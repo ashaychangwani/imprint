@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Imprint - UI Sketch</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; background: #f5f5f5; color: #333; padding: 24px; }
+  h2 { font-size: 14px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 16px; }
+  .layout { display: flex; gap: 32px; flex-wrap: wrap; }
+  .screen { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 0; overflow: hidden; flex: 1; min-width: 320px; max-width: 420px; }
+  .screen-title { background: #f9f9f9; border-bottom: 1px solid #ddd; padding: 12px 16px; font-size: 12px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+  .screen-body { padding: 16px; }
+  .ext-header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+  .ext-logo { width: 24px; height: 24px; background: #333; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700; }
+  .ext-name { font-size: 15px; font-weight: 600; }
+  .teach-btn { width: 100%; padding: 12px; background: #111; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; margin-bottom: 12px; }
+  .teach-btn.recording { background: #c0392b; }
+  .narration-box { width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #999; margin-bottom: 12px; min-height: 60px; resize: none; }
+  .capture-stats { font-size: 12px; color: #888; margin-bottom: 12px; }
+  .capture-stats span { color: #333; font-weight: 600; }
+  .request-list { border: 1px solid #eee; border-radius: 6px; overflow: hidden; }
+  .request-item { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; font-size: 11px; font-family: monospace; display: flex; align-items: center; gap: 8px; }
+  .request-item:last-child { border-bottom: none; }
+  .method { font-weight: 700; font-size: 10px; padding: 2px 6px; border-radius: 3px; }
+  .method.get { background: #e8f5e9; color: #2e7d32; }
+  .method.post { background: #e3f2fd; color: #1565c0; }
+  .request-url { color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dash-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .dash-title { font-size: 18px; font-weight: 700; }
+  .new-btn { padding: 8px 16px; background: #111; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .lesson-card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+  .lesson-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .lesson-name { font-size: 14px; font-weight: 600; }
+  .lesson-status { font-size: 11px; padding: 3px 8px; border-radius: 10px; font-weight: 600; }
+  .status-ready { background: #e8f5e9; color: #2e7d32; }
+  .status-learning { background: #fff3e0; color: #e65100; }
+  .lesson-meta { font-size: 12px; color: #888; margin-bottom: 8px; }
+  .lesson-actions { display: flex; gap: 8px; }
+  .lesson-actions button { padding: 5px 12px; border: 1px solid #ddd; border-radius: 5px; background: white; font-size: 11px; cursor: pointer; }
+  .lesson-actions button.primary { background: #111; color: white; border-color: #111; }
+  .replay-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; background: #f9f9f9; border-radius: 8px; border: 1px solid #eee; }
+  .replay-dot { width: 8px; height: 8px; border-radius: 50%; background: #2e7d32; }
+  .replay-text { font-size: 12px; color: #555; flex: 1; }
+  .replay-step { font-size: 12px; font-weight: 600; color: #333; }
+  .browser-frame { border: 1px solid #ddd; border-radius: 6px; overflow: hidden; }
+  .browser-bar { background: #f0f0f0; padding: 6px 10px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #ddd; }
+  .browser-dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid #ccc; }
+  .browser-url { flex: 1; background: white; border: 1px solid #ddd; border-radius: 4px; padding: 3px 8px; font-size: 10px; color: #666; }
+  .browser-body { height: 140px; background: #fafafa; display: flex; align-items: center; justify-content: center; color: #bbb; font-size: 12px; }
+  .step-log { margin-top: 12px; }
+  .step-item { padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 12px; color: #555; display: flex; align-items: center; gap: 8px; }
+  .step-check { color: #2e7d32; font-weight: 700; }
+  .step-current { color: #1565c0; font-weight: 700; }
+  .approve-bar { display: flex; gap: 8px; margin-top: 14px; }
+  .approve-bar button { flex: 1; padding: 10px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .approve-bar .approve { background: #111; color: white; border: none; }
+  .approve-bar .reteach { background: white; border: 1px solid #ddd; color: #333; }
+  .section-label { font-size: 11px; color: #aaa; margin-top: 16px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+</style>
+</head>
+<body>
+<h2>Imprint - Product Sketch</h2>
+<div class="layout">
+<div class="screen">
+  <div class="screen-title">Chrome Extension Panel - Teaching Mode</div>
+  <div class="screen-body">
+    <div class="ext-header">
+      <div class="ext-logo">IM</div>
+      <div class="ext-name">Imprint</div>
+    </div>
+    <button class="teach-btn recording">&#9679; Teaching... (2:34)</button>
+    <textarea class="narration-box" readonly>I'm navigating to my Southwest booking to show you how to get a price match when fares drop...</textarea>
+    <div class="capture-stats">
+      Captured: <span>14 requests</span> &middot; <span>8 clicks</span> &middot; <span>3 navigations</span>
+    </div>
+    <div class="section-label">Network Activity</div>
+    <div class="request-list">
+      <div class="request-item"><span class="method get">GET</span><span class="request-url">/api/v1/reservations/ABC123</span></div>
+      <div class="request-item"><span class="method post">POST</span><span class="request-url">/api/v1/flights/change</span></div>
+      <div class="request-item"><span class="method get">GET</span><span class="request-url">/api/v1/flights/search?date=...</span></div>
+      <div class="request-item"><span class="method post">POST</span><span class="request-url">/api/v1/booking/confirm-change</span></div>
+    </div>
+  </div>
+</div>
+<div class="screen">
+  <div class="screen-title">Dashboard - Your Lessons</div>
+  <div class="screen-body">
+    <div class="dash-header">
+      <div class="dash-title">Lessons</div>
+      <button class="new-btn">+ New Lesson</button>
+    </div>
+    <div class="lesson-card">
+      <div class="lesson-top">
+        <div class="lesson-name">Southwest Price Match</div>
+        <span class="lesson-status status-ready">Ready</span>
+      </div>
+      <div class="lesson-meta">southwest.com &middot; 4 API calls &middot; Taught Apr 1</div>
+      <div class="lesson-actions">
+        <button class="primary">Replay</button>
+        <button>Edit</button>
+        <button>Export</button>
+      </div>
+    </div>
+    <div class="lesson-card">
+      <div class="lesson-top">
+        <div class="lesson-name">Check Costco Delivery Slots</div>
+        <span class="lesson-status status-ready">Ready</span>
+      </div>
+      <div class="lesson-meta">costco.com &middot; 2 API calls &middot; Taught Mar 28</div>
+      <div class="lesson-actions">
+        <button class="primary">Replay</button>
+        <button>Edit</button>
+        <button>Export</button>
+      </div>
+    </div>
+    <div class="lesson-card">
+      <div class="lesson-top">
+        <div class="lesson-name">Auto-renew Library Books</div>
+        <span class="lesson-status status-learning">Learning...</span>
+      </div>
+      <div class="lesson-meta">library.org &middot; Processing session &middot; Taught just now</div>
+      <div class="lesson-actions">
+        <button disabled>Replay</button>
+        <button disabled>Edit</button>
+        <button disabled>Export</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="screen">
+  <div class="screen-title">Replay - Verification Mode</div>
+  <div class="screen-body">
+    <div class="replay-bar">
+      <div class="replay-dot"></div>
+      <div class="replay-text">Agent executing: <strong>Southwest Price Match</strong></div>
+      <div class="replay-step">Step 3/5</div>
+    </div>
+    <div class="browser-frame">
+      <div class="browser-bar">
+        <div class="browser-dot"></div>
+        <div class="browser-dot"></div>
+        <div class="browser-dot"></div>
+        <div class="browser-url">southwest.com/air/change/review</div>
+      </div>
+      <div class="browser-body">[Agent selecting same flight for rebooking]</div>
+    </div>
+    <div class="section-label">Execution Log</div>
+    <div class="step-log">
+      <div class="step-item"><span class="step-check">&#10003;</span> Navigate to reservations</div>
+      <div class="step-item"><span class="step-check">&#10003;</span> Find booking ABC123</div>
+      <div class="step-item"><span class="step-current">&#9654;</span> Select "Change Flight"</div>
+      <div class="step-item" style="color:#ccc;">&#9675; Confirm same flight selection</div>
+      <div class="step-item" style="color:#ccc;">&#9675; Verify credit amount returned</div>
+    </div>
+    <div class="approve-bar">
+      <button class="approve">Approve &amp; Save</button>
+      <button class="reteach">Re-teach</button>
+    </div>
+  </div>
+</div>
+</div>
+<div style="margin-top: 32px; padding: 16px; background: #fff; border: 1px solid #ddd; border-radius: 8px; font-size: 12px; color: #666; line-height: 1.6;">
+  <strong>Design notes:</strong><br>
+  &bull; Extension panel fits Chrome side panel width (~360px)<br>
+  &bull; Dashboard is a separate web app (not inside the extension)<br>
+  &bull; Replay shows a real browser so you can watch the agent execute<br>
+  &bull; "Learning..." state = agent processing your teaching session<br>
+  &bull; Export formats: MCP server, Playwright script, API wrapper, cURL
+</div>
+</body>
+</html>
