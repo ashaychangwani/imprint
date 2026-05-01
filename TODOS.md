@@ -76,7 +76,15 @@ Items deferred from the v0.1 design + eng review. Not blocking the 2-week sprint
 
 **Why:** Honest. Avoids someone discovering the repo in 2027 expecting a maintained project.
 
-### 10. Open-source license audit
+### 10. Anthropic SDK fallback (parallel to Vertex SDK path)
+
+**What:** Add `@anthropic-ai/sdk` as an alternate LLM client behind a `LLM_PROVIDER` env var (`vertex` | `anthropic`). User picks one; the prompt + schema layer is shared. Currently Imprint ships only the Vertex path + a Claude Code skill shortcut.
+
+**Why:** Some users won't have GCP/Vertex set up but DO have an Anthropic API key. Especially relevant for solo developers and OSS contributors who'd star/fork the repo. Vertex requires a billing-enabled GCP project + Vertex AI API enabled + Anthropic Claude models allow-listed; that's a lot of setup just to run `imprint generate` once.
+
+**Effort:** human ~3hr / CC ~30min. Pros: doubles potential user base. Cons: two SDKs to keep in lockstep on model IDs and message API drift.
+
+### 11. Open-source license audit
 
 **What:** Confirm no transitive deps under copyleft licenses (AGPL/GPL) that would conflict with the MIT license.
 

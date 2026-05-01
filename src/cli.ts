@@ -61,11 +61,24 @@ async function main(argv: string[]): Promise<number> {
         },
         allowPositionals: false,
       });
-      await record({
-        site,
-        url: values.url,
-        outPath: values.out,
-      });
+
+      // Wire SIGINT (Ctrl+C) to a clean shutdown via AbortController instead of
+      // tearing the process down mid-flight. The recorder writes its files, then
+      // returns; only then does the CLI exit.
+      const ctrl = new AbortController();
+      const onSigint = (): void => ctrl.abort();
+      process.once('SIGINT', onSigint);
+
+      try {
+        await record({
+          site,
+          url: values.url,
+          outPath: values.out,
+          signal: ctrl.signal,
+        });
+      } finally {
+        process.removeListener('SIGINT', onSigint);
+      }
       return 0;
     }
 
