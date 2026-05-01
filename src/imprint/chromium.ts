@@ -10,9 +10,9 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -50,9 +50,81 @@ const LINUX_CANDIDATES = [
   '/usr/bin/chromium-browser',
 ];
 
+/**
+ * Find Playwright's bundled Chromium (a.k.a. "Google Chrome for Testing"),
+ * which lives under ~/Library/Caches/ms-playwright/chromium-NNNN/. We prefer
+ * this over the system Chrome because corporate-managed Chrome installations
+ * (Palo Alto, Google Workspace, etc.) often push a policy that disallows
+ * `--remote-debugging-port` with the message "DevTools remote debugging is
+ * disallowed by the system admin". Playwright's Chromium is unmanaged.
+ *
+ * Returns the latest-numbered chromium-NNNN install if multiple are present.
+ */
+function findPlaywrightChromium(): string | null {
+  const cacheRoots = [
+    pathJoin(homedir(), 'Library/Caches/ms-playwright'),
+    pathJoin(homedir(), '.cache/ms-playwright'),
+  ];
+  for (const root of cacheRoots) {
+    if (!existsSync(root)) continue;
+    let dirs: string[];
+    try {
+      dirs = readdirSync(root)
+        .filter((d) => /^chromium-\d+$/.test(d))
+        .sort((a, b) => {
+          const an = Number.parseInt(a.split('-')[1] ?? '0', 10);
+          const bn = Number.parseInt(b.split('-')[1] ?? '0', 10);
+          return bn - an; // newest first
+        });
+    } catch {
+      continue;
+    }
+    for (const dir of dirs) {
+      const candidates = [
+        // macOS arm64 layout
+        pathJoin(
+          root,
+          dir,
+          'chrome-mac-arm64',
+          'Google Chrome for Testing.app',
+          'Contents',
+          'MacOS',
+          'Google Chrome for Testing',
+        ),
+        // macOS x64 layout
+        pathJoin(
+          root,
+          dir,
+          'chrome-mac',
+          'Google Chrome for Testing.app',
+          'Contents',
+          'MacOS',
+          'Google Chrome for Testing',
+        ),
+        // Linux layout
+        pathJoin(root, dir, 'chrome-linux', 'chrome'),
+      ];
+      for (const c of candidates) {
+        try {
+          if (existsSync(c) && statSync(c).isFile()) return c;
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export function findChromium(): string {
   const explicit = process.env.CHROMIUM_PATH;
   if (explicit && existsSync(explicit)) return explicit;
+
+  // Prefer Playwright's bundled Chromium — it's never subject to corporate
+  // managed-policy restrictions on remote debugging.
+  const pw = findPlaywrightChromium();
+  if (pw) return pw;
+
   if (process.platform === 'darwin' && existsSync(MAC_CHROME)) return MAC_CHROME;
   if (process.platform === 'linux') {
     for (const candidate of LINUX_CANDIDATES) {
@@ -60,7 +132,17 @@ export function findChromium(): string {
     }
   }
   throw new Error(
-    'Could not locate Chromium. Set $CHROMIUM_PATH or install Chrome at the standard path.',
+    [
+      'Could not locate Chromium.',
+      '',
+      'Try one of:',
+      '  bunx playwright install chromium    # installs an unmanaged Chromium',
+      '  export CHROMIUM_PATH=/path/to/chromium    # explicit override',
+      '',
+      'On corporate-managed devices, the system Chrome usually has a policy that',
+      "disallows `--remote-debugging-port`. Playwright's bundled Chromium does NOT",
+      'pick up those policies and is the recommended path.',
+    ].join('\n'),
   );
 }
 
