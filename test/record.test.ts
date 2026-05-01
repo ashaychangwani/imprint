@@ -62,6 +62,41 @@ describe('recorder e2e', () => {
       expect(exampleRequest.response.status).toBeLessThan(400);
     }
 
+    // Hardening assertions added day 2.5 — cookie snapshots fire at start
+    // and end so we know the auth state surrounding the captured workflow.
+    expect(session.cookieSnapshots.length).toBeGreaterThanOrEqual(2);
+    const startSnap = session.cookieSnapshots.find((s) => s.label === 'start');
+    const endSnap = session.cookieSnapshots.find((s) => s.label === 'end');
+    expect(startSnap).toBeDefined();
+    expect(endSnap).toBeDefined();
+
+    rmSync(tmp, { recursive: true, force: true });
+  }, 30_000);
+
+  it('check verb reports a session without erroring', async () => {
+    const tmp = mkdtempSync(pathJoin(tmpdir(), 'imprint-test-'));
+    const outPath = pathJoin(tmp, 'session.jsonl');
+    const ctrl = new AbortController();
+
+    const recordPromise = record({
+      site: 'check-test',
+      url: 'https://example.com/',
+      outPath,
+      signal: ctrl.signal,
+      noNarration: true,
+    });
+
+    await sleep(3500);
+    ctrl.abort();
+    await recordPromise;
+
+    const { checkSession } = await import('../src/imprint/check.ts');
+    const result = checkSession(outPath.replace(/\.jsonl$/, '.json'));
+    // We expect at least the no-narration warning. Capture is otherwise sound.
+    expect(result.summary).toContain('site:        check-test');
+    expect(result.summary).toContain('cookies:');
+    expect(result.warnings.some((w) => /narration/i.test(w))).toBe(true);
+
     rmSync(tmp, { recursive: true, force: true });
   }, 30_000);
 });

@@ -22,6 +22,9 @@ USAGE:
 
 VERBS:
   record <site>             Capture a teaching session for <site>
+  assemble <session.jsonl>  Reconstruct session.json from streaming JSONL
+                            (recovery if 'record' shutdown didn't finish)
+  check <session>           Sanity-check a captured session.json or .jsonl
   generate <session.json>   Analyze a session, produce workflow.json
   emit <workflow.json>      Generate the MCP server TS module
   login <site>              Persist auth cookies for <site>
@@ -89,6 +92,38 @@ async function main(argv: string[]): Promise<number> {
         process.removeListener('SIGINT', onSigint);
       }
       return 0;
+    }
+
+    case 'assemble': {
+      const jsonlPath = argv[1];
+      if (!jsonlPath) {
+        console.error('error: `imprint assemble` requires a <session.jsonl> argument');
+        return 2;
+      }
+      const { assembleFromJsonl } = await import('./imprint/session-writer.ts');
+      const { writeFileSync } = await import('node:fs');
+      const session = assembleFromJsonl(jsonlPath);
+      const outPath = jsonlPath.replace(/\.jsonl$/, '.json');
+      writeFileSync(outPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+      console.log(`[imprint] assembled → ${outPath}`);
+      console.log(
+        `[imprint] ${session.requests.length} requests, ${session.events.length} events, ${session.narration.length} narration lines`,
+      );
+      return 0;
+    }
+
+    case 'check': {
+      const sessionPath = argv[1];
+      if (!sessionPath) {
+        console.error(
+          'error: `imprint check` requires a <session.json> or <session.jsonl> argument',
+        );
+        return 2;
+      }
+      const { checkSession, reportCheck } = await import('./imprint/check.ts');
+      const result = checkSession(sessionPath);
+      reportCheck(sessionPath, result);
+      return result.ok ? 0 : 1;
     }
 
     case 'generate':

@@ -12,6 +12,7 @@ import { dirname } from 'node:path';
 import {
   type CapturedEvent,
   type CapturedRequest,
+  type CookieSnapshot,
   type Narration,
   type Session,
   SessionSchema,
@@ -21,7 +22,8 @@ type Record =
   | { kind: 'request'; data: CapturedRequest }
   | { kind: 'event'; data: CapturedEvent }
   | { kind: 'narration'; data: Narration }
-  | { kind: 'request-body'; data: { seq: number; body: string } };
+  | { kind: 'request-body'; data: { seq: number; body: string } }
+  | { kind: 'cookies'; data: CookieSnapshot };
 
 export interface SessionWriter {
   request(req: CapturedRequest): void;
@@ -29,6 +31,7 @@ export interface SessionWriter {
   requestBody(seq: number, body: string): void;
   event(ev: CapturedEvent): void;
   narration(n: Narration): void;
+  cookies(snapshot: CookieSnapshot): void;
   /** Flush + close the JSONL stream and write the assembled Session object. */
   close(): Promise<{ jsonlPath: string; sessionPath: string }>;
 }
@@ -59,6 +62,7 @@ export function createSessionWriter(jsonlPath: string, meta: SessionMeta): Sessi
     requestBody: (seq, body) => writeLine({ kind: 'request-body', data: { seq, body } }),
     event: (data) => writeLine({ kind: 'event', data }),
     narration: (data) => writeLine({ kind: 'narration', data }),
+    cookies: (data) => writeLine({ kind: 'cookies', data }),
     async close() {
       if (closed) {
         // Still return paths if called twice.
@@ -90,6 +94,7 @@ export function assembleFromJsonl(jsonlPath: string): Session {
   const requests: CapturedRequest[] = [];
   const events: CapturedEvent[] = [];
   const narration: Narration[] = [];
+  const cookieSnapshots: CookieSnapshot[] = [];
 
   // First pass: collect everything.
   for (const line of lines) {
@@ -98,7 +103,8 @@ export function assembleFromJsonl(jsonlPath: string): Session {
       | { kind: 'request'; data: CapturedRequest }
       | { kind: 'request-body'; data: { seq: number; body: string } }
       | { kind: 'event'; data: CapturedEvent }
-      | { kind: 'narration'; data: Narration };
+      | { kind: 'narration'; data: Narration }
+      | { kind: 'cookies'; data: CookieSnapshot };
 
     switch (rec.kind) {
       case 'meta':
@@ -120,6 +126,9 @@ export function assembleFromJsonl(jsonlPath: string): Session {
       case 'narration':
         narration.push(rec.data);
         break;
+      case 'cookies':
+        cookieSnapshots.push(rec.data);
+        break;
     }
   }
 
@@ -135,6 +144,7 @@ export function assembleFromJsonl(jsonlPath: string): Session {
     requests,
     events,
     narration,
+    cookieSnapshots,
   };
 
   // Validate before handing back. A malformed session should fail loud, not silently

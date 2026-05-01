@@ -39,11 +39,46 @@ export type CapturedRequest = z.infer<typeof CapturedRequestSchema>;
 export const CapturedEventSchema = z.object({
   seq: z.number().int().nonnegative(),
   timestamp: z.number(),
-  type: z.enum(['navigation', 'click', 'input', 'submit', 'dom-snapshot']),
-  /** CSS selector or URL or JSON-stringified payload depending on type */
+  type: z.enum([
+    'navigation',
+    'click',
+    'input',
+    'change',
+    'submit',
+    'dom-snapshot',
+    'ws-sent',
+    'ws-received',
+  ]),
+  /**
+   * For navigation: the URL.
+   * For click/input/change: JSON of { selector, tag, id, name, value?, text? }.
+   * For submit: JSON of { selector, action, method, fields[] }.
+   * For ws-sent/ws-received: JSON of { url, opcode, payloadDataPreview }.
+   */
   detail: z.string(),
 });
 export type CapturedEvent = z.infer<typeof CapturedEventSchema>;
+
+/** Cookie state snapshot at a point in time. */
+export const CookieSnapshotSchema = z.object({
+  takenAt: z.string(),
+  /** ms since recording started */
+  timestamp: z.number(),
+  label: z.enum(['start', 'end', 'manual']),
+  cookies: z.array(
+    z.object({
+      name: z.string(),
+      value: z.string(),
+      domain: z.string(),
+      path: z.string(),
+      expires: z.number().optional(),
+      httpOnly: z.boolean().optional(),
+      secure: z.boolean().optional(),
+      sameSite: z.string().optional(),
+    }),
+  ),
+});
+export type CookieSnapshot = z.infer<typeof CookieSnapshotSchema>;
 
 export const NarrationSchema = z.object({
   seq: z.number().int().nonnegative(),
@@ -64,6 +99,8 @@ export const SessionSchema = z.object({
   requests: z.array(CapturedRequestSchema),
   events: z.array(CapturedEventSchema),
   narration: z.array(NarrationSchema),
+  /** Cookie state snapshots — typically one at start, one at end. */
+  cookieSnapshots: z.array(CookieSnapshotSchema).default([]),
 });
 export type Session = z.infer<typeof SessionSchema>;
 

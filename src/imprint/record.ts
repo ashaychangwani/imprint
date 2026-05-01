@@ -22,8 +22,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import CDP from 'chrome-remote-interface';
 import envPaths from 'env-paths';
 import { launchChromium } from './chromium.ts';
+import { IMPRINT_SENTINEL, INJECTED_LISTENER_SOURCE } from './inject-listener.ts';
 import { createSessionWriter } from './session-writer.ts';
-import type { CapturedEvent, CapturedRequest } from './types.ts';
+import type { CapturedEvent, CapturedRequest, CookieSnapshot } from './types.ts';
 
 const PATHS = envPaths('imprint', { suffix: '' });
 
@@ -129,6 +130,11 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
   const { Network, Page, Runtime } = client;
 
   await Promise.all([Network.enable(), Page.enable(), Runtime.enable()]);
+
+  // Inject our passive event listener on every page load. This captures
+  // clicks/inputs/changes/submits as console.log lines that we parse via
+  // Runtime.consoleAPICalled below.
+  await Page.addScriptToEvaluateOnNewDocument({ source: INJECTED_LISTENER_SOURCE });
 
   const writer = createSessionWriter(outPath, {
     site: opts.site,
@@ -268,6 +274,102 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     writer.event(ev);
   });
 
+  // ── DOM event capture (via injected console.log sentinel) ────────────────
+  // The injector posts lines like:  [IMPRINT] click {"tag":"button","id":...,"selector":...}
+  Runtime.consoleAPICalled((params) => {
+    try {
+      if (params.type !== 'log' || !params.args || params.args.length < 2) return;
+      const first = params.args[0];
+      if (!first || first.type !== 'string' || first.value !== IMPRINT_SENTINEL) return;
+      const second = params.args[1];
+      const third = params.args[2];
+      const eventType = second?.type === 'string' ? second.value : null;
+      const payload = third?.type === 'string' ? third.value : null;
+      if (!eventType || !payload) return;
+      // Map injector's event names to our CapturedEvent type union.
+      const allowed: CapturedEvent['type'][] = ['click', 'input', 'change', 'submit'];
+      if (!allowed.includes(eventType as CapturedEvent['type'])) return;
+      writer.event({
+        seq: nextSeq(),
+        timestamp: elapsed(),
+        type: eventType as CapturedEvent['type'],
+        detail: payload,
+      });
+    } catch {
+      // Never let a single bad console line break the recorder.
+    }
+  });
+
+  // ── WebSocket frames ──────────────────────────────────────────────────────
+  // Defensive: most demo sites won't use WS but if they do for inventory or
+  // notifications, missing frames silently breaks the LLM intent inference.
+  // We capture sent + received and dedupe payload to a 1KB preview.
+  const wsUrls = new Map<string, string>();
+  Network.webSocketCreated((params) => {
+    wsUrls.set(params.requestId, params.url);
+  });
+  Network.webSocketFrameSent((params) => {
+    const url = wsUrls.get(params.requestId) ?? '';
+    const payload = params.response.payloadData ?? '';
+    writer.event({
+      seq: nextSeq(),
+      timestamp: elapsed(),
+      type: 'ws-sent',
+      detail: JSON.stringify({
+        url,
+        opcode: params.response.opcode,
+        payloadDataPreview: payload.slice(0, 1024),
+      }),
+    });
+  });
+  Network.webSocketFrameReceived((params) => {
+    const url = wsUrls.get(params.requestId) ?? '';
+    const payload = params.response.payloadData ?? '';
+    writer.event({
+      seq: nextSeq(),
+      timestamp: elapsed(),
+      type: 'ws-received',
+      detail: JSON.stringify({
+        url,
+        opcode: params.response.opcode,
+        payloadDataPreview: payload.slice(0, 1024),
+      }),
+    });
+  });
+  Network.webSocketClosed((params) => {
+    wsUrls.delete(params.requestId);
+  });
+
+  // ── Cookie snapshots ──────────────────────────────────────────────────────
+  // Capture once at the start (so we know the initial auth state) and once
+  // at the end (so we know what was set during the session — booking
+  // confirmations sometimes set a session ID cookie we need for replay).
+  const snapshotCookies = async (label: CookieSnapshot['label']): Promise<void> => {
+    try {
+      const all = await Network.getAllCookies();
+      writer.cookies({
+        takenAt: new Date().toISOString(),
+        timestamp: elapsed(),
+        label,
+        cookies: all.cookies.map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path,
+          expires: c.expires,
+          httpOnly: c.httpOnly,
+          secure: c.secure,
+          sameSite: c.sameSite,
+        })),
+      });
+    } catch (err) {
+      if (process.env.IMPRINT_DEBUG) {
+        console.error(`[debug] cookie snapshot ${label} failed: ${String(err)}`);
+      }
+    }
+  };
+  await snapshotCookies('start');
+
   // ── Narration loop ────────────────────────────────────────────────────────
   let narrationOpen = !opts.noNarration;
   let rl: ReturnType<typeof createInterface> | null = null;
@@ -335,6 +437,10 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
       }
       await Promise.allSettled(Array.from(inflight));
     }
+
+    // Final cookie snapshot before tearing CDP down. The booking-confirmation
+    // page may have set a fresh session cookie that the replay needs.
+    await snapshotCookies('end');
 
     try {
       await client.close();
