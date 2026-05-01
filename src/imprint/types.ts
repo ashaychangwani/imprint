@@ -166,3 +166,17 @@ export type ToolResult<T = unknown> =
       message: string;
       remediation?: string;
     };
+
+// ─── Cron config (input to `imprint cron`) ───────────────────────────────────
+
+/**
+ * Per-example schedule + parameters, lives at examples/<site>/cron.json.
+ * The schedule is a standard 5-field cron expression; node-cron validates it
+ * before scheduling. Params are validated against the workflow's parameter
+ * declarations at load time so a typo doesn't surface only on the first tick.
+ */
+export const CronConfigSchema = z.object({
+  schedule: z.string(),
+  params: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
+});
+export type CronConfig = z.infer<typeof CronConfigSchema>;

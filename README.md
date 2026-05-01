@@ -79,7 +79,7 @@ bun run dev cron southwest
 | `imprint generate <session>` | Run LLM intent-detection on a saved session, write `workflow.json` |
 | `imprint emit <workflow>` | Generate the MCP server TypeScript module |
 | `imprint login <site>` | Open Chromium for user-driven login, persist cookies |
-| `imprint cron <example>` | Start the polling daemon for a generated workflow |
+| `imprint cron <site>` | Start the polling daemon for `examples/<site>/cron.json`. Flags: `--once`, `--run-now`, `--config <path>`. |
 | `imprint mcp-server` | Run the MCP server (stdio default; `--http --port N` for HTTP). `--site <name>` restricts to one example. |
 
 ### Wiring up Claude Desktop
@@ -98,6 +98,31 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```
 
 Restart Claude Desktop. Your generated tools (e.g. `book_discoverandgo_museum_pass`) appear in the MCP tools panel. For other clients (Cursor, Continue.dev, mcp-inspector), point them at the same `bun run …/src/cli.ts mcp-server` command — the protocol is standard.
+
+### Polling with cron
+
+Drop a `cron.json` next to your generated `workflow.json`, then run `imprint cron <site>`:
+
+```jsonc
+// examples/discoverandgo/cron.json
+{
+  "schedule": "0 0 * * *",                      // standard 5-field cron expression
+  "params": {
+    "offer_id": 1175,
+    "offer_date": "2026-12-31",
+    "notification_email": "you@example.com"
+  }
+}
+```
+
+```bash
+imprint cron discoverandgo            # schedule and block until Ctrl-C
+imprint cron discoverandgo --run-now  # also run once immediately
+imprint cron discoverandgo --once     # run a single tick and exit
+                                      # (use this from systemd timers / launchd / OS cron)
+```
+
+Set `PUSHOVER_TOKEN` and `PUSHOVER_USER` in the environment to get a push notification on every failure (auth expired, network errors, rate limits). Without those vars, failures are logged to stderr only.
 
 ## Demos
 

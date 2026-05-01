@@ -1,0 +1,8 @@
+{
+  "schedule": "0 0 * * *",
+  "params": {
+    "offer_id": 1175,
+    "offer_date": "1999-01-01",
+    "notification_email": "you@example.com"
+  }
+}

@@ -34,7 +34,6 @@
  *   npx @modelcontextprotocol/inspector bun run src/cli.ts mcp-server
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
 import { resolve as pathResolve } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -46,18 +45,12 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
-import type { ToolResult, Workflow, WorkflowParameter } from './types.ts';
-
-type GeneratedToolFn = (
-  input: Record<string, unknown>,
-  opts?: Record<string, unknown>,
-) => Promise<ToolResult>;
-
-interface GeneratedModule {
-  WORKFLOW: Workflow;
-  [exportName: string]: unknown;
-}
+import {
+  type ResolvedTool as DiscoveredTool,
+  buildZodValidator,
+  discoverTools,
+} from './discover-tools.ts';
+import type { WorkflowParameter } from './types.ts';
 
 export interface RunMcpServerOptions {
   /** Restrict to one example. Otherwise every generated example is registered. */
@@ -76,74 +69,9 @@ export interface RunMcpServerOptions {
   version?: string;
 }
 
-interface ResolvedTool {
-  site: string;
-  workflow: Workflow;
-  toolFn: GeneratedToolFn;
-  /** JSON Schema for the tool's input — built from workflow.parameters. */
+/** A discovered tool decorated with the JSON Schema MCP advertises it as. */
+interface ResolvedTool extends DiscoveredTool {
   inputSchema: Tool['inputSchema'];
-}
-
-/**
- * Discover every example directory containing a generated index.ts.
- * Each match is dynamically imported to extract its WORKFLOW + tool function.
- */
-async function discoverTools(examplesDir: string, only?: string): Promise<ResolvedTool[]> {
-  if (!existsSync(examplesDir)) return [];
-  const entries = readdirSync(examplesDir);
-  const out: ResolvedTool[] = [];
-  for (const entry of entries) {
-    if (only && entry !== only) continue;
-    const dir = pathResolve(examplesDir, entry);
-    let isDir = false;
-    try {
-      isDir = statSync(dir).isDirectory();
-    } catch {
-      continue;
-    }
-    if (!isDir) continue;
-    const modulePath = pathResolve(dir, 'index.ts');
-    if (!existsSync(modulePath)) continue;
-
-    let mod: GeneratedModule;
-    try {
-      mod = (await import(modulePath)) as GeneratedModule;
-    } catch (err) {
-      process.stderr.write(
-        `[imprint mcp] skipping ${entry}: failed to load (${err instanceof Error ? err.message : String(err)})\n`,
-      );
-      continue;
-    }
-    if (!mod.WORKFLOW) {
-      process.stderr.write(`[imprint mcp] skipping ${entry}: missing WORKFLOW export\n`);
-      continue;
-    }
-    const fn = findToolFunction(mod);
-    if (!fn) {
-      process.stderr.write(
-        `[imprint mcp] skipping ${entry}: missing exported function for "${mod.WORKFLOW.toolName}"\n`,
-      );
-      continue;
-    }
-    out.push({
-      site: entry,
-      workflow: mod.WORKFLOW,
-      toolFn: fn,
-      inputSchema: buildJsonSchema(mod.WORKFLOW.parameters),
-    });
-  }
-  return out;
-}
-
-function findToolFunction(mod: GeneratedModule): GeneratedToolFn | null {
-  const camelName = mod.WORKFLOW.toolName
-    .split('_')
-    .map((p, i) =>
-      i === 0 ? p.toLowerCase() : p.charAt(0).toUpperCase() + p.slice(1).toLowerCase(),
-    )
-    .join('');
-  const fn = mod[camelName];
-  return typeof fn === 'function' ? (fn as GeneratedToolFn) : null;
 }
 
 /**
@@ -163,33 +91,6 @@ function buildJsonSchema(parameters: WorkflowParameter[]): Tool['inputSchema'] {
     properties,
     required: required.length ? required : undefined,
   };
-}
-
-/**
- * Tighten the input shape with Zod after the LLM provides arguments. This
- * gives us friendly validation errors and type narrowing in the execute
- * callback.
- */
-function buildZodValidator(parameters: WorkflowParameter[]): z.ZodObject<z.ZodRawShape> {
-  const shape: z.ZodRawShape = {};
-  for (const p of parameters) {
-    let field: z.ZodType;
-    switch (p.type) {
-      case 'string':
-        field = z.string();
-        break;
-      case 'number':
-        field = z.number();
-        break;
-      case 'boolean':
-        field = z.boolean();
-        break;
-    }
-    field = field.describe(p.description);
-    if (p.default !== undefined) field = field.optional();
-    shape[p.name] = field;
-  }
-  return z.object(shape);
 }
 
 const log = (msg: string): void => {
@@ -265,7 +166,11 @@ function buildServer(name: string, version: string, tools: ResolvedTool[]): Serv
 
 export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void> {
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
-  const tools = await discoverTools(examplesDir, opts.site);
+  const discovered = await discoverTools(examplesDir, opts.site, '[imprint mcp]');
+  const tools: ResolvedTool[] = discovered.map((t) => ({
+    ...t,
+    inputSchema: buildJsonSchema(t.workflow.parameters),
+  }));
   if (tools.length === 0) {
     const target = opts.site ? `for site "${opts.site}"` : `under ${examplesDir}`;
     throw new Error(

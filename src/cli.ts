@@ -30,7 +30,8 @@ VERBS:
   generate <session.json>   Analyze a session, produce workflow.json
   emit <workflow.json>      Generate the MCP server TS module
   login <site>              Persist auth cookies for <site>
-  cron <example>            Start the polling daemon
+  cron <site>               Start the polling daemon for examples/<site>/cron.json
+                            options: --once  --run-now  --config <path>
   mcp-server                Run the MCP server (stdio by default; --http for HTTP)
                             options: --site <name>  --http  --port <num>
 
@@ -264,9 +265,30 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
-    case 'cron':
-      console.error('error: `cron` is not implemented yet (coming next)');
-      return 2;
+    case 'cron': {
+      const site = argv[1];
+      if (!site) {
+        console.error('error: `imprint cron` requires a <site> argument');
+        return 2;
+      }
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          config: { type: 'string' },
+          once: { type: 'boolean' },
+          'run-now': { type: 'boolean' },
+        },
+        allowPositionals: false,
+      });
+      const { runCron } = await import('./imprint/cron.ts');
+      await runCron({
+        site,
+        configPath: values.config,
+        once: values.once,
+        runNow: values['run-now'],
+      });
+      return 0;
+    }
 
     default:
       console.error(`error: unknown verb '${verb}'\n`);
