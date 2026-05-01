@@ -86,7 +86,7 @@ COMMON_HEADERS = {
     ),
 }
 
-POLL_INTERVAL_MS = 200
+POLL_INTERVAL_MS = 100
 MAX_BOOKING_THREADS = 8
 
 # ─── Session management ──────────────────────────────────────────────────────
@@ -319,17 +319,16 @@ def fire_bookings(
 
 
 def wait_until_midnight() -> None:
-    """Sleep until 23:59:55 Pacific (5 seconds before midnight)."""
+    """Sleep until 23:59:50 Pacific (10 seconds before midnight)."""
     import zoneinfo
     pacific = zoneinfo.ZoneInfo("America/Los_Angeles")
     now = datetime.now(pacific)
-    # Next midnight
-    target = now.replace(hour=23, minute=59, second=55, microsecond=0)
+    # Next midnight — start 10s early
+    target = now.replace(hour=23, minute=59, second=50, microsecond=0)
     if now >= target:
-        # Already past 23:59:55 today, target tomorrow's midnight
         from datetime import timedelta
         target += timedelta(days=1)
-        target = target.replace(hour=23, minute=59, second=55)
+        target = target.replace(hour=23, minute=59, second=50)
 
     wait_secs = (target - now).total_seconds()
     if wait_secs > 0:
