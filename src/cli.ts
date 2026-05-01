@@ -152,12 +152,101 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
-    case 'generate':
-    case 'emit':
-    case 'login':
+    case 'generate': {
+      const sessionPath = argv[1];
+      if (!sessionPath) {
+        console.error('error: `imprint generate` requires a <session.json> argument');
+        return 2;
+      }
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          out: { type: 'string' },
+          'no-shrink': { type: 'boolean' },
+          'save-shrunken': { type: 'boolean' },
+        },
+        allowPositionals: false,
+      });
+      const { generate } = await import('./imprint/generate.ts');
+      const result = await generate({
+        sessionPath,
+        outPath: values.out,
+        noShrink: values['no-shrink'],
+        saveShrunken: values['save-shrunken'],
+      });
+      console.log('');
+      console.log(`[imprint] workflow → ${result.workflowPath}`);
+      console.log(
+        `[imprint] tool: ${result.workflow.toolName} (${result.workflow.requests.length} request${result.workflow.requests.length === 1 ? '' : 's'}, ${result.workflow.parameters.length} parameter${result.workflow.parameters.length === 1 ? '' : 's'})`,
+      );
+      console.log(
+        `[imprint] tokens: ${result.inputTokens} in, ${result.outputTokens} out — ${(result.durationMs / 1000).toFixed(1)}s`,
+      );
+      return 0;
+    }
+
+    case 'emit': {
+      const workflowPath = argv[1];
+      if (!workflowPath) {
+        console.error('error: `imprint emit` requires a <workflow.json> argument');
+        return 2;
+      }
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: { force: { type: 'boolean' }, 'out-dir': { type: 'string' } },
+        allowPositionals: false,
+      });
+      const { emit } = await import('./imprint/emit.ts');
+      const result = emit({
+        workflowPath,
+        outDir: values['out-dir'],
+        force: values.force,
+      });
+      console.log(`[imprint] generated → ${result.outPath}`);
+      console.log(
+        `[imprint] tool: ${result.toolName} (${result.parameters.length} parameter${result.parameters.length === 1 ? '' : 's'})`,
+      );
+      return 0;
+    }
+
+    case 'login': {
+      const site = argv[1];
+      if (!site) {
+        console.error('error: `imprint login` requires a <site> argument');
+        return 2;
+      }
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: { 'from-session': { type: 'string' } },
+        allowPositionals: false,
+      });
+      if (!values['from-session']) {
+        console.error(
+          'error: v0.1 of `imprint login` requires --from-session <session.json>. Capture a session via `imprint record` first, then point login at it.',
+        );
+        return 2;
+      }
+      const { login } = await import('./imprint/login.ts');
+      const result = login({
+        site,
+        fromSession: values['from-session'],
+      });
+      console.log(`[imprint] credentials → ${result.outPath}`);
+      console.log(
+        `[imprint] ${result.cookieCount} cookie${result.cookieCount === 1 ? '' : 's'} stored`,
+      );
+      console.log(
+        `[imprint] ${Object.keys(result.values).length} value${Object.keys(result.values).length === 1 ? '' : 's'} extracted: ${Object.keys(result.values).join(', ') || '(none)'}`,
+      );
+      if (result.matchedExtractors.length > 0) {
+        console.log(`[imprint] extractors matched: ${result.matchedExtractors.join(', ')}`);
+      }
+      return 0;
+    }
+
     case 'cron':
     case 'mcp-server':
-      console.error(`error: \`${verb}\` is not implemented yet (coming days 3-7)`);
+      console.error(`error: \`${verb}\` is not implemented yet (coming days 8+)`);
       return 2;
 
     default:

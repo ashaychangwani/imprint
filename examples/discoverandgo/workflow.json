@@ -1,0 +1,39 @@
+{
+  "toolName": "book_discoverandgo_museum_pass",
+  "intent": {
+    "description": "Reserve a museum pass on Discover & Go for a specific offer and date using a San Diego Public Library card.",
+    "userSaid": "clicked the cooley museum attraction and then clicked the option to view additional dates; selected may 26 and confirmaqtion dialog came up again; i confirmed it and it took me to my list of reservations"
+  },
+  "parameters": [
+    {
+      "name": "offer_id",
+      "type": "number",
+      "description": "The numeric ID of the specific museum offer to reserve (e.g. 1175 for J.A. Cooley Museum Family Pass)"
+    },
+    {
+      "name": "offer_date",
+      "type": "string",
+      "description": "The date for the reservation in YYYY-MM-DD format (e.g. 2026-05-26)"
+    },
+    {
+      "name": "notification_email",
+      "type": "string",
+      "description": "Email address to send the reservation confirmation to"
+    }
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://sandiego.discoverandgo.net/epass_server.php?dataType=json&method=makeReservation&functionFile=Reservations%2CAttractions&language=en&patronID=${credential.patron_id}&offerID=${param.offer_id}&offerDate=${param.offer_date}&notificationMethod=Email&notificationEmail=${param.notification_email}&notificationTXTNumber=",
+      "headers": {
+        "x-epass-clientID": "1",
+        "x-epass-clientKey": "335e26134a53d4e23e4bed13517b7303",
+        "x-epass-libraryID": "63",
+        "x-epass-patronID": "${credential.patron_id}",
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "application/json, text/javascript, */*; q=0.01"
+      }
+    }
+  ],
+  "site": "discoverandgo"
+}
