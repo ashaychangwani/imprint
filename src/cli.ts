@@ -25,6 +25,8 @@ VERBS:
   assemble <session.jsonl>  Reconstruct session.json from streaming JSONL
                             (recovery if 'record' shutdown didn't finish)
   check <session>           Sanity-check a captured session.json or .jsonl
+  redact <session.json>     Scrub credentials + PII; write <session>.redacted.json
+                            (always do this before sharing or LLM analysis)
   generate <session.json>   Analyze a session, produce workflow.json
   emit <workflow.json>      Generate the MCP server TS module
   login <site>              Persist auth cookies for <site>
@@ -124,6 +126,30 @@ async function main(argv: string[]): Promise<number> {
       const result = checkSession(sessionPath);
       reportCheck(sessionPath, result);
       return result.ok ? 0 : 1;
+    }
+
+    case 'redact': {
+      const sessionPath = argv[1];
+      if (!sessionPath) {
+        console.error('error: `imprint redact` requires a <session.json> argument');
+        return 2;
+      }
+      const { readFileSync, writeFileSync } = await import('node:fs');
+      const { SessionSchema } = await import('./imprint/types.ts');
+      const { redactSession } = await import('./imprint/redact.ts');
+      const raw = JSON.parse(readFileSync(sessionPath, 'utf8'));
+      const session = SessionSchema.parse(raw);
+      const { session: scrubbed, stats } = redactSession(session);
+      const outPath = sessionPath.replace(/\.json$/, '.redacted.json');
+      writeFileSync(outPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
+      console.log(`[imprint] redacted → ${outPath}`);
+      console.log(
+        `[imprint] ${stats.totalRedactions} value${stats.totalRedactions === 1 ? '' : 's'} replaced across ${stats.requestsRedacted} request${stats.requestsRedacted === 1 ? '' : 's'} and ${stats.cookiesRedacted} cookie${stats.cookiesRedacted === 1 ? '' : 's'}`,
+      );
+      for (const w of stats.warnings) {
+        console.log(`[imprint]   ⚠ ${w}`);
+      }
+      return 0;
     }
 
     case 'generate':
