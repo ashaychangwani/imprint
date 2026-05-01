@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+bun.lockb
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Captured sessions (may contain auth tokens, PII)
+examples/*/sessions/*.json
+examples/*/sessions/*.jsonl
+**/sessions/
+
+# Cookies (auth state, never commit)
+cookies/
+*.cookies.json
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Test artifacts
+coverage/
+.nyc_output/
