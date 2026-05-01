@@ -94,7 +94,29 @@ Items deferred from the v0.1 design + eng review. Not blocking the 2-week sprint
 
 **Effort:** human ~1 day / CC ~3hr post-sprint. Pros: heartwarming narrative, daily content stream ("got us into the SF Zoo today"), real personal value. Cons: slight social-cost question (free scarce resource). User should set their own moral cadence: 1-2 outings/month is fine, aggressive nightly sniping changes the vibe.
 
-### 12. Open-source license audit
+### 12. Finish MCP stdio server (in-progress, blocked on stdin framing)
+
+**What:** `imprint mcp-server <example>` exists in skeleton form (`src/imprint/mcp-server.ts`). It correctly loads the generated module, builds the Zod input schema, registers the tool. The remaining issue is stdio framing: data written to the child's stdin doesn't reach the StdioServerTransport's `_ondata` listener, so requests never get processed.
+
+**Investigation so far:**
+- Bun's `process.stdin` doesn't fire 'data' events for piped input the way Node's does. We bridge via `Bun.stdin.stream()` → `Readable.fromWeb` (or PassThrough). The bridge IS receiving data (verified with diag logs).
+- BUT the StdioServerTransport's listener still doesn't see the data, even when we pass our bridged Readable as the constructor arg.
+- A minimal MCP server in isolation (no cli.ts wrapper, no dynamic import) DOES work under both Bun and Node.
+- The breakage happens when going through cli.ts → `await import('./imprint/mcp-server.ts')`.
+
+**Likely causes (ordered by suspicion):**
+1. The dynamic-import yield in cli.ts allows process.stdin's data to be consumed by Bun's default handler before our bridge can grab it. We tried parking `Bun.stdin.stream()` on globalThis as the very first cli.ts statement — confirmed it captures the stream, but the transport still doesn't see data.
+2. `Readable.fromWeb` may not properly fire 'data' events when listeners are added after the underlying stream has already started flowing.
+3. There may be a third stdin consumer somewhere we haven't identified.
+
+**Effort to fix:** human ~1-2hr / CC ~30-60min with fresh eyes. Possible workarounds:
+- Compile mcp-server to a standalone .js bundle (no dynamic import, no TS strip)
+- Use Node 22+ for the MCP server specifically, bun for everything else
+- Implement a custom transport that uses our manually-managed stream
+
+For now: invoke the generated tool directly (`bun examples/discoverandgo/index.ts` after a small `await import + call` wrapper) instead of via MCP.
+
+### 13. Open-source license audit
 
 **What:** Confirm no transitive deps under copyleft licenses (AGPL/GPL) that would conflict with the MIT license.
 

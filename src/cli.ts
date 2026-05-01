@@ -9,8 +9,15 @@
  *   imprint login <site>             Open Chromium for user-driven login, persist cookies
  *   imprint cron <example>           Start the polling daemon for a generated workflow
  *   imprint mcp-server <example>     Speak MCP stdio protocol, exposing the workflow as a tool
+ *
+ * The first static import below (bun-stdin-park) MUST stay first — it parks
+ * Bun.stdin.stream() on globalThis before any other module evaluation. Bun's
+ * default stdin handler silently drops piped bytes that arrive before any
+ * listener is attached; doing it here protects bytes sent before the
+ * mcp-server's transport is wired up.
  */
 
+import './bun-stdin-park.ts';
 import { parseArgs } from 'node:util';
 
 const VERSION = '0.1.0';
@@ -244,9 +251,19 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
+    case 'mcp-server': {
+      const example = argv[1];
+      if (!example) {
+        console.error('error: `imprint mcp-server` requires an <example> argument');
+        return 2;
+      }
+      const { runMcpServer } = await import('./imprint/mcp-server.ts');
+      await runMcpServer({ example });
+      return 0;
+    }
+
     case 'cron':
-    case 'mcp-server':
-      console.error(`error: \`${verb}\` is not implemented yet (coming days 8+)`);
+      console.error('error: `cron` is not implemented yet (coming next)');
       return 2;
 
     default:
