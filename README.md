@@ -80,7 +80,24 @@ bun run dev cron southwest
 | `imprint emit <workflow>` | Generate the MCP server TypeScript module |
 | `imprint login <site>` | Open Chromium for user-driven login, persist cookies |
 | `imprint cron <example>` | Start the polling daemon for a generated workflow |
-| `imprint mcp-server <example>` | Speak MCP stdio protocol — for Claude Desktop / agents |
+| `imprint mcp-server` | Run the MCP server (stdio default; `--http --port N` for HTTP). `--site <name>` restricts to one example. |
+
+### Wiring up Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "imprint": {
+      "command": "bun",
+      "args": ["run", "/abs/path/to/imprint/src/cli.ts", "mcp-server"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop. Your generated tools (e.g. `book_discoverandgo_museum_pass`) appear in the MCP tools panel. For other clients (Cursor, Continue.dev, mcp-inspector), point them at the same `bun run …/src/cli.ts mcp-server` command — the protocol is standard.
 
 ## Demos
 

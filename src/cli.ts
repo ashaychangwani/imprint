@@ -9,15 +9,8 @@
  *   imprint login <site>             Open Chromium for user-driven login, persist cookies
  *   imprint cron <example>           Start the polling daemon for a generated workflow
  *   imprint mcp-server <example>     Speak MCP stdio protocol, exposing the workflow as a tool
- *
- * The first static import below (bun-stdin-park) MUST stay first — it parks
- * Bun.stdin.stream() on globalThis before any other module evaluation. Bun's
- * default stdin handler silently drops piped bytes that arrive before any
- * listener is attached; doing it here protects bytes sent before the
- * mcp-server's transport is wired up.
  */
 
-import './bun-stdin-park.ts';
 import { parseArgs } from 'node:util';
 
 const VERSION = '0.1.0';
@@ -38,7 +31,8 @@ VERBS:
   emit <workflow.json>      Generate the MCP server TS module
   login <site>              Persist auth cookies for <site>
   cron <example>            Start the polling daemon
-  mcp-server <example>      Run the MCP stdio server
+  mcp-server                Run the MCP server (stdio by default; --http for HTTP)
+                            options: --site <name>  --http  --port <num>
 
 OPTIONS for \`record\`:
   --url <url>               Starting URL (else opens about:blank)
@@ -252,13 +246,21 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'mcp-server': {
-      const example = argv[1];
-      if (!example) {
-        console.error('error: `imprint mcp-server` requires an <example> argument');
-        return 2;
-      }
+      const { values } = parseArgs({
+        args: argv.slice(1),
+        options: {
+          site: { type: 'string' },
+          http: { type: 'boolean' },
+          port: { type: 'string' },
+        },
+        allowPositionals: false,
+      });
       const { runMcpServer } = await import('./imprint/mcp-server.ts');
-      await runMcpServer({ example });
+      await runMcpServer({
+        site: values.site,
+        http: values.http,
+        port: values.port ? Number(values.port) : undefined,
+      });
       return 0;
     }
 

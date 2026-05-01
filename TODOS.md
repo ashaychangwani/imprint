@@ -94,27 +94,17 @@ Items deferred from the v0.1 design + eng review. Not blocking the 2-week sprint
 
 **Effort:** human ~1 day / CC ~3hr post-sprint. Pros: heartwarming narrative, daily content stream ("got us into the SF Zoo today"), real personal value. Cons: slight social-cost question (free scarce resource). User should set their own moral cadence: 1-2 outings/month is fine, aggressive nightly sniping changes the vibe.
 
-### 12. Finish MCP stdio server (in-progress, blocked on stdin framing)
+### 12. ~~Finish MCP stdio server~~ ✅ done (Day 8)
 
-**What:** `imprint mcp-server <example>` exists in skeleton form (`src/imprint/mcp-server.ts`). It correctly loads the generated module, builds the Zod input schema, registers the tool. The remaining issue is stdio framing: data written to the child's stdin doesn't reach the StdioServerTransport's `_ondata` listener, so requests never get processed.
+**Resolution:** Built directly on the official `@modelcontextprotocol/sdk` (stdio + Streamable HTTP transports). Both transports verified end-to-end with `scripts/mcp-client-test.ts` and `scripts/mcp-http-client-test.ts`: initialize → tools/list → tools/call against a network-free echo fixture, and tool registration confirmed against the real `book_discoverandgo_museum_pass`.
 
-**Investigation so far:**
-- Bun's `process.stdin` doesn't fire 'data' events for piped input the way Node's does. We bridge via `Bun.stdin.stream()` → `Readable.fromWeb` (or PassThrough). The bridge IS receiving data (verified with diag logs).
-- BUT the StdioServerTransport's listener still doesn't see the data, even when we pass our bridged Readable as the constructor arg.
-- A minimal MCP server in isolation (no cli.ts wrapper, no dynamic import) DOES work under both Bun and Node.
-- The breakage happens when going through cli.ts → `await import('./imprint/mcp-server.ts')`.
+**Two real bugs, neither was stdin framing:**
+1. The skeleton imported `bun-stdin-park.ts`, which called `Bun.stdin.stream()` at module-load. That mutates `process.stdin` such that the SDK's `'data'` listener never fires. Removing the file restored the handshake.
+2. After the handshake worked, `cli.ts` was calling `process.exit(0)` immediately when `runMcpServer` resolved — the SDK's `transport.start()` only attaches stdin listeners and returns, so the process exited before any client request arrived. Fixed by blocking on `transport.onclose` / SIGINT inside `runStdio`.
 
-**Likely causes (ordered by suspicion):**
-1. The dynamic-import yield in cli.ts allows process.stdin's data to be consumed by Bun's default handler before our bridge can grab it. We tried parking `Bun.stdin.stream()` on globalThis as the very first cli.ts statement — confirmed it captures the stream, but the transport still doesn't see data.
-2. `Readable.fromWeb` may not properly fire 'data' events when listeners are added after the underlying stream has already started flowing.
-3. There may be a third stdin consumer somewhere we haven't identified.
+**Pivot away from fastmcp:** First attempt used `fastmcp` for the convenience surface, but under Bun (a) `tools/call` crashed with "Connection closed" on any `await` in the handler and (b) HTTP transport silently failed to bind a port. Raw SDK is more reliable and arguably more standard.
 
-**Effort to fix:** human ~1-2hr / CC ~30-60min with fresh eyes. Possible workarounds:
-- Compile mcp-server to a standalone .js bundle (no dynamic import, no TS strip)
-- Use Node 22+ for the MCP server specifically, bun for everything else
-- Implement a custom transport that uses our manually-managed stream
-
-For now: invoke the generated tool directly (`bun examples/discoverandgo/index.ts` after a small `await import + call` wrapper) instead of via MCP.
+Claude Desktop wire-up is documented in the README.
 
 ### 13. Open-source license audit
 
