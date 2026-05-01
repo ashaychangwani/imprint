@@ -28,6 +28,13 @@ VERBS:
   cron <example>            Start the polling daemon
   mcp-server <example>      Run the MCP stdio server
 
+OPTIONS for \`record\`:
+  --url <url>               Starting URL (else opens about:blank)
+  --out <path>              Output path for session.jsonl
+  --persist-profile         Reuse Chrome profile for this site between recordings
+                            (preserves login state — useful for repeated captures
+                             against an authed site like Discover & Go)
+
 OPTIONS:
   --help, -h                Show this help
   --version, -v             Print version
@@ -58,6 +65,7 @@ async function main(argv: string[]): Promise<number> {
         options: {
           url: { type: 'string' },
           out: { type: 'string' },
+          'persist-profile': { type: 'boolean' },
         },
         allowPositionals: false,
       });
@@ -74,6 +82,7 @@ async function main(argv: string[]): Promise<number> {
           site,
           url: values.url,
           outPath: values.out,
+          persistProfile: values['persist-profile'],
           signal: ctrl.signal,
         });
       } finally {

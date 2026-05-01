@@ -20,9 +20,12 @@ import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as sleep } from 'node:timers/promises';
 import CDP from 'chrome-remote-interface';
+import envPaths from 'env-paths';
 import { launchChromium } from './chromium.ts';
 import { createSessionWriter } from './session-writer.ts';
 import type { CapturedEvent, CapturedRequest } from './types.ts';
+
+const PATHS = envPaths('imprint', { suffix: '' });
 
 const VERSION = '0.1.0';
 
@@ -33,6 +36,18 @@ export interface RecordOptions {
   url?: string;
   /** Output path for session.jsonl. Defaults to examples/<site>/sessions/<timestamp>.jsonl */
   outPath?: string;
+  /**
+   * Persist Chromium profile across recording sessions for this site. When
+   * true, Chromium uses a stable user-data-dir at $IMPRINT_DATA/profiles/<site>
+   * so cookies + login state survive between captures. Useful for the dev
+   * iteration loop against a real authed site (Discover & Go, etc.) — log in
+   * once, re-record many times.
+   *
+   * Default false (throwaway profile each session). Production use of the
+   * generated MCP server uses the dedicated `imprint login` cookie store
+   * instead.
+   */
+  persistProfile?: boolean;
   /**
    * Stop signal. CLI wires this to SIGINT; tests can fire it from an
    * AbortController to shut down cleanly without process.exit.
@@ -79,9 +94,15 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
   // attach CDP and enable Network BEFORE the first request fires. If we passed
   // the URL up front, Chromium would race ahead and the page would already be
   // loaded by the time we subscribe.
+  const userDataDir = opts.persistProfile ? pathJoin(PATHS.data, 'profiles', opts.site) : undefined;
+  if (userDataDir) {
+    mkdirSync(userDataDir, { recursive: true });
+    console.log(`[imprint] using persistent profile at ${userDataDir}`);
+  }
   const chromium = await launchChromium({
     url: 'about:blank',
     headless: false,
+    userDataDir,
   });
 
   try {
@@ -248,26 +269,43 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
   });
 
   // ── Narration loop ────────────────────────────────────────────────────────
-  // Day 1 lays the wiring; the polished prompt lands in day 2.
   let narrationOpen = !opts.noNarration;
   let rl: ReturnType<typeof createInterface> | null = null;
+
+  const formatPrompt = (): string => {
+    const secs = Math.floor(elapsed() / 1000);
+    const mm = Math.floor(secs / 60);
+    const ss = String(secs % 60).padStart(2, '0');
+    // `seq` counts requests + events + narration combined — it's the right
+    // "captured records so far" number for the prompt.
+    return `[${mm}:${ss} • ${seq} captured] narrate (or /done): `;
+  };
 
   const narrationLoop: Promise<void> = (async () => {
     if (opts.noNarration) return;
     rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
     console.log('');
-    console.log('[imprint] recording. type narration lines, blank line skips.');
-    console.log('[imprint] press Ctrl+C when done.');
+    console.log('[imprint] recording. drive the browser, narrate as you go.');
+    console.log('[imprint]   blank line   = skip without recording narration');
+    console.log('[imprint]   /done        = stop recording cleanly');
+    console.log('[imprint]   Ctrl+C       = same as /done');
     console.log('');
     while (narrationOpen) {
       const reader = rl;
       if (!reader) break;
       const line: string = await new Promise((resolve) => {
-        reader.question('narrate> ', (answer) => resolve(answer));
+        reader.question(formatPrompt(), (answer) => resolve(answer));
       });
       if (!narrationOpen) break;
-      if (line.trim().length === 0) continue;
-      writer.narration({ seq: nextSeq(), timestamp: elapsed(), text: line.trim() });
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      if (trimmed === '/done' || trimmed === '/quit' || trimmed === '/q') {
+        // Trigger graceful shutdown from within the narration loop.
+        // Caller's signal/SIGINT handlers also work; this is a UX convenience.
+        narrationOpen = false;
+        break;
+      }
+      writer.narration({ seq: nextSeq(), timestamp: elapsed(), text: trimmed });
     }
   })();
 

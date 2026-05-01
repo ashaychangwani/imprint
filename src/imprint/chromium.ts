@@ -23,6 +23,13 @@ export interface LaunchOptions {
   url?: string;
   /** Launch headless. Default false (recording = visible browser the user drives). */
   headless?: boolean;
+  /**
+   * Explicit user-data-dir. If omitted, a throwaway dir under tmpdir() is used
+   * and discarded on close. Pass an explicit path to PERSIST cookies + login
+   * state across recording sessions — useful for the dev iteration loop where
+   * you don't want to re-log-in to a real site between every capture.
+   */
+  userDataDir?: string;
   /** Extra Chromium flags (advanced). */
   extraArgs?: string[];
 }
@@ -94,7 +101,8 @@ async function waitForCdp(port: number, timeoutMs = 10_000): Promise<void> {
 export async function launchChromium(opts: LaunchOptions = {}): Promise<LaunchedChromium> {
   const exe = findChromium();
   const port = opts.port ?? (await pickFreePort());
-  const userDataDir = pathJoin(tmpdir(), `imprint-chrome-${Date.now()}-${process.pid}`);
+  const userDataDir =
+    opts.userDataDir ?? pathJoin(tmpdir(), `imprint-chrome-${Date.now()}-${process.pid}`);
 
   const args = [
     `--remote-debugging-port=${port}`,

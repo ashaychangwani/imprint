@@ -84,7 +84,17 @@ Items deferred from the v0.1 design + eng review. Not blocking the 2-week sprint
 
 **Effort:** human ~3hr / CC ~30min. Pros: doubles potential user base. Cons: two SDKs to keep in lockstep on model IDs and message API drift.
 
-### 11. Open-source license audit
+### 11. Discover & Go as a 4th demo (post-launch)
+
+**What:** Ship a Discover & Go bot as a post-v0.1 demo. Captures the user's real personal pain: California library free passes that open at midnight and sell out in seconds. Polls at midnight, books the configured pass type, Pushover-notifies on success.
+
+**Why:** Used as the dev test target during the v0.1 sprint (days 2-7), so by launch we already have a working capture/generate/emit pipeline against D&G's real auth and traffic. Shipping it as a 4th demo would only require the cron + Pushover wiring (~3-4 hours) since codegen is already validated. Tweet hook: "I taught Claude to use my library card. Got us into the Exploratorium tomorrow at 12:00:03 AM."
+
+**Why not in v0.1:** User chose conservative scope — Luma stays in the demo lineup. D&G is a stretch goal post-launch.
+
+**Effort:** human ~1 day / CC ~3hr post-sprint. Pros: heartwarming narrative, daily content stream ("got us into the SF Zoo today"), real personal value. Cons: slight social-cost question (free scarce resource). User should set their own moral cadence: 1-2 outings/month is fine, aggressive nightly sniping changes the vibe.
+
+### 12. Open-source license audit
 
 **What:** Confirm no transitive deps under copyleft licenses (AGPL/GPL) that would conflict with the MIT license.
 
