@@ -106,10 +106,8 @@ Items deferred from the v0.1 design + eng review. Not blocking the 2-week sprint
 
 Claude Desktop wire-up is documented in the README.
 
-### 13. Open-source license audit
+### 13. ~~Open-source license audit~~ ✅ done (Day 9)
 
-**What:** Confirm no transitive deps under copyleft licenses (AGPL/GPL) that would conflict with the MIT license.
+**Result:** 128 production deps, all permissive. Distribution: MIT 108, ISC 8, Apache-2.0 7, BSD-3-Clause 3, BSD-2-Clause 2. Zero AGPL/GPL/LGPL/MPL/EPL. Compatible with the MIT license on this repo.
 
-**Why:** Hiring managers occasionally ask about this. Bun + chrome-remote-interface + MCP SDK + Anthropic SDK + node-cron + Pushover SDK should all be Apache/MIT.
-
-**Effort:** 30min with `bun pm licenses` (or equivalent).
+**Reproduce:** `npx --yes license-checker --production --summary`
