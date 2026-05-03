@@ -1,10 +1,11 @@
 /**
  * `imprint cron <site>` — polling daemon for a generated workflow.
  *
- * Loads `examples/<site>/cron.json`, validates the schedule + params
- * against the generated workflow, then schedules the tool function via
- * node-cron. Each tick logs start/end + result; failures additionally
- * fire a Pushover notification when configured.
+ * Loads `examples/<site>/cron.json`, validates the schedule + params,
+ * then schedules the tool via node-cron. Each tick walks the configured
+ * replayBackend ladder (fetch → stealth-fetch → playbook in 'auto')
+ * and logs which backend produced the result. Failures additionally
+ * fire a notification when configured.
  *
  * USAGE:
  *
@@ -24,7 +25,8 @@ import cron from 'node-cron';
 import { type ResolvedTool, buildZodValidator, discoverTools } from './discover-tools.ts';
 import { evaluateNotifyWhen } from './notify-when.ts';
 import { notify } from './notify.ts';
-import { runPlaybook } from './playbook-runner.ts';
+import { type BackendContext, ladderFor, runWithLadder } from './replay-backend.ts';
+import type { StealthFetch } from './stealth-fetch.ts';
 import {
   type CronConfig,
   CronConfigSchema,
@@ -44,9 +46,7 @@ export interface RunCronOptions {
   once?: boolean;
   /** Run immediately on startup AND continue scheduling. */
   runNow?: boolean;
-  /** Inject for tests; defaults to global fetch. Forwarded to the tool function. */
-  fetchImpl?: typeof fetch;
-  /** Inject for tests; defaults to global fetch. Used by Pushover notifications. */
+  /** Inject for tests; defaults to global fetch. Used by Pushover/ntfy notifications. */
   notifyFetchImpl?: typeof fetch;
 }
 
@@ -65,53 +65,40 @@ function loadCronConfig(configPath: string): CronConfig {
 }
 
 /**
- * One execution of the workflow + result handling. Used both for
- * scheduled ticks and the --once / --run-now paths.
+ * One execution of the workflow + result handling. Walks the
+ * configured replayBackend ladder; first non-FORBIDDEN result wins.
  */
 async function runOnce(
   tool: ResolvedTool,
-  params: Record<string, unknown>,
-  fetchImpl: typeof fetch | undefined,
+  params: Record<string, string | number | boolean>,
   notifyFetchImpl: typeof fetch | undefined,
   notifyWhen: NotifyWhen | undefined,
   replayBackend: ReplayBackend,
-  playbookPath: string | undefined,
+  examplesDir: string,
+  stealthCache: Map<string, StealthFetch>,
 ): Promise<ToolResult> {
   const startedAt = new Date();
   log(`${startedAt.toISOString()} ${tool.workflow.toolName} starting (backend: ${replayBackend})`);
   const t0 = Date.now();
-  let result: ToolResult;
 
-  if (replayBackend === 'playbook' && playbookPath) {
-    result = await runPlaybook({
-      playbook: playbookPath,
-      params: params as Record<string, string | number | boolean>,
-    });
-  } else {
-    try {
-      result = await tool.toolFn(params, fetchImpl ? { fetchImpl } : undefined);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      result = { ok: false, error: 'UNKNOWN', message: `tool threw: ${msg}` };
-    }
-    // Auto fallback: if API returned FORBIDDEN and we have a playbook,
-    // re-run via the browser. Bot detection is the canonical case.
-    if (replayBackend === 'auto' && !result.ok && result.error === 'FORBIDDEN' && playbookPath) {
-      log('  API returned FORBIDDEN, falling back to playbook…');
-      result = await runPlaybook({
-        playbook: playbookPath,
-        params: params as Record<string, string | number | boolean>,
-      });
-    }
-  }
+  const ctx: BackendContext = {
+    tool,
+    params,
+    examplesDir,
+    stealthCache,
+  };
+  const ladder = ladderFor(replayBackend);
+  const { result, usedBackend, attempts } = await runWithLadder(ladder, ctx);
 
   const elapsed = Date.now() - t0;
+  for (const a of attempts) {
+    if (a.outcome === 'escalate') log(`  ${a.backend} → ${a.detail} (escalating)`);
+  }
+
   if (result.ok) {
     const data = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-    log(`  OK in ${elapsed}ms: ${data}`);
+    log(`  OK in ${elapsed}ms via ${usedBackend}: ${data}`);
     if (notifyWhen) {
-      // A bad pricePath against an unexpected response shape would throw;
-      // catch + log so a flaky predicate never crashes the cron loop.
       try {
         const decision = evaluateNotifyWhen(notifyWhen, result.data, tool.workflow.toolName);
         if (decision.notify) {
@@ -127,7 +114,7 @@ async function runOnce(
       }
     }
   } else {
-    log(`  FAILED [${result.error}] ${result.message} (${elapsed}ms)`);
+    log(`  FAILED [${result.error}] via ${usedBackend} in ${elapsed}ms: ${result.message}`);
     if (result.remediation) log(`  → ${result.remediation}`);
     await notify(
       `imprint: ${tool.workflow.toolName} failed`,
@@ -160,26 +147,23 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     throw new Error(`Invalid cron expression in ${configPath}: "${config.schedule}"`);
   }
 
-  // Locate the playbook (if any) for the playbook / auto-fallback paths.
-  const { existsSync: fsExists } = await import('node:fs');
-  const playbookPath = pathResolve(examplesDir, opts.site, 'playbook.md');
-  const playbookExists = fsExists(playbookPath);
   const replayBackend = config.replayBackend ?? 'fetch';
-  if (replayBackend === 'playbook' && !playbookExists) {
+  const playbookPath = pathResolve(examplesDir, opts.site, 'playbook.md');
+  if (replayBackend === 'playbook' && !existsSync(playbookPath)) {
     throw new Error(
       `replayBackend="playbook" but ${playbookPath} doesn't exist. Run \`imprint compile-playbook\` first.`,
     );
   }
 
-  // Param validation only runs against the API workflow's parameters when
-  // the API path will be taken. The playbook backend has its own parameter
-  // schema (read from playbook.md) that the runner enforces; validating
-  // here would fail because parameter names typically differ between the
-  // API workflow (`origin_airport_code`) and the playbook (`origin`).
+  // Param validation runs against the API workflow's parameters when
+  // the fetch path can run (i.e., the ladder includes 'fetch'). For
+  // backends with their own param schema (playbook), we accept whatever
+  // the operator provided and let the runner enforce its own validation
+  // — names typically differ (e.g., Southwest's `origin` vs
+  // `origin_airport_code`) and the ladder fail-softs on mismatch.
+  const ladder = ladderFor(replayBackend);
   let params: Record<string, string | number | boolean>;
-  if (replayBackend === 'playbook') {
-    params = config.params;
-  } else {
+  if (ladder.includes('fetch') || ladder.includes('stealth-fetch')) {
     const validator = buildZodValidator(tool.workflow.parameters);
     const parsed = validator.safeParse(config.params);
     if (!parsed.success) {
@@ -187,22 +171,29 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
       throw new Error(`cron.json params invalid for ${tool.workflow.toolName}: ${issues}`);
     }
     params = parsed.data;
+  } else {
+    params = config.params;
   }
 
   log(`tool: ${tool.workflow.toolName} (${tool.workflow.parameters.length} param(s))`);
   log(`schedule: ${config.schedule}`);
   if (config.notifyWhen) log(`notifyWhen: ${config.notifyWhen.type}`);
-  log(`replayBackend: ${replayBackend}${playbookExists ? '' : ' (no playbook.md found)'}`);
+  log(
+    `replayBackend: ${replayBackend}${ladder.length > 1 ? ` (ladder: ${ladder.join(' → ')})` : ''}`,
+  );
 
-  const playbookForRun = playbookExists ? playbookPath : undefined;
+  // Per-process StealthFetch cache so the bootstrap cost is paid once
+  // per site and reused across all cron ticks in this process.
+  const stealthCache = new Map<string, StealthFetch>();
+
   const tickArgs = [
     tool,
     params,
-    opts.fetchImpl,
     opts.notifyFetchImpl,
     config.notifyWhen,
     replayBackend,
-    playbookForRun,
+    examplesDir,
+    stealthCache,
   ] as const;
 
   if (opts.once) {
@@ -229,6 +220,11 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     const shutdown = (sig: NodeJS.Signals): void => {
       log(`received ${sig}, stopping schedule`);
       task.stop();
+      // Clean up StealthFetch instances (no-op currently, but future-
+      // proof for if we add long-lived browser support).
+      for (const sf of stealthCache.values()) {
+        void sf.close();
+      }
       resolve();
     };
     process.once('SIGINT', () => shutdown('SIGINT'));

@@ -206,18 +206,28 @@ export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
  * declarations at load time so a typo doesn't surface only on the first tick.
  */
 /**
- * Which replay backend the cron should use:
- *   - 'fetch' (default): use the captured API workflow via Node fetch.
- *     Cheap, fast, works for ~70% of sites.
- *   - 'playbook': use the DOM playbook via Playwright. Slower (~5-10s
- *     per tick) but works against bot-protected sites because it's a
- *     real browser running real JS.
- *   - 'auto': try 'fetch' first; if it returns FORBIDDEN AND a
- *     playbook.md exists next to the workflow, fall back to 'playbook'
- *     and use that result instead. Best for sites where you don't yet
- *     know if the API path will work.
+ * Which replay backend the cron / MCP server should use, in increasing
+ * order of cost + bot-detection robustness:
+ *
+ *   - `'fetch'` (default): captured API workflow via Node `fetch`. ~200ms
+ *     per call. Fails on sites with serious bot detection (Akamai,
+ *     Cloudflare, etc).
+ *   - `'stealth-fetch'`: brief Playwright bootstrap mints sensor tokens
+ *     (~12s, one-time per process), then native `fetch` augmented with
+ *     those tokens (~1s per call). Defeats Akamai for direct-API sites.
+ *   - `'playbook'`: full Playwright + stealth + DOM walk via the
+ *     compiled playbook.md. ~9.4s per call. Universal — handles sites
+ *     that need form-fills, autocompletes, multi-page navigation.
+ *   - `'auto'`: walks the ladder fetch → stealth-fetch → playbook,
+ *     escalating only on FORBIDDEN. The principle: never fail with
+ *     "Imprint can't help" as long as some backend would have worked.
+ *
+ * The `auto` ladder skips rungs whose prerequisites aren't met (e.g.,
+ * playbook is skipped when no playbook.md exists). Non-FORBIDDEN errors
+ * (AUTH_EXPIRED, NETWORK, RATE_LIMITED, etc) don't escalate — those
+ * indicate a real problem the next backend can't solve.
  */
-export const ReplayBackendSchema = z.enum(['fetch', 'playbook', 'auto']);
+export const ReplayBackendSchema = z.enum(['fetch', 'stealth-fetch', 'playbook', 'auto']);
 export type ReplayBackend = z.infer<typeof ReplayBackendSchema>;
 
 export const CronConfigSchema = z.object({
