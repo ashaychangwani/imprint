@@ -109,7 +109,7 @@ describe('executeWorkflow', () => {
 
   it('classifies 401 as AUTH_EXPIRED with a helpful remediation', async () => {
     const fetchMock = (async () =>
-      new Response('forbidden', { status: 401 })) as unknown as typeof fetch;
+      new Response('session expired', { status: 401 })) as unknown as typeof fetch;
     const r = await executeWorkflow({
       workflow: baseWorkflow,
       params: { q: 'x' },
@@ -119,7 +119,30 @@ describe('executeWorkflow', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toBe('AUTH_EXPIRED');
+    expect(r.message).toContain('session expired');
     expect(r.remediation).toMatch(/imprint login test/);
+  });
+
+  it('classifies 403 as FORBIDDEN (NOT AUTH_EXPIRED) with the body included', async () => {
+    // Real-world: Southwest's Akamai returns 403 with a JSON code body
+    // when bot detection fires. Telling the user "run imprint login" is
+    // the wrong remediation; surface the body so they can diagnose.
+    const fetchMock = (async () =>
+      new Response('{"code":403050700}', {
+        status: 403,
+        headers: { 'content-type': 'application/json' },
+      })) as unknown as typeof fetch;
+    const r = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'x' },
+      credentials: STORE,
+      fetchImpl: fetchMock,
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toBe('FORBIDDEN');
+    expect(r.message).toContain('403050700');
+    expect(r.remediation).toMatch(/bot detection/i);
   });
 
   it('classifies 429 as RATE_LIMITED', async () => {

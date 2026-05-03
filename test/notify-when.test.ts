@@ -41,6 +41,13 @@ describe('extractAt', () => {
     expect(extractAt(data, 'items[].price')).toEqual([10, 30]);
   });
 
+  it('coerces numeric strings (Southwest/Stripe-style "108.40") to numbers', () => {
+    const data = {
+      items: [{ price: '108.40' }, { price: '49.00' }, { price: 'N/A' }, { price: 199 }],
+    };
+    expect(extractAt(data, 'items[].price')).toEqual([108.4, 49, 199]);
+  });
+
   it('throws when [] is applied to a non-array', () => {
     expect(() => extractAt({ items: { not: 'array' } }, 'items[].price')).toThrow(
       /expected an array/,

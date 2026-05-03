@@ -207,14 +207,17 @@ export function redactUrl(url: string): { redacted: string; redactionsCount: num
 }
 
 /** Redact sensitive headers in-place style (returns a new object). */
-export function redactHeaders(headers: Record<string, string>): {
+export function redactHeaders(
+  headers: Record<string, string>,
+  keepHeaders: ReadonlySet<string> = new Set(),
+): {
   redacted: Record<string, string>;
   redactionsCount: number;
 } {
   const out: Record<string, string> = {};
   let count = 0;
   for (const [k, v] of Object.entries(headers)) {
-    if (isSensitiveHeader(k)) {
+    if (isSensitiveHeader(k) && !keepHeaders.has(k.toLowerCase())) {
       out[k] = REDACTED(v.length);
       count++;
     } else {
@@ -235,14 +238,28 @@ export interface RedactionStats {
   warnings: string[];
 }
 
+export interface RedactOptions {
+  /**
+   * Header names (case-insensitive) to NEVER redact even if they match
+   * the sensitive header list. Use for known-public headers like
+   * `X-API-Key` on sites where it's an app-level identifier embedded in
+   * the page JS rather than a per-user secret.
+   */
+  keepHeaders?: string[];
+}
+
 /** Produce a scrubbed copy of a session safe to send to an LLM. */
-export function redactSession(session: Session): { session: Session; stats: RedactionStats } {
+export function redactSession(
+  session: Session,
+  opts: RedactOptions = {},
+): { session: Session; stats: RedactionStats } {
   const stats: RedactionStats = {
     totalRedactions: 0,
     requestsRedacted: 0,
     cookiesRedacted: 0,
     warnings: [],
   };
+  const keepHeaders = new Set((opts.keepHeaders ?? []).map((h) => h.toLowerCase()));
 
   const redactedRequests = session.requests.map((req) => {
     let touched = 0;
@@ -250,7 +267,7 @@ export function redactSession(session: Session): { session: Session; stats: Reda
     const urlR = redactUrl(req.url);
     touched += urlR.redactionsCount;
 
-    const headersR = redactHeaders(req.headers);
+    const headersR = redactHeaders(req.headers, keepHeaders);
     touched += headersR.redactionsCount;
 
     let body = req.body;
@@ -263,7 +280,7 @@ export function redactSession(session: Session): { session: Session; stats: Reda
 
     let response = req.response;
     if (response) {
-      const respHeadersR = redactHeaders(response.headers);
+      const respHeadersR = redactHeaders(response.headers, keepHeaders);
       touched += respHeadersR.redactionsCount;
       response = {
         ...response,

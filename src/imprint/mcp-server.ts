@@ -104,7 +104,7 @@ function buildServer(name: string, version: string, tools: ResolvedTool[]): Serv
     {
       capabilities: { tools: {} },
       instructions:
-        'Imprint runs deterministic workflows captured from real browser sessions. Each tool corresponds to one captured site. Call it with the documented parameters and the workflow will execute against the live site using stored credentials. If a call returns AUTH_EXPIRED, the user needs to re-run `imprint login <site>`.',
+        'Imprint runs deterministic workflows captured from real browser sessions. Each tool corresponds to one captured site. Call it with the documented parameters and the workflow will execute against the live site using stored credentials. Error codes: AUTH_EXPIRED (401, run `imprint login <site>`); FORBIDDEN (403 — usually bot detection or geo-block, the message body has the clue); RATE_LIMITED (429, back off); BAD_RESPONSE (other 4xx/5xx); NETWORK (fetch failed); UNKNOWN (everything else).',
     },
   );
 
