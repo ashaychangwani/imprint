@@ -87,7 +87,23 @@ You output a single JSON object matching this schema, and ONLY that JSON (no pro
 
 7. **Drop redirect chains** — only the final destination matters.
 
-8. **Keep request headers minimal.** Drop User-Agent, Accept-Encoding, sec-ch-* hints, x-client-data, browser-internal headers. Keep semantically-meaningful headers like Content-Type, Origin (when it's enforced by the server), Referer (when it's enforced), and any custom X-* headers that look like CSRF tokens (those should be parameterized via extract).
+8. **Keep request headers minimal.** Drop:
+   - `User-Agent`, `Accept-Encoding`, `sec-ch-*` client hints, `x-client-data`, browser-internal headers.
+   - **Bot-detection / fingerprinting headers** — these have opaque values bound to the original browser session and go stale on replay. Common patterns:
+     - **Akamai Bot Manager**: a per-site randomized prefix followed by `-a`/`-b`/`-c`/`-d`/`-f`/`-z` suffixes (e.g. `EE30zvQLWf-a`, `xY7nQ-c`). The prefix is uppercase+lowercase+digits, ~10 chars, repeated across multiple headers in the same request.
+     - **DataDome**: headers starting with `x-dd-` or `dd-`.
+     - **PerimeterX / HUMAN**: `_px*`, `x-px*`.
+     - **Cloudflare bot**: `cf-*` (except `cf-connecting-ip` if echoed back).
+     - **Generic fingerprinting**: any header whose name doesn't appear in standard HTTP/MDN listings AND whose value is a long opaque base64-ish string.
+   - Drop them all. The runtime will replay without them; the API may flag the request as bot-driven, in which case the failure tells the operator to pivot.
+
+   **Keep**:
+   - `Content-Type`
+   - `Origin` (when the server enforces it)
+   - `Referer` (when the server enforces it)
+   - Genuine CSRF-style `X-*` headers established at login time — parameterize via `extract` from the login response, not as `${param.X}`.
+
+   **Special case — `X-API-Key`**: usually an app-level identifier embedded in the site's JavaScript (every visitor sees the same value). Keep it as a literal string in the workflow. If the redaction step replaced it with `[REDACTED:N]`, the operator should re-run `imprint redact --keep-header x-api-key` and regenerate. Only treat `X-API-Key` as a credential if the value is clearly per-user (e.g., it appears in a `Set-Cookie` after login, or differs between two captures from different accounts).
 
 9. **toolName is a verb phrase the LLM caller would naturally use** — `book_museum_pass`, `search_southwest_seats`, `cancel_reservation`. Snake_case. Specific.
 

@@ -136,18 +136,27 @@ async function main(argv: string[]): Promise<number> {
         console.error('error: `imprint redact` requires a <session.json> argument');
         return 2;
       }
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: { 'keep-header': { type: 'string', multiple: true } },
+        allowPositionals: false,
+      });
       const { readFileSync, writeFileSync } = await import('node:fs');
       const { SessionSchema } = await import('./imprint/types.ts');
       const { redactSession } = await import('./imprint/redact.ts');
       const raw = JSON.parse(readFileSync(sessionPath, 'utf8'));
       const session = SessionSchema.parse(raw);
-      const { session: scrubbed, stats } = redactSession(session);
+      const keepHeaders = values['keep-header'] ?? [];
+      const { session: scrubbed, stats } = redactSession(session, { keepHeaders });
       const outPath = sessionPath.replace(/\.json$/, '.redacted.json');
       writeFileSync(outPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
       console.log(`[imprint] redacted → ${outPath}`);
       console.log(
         `[imprint] ${stats.totalRedactions} value${stats.totalRedactions === 1 ? '' : 's'} replaced across ${stats.requestsRedacted} request${stats.requestsRedacted === 1 ? '' : 's'} and ${stats.cookiesRedacted} cookie${stats.cookiesRedacted === 1 ? '' : 's'}`,
       );
+      if (keepHeaders.length > 0) {
+        console.log(`[imprint] kept (not redacted): ${keepHeaders.join(', ')}`);
+      }
       for (const w of stats.warnings) {
         console.log(`[imprint]   ⚠ ${w}`);
       }
