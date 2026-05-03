@@ -1,104 +1,18 @@
 # search_southwest_flights_low_fare_calendar
 
 ## Summary
-Search Southwest for one-way fares between two airports using the Low Fare Calendar, select a specific date, and return flight prices for that date.
+Search Southwest for one-way fares between two airports on a given date, then drill into the Low Fare Calendar to see prices for the surrounding days. Uses Southwest's URL params to skip the form-fill ceremony entirely.
 
 ## Parameters
-- `origin` (string, required) — IATA airport code, e.g. SJC
-- `destination` (string, required) — IATA airport code, e.g. SAN
-- `depart_date` (string, required) — Initial search date in YYYY-MM-DD format
-- `selected_date` (string, required) — Date selected from the Low Fare Calendar in YYYY-MM-DD format
+- `origin` (string, required) — IATA origin airport code, e.g. SJC
+- `destination` (string, required) — IATA destination airport code, e.g. SAN
+- `depart_date` (string, required) — YYYY-MM-DD departure date
 
 ## Steps
 
-### Step 1: Open the booking page
+### Step 1: Navigate to the search URL
 - action: navigate
-- url: https://www.southwest.com/air/booking/
-- wait_for: networkidle
-
-### Step 2: Type origin airport code
-- action: type
-- locators:
-  - by: id, value: originationAirportCode
-  - by: css, value: input#originationAirportCode
-- value: ${origin}
-- wait_for: sleep:500
-
-### Step 3: Pick origin from autocomplete
-- action: click
-- locators:
-  - by: text, value_pattern: ${origin}
-  - by: aria_label, value_pattern: ${origin}
-- wait_for: visible
-
-### Step 4: Type destination airport code
-- action: type
-- locators:
-  - by: id, value: destinationAirportCode
-  - by: css, value: input#destinationAirportCode
-- value: ${destination}
-- wait_for: sleep:500
-
-### Step 5: Pick destination from autocomplete
-- action: click
-- locators:
-  - by: text, value_pattern: ${destination}
-  - by: aria_label, value_pattern: ${destination}
-- wait_for: visible
-
-### Step 6: Set departure date
-- action: type
-- locators:
-  - by: id, value: departureDate
-  - by: aria_label, value: Depart date in M M, D D format
-- value: ${depart_date}
-- wait_for: sleep:300
-
-### Step 6.5: Dismiss the date picker overlay
-- action: press
-- key: Escape
-- wait_for: sleep:300
-
-### Step 7: Open trip-type dropdown
-- action: click
-- locators:
-  - by: css, value: div.trigger__2lKPu
-  - by: text, value: Round-trip
-- wait_for: sleep:1000
-
-### Step 8: Select one-way
-- action: click
-- locators:
-  - by: text, value: One-way
-  - by: role, value: option, name: One-way
-- wait_for: visible
-
-### Step 9: Click Search flights
-- action: click
-- locators:
-  - by: text, value: Search flights
-  - by: role, value: button, name: Search flights
-- wait_for: networkidle
-
-### Step 10: Click Low Fare Calendar link
-- action: click
-- locators:
-  - by: text, value: Low Fare Calendar
-  - by: role, value: link, name: Low Fare Calendar
-- wait_for: networkidle
-
-### Step 11: Click the selected date on the calendar
-- action: click
-- locators:
-  - by: text, value_pattern: ${selected_date}
-  - by: aria_label, value_pattern: ${selected_date}
-- wait_for: sleep:500
-
-### Step 12: Click Continue to flight times
-- action: click
-- locators:
-  - by: text, value: Continue to flight times
-  - by: role, value: button, name: Continue to flight times
+- url: https://www.southwest.com/air/booking/select-depart.html?adultsCount=1&adultPassengersCount=1&originationAirportCode=${origin}&destinationAirportCode=${destination}&departureDate=${depart_date}&departureTimeOfDay=ALL_DAY&fareType=USD&int=HOMEQBOMAIR&passengerType=ADULT&promoCode=&returnDate=&returnTimeOfDay=ALL_DAY&tripType=oneway
 - wait_for: xhr:/api/air-booking/v1/air-booking/page/air/booking/shopping
 
 ## Result
@@ -106,3 +20,11 @@ Search Southwest for one-way fares between two airports using the Low Fare Calen
 - url_pattern: /api/air-booking/v1/air-booking/page/air/booking/shopping
 - extract: data.searchResults.airProducts[].lowestFare.value
 - return_as: prices
+
+## Notes
+
+The recorded session showed the user clicking through the form (origin/destination autocompletes, date picker, trip-type dropdown, search submit, then drilling into Low Fare Calendar). The captured DOM events confirmed Southwest's date input is click-only — no keyboard input events were ever fired on `#departureDate`, so the original 12-step playbook's `type` action couldn't bind to React state and the form submitted with today's date instead of the requested one.
+
+URL navigation sidesteps every form-fill quirk in one step. Southwest's `/air/booking/select-depart.html` route accepts the entire search state as query params — `originationAirportCode`, `destinationAirportCode`, `departureDate` (YYYY-MM-DD), `tripType`, etc — and runs the shopping XHR automatically. We confirmed the param shape from the captured Referer header on the shopping POST in the original recording.
+
+The Low Fare Calendar drilldown was useful UX during recording but isn't needed for the price-drop watcher: the shopping XHR returns all flights for the date, and `notifyWhen.price_below` filters across them.
