@@ -63,28 +63,33 @@ Other browser-tool frameworks (browser-use, Computer Use, openclaw) ask the LLM 
 git clone https://github.com/ashaychangwani/imprint
 cd imprint
 bun install
-cp .env.example .env  # fill in the Vertex AI credentials
+cp .env.example .env       # fill in the Vertex AI credentials
+bun link && bun link imprint   # one-time: expose `imprint` on your PATH
 
 # Capture a teaching session (opens Chromium; type narration as you click).
 # Use any site name — files land at examples/<site>/sessions/<timestamp>.jsonl
-bun run dev record discoverandgo
+imprint record discoverandgo
 
 # Scrub credentials, then send the redacted session to Claude for analysis
-bun run dev redact examples/discoverandgo/sessions/<timestamp>.json
-bun run dev generate examples/discoverandgo/sessions/<timestamp>.redacted.json
+imprint redact examples/discoverandgo/sessions/<timestamp>.json
+imprint generate examples/discoverandgo/sessions/<timestamp>.redacted.json
 
 # Codegen the deterministic TS module from the workflow
-bun run dev emit examples/discoverandgo/workflow.json
+imprint emit examples/discoverandgo/workflow.json
 
 # Optional: also compile a DOM playbook for sites where the API path
 # may get blocked by bot detection (Akamai/Cloudflare/etc).
-bun run dev compile-playbook examples/discoverandgo/sessions/<timestamp>.redacted.json
+imprint compile-playbook examples/discoverandgo/sessions/<timestamp>.redacted.json
+
+# Optional: probe each backend once and cache the ranked order so cron
+# + MCP skip futile rungs every tick.
+imprint probe-backends discoverandgo
 
 # Either expose every generated tool as MCP for Claude Desktop / Cursor…
-bun run dev mcp-server
+imprint mcp-server
 
 # …or schedule one as a cron job (drop a cron.json next to workflow.json first)
-bun run dev cron discoverandgo
+imprint cron discoverandgo
 ```
 
 ## CLI verbs
