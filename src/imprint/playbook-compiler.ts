@@ -16,8 +16,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { LLM, loadConfig } from './llm.ts';
 import { parsePlaybook } from './playbook-parser.ts';
-import type { Playbook } from './playbook-types.ts';
 import { redactSession } from './redact.ts';
+import type { Playbook } from './types.ts';
 import { type Session, SessionSchema } from './types.ts';
 
 export interface CompilePlaybookOptions {

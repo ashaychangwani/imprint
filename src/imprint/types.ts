@@ -292,3 +292,110 @@ export const CronConfigSchema = z.object({
   replayBackend: ReplayBackendSchema.optional().default('fetch'),
 });
 export type CronConfig = z.infer<typeof CronConfigSchema>;
+
+// ─── Playbook (DOM-replay artifact) ─────────────────────────────────────────
+
+/** Locator strategies, in priority order: role+name → aria_label → text → id → css. */
+export const LocatorSchema = z.discriminatedUnion('by', [
+  z.object({
+    by: z.literal('role'),
+    value: z.string(),
+    name: z.string().optional(),
+  }),
+  z.object({
+    by: z.literal('aria_label'),
+    value: z.string().optional(),
+    value_pattern: z.string().optional(),
+  }),
+  z.object({
+    by: z.literal('text'),
+    value: z.string().optional(),
+    value_pattern: z.string().optional(),
+  }),
+  z.object({ by: z.literal('id'), value: z.string() }),
+  z.object({ by: z.literal('css'), value: z.string() }),
+]);
+export type Locator = z.infer<typeof LocatorSchema>;
+
+export const WaitForSchema = z.union([
+  z.literal('networkidle'),
+  z.literal('load'),
+  z.literal('visible'),
+  z.literal('hidden'),
+  z.object({
+    xhr: z.string(),
+    method: z.string().optional(),
+    timeout_ms: z.number().int().positive().optional(),
+  }),
+  z.object({ sleep_ms: z.number().int().positive() }),
+]);
+export type WaitFor = z.infer<typeof WaitForSchema>;
+
+export const PlaybookStepSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('navigate'),
+    url: z.string(),
+    wait_for: WaitForSchema.optional(),
+  }),
+  z.object({
+    action: z.literal('click'),
+    locators: z.array(LocatorSchema).min(1),
+    wait_for: WaitForSchema.optional(),
+  }),
+  z.object({
+    action: z.literal('type'),
+    locators: z.array(LocatorSchema).min(1),
+    value: z.string(),
+    clear: z.boolean().optional(),
+    wait_for: WaitForSchema.optional(),
+  }),
+  z.object({
+    action: z.literal('submit'),
+    locators: z.array(LocatorSchema).min(1),
+    wait_for: WaitForSchema.optional(),
+  }),
+  z.object({
+    action: z.literal('press'),
+    key: z.string(),
+    locators: z.array(LocatorSchema).optional(),
+    wait_for: WaitForSchema.optional(),
+  }),
+  z.object({
+    action: z.literal('wait'),
+    wait_for: WaitForSchema,
+  }),
+]);
+export type PlaybookStep = z.infer<typeof PlaybookStepSchema>;
+
+export const PlaybookResultSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('xhr'),
+    url_pattern: z.string(),
+    method: z.string().optional(),
+    /** Dot-path with [] for array iteration (see json-path.ts). */
+    extract: z.string(),
+    return_as: z.string().default('result'),
+  }),
+  z.object({
+    source: z.literal('dom'),
+    locators: z.array(LocatorSchema).min(1),
+    /** "text" (innerText) or attribute name (e.g. "value", "href"). */
+    extract: z.string(),
+    return_as: z.string().default('result'),
+  }),
+]);
+export type PlaybookResult = z.infer<typeof PlaybookResultSchema>;
+
+// Playbook params are structurally identical to workflow params; share the schema.
+export const PlaybookParameterSchema = WorkflowParameterSchema;
+export type PlaybookParameter = WorkflowParameter;
+
+export const PlaybookSchema = z.object({
+  toolName: z.string(),
+  summary: z.string(),
+  parameters: z.array(PlaybookParameterSchema),
+  steps: z.array(PlaybookStepSchema).min(1),
+  result: PlaybookResultSchema,
+  notes: z.string().optional(),
+});
+export type Playbook = z.infer<typeof PlaybookSchema>;

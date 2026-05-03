@@ -15,9 +15,9 @@ import type { Browser, BrowserContext, Locator as PWLocator, Page } from 'playwr
 import { extractAt } from './json-path.ts';
 import { createLog } from './log.ts';
 import { parsePlaybook } from './playbook-parser.ts';
-import type { Locator, Playbook, PlaybookResult, PlaybookStep, WaitFor } from './playbook-types.ts';
+import { substituteString } from './runtime.ts';
+import type { Locator, Playbook, PlaybookResult, PlaybookStep, WaitFor } from './types.ts';
 import type { ToolResult } from './types.ts';
-import { substituteString } from './workflow-runtime.ts';
 
 export interface RunPlaybookOptions {
   /** Path to playbook.yaml OR an already-parsed Playbook. */

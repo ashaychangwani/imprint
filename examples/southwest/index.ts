@@ -11,7 +11,7 @@
 import {
   executeWorkflow,
   type CredentialStore,
-} from '../../src/imprint/workflow-runtime.ts';
+} from '../../src/imprint/runtime.ts';
 import type { ToolResult, Workflow } from '../../src/imprint/types.ts';
 
 const WORKFLOW: Workflow = {

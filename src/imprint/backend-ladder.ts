@@ -19,10 +19,10 @@
 
 import { existsSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
-import type { ResolvedTool } from './discover-tools.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
 import { type StealthFetch, createStealthFetch } from './stealth-fetch.ts';
+import type { ResolvedTool } from './tool-loader.ts';
 import type { ReplayBackend, ToolResult } from './types.ts';
 
 export interface LadderResult {

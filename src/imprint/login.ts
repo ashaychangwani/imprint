@@ -19,8 +19,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import envPaths from 'env-paths';
+import type { CredentialStore } from './runtime.ts';
 import { type Session, SessionSchema } from './types.ts';
-import type { CredentialStore } from './workflow-runtime.ts';
 
 const PATHS = envPaths('imprint', { suffix: '' });
 
