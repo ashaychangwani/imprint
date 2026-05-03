@@ -58,6 +58,46 @@ OPTIONS:
   --version, -v             Print version
 `;
 
+/**
+ * Read the positional arg right after the verb. Most verbs require a
+ * single subject (a site name, a session path, etc.) — this dedupes
+ * the boilerplate "if (!x) error and return 2" that they all share.
+ *
+ * Returns the value when present. When missing, prints a uniform error
+ * to stderr and returns null so the caller can early-return its exit
+ * code (callers do `const x = req(...); if (x === null) return 2;`).
+ */
+function requirePositional(argv: string[], verb: string, label: string): string | null {
+  const v = argv[1];
+  if (!v) {
+    console.error(`error: \`imprint ${verb}\` requires ${label}`);
+    return null;
+  }
+  return v;
+}
+
+/**
+ * Parse the `--param k=v` array used by `probe-backends` and `playbook`.
+ * Each entry is split on the FIRST `=` (so values may contain `=`).
+ * Coerces numeric / boolean strings; everything else stays a string.
+ *
+ * Throws on a malformed entry (no `=`) so the caller surfaces a
+ * specific error message instead of silently dropping the bad input.
+ */
+function parseParamKV(entries: string[]): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  for (const kv of entries) {
+    const eq = kv.indexOf('=');
+    if (eq === -1) throw new Error(`--param requires k=v form, got "${kv}"`);
+    const k = kv.slice(0, eq);
+    const v = kv.slice(eq + 1);
+    if (v === 'true' || v === 'false') out[k] = v === 'true';
+    else if (v !== '' && !Number.isNaN(Number(v))) out[k] = Number(v);
+    else out[k] = v;
+  }
+  return out;
+}
+
 async function main(argv: string[]): Promise<number> {
   const verb = argv[0];
 
@@ -72,12 +112,9 @@ async function main(argv: string[]): Promise<number> {
 
   switch (verb) {
     case 'record': {
+      const site = requirePositional(argv, 'record', 'a <site> argument');
+      if (site === null) return 2;
       const { record } = await import('./imprint/record.ts');
-      const site = argv[1];
-      if (!site) {
-        console.error('error: `imprint record` requires a <site> argument');
-        return 2;
-      }
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {
@@ -110,11 +147,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'assemble': {
-      const jsonlPath = argv[1];
-      if (!jsonlPath) {
-        console.error('error: `imprint assemble` requires a <session.jsonl> argument');
-        return 2;
-      }
+      const jsonlPath = requirePositional(argv, 'assemble', 'a <session.jsonl> argument');
+      if (jsonlPath === null) return 2;
       const { assembleFromJsonl } = await import('./imprint/session-writer.ts');
       const { writeFileSync } = await import('node:fs');
       const session = assembleFromJsonl(jsonlPath);
@@ -128,13 +162,12 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'check': {
-      const sessionPath = argv[1];
-      if (!sessionPath) {
-        console.error(
-          'error: `imprint check` requires a <session.json> or <session.jsonl> argument',
-        );
-        return 2;
-      }
+      const sessionPath = requirePositional(
+        argv,
+        'check',
+        'a <session.json> or <session.jsonl> argument',
+      );
+      if (sessionPath === null) return 2;
       const { checkSession, reportCheck } = await import('./imprint/check.ts');
       const result = checkSession(sessionPath);
       reportCheck(sessionPath, result);
@@ -142,11 +175,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'redact': {
-      const sessionPath = argv[1];
-      if (!sessionPath) {
-        console.error('error: `imprint redact` requires a <session.json> argument');
-        return 2;
-      }
+      const sessionPath = requirePositional(argv, 'redact', 'a <session.json> argument');
+      if (sessionPath === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: { 'keep-header': { type: 'string', multiple: true } },
@@ -175,11 +205,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'generate': {
-      const sessionPath = argv[1];
-      if (!sessionPath) {
-        console.error('error: `imprint generate` requires a <session.json> argument');
-        return 2;
-      }
+      const sessionPath = requirePositional(argv, 'generate', 'a <session.json> argument');
+      if (sessionPath === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {
@@ -208,11 +235,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'emit': {
-      const workflowPath = argv[1];
-      if (!workflowPath) {
-        console.error('error: `imprint emit` requires a <workflow.json> argument');
-        return 2;
-      }
+      const workflowPath = requirePositional(argv, 'emit', 'a <workflow.json> argument');
+      if (workflowPath === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: { force: { type: 'boolean' }, 'out-dir': { type: 'string' } },
@@ -232,11 +256,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'login': {
-      const site = argv[1];
-      if (!site) {
-        console.error('error: `imprint login` requires a <site> argument');
-        return 2;
-      }
+      const site = requirePositional(argv, 'login', 'a <site> argument');
+      if (site === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: { 'from-session': { type: 'string' } },
@@ -286,11 +307,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'cron': {
-      const site = argv[1];
-      if (!site) {
-        console.error('error: `imprint cron` requires a <site> argument');
-        return 2;
-      }
+      const site = requirePositional(argv, 'cron', 'a <site> argument');
+      if (site === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {
@@ -311,11 +329,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'probe-backends': {
-      const site = argv[1];
-      if (!site) {
-        console.error('error: `imprint probe-backends` requires a <site> argument');
-        return 2;
-      }
+      const site = requirePositional(argv, 'probe-backends', 'a <site> argument');
+      if (site === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {
@@ -324,18 +339,12 @@ async function main(argv: string[]): Promise<number> {
         },
         allowPositionals: false,
       });
-      const overrides: Record<string, string | number | boolean> = {};
-      for (const kv of values.param ?? []) {
-        const eq = kv.indexOf('=');
-        if (eq === -1) {
-          console.error(`error: --param requires k=v form, got "${kv}"`);
-          return 2;
-        }
-        const k = kv.slice(0, eq);
-        const v = kv.slice(eq + 1);
-        if (v === 'true' || v === 'false') overrides[k] = v === 'true';
-        else if (v !== '' && !Number.isNaN(Number(v))) overrides[k] = Number(v);
-        else overrides[k] = v;
+      let overrides: Record<string, string | number | boolean>;
+      try {
+        overrides = parseParamKV(values.param ?? []);
+      } catch (err) {
+        console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+        return 2;
       }
       const { probeBackends } = await import('./imprint/probe-backends.ts');
       const result = await probeBackends({
@@ -349,11 +358,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'compile-playbook': {
-      const sessionPath = argv[1];
-      if (!sessionPath) {
-        console.error('error: `imprint compile-playbook` requires a <session.json> argument');
-        return 2;
-      }
+      const sessionPath = requirePositional(argv, 'compile-playbook', 'a <session.json> argument');
+      if (sessionPath === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: { out: { type: 'string' } },
@@ -372,11 +378,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'playbook': {
-      const site = argv[1];
-      if (!site) {
-        console.error('error: `imprint playbook` requires a <site> argument');
-        return 2;
-      }
+      const site = requirePositional(argv, 'playbook', 'a <site> argument');
+      if (site === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {
@@ -390,19 +393,12 @@ async function main(argv: string[]): Promise<number> {
       const { resolve: pathResolve } = await import('node:path');
       const playbookPath =
         values.path ?? pathResolve(process.cwd(), 'examples', site, 'playbook.yaml');
-      const params: Record<string, string | number | boolean> = {};
-      for (const kv of values.param ?? []) {
-        const eq = kv.indexOf('=');
-        if (eq === -1) {
-          console.error(`error: --param requires k=v form, got "${kv}"`);
-          return 2;
-        }
-        const k = kv.slice(0, eq);
-        const v = kv.slice(eq + 1);
-        // Best-effort coerce: number if numeric, boolean if true/false, else string
-        if (v === 'true' || v === 'false') params[k] = v === 'true';
-        else if (v !== '' && !Number.isNaN(Number(v))) params[k] = Number(v);
-        else params[k] = v;
+      let params: Record<string, string | number | boolean>;
+      try {
+        params = parseParamKV(values.param ?? []);
+      } catch (err) {
+        console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+        return 2;
       }
       const { runPlaybook } = await import('./imprint/playbook-runner.ts');
       const result = await runPlaybook({
