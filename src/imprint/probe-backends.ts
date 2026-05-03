@@ -19,7 +19,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import { discoverTools } from './discover-tools.ts';
 import { createLog } from './log.ts';
-import { type BackendContext, runWithLadder } from './replay-backend.ts';
+import { runWithLadder } from './replay-backend.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { type BackendsCache, BackendsCacheSchema, CronConfigSchema } from './types.ts';
 
@@ -61,12 +61,6 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
   // rung even when an earlier one succeeded — operators want to know
   // which backends WOULD work, not just the first one that did.
   const stealthCache = new Map<string, StealthFetch>();
-  const ctx: BackendContext = {
-    tool,
-    params,
-    examplesDir,
-    stealthCache,
-  };
   // The probe targets the three real backends (not 'auto', which is a
   // meta-value that expands to a ladder of these).
   type ConcreteBackend = 'fetch' | 'stealth-fetch' | 'playbook';
@@ -79,7 +73,13 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
     const t0 = Date.now();
     // Run each rung as a single-rung ladder so escalation logic doesn't
     // skip over any backends.
-    const { result, attempts } = await runWithLadder([backend], ctx);
+    const { result, attempts } = await runWithLadder(
+      [backend],
+      tool,
+      params,
+      examplesDir,
+      stealthCache,
+    );
     const durationMs = Date.now() - t0;
     const attempt = attempts[0];
 

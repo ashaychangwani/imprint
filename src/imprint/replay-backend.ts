@@ -7,8 +7,8 @@
  *                        fetch (~12s bootstrap one-time, ~1s per call)
  *   3. `playbook`      — full Playwright + stealth + DOM walk (~9.4s)
  *
- * `runWithLadder(['fetch','stealth-fetch','playbook'], ctx)` walks them
- * in order, escalating only on FORBIDDEN. Other error classes
+ * `runWithLadder([...], tool, params, examplesDir, stealthCache)` walks
+ * them in order, escalating only on FORBIDDEN. Other error classes
  * (AUTH_EXPIRED, NETWORK, RATE_LIMITED, etc) return immediately —
  * a different backend can't fix those.
  *
@@ -24,18 +24,6 @@ import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
 import { type StealthFetch, createStealthFetch } from './stealth-fetch.ts';
 import type { ReplayBackend, ToolResult } from './types.ts';
-
-export interface BackendContext {
-  tool: ResolvedTool;
-  params: Record<string, string | number | boolean>;
-  examplesDir: string;
-  /**
-   * Per-process cache of long-lived StealthFetch instances. Keyed by
-   * site so the bootstrap cost is paid once per site per process.
-   * Caller (cron / mcp-server) owns the cache and passes it in.
-   */
-  stealthCache: Map<string, StealthFetch>;
-}
 
 export interface LadderResult {
   result: ToolResult;
@@ -59,7 +47,10 @@ const log = createLog('backend');
  */
 export async function runWithLadder(
   ladder: ReplayBackend[],
-  ctx: BackendContext,
+  tool: ResolvedTool,
+  params: Record<string, string | number | boolean>,
+  examplesDir: string,
+  stealthCache: Map<string, StealthFetch>,
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
     throw new Error('runWithLadder: empty ladder');
@@ -69,11 +60,11 @@ export async function runWithLadder(
   let lastResult: ToolResult | null = null;
 
   for (const backend of ladder) {
-    if (!(await backendAvailable(backend, ctx))) {
+    if (backend === 'playbook' && !existsSync(playbookPath(examplesDir, tool.site))) {
       attempts.push({
         backend,
         outcome: 'unavailable',
-        detail: backend === 'playbook' ? 'no playbook.yaml' : 'prerequisite missing',
+        detail: 'no playbook.yaml',
         durationMs: 0,
       });
       log(`${backend}: skipped (prerequisite missing)`);
@@ -82,17 +73,35 @@ export async function runWithLadder(
 
     const t0 = Date.now();
     log(`trying ${backend}…`);
-    const result = await runBackend(backend, ctx);
+    let result: ToolResult;
+    try {
+      switch (backend) {
+        case 'fetch':
+          result = await tool.toolFn(params);
+          break;
+        case 'stealth-fetch': {
+          const sf = ensureStealthFetch(tool, stealthCache);
+          result = await tool.toolFn(params, { fetchImpl: sf.fetchImpl });
+          break;
+        }
+        case 'playbook':
+          result = await runPlaybook({
+            playbook: playbookPath(examplesDir, tool.site),
+            params,
+          });
+          break;
+        case 'auto':
+          throw new Error('auto is a meta-backend; expand before runWithLadder()');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { ok: false, error: 'UNKNOWN', message: `${backend} threw: ${msg}` };
+    }
     const durationMs = Date.now() - t0;
     lastResult = result;
 
     if (result.ok) {
-      attempts.push({
-        backend,
-        outcome: 'ok',
-        detail: `succeeded in ${durationMs}ms`,
-        durationMs,
-      });
+      attempts.push({ backend, outcome: 'ok', detail: `succeeded in ${durationMs}ms`, durationMs });
       log(`${backend}: OK in ${durationMs}ms`);
       return { result, usedBackend: backend, attempts };
     }
@@ -121,8 +130,6 @@ export async function runWithLadder(
   }
 
   // Every backend either escalated (FORBIDDEN) or was unavailable.
-  // Return the last actual result; if everything was unavailable
-  // there's no result to return.
   if (!lastResult) {
     return {
       result: {
@@ -143,102 +150,25 @@ export async function runWithLadder(
 }
 
 /**
- * Translate a `replayBackend` config value into the ordered ladder
- * the runner walks. When `auto` is requested AND a backends.json
- * probe cache exists for the site, prefer the cached order — it's the
- * empirical "what worked at probe time" rather than the default
- * fetch → stealth-fetch → playbook. The cached order's tail still
- * acts as a fallback in case the preferred backend stops working.
+ * Lazily mint a per-site stealth fetcher, cached across calls so the
+ * Playwright bootstrap cost is paid once per site per process.
  */
-export function ladderFor(backend: ReplayBackend, cachedOrder?: ReplayBackend[]): ReplayBackend[] {
-  switch (backend) {
-    case 'auto':
-      if (cachedOrder && cachedOrder.length > 0) return cachedOrder;
-      return ['fetch', 'stealth-fetch', 'playbook'];
-    case 'fetch':
-    case 'stealth-fetch':
-    case 'playbook':
-      return [backend];
-  }
-}
-
-async function backendAvailable(backend: ReplayBackend, ctx: BackendContext): Promise<boolean> {
-  if (backend === 'auto') return true; // never used directly
-  if (backend === 'fetch' || backend === 'stealth-fetch') return true;
-  if (backend === 'playbook') {
-    return existsSync(playbookPath(ctx));
-  }
-  return false;
-}
-
-async function runBackend(backend: ReplayBackend, ctx: BackendContext): Promise<ToolResult> {
-  switch (backend) {
-    case 'fetch':
-      return runFetch(ctx);
-    case 'stealth-fetch':
-      return runStealthFetch(ctx);
-    case 'playbook':
-      return runPlaybookBackend(ctx);
-    case 'auto':
-      throw new Error('auto is a meta-backend; expand via ladderFor() before runBackend()');
-  }
-}
-
-async function runFetch(ctx: BackendContext): Promise<ToolResult> {
-  try {
-    return await ctx.tool.toolFn(ctx.params);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: 'UNKNOWN', message: `tool threw: ${msg}` };
-  }
-}
-
-async function runStealthFetch(ctx: BackendContext): Promise<ToolResult> {
-  const sf = ensureStealthFetch(ctx);
-  try {
-    return await ctx.tool.toolFn(ctx.params, { fetchImpl: sf.fetchImpl });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: 'UNKNOWN', message: `stealth-fetch threw: ${msg}` };
-  }
-}
-
-async function runPlaybookBackend(ctx: BackendContext): Promise<ToolResult> {
-  return runPlaybook({
-    playbook: playbookPath(ctx),
-    params: ctx.params,
-  });
-}
-
-function playbookPath(ctx: BackendContext): string {
-  return pathResolve(ctx.examplesDir, ctx.tool.site, 'playbook.yaml');
-}
-
-/**
- * Lazily mint a per-site StealthFetch instance, cached on the context.
- * The bootstrap probe URL is the first request URL from the captured
- * workflow (post-substitution) — Akamai's interceptor only injects
- * sensor headers for paths it recognizes, so a site-relevant probe is
- * required.
- */
-function ensureStealthFetch(ctx: BackendContext): StealthFetch {
-  const cached = ctx.stealthCache.get(ctx.tool.site);
+function ensureStealthFetch(tool: ResolvedTool, cache: Map<string, StealthFetch>): StealthFetch {
+  const cached = cache.get(tool.site);
   if (cached) return cached;
-
-  const baseUrl = pickBaseUrl(ctx.tool);
-  const sf = createStealthFetch({ baseUrl });
-  ctx.stealthCache.set(ctx.tool.site, sf);
+  const sf = createStealthFetch({ baseUrl: pickBaseUrl(tool) });
+  cache.set(tool.site, sf);
   return sf;
 }
 
 /**
  * Heuristic: use the workflow's first request URL's origin as the base
- * for the StealthFetch bootstrap. This is the right domain to load so
+ * for the stealth-fetch bootstrap. This is the right domain to load so
  * Akamai's sensor JS runs and binds tokens to that origin. The origin
- * comes from the URL prefix before any path segment, which is
- * always literal — `${param.X}` substitutions only appear after the
- * domain in well-formed workflows — so a regex extract is safe and
- * doesn't need access to runtime substitution.
+ * comes from the URL prefix before any path segment, which is always
+ * literal — `${param.X}` substitutions only appear after the domain in
+ * well-formed workflows — so a regex extract is safe and doesn't need
+ * access to runtime substitution.
  */
 function pickBaseUrl(tool: ResolvedTool): string {
   const firstRequest = tool.workflow.requests[0];
@@ -250,4 +180,8 @@ function pickBaseUrl(tool: ResolvedTool): string {
   const m = firstRequest.url.match(/^(https?:\/\/[^/]+)/);
   if (m?.[1]) return m[1];
   throw new Error(`Could not derive bootstrap origin from URL: ${firstRequest.url}`);
+}
+
+function playbookPath(examplesDir: string, site: string): string {
+  return pathResolve(examplesDir, site, 'playbook.yaml');
 }
