@@ -33,7 +33,7 @@ Real Southwest data, real $108.40 lowest WGA fare. Bootstrap pays a one-time ~5s
 | `sessions/<ts>.redacted.json` | Scrubbed for LLM analysis |
 | `workflow.json` | API workflow spec — used by stealth-fetch backend (substitutes `${param.X}` into the captured request) |
 | `index.ts` | Generated tool function — what cron + MCP call (`opts.fetchImpl` injection seam is what stealth-fetch uses) |
-| `playbook.md` | DOM playbook — 1 navigate step (URL-prefilled search) + XHR result extraction. Used by the playbook backend. |
+| `playbook.yaml` | DOM playbook — 1 navigate step (URL-prefilled search) + XHR result extraction. Used by the playbook backend. |
 | `cron.json` | Daily 9am check; `replayBackend: "auto"`; price_below $99 |
 | `backends.json` | Probe artifact — `preferredOrder: ["stealth-fetch", "playbook"]` (fetch always FORBIDDEN here) |
 

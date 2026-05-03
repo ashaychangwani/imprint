@@ -66,7 +66,7 @@ describe('runPlaybook', () => {
     expect(r.message).toContain('stub-page failure');
   });
 
-  it('loads playbook from a markdown path string', async () => {
+  it('loads playbook from a YAML path string', async () => {
     // The path-loading branch is covered just by reaching the next
     // step (parameter coercion) without a "Playbook not found" error.
     // We use a definitely-bad path to confirm THAT specific failure
