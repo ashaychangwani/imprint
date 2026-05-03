@@ -170,6 +170,30 @@ export type ToolResult<T = unknown> =
 // ─── Cron config (input to `imprint cron`) ───────────────────────────────────
 
 /**
+ * Optional "push only when..." predicate. Without it, cron only pushes on
+ * failure (the default). With it, cron evaluates the predicate against
+ * every successful tool result and pushes when it matches — useful for
+ * watchers like "notify when any fare drops below $99".
+ *
+ * Discriminated by `type`. New predicate kinds slot in here as new
+ * variants and a matching case in src/imprint/notify-when.ts.
+ */
+export const NotifyWhenSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('price_below'),
+    /** Push when min(extracted prices) is strictly less than this. */
+    threshold: z.number(),
+    /**
+     * Dot-path with `[]` to mean "iterate every element of this array".
+     * E.g. "bounds[].flights[].fares[].price.amount" extracts every
+     * fare price in a Southwest-shaped search response.
+     */
+    pricePath: z.string(),
+  }),
+]);
+export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
+
+/**
  * Per-example schedule + parameters, lives at examples/<site>/cron.json.
  * The schedule is a standard 5-field cron expression; node-cron validates it
  * before scheduling. Params are validated against the workflow's parameter
@@ -178,5 +202,6 @@ export type ToolResult<T = unknown> =
 export const CronConfigSchema = z.object({
   schedule: z.string(),
   params: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
+  notifyWhen: NotifyWhenSchema.optional(),
 });
 export type CronConfig = z.infer<typeof CronConfigSchema>;

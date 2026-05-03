@@ -69,6 +69,13 @@ export async function ${fnName}(input) {
              remediation: 'run imprint login ${site}' };
   }
   if (mode === 'throw') throw new Error('boom');
+  if (mode === 'fares') {
+    // Price-shaped response so notifyWhen.price_below can match against it.
+    return {
+      ok: true,
+      data: { items: [{ price: 89 }, { price: 149 }, { price: 199 }] },
+    };
+  }
   return { ok: true, data: { received: input } };
 }
 `,
@@ -338,6 +345,117 @@ describe('ntfy hook', () => {
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
+    expect(called).toBe(false);
+  });
+});
+
+describe('notifyWhen (push-on-success predicate)', () => {
+  it('fires a push when price_below matches', async () => {
+    writeFakeExample('fares_match', []);
+    writeConfig('fares_match', {
+      schedule: '* * * * *',
+      params: {},
+      notifyWhen: { type: 'price_below', threshold: 100, pricePath: 'items[].price' },
+    });
+    process.env.IMPRINT_TEST_RESULT = 'fares';
+    process.env.NTFY_URL = 'https://ntfy.example.com/match';
+    const calls: Array<{ url: string; body: string }> = [];
+    const fakeNotifyFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), body: String(init?.body ?? '') });
+      return new Response('', { status: 200 });
+    }) as unknown as typeof fetch;
+    await runCron({
+      site: 'fares_match',
+      examplesDir: root,
+      once: true,
+      notifyFetchImpl: fakeNotifyFetch,
+    });
+    expect(calls).toHaveLength(1);
+    const got = calls[0];
+    if (!got) throw new Error('unreachable');
+    // The fixture's lowest price is 89; threshold is 100; expect a push
+    // mentioning the actual lowest.
+    expect(got.body).toContain('$89');
+  });
+
+  it('does NOT push when price_below does not match', async () => {
+    writeFakeExample('fares_nomatch', []);
+    writeConfig('fares_nomatch', {
+      schedule: '* * * * *',
+      params: {},
+      notifyWhen: { type: 'price_below', threshold: 50, pricePath: 'items[].price' },
+    });
+    process.env.IMPRINT_TEST_RESULT = 'fares';
+    process.env.NTFY_URL = 'https://ntfy.example.com/nomatch';
+    let called = false;
+    const fakeNotifyFetch = (async () => {
+      called = true;
+      return new Response('', { status: 200 });
+    }) as unknown as typeof fetch;
+    await runCron({
+      site: 'fares_nomatch',
+      examplesDir: root,
+      once: true,
+      notifyFetchImpl: fakeNotifyFetch,
+    });
+    expect(called).toBe(false);
+  });
+
+  it('still pushes on failure regardless of notifyWhen', async () => {
+    writeFakeExample('fail_with_when', []);
+    writeConfig('fail_with_when', {
+      schedule: '* * * * *',
+      params: {},
+      notifyWhen: { type: 'price_below', threshold: 999, pricePath: 'items[].price' },
+    });
+    process.env.IMPRINT_TEST_RESULT = 'auth';
+    process.env.NTFY_URL = 'https://ntfy.example.com/fail';
+    let called = false;
+    const fakeNotifyFetch = (async () => {
+      called = true;
+      return new Response('', { status: 200 });
+    }) as unknown as typeof fetch;
+    await runCron({
+      site: 'fail_with_when',
+      examplesDir: root,
+      once: true,
+      notifyFetchImpl: fakeNotifyFetch,
+    });
+    expect(called).toBe(true);
+  });
+
+  it('logs predicate evaluation errors but does not crash the loop', async () => {
+    writeFakeExample('bad_path', []);
+    writeConfig('bad_path', {
+      schedule: '* * * * *',
+      params: {},
+      // pricePath expects items[] to be an array, but the fixture's "ok" mode
+      // returns { received: input } — so items is undefined and the walker
+      // returns []. Use a path that explicitly mis-types to force a throw.
+      notifyWhen: { type: 'price_below', threshold: 999, pricePath: 'received.foo[].bar' },
+    });
+    // Default 'ok' mode → { received: input }. received.foo is undefined →
+    // walker bails to []. We want an actual throw, so trigger via the fares
+    // fixture but use a path that descends into a number.
+    process.env.IMPRINT_TEST_RESULT = 'fares';
+    // Override path: items[].price.deeper — descends INTO the number 89.
+    writeConfig('bad_path', {
+      schedule: '* * * * *',
+      params: {},
+      notifyWhen: { type: 'price_below', threshold: 999, pricePath: 'items[].price.deeper' },
+    });
+    let called = false;
+    const fakeNotifyFetch = (async () => {
+      called = true;
+      return new Response('', { status: 200 });
+    }) as unknown as typeof fetch;
+    await runCron({
+      site: 'bad_path',
+      examplesDir: root,
+      once: true,
+      notifyFetchImpl: fakeNotifyFetch,
+    });
+    // Threw → caught + logged → no push fired.
     expect(called).toBe(false);
   });
 });

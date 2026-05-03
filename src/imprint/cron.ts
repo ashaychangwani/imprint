@@ -22,8 +22,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import cron from 'node-cron';
 import { type ResolvedTool, buildZodValidator, discoverTools } from './discover-tools.ts';
+import { evaluateNotifyWhen } from './notify-when.ts';
 import { notify } from './notify.ts';
-import { type CronConfig, CronConfigSchema, type ToolResult } from './types.ts';
+import { type CronConfig, CronConfigSchema, type NotifyWhen, type ToolResult } from './types.ts';
 
 export interface RunCronOptions {
   /** Example directory under examples/, e.g. "discoverandgo". */
@@ -65,6 +66,7 @@ async function runOnce(
   params: Record<string, unknown>,
   fetchImpl: typeof fetch | undefined,
   notifyFetchImpl: typeof fetch | undefined,
+  notifyWhen: NotifyWhen | undefined,
 ): Promise<ToolResult> {
   const startedAt = new Date();
   log(`${startedAt.toISOString()} ${tool.workflow.toolName} starting`);
@@ -80,6 +82,23 @@ async function runOnce(
   if (result.ok) {
     const data = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
     log(`  OK in ${elapsed}ms: ${data}`);
+    if (notifyWhen) {
+      // A bad pricePath against an unexpected response shape would throw;
+      // catch + log so a flaky predicate never crashes the cron loop.
+      try {
+        const decision = evaluateNotifyWhen(notifyWhen, result.data, tool.workflow.toolName);
+        if (decision.notify) {
+          await notify(
+            decision.title ?? `imprint: ${tool.workflow.toolName}`,
+            decision.message ?? '(no message)',
+            notifyFetchImpl,
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`  notifyWhen evaluation failed: ${msg}`);
+      }
+    }
   } else {
     log(`  FAILED [${result.error}] ${result.message} (${elapsed}ms)`);
     if (result.remediation) log(`  → ${result.remediation}`);
@@ -126,14 +145,15 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
 
   log(`tool: ${tool.workflow.toolName} (${tool.workflow.parameters.length} param(s))`);
   log(`schedule: ${config.schedule}`);
+  if (config.notifyWhen) log(`notifyWhen: ${config.notifyWhen.type}`);
 
   if (opts.once) {
-    await runOnce(tool, params, opts.fetchImpl, opts.notifyFetchImpl);
+    await runOnce(tool, params, opts.fetchImpl, opts.notifyFetchImpl, config.notifyWhen);
     return;
   }
 
   if (opts.runNow) {
-    await runOnce(tool, params, opts.fetchImpl, opts.notifyFetchImpl);
+    await runOnce(tool, params, opts.fetchImpl, opts.notifyFetchImpl, config.notifyWhen);
   }
 
   // node-cron's callbacks are sync; we kick off the async work and let it
@@ -142,7 +162,7 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
   // longer than the schedule period — fine for v0.1, callers picking
   // sub-second cadences should handle their own concurrency.
   const task = cron.schedule(config.schedule, () => {
-    void runOnce(tool, params, opts.fetchImpl, opts.notifyFetchImpl);
+    void runOnce(tool, params, opts.fetchImpl, opts.notifyFetchImpl, config.notifyWhen);
   });
   task.start();
   log('scheduled — Ctrl-C to stop');

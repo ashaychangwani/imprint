@@ -151,6 +151,25 @@ Set notification env vars to get a push on every failure (auth expired, network 
 
 With nothing configured, failures are logged to stderr only.
 
+#### Push on success too — `notifyWhen`
+
+By default cron only pushes on failures. Add an optional `notifyWhen` block to also push when a successful tool result matches a condition. v0.1 ships one predicate, `price_below`, for fare/price watchers:
+
+```jsonc
+// examples/southwest/cron.json
+{
+  "schedule": "0 9 * * *",
+  "params": { /* …captured search params… */ },
+  "notifyWhen": {
+    "type": "price_below",
+    "threshold": 99,
+    "pricePath": "bounds[].flights[].fares[].price.amount"
+  }
+}
+```
+
+`pricePath` is a dot-path; use `[]` to mean "iterate every element of this array". The predicate gathers every numeric leaf at that path, takes the minimum, and pushes if it's strictly below `threshold`. To find the right path for your captured workflow, run `imprint cron <site> --once` first — the success log line includes the raw response and you can read off the JSON path.
+
 ## Demos
 
 Coming on launch day. Each lives in `examples/<name>/`:
