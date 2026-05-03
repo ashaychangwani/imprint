@@ -46,7 +46,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { runWithLadder } from './backend-ladder.ts';
+import { resolveLadder, runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
 import { loadBackendsCache } from './probe-backends.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
@@ -170,12 +170,7 @@ function buildServer(
     >;
 
     try {
-      // 'auto' on every MCP call: prefer the cached probe order when
-      // available, otherwise the default cost-ranked ladder.
-      const ladder: ReplayBackend[] =
-        tool.preferredOrder && tool.preferredOrder.length > 0
-          ? tool.preferredOrder
-          : ['fetch', 'stealth-fetch', 'playbook'];
+      const ladder = resolveLadder('auto', tool.preferredOrder);
       const { result, usedBackend } = await runWithLadder(
         ladder,
         tool,

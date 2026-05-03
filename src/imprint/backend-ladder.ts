@@ -40,6 +40,26 @@ export interface LadderResult {
 
 const log = createLog('backend');
 
+const DEFAULT_LADDER: ReplayBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
+
+/**
+ * Expand a user-facing replayBackend choice into the concrete ladder
+ * `runWithLadder` will walk. 'auto' uses the cached preferredOrder
+ * (from `imprint probe-backends`) if present, otherwise the default
+ * cost-ranked ladder. Explicit single-backend choices become single-rung.
+ */
+export function resolveLadder(
+  backend: ReplayBackend,
+  cachedPreferredOrder?: ReplayBackend[],
+): ReplayBackend[] {
+  if (backend === 'auto') {
+    return cachedPreferredOrder && cachedPreferredOrder.length > 0
+      ? cachedPreferredOrder
+      : DEFAULT_LADDER;
+  }
+  return [backend];
+}
+
 /**
  * Walk a list of backends in order, escalating on FORBIDDEN. Returns
  * the first non-FORBIDDEN result OR the last FORBIDDEN if every
