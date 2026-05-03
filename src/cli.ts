@@ -216,7 +216,7 @@ async function main(argv: string[]): Promise<number> {
         },
         allowPositionals: false,
       });
-      const { generate } = await import('./imprint/generate.ts');
+      const { generate } = await import('./imprint/compile.ts');
       const result = await generate({
         sessionPath,
         outPath: values.out,
@@ -365,7 +365,7 @@ async function main(argv: string[]): Promise<number> {
         options: { out: { type: 'string' } },
         allowPositionals: false,
       });
-      const { compilePlaybook } = await import('./imprint/playbook-compiler.ts');
+      const { compilePlaybook } = await import('./imprint/compile.ts');
       const result = await compilePlaybook({ sessionPath, outPath: values.out });
       console.log(`[imprint] playbook → ${result.playbookPath}`);
       console.log(
