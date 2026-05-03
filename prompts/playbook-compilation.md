@@ -31,86 +31,87 @@ Most events are noise — focus changes, hover, accidental clicks the user rever
 
 ## Output
 
-Markdown matching this exact structure, and ONLY the markdown (no prose before or after):
+YAML matching this exact shape, and ONLY the YAML (no prose before or after, no `\`\`\`yaml` fences):
 
-```markdown
-# <toolName>
-
-## Summary
-<one sentence describing what the playbook does>
-
-## Parameters
-- `<name>` (<type>, required) — <description>
-- `<name>` (<type>) — <description> default: <value>
-
-## Steps
-
-### Step 1: <human description>
-- action: <navigate|click|type|submit|wait>
-- <action-specific attributes>
-
-### Step 2: <…>
-- …
-
-## Result
-- source: <xhr|dom>
-- <source-specific attributes>
-- extract: <dot.path[].with.iteration>
-- return_as: <field name in result.data>
+```yaml
+toolName: <snake_case_verb_phrase>
+summary: <one sentence describing what the playbook does>
+parameters:
+  - name: <param_name>
+    type: <string|number|boolean>
+    description: <what this parameter is>
+    default: <optional default value>
+steps:
+  - action: <navigate|click|type|submit|press|wait>
+    # action-specific fields below
+result:
+  source: <xhr|dom>
+  # source-specific fields below
+notes: <optional free-form caveats for downstream agents>
 ```
 
-### Step formats
+### Step shapes
 
 **navigate** — opens a URL.
-```markdown
-### Step 1: Open the booking page
+```yaml
 - action: navigate
-- url: https://www.example.com/path
-- wait_for: networkidle
+  url: https://www.example.com/path
+  wait_for: networkidle
 ```
 
 **type** — types into an input.
-```markdown
-### Step N: Type origin airport
+```yaml
 - action: type
-- locators:
-  - by: id, value: originationAirportCode
-  - by: css, value: input[name="origin"]
-- value: ${origin}
-- wait_for: sleep:300
+  locators:
+    - by: id
+      value: originationAirportCode
+    - by: css
+      value: input[name="origin"]
+  value: ${origin}
+  wait_for:
+    sleep_ms: 300
 ```
 
 **click** — clicks an element.
-```markdown
-### Step N: Pick autocomplete option
+```yaml
 - action: click
-- locators:
-  - by: aria_label, value_pattern: ${origin}
-  - by: text, value_pattern: ${origin}
-- wait_for: visible
+  locators:
+    - by: aria_label
+      value_pattern: ${origin}
+    - by: text
+      value_pattern: ${origin}
+  wait_for: visible
 ```
 
 **submit** — submits a form.
-```markdown
-### Step N: Submit search
+```yaml
 - action: submit
-- locators:
-  - by: css, value: form#search
-- wait_for: xhr:/api/search
+  locators:
+    - by: css
+      value: form#search
+  wait_for:
+    xhr: /api/search
+```
+
+**press** — dispatches a key (Escape to dismiss overlays, Enter to submit a focused form, etc.).
+```yaml
+- action: press
+  key: Escape
+  wait_for:
+    sleep_ms: 300
 ```
 
 **wait** — explicit wait without an action.
-```markdown
-### Step N: Wait for results panel
+```yaml
 - action: wait
-- wait_for: networkidle
+  wait_for: networkidle
 ```
 
 ### Locator priority
 
 Always provide MULTIPLE locators per click/type/submit step, in this priority order:
 
-1. **`by: role`** — `value: button` with `name: "Search"`. Most stable; survives CSS rewrites and a11y improvements.
+1. **`by: role`** — `value: button`, `name: "Search"`. Most stable; survives CSS rewrites and a11y improvements.
 2. **`by: aria_label`** — exact `value` or `value_pattern` (regex source). Stable when sites maintain a11y.
 3. **`by: text`** — visible text. Stable for buttons/links with persistent labels.
 4. **`by: id`** — only when the id looks stable (`originationAirportCode` good; `react-aria-:r3:` bad — those are auto-generated).
@@ -118,30 +119,36 @@ Always provide MULTIPLE locators per click/type/submit step, in this priority or
 
 ### wait_for values
 
+Strings:
 - `networkidle` — page settled (no network activity for 500ms). Good after nav and submit.
 - `load` — DOMContentLoaded fired.
-- `visible` — the element matched by THIS STEP's locator is now visible. Useful when the locator is the autocomplete option you JUST typed for. NOT useful after clicking a dropdown trigger to open it (the trigger was already visible) — use `sleep:300` instead.
+- `visible` — the element matched by THIS STEP's locator is now visible. Useful when the locator is the autocomplete option you JUST typed for. NOT useful after clicking a dropdown trigger to open it (the trigger was already visible) — use `sleep_ms` instead.
 - `hidden` — same but for disappearing.
-- `xhr:<pattern>` — wait for an XHR/fetch response whose URL matches the pattern. Pattern is a substring or regex source. Optional `method:GET`.
-- `sleep:<ms>` — unconditional pause. Use after clicking a dropdown trigger to give it time to expand, after typing into an autocomplete to give it time to filter, or anywhere a UI animation needs to finish before the next interaction. 300-500ms is the typical range.
+
+Objects:
+- `xhr: <pattern>` (with optional `method: GET`) — wait for an XHR/fetch response whose URL matches the pattern (substring or regex source).
+- `sleep_ms: <number>` — unconditional pause. Use after clicking a dropdown trigger to give it time to expand, after typing into an autocomplete to give it time to filter, or anywhere a UI animation needs to finish before the next interaction. 300-500ms is the typical range.
 
 ### Dropdown / popover pattern
 
-For a click that OPENS a popover/dropdown (trip-type selector, date picker, settings menu), the next click on a dropdown ITEM needs the popover to be rendered first. Use `wait_for: sleep:300` on the trigger click — the dropdown's items aren't yet in the DOM at the moment of the trigger click, so `visible` would resolve to the trigger itself and skip the wait.
+For a click that OPENS a popover/dropdown (trip-type selector, date picker, settings menu), the next click on a dropdown ITEM needs the popover to be rendered first. Use `sleep_ms: 300` on the trigger click — the dropdown's items aren't yet in the DOM at the moment of the trigger click, so `visible` would resolve to the trigger itself and skip the wait.
 
-```markdown
-### Step N: Open trip-type dropdown
+```yaml
 - action: click
-- locators:
-  - by: text, value: Round-trip
-- wait_for: sleep:300
+  locators:
+    - by: text
+      value: Round-trip
+  wait_for:
+    sleep_ms: 300
 
-### Step N+1: Pick One-way
 - action: click
-- locators:
-  - by: text, value: One-way
-  - by: role, value: option, name: One-way
-- wait_for: visible
+  locators:
+    - by: text
+      value: One-way
+    - by: role
+      value: option
+      name: One-way
+  wait_for: visible
 ```
 
 ### Result block
@@ -154,22 +161,24 @@ Identify which captured XHR carries the data the user actually cares about (the 
 
 If the field you want is wrapped in standard envelopes (`data`, `result`, `response`, `payload`), include the envelope in the path.
 
-```markdown
-## Result
-- source: xhr
-- url_pattern: /api/search/results
-- extract: items[].price
-- return_as: prices
+```yaml
+result:
+  source: xhr
+  url_pattern: /api/search/results
+  extract: items[].price
+  return_as: prices
 ```
 
 For pages where the data is rendered to the DOM without an XHR backing:
 
-```markdown
-## Result
-- source: dom
-- css: .price-table tr td.fare
-- extract: text
-- return_as: prices
+```yaml
+result:
+  source: dom
+  locators:
+    - by: css
+      value: .price-table tr td.fare
+  extract: text
+  return_as: prices
 ```
 
 ## Rules
@@ -182,86 +191,85 @@ For pages where the data is rendered to the DOM without an XHR backing:
 
 4. **Same parameter naming as workflow.json when both exist.** If the network workflow uses `origin_airport_code`, the playbook should too. The cron + MCP layer maps params 1:1 across both backends.
 
-5. **Identify wait points carefully.** A click that triggers an XHR needs `wait_for: xhr:<url-pattern>` so subsequent steps don't race the response. A nav needs `wait_for: networkidle`. A typed-then-pick autocomplete needs the option element to be `visible` first.
+5. **Identify wait points carefully.** A click that triggers an XHR needs `wait_for: { xhr: <url-pattern> }` so subsequent steps don't race the response. A nav needs `wait_for: networkidle`. A typed-then-pick autocomplete needs the option element to be `visible` first.
 
 6. **Drop login flows.** Same as the API workflow — login is `imprint login`'s job. The playbook starts from a logged-in state (cookies will be loaded into the browser context).
 
-7. **Keep step descriptions short.** "Type origin airport" not "Use the keyboard to enter the origin airport code into the input field on the booking form."
+7. **Keep step descriptions short.** No need for verbose human-readable titles — the YAML is the spec.
 
 8. **The toolName and parameters should match workflow.json EXACTLY when both are produced from the same session.** This lets cron/MCP fall back from API to playbook with the same params.
 
 9. **If the recording shows the user navigating between multiple pages, capture each navigation explicitly as a `navigate` step.** Don't assume single-page.
 
-10. **Output format is strict.** The parser is hand-written — H1/H2/H3 hierarchy, bullet attributes, exact attribute names. Stick to the templates above.
+10. **Output format is strict.** YAML, parsed by `YAML.parse` then validated against the Zod schema in `playbook-types.ts`. Stick to the templates above.
 
 ## Example
 
 For a Southwest fare search recording (user typed SJC, picked the autocomplete, typed SAN, picked, typed depart date, clicked search), output:
 
-```markdown
-# search_southwest_flights
-
-## Summary
-Search Southwest for one-way fares between two airports on a given date.
-
-## Parameters
-- `origin` (string, required) — IATA airport code, e.g. SJC
-- `destination` (string, required) — IATA airport code, e.g. SAN
-- `depart_date` (string, required) — YYYY-MM-DD
-
-## Steps
-
-### Step 1: Open the booking page
-- action: navigate
-- url: https://www.southwest.com/air/booking/
-- wait_for: networkidle
-
-### Step 2: Type origin airport code
-- action: type
-- locators:
-  - by: id, value: originationAirportCode
-- value: ${origin}
-- wait_for: sleep:500
-
-### Step 3: Pick origin from autocomplete
-- action: click
-- locators:
-  - by: aria_label, value_pattern: ${origin}
-  - by: text, value_pattern: ${origin}
-- wait_for: visible
-
-### Step 4: Type destination airport code
-- action: type
-- locators:
-  - by: id, value: destinationAirportCode
-- value: ${destination}
-- wait_for: sleep:500
-
-### Step 5: Pick destination from autocomplete
-- action: click
-- locators:
-  - by: aria_label, value_pattern: ${destination}
-  - by: text, value_pattern: ${destination}
-- wait_for: visible
-
-### Step 6: Set departure date
-- action: type
-- locators:
-  - by: id, value: departureDate
-- value: ${depart_date}
-
-### Step 7: Submit the search
-- action: click
-- locators:
-  - by: text, value: Search
-  - by: aria_label, value: Search flights
-- wait_for: xhr:/api/air-booking/v1/.*/shopping
-
-## Result
-- source: xhr
-- url_pattern: /api/air-booking/v1/.*/shopping
-- extract: airProducts[].lowestFare.value
-- return_as: prices
+```yaml
+toolName: search_southwest_flights
+summary: Search Southwest for one-way fares between two airports on a given date.
+parameters:
+  - name: origin
+    type: string
+    description: IATA airport code, e.g. SJC
+  - name: destination
+    type: string
+    description: IATA airport code, e.g. SAN
+  - name: depart_date
+    type: string
+    description: YYYY-MM-DD
+steps:
+  - action: navigate
+    url: https://www.southwest.com/air/booking/
+    wait_for: networkidle
+  - action: type
+    locators:
+      - by: id
+        value: originationAirportCode
+    value: ${origin}
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: ${origin}
+      - by: text
+        value_pattern: ${origin}
+    wait_for: visible
+  - action: type
+    locators:
+      - by: id
+        value: destinationAirportCode
+    value: ${destination}
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: ${destination}
+      - by: text
+        value_pattern: ${destination}
+    wait_for: visible
+  - action: type
+    locators:
+      - by: id
+        value: departureDate
+    value: ${depart_date}
+  - action: click
+    locators:
+      - by: text
+        value: Search
+      - by: aria_label
+        value: Search flights
+    wait_for:
+      xhr: /api/air-booking/v1/.*/shopping
+result:
+  source: xhr
+  url_pattern: /api/air-booking/v1/.*/shopping
+  extract: airProducts[].lowestFare.value
+  return_as: prices
 ```
 
 Now compile the input session.

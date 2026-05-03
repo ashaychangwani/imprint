@@ -482,7 +482,7 @@ describe('notifyWhen (push-on-success predicate)', () => {
 });
 
 describe('replayBackend', () => {
-  it('errors clearly when replayBackend=playbook but no playbook.md exists', async () => {
+  it('errors clearly when replayBackend=playbook but no playbook.yaml exists', async () => {
     writeFakeExample('no_playbook', []);
     writeConfig('no_playbook', {
       schedule: '* * * * *',
@@ -490,7 +490,7 @@ describe('replayBackend', () => {
       replayBackend: 'playbook',
     });
     await expect(runCron({ site: 'no_playbook', examplesDir: root, once: true })).rejects.toThrow(
-      /playbook\.md.*doesn't exist/,
+      /playbook\.yaml.*doesn't exist/,
     );
   });
 

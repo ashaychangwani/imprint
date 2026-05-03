@@ -34,6 +34,7 @@
     "playwright": "^1.49.0",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "yaml": "^2.8.4",
     "zod": "^3.24.0"
   },
   "devDependencies": {

@@ -72,7 +72,7 @@ describe('runPlaybook', () => {
     // We use a definitely-bad path to confirm THAT specific failure
     // surfaces with the right error text.
     const r = await runPlaybook({
-      playbook: '/tmp/imprint-no-such-playbook.md',
+      playbook: '/tmp/imprint-no-such-playbook.yaml',
       params: { q: 'x' },
     });
     expect(r.ok).toBe(false);
