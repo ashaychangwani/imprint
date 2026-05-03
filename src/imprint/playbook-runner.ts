@@ -27,6 +27,12 @@ export interface RunPlaybookOptions {
   /** Per-step timeout in ms. Default 15000. */
   stepTimeoutMs?: number;
   /**
+   * If true, screenshot the page after EVERY step (not just failure)
+   * and log the URL + path. Useful when iterating on a playbook and
+   * you can't run --headed. Files land in the system tmp dir.
+   */
+  trace?: boolean;
+  /**
    * Inject a Playwright Page for tests (skips browser launch). When
    * provided, the runner uses this page directly and the caller is
    * responsible for the browser lifecycle.
@@ -53,7 +59,10 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
       message: err instanceof Error ? err.message : String(err),
     };
   }
-  const stepTimeoutMs = opts.stepTimeoutMs ?? 15000;
+  // Default step timeout is generous because some sites need real time
+  // to settle (Akamai sensor JS, A/B test loaders, lazy bundles). 30s
+  // beats the headache of "tight timeout, looks broken when it's not."
+  const stepTimeoutMs = opts.stepTimeoutMs ?? 30000;
 
   // Either reuse the test-injected page or boot Chromium ourselves.
   let browser: Browser | undefined;
@@ -62,18 +71,39 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   if (opts.pageOverride) {
     page = opts.pageOverride;
   } else {
-    let pw: typeof import('playwright');
+    // Use playwright-extra + stealth plugin by default. Stealth patches
+    // navigator.webdriver, plugin enumeration, languages, permissions,
+    // WebGL vendor strings, and other tells that bot detectors (Akamai,
+    // Cloudflare, DataDome, PerimeterX) check. Without it, vanilla
+    // headless Playwright gets a 403 from any decent enterprise site.
+    // Verified against Southwest: vanilla → 403 sensor block, stealth
+    // → 200 with real flight data.
+    let chromium: typeof import('playwright').chromium;
     try {
-      pw = await import('playwright');
+      const pwExtra = await import('playwright-extra');
+      const stealthMod = await import('puppeteer-extra-plugin-stealth');
+      const stealthFactory =
+        (stealthMod as { default?: () => unknown }).default ??
+        (stealthMod as unknown as () => unknown);
+      pwExtra.chromium.use(stealthFactory() as never);
+      chromium = pwExtra.chromium as unknown as typeof import('playwright').chromium;
     } catch (err) {
-      return {
-        ok: false,
-        error: 'UNKNOWN',
-        message: `Playwright not available: ${err instanceof Error ? err.message : String(err)}. Run: bunx playwright install chromium`,
-      };
+      // Fall back to vanilla playwright if the stealth deps aren't there
+      // (e.g., a downstream user installs imprint without optional deps).
+      // Bot-protected sites will likely fail in this mode.
+      try {
+        const pw = await import('playwright');
+        chromium = pw.chromium;
+      } catch (innerErr) {
+        return {
+          ok: false,
+          error: 'UNKNOWN',
+          message: `Playwright not available: ${innerErr instanceof Error ? innerErr.message : String(innerErr)}. Run: bunx playwright install chromium`,
+        };
+      }
     }
     try {
-      browser = await pw.chromium.launch({ headless: !opts.headed });
+      browser = await chromium.launch({ headless: !opts.headed });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return {
@@ -86,24 +116,51 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     page = await context.newPage();
   }
 
-  const captured: Array<{ url: string; method: string; body: () => Promise<string> }> = [];
+  // Capture body text eagerly inside the response handler — Playwright/CDP
+  // garbage-collects response bodies aggressively, so a lazy callback that
+  // tries to read text() at extraction time often fails with "no resource
+  // with given identifier found." Reading inside the handler is safe.
+  // Track the pending body-read promises so the result extraction can
+  // await them all (otherwise a wait_for that fires before text()
+  // resolves would extract from a partial captured list).
+  const captured: Array<{
+    url: string;
+    method: string;
+    status: number;
+    body: string | null;
+  }> = [];
+  const pendingBodyReads: Array<Promise<unknown>> = [];
   let lastStep = 0;
 
   try {
-    // Subscribe to responses from the start so we don't miss the result XHR.
     page.on('response', (resp) => {
-      captured.push({
-        url: resp.url(),
-        method: resp.request().method(),
-        body: () => resp.text(),
-      });
+      const url = resp.url();
+      const method = resp.request().method();
+      const status = resp.status();
+      const p = resp
+        .text()
+        .then((body) => captured.push({ url, method, status, body }))
+        .catch(() => captured.push({ url, method, status, body: null }));
+      pendingBodyReads.push(p);
     });
 
     for (const [i, step] of playbook.steps.entries()) {
       lastStep = i + 1;
       log(`step ${i + 1}/${playbook.steps.length}: ${step.action}`);
       await executeStep(page, step, params, stepTimeoutMs);
+      if (opts.trace) {
+        const traceShot = await dumpScreenshotOnFailure(
+          page,
+          `${playbook.toolName}-trace`,
+          lastStep,
+        );
+        log(`  url=${page.url()}`);
+        if (traceShot) log(`  trace screenshot: ${traceShot}`);
+      }
     }
+    // Drain any in-flight body reads before extracting — otherwise we
+    // might miss the result XHR if its text() hasn't resolved yet.
+    await Promise.allSettled(pendingBodyReads);
     const data = await extractResult(page, playbook.result, captured);
     return { ok: true, data };
   } catch (err) {
@@ -175,7 +232,11 @@ async function executeStep(
   switch (step.action) {
     case 'navigate': {
       const url = subst(step.url, params);
-      await page.goto(url, { timeout: timeoutMs });
+      // SPAs (especially behind enterprise WAFs) keep persistent
+      // connections alive so the default 'load' waitUntil hangs. Use
+      // 'domcontentloaded' — the explicit wait_for handles the
+      // semantic "page is ready" condition.
+      await page.goto(url, { timeout: timeoutMs, waitUntil: 'domcontentloaded' });
       await applyWait(page, step.wait_for, undefined, timeoutMs);
       return;
     }
@@ -359,23 +420,34 @@ async function applyWait(
 async function extractResult(
   page: Page,
   result: PlaybookResult,
-  captured: Array<{ url: string; method: string; body: () => Promise<string> }>,
+  captured: Array<{ url: string; method: string; status: number; body: string | null }>,
 ): Promise<Record<string, unknown>> {
   if (result.source === 'xhr') {
     const re = new RegExp(result.url_pattern);
     const matches = captured.filter(
-      (c) => re.test(c.url) && (!result.method || c.method === result.method),
+      (c) => re.test(c.url) && (!result.method || c.method === result.method) && c.body !== null,
     );
     const last = matches.at(-1);
-    if (!last) {
-      throw new Error(`No captured XHR matched ${result.url_pattern}`);
+    if (!last || last.body === null) {
+      throw new Error(`No captured XHR matched ${result.url_pattern} (with a readable body)`);
     }
-    const text = await last.body();
+    // The result XHR fired but came back as an error — typically Akamai/
+    // Cloudflare bot block (403) even from a real Chromium. Surface it
+    // instead of silently returning empty data.
+    if (last.status >= 400) {
+      const hint =
+        last.status === 403
+          ? 'Likely bot detection — even headless Chromium can get flagged. Try --headed, or use a stealth-patched browser (rebrowser-patches / playwright-stealth).'
+          : '';
+      throw new Error(
+        `Result XHR returned ${last.status} (${last.url}): ${last.body.slice(0, 300)}. ${hint}`,
+      );
+    }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(text);
+      parsed = JSON.parse(last.body);
     } catch {
-      throw new Error(`Result XHR body was not JSON (${last.url}): ${text.slice(0, 200)}`);
+      throw new Error(`Result XHR body was not JSON (${last.url}): ${last.body.slice(0, 200)}`);
     }
     const values = extractAt(parsed, result.extract);
     return { [result.return_as]: values, source_url: last.url };

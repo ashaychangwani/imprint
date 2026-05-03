@@ -4,8 +4,7 @@
   "params": {
     "origin": "SJC",
     "destination": "SAN",
-    "depart_date": "2026-06-20",
-    "selected_date": "2026-06-23"
+    "depart_date": "2026-06-20"
   },
   "notifyWhen": {
     "type": "price_below",
