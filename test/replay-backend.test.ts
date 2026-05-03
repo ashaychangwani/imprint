@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import type { ResolvedTool } from '../src/imprint/discover-tools.ts';
 import { type BackendContext, ladderFor, runWithLadder } from '../src/imprint/replay-backend.ts';
-import { StealthFetch } from '../src/imprint/stealth-fetch.ts';
+import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
 import type { ToolResult, Workflow } from '../src/imprint/types.ts';
 
 let root: string;
@@ -70,12 +70,13 @@ function makeFakeTool(site: string, behavior: FakeToolBehavior): ResolvedTool {
 }
 
 function makeContext(tool: ResolvedTool): BackendContext {
-  // Pre-populate the stealth cache with a stubbed StealthFetch so the
-  // ladder doesn't try to launch real Chromium when stealth-fetch is in
-  // the mix. The fake tool's toolFn doesn't actually CALL the fetchImpl,
-  // so this stub is never invoked — it just satisfies the type.
+  // Pre-populate the stealth cache with a stubbed stealth fetcher so
+  // the ladder doesn't try to launch real Chromium when stealth-fetch
+  // is in the mix. The fake tool's toolFn doesn't actually CALL the
+  // fetchImpl, so this stub is never invoked — it just satisfies the
+  // type.
   const stealthCache = new Map<string, StealthFetch>();
-  stealthCache.set(tool.site, new StealthFetch(`https://${tool.site}.example.com`));
+  stealthCache.set(tool.site, createStealthFetch(`https://${tool.site}.example.com`));
   return {
     tool,
     params: {},

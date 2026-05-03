@@ -18,8 +18,6 @@
  *
  * Total cost: ~12s for bootstrap (one-time), ~1s per API call after.
  *
- * Dep cost: only Playwright (already an Imprint dependency).
- *
  * Comes from PR #1 (https://github.com/ashaychangwani/imprint/pull/1)
  * which proved the bypass against real Southwest. This file refines it
  * for integration: proactive refresh, consecutive-failure escalation,
@@ -48,10 +46,10 @@ export interface StealthFetchOptions {
    */
   maxTokenAgeSeconds?: number;
   /**
-   * After this many CONSECUTIVE 403 responses across calls, the
-   * StealthFetch reports the site as broken and stops auto-retrying so
-   * the caller (the ladder) can escalate to playbook. Avoids
-   * pathological re-bootstrap loops.
+   * After this many CONSECUTIVE 403 responses across calls, the stealth
+   * fetcher reports the site as broken and stops auto-retrying so the
+   * caller (the ladder) can escalate to playbook. Avoids pathological
+   * re-bootstrap loops.
    */
   maxConsecutiveFailures?: number;
 }
@@ -69,10 +67,50 @@ export interface FetchResult {
   headers: Record<string, string>;
 }
 
-interface TokenCache {
+export interface TokenCache {
   cookies: Array<{ name: string; value: string }>;
   sensorHeaders: Record<string, string>;
   bootstrappedAt: number;
+}
+
+/**
+ * The public surface of a stealth fetcher. Production callers use only
+ * `fetchImpl` (and occasionally the introspection getters); the tests
+ * use `invalidate` + the streak/age numbers to assert lifecycle.
+ */
+export interface StealthFetch {
+  /**
+   * `typeof fetch`-shaped wrapper that routes through the bootstrap +
+   * sensor-token machinery. Drop into workflow-runtime as `fetchImpl`
+   * with zero workflow.json changes.
+   */
+  readonly fetchImpl: typeof fetch;
+  /** Force-invalidate cached tokens. Next fetch will re-bootstrap. */
+  invalidate(): void;
+  /** Token age in seconds; -1 if not bootstrapped yet. */
+  readonly tokenAgeSeconds: number;
+  /** Consecutive 403s observed across recent calls. Resets on success. */
+  readonly failureStreak: number;
+  /** Drop tokens. Kept for symmetry with future browser-pool variants. */
+  close(): Promise<void>;
+}
+
+export interface BootstrapArgs {
+  baseUrl: string;
+  probeUrl?: string;
+  userAgent: string;
+  headed: boolean;
+  sensorWaitSeconds: number;
+}
+
+/**
+ * Test-only seam for swapping the Playwright bootstrap and the
+ * sensor-headered network call. Production code never passes these —
+ * defaults are real Chromium + globalThis.fetch.
+ */
+export interface StealthFetchInternals {
+  bootstrap?: (args: BootstrapArgs) => Promise<TokenCache>;
+  underlyingFetch?: (url: string, init: FetchInit, tokens: TokenCache) => Promise<FetchResult>;
 }
 
 const DEFAULT_UA =
@@ -103,245 +141,6 @@ const STANDARD_HEADERS = new Set([
   'cookie',
 ]);
 
-const log = createLog('stealth');
-
-export class StealthFetch {
-  private opts: Required<StealthFetchOptions>;
-  private tokens: TokenCache | null = null;
-  private consecutiveFailures = 0;
-
-  constructor(opts: StealthFetchOptions | string) {
-    const o = typeof opts === 'string' ? { baseUrl: opts } : opts;
-    this.opts = {
-      baseUrl: o.baseUrl,
-      sensorWaitSeconds: o.sensorWaitSeconds ?? 3,
-      headed: o.headed ?? false,
-      userAgent: o.userAgent ?? DEFAULT_UA,
-      maxRetries: o.maxRetries ?? 1,
-      maxTokenAgeSeconds: o.maxTokenAgeSeconds ?? 600,
-      maxConsecutiveFailures: o.maxConsecutiveFailures ?? 3,
-    };
-  }
-
-  /**
-   * Bootstrap: launch browser, navigate, capture tokens, close browser.
-   * Called automatically on first fetch() and on TTL refresh / 403.
-   * `probeUrl` should be the actual API endpoint — Akamai's interceptor
-   * only injects sensor headers for requests to paths it recognizes.
-   */
-  async bootstrap(probeUrl?: string): Promise<void> {
-    const t0 = Date.now();
-    log('bootstrapping…');
-
-    let browser: Browser | undefined;
-    try {
-      browser = await chromium.launch({
-        headless: !this.opts.headed,
-        args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
-      });
-
-      const context = await browser.newContext({
-        userAgent: this.opts.userAgent,
-        viewport: { width: 1440, height: 900 },
-        screen: { width: 2560, height: 1440 },
-        locale: 'en-US',
-        timezoneId: 'America/Los_Angeles',
-      });
-
-      const page = await context.newPage();
-      await page.addInitScript(() => {
-        Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      });
-
-      // SPAs (Southwest, anything React-heavy) keep persistent
-      // connections alive so 'networkidle' hangs forever. Use
-      // 'domcontentloaded' + an explicit sensor-wait — long enough for
-      // Akamai's bot-detection JS to fire and inject sensor tokens.
-      await page.goto(this.opts.baseUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-      });
-      await page.waitForTimeout(this.opts.sensorWaitSeconds * 1000);
-
-      // Capture ONLY the bot-detection headers that the sensor injects.
-      // We send a probe with known headers, then any header in the
-      // outbound request that we didn't send is sensor-injected. This
-      // avoids capturing our own dummy values.
-      const probeHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'X-API-Key': 'x',
-        'X-App-ID': 'x',
-        'X-Channel-ID': 'x',
-        'X-User-Experience-ID': 'x',
-      };
-      const probeSentKeys = new Set([
-        ...Array.from(STANDARD_HEADERS),
-        ...Object.keys(probeHeaders).map((k) => k.toLowerCase()),
-      ]);
-
-      const sensorHeaders: Record<string, string> = {};
-      await page.route('**/*', async (route) => {
-        for (const [k, v] of Object.entries(route.request().headers())) {
-          if (!probeSentKeys.has(k.toLowerCase())) {
-            sensorHeaders[k] = v;
-          }
-        }
-        await route.abort();
-      });
-
-      const probe = probeUrl ?? `${new URL(this.opts.baseUrl).origin}/api/__stealth_probe__`;
-      await page.evaluate(
-        async (args: { url: string; headers: Record<string, string> }) => {
-          try {
-            await fetch(args.url, {
-              method: 'POST',
-              headers: args.headers,
-              body: '{}',
-            });
-          } catch {
-            // expected: route aborts the request after capturing headers
-          }
-        },
-        { url: probe, headers: probeHeaders },
-      );
-
-      await page.waitForTimeout(300);
-
-      // Capture cookies for the registrable domain.
-      const allCookies = await context.cookies();
-      const origin = new URL(this.opts.baseUrl);
-      const rootDomain = origin.hostname.split('.').slice(-2).join('.');
-      const cookies = allCookies
-        .filter((c) => c.domain.includes(rootDomain))
-        .map((c) => ({ name: c.name, value: c.value }));
-
-      this.tokens = {
-        cookies,
-        sensorHeaders,
-        bootstrappedAt: Date.now(),
-      };
-      // Successful bootstrap resets the failure counter — old failures
-      // were against stale tokens that we've now refreshed.
-      this.consecutiveFailures = 0;
-
-      log(
-        `bootstrapped in ${Date.now() - t0}ms — ${cookies.length} cookies, ${Object.keys(sensorHeaders).length} sensor headers`,
-      );
-    } finally {
-      await browser?.close().catch(() => {});
-    }
-  }
-
-  /**
-   * Make a fetch call using cached sensor tokens. Auto-bootstraps when:
-   *   - no tokens yet (first call)
-   *   - tokens are older than maxTokenAgeSeconds (proactive refresh)
-   *   - the call returned 403 (reactive refresh, up to maxRetries)
-   *
-   * After maxConsecutiveFailures consecutive 403s ACROSS calls, returns
-   * the 403 result without further retries — caller (the ladder) should
-   * escalate to a different backend.
-   */
-  async fetch(url: string, init?: FetchInit): Promise<FetchResult> {
-    const fullUrl = url.startsWith('http') ? url : `${new URL(this.opts.baseUrl).origin}${url}`;
-
-    // Proactive refresh — if tokens have aged out, mint new ones now
-    // instead of paying the round-trip + 403 + re-bootstrap cost.
-    if (this.tokens && this.tokenAgeSeconds >= this.opts.maxTokenAgeSeconds) {
-      log(
-        `tokens are ${this.tokenAgeSeconds}s old (>= ${this.opts.maxTokenAgeSeconds}s), refreshing proactively`,
-      );
-      this.tokens = null;
-    }
-
-    if (!this.tokens) {
-      await this.bootstrap(fullUrl);
-    }
-
-    let retries = 0;
-    while (true) {
-      const result = await this.doFetch(fullUrl, init);
-
-      if (result.status === 403) {
-        this.consecutiveFailures++;
-        if (this.consecutiveFailures >= this.opts.maxConsecutiveFailures) {
-          log(
-            `${this.consecutiveFailures} consecutive 403s — giving up on this site (caller should escalate)`,
-          );
-          return result;
-        }
-        if (retries < this.opts.maxRetries) {
-          log(`got 403 — re-bootstrapping (attempt ${retries + 1}/${this.opts.maxRetries})`);
-          await this.bootstrap(fullUrl);
-          retries++;
-          continue;
-        }
-        return result;
-      }
-
-      // Any non-403 (success or different error) resets the streak.
-      this.consecutiveFailures = 0;
-      return result;
-    }
-  }
-
-  private async doFetch(url: string, init?: FetchInit): Promise<FetchResult> {
-    const tokens = this.tokens;
-    if (!tokens) throw new Error('No tokens (bootstrap failed?)');
-
-    const cookieStr = tokens.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
-
-    const resp = await globalThis.fetch(url, {
-      method: init?.method ?? 'GET',
-      headers: {
-        'User-Agent': this.opts.userAgent,
-        Accept: 'application/json, text/javascript, */*; q=0.01',
-        'Content-Type': 'application/json',
-        Cookie: cookieStr,
-        Origin: new URL(url).origin,
-        Referer: this.opts.baseUrl,
-        ...tokens.sensorHeaders,
-        ...(init?.headers ?? {}),
-      },
-      body: init?.body,
-    });
-
-    const body = await resp.text();
-    const headers: Record<string, string> = {};
-    resp.headers.forEach((v, k) => {
-      headers[k] = v;
-    });
-
-    return { status: resp.status, ok: resp.ok, body, headers };
-  }
-
-  /** How old the current tokens are, in seconds. -1 if not bootstrapped. */
-  get tokenAgeSeconds(): number {
-    if (!this.tokens) return -1;
-    return Math.floor((Date.now() - this.tokens.bootstrappedAt) / 1000);
-  }
-
-  /** Force-invalidate cached tokens. Next fetch() will re-bootstrap. */
-  invalidate(): void {
-    this.tokens = null;
-    this.consecutiveFailures = 0;
-  }
-
-  /**
-   * Number of consecutive 403s observed across recent fetch() calls.
-   * The ladder runner can poll this to decide whether to escalate.
-   */
-  get failureStreak(): number {
-    return this.consecutiveFailures;
-  }
-
-  /** No-op kept for API compatibility with PR's v1. */
-  async close(): Promise<void> {
-    this.tokens = null;
-    this.consecutiveFailures = 0;
-  }
-}
-
 /**
  * Headers that should be regenerated as fresh UUIDs on every call,
  * never reused from the captured workflow. Sites validate these as
@@ -360,19 +159,123 @@ const FRESH_UUID_HEADERS = new Set([
   'x-trace-id',
 ]);
 
+const log = createLog('stealth');
+
 /**
- * Wrap a StealthFetch as a `typeof fetch`-compatible function suitable
- * for injecting into workflow-runtime as `fetchImpl`. The captured
- * workflow.json runs through stealth-fetch with zero workflow.json
- * changes — the runtime's substitution + chain logic + error
- * classification all stay the same.
- *
- * Side effect: known "unique per call" headers (X-User-Experience-ID
- * etc) get regenerated as fresh UUIDs. The captured value from
- * recording is treated as a stale identifier the API will reject.
+ * Build a stealth fetcher. Returns an object exposing `fetchImpl` plus
+ * a few introspection accessors. Lifecycle (bootstrap, retry, refresh)
+ * lives in closure variables — there is no class, no `new`, no `this`.
  */
-export function createStealthFetchImpl(sf: StealthFetch): typeof fetch {
-  return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+export function createStealthFetch(
+  optsOrUrl: StealthFetchOptions | string,
+  internals?: StealthFetchInternals,
+): StealthFetch {
+  const o = typeof optsOrUrl === 'string' ? { baseUrl: optsOrUrl } : optsOrUrl;
+  const opts = {
+    baseUrl: o.baseUrl,
+    sensorWaitSeconds: o.sensorWaitSeconds ?? 3,
+    headed: o.headed ?? false,
+    userAgent: o.userAgent ?? DEFAULT_UA,
+    maxRetries: o.maxRetries ?? 1,
+    maxTokenAgeSeconds: o.maxTokenAgeSeconds ?? 600,
+    maxConsecutiveFailures: o.maxConsecutiveFailures ?? 3,
+  };
+  const bootstrapFn = internals?.bootstrap ?? defaultBootstrap;
+  const underlyingFetchFn = internals?.underlyingFetch ?? defaultUnderlyingFetch;
+
+  let tokens: TokenCache | null = null;
+  let consecutiveFailures = 0;
+
+  const tokenAge = (): number => {
+    if (!tokens) return -1;
+    return Math.floor((Date.now() - tokens.bootstrappedAt) / 1000);
+  };
+
+  async function ensureTokens(probeUrl?: string): Promise<void> {
+    // Proactive refresh — if tokens have aged out, mint new ones now
+    // instead of paying the round-trip + 403 + re-bootstrap cost.
+    if (tokens && tokenAge() >= opts.maxTokenAgeSeconds) {
+      log(`tokens are ${tokenAge()}s old (>= ${opts.maxTokenAgeSeconds}s), refreshing proactively`);
+      tokens = null;
+    }
+    if (tokens) return;
+    const t0 = Date.now();
+    log('bootstrapping…');
+    tokens = await bootstrapFn({
+      baseUrl: opts.baseUrl,
+      probeUrl,
+      userAgent: opts.userAgent,
+      headed: opts.headed,
+      sensorWaitSeconds: opts.sensorWaitSeconds,
+    });
+    // Successful bootstrap resets the failure counter — old failures
+    // were against stale tokens that we've now refreshed.
+    consecutiveFailures = 0;
+    log(
+      `bootstrapped in ${Date.now() - t0}ms — ${tokens.cookies.length} cookies, ${Object.keys(tokens.sensorHeaders).length} sensor headers`,
+    );
+  }
+
+  /**
+   * Internal fetch — auto-bootstraps on demand, re-bootstraps on 403
+   * (within maxRetries), escalates after maxConsecutiveFailures. Returns
+   * a raw FetchResult (status/body/headers) for the public wrapper to
+   * adapt into a Response.
+   */
+  async function fetchWithRetry(url: string, init?: FetchInit): Promise<FetchResult> {
+    const fullUrl = url.startsWith('http') ? url : `${new URL(opts.baseUrl).origin}${url}`;
+    await ensureTokens(fullUrl);
+    let retries = 0;
+    while (true) {
+      const t = tokens;
+      if (!t) throw new Error('No tokens (bootstrap failed?)');
+      const result = await underlyingFetchFn(
+        fullUrl,
+        {
+          method: init?.method ?? 'GET',
+          headers: {
+            'User-Agent': opts.userAgent,
+            Accept: 'application/json, text/javascript, */*; q=0.01',
+            'Content-Type': 'application/json',
+            Cookie: t.cookies.map((c) => `${c.name}=${c.value}`).join('; '),
+            Origin: new URL(fullUrl).origin,
+            Referer: opts.baseUrl,
+            ...t.sensorHeaders,
+            ...(init?.headers ?? {}),
+          },
+          body: init?.body,
+        },
+        t,
+      );
+
+      if (result.status === 403) {
+        consecutiveFailures++;
+        if (consecutiveFailures >= opts.maxConsecutiveFailures) {
+          log(
+            `${consecutiveFailures} consecutive 403s — giving up on this site (caller should escalate)`,
+          );
+          return result;
+        }
+        if (retries < opts.maxRetries) {
+          log(`got 403 — re-bootstrapping (attempt ${retries + 1}/${opts.maxRetries})`);
+          tokens = null;
+          await ensureTokens(fullUrl);
+          retries++;
+          continue;
+        }
+        return result;
+      }
+
+      // Any non-403 (success or different error) resets the streak.
+      consecutiveFailures = 0;
+      return result;
+    }
+  }
+
+  const fetchImpl: typeof fetch = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const headers: Record<string, string> = {};
@@ -394,14 +297,10 @@ export function createStealthFetchImpl(sf: StealthFetch): typeof fetch {
         headers[k] = crypto.randomUUID();
       }
     }
-    // Inject X-User-Experience-ID if missing — Southwest requires it
-    // even when the captured workflow doesn't include it. The other
-    // FRESH_UUID_HEADERS are less universal so we only auto-inject
-    // this one; future demos can opt other headers in.
     if (!present.has('x-user-experience-id')) {
       headers['X-User-Experience-ID'] = crypto.randomUUID();
     }
-    const result = await sf.fetch(url, {
+    const result = await fetchWithRetry(url, {
       method: typeof init?.method === 'string' ? init.method : 'GET',
       headers,
       body: typeof init?.body === 'string' ? init.body : undefined,
@@ -411,4 +310,132 @@ export function createStealthFetchImpl(sf: StealthFetch): typeof fetch {
       headers: new Headers(result.headers),
     });
   }) as typeof fetch;
+
+  return {
+    fetchImpl,
+    invalidate(): void {
+      tokens = null;
+      consecutiveFailures = 0;
+    },
+    get tokenAgeSeconds(): number {
+      return tokenAge();
+    },
+    get failureStreak(): number {
+      return consecutiveFailures;
+    },
+    async close(): Promise<void> {
+      tokens = null;
+      consecutiveFailures = 0;
+    },
+  };
+}
+
+/**
+ * Real Playwright bootstrap. Launches headless Chromium, navigates to
+ * `baseUrl`, lets the bot-detection JS run, captures the resulting
+ * cookies + sensor-injected headers via a route interceptor on a probe
+ * request, closes the browser. Returns a fresh TokenCache.
+ */
+async function defaultBootstrap(args: BootstrapArgs): Promise<TokenCache> {
+  let browser: Browser | undefined;
+  try {
+    browser = await chromium.launch({
+      headless: !args.headed,
+      args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+    });
+
+    const context = await browser.newContext({
+      userAgent: args.userAgent,
+      viewport: { width: 1440, height: 900 },
+      screen: { width: 2560, height: 1440 },
+      locale: 'en-US',
+      timezoneId: 'America/Los_Angeles',
+    });
+
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    });
+
+    // SPAs (Southwest, anything React-heavy) keep persistent connections
+    // alive so 'networkidle' hangs forever. Use 'domcontentloaded' + an
+    // explicit sensor-wait — long enough for Akamai's bot-detection JS
+    // to fire and inject sensor tokens.
+    await page.goto(args.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(args.sensorWaitSeconds * 1000);
+
+    // Capture ONLY the bot-detection headers that the sensor injects.
+    // We send a probe with known headers, then any header in the
+    // outbound request that we didn't send is sensor-injected. This
+    // avoids capturing our own dummy values.
+    const probeHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-API-Key': 'x',
+      'X-App-ID': 'x',
+      'X-Channel-ID': 'x',
+      'X-User-Experience-ID': 'x',
+    };
+    const probeSentKeys = new Set([
+      ...Array.from(STANDARD_HEADERS),
+      ...Object.keys(probeHeaders).map((k) => k.toLowerCase()),
+    ]);
+
+    const sensorHeaders: Record<string, string> = {};
+    await page.route('**/*', async (route) => {
+      for (const [k, v] of Object.entries(route.request().headers())) {
+        if (!probeSentKeys.has(k.toLowerCase())) {
+          sensorHeaders[k] = v;
+        }
+      }
+      await route.abort();
+    });
+
+    const probe = args.probeUrl ?? `${new URL(args.baseUrl).origin}/api/__stealth_probe__`;
+    await page.evaluate(
+      async (probeArgs: { url: string; headers: Record<string, string> }) => {
+        try {
+          await fetch(probeArgs.url, {
+            method: 'POST',
+            headers: probeArgs.headers,
+            body: '{}',
+          });
+        } catch {
+          // expected: route aborts the request after capturing headers
+        }
+      },
+      { url: probe, headers: probeHeaders },
+    );
+
+    await page.waitForTimeout(300);
+
+    // Capture cookies for the registrable domain.
+    const allCookies = await context.cookies();
+    const origin = new URL(args.baseUrl);
+    const rootDomain = origin.hostname.split('.').slice(-2).join('.');
+    const cookies = allCookies
+      .filter((c) => c.domain.includes(rootDomain))
+      .map((c) => ({ name: c.name, value: c.value }));
+
+    return { cookies, sensorHeaders, bootstrappedAt: Date.now() };
+  } finally {
+    await browser?.close().catch(() => {});
+  }
+}
+
+async function defaultUnderlyingFetch(
+  url: string,
+  init: FetchInit,
+  _tokens: TokenCache,
+): Promise<FetchResult> {
+  const resp = await globalThis.fetch(url, {
+    method: init.method ?? 'GET',
+    headers: init.headers,
+    body: init.body,
+  });
+  const body = await resp.text();
+  const headers: Record<string, string> = {};
+  resp.headers.forEach((v, k) => {
+    headers[k] = v;
+  });
+  return { status: resp.status, ok: resp.ok, body, headers };
 }
