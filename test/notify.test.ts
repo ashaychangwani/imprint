@@ -1,11 +1,12 @@
 /**
  * Tests for the predicate engine that drives cron's optional
- * `notifyWhen` push-on-success hook.
+ * `notifyWhen` push-on-success hook (provider hooks live in notify.ts
+ * itself but are env-var-driven and not unit-tested here).
  */
 
 import { describe, expect, it } from 'bun:test';
 import { extractAt } from '../src/imprint/json-path.ts';
-import { evaluateNotifyWhen } from '../src/imprint/notify-when.ts';
+import { evaluateNotifyWhen } from '../src/imprint/notify.ts';
 
 describe('extractAt', () => {
   it('extracts a single numeric leaf via dot path', () => {
