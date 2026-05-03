@@ -22,7 +22,7 @@ import { resolve as pathResolve } from 'node:path';
 import type { ResolvedTool } from './discover-tools.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
-import { StealthFetch, createStealthFetchImpl } from './stealth-fetch.ts';
+import { type StealthFetch, createStealthFetch } from './stealth-fetch.ts';
 import type { ReplayBackend, ToolResult } from './types.ts';
 
 export interface BackendContext {
@@ -195,9 +195,8 @@ async function runFetch(ctx: BackendContext): Promise<ToolResult> {
 
 async function runStealthFetch(ctx: BackendContext): Promise<ToolResult> {
   const sf = ensureStealthFetch(ctx);
-  const stealthImpl = createStealthFetchImpl(sf);
   try {
-    return await ctx.tool.toolFn(ctx.params, { fetchImpl: stealthImpl });
+    return await ctx.tool.toolFn(ctx.params, { fetchImpl: sf.fetchImpl });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: 'UNKNOWN', message: `stealth-fetch threw: ${msg}` };
@@ -227,7 +226,7 @@ function ensureStealthFetch(ctx: BackendContext): StealthFetch {
   if (cached) return cached;
 
   const baseUrl = pickBaseUrl(ctx.tool);
-  const sf = new StealthFetch({ baseUrl });
+  const sf = createStealthFetch({ baseUrl });
   ctx.stealthCache.set(ctx.tool.site, sf);
   return sf;
 }
