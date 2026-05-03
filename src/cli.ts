@@ -337,6 +337,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           headed: { type: 'boolean' },
+          trace: { type: 'boolean' },
           param: { type: 'string', multiple: true },
           path: { type: 'string' },
         },
@@ -364,6 +365,7 @@ async function main(argv: string[]): Promise<number> {
         playbook: playbookPath,
         params,
         headed: values.headed,
+        trace: values.trace,
       });
       if (result.ok) {
         console.log('[imprint] OK');
