@@ -11,7 +11,7 @@
  */
 
 import YAML from 'yaml';
-import { type Playbook, PlaybookSchema } from './playbook-types.ts';
+import { type Playbook, PlaybookSchema } from './types.ts';
 
 /**
  * Parse a playbook YAML document. Throws with the underlying YAML or

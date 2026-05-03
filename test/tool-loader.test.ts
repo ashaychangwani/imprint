@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
-import { discoverTools, findToolFunction, toCamelCase } from '../src/imprint/discover-tools.ts';
+import { discoverTools, findToolFunction, toCamelCase } from '../src/imprint/tool-loader.ts';
 
 let root: string;
 

@@ -53,7 +53,7 @@ export function emit(opts: EmitOptions): EmitResult {
   // Compute the import path from the generated file back to workflow-runtime
   // in src/. Generated files live in examples/<site>/ which is two levels
   // deep from src/imprint/.
-  const runtimeModule = pathResolve(import.meta.dir, 'workflow-runtime.ts');
+  const runtimeModule = pathResolve(import.meta.dir, 'runtime.ts');
   const importPath = relative(outDir, runtimeModule);
 
   const source = renderModule(workflow, importPath);

@@ -11,9 +11,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
-import type { ResolvedTool } from '../src/imprint/discover-tools.ts';
-import { runWithLadder } from '../src/imprint/replay-backend.ts';
+import { runWithLadder } from '../src/imprint/backend-ladder.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
+import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import type { ToolResult, Workflow } from '../src/imprint/types.ts';
 
 let root: string;
