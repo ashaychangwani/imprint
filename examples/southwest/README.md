@@ -6,7 +6,7 @@ Recorded session: `sessions/2026-05-03T09-30-16-437Z.{jsonl,json}`
 ## Status: end-to-end working via the auto ladder
 
 ```bash
-bun src/cli.ts cron southwest --once
+imprint cron southwest --once
 # [imprint cron] backends.json: probed 2026-05-03T22:23Z, preferred order: stealth-fetch → playbook
 # [imprint cron] replayBackend: auto (ladder: stealth-fetch → playbook)
 # [imprint backend] trying stealth-fetch…
@@ -45,13 +45,13 @@ bunx playwright install chromium     # for stealth-fetch + playbook backends
 bun install                          # if you haven't
 
 # Verify everything still works after a code change
-bun src/cli.ts cron southwest --once
+imprint cron southwest --once
 
 # Production (foreground)
-NTFY_URL=https://ntfy.sh/your-secret-topic bun src/cli.ts cron southwest
+NTFY_URL=https://ntfy.sh/your-secret-topic imprint cron southwest
 
 # Production (OS scheduler — wraps --once for cron / systemd timer / launchd)
-NTFY_URL=https://ntfy.sh/your-secret-topic bun src/cli.ts cron southwest --once
+NTFY_URL=https://ntfy.sh/your-secret-topic imprint cron southwest --once
 ```
 
 The `cron.json` schedule (`0 9 * * *` = daily at 9am local) is conservative to avoid hammering the API. Crank it up to hourly for a tighter watch but be aware Akamai may flag the IP at high frequency.
@@ -78,4 +78,4 @@ These came up during bring-up; documented so the next person knows they're handl
 
 - **Booking the cheaper flight automatically when a drop fires.** Read-only watcher only. Booking would need authenticated session replay — solvable but out of scope.
 - **Multi-day calendar sweep.** Current playbook polls one date. Either spin up multiple `cron.json` files or wait for v0.2 sweep support.
-- **Persistent runtime.** Currently you run `bun src/cli.ts cron southwest` foreground or wire it to your OS scheduler. v0.2 plan: Hetzner CX22 ($5/mo) hosting (TODOS #8).
+- **Persistent runtime.** Currently you run `imprint cron southwest` foreground or wire it to your OS scheduler. v0.2 plan: Hetzner CX22 ($5/mo) hosting (TODOS #8).
