@@ -22,7 +22,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import cron from 'node-cron';
 import { type ResolvedTool, buildZodValidator, discoverTools } from './discover-tools.ts';
-import { notifyPushover } from './notify.ts';
+import { notify } from './notify.ts';
 import { type CronConfig, CronConfigSchema, type ToolResult } from './types.ts';
 
 export interface RunCronOptions {
@@ -83,7 +83,7 @@ async function runOnce(
   } else {
     log(`  FAILED [${result.error}] ${result.message} (${elapsed}ms)`);
     if (result.remediation) log(`  → ${result.remediation}`);
-    await notifyPushover(
+    await notify(
       `imprint: ${tool.workflow.toolName} failed`,
       `[${result.error}] ${result.message}${result.remediation ? `\n→ ${result.remediation}` : ''}`,
       notifyFetchImpl,

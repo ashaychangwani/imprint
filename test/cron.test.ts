@@ -31,6 +31,10 @@ afterEach(() => {
   // biome-ignore lint/performance/noDelete: env vars need real deletion
   delete process.env.PUSHOVER_USER;
   // biome-ignore lint/performance/noDelete: env vars need real deletion
+  delete process.env.NTFY_URL;
+  // biome-ignore lint/performance/noDelete: env vars need real deletion
+  delete process.env.NTFY_TOKEN;
+  // biome-ignore lint/performance/noDelete: env vars need real deletion
   delete process.env.IMPRINT_TEST_RESULT;
 });
 
@@ -221,6 +225,115 @@ describe('Pushover hook', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'success_push',
+      examplesDir: root,
+      once: true,
+      notifyFetchImpl: fakeNotifyFetch,
+    });
+    expect(called).toBe(false);
+  });
+});
+
+describe('ntfy hook', () => {
+  it('POSTs to NTFY_URL with title + body when configured and the tool fails', async () => {
+    writeFakeExample('with_ntfy', []);
+    writeConfig('with_ntfy', { schedule: '* * * * *', params: {} });
+    process.env.IMPRINT_TEST_RESULT = 'auth';
+    process.env.NTFY_URL = 'https://ntfy.example.com/imprint-test';
+    const captured: Array<{
+      url: string;
+      headers: Record<string, string>;
+      body: string;
+    }> = [];
+    const fakeNotifyFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const headersObj: Record<string, string> = {};
+      for (const [k, v] of Object.entries(init?.headers ?? {})) {
+        headersObj[k] = String(v);
+      }
+      captured.push({
+        url: String(url),
+        headers: headersObj,
+        body: String(init?.body ?? ''),
+      });
+      return new Response('', { status: 200 });
+    }) as unknown as typeof fetch;
+    await runCron({
+      site: 'with_ntfy',
+      examplesDir: root,
+      once: true,
+      notifyFetchImpl: fakeNotifyFetch,
+    });
+    expect(captured).toHaveLength(1);
+    const got = captured[0];
+    if (!got) throw new Error('unreachable: captured length already asserted');
+    expect(got.url).toBe('https://ntfy.example.com/imprint-test');
+    expect(got.headers.Title).toContain('with_ntfy');
+    expect(got.body).toContain('AUTH_EXPIRED');
+    expect(got.body).toContain('auth expired');
+    expect(got.headers.Authorization).toBeUndefined();
+  });
+
+  it('adds a Bearer Authorization header when NTFY_TOKEN is set', async () => {
+    writeFakeExample('ntfy_auth', []);
+    writeConfig('ntfy_auth', { schedule: '* * * * *', params: {} });
+    process.env.IMPRINT_TEST_RESULT = 'auth';
+    process.env.NTFY_URL = 'https://ntfy.private.example/topic';
+    process.env.NTFY_TOKEN = 'tk_secret';
+    const captured: Array<{ headers: Record<string, string> }> = [];
+    const fakeNotifyFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const headersObj: Record<string, string> = {};
+      for (const [k, v] of Object.entries(init?.headers ?? {})) {
+        headersObj[k] = String(v);
+      }
+      captured.push({ headers: headersObj });
+      return new Response('', { status: 200 });
+    }) as unknown as typeof fetch;
+    await runCron({
+      site: 'ntfy_auth',
+      examplesDir: root,
+      once: true,
+      notifyFetchImpl: fakeNotifyFetch,
+    });
+    expect(captured).toHaveLength(1);
+    const got = captured[0];
+    if (!got) throw new Error('unreachable: captured length already asserted');
+    expect(got.headers.Authorization).toBe('Bearer tk_secret');
+  });
+
+  it('fires both Pushover and ntfy when both are configured', async () => {
+    writeFakeExample('both_providers', []);
+    writeConfig('both_providers', { schedule: '* * * * *', params: {} });
+    process.env.IMPRINT_TEST_RESULT = 'auth';
+    process.env.PUSHOVER_TOKEN = 'tok';
+    process.env.PUSHOVER_USER = 'user';
+    process.env.NTFY_URL = 'https://ntfy.sh/imprint-both';
+    const calls: string[] = [];
+    const fakeNotifyFetch = (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+    await runCron({
+      site: 'both_providers',
+      examplesDir: root,
+      once: true,
+      notifyFetchImpl: fakeNotifyFetch,
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls.some((u) => u.includes('pushover.net'))).toBe(true);
+    expect(calls.some((u) => u.includes('ntfy.sh'))).toBe(true);
+  });
+
+  it('skips ntfy entirely when NTFY_URL is not set', async () => {
+    writeFakeExample('no_ntfy', []);
+    writeConfig('no_ntfy', { schedule: '* * * * *', params: {} });
+    process.env.IMPRINT_TEST_RESULT = 'auth';
+    // Neither provider configured.
+    let called = false;
+    const fakeNotifyFetch = (async () => {
+      called = true;
+      return new Response('', { status: 200 });
+    }) as unknown as typeof fetch;
+    await runCron({
+      site: 'no_ntfy',
       examplesDir: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,

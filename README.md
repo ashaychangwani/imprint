@@ -142,13 +142,20 @@ imprint cron discoverandgo --once     # run a single tick and exit
                                       # (use this from systemd timers / launchd / OS cron)
 ```
 
-Set `PUSHOVER_TOKEN` and `PUSHOVER_USER` in the environment to get a push notification on every failure (auth expired, network errors, rate limits). Without those vars, failures are logged to stderr only.
+Set notification env vars to get a push on every failure (auth expired, network errors, rate limits). Pick whichever provider you prefer — set both and they fire in parallel:
+
+| Provider | Env vars | Notes |
+|---|---|---|
+| **[Pushover](https://pushover.net/)** | `PUSHOVER_TOKEN`, `PUSHOVER_USER` | $5 one-time per platform. Polished iOS/Android/desktop apps. |
+| **[ntfy](https://ntfy.sh/)** | `NTFY_URL` (e.g. `https://ntfy.sh/your-secret-topic`), `NTFY_TOKEN` (optional, for protected topics on self-hosted) | Free. Self-hostable. Pick a hard-to-guess topic name on the public server. |
+
+With nothing configured, failures are logged to stderr only.
 
 ## Demos
 
 Coming on launch day. Each lives in `examples/<name>/`:
 
-- **Southwest seat tracker** — polls every 15 min, books your preferred seat the moment it opens up, Pushover-notifies you
+- **Southwest seat tracker** — polls every 15 min, books your preferred seat the moment it opens up, push-notifies you
 - **Luma event finder** — "find SF AI events this weekend" as an MCP tool
 - **Office canteen ordering** — order lunch in 30 seconds via Claude Desktop
 
