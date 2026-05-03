@@ -1,109 +1,80 @@
 /**
- * Pure-logic tests for StealthFetch — no real Chromium, no real
+ * Pure-logic tests for stealth-fetch — no real Chromium, no real
  * network. The Playwright + Akamai integration is verified by
  * scripts/southwest-stealth-test.ts (live, manual) since it can't be
  * meaningfully unit-tested without spinning up a browser.
  *
  * These tests cover:
- *   - Constructor option handling
+ *   - Construction (string and options-object forms)
  *   - Token age tracking + invalidate
  *   - Proactive maxTokenAgeSeconds refresh
  *   - Reactive maxConsecutiveFailures escalation
- *   - createStealthFetchImpl wrapper translation
+ *   - fetchImpl wrapper translation (URL inputs, Response shape)
+ *
+ * The bootstrap + underlying network call are injected via the
+ * StealthFetchInternals seam so the tests drive lifecycle
+ * deterministically without touching real Chromium or the network.
  */
 
 import { describe, expect, it } from 'bun:test';
-import { StealthFetch, createStealthFetchImpl } from '../src/imprint/stealth-fetch.ts';
+import {
+  type FetchInit,
+  type StealthFetch,
+  type StealthFetchOptions,
+  type TokenCache,
+  createStealthFetch,
+} from '../src/imprint/stealth-fetch.ts';
 
-/**
- * Test subclass that stubs the real bootstrap (browser launch) and the
- * public fetch path so the test drives lifecycle deterministically
- * without touching real Chromium or the network. We override `fetch`
- * directly and re-implement just enough of the retry + age + failure-
- * streak logic to keep the StealthFetch contract observable from tests.
- */
-class FakeStealthFetch extends StealthFetch {
-  bootstrapCalls = 0;
-  fetchCalls = 0;
-  /** Status returned from each successive simulated network call. */
-  statusSequence: number[] = [200];
-  bodySequence: string[] = ['{}'];
-
-  override async bootstrap(_probeUrl?: string): Promise<void> {
-    this.bootstrapCalls++;
-    // Inject pretend tokens so tokenAgeSeconds becomes >= 0.
-    // biome-ignore lint/suspicious/noExplicitAny: test-only access to private state
-    (this as any).tokens = {
-      cookies: [{ name: '_abck', value: 'fake' }],
-      sensorHeaders: { 'EE-a': 'sensor-token' },
-      bootstrappedAt: Date.now(),
-    };
-    // biome-ignore lint/suspicious/noExplicitAny: test-only access to private state
-    (this as any).consecutiveFailures = 0;
-  }
-
-  override async fetch(
-    _url: string,
-    _init?: { method?: string; headers?: Record<string, string>; body?: string },
-  ): Promise<{
-    status: number;
-    ok: boolean;
-    body: string;
-    headers: Record<string, string>;
-  }> {
-    // Mimic the proactive-refresh check on the parent class.
-    // biome-ignore lint/suspicious/noExplicitAny: test-only access
-    const tokens = (this as any).tokens as { bootstrappedAt: number } | null;
-    // biome-ignore lint/suspicious/noExplicitAny: test-only access
-    const opts = (this as any).opts as {
-      maxRetries: number;
-      maxConsecutiveFailures: number;
-      maxTokenAgeSeconds: number;
-    };
-    if (tokens && this.tokenAgeSeconds >= opts.maxTokenAgeSeconds) {
-      // biome-ignore lint/suspicious/noExplicitAny: test-only access
-      (this as any).tokens = null;
-    }
-    // biome-ignore lint/suspicious/noExplicitAny: test-only access
-    if (!(this as any).tokens) await this.bootstrap();
-
-    let retries = 0;
-    while (true) {
-      const status = this.statusSequence[this.fetchCalls] ?? 200;
-      const body = this.bodySequence[this.fetchCalls] ?? '{}';
-      this.fetchCalls++;
-      const result = { status, ok: status >= 200 && status < 300, body, headers: {} };
-
-      if (status === 403) {
-        // biome-ignore lint/suspicious/noExplicitAny: test-only access
-        (this as any).consecutiveFailures++;
-        // biome-ignore lint/suspicious/noExplicitAny: test-only access
-        if ((this as any).consecutiveFailures >= opts.maxConsecutiveFailures) {
-          return result;
-        }
-        if (retries < opts.maxRetries) {
-          await this.bootstrap();
-          retries++;
-          continue;
-        }
-        return result;
-      }
-
-      // biome-ignore lint/suspicious/noExplicitAny: test-only access
-      (this as any).consecutiveFailures = 0;
-      return result;
-    }
-  }
+interface FakeOpts extends Partial<StealthFetchOptions> {
+  /** Sequence of HTTP statuses returned by underlyingFetch in order. */
+  statusSequence?: number[];
+  /** Sequence of bodies returned by underlyingFetch in order. */
+  bodySequence?: string[];
+  /** Caller observes how many times bootstrap was invoked. */
+  bootstrapCalls?: { count: number };
+  /** Caller observes how many times underlyingFetch was invoked. */
+  fetchCalls?: { count: number };
 }
 
-describe('StealthFetch construction', () => {
+function makeFake(opts: FakeOpts = {}): StealthFetch {
+  const bootstrapRef = opts.bootstrapCalls ?? { count: 0 };
+  const fetchRef = opts.fetchCalls ?? { count: 0 };
+  const statusSeq = opts.statusSequence ?? [200];
+  const bodySeq = opts.bodySequence ?? ['{}'];
+  return createStealthFetch(
+    {
+      baseUrl: opts.baseUrl ?? 'https://example.com',
+      maxRetries: opts.maxRetries,
+      maxConsecutiveFailures: opts.maxConsecutiveFailures,
+      maxTokenAgeSeconds: opts.maxTokenAgeSeconds,
+    },
+    {
+      bootstrap: async (): Promise<TokenCache> => {
+        bootstrapRef.count++;
+        return {
+          cookies: [{ name: '_abck', value: 'fake' }],
+          sensorHeaders: { 'EE-a': 'sensor-token' },
+          bootstrappedAt: Date.now(),
+        };
+      },
+      underlyingFetch: async (_url: string, _init: FetchInit, _tokens: TokenCache) => {
+        const idx = fetchRef.count++;
+        const status = statusSeq[idx] ?? 200;
+        const body = bodySeq[idx] ?? '{}';
+        return { status, ok: status >= 200 && status < 300, body, headers: {} };
+      },
+    },
+  );
+}
+
+describe('createStealthFetch construction', () => {
   it('accepts a string baseUrl as shorthand', () => {
-    const sf = new StealthFetch('https://example.com');
+    const sf = createStealthFetch('https://example.com');
     expect(sf.tokenAgeSeconds).toBe(-1);
   });
 
   it('accepts an options object', () => {
-    const sf = new StealthFetch({
+    const sf = createStealthFetch({
       baseUrl: 'https://example.com',
       sensorWaitSeconds: 5,
       maxTokenAgeSeconds: 30,
@@ -113,20 +84,20 @@ describe('StealthFetch construction', () => {
 });
 
 describe('Token lifecycle', () => {
-  it('tokenAgeSeconds is -1 before bootstrap', () => {
-    const sf = new FakeStealthFetch('https://example.com');
+  it('tokenAgeSeconds is -1 before any fetch', () => {
+    const sf = makeFake();
     expect(sf.tokenAgeSeconds).toBe(-1);
   });
 
-  it('tokenAgeSeconds becomes >= 0 after bootstrap', async () => {
-    const sf = new FakeStealthFetch('https://example.com');
-    await sf.bootstrap();
+  it('tokenAgeSeconds becomes >= 0 after the first fetch (which bootstraps)', async () => {
+    const sf = makeFake({ statusSequence: [200] });
+    await sf.fetchImpl('https://example.com/api/x');
     expect(sf.tokenAgeSeconds).toBeGreaterThanOrEqual(0);
   });
 
   it('invalidate() clears tokens', async () => {
-    const sf = new FakeStealthFetch('https://example.com');
-    await sf.bootstrap();
+    const sf = makeFake({ statusSequence: [200] });
+    await sf.fetchImpl('https://example.com/api/x');
     sf.invalidate();
     expect(sf.tokenAgeSeconds).toBe(-1);
   });
@@ -134,84 +105,83 @@ describe('Token lifecycle', () => {
 
 describe('Proactive TTL refresh (maxTokenAgeSeconds)', () => {
   it('does NOT re-bootstrap when tokens are within max age', async () => {
-    const sf = new FakeStealthFetch({
-      baseUrl: 'https://example.com',
+    const bootstrapCalls = { count: 0 };
+    const sf = makeFake({
+      statusSequence: [200, 200],
+      bootstrapCalls,
       maxTokenAgeSeconds: 600,
     });
-    sf.statusSequence = [200];
-    await sf.fetch('/api/x');
-    expect(sf.bootstrapCalls).toBe(1);
-    sf.statusSequence = [200];
-    await sf.fetch('/api/x');
-    // Still 1 — tokens are fresh
-    expect(sf.bootstrapCalls).toBe(1);
+    await sf.fetchImpl('https://example.com/api/x');
+    expect(bootstrapCalls.count).toBe(1);
+    await sf.fetchImpl('https://example.com/api/x');
+    // Still 1 — tokens are fresh.
+    expect(bootstrapCalls.count).toBe(1);
   });
 
   it('re-bootstraps when tokens exceed max age', async () => {
-    const sf = new FakeStealthFetch({
-      baseUrl: 'https://example.com',
+    const bootstrapCalls = { count: 0 };
+    const sf = makeFake({
+      statusSequence: [200, 200],
+      bootstrapCalls,
       maxTokenAgeSeconds: 0, // expire immediately
     });
-    sf.statusSequence = [200, 200];
-    await sf.fetch('/api/x');
-    expect(sf.bootstrapCalls).toBe(1);
+    await sf.fetchImpl('https://example.com/api/x');
+    expect(bootstrapCalls.count).toBe(1);
     // Wait at least 1 full second so floor((now - bootstrappedAt)/1000) >= 1.
     await new Promise((r) => setTimeout(r, 1100));
-    await sf.fetch('/api/x');
-    expect(sf.bootstrapCalls).toBe(2);
+    await sf.fetchImpl('https://example.com/api/x');
+    expect(bootstrapCalls.count).toBe(2);
   });
 });
 
 describe('Reactive 403 retry + consecutive-failure escalation', () => {
   it('re-bootstraps once on 403 (within maxRetries)', async () => {
-    const sf = new FakeStealthFetch({
-      baseUrl: 'https://example.com',
+    const bootstrapCalls = { count: 0 };
+    const sf = makeFake({
+      statusSequence: [403, 200],
+      bootstrapCalls,
       maxRetries: 1,
       maxConsecutiveFailures: 5,
     });
-    sf.statusSequence = [403, 200];
-    const r = await sf.fetch('/api/x');
+    const r = await sf.fetchImpl('https://example.com/api/x');
     expect(r.status).toBe(200);
-    expect(sf.bootstrapCalls).toBe(2); // initial + one retry
+    expect(bootstrapCalls.count).toBe(2); // initial + one retry
   });
 
   it('returns the 403 (and stops retrying) when failure streak hits the cap', async () => {
-    const sf = new FakeStealthFetch({
-      baseUrl: 'https://example.com',
+    const sf = makeFake({
+      statusSequence: [403, 403, 403, 403],
       maxRetries: 1,
       maxConsecutiveFailures: 2,
     });
     // Streak grows across calls: 1st call → 403, 2nd call → 403 (caps).
-    sf.statusSequence = [403, 403, 403, 403];
-    const r1 = await sf.fetch('/api/x');
+    const r1 = await sf.fetchImpl('https://example.com/api/x');
     expect(r1.status).toBe(403);
     expect(sf.failureStreak).toBe(1);
 
     // Second call sees 403 again — failure count hits 2, no more retries.
-    const r2 = await sf.fetch('/api/x');
+    const r2 = await sf.fetchImpl('https://example.com/api/x');
     expect(r2.status).toBe(403);
     expect(sf.failureStreak).toBeGreaterThanOrEqual(2);
   });
 
   it('resets the failure streak on a non-403 response', async () => {
-    const sf = new FakeStealthFetch({
-      baseUrl: 'https://example.com',
+    const sf = makeFake({
+      statusSequence: [403, 200, 200],
       maxConsecutiveFailures: 5,
     });
-    sf.statusSequence = [403, 200, 200];
-    await sf.fetch('/api/x');
+    await sf.fetchImpl('https://example.com/api/x');
     expect(sf.failureStreak).toBe(0); // reset by the 200 after 403's retry
   });
 });
 
-describe('createStealthFetchImpl', () => {
-  it('returns a fetch-shaped function that delegates to StealthFetch', async () => {
-    const sf = new FakeStealthFetch('https://example.com');
-    sf.statusSequence = [200];
-    sf.bodySequence = ['{"items":[1,2,3]}'];
-
-    const impl = createStealthFetchImpl(sf);
-    const resp = await impl('https://example.com/api/x', {
+describe('fetchImpl', () => {
+  it('returns a fetch-shaped Response', async () => {
+    const sf = makeFake({
+      statusSequence: [200],
+      bodySequence: ['{"items":[1,2,3]}'],
+    });
+    const resp = await sf.fetchImpl('https://example.com/api/x', {
       method: 'POST',
       headers: { 'X-Custom': 'value' },
       body: 'request-body',
@@ -223,10 +193,8 @@ describe('createStealthFetchImpl', () => {
   });
 
   it('handles URL objects as input', async () => {
-    const sf = new FakeStealthFetch('https://example.com');
-    sf.statusSequence = [200];
-    const impl = createStealthFetchImpl(sf);
-    const resp = await impl(new URL('https://example.com/api/x'));
+    const sf = makeFake({ statusSequence: [200] });
+    const resp = await sf.fetchImpl(new URL('https://example.com/api/x'));
     expect(resp.status).toBe(200);
   });
 });
