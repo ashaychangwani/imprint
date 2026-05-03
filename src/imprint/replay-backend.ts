@@ -74,7 +74,7 @@ export async function runWithLadder(
       attempts.push({
         backend,
         outcome: 'unavailable',
-        detail: backend === 'playbook' ? 'no playbook.md' : 'prerequisite missing',
+        detail: backend === 'playbook' ? 'no playbook.yaml' : 'prerequisite missing',
         durationMs: 0,
       });
       log(`${backend}: skipped (prerequisite missing)`);
@@ -213,7 +213,7 @@ async function runPlaybookBackend(ctx: BackendContext): Promise<ToolResult> {
 }
 
 function playbookPath(ctx: BackendContext): string {
-  return pathResolve(ctx.examplesDir, ctx.tool.site, 'playbook.md');
+  return pathResolve(ctx.examplesDir, ctx.tool.site, 'playbook.yaml');
 }
 
 /**

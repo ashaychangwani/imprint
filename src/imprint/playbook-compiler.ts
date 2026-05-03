@@ -90,21 +90,21 @@ export async function compilePlaybook(
   const llm = new LLM(loadConfig(opts.llmConfig));
   const result = await llm.analyze(systemPrompt, slim);
 
-  // Strip code fences if the LLM wrapped the markdown in ```markdown ... ```
-  const markdown = stripCodeFences(result.text).trim();
+  // Strip code fences if the LLM wrapped the YAML in ```yaml ... ```
+  const yaml = stripCodeFences(result.text).trim();
 
   let playbook: Playbook;
   try {
-    playbook = parsePlaybook(markdown);
+    playbook = parsePlaybook(yaml);
   } catch (err) {
     throw new Error(
       `Compiled playbook failed to parse: ${err instanceof Error ? err.message : String(err)}\n` +
-        `Raw output:\n${markdown.slice(0, 1500)}`,
+        `Raw output:\n${yaml.slice(0, 1500)}`,
     );
   }
 
-  const playbookPath = opts.outPath ?? pathJoin(dirname(opts.sessionPath), '..', 'playbook.md');
-  writeFileSync(playbookPath, `${markdown}\n`);
+  const playbookPath = opts.outPath ?? pathJoin(dirname(opts.sessionPath), '..', 'playbook.yaml');
+  writeFileSync(playbookPath, `${yaml}\n`);
 
   return {
     playbook,

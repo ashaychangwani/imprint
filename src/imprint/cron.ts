@@ -150,7 +150,7 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
   }
 
   const replayBackend = config.replayBackend ?? 'fetch';
-  const playbookPath = pathResolve(examplesDir, opts.site, 'playbook.md');
+  const playbookPath = pathResolve(examplesDir, opts.site, 'playbook.yaml');
   if (replayBackend === 'playbook' && !existsSync(playbookPath)) {
     throw new Error(
       `replayBackend="playbook" but ${playbookPath} doesn't exist. Run \`imprint compile-playbook\` first.`,

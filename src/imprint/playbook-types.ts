@@ -2,7 +2,7 @@
  * Playbook = the DOM-script artifact produced from a recorded session.
  *
  * Where workflow.json describes the API path (replayed via `fetch`),
- * playbook.md describes the DOM path (replayed via Playwright). The
+ * playbook.yaml describes the DOM path (replayed via Playwright). The
  * same recording compiles to both: when the API replay gets blocked
  * (Akamai, Cloudflare, etc.), the playbook is the deterministic
  * fallback that runs in a real browser.

@@ -19,7 +19,7 @@ import type { ToolResult } from './types.ts';
 import { substituteString } from './workflow-runtime.ts';
 
 export interface RunPlaybookOptions {
-  /** Path to playbook.md OR an already-parsed Playbook. */
+  /** Path to playbook.yaml OR an already-parsed Playbook. */
   playbook: string | Playbook;
   params: Record<string, string | number | boolean>;
   /** Run with a visible browser window. Default false (headless). */
