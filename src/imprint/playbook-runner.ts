@@ -12,7 +12,8 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import type { Browser, BrowserContext, Locator as PWLocator, Page } from 'playwright';
-import { extractAt } from './notify-when.ts';
+import { extractAt } from './json-path.ts';
+import { createLog } from './log.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import type { Locator, Playbook, PlaybookResult, PlaybookStep, WaitFor } from './playbook-types.ts';
 import type { ToolResult } from './types.ts';
@@ -40,9 +41,7 @@ export interface RunPlaybookOptions {
   pageOverride?: Page;
 }
 
-const log = (msg: string): void => {
-  process.stderr.write(`[imprint playbook] ${msg}\n`);
-};
+const log = createLog('playbook');
 
 export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult> {
   // Convert every thrown error into a ToolResult so callers can rely on

@@ -20,6 +20,7 @@
 import { existsSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import type { ResolvedTool } from './discover-tools.ts';
+import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
 import { StealthFetch, createStealthFetchImpl } from './stealth-fetch.ts';
 import type { ReplayBackend, ToolResult } from './types.ts';
@@ -49,9 +50,7 @@ export interface LadderResult {
   }>;
 }
 
-const log = (msg: string): void => {
-  process.stderr.write(`[imprint backend] ${msg}\n`);
-};
+const log = createLog('backend');
 
 /**
  * Walk a list of backends in order, escalating on FORBIDDEN. Returns

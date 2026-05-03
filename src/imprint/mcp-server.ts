@@ -51,6 +51,7 @@ import {
   buildZodValidator,
   discoverTools,
 } from './discover-tools.ts';
+import { createLog } from './log.ts';
 import { loadBackendsCache } from './probe-backends.ts';
 import { type BackendContext, ladderFor, runWithLadder } from './replay-backend.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
@@ -106,9 +107,7 @@ function buildJsonSchema(parameters: WorkflowParameter[]): Tool['inputSchema'] {
   };
 }
 
-const log = (msg: string): void => {
-  process.stderr.write(`[imprint mcp] ${msg}\n`);
-};
+const log = createLog('mcp');
 
 /** Build the MCP Server with all discovered tools registered. */
 function buildServer(

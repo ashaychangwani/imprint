@@ -18,6 +18,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import { discoverTools } from './discover-tools.ts';
+import { createLog } from './log.ts';
 import { type BackendContext, runWithLadder } from './replay-backend.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { type BackendsCache, BackendsCacheSchema, CronConfigSchema } from './types.ts';
@@ -37,9 +38,7 @@ export interface ProbeBackendsResult {
 }
 
 const IMPRINT_VERSION = '0.1.0';
-const log = (msg: string): void => {
-  process.stderr.write(`[imprint probe] ${msg}\n`);
-};
+const log = createLog('probe');
 
 export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBackendsResult> {
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
