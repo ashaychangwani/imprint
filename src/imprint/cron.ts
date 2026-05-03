@@ -22,7 +22,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import cron from 'node-cron';
-import { runWithLadder } from './backend-ladder.ts';
+import { resolveLadder, runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
 import { evaluateNotifyWhen, notify } from './notify.ts';
 import { loadBackendsCache } from './probe-backends.ts';
@@ -171,14 +171,7 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
   // the operator provided and let the runner enforce its own validation
   // — names typically differ (e.g., Southwest's `origin` vs
   // `origin_airport_code`) and the ladder fail-softs on mismatch.
-  //
-  // 'auto' expands to the cached preferred order (set by `imprint
-  // probe-backends`) when available, otherwise the default cost-ranked
-  // ladder. Explicit single-backend choices become single-rung ladders.
-  const ladder: ReplayBackend[] =
-    replayBackend === 'auto'
-      ? (cached?.preferredOrder ?? ['fetch', 'stealth-fetch', 'playbook'])
-      : [replayBackend];
+  const ladder = resolveLadder(replayBackend, cached?.preferredOrder);
   let params: Record<string, string | number | boolean>;
   if (ladder.includes('fetch') || ladder.includes('stealth-fetch')) {
     const validator = buildZodValidator(tool.workflow.parameters);
