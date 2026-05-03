@@ -102,12 +102,12 @@ imprint cron discoverandgo
 | `imprint redact <session.json>` | Scrub credentials + PII; write `<session>.redacted.json`. Run this before sharing or sending to the LLM. |
 | `imprint generate <session>` | Run LLM intent-detection on a redacted session; write `workflow.json`. |
 | `imprint emit <workflow>` | Generate the deterministic TS module at `examples/<site>/index.ts`. |
-| `imprint compile-playbook <session>` | LLM-compile the captured DOM events into `examples/<site>/playbook.md` — the browser-replay artifact for sites the API path can't reach. |
-| `imprint playbook <site>` | Run a playbook against a real Chromium. Flags: `--headed`, `--param k=v`, `--path <md>`. |
+| `imprint compile-playbook <session>` | LLM-compile the captured DOM events into `examples/<site>/playbook.yaml` — the browser-replay artifact for sites the API path can't reach. |
+| `imprint playbook <site>` | Run a playbook against a real Chromium. Flags: `--headed`, `--param k=v`, `--path <yaml>`. |
 | `imprint probe-backends <site>` | Try fetch / stealth-fetch / playbook once and write `examples/<site>/backends.json` with the ranked order. cron + MCP read this so they skip futile rungs every tick. |
 | `imprint login <site>` | Persist auth cookies for `<site>` from a captured session. |
 | `imprint cron <site>` | Start the polling daemon for `examples/<site>/cron.json`. Flags: `--once`, `--run-now`, `--config <path>`. |
-| `imprint mcp-server` | Run the MCP server (stdio default; `--http --port N` for HTTP). `--site <name>` restricts to one example. Sites with a playbook also expose `<toolName>_via_browser` as a fallback tool. |
+| `imprint mcp-server` | Run the MCP server (stdio default; `--http --port N` for HTTP). `--site <name>` restricts to one example. Each tool routes through the cached backend ladder (fetch → stealth-fetch → playbook) per `examples/<site>/backends.json`. |
 
 ### Wiring up Claude Desktop
 
@@ -195,7 +195,7 @@ Sites like Southwest, Ticketmaster, and anything behind Akamai / Cloudflare / Da
 |---|---|---|---|
 | `fetch` | Captured `workflow.json` via Node `fetch` | ~200ms | Plain APIs |
 | `stealth-fetch` | Bootstrap Playwright once to mint Akamai sensor tokens, then native `fetch` augmented with those tokens | ~12s bootstrap (one-time per process) + ~1s per call | Akamai, Cloudflare, DataDome (token-validation tier) |
-| `playbook` | Full Playwright + stealth + DOM walk via `playbook.md` | ~9.4s per call | Universal — also handles sites that need form-fills, autocompletes, multi-page navigation |
+| `playbook` | Full Playwright + stealth + DOM walk via `playbook.yaml` | ~9.4s per call | Universal — also handles sites that need form-fills, autocompletes, multi-page navigation |
 
 Set `replayBackend` in `cron.json` (or omit for the default):
 
