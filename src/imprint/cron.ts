@@ -26,7 +26,7 @@ import { type ResolvedTool, buildZodValidator, discoverTools } from './discover-
 import { createLog } from './log.ts';
 import { evaluateNotifyWhen, notify } from './notify.ts';
 import { loadBackendsCache } from './probe-backends.ts';
-import { type BackendContext, ladderFor, runWithLadder } from './replay-backend.ts';
+import { runWithLadder } from './replay-backend.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import {
   type CronConfig,
@@ -82,13 +82,13 @@ async function runOnce(
   );
   const t0 = Date.now();
 
-  const ctx: BackendContext = {
+  const { result, usedBackend, attempts } = await runWithLadder(
+    ladder,
     tool,
     params,
     examplesDir,
     stealthCache,
-  };
-  const { result, usedBackend, attempts } = await runWithLadder(ladder, ctx);
+  );
 
   const elapsed = Date.now() - t0;
   for (const a of attempts) {
@@ -171,7 +171,14 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
   // the operator provided and let the runner enforce its own validation
   // — names typically differ (e.g., Southwest's `origin` vs
   // `origin_airport_code`) and the ladder fail-softs on mismatch.
-  const ladder = ladderFor(replayBackend, cached?.preferredOrder);
+  //
+  // 'auto' expands to the cached preferred order (set by `imprint
+  // probe-backends`) when available, otherwise the default cost-ranked
+  // ladder. Explicit single-backend choices become single-rung ladders.
+  const ladder: ReplayBackend[] =
+    replayBackend === 'auto'
+      ? (cached?.preferredOrder ?? ['fetch', 'stealth-fetch', 'playbook'])
+      : [replayBackend];
   let params: Record<string, string | number | boolean>;
   if (ladder.includes('fetch') || ladder.includes('stealth-fetch')) {
     const validator = buildZodValidator(tool.workflow.parameters);

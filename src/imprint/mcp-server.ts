@@ -53,7 +53,7 @@ import {
 } from './discover-tools.ts';
 import { createLog } from './log.ts';
 import { loadBackendsCache } from './probe-backends.ts';
-import { type BackendContext, ladderFor, runWithLadder } from './replay-backend.ts';
+import { runWithLadder } from './replay-backend.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import type { ReplayBackend, WorkflowParameter } from './types.ts';
 
@@ -170,15 +170,18 @@ function buildServer(
     >;
 
     try {
-      const ctx: BackendContext = {
+      // 'auto' on every MCP call: prefer the cached probe order when
+      // available, otherwise the default cost-ranked ladder.
+      const ladder: ReplayBackend[] =
+        tool.preferredOrder && tool.preferredOrder.length > 0
+          ? tool.preferredOrder
+          : ['fetch', 'stealth-fetch', 'playbook'];
+      const { result, usedBackend } = await runWithLadder(
+        ladder,
         tool,
-        params: args,
+        args,
         examplesDir,
         stealthCache,
-      };
-      const { result, usedBackend } = await runWithLadder(
-        ladderFor('auto', tool.preferredOrder),
-        ctx,
       );
       if (!result.ok) {
         const text = result.remediation
