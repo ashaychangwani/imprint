@@ -83,7 +83,16 @@ function parsePath(path: string): PathSegment[] {
 
 function walk(node: unknown, segs: PathSegment[], i: number, out: number[]): void {
   if (i === segs.length) {
-    if (typeof node === 'number' && Number.isFinite(node)) out.push(node);
+    // Numeric leaves are kept as-is. String leaves like "108.40" are
+    // coerced — many real APIs return decimal money values as strings to
+    // avoid float-precision games (Southwest, Stripe, most travel APIs).
+    // Strings that don't parse cleanly are silently skipped.
+    if (typeof node === 'number' && Number.isFinite(node)) {
+      out.push(node);
+    } else if (typeof node === 'string') {
+      const n = Number(node);
+      if (Number.isFinite(n)) out.push(n);
+    }
     return;
   }
   const seg = segs[i];

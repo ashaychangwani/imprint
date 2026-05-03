@@ -119,19 +119,35 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     }
     clearTimeout(timeoutHandle);
 
-    if (resp.status === 401 || resp.status === 403) {
+    if (resp.status === 401) {
+      const text = await safeText(resp);
       return {
         ok: false,
         error: 'AUTH_EXPIRED',
-        message: `Request ${i} returned ${resp.status} — auth has likely expired`,
+        message: `Request ${i} returned 401 — auth has likely expired: ${text.slice(0, 300)}`,
         remediation: `Run \`imprint login ${opts.workflow.site}\` to refresh credentials.`,
       };
     }
+    if (resp.status === 403) {
+      // 403 has many causes besides expired auth — most often bot
+      // detection (Akamai, Cloudflare, DataDome) on consumer sites,
+      // sometimes geo-block, ToS violation, or missing capability. The
+      // body usually has a code or message that disambiguates. Surface
+      // it instead of guessing.
+      const text = await safeText(resp);
+      return {
+        ok: false,
+        error: 'FORBIDDEN',
+        message: `Request ${i} returned 403: ${text.slice(0, 300)}`,
+        remediation: `Common causes: bot detection (Akamai/Cloudflare/DataDome), geo-block, expired credential, or ToS violation. Inspect the response body above; if it looks like bot detection, the captured workflow can't replay against this site without a real browser. If it's auth, try \`imprint login ${opts.workflow.site}\`.`,
+      };
+    }
     if (resp.status === 429) {
+      const text = await safeText(resp);
       return {
         ok: false,
         error: 'RATE_LIMITED',
-        message: `Request ${i} returned 429`,
+        message: `Request ${i} returned 429: ${text.slice(0, 300)}`,
         remediation: 'Back off and retry after the Retry-After interval.',
       };
     }

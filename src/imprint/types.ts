@@ -162,7 +162,13 @@ export type ToolResult<T = unknown> =
   | { ok: true; data: T }
   | {
       ok: false;
-      error: 'AUTH_EXPIRED' | 'NETWORK' | 'RATE_LIMITED' | 'BAD_RESPONSE' | 'UNKNOWN';
+      error:
+        | 'AUTH_EXPIRED' // 401 — credentials expired or missing; user runs `imprint login`
+        | 'FORBIDDEN' // 403 — blocked (bot detection, geo, ToS, capability mismatch); body has the clue
+        | 'NETWORK' // fetch threw / timed out
+        | 'RATE_LIMITED' // 429
+        | 'BAD_RESPONSE' // other 4xx/5xx
+        | 'UNKNOWN';
       message: string;
       remediation?: string;
     };

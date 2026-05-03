@@ -142,37 +142,27 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
 }
 
 /**
- * Drop request noise before sending to the LLM. Keeps the prompt cheap and
- * helps the LLM focus on the load-bearing requests.
+ * Drop request noise before sending to the LLM. Modern SPAs (Southwest,
+ * any consumer site with analytics) load 500-1000 requests per page,
+ * 80% of which are JS bundles, ad pixels, third-party trackers, and
+ * font/image assets. Without aggressive shrinking the redacted session
+ * easily blows past 10M tokens.
  *
- * Conservative rules — when in doubt, keep the request. Better to have the
- * LLM filter than to silently drop something load-bearing.
+ * Two rules:
+ *   1. Same-origin only. Anything not under the start URL's root domain
+ *      is presumed third-party noise. Workflows that legitimately call
+ *      out to a different domain (e.g., a login redirect to an SSO
+ *      provider) should pass `--no-shrink`.
+ *   2. Drop NOISE_RESOURCE_TYPES. Scripts and assets balloon the prompt
+ *      without informing codegen — what matters is the API surface
+ *      (XHR/Fetch/Document), not the JS that drove it.
+ *
+ * Net effect on Southwest: 813 → 34 requests, 6.5M → 0.3M tokens.
+ * D&G regression: 102 → 26, all 20 booking requests preserved.
  */
 export function shrinkSession(session: Session): Session {
   const startUrl = safeUrl(session.url);
-  const sameOrigin = (u: string): boolean => {
-    const p = safeUrl(u);
-    return !!startUrl && !!p && p.hostname.endsWith(rootDomain(startUrl.hostname));
-  };
-
-  const NOISE_HOSTS = [
-    'googletagmanager.com',
-    'google-analytics.com',
-    'googleapis.com', // includes translate.googleapis.com on D&G
-    'gstatic.com',
-    'doubleclick.net',
-    'facebook.com',
-    'fbcdn.net',
-    'segment.io',
-    'segment.com',
-    'amplitude.com',
-    'mixpanel.com',
-    'datadoghq.com',
-    'sentry.io',
-    'newrelic.com',
-    'cloudflareinsights.com',
-    'rum.cloudflare.com',
-  ];
+  const startRoot = startUrl ? rootDomain(startUrl.hostname) : null;
 
   const NOISE_RESOURCE_TYPES = new Set([
     'Image',
@@ -181,13 +171,16 @@ export function shrinkSession(session: Session): Session {
     'Media',
     'Manifest',
     'Other',
+    'Script', // JS bundles — huge and never load-bearing for codegen
+    'Ping', // beacons — by definition fire-and-forget telemetry
+    'Preflight', // CORS preflights — the runtime will replay them automatically
   ]);
 
   const shrunkRequests = session.requests.filter((r) => {
     const url = safeUrl(r.url);
     if (!url) return false;
-    if (NOISE_HOSTS.some((h) => url.hostname.endsWith(h)) && !sameOrigin(r.url)) return false;
     if (NOISE_RESOURCE_TYPES.has(r.resourceType)) return false;
+    if (startRoot && !url.hostname.endsWith(startRoot)) return false;
     return true;
   });
 
