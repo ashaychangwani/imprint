@@ -34,6 +34,11 @@ VERBS:
                             options: --once  --run-now  --config <path>
   mcp-server                Run the MCP server (stdio by default; --http for HTTP)
                             options: --site <name>  --http  --port <num>
+  compile-playbook <s.json> Turn a recorded session into a markdown playbook
+                            (DOM fallback for sites where API replay is blocked)
+                            options: --out <path>
+  playbook <site>           Run examples/<site>/playbook.md against a real browser
+                            options: --headed  --param k=v  --path <path>
 
 OPTIONS for \`record\`:
   --url <url>               Starting URL (else opens about:blank)
@@ -297,6 +302,76 @@ async function main(argv: string[]): Promise<number> {
         runNow: values['run-now'],
       });
       return 0;
+    }
+
+    case 'compile-playbook': {
+      const sessionPath = argv[1];
+      if (!sessionPath) {
+        console.error('error: `imprint compile-playbook` requires a <session.json> argument');
+        return 2;
+      }
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: { out: { type: 'string' } },
+        allowPositionals: false,
+      });
+      const { compilePlaybook } = await import('./imprint/playbook-compiler.ts');
+      const result = await compilePlaybook({ sessionPath, outPath: values.out });
+      console.log(`[imprint] playbook → ${result.playbookPath}`);
+      console.log(
+        `[imprint] tool: ${result.playbook.toolName} (${result.playbook.steps.length} step${result.playbook.steps.length === 1 ? '' : 's'}, ${result.playbook.parameters.length} parameter${result.playbook.parameters.length === 1 ? '' : 's'})`,
+      );
+      console.log(
+        `[imprint] tokens: ${result.inputTokens} in, ${result.outputTokens} out — ${(result.durationMs / 1000).toFixed(1)}s`,
+      );
+      return 0;
+    }
+
+    case 'playbook': {
+      const site = argv[1];
+      if (!site) {
+        console.error('error: `imprint playbook` requires a <site> argument');
+        return 2;
+      }
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          headed: { type: 'boolean' },
+          param: { type: 'string', multiple: true },
+          path: { type: 'string' },
+        },
+        allowPositionals: false,
+      });
+      const { resolve: pathResolve } = await import('node:path');
+      const playbookPath =
+        values.path ?? pathResolve(process.cwd(), 'examples', site, 'playbook.md');
+      const params: Record<string, string | number | boolean> = {};
+      for (const kv of values.param ?? []) {
+        const eq = kv.indexOf('=');
+        if (eq === -1) {
+          console.error(`error: --param requires k=v form, got "${kv}"`);
+          return 2;
+        }
+        const k = kv.slice(0, eq);
+        const v = kv.slice(eq + 1);
+        // Best-effort coerce: number if numeric, boolean if true/false, else string
+        if (v === 'true' || v === 'false') params[k] = v === 'true';
+        else if (v !== '' && !Number.isNaN(Number(v))) params[k] = Number(v);
+        else params[k] = v;
+      }
+      const { runPlaybook } = await import('./imprint/playbook-runner.ts');
+      const result = await runPlaybook({
+        playbook: playbookPath,
+        params,
+        headed: values.headed,
+      });
+      if (result.ok) {
+        console.log('[imprint] OK');
+        console.log(JSON.stringify(result.data, null, 2));
+        return 0;
+      }
+      console.error(`[imprint] ${result.error}: ${result.message}`);
+      return 1;
     }
 
     default:

@@ -24,7 +24,14 @@ import cron from 'node-cron';
 import { type ResolvedTool, buildZodValidator, discoverTools } from './discover-tools.ts';
 import { evaluateNotifyWhen } from './notify-when.ts';
 import { notify } from './notify.ts';
-import { type CronConfig, CronConfigSchema, type NotifyWhen, type ToolResult } from './types.ts';
+import { runPlaybook } from './playbook-runner.ts';
+import {
+  type CronConfig,
+  CronConfigSchema,
+  type NotifyWhen,
+  type ReplayBackend,
+  type ToolResult,
+} from './types.ts';
 
 export interface RunCronOptions {
   /** Example directory under examples/, e.g. "discoverandgo". */
@@ -67,17 +74,37 @@ async function runOnce(
   fetchImpl: typeof fetch | undefined,
   notifyFetchImpl: typeof fetch | undefined,
   notifyWhen: NotifyWhen | undefined,
+  replayBackend: ReplayBackend,
+  playbookPath: string | undefined,
 ): Promise<ToolResult> {
   const startedAt = new Date();
-  log(`${startedAt.toISOString()} ${tool.workflow.toolName} starting`);
+  log(`${startedAt.toISOString()} ${tool.workflow.toolName} starting (backend: ${replayBackend})`);
   const t0 = Date.now();
   let result: ToolResult;
-  try {
-    result = await tool.toolFn(params, fetchImpl ? { fetchImpl } : undefined);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    result = { ok: false, error: 'UNKNOWN', message: `tool threw: ${msg}` };
+
+  if (replayBackend === 'playbook' && playbookPath) {
+    result = await runPlaybook({
+      playbook: playbookPath,
+      params: params as Record<string, string | number | boolean>,
+    });
+  } else {
+    try {
+      result = await tool.toolFn(params, fetchImpl ? { fetchImpl } : undefined);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { ok: false, error: 'UNKNOWN', message: `tool threw: ${msg}` };
+    }
+    // Auto fallback: if API returned FORBIDDEN and we have a playbook,
+    // re-run via the browser. Bot detection is the canonical case.
+    if (replayBackend === 'auto' && !result.ok && result.error === 'FORBIDDEN' && playbookPath) {
+      log('  API returned FORBIDDEN, falling back to playbook…');
+      result = await runPlaybook({
+        playbook: playbookPath,
+        params: params as Record<string, string | number | boolean>,
+      });
+    }
   }
+
   const elapsed = Date.now() - t0;
   if (result.ok) {
     const data = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
@@ -129,31 +156,62 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     );
   }
 
-  // Validate params against the workflow's parameter declarations so a typo
-  // in cron.json fails fast at startup, not on the first tick.
-  const validator = buildZodValidator(tool.workflow.parameters);
-  const parsed = validator.safeParse(config.params);
-  if (!parsed.success) {
-    const issues = parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ');
-    throw new Error(`cron.json params invalid for ${tool.workflow.toolName}: ${issues}`);
-  }
-  const params = parsed.data;
-
   if (!cron.validate(config.schedule)) {
     throw new Error(`Invalid cron expression in ${configPath}: "${config.schedule}"`);
+  }
+
+  // Locate the playbook (if any) for the playbook / auto-fallback paths.
+  const { existsSync: fsExists } = await import('node:fs');
+  const playbookPath = pathResolve(examplesDir, opts.site, 'playbook.md');
+  const playbookExists = fsExists(playbookPath);
+  const replayBackend = config.replayBackend ?? 'fetch';
+  if (replayBackend === 'playbook' && !playbookExists) {
+    throw new Error(
+      `replayBackend="playbook" but ${playbookPath} doesn't exist. Run \`imprint compile-playbook\` first.`,
+    );
+  }
+
+  // Param validation only runs against the API workflow's parameters when
+  // the API path will be taken. The playbook backend has its own parameter
+  // schema (read from playbook.md) that the runner enforces; validating
+  // here would fail because parameter names typically differ between the
+  // API workflow (`origin_airport_code`) and the playbook (`origin`).
+  let params: Record<string, string | number | boolean>;
+  if (replayBackend === 'playbook') {
+    params = config.params;
+  } else {
+    const validator = buildZodValidator(tool.workflow.parameters);
+    const parsed = validator.safeParse(config.params);
+    if (!parsed.success) {
+      const issues = parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ');
+      throw new Error(`cron.json params invalid for ${tool.workflow.toolName}: ${issues}`);
+    }
+    params = parsed.data;
   }
 
   log(`tool: ${tool.workflow.toolName} (${tool.workflow.parameters.length} param(s))`);
   log(`schedule: ${config.schedule}`);
   if (config.notifyWhen) log(`notifyWhen: ${config.notifyWhen.type}`);
+  log(`replayBackend: ${replayBackend}${playbookExists ? '' : ' (no playbook.md found)'}`);
+
+  const playbookForRun = playbookExists ? playbookPath : undefined;
+  const tickArgs = [
+    tool,
+    params,
+    opts.fetchImpl,
+    opts.notifyFetchImpl,
+    config.notifyWhen,
+    replayBackend,
+    playbookForRun,
+  ] as const;
 
   if (opts.once) {
-    await runOnce(tool, params, opts.fetchImpl, opts.notifyFetchImpl, config.notifyWhen);
+    await runOnce(...tickArgs);
     return;
   }
 
   if (opts.runNow) {
-    await runOnce(tool, params, opts.fetchImpl, opts.notifyFetchImpl, config.notifyWhen);
+    await runOnce(...tickArgs);
   }
 
   // node-cron's callbacks are sync; we kick off the async work and let it
@@ -162,7 +220,7 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
   // longer than the schedule period — fine for v0.1, callers picking
   // sub-second cadences should handle their own concurrency.
   const task = cron.schedule(config.schedule, () => {
-    void runOnce(tool, params, opts.fetchImpl, opts.notifyFetchImpl, config.notifyWhen);
+    void runOnce(...tickArgs);
   });
   task.start();
   log('scheduled — Ctrl-C to stop');
