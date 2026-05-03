@@ -182,7 +182,7 @@ export type ToolResult<T = unknown> =
  * watchers like "notify when any fare drops below $99".
  *
  * Discriminated by `type`. New predicate kinds slot in here as new
- * variants and a matching case in src/imprint/notify-when.ts.
+ * variants and a matching case in src/imprint/notify.ts.
  */
 export const NotifyWhenSchema = z.discriminatedUnion('type', [
   z.object({
