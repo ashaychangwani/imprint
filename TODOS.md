@@ -111,3 +111,23 @@ Claude Desktop wire-up is documented in the README.
 **Result:** 128 production deps, all permissive. Distribution: MIT 108, ISC 8, Apache-2.0 7, BSD-3-Clause 3, BSD-2-Clause 2. Zero AGPL/GPL/LGPL/MPL/EPL. Compatible with the MIT license on this repo.
 
 **Reproduce:** `npx --yes license-checker --production --summary`
+
+### 14. ~~Multi-backend ladder + record-time probe~~ ✅ done (Day 9)
+
+**Resolution:** Three replay backends in increasing cost: `fetch` (~200ms, plain Node fetch) → `stealth-fetch` (~12s bootstrap + ~1s/call, Playwright-minted Akamai sensor tokens used by native fetch — derived from PR #1) → `playbook` (~9.4s/call, full Playwright + stealth + DOM walk). `replayBackend: "auto"` walks them in order, escalating only on FORBIDDEN.
+
+`imprint probe-backends <site>` runs the ladder once at record time and writes `examples/<site>/backends.json` with the ranked order. cron + MCP read this and skip futile rungs every tick — without the probe, an "auto" Southwest tick wastes ~200ms on the fetch attempt that always 403s. Runtime ladder remains the fallback if the cached preferred backend stops working between probes.
+
+Verified end-to-end against Southwest: probe identifies `stealth-fetch → playbook` as preferred; cron tick now logs `trying stealth-fetch…` directly (no fetch attempt); returns real fare data in ~10s.
+
+### 15. Future stealth options if Akamai ratchets up
+
+**What:** If `stealth-fetch` starts getting blocked too (Akamai updates sensor JS / TLS-fingerprint detection / device-fingerprint-based heuristics), the ladder's playbook rung still works (real Chromium runs the live JS). Beyond that, we'd need:
+
+1. **`rebrowser-patches`** — patches Chrome itself to defeat the deeper headless-detection markers. ~70% success against modern Akamai per public reports.
+2. **Residential-IP proxy rotation** — Akamai also weighs IP reputation. Datacenter IPs flagged faster than residential.
+3. **A paid stealth API** — Bright Data Web Unlocker, ScrapingBee, ZenRows. $30-300/mo. Would slot in as a fourth backend in the ladder via the existing `BackendContext` + `runWithLadder` extension point.
+
+**Why not now:** Current ladder works. The probe writes empirical results, so when a backend stops working, the operator sees it in the next probe + can pick the next-cheapest known-working option. v0.2 work, only if launch reveals real demand.
+
+**Why NOT a long-lived StealthFetch daemon:** Sensor tokens have a TTL (minutes to hours) regardless of process lifetime. Sharing a StealthFetch instance across cron processes via IPC adds significant complexity (daemon lifecycle, token serialization, IPC protocol) without solving expiry — every process would still need re-bootstrap on token refresh. The current per-process cache is the right tradeoff for the cron use case (one process per schedule, tokens last across many ticks).

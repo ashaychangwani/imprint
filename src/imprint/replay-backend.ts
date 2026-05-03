@@ -145,11 +145,16 @@ export async function runWithLadder(
 
 /**
  * Translate a `replayBackend` config value into the ordered ladder
- * the runner walks.
+ * the runner walks. When `auto` is requested AND a backends.json
+ * probe cache exists for the site, prefer the cached order — it's the
+ * empirical "what worked at probe time" rather than the default
+ * fetch → stealth-fetch → playbook. The cached order's tail still
+ * acts as a fallback in case the preferred backend stops working.
  */
-export function ladderFor(backend: ReplayBackend): ReplayBackend[] {
+export function ladderFor(backend: ReplayBackend, cachedOrder?: ReplayBackend[]): ReplayBackend[] {
   switch (backend) {
     case 'auto':
+      if (cachedOrder && cachedOrder.length > 0) return cachedOrder;
       return ['fetch', 'stealth-fetch', 'playbook'];
     case 'fetch':
     case 'stealth-fetch':
