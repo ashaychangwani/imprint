@@ -1,7 +1,7 @@
 /**
  * Tests for the backend ladder. Pure-logic — no real Chromium, no real
  * network. Synthesizes fake ResolvedTool instances and exercises
- * ladderFor + runWithLadder against fake backend implementations.
+ * runWithLadder against fake backend implementations.
  *
  * The actual backends (fetch / stealth-fetch / playbook) have their
  * own test files; this file is about the ladder's escalation logic.
@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import type { ResolvedTool } from '../src/imprint/discover-tools.ts';
-import { type BackendContext, ladderFor, runWithLadder } from '../src/imprint/replay-backend.ts';
+import { runWithLadder } from '../src/imprint/replay-backend.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
 import type { ToolResult, Workflow } from '../src/imprint/types.ts';
 
@@ -69,32 +69,17 @@ function makeFakeTool(site: string, behavior: FakeToolBehavior): ResolvedTool {
   return { site, workflow, toolFn };
 }
 
-function makeContext(tool: ResolvedTool): BackendContext {
-  // Pre-populate the stealth cache with a stubbed stealth fetcher so
-  // the ladder doesn't try to launch real Chromium when stealth-fetch
-  // is in the mix. The fake tool's toolFn doesn't actually CALL the
-  // fetchImpl, so this stub is never invoked — it just satisfies the
-  // type.
-  const stealthCache = new Map<string, StealthFetch>();
-  stealthCache.set(tool.site, createStealthFetch(`https://${tool.site}.example.com`));
-  return {
-    tool,
-    params: {},
-    examplesDir: root,
-    stealthCache,
-  };
+/**
+ * Per-test stealth cache. Pre-populated with a stub for the tool so the
+ * ladder doesn't try to launch real Chromium when stealth-fetch is in
+ * the mix. The fake tool's toolFn doesn't actually CALL the fetchImpl,
+ * so this stub is never invoked — it just satisfies the type.
+ */
+function makeStealthCache(tool: ResolvedTool): Map<string, StealthFetch> {
+  const cache = new Map<string, StealthFetch>();
+  cache.set(tool.site, createStealthFetch(`https://${tool.site}.example.com`));
+  return cache;
 }
-
-describe('ladderFor', () => {
-  it('"auto" expands to fetch → stealth-fetch → playbook', () => {
-    expect(ladderFor('auto')).toEqual(['fetch', 'stealth-fetch', 'playbook']);
-  });
-  it('explicit backends become single-rung ladders', () => {
-    expect(ladderFor('fetch')).toEqual(['fetch']);
-    expect(ladderFor('stealth-fetch')).toEqual(['stealth-fetch']);
-    expect(ladderFor('playbook')).toEqual(['playbook']);
-  });
-});
 
 describe('runWithLadder — single-rung explicit', () => {
   it('returns the fetch result directly when explicit "fetch"', async () => {
@@ -103,7 +88,7 @@ describe('runWithLadder — single-rung explicit', () => {
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    const r = await runWithLadder(['fetch'], makeContext(tool));
+    const r = await runWithLadder(['fetch'], tool, {}, root, makeStealthCache(tool));
     expect(r.usedBackend).toBe('fetch');
     expect(r.result.ok).toBe(true);
     expect(behavior.calls.fetch).toBe(1);
@@ -116,7 +101,7 @@ describe('runWithLadder — single-rung explicit', () => {
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    const r = await runWithLadder(['fetch'], makeContext(tool));
+    const r = await runWithLadder(['fetch'], tool, {}, root, makeStealthCache(tool));
     expect(r.result.ok).toBe(false);
     if (r.result.ok) return;
     expect(r.result.error).toBe('FORBIDDEN');
@@ -133,7 +118,13 @@ describe('runWithLadder — auto escalation', () => {
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    const r = await runWithLadder(['fetch', 'stealth-fetch'], makeContext(tool));
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
     expect(r.result.ok).toBe(true);
     expect(r.usedBackend).toBe('stealth-fetch');
     expect(behavior.calls.fetch).toBe(1);
@@ -155,7 +146,13 @@ describe('runWithLadder — auto escalation', () => {
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    const r = await runWithLadder(['fetch', 'stealth-fetch'], makeContext(tool));
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
     expect(r.usedBackend).toBe('fetch');
     if (r.result.ok) throw new Error('expected failure');
     expect(r.result.error).toBe('AUTH_EXPIRED');
@@ -171,7 +168,13 @@ describe('runWithLadder — auto escalation', () => {
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    const r = await runWithLadder(['fetch', 'stealth-fetch'], makeContext(tool));
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
     expect(r.result.ok).toBe(false);
     if (r.result.ok) return;
     expect(r.result.error).toBe('FORBIDDEN');
@@ -189,7 +192,13 @@ describe('runWithLadder — auto escalation', () => {
     };
     const tool = makeFakeTool('alpha', behavior);
     // examplesDir/alpha/playbook.yaml does NOT exist
-    const r = await runWithLadder(['fetch', 'stealth-fetch', 'playbook'], makeContext(tool));
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch', 'playbook'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
     expect(r.attempts).toHaveLength(3);
     expect(r.attempts[2]).toMatchObject({ backend: 'playbook', outcome: 'unavailable' });
     // Last actual result is the second escalated FORBIDDEN
@@ -221,7 +230,13 @@ result:
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    const r = await runWithLadder(['fetch', 'stealth-fetch', 'playbook'], makeContext(tool));
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch', 'playbook'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
     // Playbook will fail too (no real browser, navigates about:blank, no
     // matching XHR) — but it WAS attempted.
     expect(r.attempts).toHaveLength(3);
@@ -235,6 +250,8 @@ result:
 describe('runWithLadder — empty ladder', () => {
   it('throws on an empty ladder', async () => {
     const tool = makeFakeTool('alpha', { calls: { fetch: 0, stealth: 0 } });
-    await expect(runWithLadder([], makeContext(tool))).rejects.toThrow(/empty ladder/);
+    await expect(runWithLadder([], tool, {}, root, makeStealthCache(tool))).rejects.toThrow(
+      /empty ladder/,
+    );
   });
 });

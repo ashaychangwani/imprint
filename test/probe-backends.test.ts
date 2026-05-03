@@ -1,7 +1,10 @@
 /**
  * Tests for the probe + cache. Pure-logic — no real backends. Verifies
- * the cache schema, loader behavior, and that ladderFor honors a
- * cached preferredOrder.
+ * the cache schema and loader behavior. The "cached preferredOrder is
+ * honored as the auto ladder" behavior used to live in a `ladderFor`
+ * helper that was tested here; it now lives inline in cron.ts and
+ * mcp-server.ts as a 3-line `replayBackend === 'auto' ? cached : default`
+ * switch and is exercised end-to-end by the cron tests.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
@@ -9,7 +12,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import { loadBackendsCache } from '../src/imprint/probe-backends.ts';
-import { ladderFor } from '../src/imprint/replay-backend.ts';
 import { type BackendsCache, BackendsCacheSchema } from '../src/imprint/types.ts';
 
 let root: string;
@@ -113,21 +115,5 @@ describe('loadBackendsCache', () => {
       results: {},
     });
     expect(loadBackendsCache('schema-bad', root)).toBeNull();
-  });
-});
-
-describe('ladderFor honors cached preferredOrder', () => {
-  it('uses the cached order for "auto" when provided', () => {
-    expect(ladderFor('auto', ['stealth-fetch', 'playbook'])).toEqual(['stealth-fetch', 'playbook']);
-  });
-
-  it('falls back to default for "auto" when cache is empty', () => {
-    expect(ladderFor('auto')).toEqual(['fetch', 'stealth-fetch', 'playbook']);
-    expect(ladderFor('auto', [])).toEqual(['fetch', 'stealth-fetch', 'playbook']);
-  });
-
-  it('ignores the cached order for explicit non-auto backends', () => {
-    expect(ladderFor('fetch', ['stealth-fetch', 'playbook'])).toEqual(['fetch']);
-    expect(ladderFor('playbook', ['fetch'])).toEqual(['playbook']);
   });
 });
