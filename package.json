@@ -29,7 +29,6 @@
     "@anthropic-ai/vertex-sdk": "^0.13.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "chrome-remote-interface": "^0.33.0",
-    "cycletls": "^2.0.5",
     "env-paths": "^3.0.0",
     "jsdom": "^29.1.1",
     "node-cron": "^3.0.3",
