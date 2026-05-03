@@ -180,14 +180,14 @@ describe('runWithLadder — auto escalation', () => {
     expect(behavior.calls.stealth).toBe(1);
   });
 
-  it('skips playbook rung when no playbook.md exists', async () => {
+  it('skips playbook rung when no playbook.yaml exists', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
       stealthResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    // examplesDir/alpha/playbook.md does NOT exist
+    // examplesDir/alpha/playbook.yaml does NOT exist
     const r = await runWithLadder(['fetch', 'stealth-fetch', 'playbook'], makeContext(tool));
     expect(r.attempts).toHaveLength(3);
     expect(r.attempts[2]).toMatchObject({ backend: 'playbook', outcome: 'unavailable' });
@@ -195,13 +195,24 @@ describe('runWithLadder — auto escalation', () => {
     expect(r.result.ok).toBe(false);
   });
 
-  it('reaches playbook when playbook.md exists', async () => {
-    // Create the playbook.md file so playbook rung is "available"
+  it('reaches playbook when playbook.yaml exists', async () => {
+    // Create the playbook.yaml file so playbook rung is "available"
     const siteDir = pathResolve(root, 'alpha');
     mkdirSync(siteDir, { recursive: true });
     writeFileSync(
-      pathResolve(siteDir, 'playbook.md'),
-      '# tool_alpha\n## Summary\nx\n## Parameters\n## Steps\n### Step 1: nav\n- action: navigate\n- url: about:blank\n## Result\n- source: xhr\n- url_pattern: never\n- extract: x\n- return_as: r\n',
+      pathResolve(siteDir, 'playbook.yaml'),
+      `toolName: tool_alpha
+summary: x
+parameters: []
+steps:
+  - action: navigate
+    url: about:blank
+result:
+  source: xhr
+  url_pattern: never
+  extract: x
+  return_as: r
+`,
     );
     const behavior: FakeToolBehavior = {
       fetchResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },

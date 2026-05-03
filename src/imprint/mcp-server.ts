@@ -76,7 +76,7 @@ export interface RunMcpServerOptions {
 /** A discovered tool decorated with the JSON Schema MCP advertises it as. */
 interface ResolvedTool extends DiscoveredTool {
   inputSchema: Tool['inputSchema'];
-  /** Path to playbook.md when one exists alongside index.ts. */
+  /** Path to playbook.yaml when one exists alongside index.ts. */
   playbookPath?: string;
   /**
    * Cached preferred backend ladder from a prior `imprint probe-backends` run.
@@ -206,7 +206,7 @@ export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
   const discovered = await discoverTools(examplesDir, opts.site, '[imprint mcp]');
   const tools: ResolvedTool[] = discovered.map((t) => {
-    const playbookPath = pathResolve(examplesDir, t.site, 'playbook.md');
+    const playbookPath = pathResolve(examplesDir, t.site, 'playbook.yaml');
     const cache = loadBackendsCache(t.site, examplesDir);
     return {
       ...t,
@@ -231,7 +231,7 @@ export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void
       log(`  preferred backend order (probed): ${t.preferredOrder.join(' → ')}`);
     }
     if (t.playbookPath) {
-      log('  playbook.md found (available as ladder fallback)');
+      log('  playbook.yaml found (available as ladder fallback)');
     }
   }
 

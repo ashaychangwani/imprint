@@ -37,7 +37,7 @@ VERBS:
   compile-playbook <s.json> Turn a recorded session into a markdown playbook
                             (DOM fallback for sites where API replay is blocked)
                             options: --out <path>
-  playbook <site>           Run examples/<site>/playbook.md against a real browser
+  playbook <site>           Run examples/<site>/playbook.yaml against a real browser
                             options: --headed  --param k=v  --path <path>
   probe-backends <site>     Try each backend (fetch / stealth-fetch / playbook)
                             once and write examples/<site>/backends.json with
@@ -389,7 +389,7 @@ async function main(argv: string[]): Promise<number> {
       });
       const { resolve: pathResolve } = await import('node:path');
       const playbookPath =
-        values.path ?? pathResolve(process.cwd(), 'examples', site, 'playbook.md');
+        values.path ?? pathResolve(process.cwd(), 'examples', site, 'playbook.yaml');
       const params: Record<string, string | number | boolean> = {};
       for (const kv of values.param ?? []) {
         const eq = kv.indexOf('=');

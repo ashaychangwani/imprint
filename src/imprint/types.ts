@@ -216,14 +216,14 @@ export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
  *     (~12s, one-time per process), then native `fetch` augmented with
  *     those tokens (~1s per call). Defeats Akamai for direct-API sites.
  *   - `'playbook'`: full Playwright + stealth + DOM walk via the
- *     compiled playbook.md. ~9.4s per call. Universal — handles sites
+ *     compiled playbook.yaml. ~9.4s per call. Universal — handles sites
  *     that need form-fills, autocompletes, multi-page navigation.
  *   - `'auto'`: walks the ladder fetch → stealth-fetch → playbook,
  *     escalating only on FORBIDDEN. The principle: never fail with
  *     "Imprint can't help" as long as some backend would have worked.
  *
  * The `auto` ladder skips rungs whose prerequisites aren't met (e.g.,
- * playbook is skipped when no playbook.md exists). Non-FORBIDDEN errors
+ * playbook is skipped when no playbook.yaml exists). Non-FORBIDDEN errors
  * (AUTH_EXPIRED, NETWORK, RATE_LIMITED, etc) don't escalate — those
  * indicate a real problem the next backend can't solve.
  */
