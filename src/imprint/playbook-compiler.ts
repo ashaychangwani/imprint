@@ -1,7 +1,7 @@
 /**
  * `imprint compile-playbook <session>` — turn a recorded session into a
- * markdown playbook the runner (or any LLM agent with a browser tool)
- * can execute step-by-step.
+ * YAML playbook the runner (or any LLM agent with a browser tool) can
+ * execute step-by-step.
  *
  * Mirrors generate.ts: feed the session to Vertex Claude with a system
  * prompt, validate the output, write it next to the session.

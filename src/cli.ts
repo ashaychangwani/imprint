@@ -34,7 +34,7 @@ VERBS:
                             options: --once  --run-now  --config <path>
   mcp-server                Run the MCP server (stdio by default; --http for HTTP)
                             options: --site <name>  --http  --port <num>
-  compile-playbook <s.json> Turn a recorded session into a markdown playbook
+  compile-playbook <s.json> Turn a recorded session into a YAML playbook
                             (DOM fallback for sites where API replay is blocked)
                             options: --out <path>
   playbook <site>           Run examples/<site>/playbook.yaml against a real browser
