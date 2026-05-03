@@ -13,6 +13,7 @@
  */
 
 import { z } from 'zod';
+import { type WorkflowParameter, WorkflowParameterSchema } from './types.ts';
 
 /**
  * Locator strategies, listed in the order the runner tries them.
@@ -151,13 +152,11 @@ export const PlaybookResultSchema = z.discriminatedUnion('source', [
 ]);
 export type PlaybookResult = z.infer<typeof PlaybookResultSchema>;
 
-export const PlaybookParameterSchema = z.object({
-  name: z.string(),
-  type: z.enum(['string', 'number', 'boolean']),
-  description: z.string(),
-  default: z.union([z.string(), z.number(), z.boolean()]).optional(),
-});
-export type PlaybookParameter = z.infer<typeof PlaybookParameterSchema>;
+// Playbook parameters are structurally identical to workflow parameters
+// (same {name, type, description, default?} shape). Re-export the workflow
+// schema so they stay in sync — when one grows a field, both get it.
+export const PlaybookParameterSchema = WorkflowParameterSchema;
+export type PlaybookParameter = WorkflowParameter;
 
 export const PlaybookSchema = z.object({
   /** Tool name in snake_case (matches workflow.json's toolName when both exist). */
