@@ -99,6 +99,7 @@ bun run dev cron discoverandgo
 | `imprint emit <workflow>` | Generate the deterministic TS module at `examples/<site>/index.ts`. |
 | `imprint compile-playbook <session>` | LLM-compile the captured DOM events into `examples/<site>/playbook.md` — the browser-replay artifact for sites the API path can't reach. |
 | `imprint playbook <site>` | Run a playbook against a real Chromium. Flags: `--headed`, `--param k=v`, `--path <md>`. |
+| `imprint probe-backends <site>` | Try fetch / stealth-fetch / playbook once and write `examples/<site>/backends.json` with the ranked order. cron + MCP read this so they skip futile rungs every tick. |
 | `imprint login <site>` | Persist auth cookies for `<site>` from a captured session. |
 | `imprint cron <site>` | Start the polling daemon for `examples/<site>/cron.json`. Flags: `--once`, `--run-now`, `--config <path>`. |
 | `imprint mcp-server` | Run the MCP server (stdio default; `--http --port N` for HTTP). `--site <name>` restricts to one example. Sites with a playbook also expose `<toolName>_via_browser` as a fallback tool. |
@@ -208,7 +209,7 @@ Set `replayBackend` in `cron.json` (or omit for the default):
 }
 ```
 
-A typical Southwest cron tick log:
+A typical Southwest cron tick log (no probe yet — auto walks the full ladder):
 ```
 [imprint cron] replayBackend: auto (ladder: fetch → stealth-fetch → playbook)
 [imprint backend] trying fetch…
@@ -221,6 +222,30 @@ A typical Southwest cron tick log:
 ```
 
 The principle: as long as some backend would have worked, the call succeeds. "Imprint can't help here" is the failure mode this design eliminates.
+
+#### One-time probe — skip the futile rungs
+
+Walking the full ladder every tick wastes ~200ms on the fetch attempt that always 403s for bot-protected sites. Run `imprint probe-backends <site>` once after `emit` to find which backends work and persist the order to `examples/<site>/backends.json`:
+
+```bash
+imprint probe-backends southwest
+# [imprint probe] probing fetch / stealth-fetch / playbook for search_southwest_flights…
+# [imprint probe]   fetch: FORBIDDEN
+# [imprint probe]   stealth-fetch: OK in 12419ms
+# [imprint probe]   playbook: OK in 13597ms
+# [imprint probe] wrote examples/southwest/backends.json — preferred: stealth-fetch → playbook
+```
+
+Subsequent cron ticks read the cache and start with the cheapest known-working backend:
+```
+[imprint cron] backends.json: probed 2026-05-03T22:23:26Z, preferred order: stealth-fetch → playbook
+[imprint cron] replayBackend: auto (ladder: stealth-fetch → playbook)
+[imprint backend] trying stealth-fetch…    ← starts here, skips the futile fetch
+[imprint backend] stealth-fetch: OK in 10218ms
+[imprint cron]   OK in 10218ms via stealth-fetch
+```
+
+The runtime ladder still serves as the fallback if the cached backend stops working between probes (token-validator changes, API moves behind a stricter WAF tier, etc). Re-run the probe whenever you re-record or the site changes its bot-detection posture.
 
 ```bash
 # Compile the playbook for sites that need the DOM path

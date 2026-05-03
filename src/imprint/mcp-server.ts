@@ -51,9 +51,10 @@ import {
   buildZodValidator,
   discoverTools,
 } from './discover-tools.ts';
+import { loadBackendsCache } from './probe-backends.ts';
 import { type BackendContext, ladderFor, runWithLadder } from './replay-backend.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
-import type { WorkflowParameter } from './types.ts';
+import type { ReplayBackend, WorkflowParameter } from './types.ts';
 
 export interface RunMcpServerOptions {
   /** Restrict to one example. Otherwise every generated example is registered. */
@@ -77,6 +78,13 @@ interface ResolvedTool extends DiscoveredTool {
   inputSchema: Tool['inputSchema'];
   /** Path to playbook.md when one exists alongside index.ts. */
   playbookPath?: string;
+  /**
+   * Cached preferred backend ladder from a prior `imprint probe-backends` run.
+   * When present, the runtime starts with this order instead of the default
+   * fetch → stealth-fetch → playbook ladder, avoiding the wasted fetch attempt
+   * on every tick for known-blocked sites.
+   */
+  preferredOrder?: ReplayBackend[];
 }
 
 /**
@@ -169,7 +177,10 @@ function buildServer(
         examplesDir,
         stealthCache,
       };
-      const { result, usedBackend } = await runWithLadder(ladderFor('auto'), ctx);
+      const { result, usedBackend } = await runWithLadder(
+        ladderFor('auto', tool.preferredOrder),
+        ctx,
+      );
       if (!result.ok) {
         const text = result.remediation
           ? `[${result.error}] ${result.message}\n  → ${result.remediation}`
@@ -196,10 +207,12 @@ export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void
   const discovered = await discoverTools(examplesDir, opts.site, '[imprint mcp]');
   const tools: ResolvedTool[] = discovered.map((t) => {
     const playbookPath = pathResolve(examplesDir, t.site, 'playbook.md');
+    const cache = loadBackendsCache(t.site, examplesDir);
     return {
       ...t,
       inputSchema: buildJsonSchema(t.workflow.parameters),
       playbookPath: existsSync(playbookPath) ? playbookPath : undefined,
+      preferredOrder: cache?.preferredOrder,
     };
   });
   if (tools.length === 0) {
@@ -214,8 +227,11 @@ export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void
 
   for (const t of tools) {
     log(`registered ${t.workflow.toolName} (${t.site}) — ${t.workflow.parameters.length} param(s)`);
+    if (t.preferredOrder) {
+      log(`  preferred backend order (probed): ${t.preferredOrder.join(' → ')}`);
+    }
     if (t.playbookPath) {
-      log(`  + ${t.workflow.toolName}_via_browser (playbook fallback)`);
+      log('  playbook.md found (available as ladder fallback)');
     }
   }
 
