@@ -39,6 +39,12 @@ VERBS:
                             options: --out <path>
   playbook <site>           Run examples/<site>/playbook.md against a real browser
                             options: --headed  --param k=v  --path <path>
+  probe-backends <site>     Try each backend (fetch / stealth-fetch / playbook)
+                            once and write examples/<site>/backends.json with
+                            the ranked order. cron + MCP read this so they
+                            don't burn a fetch attempt every tick on bot-
+                            protected sites.
+                            options: --out <path>  --param k=v
 
 OPTIONS for \`record\`:
   --url <url>               Starting URL (else opens about:blank)
@@ -301,6 +307,44 @@ async function main(argv: string[]): Promise<number> {
         once: values.once,
         runNow: values['run-now'],
       });
+      return 0;
+    }
+
+    case 'probe-backends': {
+      const site = argv[1];
+      if (!site) {
+        console.error('error: `imprint probe-backends` requires a <site> argument');
+        return 2;
+      }
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          out: { type: 'string' },
+          param: { type: 'string', multiple: true },
+        },
+        allowPositionals: false,
+      });
+      const overrides: Record<string, string | number | boolean> = {};
+      for (const kv of values.param ?? []) {
+        const eq = kv.indexOf('=');
+        if (eq === -1) {
+          console.error(`error: --param requires k=v form, got "${kv}"`);
+          return 2;
+        }
+        const k = kv.slice(0, eq);
+        const v = kv.slice(eq + 1);
+        if (v === 'true' || v === 'false') overrides[k] = v === 'true';
+        else if (v !== '' && !Number.isNaN(Number(v))) overrides[k] = Number(v);
+        else overrides[k] = v;
+      }
+      const { probeBackends } = await import('./imprint/probe-backends.ts');
+      const result = await probeBackends({
+        site,
+        outPath: values.out,
+        paramOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
+      });
+      console.log(`[imprint] probed → ${result.outPath}`);
+      console.log(`[imprint] preferred order: ${result.cache.preferredOrder.join(' → ')}`);
       return 0;
     }
 

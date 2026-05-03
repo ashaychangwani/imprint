@@ -25,6 +25,7 @@ import cron from 'node-cron';
 import { type ResolvedTool, buildZodValidator, discoverTools } from './discover-tools.ts';
 import { evaluateNotifyWhen } from './notify-when.ts';
 import { notify } from './notify.ts';
+import { loadBackendsCache } from './probe-backends.ts';
 import { type BackendContext, ladderFor, runWithLadder } from './replay-backend.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import {
@@ -73,12 +74,14 @@ async function runOnce(
   params: Record<string, string | number | boolean>,
   notifyFetchImpl: typeof fetch | undefined,
   notifyWhen: NotifyWhen | undefined,
-  replayBackend: ReplayBackend,
+  ladder: ReplayBackend[],
   examplesDir: string,
   stealthCache: Map<string, StealthFetch>,
 ): Promise<ToolResult> {
   const startedAt = new Date();
-  log(`${startedAt.toISOString()} ${tool.workflow.toolName} starting (backend: ${replayBackend})`);
+  log(
+    `${startedAt.toISOString()} ${tool.workflow.toolName} starting (ladder: ${ladder.join(' → ')})`,
+  );
   const t0 = Date.now();
 
   const ctx: BackendContext = {
@@ -87,7 +90,6 @@ async function runOnce(
     examplesDir,
     stealthCache,
   };
-  const ladder = ladderFor(replayBackend);
   const { result, usedBackend, attempts } = await runWithLadder(ladder, ctx);
 
   const elapsed = Date.now() - t0;
@@ -155,13 +157,23 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     );
   }
 
+  // Read the probe cache if it exists. For replayBackend "auto" this
+  // reorders the ladder to start from the empirically-cheapest known-
+  // working backend instead of always trying fetch first.
+  const cached = loadBackendsCache(opts.site, examplesDir);
+  if (cached) {
+    log(
+      `backends.json: probed ${cached.probedAt}, preferred order: ${cached.preferredOrder.join(' → ')}`,
+    );
+  }
+
   // Param validation runs against the API workflow's parameters when
   // the fetch path can run (i.e., the ladder includes 'fetch'). For
   // backends with their own param schema (playbook), we accept whatever
   // the operator provided and let the runner enforce its own validation
   // — names typically differ (e.g., Southwest's `origin` vs
   // `origin_airport_code`) and the ladder fail-softs on mismatch.
-  const ladder = ladderFor(replayBackend);
+  const ladder = ladderFor(replayBackend, cached?.preferredOrder);
   let params: Record<string, string | number | boolean>;
   if (ladder.includes('fetch') || ladder.includes('stealth-fetch')) {
     const validator = buildZodValidator(tool.workflow.parameters);
@@ -191,7 +203,7 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     params,
     opts.notifyFetchImpl,
     config.notifyWhen,
-    replayBackend,
+    ladder,
     examplesDir,
     stealthCache,
   ] as const;

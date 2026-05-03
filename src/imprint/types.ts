@@ -230,6 +230,61 @@ export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
 export const ReplayBackendSchema = z.enum(['fetch', 'stealth-fetch', 'playbook', 'auto']);
 export type ReplayBackend = z.infer<typeof ReplayBackendSchema>;
 
+/**
+ * Result of probing each backend at record time. Persisted to
+ * `examples/<site>/backends.json` by `imprint probe-backends <site>`
+ * and read by cron + MCP at startup. The recommended starting backend
+ * is `preferredOrder[0]`; runtime ladder uses the rest as the fallback
+ * sequence in case the preferred backend stops working between probes.
+ *
+ * Probing once at record time avoids burning a fetch attempt (~200ms)
+ * on every cron tick for known-blocked sites like Southwest. Without
+ * the probe, an `"auto"` cron tick logs `fetch FORBIDDEN → escalate`
+ * every single tick — wasted work + log noise.
+ */
+export const BackendProbeResultSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    outcome: z.literal('ok'),
+    durationMs: z.number(),
+  }),
+  z.object({
+    outcome: z.literal('forbidden'),
+    durationMs: z.number(),
+    detail: z.string().optional(),
+  }),
+  z.object({
+    outcome: z.literal('failed'),
+    durationMs: z.number(),
+    error: z.string(),
+    detail: z.string().optional(),
+  }),
+  z.object({
+    outcome: z.literal('unavailable'),
+    detail: z.string(),
+  }),
+  z.object({
+    outcome: z.literal('skipped'),
+    detail: z.string(),
+  }),
+]);
+export type BackendProbeResult = z.infer<typeof BackendProbeResultSchema>;
+
+export const BackendsCacheSchema = z.object({
+  /** ISO 8601 timestamp of when the probe ran. */
+  probedAt: z.string(),
+  /** Imprint version that ran the probe (so a future format bump can invalidate). */
+  imprintVersion: z.string(),
+  /**
+   * Ladder ordering for runtime — preferredOrder[0] is the cheapest
+   * known-working backend; the rest fall back on FORBIDDEN. Excludes
+   * 'auto' (it's a meta-value).
+   */
+  preferredOrder: z.array(z.enum(['fetch', 'stealth-fetch', 'playbook'])).min(1),
+  /** Per-backend probe results for the operator to inspect. */
+  results: z.record(z.enum(['fetch', 'stealth-fetch', 'playbook']), BackendProbeResultSchema),
+});
+export type BackendsCache = z.infer<typeof BackendsCacheSchema>;
+
 export const CronConfigSchema = z.object({
   schedule: z.string(),
   params: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
