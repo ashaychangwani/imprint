@@ -56,17 +56,23 @@ A Chromium window opens with the D&G homepage. Drive it normally:
 
 ## What the recorder is capturing
 
-| Capture | How |
-|---|---|
-| Every network request (method, URL, headers, body) | CDP `Network.requestWillBeSent` |
-| Every response (status, headers, mimeType, body) | CDP `Network.responseReceived` + best-effort `Network.getResponseBody` |
-| Page navigations | CDP `Page.frameNavigated` |
-| Clicks, inputs, form submits | Injected JS listener → `Runtime.consoleAPICalled` |
-| WebSocket frames (if any) | CDP `Network.webSocketFrameSent/Received` |
-| Cookies at start AND end | CDP `Network.getAllCookies` |
-| Your narration | Terminal stdin loop |
+| Capture | How | Powers |
+|---|---|---|
+| Every network request (method, URL, headers, body) | CDP `Network.requestWillBeSent` | API workflow (`workflow.json` → `index.ts`) |
+| Every response (status, headers, mimeType, body) | CDP `Network.responseReceived` + best-effort `Network.getResponseBody` | API workflow + playbook result extraction |
+| Page navigations | CDP `Page.frameNavigated` | Playbook (`navigate` steps) |
+| Clicks, inputs, form submits — with element tag, id, text, aria-label, selector, value | Injected JS listener → `Runtime.consoleAPICalled` | Playbook (`click`/`type`/`submit` steps with locator priority) |
+| WebSocket frames (if any) | CDP `Network.webSocketFrameSent/Received` | (v0.2 codegen) |
+| Cookies at start AND end | CDP `Network.getAllCookies` | `imprint login` credential store |
+| Your narration | Terminal stdin loop | LLM intent identification (both compilers) |
 
 Password fields are auto-redacted before being captured. Other input values are captured verbatim (truncated to 200 chars per value).
+
+**One recording, two artifacts.** The same session.json compiles to both:
+- `imprint generate` → `workflow.json` → `imprint emit` → `index.ts` (API replay path)
+- `imprint compile-playbook` → `playbook.md` (DOM replay path)
+
+You don't have to commit to one or the other when you record. Generate both; the cron / MCP layer picks which to use per `replayBackend` config (`fetch` / `playbook` / `auto`).
 
 ## After the recording — verify it worked
 
