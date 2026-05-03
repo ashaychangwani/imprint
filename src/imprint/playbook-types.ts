@@ -124,7 +124,7 @@ export type PlaybookStep = z.infer<typeof PlaybookStepSchema>;
  * Two sources:
  *   - `xhr`: capture an XHR/fetch response by URL pattern, parse the body
  *     as JSON, extract values via the dot-path syntax (same walker as
- *     notify-when's pricePath: dots + [] for "iterate").
+ *     notify's pricePath: dots + [] for "iterate").
  *   - `dom`: extract from the rendered page via a locator (text content
  *     or attribute value). Use when the data only exists in the DOM
  *     (e.g., a server-rendered table without an XHR backing it).
@@ -136,7 +136,7 @@ export const PlaybookResultSchema = z.discriminatedUnion('source', [
     url_pattern: z.string(),
     /** Optional method filter. */
     method: z.string().optional(),
-    /** Dot-path with [] for array iteration (see notify-when.ts). */
+    /** Dot-path with [] for array iteration (see json-path.ts). */
     extract: z.string(),
     /** Field name in result.data. Defaults to "result". */
     return_as: z.string().default('result'),

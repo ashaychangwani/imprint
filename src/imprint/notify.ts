@@ -1,11 +1,17 @@
 /**
- * Notification hooks for the cron daemon. Multi-provider: every provider
- * configured via env vars fires on each call, so you can mirror to both
- * Pushover and ntfy if you want, or just pick one. With nothing
- * configured, `notify()` is a silent no-op.
+ * Notification hooks for the cron daemon. Two concerns living in one
+ * file because they're only used together:
  *
- * Failures are caught and logged so a flaky push provider can never
- * crash the cron loop.
+ *   1. `evaluateNotifyWhen` — predicate engine that decides, given a
+ *      tool result, whether the result is interesting enough to push
+ *      (e.g. price_below).
+ *   2. `notify` / provider fns — the actual delivery to Pushover/ntfy.
+ *
+ * Multi-provider: every provider configured via env vars fires on each
+ * call, so you can mirror to both Pushover and ntfy. With nothing
+ * configured, `notify()` is a silent no-op. Provider failures are
+ * caught and logged so a flaky push service can never crash the cron
+ * loop.
  *
  * Providers:
  *
@@ -17,7 +23,9 @@
  *             https://docs.ntfy.sh/publish/  (free public, self-hostable)
  */
 
+import { extractAt } from './json-path.ts';
 import { createLog } from './log.ts';
+import type { NotifyWhen } from './types.ts';
 
 const PUSHOVER_URL = 'https://api.pushover.net/1/messages.json';
 
@@ -26,6 +34,40 @@ export interface NotifyResult {
   delivered: boolean;
   /** Set when delivery was attempted-but-failed, OR provider was skipped. */
   reason?: string;
+}
+
+export interface NotifyDecision {
+  notify: boolean;
+  /** Used as the push title when notify=true. */
+  title?: string;
+  /** Used as the push body when notify=true. */
+  message?: string;
+}
+
+export function evaluateNotifyWhen(
+  pred: NotifyWhen,
+  data: unknown,
+  toolName = 'workflow',
+): NotifyDecision {
+  switch (pred.type) {
+    case 'price_below': {
+      const prices = extractAt(data, pred.pricePath);
+      if (prices.length === 0) {
+        // No prices at all — most likely an empty result set or a
+        // misconfigured path. Treat as "no signal", don't push.
+        return { notify: false };
+      }
+      const min = Math.min(...prices);
+      if (min < pred.threshold) {
+        return {
+          notify: true,
+          title: `imprint: price drop on ${toolName}`,
+          message: `Lowest price $${min} (under your $${pred.threshold} threshold) — ${prices.length} option${prices.length === 1 ? '' : 's'} found.`,
+        };
+      }
+      return { notify: false };
+    }
+  }
 }
 
 const log = createLog('notify');
