@@ -17,7 +17,7 @@
  * cancel anything created during the partial run.
  */
 
-import { executeWorkflow, loadCredentialStore } from '../src/imprint/workflow-runtime.ts';
+import { executeWorkflow, loadCredentialStore } from '../src/imprint/runtime.ts';
 import type { Workflow } from '../src/imprint/types.ts';
 
 const ATTRACTION_NAME = 'Cooley Museum';

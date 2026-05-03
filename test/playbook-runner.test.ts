@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { runPlaybook } from '../src/imprint/playbook-runner.ts';
-import type { Playbook } from '../src/imprint/playbook-types.ts';
+import type { Playbook } from '../src/imprint/types.ts';
 
 const MIN_PLAYBOOK: Playbook = {
   toolName: 'test_tool',

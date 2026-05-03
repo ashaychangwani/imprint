@@ -46,15 +46,15 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import { runWithLadder } from './backend-ladder.ts';
+import { createLog } from './log.ts';
+import { loadBackendsCache } from './probe-backends.ts';
+import type { StealthFetch } from './stealth-fetch.ts';
 import {
   type ResolvedTool as DiscoveredTool,
   buildZodValidator,
   discoverTools,
-} from './discover-tools.ts';
-import { createLog } from './log.ts';
-import { loadBackendsCache } from './probe-backends.ts';
-import { runWithLadder } from './replay-backend.ts';
-import type { StealthFetch } from './stealth-fetch.ts';
+} from './tool-loader.ts';
 import type { ReplayBackend, WorkflowParameter } from './types.ts';
 
 export interface RunMcpServerOptions {

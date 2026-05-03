@@ -6,12 +6,8 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { type CredentialStore, executeWorkflow, substituteString } from '../src/imprint/runtime.ts';
 import type { Workflow } from '../src/imprint/types.ts';
-import {
-  type CredentialStore,
-  executeWorkflow,
-  substituteString,
-} from '../src/imprint/workflow-runtime.ts';
 
 const STORE: CredentialStore = {
   site: 'test',

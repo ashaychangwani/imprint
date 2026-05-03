@@ -10,7 +10,7 @@
  * It does NOT make or cancel any reservation.
  */
 
-import { executeWorkflow, loadCredentialStore } from '../src/imprint/workflow-runtime.ts';
+import { executeWorkflow, loadCredentialStore } from '../src/imprint/runtime.ts';
 import type { Workflow } from '../src/imprint/types.ts';
 
 const workflow: Workflow = {
