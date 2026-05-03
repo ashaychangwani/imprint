@@ -16,7 +16,7 @@ Don't try to render the PNG in stdout — the Read tool handles images natively.
 
 Add `--trace` to see what every step did:
 ```bash
-bun src/cli.ts playbook <site> --trace --param k=v
+imprint playbook <site> --trace --param k=v
 ```
 After each step the runner logs the URL + a screenshot path. You can spot the exact step where state diverges from expected.
 
