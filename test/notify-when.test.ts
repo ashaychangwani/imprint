@@ -4,7 +4,8 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { evaluateNotifyWhen, extractAt } from '../src/imprint/notify-when.ts';
+import { extractAt } from '../src/imprint/json-path.ts';
+import { evaluateNotifyWhen } from '../src/imprint/notify-when.ts';
 
 describe('extractAt', () => {
   it('extracts a single numeric leaf via dot path', () => {

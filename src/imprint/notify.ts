@@ -17,6 +17,8 @@
  *             https://docs.ntfy.sh/publish/  (free public, self-hostable)
  */
 
+import { createLog } from './log.ts';
+
 const PUSHOVER_URL = 'https://api.pushover.net/1/messages.json';
 
 export interface NotifyResult {
@@ -26,9 +28,7 @@ export interface NotifyResult {
   reason?: string;
 }
 
-const log = (msg: string): void => {
-  process.stderr.write(`[imprint notify] ${msg}\n`);
-};
+const log = createLog('notify');
 
 /**
  * Dispatch a notification to every configured provider in parallel.

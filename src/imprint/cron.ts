@@ -23,6 +23,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import cron from 'node-cron';
 import { type ResolvedTool, buildZodValidator, discoverTools } from './discover-tools.ts';
+import { createLog } from './log.ts';
 import { evaluateNotifyWhen } from './notify-when.ts';
 import { notify } from './notify.ts';
 import { loadBackendsCache } from './probe-backends.ts';
@@ -51,9 +52,7 @@ export interface RunCronOptions {
   notifyFetchImpl?: typeof fetch;
 }
 
-const log = (msg: string): void => {
-  process.stderr.write(`[imprint cron] ${msg}\n`);
-};
+const log = createLog('cron');
 
 function loadCronConfig(configPath: string): CronConfig {
   if (!existsSync(configPath)) {

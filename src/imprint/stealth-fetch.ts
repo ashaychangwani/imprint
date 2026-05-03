@@ -28,6 +28,7 @@
  */
 
 import { type Browser, chromium } from 'playwright';
+import { createLog } from './log.ts';
 
 export interface StealthFetchOptions {
   /** Homepage URL to load during bootstrap (triggers bot-detection JS). */
@@ -102,9 +103,7 @@ const STANDARD_HEADERS = new Set([
   'cookie',
 ]);
 
-const log = (msg: string): void => {
-  process.stderr.write(`[imprint stealth] ${msg}\n`);
-};
+const log = createLog('stealth');
 
 export class StealthFetch {
   private opts: Required<StealthFetchOptions>;
