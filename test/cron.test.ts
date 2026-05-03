@@ -36,6 +36,12 @@ afterEach(() => {
   delete process.env.NTFY_TOKEN;
   // biome-ignore lint/performance/noDelete: env vars need real deletion
   delete process.env.IMPRINT_TEST_RESULT;
+  // biome-ignore lint/performance/noDelete: env vars need real deletion
+  delete process.env.IMPRINT_TEST_RESULT_SEQUENCE;
+  // Reset per-call counters that the fake examples write to globalThis.
+  const g = globalThis as Record<string, unknown>;
+  g.__IMPRINT_TEST_CALL_COUNT = 0;
+  g.__IMPRINT_TEST_FETCH_IMPL_CALLS = 0;
 });
 
 /**
@@ -58,25 +64,40 @@ export const WORKFLOW = {
   toolName: '${site}',
   intent: { description: 'test fixture' },
   parameters: ${paramSchema},
-  requests: [],
+  requests: [{ method: 'GET', url: 'https://example.com/api/${site}', headers: {} }],
   site: '${site}',
 };
-export async function ${fnName}(input) {
-  globalThis.__IMPRINT_TEST_LAST_INPUT = input;
-  const mode = process.env.IMPRINT_TEST_RESULT ?? 'ok';
+
+function makeResult(mode, input) {
   if (mode === 'auth') {
     return { ok: false, error: 'AUTH_EXPIRED', message: 'auth expired',
              remediation: 'run imprint login ${site}' };
   }
+  if (mode === 'forbidden') {
+    return { ok: false, error: 'FORBIDDEN', message: 'bot detection — go away' };
+  }
   if (mode === 'throw') throw new Error('boom');
   if (mode === 'fares') {
-    // Price-shaped response so notifyWhen.price_below can match against it.
-    return {
-      ok: true,
-      data: { items: [{ price: 89 }, { price: 149 }, { price: 199 }] },
-    };
+    return { ok: true, data: { items: [{ price: 89 }, { price: 149 }, { price: 199 }] } };
   }
   return { ok: true, data: { received: input } };
+}
+
+export async function ${fnName}(input, opts) {
+  globalThis.__IMPRINT_TEST_LAST_INPUT = input;
+  // Track call count for SEQUENCE mode and to mark which backend ran
+  // (when fetchImpl is injected, that's the stealth-fetch backend).
+  globalThis.__IMPRINT_TEST_CALL_COUNT = (globalThis.__IMPRINT_TEST_CALL_COUNT ?? 0) + 1;
+  if (opts && opts.fetchImpl) {
+    globalThis.__IMPRINT_TEST_FETCH_IMPL_CALLS = (globalThis.__IMPRINT_TEST_FETCH_IMPL_CALLS ?? 0) + 1;
+  }
+  const seq = process.env.IMPRINT_TEST_RESULT_SEQUENCE;
+  if (seq) {
+    const modes = seq.split(',');
+    const idx = (globalThis.__IMPRINT_TEST_CALL_COUNT - 1) % modes.length;
+    return makeResult(modes[idx] ?? 'ok', input);
+  }
+  return makeResult(process.env.IMPRINT_TEST_RESULT ?? 'ok', input);
 }
 `,
     'utf8',

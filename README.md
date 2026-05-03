@@ -181,32 +181,60 @@ By default cron only pushes on failures. Add an optional `notifyWhen` block to a
 
 `pricePath` is a dot-path; use `[]` to mean "iterate every element of this array". The predicate gathers every numeric leaf at that path, takes the minimum, and pushes if it's strictly below `threshold`. Numeric strings (e.g. Southwest returns `"108.40"`) are coerced. To find the right path for your captured workflow, run `imprint cron <site> --once` first — the success log line includes the raw response and you can read off the JSON path.
 
-#### Playbook fallback for bot-protected sites
+#### The replay-backend ladder — bot detection is no longer a dead end
 
-Some sites (Southwest, Ticketmaster, anything behind Akamai/Cloudflare/DataDome) return 403 to non-browser HTTP clients regardless of TLS-fingerprint spoofing — they validate JS-generated sensor tokens that only a real browser can produce. For these sites, compile a DOM playbook and run it via Playwright instead:
+Sites like Southwest, Ticketmaster, and anything behind Akamai / Cloudflare / DataDome return `403` to non-browser HTTP clients regardless of TLS-fingerprint spoofing. Imprint handles this by walking a **ladder** of progressively heavier replay backends, escalating only when the cheaper rung gets blocked:
 
-```bash
-# Compile the playbook from the same recording you used for the API workflow
-imprint compile-playbook examples/southwest/sessions/<ts>.redacted.json
+| Backend | How | Per-call cost | Defeats |
+|---|---|---|---|
+| `fetch` | Captured `workflow.json` via Node `fetch` | ~200ms | Plain APIs |
+| `stealth-fetch` | Bootstrap Playwright once to mint Akamai sensor tokens, then native `fetch` augmented with those tokens | ~12s bootstrap (one-time per process) + ~1s per call | Akamai, Cloudflare, DataDome (token-validation tier) |
+| `playbook` | Full Playwright + stealth + DOM walk via `playbook.md` | ~9.4s per call | Universal — also handles sites that need form-fills, autocompletes, multi-page navigation |
 
-# Standalone test
-imprint playbook southwest --param origin=SJC --param destination=SAN \
-                           --param depart_date=2026-06-23
+Set `replayBackend` in `cron.json` (or omit for the default):
 
-# Or set cron to use the browser path on every tick
-# examples/southwest/cron.json:
-#   "replayBackend": "playbook"
+- `"fetch"` (default) — try the API only.
+- `"stealth-fetch"` — skip the futile fetch attempt for known bot-protected sites.
+- `"playbook"` — force the DOM path.
+- **`"auto"` (recommended for bot-protected sites)** — walk the full ladder. Fetch first; on `FORBIDDEN`, escalate to stealth-fetch; on `FORBIDDEN`, escalate to playbook. Returns the first non-FORBIDDEN result. Other error classes (AUTH_EXPIRED, RATE_LIMITED, etc) don't escalate — those indicate problems no other backend can fix.
+
+```jsonc
+// examples/southwest/cron.json — bot-protected, uses auto ladder
+{
+  "schedule": "0 9 * * *",
+  "replayBackend": "auto",
+  "params": { /* …captured search params… */ },
+  "notifyWhen": { "type": "price_below", "threshold": 99, "pricePath": "prices[]" }
+}
 ```
 
-Three `replayBackend` modes (cron + MCP both honor it):
+A typical Southwest cron tick log:
+```
+[imprint cron] replayBackend: auto (ladder: fetch → stealth-fetch → playbook)
+[imprint backend] trying fetch…
+[imprint backend] fetch: FORBIDDEN in 321ms — escalating
+[imprint backend] trying stealth-fetch…
+[imprint stealth] bootstrapping…
+[imprint stealth] bootstrapped in 5125ms — 18 cookies, 7 sensor headers
+[imprint backend] stealth-fetch: OK in 10218ms
+[imprint cron]   OK in 10588ms via stealth-fetch: {"prices":[108.4]}
+```
 
-- `"fetch"` (default) — captured API only. Fast, cheap.
-- `"playbook"` — Playwright + real Chromium only. Slow, but bot-protection passes naturally.
-- `"auto"` — try fetch; on `FORBIDDEN`, fall back to the playbook. Best when you don't yet know which the site needs.
+The principle: as long as some backend would have worked, the call succeeds. "Imprint can't help here" is the failure mode this design eliminates.
 
-The MCP server registers two tools per site that has a playbook: `<toolName>` (fast) and `<toolName>_via_browser` (slow but robust). LLM clients can pick either; the `_via_browser` description tells them when to use it.
+```bash
+# Compile the playbook for sites that need the DOM path
+imprint compile-playbook examples/southwest/sessions/<ts>.redacted.json
 
-> **Browser install:** the playbook runner uses Playwright's bundled Chromium. If you haven't already, run `bunx playwright install chromium` once. The runner detects a missing install and prints the same instruction.
+# Standalone test of the playbook path
+imprint playbook southwest --param origin_airport_code=SJC \
+                           --param destination_airport_code=SAN \
+                           --param departure_date=2026-06-20
+```
+
+The MCP server registers ONE tool per site (`<toolName>`); calls route through the ladder internally. An LLM client doesn't need to know about backends — `(backend: stealth-fetch)` is appended to the response text so it can see which path produced the answer.
+
+> **Browser install:** stealth-fetch and the playbook backend use Playwright's bundled Chromium. If you haven't already, run `bunx playwright install chromium` once.
 
 ## Demos
 

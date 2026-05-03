@@ -1,18 +1,20 @@
-# search_southwest_flights_low_fare_calendar
+# search_southwest_flights
 
 ## Summary
-Search Southwest for one-way fares between two airports on a given date, then drill into the Low Fare Calendar to see prices for the surrounding days. Uses Southwest's URL params to skip the form-fill ceremony entirely.
+Search Southwest for one-way fares between two airports on a given date. Uses the URL-prefilled search shortcut so a single navigation triggers the shopping XHR — no DOM walk needed. Stealth Chromium (default in the runner) defeats Akamai's bot detection that blocks naive HTTP clients.
 
 ## Parameters
-- `origin` (string, required) — IATA origin airport code, e.g. SJC
-- `destination` (string, required) — IATA destination airport code, e.g. SAN
-- `depart_date` (string, required) — YYYY-MM-DD departure date
+- `origin_airport_code` (string, required) — IATA origin airport code, e.g. SJC
+- `destination_airport_code` (string, required) — IATA destination airport code, e.g. SAN
+- `departure_date` (string, required) — YYYY-MM-DD
+- `adult_passengers_count` (number) — default: 1
+- `fare_type` (string) — `USD` or `POINTS` default: USD
 
 ## Steps
 
-### Step 1: Navigate to the search URL
+### Step 1: Navigate to the prefilled search URL
 - action: navigate
-- url: https://www.southwest.com/air/booking/select-depart.html?adultsCount=1&adultPassengersCount=1&originationAirportCode=${origin}&destinationAirportCode=${destination}&departureDate=${depart_date}&departureTimeOfDay=ALL_DAY&fareType=USD&int=HOMEQBOMAIR&passengerType=ADULT&promoCode=&returnDate=&returnTimeOfDay=ALL_DAY&tripType=oneway
+- url: https://www.southwest.com/air/booking/select-depart.html?adultsCount=${adult_passengers_count}&adultPassengersCount=${adult_passengers_count}&originationAirportCode=${origin_airport_code}&destinationAirportCode=${destination_airport_code}&departureDate=${departure_date}&departureTimeOfDay=ALL_DAY&fareType=${fare_type}&int=HOMEQBOMAIR&passengerType=ADULT&promoCode=&returnDate=&returnTimeOfDay=ALL_DAY&tripType=oneway
 - wait_for: xhr:/api/air-booking/v1/air-booking/page/air/booking/shopping
 
 ## Result
@@ -23,8 +25,6 @@ Search Southwest for one-way fares between two airports on a given date, then dr
 
 ## Notes
 
-The recorded session showed the user clicking through the form (origin/destination autocompletes, date picker, trip-type dropdown, search submit, then drilling into Low Fare Calendar). The captured DOM events confirmed Southwest's date input is click-only — no keyboard input events were ever fired on `#departureDate`, so the original 12-step playbook's `type` action couldn't bind to React state and the form submitted with today's date instead of the requested one.
+Param names match `workflow.json` exactly (`origin_airport_code` etc., not the friendlier `origin`) so cron.json's `params` block is shared across the fetch / stealth-fetch / playbook backends and the auto-ladder can hot-swap between them without rewriting params.
 
-URL navigation sidesteps every form-fill quirk in one step. Southwest's `/air/booking/select-depart.html` route accepts the entire search state as query params — `originationAirportCode`, `destinationAirportCode`, `departureDate` (YYYY-MM-DD), `tripType`, etc — and runs the shopping XHR automatically. We confirmed the param shape from the captured Referer header on the shopping POST in the original recording.
-
-The Low Fare Calendar drilldown was useful UX during recording but isn't needed for the price-drop watcher: the shopping XHR returns all flights for the date, and `notifyWhen.price_below` filters across them.
+The original recording walked through the form (autocompletes, date picker, trip-type dropdown, search submit, Low Fare Calendar drilldown). Six iterations revealed Southwest's date input is non-typeable (zero `input` events captured on `#departureDate` — the user clicked the input + clicked a calendar cell). The URL-param shortcut sidesteps every form-fill quirk in one navigation.
