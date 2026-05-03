@@ -34,6 +34,7 @@
  *   npx @modelcontextprotocol/inspector bun run src/cli.ts mcp-server
  */
 
+import { existsSync } from 'node:fs';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
 import { resolve as pathResolve } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -50,6 +51,7 @@ import {
   buildZodValidator,
   discoverTools,
 } from './discover-tools.ts';
+import { runPlaybook } from './playbook-runner.ts';
 import type { WorkflowParameter } from './types.ts';
 
 export interface RunMcpServerOptions {
@@ -72,6 +74,8 @@ export interface RunMcpServerOptions {
 /** A discovered tool decorated with the JSON Schema MCP advertises it as. */
 interface ResolvedTool extends DiscoveredTool {
   inputSchema: Tool['inputSchema'];
+  /** Path to playbook.md when one exists alongside index.ts. */
+  playbookPath?: string;
 }
 
 /**
@@ -108,28 +112,59 @@ function buildServer(name: string, version: string, tools: ResolvedTool[]): Serv
     },
   );
 
+  // Validators keyed by base toolName (the _via_browser variant reuses
+  // the same input schema as the API tool).
   const validators = new Map(
     tools.map((t) => [t.workflow.toolName, buildZodValidator(t.workflow.parameters)] as const),
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((t) => ({
-      name: t.workflow.toolName,
-      description: t.workflow.intent.description,
-      inputSchema: t.inputSchema,
-    })),
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const list: Tool[] = [];
+    for (const t of tools) {
+      list.push({
+        name: t.workflow.toolName,
+        description: t.workflow.intent.description,
+        inputSchema: t.inputSchema,
+      });
+      // For sites with a playbook, expose a second tool that drives a
+      // real Chromium. Slower (~5-10s per call) but works against
+      // bot-protected sites where the API path returns FORBIDDEN.
+      if (t.playbookPath) {
+        list.push({
+          name: `${t.workflow.toolName}_via_browser`,
+          description: `${t.workflow.intent.description} (browser-based fallback — use this if the cheaper API tool returns FORBIDDEN, e.g. on bot-protected sites)`,
+          inputSchema: t.inputSchema,
+        });
+      }
+    }
+    return { tools: list };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (req): Promise<CallToolResult> => {
-    const tool = tools.find((t) => t.workflow.toolName === req.params.name);
+    const isBrowserVariant = req.params.name.endsWith('_via_browser');
+    const baseName = isBrowserVariant
+      ? req.params.name.slice(0, -'_via_browser'.length)
+      : req.params.name;
+    const tool = tools.find((t) => t.workflow.toolName === baseName);
     if (!tool) {
       return {
         isError: true,
         content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }],
       };
     }
+    if (isBrowserVariant && !tool.playbookPath) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `No playbook.md for ${baseName} — only the API tool is available.`,
+          },
+        ],
+      };
+    }
 
-    const validator = validators.get(req.params.name);
+    const validator = validators.get(baseName);
     const parsed = validator?.safeParse(req.params.arguments ?? {});
     if (parsed && !parsed.success) {
       return {
@@ -145,7 +180,13 @@ function buildServer(name: string, version: string, tools: ResolvedTool[]): Serv
     const args = (parsed?.data ?? req.params.arguments ?? {}) as Record<string, unknown>;
 
     try {
-      const result = await tool.toolFn(args);
+      const result =
+        isBrowserVariant && tool.playbookPath
+          ? await runPlaybook({
+              playbook: tool.playbookPath,
+              params: args as Record<string, string | number | boolean>,
+            })
+          : await tool.toolFn(args);
       if (!result.ok) {
         const text = result.remediation
           ? `[${result.error}] ${result.message}\n  → ${result.remediation}`
@@ -167,10 +208,14 @@ function buildServer(name: string, version: string, tools: ResolvedTool[]): Serv
 export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void> {
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
   const discovered = await discoverTools(examplesDir, opts.site, '[imprint mcp]');
-  const tools: ResolvedTool[] = discovered.map((t) => ({
-    ...t,
-    inputSchema: buildJsonSchema(t.workflow.parameters),
-  }));
+  const tools: ResolvedTool[] = discovered.map((t) => {
+    const playbookPath = pathResolve(examplesDir, t.site, 'playbook.md');
+    return {
+      ...t,
+      inputSchema: buildJsonSchema(t.workflow.parameters),
+      playbookPath: existsSync(playbookPath) ? playbookPath : undefined,
+    };
+  });
   if (tools.length === 0) {
     const target = opts.site ? `for site "${opts.site}"` : `under ${examplesDir}`;
     throw new Error(
@@ -183,6 +228,9 @@ export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void
 
   for (const t of tools) {
     log(`registered ${t.workflow.toolName} (${t.site}) — ${t.workflow.parameters.length} param(s)`);
+    if (t.playbookPath) {
+      log(`  + ${t.workflow.toolName}_via_browser (playbook fallback)`);
+    }
   }
 
   if (opts.http) {

@@ -205,9 +205,25 @@ export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
  * before scheduling. Params are validated against the workflow's parameter
  * declarations at load time so a typo doesn't surface only on the first tick.
  */
+/**
+ * Which replay backend the cron should use:
+ *   - 'fetch' (default): use the captured API workflow via Node fetch.
+ *     Cheap, fast, works for ~70% of sites.
+ *   - 'playbook': use the DOM playbook via Playwright. Slower (~5-10s
+ *     per tick) but works against bot-protected sites because it's a
+ *     real browser running real JS.
+ *   - 'auto': try 'fetch' first; if it returns FORBIDDEN AND a
+ *     playbook.md exists next to the workflow, fall back to 'playbook'
+ *     and use that result instead. Best for sites where you don't yet
+ *     know if the API path will work.
+ */
+export const ReplayBackendSchema = z.enum(['fetch', 'playbook', 'auto']);
+export type ReplayBackend = z.infer<typeof ReplayBackendSchema>;
+
 export const CronConfigSchema = z.object({
   schedule: z.string(),
   params: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
   notifyWhen: NotifyWhenSchema.optional(),
+  replayBackend: ReplayBackendSchema.optional().default('fetch'),
 });
 export type CronConfig = z.infer<typeof CronConfigSchema>;

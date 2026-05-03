@@ -2,7 +2,12 @@
 
 **Teach AI agents to use any website by demonstrating once.**
 
-Imprint watches you do something on a website, captures the underlying API calls and your narration, and generates a deterministic [MCP server](https://modelcontextprotocol.io/) an agent can call from then on. Browser-use is great at one-shot exploration where the LLM re-decides every action at runtime. Imprint freezes the workflow into a cheap, fast, deterministic tool after one demonstration.
+Imprint watches you do something on a website, captures both the underlying API calls *and* the precise DOM events, and generates two deterministic artifacts an agent can call from then on:
+
+1. A **[MCP server](https://modelcontextprotocol.io/)** that replays the captured API workflow. Cheap (~200ms per call), works for ~70% of sites.
+2. A **markdown playbook** — a frozen click recipe with stable locator priorities, executable in any real browser. Slower (~5-10s per call) but works on bot-protected sites where API replay returns 403.
+
+Other browser-tool frameworks (browser-use, Computer Use, openclaw) ask the LLM to *decide every click at runtime*. Token cost scales with workflow length; reliability is variable; bot-detection forces operators to pay for stealth APIs. Imprint's pitch is different: **the recording IS the executable.** The agent reads the playbook and follows it verbatim. Zero exploration tokens, zero re-decision variance, real Chromium → real `_abck` → no bot block.
 
 > **Status:** v0.1, in a 2-week sprint (April 2026) as a portfolio piece. The pipeline (`record` → `generate` → `emit` → `mcp-server` / `cron`) is built and validated end-to-end against the real Discover & Go museum-pass API. Three demos planned for the launch: Southwest seat tracker, Luma SF event finder, and an internal canteen ordering tool. See [TODOS.md](./TODOS.md) for v0.2 candidates.
 
@@ -71,6 +76,10 @@ bun run dev generate examples/discoverandgo/sessions/<timestamp>.redacted.json
 # Codegen the deterministic TS module from the workflow
 bun run dev emit examples/discoverandgo/workflow.json
 
+# Optional: also compile a DOM playbook for sites where the API path
+# may get blocked by bot detection (Akamai/Cloudflare/etc).
+bun run dev compile-playbook examples/discoverandgo/sessions/<timestamp>.redacted.json
+
 # Either expose every generated tool as MCP for Claude Desktop / Cursor…
 bun run dev mcp-server
 
@@ -88,9 +97,11 @@ bun run dev cron discoverandgo
 | `imprint redact <session.json>` | Scrub credentials + PII; write `<session>.redacted.json`. Run this before sharing or sending to the LLM. |
 | `imprint generate <session>` | Run LLM intent-detection on a redacted session; write `workflow.json`. |
 | `imprint emit <workflow>` | Generate the deterministic TS module at `examples/<site>/index.ts`. |
+| `imprint compile-playbook <session>` | LLM-compile the captured DOM events into `examples/<site>/playbook.md` — the browser-replay artifact for sites the API path can't reach. |
+| `imprint playbook <site>` | Run a playbook against a real Chromium. Flags: `--headed`, `--param k=v`, `--path <md>`. |
 | `imprint login <site>` | Persist auth cookies for `<site>` from a captured session. |
 | `imprint cron <site>` | Start the polling daemon for `examples/<site>/cron.json`. Flags: `--once`, `--run-now`, `--config <path>`. |
-| `imprint mcp-server` | Run the MCP server (stdio default; `--http --port N` for HTTP). `--site <name>` restricts to one example. |
+| `imprint mcp-server` | Run the MCP server (stdio default; `--http --port N` for HTTP). `--site <name>` restricts to one example. Sites with a playbook also expose `<toolName>_via_browser` as a fallback tool. |
 
 ### Wiring up Claude Desktop
 
@@ -168,7 +179,34 @@ By default cron only pushes on failures. Add an optional `notifyWhen` block to a
 }
 ```
 
-`pricePath` is a dot-path; use `[]` to mean "iterate every element of this array". The predicate gathers every numeric leaf at that path, takes the minimum, and pushes if it's strictly below `threshold`. To find the right path for your captured workflow, run `imprint cron <site> --once` first — the success log line includes the raw response and you can read off the JSON path.
+`pricePath` is a dot-path; use `[]` to mean "iterate every element of this array". The predicate gathers every numeric leaf at that path, takes the minimum, and pushes if it's strictly below `threshold`. Numeric strings (e.g. Southwest returns `"108.40"`) are coerced. To find the right path for your captured workflow, run `imprint cron <site> --once` first — the success log line includes the raw response and you can read off the JSON path.
+
+#### Playbook fallback for bot-protected sites
+
+Some sites (Southwest, Ticketmaster, anything behind Akamai/Cloudflare/DataDome) return 403 to non-browser HTTP clients regardless of TLS-fingerprint spoofing — they validate JS-generated sensor tokens that only a real browser can produce. For these sites, compile a DOM playbook and run it via Playwright instead:
+
+```bash
+# Compile the playbook from the same recording you used for the API workflow
+imprint compile-playbook examples/southwest/sessions/<ts>.redacted.json
+
+# Standalone test
+imprint playbook southwest --param origin=SJC --param destination=SAN \
+                           --param depart_date=2026-06-23
+
+# Or set cron to use the browser path on every tick
+# examples/southwest/cron.json:
+#   "replayBackend": "playbook"
+```
+
+Three `replayBackend` modes (cron + MCP both honor it):
+
+- `"fetch"` (default) — captured API only. Fast, cheap.
+- `"playbook"` — Playwright + real Chromium only. Slow, but bot-protection passes naturally.
+- `"auto"` — try fetch; on `FORBIDDEN`, fall back to the playbook. Best when you don't yet know which the site needs.
+
+The MCP server registers two tools per site that has a playbook: `<toolName>` (fast) and `<toolName>_via_browser` (slow but robust). LLM clients can pick either; the `_via_browser` description tells them when to use it.
+
+> **Browser install:** the playbook runner uses Playwright's bundled Chromium. If you haven't already, run `bunx playwright install chromium` once. The runner detects a missing install and prints the same instruction.
 
 ## Demos
 

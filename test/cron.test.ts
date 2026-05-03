@@ -459,3 +459,50 @@ describe('notifyWhen (push-on-success predicate)', () => {
     expect(called).toBe(false);
   });
 });
+
+describe('replayBackend', () => {
+  it('errors clearly when replayBackend=playbook but no playbook.md exists', async () => {
+    writeFakeExample('no_playbook', []);
+    writeConfig('no_playbook', {
+      schedule: '* * * * *',
+      params: {},
+      replayBackend: 'playbook',
+    });
+    await expect(runCron({ site: 'no_playbook', examplesDir: root, once: true })).rejects.toThrow(
+      /playbook\.md.*doesn't exist/,
+    );
+  });
+
+  it('runs the API path when replayBackend=fetch (default) and no playbook exists', async () => {
+    writeFakeExample('plain_fetch', []);
+    writeConfig('plain_fetch', { schedule: '* * * * *', params: {} });
+    // No notifyWhen → no push expected even on success. Just verify no throw.
+    await runCron({ site: 'plain_fetch', examplesDir: root, once: true });
+  });
+
+  it('replayBackend=auto without a playbook behaves like fetch', async () => {
+    writeFakeExample('auto_no_playbook', []);
+    writeConfig('auto_no_playbook', {
+      schedule: '* * * * *',
+      params: {},
+      replayBackend: 'auto',
+    });
+    // Even with auto, no playbook means we never try to fall back.
+    process.env.IMPRINT_TEST_RESULT = 'auth';
+    let called = false;
+    const fakeNotifyFetch = (async () => {
+      called = true;
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+    process.env.PUSHOVER_TOKEN = 'tok';
+    process.env.PUSHOVER_USER = 'user';
+    await runCron({
+      site: 'auto_no_playbook',
+      examplesDir: root,
+      once: true,
+      notifyFetchImpl: fakeNotifyFetch,
+    });
+    // The failure surfaces as the API result and triggers a notify.
+    expect(called).toBe(true);
+  });
+});
