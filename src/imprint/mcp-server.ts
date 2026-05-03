@@ -51,7 +51,8 @@ import {
   buildZodValidator,
   discoverTools,
 } from './discover-tools.ts';
-import { runPlaybook } from './playbook-runner.ts';
+import { type BackendContext, ladderFor, runWithLadder } from './replay-backend.ts';
+import type { StealthFetch } from './stealth-fetch.ts';
 import type { WorkflowParameter } from './types.ts';
 
 export interface RunMcpServerOptions {
@@ -102,69 +103,48 @@ const log = (msg: string): void => {
 };
 
 /** Build the MCP Server with all discovered tools registered. */
-function buildServer(name: string, version: string, tools: ResolvedTool[]): Server {
+function buildServer(
+  name: string,
+  version: string,
+  tools: ResolvedTool[],
+  examplesDir: string,
+): Server {
   const server = new Server(
     { name, version },
     {
       capabilities: { tools: {} },
       instructions:
-        'Imprint runs deterministic workflows captured from real browser sessions. Each tool corresponds to one captured site. Call it with the documented parameters and the workflow will execute against the live site using stored credentials. Error codes: AUTH_EXPIRED (401, run `imprint login <site>`); FORBIDDEN (403 — usually bot detection or geo-block, the message body has the clue); RATE_LIMITED (429, back off); BAD_RESPONSE (other 4xx/5xx); NETWORK (fetch failed); UNKNOWN (everything else).',
+        'Imprint runs deterministic workflows captured from real browser sessions. Each tool routes through fetch → stealth-fetch → playbook automatically — the cheap path is tried first; bot-protected sites escalate to slower paths. Error codes: AUTH_EXPIRED (401, run `imprint login <site>`); FORBIDDEN (403, all backends in the ladder failed — site needs a paid stealth provider or is fundamentally unscrapable); RATE_LIMITED (429, back off); BAD_RESPONSE (other 4xx/5xx); NETWORK (fetch failed); UNKNOWN (everything else).',
     },
   );
 
-  // Validators keyed by base toolName (the _via_browser variant reuses
-  // the same input schema as the API tool).
   const validators = new Map(
     tools.map((t) => [t.workflow.toolName, buildZodValidator(t.workflow.parameters)] as const),
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const list: Tool[] = [];
-    for (const t of tools) {
-      list.push({
-        name: t.workflow.toolName,
-        description: t.workflow.intent.description,
-        inputSchema: t.inputSchema,
-      });
-      // For sites with a playbook, expose a second tool that drives a
-      // real Chromium. Slower (~5-10s per call) but works against
-      // bot-protected sites where the API path returns FORBIDDEN.
-      if (t.playbookPath) {
-        list.push({
-          name: `${t.workflow.toolName}_via_browser`,
-          description: `${t.workflow.intent.description} (browser-based fallback — use this if the cheaper API tool returns FORBIDDEN, e.g. on bot-protected sites)`,
-          inputSchema: t.inputSchema,
-        });
-      }
-    }
-    return { tools: list };
-  });
+  // One StealthFetch instance per site, lazily created on first use,
+  // reused across MCP calls in this process. Pays the ~12s bootstrap
+  // once per site rather than per call.
+  const stealthCache = new Map<string, StealthFetch>();
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: tools.map((t) => ({
+      name: t.workflow.toolName,
+      description: `${t.workflow.intent.description} — auto-routes through fetch / stealth-fetch / playbook depending on what works for this site.`,
+      inputSchema: t.inputSchema,
+    })),
+  }));
 
   server.setRequestHandler(CallToolRequestSchema, async (req): Promise<CallToolResult> => {
-    const isBrowserVariant = req.params.name.endsWith('_via_browser');
-    const baseName = isBrowserVariant
-      ? req.params.name.slice(0, -'_via_browser'.length)
-      : req.params.name;
-    const tool = tools.find((t) => t.workflow.toolName === baseName);
+    const tool = tools.find((t) => t.workflow.toolName === req.params.name);
     if (!tool) {
       return {
         isError: true,
         content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }],
       };
     }
-    if (isBrowserVariant && !tool.playbookPath) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: 'text',
-            text: `No playbook.md for ${baseName} — only the API tool is available.`,
-          },
-        ],
-      };
-    }
 
-    const validator = validators.get(baseName);
+    const validator = validators.get(req.params.name);
     const parsed = validator?.safeParse(req.params.arguments ?? {});
     if (parsed && !parsed.success) {
       return {
@@ -177,25 +157,31 @@ function buildServer(name: string, version: string, tools: ResolvedTool[]): Serv
         ],
       };
     }
-    const args = (parsed?.data ?? req.params.arguments ?? {}) as Record<string, unknown>;
+    const args = (parsed?.data ?? req.params.arguments ?? {}) as Record<
+      string,
+      string | number | boolean
+    >;
 
     try {
-      const result =
-        isBrowserVariant && tool.playbookPath
-          ? await runPlaybook({
-              playbook: tool.playbookPath,
-              params: args as Record<string, string | number | boolean>,
-            })
-          : await tool.toolFn(args);
+      const ctx: BackendContext = {
+        tool,
+        params: args,
+        examplesDir,
+        stealthCache,
+      };
+      const { result, usedBackend } = await runWithLadder(ladderFor('auto'), ctx);
       if (!result.ok) {
         const text = result.remediation
           ? `[${result.error}] ${result.message}\n  → ${result.remediation}`
           : `[${result.error}] ${result.message}`;
-        return { isError: true, content: [{ type: 'text', text }] };
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `${text}\n(backend: ${usedBackend})` }],
+        };
       }
       const text =
         typeof result.data === 'string' ? result.data : JSON.stringify(result.data, null, 2);
-      return { content: [{ type: 'text', text }] };
+      return { content: [{ type: 'text', text: `${text}\n\n(backend: ${usedBackend})` }] };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { isError: true, content: [{ type: 'text', text: `[INTERNAL] ${msg}` }] };
@@ -236,9 +222,9 @@ export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void
   if (opts.http) {
     const port = opts.port ?? 8765;
     const host = opts.host ?? '127.0.0.1';
-    await runHttp(name, version, tools, host, port);
+    await runHttp(name, version, tools, host, port, examplesDir);
   } else {
-    await runStdio(name, version, tools);
+    await runStdio(name, version, tools, examplesDir);
   }
 }
 
@@ -249,8 +235,13 @@ export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void
  * client request arrived. Block until the transport closes (client EOFs
  * stdin) or we get SIGINT/SIGTERM.
  */
-async function runStdio(name: string, version: string, tools: ResolvedTool[]): Promise<void> {
-  const server = buildServer(name, version, tools);
+async function runStdio(
+  name: string,
+  version: string,
+  tools: ResolvedTool[],
+  examplesDir: string,
+): Promise<void> {
+  const server = buildServer(name, version, tools, examplesDir);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log(`stdio transport ready (${tools.length} tool${tools.length === 1 ? '' : 's'})`);
@@ -281,8 +272,9 @@ async function runHttp(
   tools: ResolvedTool[],
   host: string,
   port: number,
+  examplesDir: string,
 ): Promise<void> {
-  const server = buildServer(name, version, tools);
+  const server = buildServer(name, version, tools, examplesDir);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
   });
