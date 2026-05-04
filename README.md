@@ -19,20 +19,25 @@ bun install && bun link
 bunx playwright install chromium
 export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
 
-# Drive the workflow once
-imprint record acmecorp --url https://app.acmecorp.com
+# 1. Drive the workflow once. Pick any site you want to automate.
+imprint record mysite --url https://your-site-here.example.com
 # (Chromium opens. Do the thing. Narrate. /done when finished.)
 
-# Compile to two replay artifacts + MCP tool
-SESSION=examples/acmecorp/sessions/$(ls examples/acmecorp/sessions | tail -1)
-imprint redact $SESSION
-imprint generate ${SESSION%.json}.redacted.json
-imprint compile-playbook ${SESSION%.json}.redacted.json
-imprint emit examples/acmecorp/workflow.json
-imprint probe-backends acmecorp
+# 2. Pick the session you just recorded.
+SESSION=$(ls examples/mysite/sessions/*.json | grep -v redacted | tail -1)
 
-# You now have an MCP tool — wire it into Claude Desktop:
-imprint mcp-server   # see docs/getting-started.md for claude_desktop_config.json
+# 3. Scrub credentials, LLM-compile two replay artifacts, codegen the tool.
+imprint redact "$SESSION"
+imprint generate "${SESSION%.json}.redacted.json"
+imprint compile-playbook "${SESSION%.json}.redacted.json"
+imprint emit examples/mysite/workflow.json
+
+# 4. (Optional) probe which backends work — caches the order so cron/MCP
+#    skip futile rungs. Safe to skip on plain APIs; useful for bot-protected sites.
+imprint probe-backends mysite
+
+# 5. Expose as MCP for Claude Desktop / Cursor / Continue.dev
+imprint mcp-server     # see docs/getting-started.md for claude_desktop_config.json
 ```
 
 For the full walkthrough including Claude Desktop wire-up, see [docs/getting-started.md](docs/getting-started.md).
