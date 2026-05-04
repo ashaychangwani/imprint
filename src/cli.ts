@@ -324,11 +324,35 @@ async function main(argv: string[]): Promise<number> {
         options: { 'keep-header': { type: 'string', multiple: true } },
         allowPositionals: false,
       });
-      const { readFileSync, writeFileSync } = await import('node:fs');
+      const { existsSync, readFileSync, writeFileSync } = await import('node:fs');
       const { SessionSchema } = await import('./imprint/types.ts');
       const { redactSession } = await import('./imprint/redact.ts');
-      const raw = JSON.parse(readFileSync(sessionPath, 'utf8'));
-      const session = SessionSchema.parse(raw);
+      if (!existsSync(sessionPath)) {
+        console.error(
+          `error: session file not found: ${sessionPath}\n→ run \`imprint record <site>\` to capture one.`,
+        );
+        return 2;
+      }
+      let raw: unknown;
+      try {
+        raw = JSON.parse(readFileSync(sessionPath, 'utf8'));
+      } catch (err) {
+        console.error(
+          `error: ${sessionPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}\n→ if this is a .jsonl from a crashed recording, run \`imprint assemble ${sessionPath}\` first.`,
+        );
+        return 2;
+      }
+      const sessionParse = SessionSchema.safeParse(raw);
+      if (!sessionParse.success) {
+        const issues = sessionParse.error.errors
+          .map((e) => `  - ${e.path.join('.') || '(root)'}: ${e.message}`)
+          .join('\n');
+        console.error(
+          `error: ${sessionPath} doesn't match the Session schema:\n${issues}\n→ check the file came from \`imprint record\`; hand-edited files often drift.`,
+        );
+        return 2;
+      }
+      const session = sessionParse.data;
       const keepHeaders = values['keep-header'] ?? [];
       const { session: scrubbed, stats } = redactSession(session, { keepHeaders });
       const outPath = sessionPath.replace(/\.json$/, '.redacted.json');
