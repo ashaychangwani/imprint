@@ -1,147 +1,206 @@
-# Imprint
+<p align="center">
+  <strong>Imprint</strong><br>
+  <em>Teach an AI agent how to use any website. Once.</em>
+</p>
 
-> **Teach an AI agent how to use any website. Once.**
+<p align="center">
+  <a href="https://github.com/ashaychangwani/imprint/actions/workflows/test.yml"><img src="https://github.com/ashaychangwani/imprint/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
+  <a href="https://github.com/ashaychangwani/imprint/releases"><img src="https://img.shields.io/github/v/release/ashaychangwani/imprint?label=release" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
+  <a href="https://bun.sh"><img src="https://img.shields.io/badge/bun-%3E%3D1.3-black" alt="Bun"></a>
+</p>
 
-Show Imprint a workflow in a real browser — drive the page, narrate what you're doing — and you get back two deterministic replay artifacts plus a generated MCP tool any AI agent can call from then on. No re-decisions, no exploration tokens, no "the LLM clicked the wrong button" variance. The recording **is** the executable.
+---
+
+Browser-tool frameworks like browser-use and Computer Use ask the LLM to **decide every click at runtime**. That means unpredictable token costs, flaky execution, and constant bot-detection battles.
+
+Imprint takes a different approach: **you record once, and the recording becomes the executable.** One command opens a browser, you drive the workflow, and Imprint compiles it into a deterministic MCP tool your AI agent can call forever.
 
 ```
-imprint teach mysite --url https://...
-  → record → redact → generate → compile-playbook → emit
-  → pick your platform → done
+imprint teach southwest --url https://southwest.com
 ```
 
----
-
-## Quickstart
-
-```bash
-git clone https://github.com/ashaychangwani/imprint.git
-cd imprint
-bun install
-bun link                          # makes `imprint` global
-bunx playwright install chromium
-export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
-imprint doctor                    # verify setup
-
-# Teach your agent a new workflow (interactive — walks you through everything):
-imprint teach mysite --url https://your-site-here.example.com
-```
-
-`imprint teach` records the workflow, compiles both artifacts (API workflow + DOM playbook), generates the tool, and asks which AI platform you use. It then either runs the setup command or prints a paste-ready snippet.
-
-For the step-by-step walkthrough, see [docs/getting-started.md](docs/getting-started.md).
-
----
-
-## Connect to your AI tool
-
-`imprint teach` handles integration at the end of the pipeline. It supports:
-
-| Platform | Setup method |
-|----------|-------------|
-| **Claude Code** | Runs `claude mcp add` — one command |
-| **Codex CLI** | Runs `codex mcp add` — one command |
-| **Claude Desktop** | Prints JSON snippet for config file |
-| **OpenClaw** | Prints MCP config + optional SKILL.md export |
-| **Hermes** | Prints MCP config + optional SKILL.md export + cron mapping |
-
-Each site gets its own MCP server: `imprint mcp-server southwest` registers as `imprint-southwest`.
-
-For manual setup or advanced configuration, see [docs/integrations.md](docs/integrations.md).
-
----
-
-## Why use Imprint over the alternatives
-
-Other browser-tool frameworks (browser-use, Computer Use, openclaw) ask the LLM to **decide every click at runtime**. Token cost scales with workflow length; reliability is variable; bot-detection forces operators to pay for stealth APIs.
-
-Imprint is different: the recording is a frozen, deterministic artifact. The agent reads it and follows it verbatim. **Zero exploration tokens, zero re-decision variance**, and a real Chromium minted the auth tokens — so bot detection sees a real browser.
-
-When the cheap API replay gets blocked, the **backend ladder** automatically escalates:
-
-| Backend | Per call | Defeats |
-|---|---|---|
-| `fetch` | ~200ms | Plain APIs |
-| `stealth-fetch` | ~12s bootstrap (one-time per process) + ~1s | Akamai, Cloudflare, DataDome (token-validation tier) |
-| `playbook` | ~9.4s | Universal — handles form-fills, autocompletes, multi-page navigation |
-
-Every recording compiles to BOTH `workflow.json` and `playbook.yaml`, so the ladder always has a fallback. **"Imprint can't help here" is the failure mode this design eliminates.**
-
----
-
-## Demos
-
-| Demo | What it shows | How to run |
-|---|---|---|
-| [`examples/southwest`](examples/southwest) | Live flight-fare watcher; defeats Akamai via `stealth-fetch`; pushes when prices drop below your threshold | `imprint cron southwest --once` |
-| [`examples/discoverandgo`](examples/discoverandgo) | Authed museum-pass booking via the per-site credential store | `imprint cron discoverandgo --once` |
-| [`examples/echo`](examples/echo) | Trivial MCP smoke-test fixture (no LLM, no network) | `imprint mcp-server echo` |
+That's it. Your agent now has a tool called `search_southwest_flights` that works reliably, every time.
 
 ---
 
 ## How it works
 
 ```
-   imprint teach  ─── interactive pipeline ───────────┐
-                                                       │
-   imprint record  ─┐                                 │
-                    ▼                                  │
-              session.json                             │
-                    │                                  │
-        ┌───────────┴───────────┐                      │
-        ▼                       ▼                      │
-  imprint generate     imprint compile-playbook        │
-        │                       │                      │
-        ▼                       ▼                      │
-  workflow.json          playbook.yaml                 │
-        │                                              │
-  imprint emit                                         │
-        ▼                                              │
-  examples/<site>/index.ts  ──┐                        │
-                              │                        │
-       imprint cron / mcp ────┼──► backend ladder ◄────┘
-                              │      fetch ─FORBIDDEN→
-                              │      stealth-fetch ─→
-                              │      playbook
-                              │
-                              └──► result
+You record a workflow        Imprint compiles two artifacts       Your agent calls the MCP tool
+in a real browser             (API replay + DOM fallback)          and gets results back
+                                                                  
+  imprint teach              workflow.json   playbook.yaml        agent: "find flights
+       |                          |               |                SFO → LAX tomorrow"
+       v                          v               v                       |
+  [Browser session]  ──>    [API workflow]   [DOM playbook]  ──>   [deterministic result]
 ```
 
-For the full architecture (module map, file taxonomy, design rationale), see [docs/architecture.md](docs/architecture.md) and [docs/decisions.md](docs/decisions.md).
+The **backend ladder** tries the fastest method first and escalates automatically:
+
+| Backend | Speed | What it defeats |
+|---|---|---|
+| `fetch` | ~200ms | Plain APIs |
+| `stealth-fetch` | ~1s | Akamai, Cloudflare, DataDome |
+| `playbook` | ~9s | Everything else (DOM replay) |
+
+If the API changes, the DOM playbook still works. If the page redesigns, re-record in 2 minutes. **There is always a fallback.**
 
 ---
 
-## CLI
+## Get started
 
-```
-imprint --help        # full verb list
-imprint <verb> --help # per-verb help
+### Prerequisites
+
+- [Bun](https://bun.sh) >= 1.3
+- A Google Cloud project with [Vertex AI](https://cloud.google.com/vertex-ai) Anthropic models enabled
+
+### Install
+
+```bash
+git clone https://github.com/ashaychangwani/imprint.git
+cd imprint
+bun install
+bun link
+bunx playwright install chromium
+export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
 ```
 
-Verbs: `teach`, `record`, `redact`, `generate`, `compile-playbook`, `emit`, `probe-backends`, `cron`, `mcp-server`, `playbook`, `login`, `assemble`, `check`, `doctor`.
+Verify everything works:
+
+```bash
+imprint doctor
+```
+
+### Teach your first workflow
+
+```bash
+imprint teach mysite --url https://example.com
+```
+
+This single command:
+1. Opens a browser for you to drive the workflow
+2. Records every network request and DOM interaction
+3. Redacts credentials and PII automatically
+4. Compiles an API workflow + DOM playbook
+5. Generates a typed MCP tool
+6. Connects it to your AI platform
+
+At the end, `imprint teach` asks which platform you use and handles the integration automatically.
+
+For the full step-by-step walkthrough, see [Getting Started](docs/getting-started.md).
 
 ---
 
-## Docs
+## Works with your AI platform
 
-- **[docs/integrations.md](docs/integrations.md)** — per-platform setup: Claude Code, Codex, Claude Desktop, OpenClaw, Hermes
-- **[docs/getting-started.md](docs/getting-started.md)** — full walkthrough, step-by-step
-- **[docs/architecture.md](docs/architecture.md)** — data flow, module map, file taxonomy
-- **[docs/glossary.md](docs/glossary.md)** — Session, Workflow, Playbook, Backend, Stealth-fetch, etc.
-- **[docs/decisions.md](docs/decisions.md)** — the load-bearing calls (why YAML, why ladder, why MCP-stdio default)
-- **[docs/troubleshooting.md](docs/troubleshooting.md)** — predictable failures + fixes
-- **[docs/notifications.md](docs/notifications.md)** — Pushover + ntfy setup, predicate language
-- **[docs/security.md](docs/security.md)** — what Imprint stores, redaction guarantees, credential handling
-- **[docs/capture-protocol.md](docs/capture-protocol.md)** — what a clean recording looks like
-- **[docs/playbook-debugging.md](docs/playbook-debugging.md)** — when DOM walks misbehave
-- **[docs/design.md](docs/design.md)** — original thesis (April 2026 office-hours)
+`imprint teach` handles setup at the end of the pipeline. Supported platforms:
+
+| Platform | How it connects |
+|---|---|
+| **Claude Code** | Runs `claude mcp add` automatically |
+| **Codex CLI** | Runs `codex mcp add` automatically |
+| **Claude Desktop** | Prints paste-ready JSON config |
+| **Cursor** | Prints paste-ready JSON config |
+| **Continue.dev** | Prints paste-ready JSON config |
+| **OpenClaw** | MCP config + optional SKILL.md export |
+| **Hermes** | MCP config + SKILL.md export + cron mapping |
+
+Each site gets its own isolated MCP server. `imprint mcp-server southwest` registers as `imprint-southwest`, so tools from different sites never collide.
+
+For manual setup or advanced options (HTTP transport, Docker, systemd), see [Integrations](docs/integrations.md).
 
 ---
 
-## Status
+## Real-world examples
 
-v0.1 — pipeline complete, two demos live. v0.2 candidates in [TODOS.md](TODOS.md). What's changed: [CHANGELOG.md](CHANGELOG.md). How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md). Issues + PRs welcome.
+### Southwest flight watcher
+
+Defeats Akamai bot detection. Watches fares daily, notifies you when prices drop.
+
+```bash
+imprint cron southwest --once
+```
+
+```
+stealth-fetch bootstrapping Chromium...       13.4 s
+stealth-fetch request complete                 1.2 s
+SFO → LAX  2026-05-15  $87 (Wanna Get Away)
+```
+
+See [`examples/southwest`](examples/southwest) for the full setup.
+
+### Discover & Go museum booking
+
+Authenticated workflow using the per-site credential store. Books museum passes through a member portal.
+
+```bash
+imprint cron discoverandgo --once
+```
+
+See [`examples/discoverandgo`](examples/discoverandgo) for the full setup.
+
+---
+
+## Why not just use browser-use / Computer Use?
+
+| | Imprint | Browser-use / Computer Use |
+|---|---|---|
+| **Token cost** | Zero exploration tokens | Scales with workflow length |
+| **Reliability** | Deterministic replay | LLM decides every click |
+| **Bot detection** | Real browser session + stealth-fetch | Detectable automation |
+| **Fallback** | API replay + DOM playbook ladder | None |
+| **Speed** | 200ms - 9s depending on backend | 30s+ per workflow |
+| **Setup** | Record once, done forever | Configure per run |
+
+---
+
+## CLI reference
+
+```bash
+imprint --help            # all commands
+imprint <command> --help  # per-command options
+```
+
+**Core pipeline:** `teach` · `record` · `redact` · `generate` · `compile-playbook` · `emit`
+
+**Run & serve:** `cron` · `mcp-server` · `playbook` · `probe-backends`
+
+**Utilities:** `login` · `assemble` · `check` · `doctor`
+
+---
+
+## Documentation
+
+| Doc | What's in it |
+|---|---|
+| [Getting Started](docs/getting-started.md) | Full walkthrough, step by step |
+| [Integrations](docs/integrations.md) | Per-platform setup and advanced config |
+| [Architecture](docs/architecture.md) | Data flow, module map, file taxonomy |
+| [Glossary](docs/glossary.md) | Session, Workflow, Playbook, Backend, and more |
+| [Decisions](docs/decisions.md) | Why YAML, why ladder, why MCP-stdio default |
+| [Security](docs/security.md) | What Imprint stores, redaction guarantees, credential handling |
+| [Troubleshooting](docs/troubleshooting.md) | Common failures and fixes |
+| [Capture Protocol](docs/capture-protocol.md) | What a clean recording looks like |
+| [Playbook Debugging](docs/playbook-debugging.md) | When DOM walks misbehave |
+| [Notifications](docs/notifications.md) | Pushover + ntfy setup |
+
+---
+
+## Contributing
+
+Contributions are welcome. The codebase has 193 tests and enforces Conventional Commits in CI.
+
+```bash
+bun run check   # typecheck + lint + test + dead-code scan
+```
+
+Good first contributions: new replay backends, notification predicates, per-site auth extractors, docs improvements, or new example sites.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and guidelines.
+
+---
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE)
