@@ -49,6 +49,19 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   const fetchFn = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.requestTimeoutMs ?? 30_000;
 
+  // A zero-request workflow would silently return null data — almost
+  // certainly a misconfigured workflow (LLM produced an empty `requests`
+  // array). Fail loud so the user knows to re-record or re-generate.
+  if (opts.workflow.requests.length === 0) {
+    return {
+      ok: false,
+      error: 'UNKNOWN',
+      message: `Workflow ${opts.workflow.toolName} has no requests — nothing to execute.`,
+      remediation:
+        're-record the session (capture probably stopped before any XHR fired), or re-run `imprint generate` if the workflow JSON looks empty.',
+    };
+  }
+
   const credentials =
     opts.credentials ?? loadCredentialStore(opts.workflow.site) ?? emptyStore(opts.workflow.site);
 
