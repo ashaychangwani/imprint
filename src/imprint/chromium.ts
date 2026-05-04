@@ -1,13 +1,6 @@
-/**
- * Launch a real Chromium with the CDP debugging port open.
- *
- * On macOS we default to Google Chrome at the standard /Applications path.
- * Override with $CHROMIUM_PATH if you've installed Chromium / Edge / Brave
- * elsewhere.
- *
- * The launched process is a foreground child — we wire SIGINT/SIGTERM to it
- * so Ctrl+C in the recording terminal actually closes the browser.
- */
+/** Launch real Chromium with CDP debugging open. Prefers Playwright's
+ *  bundled Chromium (unmanaged) over system Chrome (corporate policy
+ *  often blocks --remote-debugging-port). $CHROMIUM_PATH overrides. */
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
@@ -23,12 +16,7 @@ export interface LaunchOptions {
   url?: string;
   /** Launch headless. Default false (recording = visible browser the user drives). */
   headless?: boolean;
-  /**
-   * Explicit user-data-dir. If omitted, a throwaway dir under tmpdir() is used
-   * and discarded on close. Pass an explicit path to PERSIST cookies + login
-   * state across recording sessions — useful for the dev iteration loop where
-   * you don't want to re-log-in to a real site between every capture.
-   */
+  /** Persist cookies + login by passing an explicit path; otherwise a throwaway tmp dir. */
   userDataDir?: string;
   /** Extra Chromium flags (advanced). */
   extraArgs?: string[];
@@ -50,16 +38,8 @@ const LINUX_CANDIDATES = [
   '/usr/bin/chromium-browser',
 ];
 
-/**
- * Find Playwright's bundled Chromium (a.k.a. "Google Chrome for Testing"),
- * which lives under ~/Library/Caches/ms-playwright/chromium-NNNN/. We prefer
- * this over the system Chrome because corporate-managed Chrome installations
- * (Palo Alto, Google Workspace, etc.) often push a policy that disallows
- * `--remote-debugging-port` with the message "DevTools remote debugging is
- * disallowed by the system admin". Playwright's Chromium is unmanaged.
- *
- * Returns the latest-numbered chromium-NNNN install if multiple are present.
- */
+/** Find Playwright's "Google Chrome for Testing" — newest version wins
+ *  if multiple are installed. */
 function findPlaywrightChromium(): string | null {
   const cacheRoots = [
     pathJoin(homedir(), 'Library/Caches/ms-playwright'),
@@ -120,8 +100,7 @@ export function findChromium(): string {
   const explicit = process.env.CHROMIUM_PATH;
   if (explicit && existsSync(explicit)) return explicit;
 
-  // Prefer Playwright's bundled Chromium — it's never subject to corporate
-  // managed-policy restrictions on remote debugging.
+  // Prefer Playwright's bundled Chromium — never blocked by corporate policy.
   const pw = findPlaywrightChromium();
   if (pw) return pw;
 
@@ -203,7 +182,7 @@ export async function launchChromium(opts: LaunchOptions = {}): Promise<Launched
     detached: false,
   });
 
-  // Forward stderr in debug mode only — Chromium is noisy.
+  // Chromium is noisy — only surface stderr under IMPRINT_DEBUG.
   if (process.env.IMPRINT_DEBUG) {
     child.stderr?.on('data', (chunk) => process.stderr.write(chunk));
   }
@@ -216,7 +195,6 @@ export async function launchChromium(opts: LaunchOptions = {}): Promise<Launched
     closed = true;
     if (child.exitCode === null && child.signalCode === null) {
       child.kill('SIGTERM');
-      // Give it a moment to exit cleanly, then SIGKILL.
       await Promise.race([
         new Promise<void>((resolve) => child.once('exit', () => resolve())),
         sleep(2000),

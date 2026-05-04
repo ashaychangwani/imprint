@@ -1,13 +1,5 @@
-/**
- * Vertex Anthropic client wrapper.
- *
- * Reads config from env (or sensible defaults) and exposes one method:
- * `analyze(prompt, session)` which sends the prompt + session to Claude and
- * returns the parsed text response.
- *
- * The prompt template lives at prompts/*.md so it's editable without
- * rebuilding. Session payload is JSON-serialized inline.
- */
+/** Vertex Anthropic client wrapper — system prompt + JSON-serialized
+ *  user payload → raw model text. */
 
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 
@@ -15,9 +7,8 @@ export interface LLMConfig {
   projectId: string;
   region: string;
   model: string;
-  /** Sampling temperature. 0 = deterministic; we want stable workflow output. */
+  /** 0 = deterministic — we want stable artifacts. */
   temperature: number;
-  /** Max output tokens. Workflow JSON is small but allow room. */
   maxTokens: number;
 }
 
@@ -36,8 +27,7 @@ export function loadConfig(overrides: Partial<LLMConfig> = {}): LLMConfig {
   return {
     projectId,
     region: overrides.region ?? process.env.CLOUD_ML_REGION ?? 'us-east5',
-    // Vertex resolves a bare model id like `claude-sonnet-4-6` to the latest
-    // deployed version in the project. Pass an `@DATE` suffix to pin.
+    // Vertex resolves bare ids to latest; pass `@DATE` suffix to pin.
     model: overrides.model ?? process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6',
     temperature: overrides.temperature ?? 0,
     maxTokens: overrides.maxTokens ?? 8192,
@@ -45,14 +35,11 @@ export function loadConfig(overrides: Partial<LLMConfig> = {}): LLMConfig {
 }
 
 export interface AnalyzeResult {
-  /** Raw text the model produced. */
   text: string;
-  /** Token usage as reported by Vertex. */
   inputTokens: number;
   outputTokens: number;
-  /** Wall clock duration of the request in ms. */
   durationMs: number;
-  /** Stop reason: end_turn | max_tokens | stop_sequence | tool_use | ... */
+  /** end_turn | max_tokens | stop_sequence | tool_use | … */
   stopReason: string | null;
 }
 
@@ -65,14 +52,6 @@ export class LLM {
     });
   }
 
-  /**
-   * Send a system prompt + a user message containing the JSON-serialized
-   * session, and return the raw model response text.
-   *
-   * The caller is responsible for parsing the response (see generate.ts which
-   * extracts a JSON object from the text and validates it against
-   * WorkflowSchema).
-   */
   async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
     const t0 = Date.now();
     const userText = JSON.stringify(userPayload);
@@ -100,16 +79,9 @@ export class LLM {
   }
 }
 
-/**
- * Extract the first top-level JSON object from a string. The model is
- * instructed to return ONLY JSON, but real responses sometimes wrap it in
- * a fenced code block or add a preamble. We slice from the first `{` to the
- * matching closing brace via depth tracking.
- *
- * Returns null if no balanced object is found.
- */
+/** Extract the first balanced top-level JSON object — handles fenced
+ *  code blocks and preamble text. Returns null if no object is found. */
 export function extractJsonObject(text: string): string | null {
-  // Strip code fences if present.
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   const candidate = fenced?.[1] ?? text;
 

@@ -1,11 +1,4 @@
-/**
- * Streams a recording to a single JSON file on disk.
- *
- * The on-disk format is one JSON object per line (JSONL) so a Ctrl+C mid-recording
- * still leaves a parseable file. On clean close we ALSO write a sidecar
- * `<file>.json` that is the fully assembled `Session` object — the shape every
- * downstream verb (generate, emit) actually consumes.
- */
+/** JSONL streaming writer (crash-safe) + sidecar Session JSON on close. */
 
 import { type WriteStream, createWriteStream, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -47,7 +40,7 @@ export function createSessionWriter(jsonlPath: string, meta: SessionMeta): Sessi
   mkdirSync(dirname(jsonlPath), { recursive: true });
   const stream: WriteStream = createWriteStream(jsonlPath, { flags: 'w', encoding: 'utf8' });
 
-  // First line is the meta header so a partial JSONL can still be reconstructed.
+  // First line: meta header so a partial JSONL still rehydrates.
   stream.write(`${JSON.stringify({ kind: 'meta', data: meta })}\n`);
 
   let closed = false;
@@ -64,10 +57,7 @@ export function createSessionWriter(jsonlPath: string, meta: SessionMeta): Sessi
     narration: (data) => writeLine({ kind: 'narration', data }),
     cookies: (data) => writeLine({ kind: 'cookies', data }),
     async close() {
-      if (closed) {
-        // Still return paths if called twice.
-        return { jsonlPath, sessionPath: jsonlPath.replace(/\.jsonl$/, '.json') };
-      }
+      if (closed) return { jsonlPath, sessionPath: jsonlPath.replace(/\.jsonl$/, '.json') };
       closed = true;
       await new Promise<void>((resolve, reject) => {
         stream.end((err?: Error | null) => (err ? reject(err) : resolve()));
@@ -82,10 +72,7 @@ export function createSessionWriter(jsonlPath: string, meta: SessionMeta): Sessi
   };
 }
 
-/**
- * Read a JSONL recording back into a full Session object.
- * Exposed so downstream tools (and tests) can rehydrate without touching disk twice.
- */
+/** Rehydrate a JSONL recording into a Session object. */
 export function assembleFromJsonl(jsonlPath: string): Session {
   const text = readFileSync(jsonlPath, 'utf8');
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
@@ -96,7 +83,6 @@ export function assembleFromJsonl(jsonlPath: string): Session {
   const narration: Narration[] = [];
   const cookieSnapshots: CookieSnapshot[] = [];
 
-  // First pass: collect everything.
   for (const line of lines) {
     const rec = JSON.parse(line) as
       | { kind: 'meta'; data: SessionMeta }
@@ -147,7 +133,5 @@ export function assembleFromJsonl(jsonlPath: string): Session {
     cookieSnapshots,
   };
 
-  // Validate before handing back. A malformed session should fail loud, not silently
-  // produce a broken workflow downstream.
-  return SessionSchema.parse(session);
+  return SessionSchema.parse(session); // fail loud if malformed
 }

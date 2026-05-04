@@ -1,22 +1,11 @@
 /**
- * `imprint cron <site>` — polling daemon for a generated workflow.
+ * `imprint cron <site>` — polling daemon for a generated tool. Loads
+ * examples/<site>/cron.json, schedules via node-cron, runs the tool
+ * through the configured backend ladder per tick, and pushes via
+ * notify.ts on failure (or on a notifyWhen predicate match).
  *
- * Loads `examples/<site>/cron.json`, validates the schedule + params,
- * then schedules the tool via node-cron. Each tick walks the configured
- * replayBackend ladder (fetch → stealth-fetch → playbook in 'auto')
- * and logs which backend produced the result. Failures additionally
- * fire a notification when configured.
- *
- * USAGE:
- *
- *   imprint cron discoverandgo                  # schedule and block until SIGINT
- *   imprint cron discoverandgo --run-now        # also run once immediately
- *   imprint cron discoverandgo --once           # run once and exit (for tests / OS scheduler)
- *   imprint cron discoverandgo --config /tmp/x  # override config path
- *
- * The cron daemon is single-example by design — run one process per
- * schedule. This matches how systemd timers and launchd are typically
- * organized and keeps failure isolation clean.
+ * One process per schedule by design — matches how systemd timers /
+ * launchd are organized and keeps failure isolation clean.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -63,10 +52,7 @@ function loadCronConfig(configPath: string): CronConfig {
   return CronConfigSchema.parse(raw);
 }
 
-/**
- * One execution of the workflow + result handling. Walks the
- * configured replayBackend ladder; first non-FORBIDDEN result wins.
- */
+/** One tool tick: walk the ladder, log, push notification on result. */
 async function runOnce(
   tool: ResolvedTool,
   params: Record<string, string | number | boolean>,
@@ -155,9 +141,8 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     );
   }
 
-  // Read the probe cache if it exists. For replayBackend "auto" this
-  // reorders the ladder to start from the empirically-cheapest known-
-  // working backend instead of always trying fetch first.
+  // Probe cache reorders the 'auto' ladder to start with the empirically
+  // cheapest known-working backend.
   const cached = loadBackendsCache(opts.site, examplesDir);
   if (cached) {
     log(
@@ -165,12 +150,8 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     );
   }
 
-  // Param validation runs against the API workflow's parameters when
-  // the fetch path can run (i.e., the ladder includes 'fetch'). For
-  // backends with their own param schema (playbook), we accept whatever
-  // the operator provided and let the runner enforce its own validation
-  // — names typically differ (e.g., Southwest's `origin` vs
-  // `origin_airport_code`) and the ladder fail-softs on mismatch.
+  // Validate params against the API workflow only when fetch/stealth-fetch
+  // is in the ladder; playbook has its own param schema with different names.
   const ladder = resolveLadder(replayBackend, cached?.preferredOrder);
   let params: Record<string, string | number | boolean>;
   if (ladder.includes('fetch') || ladder.includes('stealth-fetch')) {
@@ -192,8 +173,7 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     `replayBackend: ${replayBackend}${ladder.length > 1 ? ` (ladder: ${ladder.join(' → ')})` : ''}`,
   );
 
-  // Per-process StealthFetch cache so the bootstrap cost is paid once
-  // per site and reused across all cron ticks in this process.
+  // Per-site stealth-fetch cache — bootstrap cost paid once per process.
   const stealthCache = new Map<string, StealthFetch>();
 
   const tickArgs = [

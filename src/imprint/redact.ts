@@ -1,37 +1,15 @@
 /**
- * Credential / PII redaction for captured sessions.
- *
- * Captures often contain credentials in places nobody thinks to look:
- *   - Login POST bodies (patronPassword, password, token, ...)
- *   - URL query strings (apiKey=..., access_token=..., patronNumber=...)
- *   - Authorization / Cookie / X-CSRF-Token request headers
- *   - Set-Cookie response headers
- *   - End-of-session cookie snapshots (the actual session cookie value)
- *
- * Before any captured session is sent to an LLM (day 3 codegen), we scrub
- * these. The LLM still needs to know the SHAPE — which fields exist, what
- * type they are — so it can parameterize the workflow. So we replace VALUES
- * with `[REDACTED:N]` markers (N = original length) instead of removing
- * the field entirely.
- *
- * This is best-effort. It catches the common cases. It will NOT catch:
- *   - Credentials embedded in arbitrary response bodies (HTML pages, JSON)
- *   - Custom field names a site invents that don't match the patterns below
- *   - Credentials encoded as part of a URL path segment (vs query string)
- *
- * If you're using Imprint on a site with unusual auth, audit the redacted
- * session before generating against it.
+ * Credential / PII redaction. Replaces values of known-sensitive fields
+ * with `[REDACTED:N]` (N = original length) so the LLM still sees the
+ * shape but never the secret. Best-effort — see docs/troubleshooting.md
+ * for what it doesn't catch (response bodies, URL path segments, etc.)
+ * and how to audit a redacted session.
  */
 
 import type { Session } from './types.ts';
 
-/**
- * Field names whose values get replaced. Match is case-insensitive on the
- * KEY only; values are not pattern-matched, so "patronPassword: hunter2"
- * is redacted but a value that happens to look like a JWT in some other
- * field is not. (Catching value patterns is a separate, higher-false-positive
- * problem we punt on.)
- */
+/** Case-insensitive key match. Values aren't pattern-matched — that's a
+ *  separate high-false-positive problem we punt on. */
 const SENSITIVE_KEYS = [
   // Generic auth
   'password',
