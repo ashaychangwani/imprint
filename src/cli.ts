@@ -146,13 +146,18 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   cron: {
     summary: 'Polling daemon for examples/<site>/cron.json.',
-    usage: ['imprint cron <site> [--once | --run-now] [--config <path>]'],
+    usage: ['imprint cron <site> [--once | --run-now] [--config <path>] [--quiet]'],
     flags: [
       { name: '--once', description: 'Run a single tick and exit (for OS schedulers).' },
       { name: '--run-now', description: 'Run once immediately, then continue scheduling.' },
       { name: '--config <path>', description: 'Override the cron.json path.' },
+      {
+        name: '--quiet',
+        description:
+          'Suppress logs on successful runs (errors still surface). For OS schedulers that mail on stderr.',
+      },
     ],
-    example: 'imprint cron southwest --once',
+    example: 'imprint cron southwest --once --quiet',
   },
   'mcp-server': {
     summary: 'Expose every generated tool as MCP (stdio default).',
@@ -448,9 +453,13 @@ async function main(argv: string[]): Promise<number> {
           config: { type: 'string' },
           once: { type: 'boolean' },
           'run-now': { type: 'boolean' },
+          quiet: { type: 'boolean' },
         },
         allowPositionals: false,
       });
+      // --quiet suppresses successful-run logs so OS schedulers
+      // (cron, systemd, launchd) don't mail noise on green runs.
+      if (values.quiet) process.env.IMPRINT_QUIET = '1';
       const { runCron } = await import('./imprint/cron.ts');
       await runCron({
         site,
