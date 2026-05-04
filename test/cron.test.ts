@@ -135,6 +135,40 @@ describe('runCron({ once: true })', () => {
     });
   });
 
+  it('scopes IMPRINT_QUIET mutation to the call (restores prior value)', async () => {
+    writeFakeExample('quiet_test', []);
+    writeConfig('quiet_test', { schedule: '* * * * *', params: {} });
+
+    // 1. From an unset baseline, quiet:true should not leak.
+    expect(process.env.IMPRINT_QUIET).toBeUndefined();
+    await runCron({ site: 'quiet_test', examplesDir: root, once: true, quiet: true });
+    expect(process.env.IMPRINT_QUIET).toBeUndefined();
+
+    // 2. From a pre-existing value, quiet:true should restore it.
+    process.env.IMPRINT_QUIET = 'preset-value';
+    try {
+      await runCron({ site: 'quiet_test', examplesDir: root, once: true, quiet: true });
+      expect(process.env.IMPRINT_QUIET).toBe('preset-value');
+    } finally {
+      // biome-ignore lint/performance/noDelete: env restoration needs real deletion
+      delete process.env.IMPRINT_QUIET;
+    }
+
+    // 3. quiet:false (or omitted) should never touch the env at all.
+    await runCron({ site: 'quiet_test', examplesDir: root, once: true });
+    expect(process.env.IMPRINT_QUIET).toBeUndefined();
+  });
+
+  it('restores IMPRINT_QUIET even when the tool throws', async () => {
+    writeFakeExample('throws_test', []);
+    writeConfig('throws_test', { schedule: 'NOT VALID CRON', params: {} });
+    expect(process.env.IMPRINT_QUIET).toBeUndefined();
+    await expect(
+      runCron({ site: 'throws_test', examplesDir: root, once: true, quiet: true }),
+    ).rejects.toThrow();
+    expect(process.env.IMPRINT_QUIET).toBeUndefined();
+  });
+
   it('rejects an invalid cron expression before scheduling', async () => {
     writeFakeExample('bad_sched', []);
     writeConfig('bad_sched', { schedule: 'not a cron expression', params: {} });
