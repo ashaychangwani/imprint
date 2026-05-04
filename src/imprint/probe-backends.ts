@@ -7,11 +7,16 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
-import { type ConcreteBackend, runWithLadder } from './backend-ladder.ts';
+import { runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { discoverTools } from './tool-loader.ts';
-import { type BackendsCache, BackendsCacheSchema, CronConfigSchema } from './types.ts';
+import {
+  type BackendsCache,
+  BackendsCacheSchema,
+  type ConcreteBackend,
+  CronConfigSchema,
+} from './types.ts';
 import { VERSION } from './version.ts';
 
 interface ProbeBackendsOptions {

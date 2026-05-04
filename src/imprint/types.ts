@@ -170,6 +170,10 @@ export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
 const ReplayBackendSchema = z.enum(['fetch', 'stealth-fetch', 'playbook', 'auto']);
 export type ReplayBackend = z.infer<typeof ReplayBackendSchema>;
 
+const ConcreteBackendSchema = ReplayBackendSchema.exclude(['auto']);
+/** ReplayBackend without the 'auto' meta-value — what the ladder actually walks. */
+export type ConcreteBackend = Exclude<ReplayBackend, 'auto'>;
+
 /** Per-backend probe result. Written to examples/<site>/backends.json
  *  by `imprint probe-backends`; cron + MCP read it at startup so they
  *  start with the cheapest known-working backend. */
@@ -205,8 +209,8 @@ export const BackendsCacheSchema = z.object({
   imprintVersion: z.string(),
   /** Ladder for runtime — preferredOrder[0] cheapest, rest fall back on
    *  FORBIDDEN. Excludes 'auto'. */
-  preferredOrder: z.array(z.enum(['fetch', 'stealth-fetch', 'playbook'])).min(1),
-  results: z.record(z.enum(['fetch', 'stealth-fetch', 'playbook']), BackendProbeResultSchema),
+  preferredOrder: z.array(ConcreteBackendSchema).min(1),
+  results: z.record(ConcreteBackendSchema, BackendProbeResultSchema),
 });
 export type BackendsCache = z.infer<typeof BackendsCacheSchema>;
 

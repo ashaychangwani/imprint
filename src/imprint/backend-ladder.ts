@@ -11,11 +11,7 @@ import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
 import { type StealthFetch, createStealthFetch } from './stealth-fetch.ts';
 import type { ResolvedTool } from './tool-loader.ts';
-import type { ReplayBackend, ToolResult } from './types.ts';
-
-/** Concrete (non-meta) backends the ladder actually walks. Excludes 'auto'
- *  because that's a user-facing choice that resolveLadder() expands away. */
-export type ConcreteBackend = Exclude<ReplayBackend, 'auto'>;
+import type { ConcreteBackend, ReplayBackend, ToolResult } from './types.ts';
 
 interface LadderResult {
   result: ToolResult;
