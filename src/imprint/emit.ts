@@ -79,7 +79,7 @@ function renderModule(workflow: Workflow, runtimeImportPath: string): string {
  * Site: ${workflow.site}
  * Intent: ${workflow.intent.description}
  *
- * To regenerate: bun run dev emit examples/${workflow.site}/workflow.json --force
+ * To regenerate: imprint emit examples/${workflow.site}/workflow.json --force
  */
 
 import {
