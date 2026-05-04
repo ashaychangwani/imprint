@@ -51,6 +51,15 @@ interface ResolvedTool extends DiscoveredTool {
   preferredOrder?: ReplayBackend[];
 }
 
+/** Tool description shown to MCP clients. Includes the operator's
+ *  recorded narration when present — surprisingly load-bearing for the
+ *  LLM picking the right tool. */
+function buildToolDescription(w: ResolvedTool['workflow']): string {
+  const base = w.intent.description;
+  const said = w.intent.userSaid?.trim();
+  return said ? `${base}\n\nRecording context: "${said}"` : base;
+}
+
 /** MCP advertises tool input as JSON Schema; build it directly from
  *  workflow parameters rather than going through Zod. */
 function buildJsonSchema(parameters: WorkflowParameter[]): Tool['inputSchema'] {
@@ -95,7 +104,7 @@ function buildServer(
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((t) => ({
       name: t.workflow.toolName,
-      description: `${t.workflow.intent.description} — auto-routes through fetch / stealth-fetch / playbook depending on what works for this site.`,
+      description: buildToolDescription(t.workflow),
       inputSchema: t.inputSchema,
     })),
   }));
