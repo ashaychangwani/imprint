@@ -12,6 +12,7 @@ import CDP from 'chrome-remote-interface';
 import envPaths from 'env-paths';
 import { launchChromium } from './chromium.ts';
 import { IMPRINT_SENTINEL, INJECTED_LISTENER_SOURCE } from './inject-listener.ts';
+import { isDebug } from './log.ts';
 import { createSessionWriter } from './session-writer.ts';
 import type { CapturedEvent, CapturedRequest, CookieSnapshot } from './types.ts';
 import { VERSION } from './version.ts';
@@ -128,7 +129,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
 
   Network.requestWillBeSent((params) => {
     const { request, requestId, type } = params;
-    if (process.env.IMPRINT_DEBUG) {
+    if (isDebug()) {
       console.error(`[debug] requestWillBeSent ${requestId} ${request.method} ${request.url}`);
     }
     pending.set(requestId, {
@@ -148,7 +149,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     if (!reqInfo) return;
     pending.delete(requestId);
 
-    if (process.env.IMPRINT_DEBUG) {
+    if (isDebug()) {
       console.error(
         `[debug] responseReceived ${requestId} status=${response.status} ${reqInfo.url}`,
       );
@@ -193,7 +194,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
   });
 
   Network.loadingFailed((params) => {
-    if (process.env.IMPRINT_DEBUG) {
+    if (isDebug()) {
       console.error(`[debug] loadingFailed ${params.requestId} ${params.errorText}`);
     }
     pending.delete(params.requestId);
@@ -201,11 +202,11 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
 
   // Network is wired — safe to drive Chromium to the target URL.
   if (opts.url && opts.url !== 'about:blank') {
-    if (process.env.IMPRINT_DEBUG) {
+    if (isDebug()) {
       console.error(`[debug] navigating to ${opts.url}`);
     }
     const navResult = await Page.navigate({ url: opts.url });
-    if (process.env.IMPRINT_DEBUG) {
+    if (isDebug()) {
       console.error(`[debug] navigate returned: ${JSON.stringify(navResult)}`);
     }
   }
@@ -305,7 +306,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
         })),
       });
     } catch (err) {
-      if (process.env.IMPRINT_DEBUG) {
+      if (isDebug()) {
         console.error(`[debug] cookie snapshot ${label} failed: ${String(err)}`);
       }
     }
@@ -369,7 +370,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     // Drain in-flight body fetches before closing the JSONL stream — CDP
     // body fetch is async, late arrivals would be silently dropped.
     if (inflight.size > 0) {
-      if (process.env.IMPRINT_DEBUG) {
+      if (isDebug()) {
         console.error(`[debug] draining ${inflight.size} inflight handlers`);
       }
       await Promise.allSettled(Array.from(inflight));

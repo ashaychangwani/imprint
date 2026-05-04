@@ -2,6 +2,7 @@
 /** CLI entry point. Run `imprint --help` for the verb list. */
 
 import { parseArgs } from 'node:util';
+import { isDebug } from './imprint/log.ts';
 import { VERSION } from './imprint/version.ts';
 
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
@@ -609,7 +610,7 @@ if (import.meta.main) {
     .then((code) => process.exit(code))
     .catch((err) => {
       console.error('imprint: fatal:', err instanceof Error ? err.message : String(err));
-      if (process.env.IMPRINT_DEBUG) {
+      if (isDebug()) {
         console.error(err);
       }
       process.exit(1);
