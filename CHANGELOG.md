@@ -43,7 +43,9 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - **Pipeline next-step hints** — `imprint redact`, `generate`, `compile-playbook`, `record`, `check`, `login`, `probe-backends`, `mcp-server` (no-tools path) all now print "next step: imprint <verb> ..." after a successful run or hint-worthy error, so the full pipeline can be chained without alt-tabbing to docs.
 - **isDebug() / isQuiet() env helpers** — `=== '1'` semantics (not truthy coercion), so `IMPRINT_DEBUG=0` actually disables. Replaces 8 raw `process.env.IMPRINT_DEBUG` checks across record.ts, chromium.ts, cron.ts, cli.ts.
 - **`tryParseParamKV()` helper** in cli.ts — return-null-on-error pattern eliminates the duplicated try/catch for the two `--param` callers.
-- **Test coverage gap-fills**: `test/check.test.ts` (+8 tests pinning warning heuristics), `test/load-json.test.ts` (+7 tests pinning the shared error shape).
+- **Test coverage gap-fills**: `test/check.test.ts` (+8 tests pinning warning heuristics), `test/load-json.test.ts` (+7 tests pinning the shared error shape), `test/sites.test.ts` (+5 tests pinning availableSitesHint branches).
+- **`availableSitesHint()` shared across cron / probe-backends / mcp-server** — extracted from cron.ts to `src/imprint/sites.ts`. Now `imprint probe-backends <typo>` and `imprint mcp-server --site <typo>` also list the actual sites under examples/ so users can spot a one-character typo.
+- **MCP server version single-sourced** — was hard-coded `'0.1.0'`; now reads from the same `VERSION` constant the CLI uses, eliminating a future drift hazard on package.json bumps.
 - **Single source of truth for the backend enum** — `BackendsCacheSchema` previously duplicated `['fetch', 'stealth-fetch', 'playbook']` literally. Now derives from `ReplayBackendSchema.exclude(['auto'])`. Adding a new backend updates one place.
 - **Tighter type narrowing** — `runWithLadder` parameter changed from `ReplayBackend[]` to `ConcreteBackend[]` (= `Exclude<ReplayBackend, 'auto'>`); the unreachable `case 'auto'` defensive throw deleted.
 - **Zero dead code, enforced** — three-tool defense:
