@@ -46,7 +46,46 @@ Anything bigger:
   - TypeScript's `noUnusedLocals` + `noUnusedParameters` for unused symbols inside a file
   - `madge --circular` for cycles between modules
   If any tool flags a new addition: drop the `export` (TS structural typing means callers don't need a named import to use your `*Options` / `*Result` interfaces), prefix unused params with `_`, or delete the artifact.
-- **Commits**: imperative present tense; describe the WHY in the body for non-trivial changes.
+- **Commits**: [Conventional Commits](https://www.conventionalcommits.org/) enforced in CI. See the commit conventions section below.
+
+## Commit conventions
+
+Every commit message must follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <subject>
+
+[optional body — explain WHY, not WHAT]
+```
+
+**Types:** `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `ci`, `chore`, `build`, `style`
+
+**Scopes** (optional, derived from directory names): `cli`, `probe`, `backend`, `playbook`, `stealth-fetch`, `cron`, `notify`, `utils`, `types`, `replay-backend`, `mcp`, `record`, `redact`, `session-writer`
+
+**Examples:**
+```
+feat(mcp): add tool listing endpoint
+fix(replay-backend): handle expired auth tokens on retry
+refactor(cli): extract positional argument parser
+docs: update quickstart with new CLI verbs
+```
+
+CI validates both the PR title and individual commit messages on every pull request.
+
+## Releases
+
+Releases are tag-triggered. Pushing a `v*` tag fires GitHub Actions to generate a changelog from conventional commits and create a GitHub Release.
+
+To cut a release:
+1. Determine the version bump (patch / minor / major) from commits since the last tag
+2. Update `version` in `package.json`
+3. Commit: `git commit -am "chore(release): v<VERSION>"`
+4. Tag: `git tag v<VERSION>`
+5. Push: `git push && git push --tags`
+
+Or use the `/release` Claude skill which automates these steps.
+
+Preview unreleased changelog locally: `bun run changelog`
 
 ## What's in scope vs. out of scope
 
