@@ -27,7 +27,9 @@
     "lint:fix": "biome check --write src test",
     "typecheck": "tsc --noEmit",
     "knip": "knip --no-progress",
-    "check": "bun run typecheck && bun run lint && bun test && bun run knip"
+    "deadcode": "bun run knip && bun run circular",
+    "circular": "madge --circular --extensions ts src/",
+    "check": "bun run typecheck && bun run lint && bun test && bun run deadcode"
   },
   "dependencies": {
     "@anthropic-ai/vertex-sdk": "^0.13.0",
@@ -48,6 +50,7 @@
     "@types/node": "^22.10.0",
     "@types/node-cron": "^3.0.11",
     "knip": "^5.0.0",
+    "madge": "^8.0.0",
     "typescript": "^5.7.0"
   }
 }
