@@ -27,7 +27,7 @@ import {
 } from './tool-loader.ts';
 import type { ReplayBackend, WorkflowParameter } from './types.ts';
 
-export interface RunMcpServerOptions {
+interface RunMcpServerOptions {
   /** Restrict to one example. Otherwise every generated example is registered. */
   site?: string;
   /** Override examples directory. Defaults to <cwd>/examples. */

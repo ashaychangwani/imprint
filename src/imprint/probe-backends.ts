@@ -14,7 +14,7 @@ import { discoverTools } from './tool-loader.ts';
 import { type BackendsCache, BackendsCacheSchema, CronConfigSchema } from './types.ts';
 import { VERSION } from './version.ts';
 
-export interface ProbeBackendsOptions {
+interface ProbeBackendsOptions {
   site: string;
   examplesDir?: string;
   /** Override params instead of reading cron.json / workflow defaults. */
@@ -23,7 +23,7 @@ export interface ProbeBackendsOptions {
   outPath?: string;
 }
 
-export interface ProbeBackendsResult {
+interface ProbeBackendsResult {
   cache: BackendsCache;
   outPath: string;
 }

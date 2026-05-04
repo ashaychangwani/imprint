@@ -6,12 +6,12 @@ import { resolve as pathResolve } from 'node:path';
 import { z } from 'zod';
 import type { ToolResult, Workflow, WorkflowParameter } from './types.ts';
 
-export type GeneratedToolFn = (
+type GeneratedToolFn = (
   input: Record<string, unknown>,
   opts?: Record<string, unknown>,
 ) => Promise<ToolResult>;
 
-export interface GeneratedModule {
+interface GeneratedModule {
   WORKFLOW: Workflow;
   [exportName: string]: unknown;
 }

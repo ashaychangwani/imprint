@@ -18,7 +18,7 @@ import { VERSION } from './version.ts';
 
 const PATHS = envPaths('imprint', { suffix: '' });
 
-export interface RecordOptions {
+interface RecordOptions {
   /** Site label, e.g. "southwest". Determines output path. */
   site: string;
   /** Starting URL. If omitted, opens about:blank — user navigates manually. */
@@ -34,7 +34,7 @@ export interface RecordOptions {
   noNarration?: boolean;
 }
 
-export interface RecordResult {
+interface RecordResult {
   jsonlPath: string;
   sessionPath: string;
   /** Number of records written (requests + events + narration). */
