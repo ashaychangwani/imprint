@@ -14,9 +14,11 @@ A working MCP tool from a fresh clone in about 5 minutes.
 git clone https://github.com/<you>/imprint.git
 cd imprint
 bun install
-bun link    # makes `imprint` available globally on PATH
-bunx playwright install chromium    # for stealth-fetch + playbook backends
+bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
+bunx playwright install chromium  # for stealth-fetch + playbook backends
 ```
+
+If `imprint --help` says "command not found" after `bun link`, your `~/.bun/bin` isn't on `PATH`. Either add it (Bun's installer normally does this) or skip `bun link` and call everything via `bun src/cli.ts <verb>`.
 
 Set your Vertex project once:
 
