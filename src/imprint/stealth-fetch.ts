@@ -35,7 +35,12 @@ export interface StealthFetchOptions {
 export interface FetchInit {
   method?: string;
   headers?: Record<string, string>;
-  body?: string;
+  /** Anything `fetch()` accepts as a body. The retry loop reads this
+   *  once per attempt via globalThis.fetch, so non-replayable bodies
+   *  (ReadableStream consumed once, hand-rolled iterables) won't survive
+   *  a 403 retry — callers that need retry-after-bot-bootstrap should
+   *  pass a string, Blob, ArrayBuffer, FormData, or URLSearchParams. */
+  body?: RequestInit['body'];
 }
 
 interface FetchResult {
@@ -242,7 +247,10 @@ export function createStealthFetch(
     const result = await fetchWithRetry(url, {
       method: typeof init?.method === 'string' ? init.method : 'GET',
       headers,
-      body: typeof init?.body === 'string' ? init.body : undefined,
+      // Pass BodyInit through unchanged; globalThis.fetch handles every
+      // accepted shape (string, Blob, ArrayBuffer, FormData, URLSearchParams,
+      // ReadableStream). Previously we dropped any non-string body silently.
+      body: init?.body ?? undefined,
     });
     return new Response(result.body, {
       status: result.status,
