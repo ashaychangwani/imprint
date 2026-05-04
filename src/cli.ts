@@ -560,7 +560,7 @@ async function main(argv: string[]): Promise<number> {
 
 /** Suggest the closest known verb to a typo via Levenshtein distance.
  *  Returns the suggestion only if it's plausibly close (≤ 3 edits). */
-function closestVerb(input: string): string | null {
+export function closestVerb(input: string): string | null {
   const verbs = Object.keys(VERB_HELP);
   let best: { verb: string; dist: number } | null = null;
   for (const v of verbs) {
