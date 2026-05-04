@@ -22,7 +22,6 @@
     "imprint": "bun run src/cli.ts",
     "doctor": "bun run src/cli.ts doctor",
     "test": "bun test",
-    "test:eval": "RUN_EVALS=1 bun test test/eval",
     "lint": "biome check src test",
     "lint:fix": "biome check --write src test",
     "typecheck": "tsc --noEmit",
