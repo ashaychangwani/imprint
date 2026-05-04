@@ -50,7 +50,7 @@ export function generatePasteSnippet(opts: {
 
   switch (platform) {
     case 'claude-code':
-      return `Add the ${toolName} tool: run \`claude mcp add --scope project ${toolName} -- ${shellCmd}\` to register ${descLower}. Parameters: ${paramList}. The backend ladder handles bot detection automatically (fetch → stealth-fetch → playbook).`;
+      return `Add the ${toolName} tool: run \`claude mcp add --scope user ${toolName} -- ${shellCmd}\` to register ${descLower}. Parameters: ${paramList}. The backend ladder handles bot detection automatically (fetch → stealth-fetch → playbook).`;
 
     case 'codex':
       return `Add the ${toolName} tool: run \`codex mcp add ${toolName} -- ${shellCmd}\` to register ${descLower}. Parameters: ${paramList}.`;
@@ -113,7 +113,7 @@ export function buildRegistrationCommand(opts: {
 
   switch (platform) {
     case 'claude-code':
-      return ['claude', 'mcp', 'add', '--scope', 'project', toolName, '--', ...imprintArgs];
+      return ['claude', 'mcp', 'add', '--scope', 'user', toolName, '--', ...imprintArgs];
     case 'codex':
       return ['codex', 'mcp', 'add', toolName, '--', ...imprintArgs];
     case 'claude-desktop':
