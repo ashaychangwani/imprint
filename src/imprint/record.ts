@@ -392,6 +392,9 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     console.log(`[imprint] saved ${jsonlPath}`);
     console.log(`[imprint] assembled ${sessionPath}`);
     console.log(`[imprint] ${seq} captured records`);
+    console.log('');
+    console.log('next step:');
+    console.log(`  imprint redact ${sessionPath}    # scrub credentials before LLM analysis`);
     return { jsonlPath, sessionPath, count: seq };
   };
 
