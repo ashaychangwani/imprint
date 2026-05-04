@@ -30,8 +30,8 @@ import type { ConcreteBackend, WorkflowParameter } from './types.ts';
 import { VERSION } from './version.ts';
 
 interface RunMcpServerOptions {
-  /** Restrict to one example. Otherwise every generated example is registered. */
-  site?: string;
+  /** Site name. */
+  site: string;
   /** Override examples directory. Defaults to <cwd>/examples. */
   examplesDir?: string;
   /** Use Streamable HTTP transport instead of stdio. */
@@ -168,7 +168,7 @@ function buildServer(
   return server;
 }
 
-export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void> {
+export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
   const discovered = await discoverTools(examplesDir, opts.site, '[imprint mcp]');
   const tools: ResolvedTool[] = discovered.map((t) => {
@@ -182,14 +182,12 @@ export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void
     };
   });
   if (tools.length === 0) {
-    const target = opts.site ? `for site "${opts.site}"` : `under ${examplesDir}`;
-    const sitesLine = opts.site ? `${availableSitesHint(examplesDir, opts.site)}\n` : '';
     throw new Error(
-      `No generated tools found ${target}\n${sitesLine}→ run \`imprint emit examples/<site>/workflow.json\` to codegen a tool.\n→ or test with the bundled fixture: \`imprint mcp-server --site echo\`.`,
+      `No generated tool found for site "${opts.site}"\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/<site>/workflow.json\` to codegen a tool.\n→ or test with the bundled fixture: \`imprint mcp-server echo\`.`,
     );
   }
 
-  const name = opts.name ?? 'imprint';
+  const name = opts.name ?? `imprint-${opts.site}`;
   const version = opts.version ?? VERSION;
 
   for (const t of tools) {

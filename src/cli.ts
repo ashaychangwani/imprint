@@ -13,6 +13,7 @@ USAGE
 
 CAPTURE
   record <site>            Drive a workflow in Chromium, capture session.
+  teach <site>             Record + compile + emit in one interactive flow.
   redact <session.json>    Scrub credentials + PII before LLM analysis.
 
 COMPILE
@@ -22,7 +23,7 @@ COMPILE
   probe-backends <site>    Try each backend once, cache the working order.
 
 RUN
-  mcp-server               Expose every generated tool as MCP (stdio default).
+  mcp-server <site>        Serve one site's tool as MCP (stdio default).
   cron <site>              Polling daemon for examples/<site>/cron.json.
   playbook <site>          Run a playbook directly (debugging).
 
@@ -60,6 +61,20 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       },
     ],
     example: 'imprint record acmecorp --url https://app.acmecorp.com',
+  },
+  teach: {
+    summary:
+      'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow.',
+    usage: ['imprint teach <site> [--url <url>] [--persist-profile] [--no-interactive]'],
+    flags: [
+      { name: '--url <url>', description: 'Starting URL (else about:blank).' },
+      { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
+      {
+        name: '--no-interactive',
+        description: 'Run the full pipeline without prompts; print all integration snippets.',
+      },
+    ],
+    example: 'imprint teach mysite --url https://app.example.com',
   },
   doctor: {
     summary: 'Check that the environment is set up correctly (Bun, Chromium, Vertex env, push).',
@@ -161,14 +176,13 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     example: 'imprint cron southwest --once --quiet',
   },
   'mcp-server': {
-    summary: 'Expose every generated tool as MCP (stdio default).',
-    usage: ['imprint mcp-server [--site <name>] [--http] [--port <num>]'],
+    summary: "Serve one site's generated tool as MCP (stdio default).",
+    usage: ['imprint mcp-server <site> [--http] [--port <num>]'],
     flags: [
-      { name: '--site <name>', description: 'Restrict to one example.' },
       { name: '--http', description: 'Use Streamable HTTP transport instead of stdio.' },
       { name: '--port <num>', description: 'Port for HTTP transport (default 8765).' },
     ],
-    example: 'imprint mcp-server --site echo',
+    example: 'imprint mcp-server southwest',
   },
 };
 
@@ -435,7 +449,7 @@ async function main(argv: string[]): Promise<number> {
       console.log('');
       console.log('next steps:');
       console.log(`  imprint probe-backends ${site}    # cache the working backend order`);
-      console.log('  imprint mcp-server                # expose every generated tool as MCP');
+      console.log(`  imprint mcp-server ${site}        # expose this site's tool as MCP`);
       console.log(`  imprint cron ${site} --once       # one-shot test (after creating cron.json)`);
       return 0;
     }
@@ -477,10 +491,11 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'mcp-server': {
+      const site = requirePositional(argv, 'mcp-server', 'a <site> argument');
+      if (site === null) return 2;
       const { values } = parseArgs({
-        args: argv.slice(1),
+        args: argv.slice(2),
         options: {
-          site: { type: 'string' },
           http: { type: 'boolean' },
           port: { type: 'string' },
         },
@@ -488,7 +503,7 @@ async function main(argv: string[]): Promise<number> {
       });
       const { runMcpServer } = await import('./imprint/mcp-server.ts');
       await runMcpServer({
-        site: values.site,
+        site,
         http: values.http,
         port: values.port ? Number(values.port) : undefined,
       });
@@ -607,6 +622,38 @@ async function main(argv: string[]): Promise<number> {
       }
       console.error(`[imprint] ${result.error}: ${result.message}`);
       return 1;
+    }
+
+    case 'teach': {
+      const site = requirePositional(argv, 'teach', 'a <site> argument');
+      if (site === null) return 2;
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          url: { type: 'string' },
+          'persist-profile': { type: 'boolean' },
+          'no-interactive': { type: 'boolean' },
+        },
+        allowPositionals: false,
+      });
+
+      const ctrl = new AbortController();
+      const onSigint = (): void => ctrl.abort();
+      process.once('SIGINT', onSigint);
+
+      try {
+        const { teach } = await import('./imprint/teach.ts');
+        await teach({
+          site,
+          url: values.url,
+          persistProfile: values['persist-profile'],
+          signal: ctrl.signal,
+          noInteractive: values['no-interactive'],
+        });
+      } finally {
+        process.removeListener('SIGINT', onSigint);
+      }
+      return 0;
     }
 
     default: {
