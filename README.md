@@ -113,7 +113,7 @@ imprint --help        # full verb list
 imprint <verb> --help # per-verb help
 ```
 
-Verbs: `record`, `assemble`, `check`, `redact`, `generate`, `compile-playbook`, `emit`, `login`, `probe-backends`, `playbook`, `cron`, `mcp-server`.
+Verbs: `record`, `redact`, `generate`, `compile-playbook`, `emit`, `probe-backends`, `cron`, `mcp-server`, `playbook`, `login`, `assemble`, `check`, `doctor`.
 
 ---
 
