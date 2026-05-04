@@ -25,36 +25,42 @@ export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
 export CLOUD_ML_REGION=us-east5    # optional; defaults to us-east5
 ```
 
-## Your first tool — 60 seconds
+## Your first tool — step by step
 
-Pick a site you want to automate. We'll use a search box on a public site as the example, but it works on any site you can drive in a browser (internal admin panels, dashboards, login-required tools, etc.).
+Pick a site you want to automate. Internal admin panels, dashboards, and authed tools all work — anything you can drive in a browser.
+
+Throughout this walkthrough we'll use the placeholder site name `mysite`. Substitute your own (any short label; it becomes the directory name under `examples/`).
 
 ```bash
 # 1. Record yourself doing the thing once
-imprint record acmecorp --url https://app.acmecorp.com
-#   → Chromium opens. Drive the workflow. Narrate what you're doing.
-#   → Press /done or Ctrl+C when finished.
-#   → Output: examples/acmecorp/sessions/<timestamp>.{jsonl,json}
+imprint record mysite --url https://your-site-here.example.com
+#   → Chromium opens. Drive the workflow end-to-end. Narrate what
+#     you're doing in the terminal. Press /done (or Ctrl+C) when finished.
+#   → Output: examples/mysite/sessions/<timestamp>.{jsonl,json}
 
-# 2. Scrub PII
-imprint redact examples/acmecorp/sessions/<timestamp>.json
-#   → Output: examples/acmecorp/sessions/<timestamp>.redacted.json
+# 2. Pick the session you just recorded
+SESSION=$(ls examples/mysite/sessions/*.json | grep -v redacted | tail -1)
 
-# 3. LLM-compile to two artifacts
-imprint generate examples/acmecorp/sessions/<timestamp>.redacted.json
-imprint compile-playbook examples/acmecorp/sessions/<timestamp>.redacted.json
-#   → Outputs: examples/acmecorp/{workflow.json, playbook.yaml}
+# 3. Scrub credentials and PII before sending to the LLM
+imprint redact "$SESSION"
+#   → Output: examples/mysite/sessions/<timestamp>.redacted.json
 
-# 4. Emit the executable TS module
-imprint emit examples/acmecorp/workflow.json
-#   → Output: examples/acmecorp/index.ts
+# 4. LLM-compile two artifacts (workflow.json + playbook.yaml)
+imprint generate "${SESSION%.json}.redacted.json"
+imprint compile-playbook "${SESSION%.json}.redacted.json"
+#   → Outputs: examples/mysite/{workflow.json, playbook.yaml}
 
-# 5. Probe which backends work
-imprint probe-backends acmecorp
-#   → Output: examples/acmecorp/backends.json
+# 5. Emit the executable TS module
+imprint emit examples/mysite/workflow.json
+#   → Output: examples/mysite/index.ts
 
-# 6. (Optional) test it directly
-imprint mcp-server --site acmecorp    # stdio MCP server
+# 6. (Optional) Probe which backends work and cache the order.
+#    Safe to skip for plain APIs; useful for bot-protected sites.
+imprint probe-backends mysite
+#   → Output: examples/mysite/backends.json
+
+# 7. Test it
+imprint mcp-server --site mysite    # stdio MCP server
 ```
 
 You now have an MCP tool any agent can call.
