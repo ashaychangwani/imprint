@@ -4,20 +4,25 @@ All notable changes to Imprint. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased] — refactor/de-slop branch
 
-A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implementation sleek and the docs adoption-friendly. **No behavioral changes** — every demo still works (live-verified end-to-end against Southwest via stealth-fetch).
+A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implementation sleek and the docs adoption-friendly. **No behavioral changes to existing verbs** — every demo still works (live-verified end-to-end against Southwest via stealth-fetch). One new verb (`imprint doctor`) added.
 
 ### Added
+- **`imprint doctor` verb** — one-shot environment health check (Bun, Chromium binary, Playwright Chromium, Vertex env vars, push providers). Exits 0 on all-pass / 1 on any required failure (CI-friendly). Each failure includes a `→ next step:` hint. Surfaced in README quickstart + docs/troubleshooting.md as the first thing to try.
 - `docs/architecture.md` — data flow diagram, module map, backend ladder cost table, per-example file taxonomy.
 - `docs/glossary.md` — Session, Workflow, Playbook, Backend, Stealth-fetch, Sensor headers, Token TTL refresh, Sentinel, CDP, Credential store, NotifyWhen.
 - `docs/decisions.md` — 12 ADR-style entries (D1-D12) covering the load-bearing calls.
 - `docs/getting-started.md` — 5-minute walkthrough from clone to MCP tool in Claude Desktop.
 - `docs/troubleshooting.md` — predictable failure modes with the same `→ next step:` format the in-code error messages use.
 - `docs/notifications.md` — Pushover + ntfy setup, predicate language for `notifyWhen`.
-- `examples/discoverandgo/README.md` and `examples/echo/README.md` — tutorial-style READMEs.
+- `docs/security.md` — what Imprint stores, redaction guarantees, credential handling, vuln reporting flow.
+- `examples/discoverandgo/README.md` and `examples/echo/README.md` — tutorial-style READMEs (each: what / why interesting / run / what you should see / notes).
 - `CHANGELOG.md` — this file.
+- `CONTRIBUTING.md` — table-stakes contributor guide.
 - Per-verb help: `imprint <verb> --help` shows summary + usage + flags + a concrete example. The verb registry is single-source.
 - Actionable `→ next step:` hints in every user-reachable error message (Pushover/ntfy not set, missing playbook, missing param, no requests in workflow, etc.).
 - `resolveLadder` helper in `backend-ladder.ts` so cron + mcp-server share the auto-ladder expansion logic.
+- MCP tool descriptions now include the operator's recorded narration (`intent.userSaid`) — gives the LLM real context for picking the right tool.
+- Test coverage: `test/compile.test.ts` (+15 tests for shrinkSession + error paths), `test/cli-help.test.ts` (+26 drift-guard tests for VERB_HELP / dispatcher sync), `test/backend-ladder.test.ts` (+5 resolveLadder tests). 132 → 182 tests.
 
 ### Changed
 - **Module reshape**: clearer file boundaries.
@@ -31,6 +36,7 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - **CLAUDE.md**: trimmed from 60 lines of pre-sprint design doc to a slim ~30-line agent-context file. All load-bearing content relocated to `docs/` (per the "don't drop documentation, move it" rule).
 - **Comment hygiene**: stripped design-doc preambles, defensive validation for impossible scenarios, `log("starting…")`/`log("done in Yms")` pairs, and over-documented helpers whose docstring just restated the signature. Net `-691` LOC across `src/imprint/` + `src/cli.ts`.
 - **Test pruning**: consolidated redundant schema tests, parametrized micro-variations, dropped low-signal tests.
+- **Single source of truth for VERSION**: `src/imprint/version.ts` reads the version once from `package.json`. cli.ts, record.ts, probe-backends.ts all import from there — no more drift on bumps.
 
 ### Removed
 - `src/imprint/replay-backend.ts`, `src/imprint/workflow-runtime.ts`, `src/imprint/discover-tools.ts`, `src/imprint/playbook-types.ts` (renamed/folded; see Changed).
@@ -42,11 +48,12 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 
 | | Before | After |
 |---|---|---|
-| `src/imprint/` + `src/cli.ts` LOC | 5,828 | ~4,800 (-18%) |
-| Source files | 26 | 22 |
-| Tests | 137 / 13 files | 132 / 12 files |
-| README | sprint-changelog flavor (285 lines) | adoption-friendly (109 lines) |
-| Docs files | 3 | 9 (+ CHANGELOG.md) |
+| `src/imprint/` + `src/cli.ts` LOC | 5,828 | ~4,950 (-15%, including +110 LOC for the new doctor verb) |
+| Source files | 26 | 23 (− 4 renames/folds + 2 new: compile.ts, doctor.ts, version.ts) |
+| Tests | 137 / 13 files | 182 / 14 files (more user-path coverage) |
+| README | sprint-changelog flavor (285 lines) | adoption-friendly (110 lines) |
+| Docs files | 3 | 10 (+ CHANGELOG, CONTRIBUTING) |
+| CLI verbs | 12 | 13 (+ doctor) |
 
 ---
 
