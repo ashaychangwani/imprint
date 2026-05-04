@@ -26,6 +26,7 @@ RUN
   playbook <site>          Run a playbook directly (debugging).
 
 OTHER
+  doctor                   Check that the environment is set up correctly.
   assemble <session.jsonl> Recover session.json from a partial JSONL.
   check <session>          Sanity-check a captured session.
   login <site>             Persist cookies for <site> from a session.
@@ -59,10 +60,15 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     ],
     example: 'imprint record acmecorp --url https://app.acmecorp.com',
   },
+  doctor: {
+    summary: 'Check that the environment is set up correctly (Bun, Chromium, Vertex env, push).',
+    usage: ['imprint doctor'],
+    example: 'imprint doctor',
+  },
   assemble: {
     summary: 'Reconstruct session.json from a partial session.jsonl.',
     usage: ['imprint assemble <session.jsonl>'],
-    example: 'imprint assemble examples/acmecorp/sessions/2026-05-03T22-00-00Z.jsonl',
+    example: 'imprint assemble examples/mysite/sessions/2026-05-03T22-00-00Z.jsonl',
   },
   check: {
     summary: 'Sanity-check a captured session for completeness.',
@@ -257,6 +263,13 @@ async function main(argv: string[]): Promise<number> {
         process.removeListener('SIGINT', onSigint);
       }
       return 0;
+    }
+
+    case 'doctor': {
+      const { doctor, reportDoctor } = await import('./imprint/doctor.ts');
+      const report = reportDoctor(doctor());
+      for (const line of report.lines) console.log(line);
+      return report.ok ? 0 : 1;
     }
 
     case 'assemble': {
