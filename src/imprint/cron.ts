@@ -8,10 +8,11 @@
  * launchd are organized and keeps failure isolation clean.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import cron from 'node-cron';
 import { resolveLadder, runWithLadder } from './backend-ladder.ts';
+import { loadJsonFile } from './load-json.ts';
 import { createLog, isDebug } from './log.ts';
 import { evaluateNotifyWhen, notify } from './notify.ts';
 import { loadBackendsCache } from './probe-backends.ts';
@@ -43,29 +44,18 @@ interface RunCronOptions {
 const log = createLog('cron');
 
 function loadCronConfig(configPath: string): CronConfig {
-  if (!existsSync(configPath)) {
-    throw new Error(
-      `cron.json not found at ${configPath}\n→ create one with: {"schedule":"0 9 * * *","params":{},"replayBackend":"auto"}\n→ see docs/getting-started.md for full schema.`,
-    );
-  }
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch (err) {
-    throw new Error(
-      `cron.json at ${configPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}\n→ check for a stray comma or unquoted key.`,
-    );
-  }
-  const parsed = CronConfigSchema.safeParse(raw);
-  if (!parsed.success) {
-    const issues = parsed.error.errors
-      .map((e) => `  - ${e.path.join('.') || '(root)'}: ${e.message}`)
-      .join('\n');
-    throw new Error(
-      `cron.json at ${configPath} failed schema validation:\n${issues}\n→ minimum required: {"schedule":"0 9 * * *","params":{}}\n→ full schema: docs/getting-started.md (look for "Schedule it").`,
-    );
-  }
-  return parsed.data;
+  return loadJsonFile(
+    configPath,
+    CronConfigSchema,
+    {
+      notFound:
+        '→ create one with: {"schedule":"0 9 * * *","params":{},"replayBackend":"auto"}\n→ see docs/getting-started.md for full schema.',
+      notJson: '→ check for a stray comma or unquoted key.',
+      badSchema:
+        '→ minimum required: {"schedule":"0 9 * * *","params":{}}\n→ full schema: docs/getting-started.md (look for "Schedule it").',
+    },
+    'cron.json',
+  );
 }
 
 /** One tool tick: walk the ladder, log, push notification on result. */
