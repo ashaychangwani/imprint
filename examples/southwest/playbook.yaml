@@ -1,0 +1,46 @@
+toolName: search_southwest_flights
+summary: |
+  Search Southwest for one-way fares between two airports on a given date.
+  Uses the URL-prefilled search shortcut so a single navigation triggers the
+  shopping XHR — no DOM walk needed. Stealth Chromium (default in the runner)
+  defeats Akamai's bot detection that blocks naive HTTP clients.
+parameters:
+  - name: origin_airport_code
+    type: string
+    description: IATA origin airport code, e.g. SJC
+  - name: destination_airport_code
+    type: string
+    description: IATA destination airport code, e.g. SAN
+  - name: departure_date
+    type: string
+    description: YYYY-MM-DD
+  - name: adult_passengers_count
+    type: number
+    description: Number of adult passengers
+    default: 1
+  - name: fare_type
+    type: string
+    description: "USD or POINTS"
+    default: USD
+steps:
+  - action: navigate
+    url: https://www.southwest.com/air/booking/select-depart.html?adultsCount=${adult_passengers_count}&adultPassengersCount=${adult_passengers_count}&originationAirportCode=${origin_airport_code}&destinationAirportCode=${destination_airport_code}&departureDate=${departure_date}&departureTimeOfDay=ALL_DAY&fareType=${fare_type}&int=HOMEQBOMAIR&passengerType=ADULT&promoCode=&returnDate=&returnTimeOfDay=ALL_DAY&tripType=oneway
+    wait_for:
+      xhr: /api/air-booking/v1/air-booking/page/air/booking/shopping
+result:
+  source: xhr
+  url_pattern: /api/air-booking/v1/air-booking/page/air/booking/shopping
+  extract: data.searchResults.airProducts[].lowestFare.value
+  return_as: prices
+notes: |
+  Param names match workflow.json exactly (origin_airport_code etc., not the
+  friendlier origin) so cron.json's params block is shared across the
+  fetch / stealth-fetch / playbook backends and the auto-ladder can hot-swap
+  between them without rewriting params.
+
+  The original recording walked through the form (autocompletes, date picker,
+  trip-type dropdown, search submit, Low Fare Calendar drilldown). Six
+  iterations revealed Southwest's date input is non-typeable (zero input
+  events captured on #departureDate — the user clicked the input + clicked
+  a calendar cell). The URL-param shortcut sidesteps every form-fill quirk
+  in one navigation.

@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
-import { discoverTools, findToolFunction, toCamelCase } from '../src/imprint/discover-tools.ts';
+import { discoverTools, findToolFunction, toCamelCase } from '../src/imprint/tool-loader.ts';
 
 let root: string;
 
@@ -42,16 +42,12 @@ export async function doThing() {
 `;
 
 describe('toCamelCase', () => {
-  it('maps multi-word snake_case to camelCase', () => {
-    expect(toCamelCase('book_discoverandgo_museum_pass')).toBe('bookDiscoverandgoMuseumPass');
-  });
-
-  it('handles single-word names', () => {
-    expect(toCamelCase('echo')).toBe('echo');
-  });
-
-  it('lowercases the first segment', () => {
-    expect(toCamelCase('DO_THING')).toBe('doThing');
+  it.each([
+    ['book_discoverandgo_museum_pass', 'bookDiscoverandgoMuseumPass'],
+    ['echo', 'echo'],
+    ['DO_THING', 'doThing'],
+  ])('%s → %s', (input, expected) => {
+    expect(toCamelCase(input)).toBe(expected);
   });
 });
 

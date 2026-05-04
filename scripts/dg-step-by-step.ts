@@ -3,7 +3,7 @@
  * Calls each request individually so we can see what came back at each step.
  */
 
-import { executeWorkflow, loadCredentialStore } from '../src/imprint/workflow-runtime.ts';
+import { executeWorkflow, loadCredentialStore } from '../src/imprint/runtime.ts';
 import type { Workflow } from '../src/imprint/types.ts';
 
 const COMMON_HEADERS = {

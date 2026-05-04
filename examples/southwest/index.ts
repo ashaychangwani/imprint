@@ -5,13 +5,13 @@
  * Site: southwest
  * Intent: Search for one-way Southwest Airlines flights between two airports on a given departure date, returning available flights and fares.
  *
- * To regenerate: bun run dev emit examples/southwest/workflow.json --force
+ * To regenerate: imprint emit examples/southwest/workflow.json --force
  */
 
 import {
   executeWorkflow,
   type CredentialStore,
-} from '../../src/imprint/workflow-runtime.ts';
+} from '../../src/imprint/runtime.ts';
 import type { ToolResult, Workflow } from '../../src/imprint/types.ts';
 
 const WORKFLOW: Workflow = {

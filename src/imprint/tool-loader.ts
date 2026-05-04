@@ -1,22 +1,17 @@
-/**
- * Shared tool-discovery for the MCP server (`mcp-server`) and the cron
- * daemon (`cron`). Both consume the generated `examples/<site>/index.ts`
- * modules — same WORKFLOW export, same camelCase function. Keeping the
- * scan in one place avoids drift if we add new validation or sandboxing
- * later.
- */
+/** Discover + load generated tools from examples/<site>/index.ts. Used
+ *  by mcp-server, cron, and probe-backends. */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import { z } from 'zod';
 import type { ToolResult, Workflow, WorkflowParameter } from './types.ts';
 
-export type GeneratedToolFn = (
+type GeneratedToolFn = (
   input: Record<string, unknown>,
   opts?: Record<string, unknown>,
 ) => Promise<ToolResult>;
 
-export interface GeneratedModule {
+interface GeneratedModule {
   WORKFLOW: Workflow;
   [exportName: string]: unknown;
 }
@@ -28,13 +23,8 @@ export interface ResolvedTool {
   toolFn: GeneratedToolFn;
 }
 
-/**
- * Discover every example directory containing a generated index.ts.
- * Each match is dynamically imported to extract its WORKFLOW + tool function.
- *
- * Errors during load (missing WORKFLOW, missing function, throwing import)
- * are written to stderr and the entry is skipped — discovery never throws.
- */
+/** Scan examples/, dynamically import each index.ts. Per-entry errors
+ *  go to stderr and the entry is skipped — discovery never throws. */
 export async function discoverTools(
   examplesDir: string,
   only?: string,
@@ -81,10 +71,7 @@ export async function discoverTools(
   return out;
 }
 
-/**
- * Tool functions are exported under the camelCase form of `toolName`.
- * `book_discoverandgo_museum_pass` → `bookDiscoverandgoMuseumPass`.
- */
+/** Tool fn export is the camelCase of toolName: book_x_y → bookXY. */
 export function findToolFunction(mod: GeneratedModule): GeneratedToolFn | null {
   const camelName = toCamelCase(mod.WORKFLOW.toolName);
   const fn = mod[camelName];
@@ -100,12 +87,8 @@ export function toCamelCase(snake: string): string {
     .join('');
 }
 
-/**
- * Build a Zod validator from a workflow's parameter declarations. Used by
- * both the MCP server (validate args coming from the LLM) and the cron
- * daemon (validate params coming from cron.json) so the contract is
- * enforced identically in both places.
- */
+/** Zod validator from workflow parameters — enforces the same contract
+ *  for MCP args (from the LLM) and cron.json params. */
 export function buildZodValidator(parameters: WorkflowParameter[]): z.ZodObject<z.ZodRawShape> {
   const shape: z.ZodRawShape = {};
   for (const p of parameters) {
