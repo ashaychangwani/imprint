@@ -11,6 +11,9 @@
   "notifyWhen": {
     "type": "price_below",
     "threshold": 99,
-    "pricePath": "prices[]"
+    "pricePath": [
+      "data.searchResults.airProducts[].lowestFare.value",
+      "prices[]"
+    ]
   }
 }

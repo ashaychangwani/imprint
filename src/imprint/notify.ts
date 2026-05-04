@@ -36,7 +36,18 @@ export function evaluateNotifyWhen(
 ): NotifyDecision {
   switch (pred.type) {
     case 'price_below': {
-      const prices = extractAt(data, pred.pricePath);
+      const paths = Array.isArray(pred.pricePath) ? pred.pricePath : [pred.pricePath];
+      // Union the values from every path that matches — gracefully handles
+      // tools that return different shapes from different backends.
+      const prices: number[] = [];
+      for (const p of paths) {
+        try {
+          prices.push(...extractAt(data, p));
+        } catch {
+          // Path didn't match this shape — try the next one. If ALL paths
+          // throw, prices stays empty and we treat it as "no signal" below.
+        }
+      }
       if (prices.length === 0) return { notify: false }; // empty / misconfigured path
       const min = Math.min(...prices);
       if (min < pred.threshold) {
