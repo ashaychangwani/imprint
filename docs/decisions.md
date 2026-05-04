@@ -73,3 +73,22 @@ A running log of the load-bearing calls made for Imprint. Each entry: the decisi
 **Decided.** Turn any internal tool into an MCP server in 5 minutes by showing an AI how to use it.
 
 **Alternative:** "Browser automation framework", "headless RPA", etc. These map onto known categories with known incumbents (Playwright, UiPath). The Postman framing puts Imprint in a different mental category — one that's currently empty.
+
+## D13 — Three-tool dead-code defense (knip + tsc-strict + madge)
+
+**Decided.** `bun run check` includes three orthogonal dead-code detectors:
+- `knip` — unused exports / unused files / unused dependencies / unused types
+- `tsc` with `noUnusedLocals` + `noUnusedParameters` — unused locals, parameters, imports
+- `madge --circular` — circular dependencies
+
+All three are part of CI. Adding new dead exports / unused symbols / circular deps fails the build.
+
+**Alternative:** Just `knip`. Catches most of it but misses the in-file unused-locals + circular-dep cases. The three together overlap a little but cover everything; the combined cost is ~3 seconds per `bun run check`.
+
+## D14 — User-friendly errors over compact code
+
+**Decided.** Every user-reachable `throw` should either (a) include a `→ next step:` hint pointing at the exact fix command, or (b) be a "shouldn't happen" assertion the user will never see. Verbose error messages are worth the extra LOC because the alternative is a docs round-trip every time someone hits a rough edge.
+
+This shows up everywhere: `requirePositional` → "→ run \`imprint <verb> --help\`"; `loadJsonFile` → multi-line "noun not found / not JSON / schema mismatch + remediation"; `availableSitesHint` → "→ available sites: a, b, c"; LLM errors → "→ run \`gcloud auth application-default login\`"; etc.
+
+**Alternative:** Terse errors that defer to docs. Forces users to grep docs for every error, which most won't do — they'll just give up.
