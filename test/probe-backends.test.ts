@@ -33,48 +33,49 @@ function writeCache(site: string, cache: unknown): string {
 }
 
 describe('BackendsCacheSchema', () => {
-  it('accepts a minimal valid cache', () => {
-    const r = BackendsCacheSchema.safeParse({
-      probedAt: '2026-05-03T22:00:00.000Z',
-      imprintVersion: '0.1.0',
-      preferredOrder: ['stealth-fetch'],
-      results: { 'stealth-fetch': { outcome: 'ok', durationMs: 1234 } },
-    });
-    expect(r.success).toBe(true);
+  const TS = '2026-05-03T22:00:00.000Z';
+  const VER = '0.1.0';
+
+  it('accepts a minimal cache + a multi-outcome cache', () => {
+    expect(
+      BackendsCacheSchema.safeParse({
+        probedAt: TS,
+        imprintVersion: VER,
+        preferredOrder: ['stealth-fetch'],
+        results: { 'stealth-fetch': { outcome: 'ok', durationMs: 1234 } },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      BackendsCacheSchema.safeParse({
+        probedAt: TS,
+        imprintVersion: VER,
+        preferredOrder: ['fetch'],
+        results: {
+          fetch: { outcome: 'ok', durationMs: 200 },
+          'stealth-fetch': { outcome: 'forbidden', durationMs: 5000, detail: '403' },
+          playbook: { outcome: 'failed', durationMs: 9000, error: 'NETWORK', detail: 'timeout' },
+        },
+      }).success,
+    ).toBe(true);
   });
 
-  it('rejects empty preferredOrder', () => {
-    const r = BackendsCacheSchema.safeParse({
-      probedAt: '2026-05-03T22:00:00.000Z',
-      imprintVersion: '0.1.0',
-      preferredOrder: [],
-      results: {},
-    });
-    expect(r.success).toBe(false);
-  });
-
-  it('rejects invalid backend name in preferredOrder', () => {
-    const r = BackendsCacheSchema.safeParse({
-      probedAt: '2026-05-03T22:00:00.000Z',
-      imprintVersion: '0.1.0',
-      preferredOrder: ['fetch', 'magic-cloud'], // not a real backend
-      results: {},
-    });
-    expect(r.success).toBe(false);
-  });
-
-  it('discriminates probe-result outcomes correctly', () => {
-    const ok = BackendsCacheSchema.safeParse({
-      probedAt: '2026-05-03T22:00:00.000Z',
-      imprintVersion: '0.1.0',
-      preferredOrder: ['fetch'],
-      results: {
-        fetch: { outcome: 'ok', durationMs: 200 },
-        'stealth-fetch': { outcome: 'forbidden', durationMs: 5000, detail: '403' },
-        playbook: { outcome: 'failed', durationMs: 9000, error: 'NETWORK', detail: 'timeout' },
+  it.each([
+    [
+      'empty preferredOrder',
+      { probedAt: TS, imprintVersion: VER, preferredOrder: [], results: {} },
+    ],
+    [
+      'invalid backend name',
+      {
+        probedAt: TS,
+        imprintVersion: VER,
+        preferredOrder: ['fetch', 'magic-cloud'],
+        results: {},
       },
-    });
-    expect(ok.success).toBe(true);
+    ],
+  ])('rejects: %s', (_label, input) => {
+    expect(BackendsCacheSchema.safeParse(input).success).toBe(false);
   });
 });
 

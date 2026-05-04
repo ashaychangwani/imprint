@@ -42,16 +42,12 @@ export async function doThing() {
 `;
 
 describe('toCamelCase', () => {
-  it('maps multi-word snake_case to camelCase', () => {
-    expect(toCamelCase('book_discoverandgo_museum_pass')).toBe('bookDiscoverandgoMuseumPass');
-  });
-
-  it('handles single-word names', () => {
-    expect(toCamelCase('echo')).toBe('echo');
-  });
-
-  it('lowercases the first segment', () => {
-    expect(toCamelCase('DO_THING')).toBe('doThing');
+  it.each([
+    ['book_discoverandgo_museum_pass', 'bookDiscoverandgoMuseumPass'],
+    ['echo', 'echo'],
+    ['DO_THING', 'doThing'],
+  ])('%s → %s', (input, expected) => {
+    expect(toCamelCase(input)).toBe(expected);
   });
 });
 
