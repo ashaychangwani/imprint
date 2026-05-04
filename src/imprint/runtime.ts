@@ -214,8 +214,14 @@ export function substituteString(
       }
       // ${param.X} / ${credential.X}
       if (kind === 'param' && name) {
-        if (!(name in params))
-          throw new Error(`Workflow placeholder ${match} but no param "${name}" provided`);
+        if (!(name in params)) {
+          const available = Object.keys(params);
+          const hint =
+            available.length === 0
+              ? `→ no params were passed; the tool needs --param ${name}=<value>`
+              : `→ available params: ${available.join(', ')}`;
+          throw new Error(`Workflow placeholder ${match} but no param "${name}" provided\n${hint}`);
+        }
         return encodePart(params[name], template, match);
       }
       if (kind === 'credential' && name) {

@@ -20,8 +20,7 @@ export function loadConfig(overrides: Partial<LLMConfig> = {}): LLMConfig {
     '';
   if (!projectId) {
     throw new Error(
-      'No Vertex project ID. Set ANTHROPIC_VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT, ' +
-        'or pass `projectId` explicitly.',
+      'No Vertex project ID.\n→ export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id\n→ or run `imprint doctor` to see what other env vars are missing.',
     );
   }
   return {
