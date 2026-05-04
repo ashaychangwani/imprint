@@ -62,8 +62,24 @@ async function compile<T>(opts: CompileOptions, task: CompileTask<T>): Promise<C
     );
   }
 
-  const raw = JSON.parse(readFileSync(opts.sessionPath, 'utf8'));
-  let session: Session = SessionSchema.parse(raw);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(opts.sessionPath, 'utf8'));
+  } catch (err) {
+    throw new Error(
+      `${opts.sessionPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}\n→ if it's a partial .jsonl, run \`imprint assemble ${opts.sessionPath}\` first.`,
+    );
+  }
+  const sessionParse = SessionSchema.safeParse(raw);
+  if (!sessionParse.success) {
+    const issues = sessionParse.error.errors
+      .map((e) => `  - ${e.path.join('.') || '(root)'}: ${e.message}`)
+      .join('\n');
+    throw new Error(
+      `${opts.sessionPath} doesn't match the Session schema:\n${issues}\n→ check the file came from \`imprint record\`.`,
+    );
+  }
+  let session: Session = sessionParse.data;
 
   // Auto-redact if the input wasn't already scrubbed — we never let
   // plaintext credentials leave this process.
