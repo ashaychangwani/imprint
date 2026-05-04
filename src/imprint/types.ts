@@ -198,7 +198,6 @@ const BackendProbeResultSchema = z.discriminatedUnion('outcome', [
     detail: z.string(),
   }),
 ]);
-type BackendProbeResult = z.infer<typeof BackendProbeResultSchema>;
 
 export const BackendsCacheSchema = z.object({
   probedAt: z.string(),
