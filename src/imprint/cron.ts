@@ -106,8 +106,15 @@ async function runOnce(
       }
     }
   } else {
-    log(`  FAILED [${result.error}] via ${usedBackend} in ${elapsed}ms: ${result.message}`);
-    if (result.remediation) log(`  → ${result.remediation}`);
+    // Failures must surface even in --quiet mode — that's the whole point
+    // (cron runs silently on success, mails on failure). Bypass createLog's
+    // quiet-aware path and write directly to stderr.
+    process.stderr.write(
+      `[imprint cron]   FAILED [${result.error}] via ${usedBackend} in ${elapsed}ms: ${result.message}\n`,
+    );
+    if (result.remediation) {
+      process.stderr.write(`[imprint cron]   → ${result.remediation}\n`);
+    }
     await notify(
       `imprint: ${tool.workflow.toolName} failed`,
       `[${result.error}] ${result.message}${result.remediation ? `\n→ ${result.remediation}` : ''}`,
