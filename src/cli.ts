@@ -206,9 +206,21 @@ function requirePositional(argv: string[], verb: string, label: string): string 
   return v;
 }
 
-/** Parse `--param k=v` entries; coerces numeric/boolean values. Returns null
- *  and prints an error on malformed input — caller returns its own exit code. */
-function tryParseParamKV(
+/** Parse `--param k=v` entries; coerces only well-formed decimal numbers
+ *  and booleans, leaves everything else as strings. Returns null and prints
+ *  an error on malformed input — caller returns its own exit code.
+ *
+ *  Numeric coercion is intentionally stricter than `Number(v)`:
+ *  - Leading zeros stay strings ("0123" → "0123", not 123) so airport / ZIP /
+ *    library-card codes survive.
+ *  - "Infinity" / "-Infinity" / "NaN" stay strings (Number() accepts them).
+ *  - Empty / whitespace stays as the literal string.
+ *  - Hex / binary / octal literals stay strings.
+ *  Pattern matches: optional minus, single 0 or non-zero-leading digits,
+ *  optional .digits, optional eN exponent. */
+const NUMERIC_PARAM_RE = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
+export function tryParseParamKV(
   entries: string[] | undefined,
 ): Record<string, string | number | boolean> | null {
   const out: Record<string, string | number | boolean> = {};
@@ -223,7 +235,7 @@ function tryParseParamKV(
     const k = kv.slice(0, eq);
     const v = kv.slice(eq + 1);
     if (v === 'true' || v === 'false') out[k] = v === 'true';
-    else if (v !== '' && !Number.isNaN(Number(v))) out[k] = Number(v);
+    else if (NUMERIC_PARAM_RE.test(v)) out[k] = Number(v);
     else out[k] = v;
   }
   return out;
