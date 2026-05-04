@@ -66,6 +66,11 @@ export interface StealthFetch {
   readonly tokenAgeSeconds: number;
   /** Consecutive 403s; resets on success. */
   readonly failureStreak: number;
+  /** Future-proof teardown hook. Today: no-op (defaultBootstrap closes
+   *  its Browser inside its own try/finally; nothing else to release).
+   *  Reserved for an architecture where StealthFetch owns a long-lived
+   *  Browser across calls — callers can wire \`await sf.close()\` into
+   *  shutdown handlers now and it'll Just Work later. */
   close(): Promise<void>;
 }
 
@@ -271,10 +276,11 @@ export function createStealthFetch(
     get failureStreak(): number {
       return consecutiveFailures;
     },
-    async close(): Promise<void> {
-      tokens = null;
-      consecutiveFailures = 0;
-    },
+    // Intentional no-op — see the docstring on StealthFetch.close.
+    // Don't reset tokens/failures here: callers that hit close() are
+    // shutting down, not invalidating, and the difference matters if
+    // the future architecture grows real cleanup work.
+    async close(): Promise<void> {},
   };
 }
 
