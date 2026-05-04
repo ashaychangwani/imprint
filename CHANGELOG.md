@@ -30,7 +30,11 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - "command not found" troubleshooting section explicitly covering the bun-link / PATH failure mode.
 - **Typo suggestions** for unknown verbs: `imprint recrod` → "did you mean `imprint record`?" via Levenshtein distance (≤ 3 edits AND ≤ half-length). Same UX pattern as git/bun. Tested.
 - **Capped cron success-log preview** at 500 chars (full payload still available via IMPRINT_DEBUG=1) so long-running daemons don't flood stderr. Southwest's ~100KB shopping response went from log-flooding to one-line.
-- **Zero dead code, enforced** — `knip` integrated into `bun run check`. Removed 19 unused value exports, 35 unused type exports, plus a duplicate alias. Internal-only Options/Result interfaces are no longer exported (TypeScript structural typing means callers don't need a named import). Adding new dead exports now fails CI.
+- **Zero dead code, enforced** — three-tool defense:
+  - `knip` (unused exports/files/types/deps)
+  - `tsc` (`noUnusedLocals` + `noUnusedParameters` enabled — unused locals/params/imports)
+  - `madge` (circular dependencies)
+  All three are part of `bun run check` and CI. Removed 19 unused value exports, 35 unused type exports, plus a duplicate alias. Internal-only Options/Result interfaces are no longer exported (TypeScript structural typing means callers don't need a named import). Adding new dead exports / circular deps / unused symbols now fails CI.
 
 ### Changed
 - **Module reshape**: clearer file boundaries.

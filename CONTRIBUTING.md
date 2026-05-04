@@ -41,7 +41,11 @@ Anything bigger:
 - **Comments**: sparse. Only when the WHY is non-obvious. The "why" usually goes in the commit message; the code explains the what. See [docs/decisions.md](docs/decisions.md) for the rationale behind this stance.
 - **Tests**: behavior-level when possible. `test/sanity.test.ts` was deleted because it tested Zod, not Imprint — don't reintroduce that pattern.
 - **Errors**: every user-reachable `throw new Error` should end with `→ next step:` when the fix is well-known. See [docs/troubleshooting.md](docs/troubleshooting.md) for the patterns we've already documented.
-- **Dead code is blocked.** `bun run knip` runs as part of `bun run check`. Don't export anything you don't have a real cross-module consumer for — TypeScript's structural typing means callers don't need a named import to use your `*Options` / `*Result` interfaces. If knip flags a new export as unused, drop the `export` keyword (interface still works as parameter type) or delete it.
+- **Dead code is blocked** — three layers, all part of `bun run check`:
+  - `knip` for unused exports/files/types/deps
+  - TypeScript's `noUnusedLocals` + `noUnusedParameters` for unused symbols inside a file
+  - `madge --circular` for cycles between modules
+  If any tool flags a new addition: drop the `export` (TS structural typing means callers don't need a named import to use your `*Options` / `*Result` interfaces), prefix unused params with `_`, or delete the artifact.
 - **Commits**: imperative present tense; describe the WHY in the body for non-trivial changes.
 
 ## What's in scope vs. out of scope
