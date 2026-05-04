@@ -1,7 +1,7 @@
 /** `imprint doctor` — check that the environment can actually run imprint.
  *  Reports pass/fail per prerequisite plus a one-line fix when failed. */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { findChromium } from './chromium.ts';
@@ -22,6 +22,9 @@ export function doctor(): CheckResult[] {
     checkVertexProject(),
     checkVertexRegion(),
     checkPushOptional(),
+    checkClaudeCode(),
+    checkHermes(),
+    checkOpenClaw(),
   ];
 }
 
@@ -114,6 +117,78 @@ function checkPushOptional(): CheckResult {
     ok: true, // optional — not a failure
     detail: 'none configured (cron will only push to stderr)',
     fix: 'set PUSHOVER_TOKEN+PUSHOVER_USER or NTFY_URL — see docs/notifications.md',
+  };
+}
+
+function checkClaudeCode(): CheckResult {
+  // Look for ~/.claude/settings.json
+  const configPath = pathJoin(homedir(), '.claude', 'settings.json');
+  if (!existsSync(configPath)) {
+    return {
+      name: 'Claude Code',
+      ok: true,
+      detail: 'not detected',
+      fix: 'install Claude Code, then run `imprint teach <site>` to connect',
+    };
+  }
+  // Check if any imprint-* MCP servers are registered
+  try {
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    const servers = config?.mcpServers ?? {};
+    const imprintServers = Object.keys(servers).filter((k) => k.startsWith('imprint-'));
+    if (imprintServers.length > 0) {
+      return {
+        name: 'Claude Code',
+        ok: true,
+        detail: `${imprintServers.length} imprint tool(s): ${imprintServers.join(', ')}`,
+      };
+    }
+    return {
+      name: 'Claude Code',
+      ok: true,
+      detail: 'installed, no imprint tools registered',
+      fix: 'run `imprint teach <site>` to record a workflow and connect it',
+    };
+  } catch {
+    return {
+      name: 'Claude Code',
+      ok: true,
+      detail: 'installed (could not parse settings)',
+    };
+  }
+}
+
+function checkHermes(): CheckResult {
+  const configPath = pathJoin(homedir(), '.hermes', 'config.yaml');
+  if (!existsSync(configPath)) {
+    return {
+      name: 'Hermes Agent',
+      ok: true,
+      detail: 'not detected',
+    };
+  }
+  return {
+    name: 'Hermes Agent',
+    ok: true,
+    detail: `config at ${configPath}`,
+    fix: 'run `imprint teach <site>` and select Hermes to connect',
+  };
+}
+
+function checkOpenClaw(): CheckResult {
+  const configPath = pathJoin(homedir(), '.openclaw', 'openclaw.json');
+  if (!existsSync(configPath)) {
+    return {
+      name: 'OpenClaw',
+      ok: true,
+      detail: 'not detected',
+    };
+  }
+  return {
+    name: 'OpenClaw',
+    ok: true,
+    detail: `config at ${configPath}`,
+    fix: 'run `imprint teach <site>` and select OpenClaw to connect',
   };
 }
 

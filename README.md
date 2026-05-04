@@ -5,46 +5,49 @@
 Show Imprint a workflow in a real browser — drive the page, narrate what you're doing — and you get back two deterministic replay artifacts plus a generated MCP tool any AI agent can call from then on. No re-decisions, no exploration tokens, no "the LLM clicked the wrong button" variance. The recording **is** the executable.
 
 ```
-record once  →  workflow.json + playbook.yaml + index.ts  →  MCP tool / cron job
+imprint teach mysite --url https://...
+  → record → redact → generate → compile-playbook → emit
+  → pick your platform → done
 ```
 
 ---
 
-## 60-second quickstart
+## Quickstart
 
 ```bash
 git clone https://github.com/ashaychangwani/imprint.git
 cd imprint
 bun install
-bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
+bun link                          # makes `imprint` global
 bunx playwright install chromium
 export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
-imprint doctor                    # verify everything is wired up before recording
+imprint doctor                    # verify setup
 
-# (alternative: skip `bun link` and call directly via `bun src/cli.ts <verb>`)
-
-# 1. Drive the workflow once. Pick any site you want to automate.
-imprint record mysite --url https://your-site-here.example.com
-# (Chromium opens. Do the thing. Narrate. /done when finished.)
-
-# 2. Pick the session you just recorded.
-SESSION=$(ls examples/mysite/sessions/*.json | grep -v redacted | tail -1)
-
-# 3. Scrub credentials, LLM-compile two replay artifacts, codegen the tool.
-imprint redact "$SESSION"
-imprint generate "${SESSION%.json}.redacted.json"
-imprint compile-playbook "${SESSION%.json}.redacted.json"
-imprint emit examples/mysite/workflow.json
-
-# 4. (Optional) probe which backends work — caches the order so cron/MCP
-#    skip futile rungs. Safe to skip on plain APIs; useful for bot-protected sites.
-imprint probe-backends mysite
-
-# 5. Expose as MCP for Claude Desktop / Cursor / Continue.dev
-imprint mcp-server     # see docs/getting-started.md for claude_desktop_config.json
+# Teach your agent a new workflow (interactive — walks you through everything):
+imprint teach mysite --url https://your-site-here.example.com
 ```
 
-For the full walkthrough including Claude Desktop wire-up, see [docs/getting-started.md](docs/getting-started.md).
+`imprint teach` records the workflow, compiles both artifacts (API workflow + DOM playbook), generates the tool, and asks which AI platform you use. It then either runs the setup command or prints a paste-ready snippet.
+
+For the step-by-step walkthrough, see [docs/getting-started.md](docs/getting-started.md).
+
+---
+
+## Connect to your AI tool
+
+`imprint teach` handles integration at the end of the pipeline. It supports:
+
+| Platform | Setup method |
+|----------|-------------|
+| **Claude Code** | Runs `claude mcp add` — one command |
+| **Codex CLI** | Runs `codex mcp add` — one command |
+| **Claude Desktop** | Prints JSON snippet for config file |
+| **OpenClaw** | Prints MCP config + optional SKILL.md export |
+| **Hermes** | Prints MCP config + optional SKILL.md export + cron mapping |
+
+Each site gets its own MCP server: `imprint mcp-server southwest` registers as `imprint-southwest`.
+
+For manual setup or advanced configuration, see [docs/integrations.md](docs/integrations.md).
 
 ---
 
@@ -72,29 +75,31 @@ Every recording compiles to BOTH `workflow.json` and `playbook.yaml`, so the lad
 |---|---|---|
 | [`examples/southwest`](examples/southwest) | Live flight-fare watcher; defeats Akamai via `stealth-fetch`; pushes when prices drop below your threshold | `imprint cron southwest --once` |
 | [`examples/discoverandgo`](examples/discoverandgo) | Authed museum-pass booking via the per-site credential store | `imprint cron discoverandgo --once` |
-| [`examples/echo`](examples/echo) | Trivial MCP smoke-test fixture (no LLM, no network) | `imprint mcp-server --site echo` |
+| [`examples/echo`](examples/echo) | Trivial MCP smoke-test fixture (no LLM, no network) | `imprint mcp-server echo` |
 
 ---
 
 ## How it works
 
 ```
-   imprint record  ─┐
-                    ▼
-              session.json
-                    │
-        ┌───────────┴───────────┐
-        ▼                       ▼
-  imprint generate     imprint compile-playbook
-        │                       │
-        ▼                       ▼
-  workflow.json          playbook.yaml
-        │
-  imprint emit
-        ▼
-  examples/<site>/index.ts  ──┐
-                              │
-       imprint cron / mcp ────┼──► backend ladder
+   imprint teach  ─── interactive pipeline ───────────┐
+                                                       │
+   imprint record  ─┐                                 │
+                    ▼                                  │
+              session.json                             │
+                    │                                  │
+        ┌───────────┴───────────┐                      │
+        ▼                       ▼                      │
+  imprint generate     imprint compile-playbook        │
+        │                       │                      │
+        ▼                       ▼                      │
+  workflow.json          playbook.yaml                 │
+        │                                              │
+  imprint emit                                         │
+        ▼                                              │
+  examples/<site>/index.ts  ──┐                        │
+                              │                        │
+       imprint cron / mcp ────┼──► backend ladder ◄────┘
                               │      fetch ─FORBIDDEN→
                               │      stealth-fetch ─→
                               │      playbook
@@ -113,13 +118,14 @@ imprint --help        # full verb list
 imprint <verb> --help # per-verb help
 ```
 
-Verbs: `record`, `redact`, `generate`, `compile-playbook`, `emit`, `probe-backends`, `cron`, `mcp-server`, `playbook`, `login`, `assemble`, `check`, `doctor`.
+Verbs: `teach`, `record`, `redact`, `generate`, `compile-playbook`, `emit`, `probe-backends`, `cron`, `mcp-server`, `playbook`, `login`, `assemble`, `check`, `doctor`.
 
 ---
 
 ## Docs
 
-- **[docs/getting-started.md](docs/getting-started.md)** — full walkthrough, Claude Desktop wire-up
+- **[docs/integrations.md](docs/integrations.md)** — per-platform setup: Claude Code, Codex, Claude Desktop, OpenClaw, Hermes
+- **[docs/getting-started.md](docs/getting-started.md)** — full walkthrough, step-by-step
 - **[docs/architecture.md](docs/architecture.md)** — data flow, module map, file taxonomy
 - **[docs/glossary.md](docs/glossary.md)** — Session, Workflow, Playbook, Backend, Stealth-fetch, etc.
 - **[docs/decisions.md](docs/decisions.md)** — the load-bearing calls (why YAML, why ladder, why MCP-stdio default)
