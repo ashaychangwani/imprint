@@ -11,7 +11,7 @@ A working MCP tool from a fresh clone in about 5 minutes.
 ## Install
 
 ```bash
-git clone https://github.com/<you>/imprint.git
+git clone https://github.com/ashaychangwani/imprint.git
 cd imprint
 bun install
 bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
