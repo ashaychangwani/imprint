@@ -230,7 +230,7 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
 /** List the configured sites under examples/ to suggest in error messages. */
 function availableSitesHint(examplesDir: string, badSite: string): string {
   if (!existsSync(examplesDir)) {
-    return `→ examples/ doesn't exist — run \`imprint record <site>\` to create one.`;
+    return "→ examples/ doesn't exist — run `imprint record <site>` to create one.";
   }
   const sites = readdirSync(examplesDir).filter((d) => {
     try {
@@ -240,7 +240,7 @@ function availableSitesHint(examplesDir: string, badSite: string): string {
     }
   });
   if (sites.length === 0) {
-    return `→ examples/ is empty — run \`imprint record <site>\` to create one.`;
+    return '→ examples/ is empty — run `imprint record <site>` to create one.';
   }
   return `→ available sites: ${sites.join(', ')} (you asked for "${badSite}").`;
 }
