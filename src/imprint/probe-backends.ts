@@ -7,7 +7,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
-import { runWithLadder } from './backend-ladder.ts';
+import { type ConcreteBackend, runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { discoverTools } from './tool-loader.ts';
@@ -50,7 +50,6 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
   // Try every backend (single-rung ladders) — operators want the full
   // matrix, not just the first that worked.
   const stealthCache = new Map<string, StealthFetch>();
-  type ConcreteBackend = 'fetch' | 'stealth-fetch' | 'playbook';
   const allBackends: ConcreteBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
   const results: BackendsCache['results'] = {};
   const working: ConcreteBackend[] = [];

@@ -13,12 +13,16 @@ import { type StealthFetch, createStealthFetch } from './stealth-fetch.ts';
 import type { ResolvedTool } from './tool-loader.ts';
 import type { ReplayBackend, ToolResult } from './types.ts';
 
+/** Concrete (non-meta) backends the ladder actually walks. Excludes 'auto'
+ *  because that's a user-facing choice that resolveLadder() expands away. */
+export type ConcreteBackend = Exclude<ReplayBackend, 'auto'>;
+
 interface LadderResult {
   result: ToolResult;
-  usedBackend: ReplayBackend;
+  usedBackend: ConcreteBackend;
   /** One entry per rung that was tried. */
   attempts: Array<{
-    backend: ReplayBackend;
+    backend: ConcreteBackend;
     outcome: 'ok' | 'escalate' | 'failed' | 'unavailable';
     detail: string;
     durationMs: number;
@@ -27,14 +31,14 @@ interface LadderResult {
 
 const log = createLog('backend');
 
-const DEFAULT_LADDER: ReplayBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
+const DEFAULT_LADDER: ConcreteBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
 
 /** Expand a replayBackend choice into a concrete ladder. 'auto' prefers
  *  the probed order (if any), else the default. Explicit choice → single rung. */
 export function resolveLadder(
   backend: ReplayBackend,
-  cachedPreferredOrder?: ReplayBackend[],
-): ReplayBackend[] {
+  cachedPreferredOrder?: ConcreteBackend[],
+): ConcreteBackend[] {
   if (backend === 'auto') {
     return cachedPreferredOrder && cachedPreferredOrder.length > 0
       ? cachedPreferredOrder
@@ -45,7 +49,7 @@ export function resolveLadder(
 
 /** First non-FORBIDDEN result wins; last FORBIDDEN returned if every rung escalates. */
 export async function runWithLadder(
-  ladder: ReplayBackend[],
+  ladder: ConcreteBackend[],
   tool: ResolvedTool,
   params: Record<string, string | number | boolean>,
   examplesDir: string,
@@ -89,8 +93,6 @@ export async function runWithLadder(
             params,
           });
           break;
-        case 'auto':
-          throw new Error('auto is a meta-backend; expand before runWithLadder()');
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
