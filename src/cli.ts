@@ -378,6 +378,13 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `[imprint] tool: ${result.toolName} (${result.parameters.length} parameter${result.parameters.length === 1 ? '' : 's'})`,
       );
+      // Surface what to do next so users don't have to alt-tab to docs.
+      const site = result.outPath.split('/').slice(-2, -1)[0] ?? '<site>';
+      console.log('');
+      console.log('next steps:');
+      console.log(`  imprint probe-backends ${site}    # cache the working backend order`);
+      console.log(`  imprint mcp-server                # expose every generated tool as MCP`);
+      console.log(`  imprint cron ${site} --once       # one-shot test (after creating cron.json)`);
       return 0;
     }
 
