@@ -27,6 +27,7 @@ import {
   discoverTools,
 } from './tool-loader.ts';
 import type { ConcreteBackend, WorkflowParameter } from './types.ts';
+import { VERSION } from './version.ts';
 
 interface RunMcpServerOptions {
   /** Restrict to one example. Otherwise every generated example is registered. */
@@ -189,7 +190,7 @@ export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void
   }
 
   const name = opts.name ?? 'imprint';
-  const version = opts.version ?? '0.1.0';
+  const version = opts.version ?? VERSION;
 
   for (const t of tools) {
     log(`registered ${t.workflow.toolName} (${t.site}) — ${t.workflow.parameters.length} param(s)`);
