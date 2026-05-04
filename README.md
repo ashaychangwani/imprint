@@ -72,7 +72,7 @@ Every recording compiles to BOTH `workflow.json` and `playbook.yaml`, so the lad
 |---|---|---|
 | [`examples/southwest`](examples/southwest) | Live flight-fare watcher; defeats Akamai via `stealth-fetch`; pushes when prices drop below your threshold | `imprint cron southwest --once` |
 | [`examples/discoverandgo`](examples/discoverandgo) | Authed museum-pass booking via the per-site credential store | `imprint cron discoverandgo --once` |
-| `examples/echo` | Trivial MCP smoke-test fixture | `imprint mcp-server --site echo` |
+| [`examples/echo`](examples/echo) | Trivial MCP smoke-test fixture (no LLM, no network) | `imprint mcp-server --site echo` |
 
 ---
 
