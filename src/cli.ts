@@ -300,6 +300,9 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `[imprint] ${session.requests.length} requests, ${session.events.length} events, ${session.narration.length} narration lines`,
       );
+      console.log('');
+      console.log('next step:');
+      console.log(`  imprint check ${outPath}    # sanity-check what was captured`);
       return 0;
     }
 
