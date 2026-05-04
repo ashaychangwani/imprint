@@ -435,6 +435,10 @@ async function main(argv: string[]): Promise<number> {
       if (result.matchedExtractors.length > 0) {
         console.log(`[imprint] extractors matched: ${result.matchedExtractors.join(', ')}`);
       }
+      console.log('');
+      console.log(
+        `[imprint] credentials are loaded automatically by \`imprint cron ${site}\` and \`imprint mcp-server\` — no extra wiring needed.`,
+      );
       return 0;
     }
 
