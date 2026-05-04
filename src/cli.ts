@@ -549,11 +549,52 @@ async function main(argv: string[]): Promise<number> {
       return 1;
     }
 
-    default:
-      console.error(`error: unknown verb '${verb}'\n`);
-      console.log(HELP);
+    default: {
+      const suggestion = closestVerb(verb);
+      const tail = suggestion ? `did you mean \`imprint ${suggestion}\`?` : 'run `imprint --help`';
+      console.error(`error: unknown verb '${verb}' — ${tail}`);
       return 2;
+    }
   }
+}
+
+/** Suggest the closest known verb to a typo via Levenshtein distance.
+ *  Returns the suggestion only if it's plausibly close (≤ 3 edits). */
+function closestVerb(input: string): string | null {
+  const verbs = Object.keys(VERB_HELP);
+  let best: { verb: string; dist: number } | null = null;
+  for (const v of verbs) {
+    const d = levenshtein(input, v);
+    if (best === null || d < best.dist) best = { verb: v, dist: d };
+  }
+  if (best === null) return null;
+  // Require absolute distance ≤ 3 AND ≤ half the longer string's length —
+  // catches typos and short truncations without suggesting wildly different verbs.
+  const maxLen = Math.max(input.length, best.verb.length);
+  if (best.dist > 3 || best.dist > Math.floor(maxLen / 2)) return null;
+  return best.verb;
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const prev = new Array<number>(b.length + 1);
+  const curr = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        (curr[j - 1] ?? 0) + 1,
+        (prev[j] ?? 0) + 1,
+        (prev[j - 1] ?? 0) + cost,
+      );
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j] ?? 0;
+  }
+  return prev[b.length] ?? a.length;
 }
 
 // Only run when invoked as the entry point — importing this module
