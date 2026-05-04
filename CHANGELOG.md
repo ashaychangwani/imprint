@@ -22,7 +22,12 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - Actionable `→ next step:` hints in every user-reachable error message (Pushover/ntfy not set, missing playbook, missing param, no requests in workflow, etc.).
 - `resolveLadder` helper in `backend-ladder.ts` so cron + mcp-server share the auto-ladder expansion logic.
 - MCP tool descriptions now include the operator's recorded narration (`intent.userSaid`) — gives the LLM real context for picking the right tool.
-- Test coverage: `test/compile.test.ts` (+15 tests for shrinkSession + error paths), `test/cli-help.test.ts` (+26 drift-guard tests for VERB_HELP / dispatcher sync), `test/backend-ladder.test.ts` (+5 resolveLadder tests). 132 → 182 tests.
+- Test coverage: `test/compile.test.ts` (+15 tests for shrinkSession + error paths), `test/cli-help.test.ts` (+26 drift-guard tests for VERB_HELP / dispatcher sync), `test/backend-ladder.test.ts` (+5 resolveLadder tests), `test/doctor.test.ts` (+7), additional `test/notify.test.ts` cases for multi-path pricePath. 132 → 193 tests.
+- `bun run check` package.json script — combined typecheck + lint + tests. CI now runs this directly.
+- `bun run imprint <verb>` and `bun run doctor` package.json shortcuts (alternatives to `bun link`).
+- `imprint emit` prints "next steps" after generating, removing the "I have a tool, now what?" friction point.
+- `imprint cron <unknown-site>` now lists the configured sites in the error message ("available sites: a, b, c").
+- "command not found" troubleshooting section explicitly covering the bun-link / PATH failure mode.
 
 ### Changed
 - **Module reshape**: clearer file boundaries.
@@ -37,6 +42,8 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - **Comment hygiene**: stripped design-doc preambles, defensive validation for impossible scenarios, `log("starting…")`/`log("done in Yms")` pairs, and over-documented helpers whose docstring just restated the signature. Net `-691` LOC across `src/imprint/` + `src/cli.ts`.
 - **Test pruning**: consolidated redundant schema tests, parametrized micro-variations, dropped low-signal tests.
 - **Single source of truth for VERSION**: `src/imprint/version.ts` reads the version once from `package.json`. cli.ts, record.ts, probe-backends.ts all import from there — no more drift on bumps.
+- **`pricePath` accepts an array of fallback paths** (backward-compatible with single-string). Fixes a real bug in the southwest cron where `notifyWhen` silently never fired on the stealth-fetch backend (raw API shape) but worked on the playbook backend (reshaped output). Now both shapes are accepted.
+- **package.json description** rewritten to match the README tagline (was a technical surface description).
 
 ### Removed
 - `src/imprint/replay-backend.ts`, `src/imprint/workflow-runtime.ts`, `src/imprint/discover-tools.ts`, `src/imprint/playbook-types.ts` (renamed/folded; see Changed).
@@ -50,7 +57,7 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 |---|---|---|
 | `src/imprint/` + `src/cli.ts` LOC | 5,828 | ~4,950 (-15%, including +110 LOC for the new doctor verb) |
 | Source files | 26 | 23 (− 4 renames/folds + 2 new: compile.ts, doctor.ts, version.ts) |
-| Tests | 137 / 13 files | 182 / 14 files (more user-path coverage) |
+| Tests | 137 / 13 files | 193 / 15 files (more user-path coverage) |
 | README | sprint-changelog flavor (285 lines) | adoption-friendly (110 lines) |
 | Docs files | 3 | 10 (+ CHANGELOG, CONTRIBUTING) |
 | CLI verbs | 12 | 13 (+ doctor) |
