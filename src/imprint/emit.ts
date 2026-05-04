@@ -1,8 +1,9 @@
 /** `imprint emit` — generate examples/<site>/index.ts: a thin wrapper
  *  around runtime.executeWorkflow with the workflow JSON embedded inline. */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin, resolve as pathResolve, relative } from 'node:path';
+import { loadJsonFile } from './load-json.ts';
 import { type Workflow, WorkflowSchema } from './types.ts';
 
 interface EmitOptions {
@@ -23,29 +24,16 @@ interface EmitResult {
 }
 
 export function emit(opts: EmitOptions): EmitResult {
-  if (!existsSync(opts.workflowPath)) {
-    throw new Error(
-      `workflow.json not found: ${opts.workflowPath}\n→ run \`imprint generate <session>\` to create one.`,
-    );
-  }
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(opts.workflowPath, 'utf8'));
-  } catch (err) {
-    throw new Error(
-      `${opts.workflowPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  const parsed = WorkflowSchema.safeParse(raw);
-  if (!parsed.success) {
-    const issues = parsed.error.errors
-      .map((e) => `  - ${e.path.join('.') || '(root)'}: ${e.message}`)
-      .join('\n');
-    throw new Error(
-      `workflow.json failed schema validation:\n${issues}\n→ regenerate with \`imprint generate <session>\` (the LLM may have produced bad output).`,
-    );
-  }
-  const workflow = parsed.data;
+  const workflow = loadJsonFile(
+    opts.workflowPath,
+    WorkflowSchema,
+    {
+      notFound: '→ run `imprint generate <session>` to create one.',
+      badSchema:
+        '→ regenerate with `imprint generate <session>` (the LLM may have produced bad output).',
+    },
+    'workflow.json',
+  );
 
   const outDir = opts.outDir ?? pathResolve(dirname(opts.workflowPath));
 
