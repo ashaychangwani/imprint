@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
-import { runWithLadder } from '../src/imprint/backend-ladder.ts';
+import { resolveLadder, runWithLadder } from '../src/imprint/backend-ladder.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import type { ToolResult, Workflow } from '../src/imprint/types.ts';
@@ -80,6 +80,34 @@ function makeStealthCache(tool: ResolvedTool): Map<string, StealthFetch> {
   cache.set(tool.site, createStealthFetch(`https://${tool.site}.example.com`));
   return cache;
 }
+
+describe('resolveLadder', () => {
+  it('expands "auto" with no cached order to the default ladder', () => {
+    expect(resolveLadder('auto')).toEqual(['fetch', 'stealth-fetch', 'playbook']);
+  });
+
+  it('expands "auto" with an empty cached order to the default ladder', () => {
+    expect(resolveLadder('auto', [])).toEqual(['fetch', 'stealth-fetch', 'playbook']);
+  });
+
+  it('uses the cached preferred order for "auto" when provided', () => {
+    expect(resolveLadder('auto', ['stealth-fetch', 'playbook'])).toEqual([
+      'stealth-fetch',
+      'playbook',
+    ]);
+  });
+
+  it.each(['fetch', 'stealth-fetch', 'playbook'] as const)(
+    'returns single-rung ladder for explicit %s',
+    (backend) => {
+      expect(resolveLadder(backend)).toEqual([backend]);
+    },
+  );
+
+  it('ignores the cached order when an explicit backend is named', () => {
+    expect(resolveLadder('fetch', ['stealth-fetch', 'playbook'])).toEqual(['fetch']);
+  });
+});
 
 describe('runWithLadder — single-rung explicit', () => {
   it('returns the fetch result directly when explicit "fetch"', async () => {
