@@ -32,7 +32,7 @@ Small tweaks (typo fixes, doc clarifications, narrow bug fixes): just open a PR.
 Anything bigger:
 1. **Open an issue first** describing the change. It's faster than rewriting code we'll have to push back on.
 2. **Keep PRs focused.** One concern per PR. Refactors that touch many files should be in their own PR, separate from feature work.
-3. **Tests pass before review.** `bun run check` (combined typecheck + lint + tests) — all green.
+3. **Tests pass before review.** `bun run check` (combined typecheck + lint + tests + knip dead-code scan) — all green.
 4. **Live-verify when relevant.** If your change touches the cron path, the MCP server, or a backend, run a live tick against `examples/southwest` (or a similar real-world fixture). Note in the PR description.
 
 ## Repo conventions
@@ -41,6 +41,7 @@ Anything bigger:
 - **Comments**: sparse. Only when the WHY is non-obvious. The "why" usually goes in the commit message; the code explains the what. See [docs/decisions.md](docs/decisions.md) for the rationale behind this stance.
 - **Tests**: behavior-level when possible. `test/sanity.test.ts` was deleted because it tested Zod, not Imprint — don't reintroduce that pattern.
 - **Errors**: every user-reachable `throw new Error` should end with `→ next step:` when the fix is well-known. See [docs/troubleshooting.md](docs/troubleshooting.md) for the patterns we've already documented.
+- **Dead code is blocked.** `bun run knip` runs as part of `bun run check`. Don't export anything you don't have a real cross-module consumer for — TypeScript's structural typing means callers don't need a named import to use your `*Options` / `*Result` interfaces. If knip flags a new export as unused, drop the `export` keyword (interface still works as parameter type) or delete it.
 - **Commits**: imperative present tense; describe the WHY in the body for non-trivial changes.
 
 ## What's in scope vs. out of scope
