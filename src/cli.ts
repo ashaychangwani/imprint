@@ -1,15 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Imprint CLI entry point.
- *
- * Verbs:
- *   imprint record <site>            Open Chromium, capture a session, write session.json
- *   imprint generate <session.json>  Run LLM intent-detection, write workflow.json
- *   imprint emit <workflow.json>     Generate the MCP server TS module
- *   imprint login <site>             Open Chromium for user-driven login, persist cookies
- *   imprint cron <example>           Start the polling daemon for a generated workflow
- *   imprint mcp-server <example>     Speak MCP stdio protocol, exposing the workflow as a tool
- */
+/** CLI entry point. Run `imprint --help` for the verb list. */
 
 import { parseArgs } from 'node:util';
 
@@ -58,15 +48,7 @@ OPTIONS:
   --version, -v             Print version
 `;
 
-/**
- * Read the positional arg right after the verb. Most verbs require a
- * single subject (a site name, a session path, etc.) — this dedupes
- * the boilerplate "if (!x) error and return 2" that they all share.
- *
- * Returns the value when present. When missing, prints a uniform error
- * to stderr and returns null so the caller can early-return its exit
- * code (callers do `const x = req(...); if (x === null) return 2;`).
- */
+/** Pull `argv[1]` or print a uniform error and return null for early-return. */
 function requirePositional(argv: string[], verb: string, label: string): string | null {
   const v = argv[1];
   if (!v) {
@@ -76,14 +58,7 @@ function requirePositional(argv: string[], verb: string, label: string): string 
   return v;
 }
 
-/**
- * Parse the `--param k=v` array used by `probe-backends` and `playbook`.
- * Each entry is split on the FIRST `=` (so values may contain `=`).
- * Coerces numeric / boolean strings; everything else stays a string.
- *
- * Throws on a malformed entry (no `=`) so the caller surfaces a
- * specific error message instead of silently dropping the bad input.
- */
+/** Parse `--param k=v` entries; coerces numeric/boolean values; throws on malformed input. */
 function parseParamKV(entries: string[]): Record<string, string | number | boolean> {
   const out: Record<string, string | number | boolean> = {};
   for (const kv of entries) {
@@ -125,9 +100,7 @@ async function main(argv: string[]): Promise<number> {
         allowPositionals: false,
       });
 
-      // Wire SIGINT (Ctrl+C) to a clean shutdown via AbortController instead of
-      // tearing the process down mid-flight. The recorder writes its files, then
-      // returns; only then does the CLI exit.
+      // SIGINT → AbortController so the recorder flushes files before exit.
       const ctrl = new AbortController();
       const onSigint = (): void => ctrl.abort();
       process.once('SIGINT', onSigint);

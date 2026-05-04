@@ -1,10 +1,4 @@
-/**
- * Tiny logger factory. Every Imprint module wants `[imprint <area>] msg`
- * on stderr; this dedupes the boilerplate.
- *
- *   const log = createLog('cron');
- *   log('starting');   // → [imprint cron] starting
- */
+/** Logger factory: `createLog('cron')('hi')` → stderr `[imprint cron] hi`. */
 
 export type Log = (msg: string) => void;
 

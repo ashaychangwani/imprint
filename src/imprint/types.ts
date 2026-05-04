@@ -1,12 +1,10 @@
 /**
- * Core types for Imprint.
+ * Zod schemas + types shared across imprint. Capture (Session), workflow
+ * (Workflow + Request), runtime (ToolResult), config (Cron, NotifyWhen,
+ * BackendsCache), and the playbook DOM-replay schema (Locator/Step/etc).
  *
- * Data flow:
- *
- *   record(url) ──▶ session.json ──▶ generate() ──▶ workflow.json ──▶ emit() ──▶ generated TS
- *                   {requests,                       {requests,                    runWorkflow()
- *                    events,                          parameters,
- *                    narration}                       intent}
+ * For the data-flow diagram (record → generate → emit → MCP), see
+ * docs/architecture.md.
  */
 
 import { z } from 'zod';
@@ -14,17 +12,14 @@ import { z } from 'zod';
 // ─── Captured session (output of `imprint record`) ──────────────────────────
 
 export const CapturedRequestSchema = z.object({
-  /** Monotonically increasing sequence within a session */
   seq: z.number().int().nonnegative(),
   /** ms since recording started */
   timestamp: z.number(),
   method: z.string(),
   url: z.string(),
   headers: z.record(z.string()),
-  /** Body as string (parsed if JSON, raw otherwise). May be omitted for GETs. */
   body: z.string().optional(),
   resourceType: z.string(),
-  /** Filled in when the response arrives */
   response: z
     .object({
       status: z.number(),
@@ -59,10 +54,8 @@ export const CapturedEventSchema = z.object({
 });
 export type CapturedEvent = z.infer<typeof CapturedEventSchema>;
 
-/** Cookie state snapshot at a point in time. */
 export const CookieSnapshotSchema = z.object({
   takenAt: z.string(),
-  /** ms since recording started */
   timestamp: z.number(),
   label: z.enum(['start', 'end', 'manual']),
   cookies: z.array(
@@ -88,18 +81,13 @@ export const NarrationSchema = z.object({
 export type Narration = z.infer<typeof NarrationSchema>;
 
 export const SessionSchema = z.object({
-  /** Site label, e.g. "southwest", "luma", "canteen" */
   site: z.string(),
-  /** ISO 8601 */
   startedAt: z.string(),
-  /** Starting URL */
   url: z.string(),
-  /** Imprint version that captured this session */
   imprintVersion: z.string(),
   requests: z.array(CapturedRequestSchema),
   events: z.array(CapturedEventSchema),
   narration: z.array(NarrationSchema),
-  /** Cookie state snapshots — typically one at start, one at end. */
   cookieSnapshots: z.array(CookieSnapshotSchema).default([]),
 });
 export type Session = z.infer<typeof SessionSchema>;
@@ -110,61 +98,46 @@ export const WorkflowParameterSchema = z.object({
   name: z.string(),
   type: z.enum(['string', 'number', 'boolean']),
   description: z.string(),
-  /** If set, the parameter is optional with this default */
+  /** Optional with this default if set. */
   default: z.union([z.string(), z.number(), z.boolean()]).optional(),
 });
 export type WorkflowParameter = z.infer<typeof WorkflowParameterSchema>;
 
 export const WorkflowRequestSchema = z.object({
   method: z.string(),
-  /**
-   * URL template. May contain:
-   *   ${param.fieldName}             — substitutes a workflow parameter
-   *   ${response[N].jsonPath.field}  — substitutes from an earlier response in the chain
-   */
+  /** Template; ${param.X} substitutes a parameter, ${response[N].path} an
+   *  earlier extracted value. */
   url: z.string(),
   headers: z.record(z.string()),
-  /** Body template, same substitution rules as url */
   body: z.string().optional(),
-  /**
-   * After a successful response, extract these jsonpath expressions for later
-   * requests to substitute via ${response[N].name}.
-   */
+  /** Names → jsonpath expressions; later requests reference via ${response[N].name}. */
   extract: z.record(z.string()).optional(),
 });
 export type WorkflowRequest = z.infer<typeof WorkflowRequestSchema>;
 
 export const WorkflowSchema = z.object({
-  /** Tool name in the generated MCP server (snake_case) */
   toolName: z.string(),
-  /** Human description of what the workflow does */
   intent: z.object({
     description: z.string(),
-    /** What the user said while recording (concatenated narration) */
+    /** Concatenated narration the user spoke while recording. */
     userSaid: z.string().optional(),
   }),
   parameters: z.array(WorkflowParameterSchema),
-  /** Ordered chain of requests, executed sequentially */
   requests: z.array(WorkflowRequestSchema),
-  /** Site this workflow targets (matches Session.site) */
   site: z.string(),
 });
 export type Workflow = z.infer<typeof WorkflowSchema>;
 
 // ─── Generated tool runtime contract ─────────────────────────────────────────
 
-/**
- * Every generated MCP tool returns a discriminated union. Either the request
- * chain completed and we have a `data` payload, or something specific went
- * wrong and we surface a remediation the user (or the LLM) can act on.
- */
+/** Discriminated union returned by every generated tool. */
 export type ToolResult<T = unknown> =
   | { ok: true; data: T }
   | {
       ok: false;
       error:
-        | 'AUTH_EXPIRED' // 401 — credentials expired or missing; user runs `imprint login`
-        | 'FORBIDDEN' // 403 — blocked (bot detection, geo, ToS, capability mismatch); body has the clue
+        | 'AUTH_EXPIRED' // 401 — run `imprint login`
+        | 'FORBIDDEN' // 403 — bot detection, geo, ToS, capability mismatch
         | 'NETWORK' // fetch threw / timed out
         | 'RATE_LIMITED' // 429
         | 'BAD_RESPONSE' // other 4xx/5xx
@@ -175,73 +148,27 @@ export type ToolResult<T = unknown> =
 
 // ─── Cron config (input to `imprint cron`) ───────────────────────────────────
 
-/**
- * Optional "push only when..." predicate. Without it, cron only pushes on
- * failure (the default). With it, cron evaluates the predicate against
- * every successful tool result and pushes when it matches — useful for
- * watchers like "notify when any fare drops below $99".
- *
- * Discriminated by `type`. New predicate kinds slot in here as new
- * variants and a matching case in src/imprint/notify.ts.
- */
+/** Push-on-success predicate. Without one, cron only pushes on failure.
+ *  See docs/architecture.md for the predicate language. */
 export const NotifyWhenSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('price_below'),
-    /** Push when min(extracted prices) is strictly less than this. */
     threshold: z.number(),
-    /**
-     * Dot-path with `[]` to mean "iterate every element of this array".
-     * E.g. "bounds[].flights[].fares[].price.amount" extracts every
-     * fare price in a Southwest-shaped search response.
-     */
+    /** Dot-path with [] for array iteration; see json-path.ts. */
     pricePath: z.string(),
   }),
 ]);
 export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
 
-/**
- * Per-example schedule + parameters, lives at examples/<site>/cron.json.
- * The schedule is a standard 5-field cron expression; node-cron validates it
- * before scheduling. Params are validated against the workflow's parameter
- * declarations at load time so a typo doesn't surface only on the first tick.
- */
-/**
- * Which replay backend the cron / MCP server should use, in increasing
- * order of cost + bot-detection robustness:
- *
- *   - `'fetch'` (default): captured API workflow via Node `fetch`. ~200ms
- *     per call. Fails on sites with serious bot detection (Akamai,
- *     Cloudflare, etc).
- *   - `'stealth-fetch'`: brief Playwright bootstrap mints sensor tokens
- *     (~12s, one-time per process), then native `fetch` augmented with
- *     those tokens (~1s per call). Defeats Akamai for direct-API sites.
- *   - `'playbook'`: full Playwright + stealth + DOM walk via the
- *     compiled playbook.yaml. ~9.4s per call. Universal — handles sites
- *     that need form-fills, autocompletes, multi-page navigation.
- *   - `'auto'`: walks the ladder fetch → stealth-fetch → playbook,
- *     escalating only on FORBIDDEN. The principle: never fail with
- *     "Imprint can't help" as long as some backend would have worked.
- *
- * The `auto` ladder skips rungs whose prerequisites aren't met (e.g.,
- * playbook is skipped when no playbook.yaml exists). Non-FORBIDDEN errors
- * (AUTH_EXPIRED, NETWORK, RATE_LIMITED, etc) don't escalate — those
- * indicate a real problem the next backend can't solve.
- */
+/** fetch (cheap, breaks on Akamai) → stealth-fetch (mint tokens, ~1s) →
+ *  playbook (full DOM walk, ~9s, universal). 'auto' walks the ladder,
+ *  escalating only on FORBIDDEN. */
 export const ReplayBackendSchema = z.enum(['fetch', 'stealth-fetch', 'playbook', 'auto']);
 export type ReplayBackend = z.infer<typeof ReplayBackendSchema>;
 
-/**
- * Result of probing each backend at record time. Persisted to
- * `examples/<site>/backends.json` by `imprint probe-backends <site>`
- * and read by cron + MCP at startup. The recommended starting backend
- * is `preferredOrder[0]`; runtime ladder uses the rest as the fallback
- * sequence in case the preferred backend stops working between probes.
- *
- * Probing once at record time avoids burning a fetch attempt (~200ms)
- * on every cron tick for known-blocked sites like Southwest. Without
- * the probe, an `"auto"` cron tick logs `fetch FORBIDDEN → escalate`
- * every single tick — wasted work + log noise.
- */
+/** Per-backend probe result. Written to examples/<site>/backends.json
+ *  by `imprint probe-backends`; cron + MCP read it at startup so they
+ *  start with the cheapest known-working backend. */
 export const BackendProbeResultSchema = z.discriminatedUnion('outcome', [
   z.object({
     outcome: z.literal('ok'),
@@ -270,17 +197,12 @@ export const BackendProbeResultSchema = z.discriminatedUnion('outcome', [
 export type BackendProbeResult = z.infer<typeof BackendProbeResultSchema>;
 
 export const BackendsCacheSchema = z.object({
-  /** ISO 8601 timestamp of when the probe ran. */
   probedAt: z.string(),
-  /** Imprint version that ran the probe (so a future format bump can invalidate). */
+  /** Schema-bump invalidator. */
   imprintVersion: z.string(),
-  /**
-   * Ladder ordering for runtime — preferredOrder[0] is the cheapest
-   * known-working backend; the rest fall back on FORBIDDEN. Excludes
-   * 'auto' (it's a meta-value).
-   */
+  /** Ladder for runtime — preferredOrder[0] cheapest, rest fall back on
+   *  FORBIDDEN. Excludes 'auto'. */
   preferredOrder: z.array(z.enum(['fetch', 'stealth-fetch', 'playbook'])).min(1),
-  /** Per-backend probe results for the operator to inspect. */
   results: z.record(z.enum(['fetch', 'stealth-fetch', 'playbook']), BackendProbeResultSchema),
 });
 export type BackendsCache = z.infer<typeof BackendsCacheSchema>;

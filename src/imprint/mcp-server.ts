@@ -1,37 +1,7 @@
 /**
- * `imprint mcp-server` — exposes every generated workflow under
- * `examples/<site>/index.ts` as an MCP tool.
- *
- * Built directly on the official @modelcontextprotocol/sdk for maximum
- * compatibility with every MCP client (Claude Desktop, Claude Code, Cursor,
- * Continue.dev, mcp-inspector, etc.). Supports stdio (the canonical
- * transport for desktop clients) and Streamable HTTP (the modern transport
- * for remote agents).
- *
- * USAGE:
- *
- *   imprint mcp-server                         # all examples, stdio (default)
- *   imprint mcp-server --site discoverandgo    # one site only
- *   imprint mcp-server --http --port 8765      # Streamable HTTP transport
- *
- * Claude Desktop wire-up
- * (~/Library/Application Support/Claude/claude_desktop_config.json):
- *
- *   {
- *     "mcpServers": {
- *       "imprint": {
- *         "command": "bun",
- *         "args": ["run", "/abs/path/to/imprint/src/cli.ts", "mcp-server"]
- *       }
- *     }
- *   }
- *
- * Restart Claude Desktop. Your tools (e.g. `book_discoverandgo_museum_pass`)
- * will appear in the MCP tools panel.
- *
- * mcp-inspector wire-up:
- *
- *   npx @modelcontextprotocol/inspector bun run src/cli.ts mcp-server
+ * `imprint mcp-server` — exposes every generated tool under
+ * examples/<site>/ as an MCP tool. Stdio + Streamable HTTP transports.
+ * See docs/getting-started.md for Claude Desktop / mcp-inspector wire-up.
  */
 
 import { existsSync } from 'node:fs';
@@ -74,25 +44,15 @@ export interface RunMcpServerOptions {
   version?: string;
 }
 
-/** A discovered tool decorated with the JSON Schema MCP advertises it as. */
 interface ResolvedTool extends DiscoveredTool {
   inputSchema: Tool['inputSchema'];
-  /** Path to playbook.yaml when one exists alongside index.ts. */
   playbookPath?: string;
-  /**
-   * Cached preferred backend ladder from a prior `imprint probe-backends` run.
-   * When present, the runtime starts with this order instead of the default
-   * fetch → stealth-fetch → playbook ladder, avoiding the wasted fetch attempt
-   * on every tick for known-blocked sites.
-   */
+  /** Probe-cached ladder; runtime starts here instead of the default. */
   preferredOrder?: ReplayBackend[];
 }
 
-/**
- * Build a JSON Schema for the tool's input from our workflow parameters.
- * MCP advertises tools using JSON Schema directly (it's an LLM-facing
- * description), so we generate it inline rather than going through Zod.
- */
+/** MCP advertises tool input as JSON Schema; build it directly from
+ *  workflow parameters rather than going through Zod. */
 function buildJsonSchema(parameters: WorkflowParameter[]): Tool['inputSchema'] {
   const properties: Record<string, { type: string; description: string }> = {};
   const required: string[] = [];
@@ -129,9 +89,7 @@ function buildServer(
     tools.map((t) => [t.workflow.toolName, buildZodValidator(t.workflow.parameters)] as const),
   );
 
-  // One StealthFetch instance per site, lazily created on first use,
-  // reused across MCP calls in this process. Pays the ~12s bootstrap
-  // once per site rather than per call.
+  // Per-site stealth-fetch cache so the ~12s bootstrap runs once per site.
   const stealthCache = new Map<string, StealthFetch>();
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({

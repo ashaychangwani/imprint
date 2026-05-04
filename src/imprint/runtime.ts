@@ -1,15 +1,8 @@
 /**
- * The shared execution engine that every generated workflow imports.
- *
- * Responsibilities:
- *   - Substitute ${param.X}, ${response[N].JSON_PATH}, ${credential.X}
- *     placeholders in URL / headers / body templates
- *   - Load cookies from the site's env-paths credential store
- *   - Execute the request chain sequentially
- *   - Extract response values per the `extract` config
- *   - Return a structured ToolResult (success or classified error)
- *
- * Generated files are thin wrappers around `executeWorkflow()`.
+ * Workflow execution engine — substitutes ${param/credential/response[N]}
+ * placeholders, loads cookies from the site credential store, runs the
+ * chain sequentially, returns a classified ToolResult. Generated tool
+ * files are thin wrappers around executeWorkflow().
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -20,17 +13,10 @@ import type { ToolResult, Workflow, WorkflowRequest } from './types.ts';
 const PATHS = envPaths('imprint', { suffix: '' });
 
 export interface CredentialStore {
-  /** Site label, e.g. "discoverandgo" */
   site: string;
-  /**
-   * Cookies persisted from `imprint login`. Sent on every request to the same
-   * registrable domain as the workflow's URLs.
-   */
+  /** Persisted via `imprint login`; sent on every same-domain request. */
   cookies: Array<{ name: string; value: string; domain: string; path: string }>;
-  /**
-   * Per-account values extracted at login time and referenced as ${credential.X}.
-   * Examples: patron_id, account_uuid, csrf_token.
-   */
+  /** ${credential.X} substitutions (patron_id, csrf_token, etc). */
   values: Record<string, string>;
 }
 
@@ -44,20 +30,12 @@ export function loadCredentialStore(site: string): CredentialStore | null {
 
 export interface ExecuteOptions {
   workflow: Workflow;
-  /** User-supplied parameters keyed by name. */
   params: Record<string, string | number | boolean>;
-  /**
-   * If provided, used instead of loading from disk. Lets tests / the cron
-   * inject a synthetic store without writing to env-paths.
-   */
+  /** Inject a synthetic credential store; otherwise loads from disk. */
   credentials?: CredentialStore;
-  /**
-   * Override fetch. Tests inject a mock here. Defaults to the global fetch.
-   */
+  /** Override global fetch (tests, stealth-fetch). */
   fetchImpl?: typeof fetch;
-  /**
-   * Per-request timeout in ms. Defaults to 30s.
-   */
+  /** Per-request timeout in ms. Default 30000. */
   requestTimeoutMs?: number;
 }
 
@@ -129,11 +107,8 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       };
     }
     if (resp.status === 403) {
-      // 403 has many causes besides expired auth — most often bot
-      // detection (Akamai, Cloudflare, DataDome) on consumer sites,
-      // sometimes geo-block, ToS violation, or missing capability. The
-      // body usually has a code or message that disambiguates. Surface
-      // it instead of guessing.
+      // 403 = bot detection / geo / ToS / missing capability. The body
+      // usually disambiguates — surface it rather than guessing.
       const text = await safeText(resp);
       return {
         ok: false,
@@ -172,7 +147,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     responses.push(parsed);
   }
 
-  // The "data" of a workflow result is the LAST response's parsed body.
+  // Return the LAST response as the workflow's `data`.
   return { ok: true, data: (responses.at(-1) ?? null) as T };
 }
 

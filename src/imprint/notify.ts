@@ -1,26 +1,11 @@
 /**
- * Notification hooks for the cron daemon. Two concerns living in one
- * file because they're only used together:
+ * Notification hooks for the cron daemon. Two concerns:
+ *   - evaluateNotifyWhen: predicate engine ("price_below" etc).
+ *   - notify / providers: deliver to Pushover + ntfy in parallel.
  *
- *   1. `evaluateNotifyWhen` — predicate engine that decides, given a
- *      tool result, whether the result is interesting enough to push
- *      (e.g. price_below).
- *   2. `notify` / provider fns — the actual delivery to Pushover/ntfy.
- *
- * Multi-provider: every provider configured via env vars fires on each
- * call, so you can mirror to both Pushover and ntfy. With nothing
- * configured, `notify()` is a silent no-op. Provider failures are
- * caught and logged so a flaky push service can never crash the cron
- * loop.
- *
- * Providers:
- *
- *   Pushover  PUSHOVER_TOKEN + PUSHOVER_USER
- *             https://pushover.net/api  (paid app, $5 one-time per platform)
- *
- *   ntfy      NTFY_URL  (e.g. https://ntfy.sh/your-secret-topic-name)
- *             NTFY_TOKEN  (optional bearer token for protected topics)
- *             https://docs.ntfy.sh/publish/  (free public, self-hostable)
+ * Every configured provider fires on each call; nothing configured is
+ * a silent no-op. Failures are caught and logged so a flaky provider
+ * can't crash the cron loop. See docs/notifications.md for setup.
  */
 
 import { extractAt } from './json-path.ts';
@@ -52,11 +37,7 @@ export function evaluateNotifyWhen(
   switch (pred.type) {
     case 'price_below': {
       const prices = extractAt(data, pred.pricePath);
-      if (prices.length === 0) {
-        // No prices at all — most likely an empty result set or a
-        // misconfigured path. Treat as "no signal", don't push.
-        return { notify: false };
-      }
+      if (prices.length === 0) return { notify: false }; // empty / misconfigured path
       const min = Math.min(...prices);
       if (min < pred.threshold) {
         return {
@@ -72,11 +53,7 @@ export function evaluateNotifyWhen(
 
 const log = createLog('notify');
 
-/**
- * Dispatch a notification to every configured provider in parallel.
- * Returns a per-provider result map so callers can log diagnostics
- * without blocking on individual provider failures.
- */
+/** Push to every configured provider in parallel; returns per-provider results. */
 export async function notify(
   title: string,
   message: string,
@@ -131,9 +108,8 @@ export async function notifyNtfy(
     return { delivered: false, reason: 'NTFY_URL not set' };
   }
 
-  // ntfy publishes by POST-ing the message body to /<topic>. Title and
-  // priority ride along as headers. Bearer auth is only needed for
-  // protected topics on self-hosted instances.
+  // POST body to /<topic>; title + priority ride as headers; bearer auth
+  // only needed for protected topics on self-hosted instances.
   const headers: Record<string, string> = {
     'content-type': 'text/plain; charset=utf-8',
     Title: title,

@@ -1,14 +1,4 @@
-/**
- * Execute a parsed Playbook against a real Chromium via Playwright.
- *
- * Boots a fresh browser per run (long-lived browser is a v0.2 concern),
- * walks the steps, captures any matching XHR responses for the result
- * extraction, returns a ToolResult that mirrors the API replay shape.
- *
- * Locator priority within each step is preserved from the playbook
- * (typically text/aria first, CSS last). The first locator that
- * matches drives the action.
- */
+/** Execute a parsed Playbook against a real Chromium via Playwright. */
 
 import { existsSync, readFileSync } from 'node:fs';
 import type { Browser, BrowserContext, Locator as PWLocator, Page } from 'playwright';
@@ -16,8 +6,14 @@ import { extractAt } from './json-path.ts';
 import { createLog } from './log.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { substituteString } from './runtime.ts';
-import type { Locator, Playbook, PlaybookResult, PlaybookStep, WaitFor } from './types.ts';
-import type { ToolResult } from './types.ts';
+import type {
+  Locator,
+  Playbook,
+  PlaybookResult,
+  PlaybookStep,
+  ToolResult,
+  WaitFor,
+} from './types.ts';
 
 export interface RunPlaybookOptions {
   /** Path to playbook.yaml OR an already-parsed Playbook. */
@@ -25,58 +21,40 @@ export interface RunPlaybookOptions {
   params: Record<string, string | number | boolean>;
   /** Run with a visible browser window. Default false (headless). */
   headed?: boolean;
-  /** Per-step timeout in ms. Default 15000. */
+  /** Per-step timeout in ms. Default 30000. */
   stepTimeoutMs?: number;
-  /**
-   * If true, screenshot the page after EVERY step (not just failure)
-   * and log the URL + path. Useful when iterating on a playbook and
-   * you can't run --headed. Files land in the system tmp dir.
-   */
+  /** Screenshot after every step (not just on failure). */
   trace?: boolean;
-  /**
-   * Inject a Playwright Page for tests (skips browser launch). When
-   * provided, the runner uses this page directly and the caller is
-   * responsible for the browser lifecycle.
-   */
+  /** Inject a Playwright Page for tests. */
   pageOverride?: Page;
 }
 
 const log = createLog('playbook');
 
 export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult> {
-  // Convert every thrown error into a ToolResult so callers can rely on
-  // a single return shape (matching the API replay path's contract).
   let playbook: Playbook;
   let params: Record<string, string | number | boolean>;
   try {
     playbook = await loadPlaybook(opts.playbook);
     params = coerceParams(opts.params, playbook);
   } catch (err) {
-    return {
-      ok: false,
-      error: 'UNKNOWN',
-      message: err instanceof Error ? err.message : String(err),
-    };
+    return { ok: false, error: 'UNKNOWN', message: errMsg(err) };
   }
-  // Default step timeout is generous because some sites need real time
-  // to settle (Akamai sensor JS, A/B test loaders, lazy bundles). 30s
-  // beats the headache of "tight timeout, looks broken when it's not."
+  // Generous default — Akamai sensor JS, A/B loaders, lazy bundles all
+  // need real time to settle. Tight timeouts make broken sites look
+  // worse than they are.
   const stepTimeoutMs = opts.stepTimeoutMs ?? 30000;
 
-  // Either reuse the test-injected page or boot Chromium ourselves.
   let browser: Browser | undefined;
   let context: BrowserContext | undefined;
   let page: Page;
   if (opts.pageOverride) {
     page = opts.pageOverride;
   } else {
-    // Use playwright-extra + stealth plugin by default. Stealth patches
-    // navigator.webdriver, plugin enumeration, languages, permissions,
-    // WebGL vendor strings, and other tells that bot detectors (Akamai,
-    // Cloudflare, DataDome, PerimeterX) check. Without it, vanilla
-    // headless Playwright gets a 403 from any decent enterprise site.
-    // Verified against Southwest: vanilla → 403 sensor block, stealth
-    // → 200 with real flight data.
+    // playwright-extra + stealth plugin patches navigator.webdriver,
+    // plugin enumeration, WebGL vendor strings, etc. Vanilla headless
+    // Playwright eats a 403 from any decent enterprise site (verified:
+    // Southwest 403 → 200 with stealth).
     let chromium: typeof import('playwright').chromium;
     try {
       const pwExtra = await import('playwright-extra');
@@ -86,10 +64,7 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
         (stealthMod as unknown as () => unknown);
       pwExtra.chromium.use(stealthFactory() as never);
       chromium = pwExtra.chromium as unknown as typeof import('playwright').chromium;
-    } catch (err) {
-      // Fall back to vanilla playwright if the stealth deps aren't there
-      // (e.g., a downstream user installs imprint without optional deps).
-      // Bot-protected sites will likely fail in this mode.
+    } catch {
       try {
         const pw = await import('playwright');
         chromium = pw.chromium;
@@ -97,37 +72,28 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
         return {
           ok: false,
           error: 'UNKNOWN',
-          message: `Playwright not available: ${innerErr instanceof Error ? innerErr.message : String(innerErr)}. Run: bunx playwright install chromium`,
+          message: `Playwright not available: ${errMsg(innerErr)}. Run: bunx playwright install chromium`,
         };
       }
     }
     try {
       browser = await chromium.launch({ headless: !opts.headed });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       return {
         ok: false,
         error: 'UNKNOWN',
-        message: `Could not launch Chromium: ${msg}. Run: bunx playwright install chromium`,
+        message: `Could not launch Chromium: ${errMsg(err)}. Run: bunx playwright install chromium`,
       };
     }
     context = await browser.newContext();
     page = await context.newPage();
   }
 
-  // Capture body text eagerly inside the response handler — Playwright/CDP
-  // garbage-collects response bodies aggressively, so a lazy callback that
-  // tries to read text() at extraction time often fails with "no resource
-  // with given identifier found." Reading inside the handler is safe.
-  // Track the pending body-read promises so the result extraction can
-  // await them all (otherwise a wait_for that fires before text()
-  // resolves would extract from a partial captured list).
-  const captured: Array<{
-    url: string;
-    method: string;
-    status: number;
-    body: string | null;
-  }> = [];
+  // Read body text inside the response handler — Playwright/CDP GCs
+  // response bodies aggressively, so a lazy text() at extraction time
+  // often fails with "no resource with given identifier found." Track
+  // pending reads so extraction waits for them all.
+  const captured: Array<{ url: string; method: string; status: number; body: string | null }> = [];
   const pendingBodyReads: Array<Promise<unknown>> = [];
   let lastStep = 0;
 
@@ -148,31 +114,21 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
       log(`step ${i + 1}/${playbook.steps.length}: ${step.action}`);
       await executeStep(page, step, params, stepTimeoutMs);
       if (opts.trace) {
-        const traceShot = await dumpScreenshotOnFailure(
-          page,
-          `${playbook.toolName}-trace`,
-          lastStep,
-        );
+        const traceShot = await screenshot(page, `${playbook.toolName}-trace`, lastStep);
         log(`  url=${page.url()}`);
         if (traceShot) log(`  trace screenshot: ${traceShot}`);
       }
     }
-    // Drain any in-flight body reads before extracting — otherwise we
-    // might miss the result XHR if its text() hasn't resolved yet.
     await Promise.allSettled(pendingBodyReads);
     const data = await extractResult(page, playbook.result, captured);
     return { ok: true, data };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // Snapshot the page state at failure so the operator has something
-    // concrete to look at (selector that didn't match, popover that
-    // didn't open, etc). Lives in the system tmp dir; path is logged.
-    const screenshotPath = await dumpScreenshotOnFailure(page, playbook.toolName, lastStep);
+    const screenshotPath = await screenshot(page, playbook.toolName, lastStep);
     const suffix = screenshotPath ? `\nscreenshot: ${screenshotPath}` : '';
     return {
       ok: false,
       error: 'BAD_RESPONSE',
-      message: `Playbook failed at step ${lastStep}: ${msg}${suffix}`,
+      message: `Playbook failed at step ${lastStep}: ${errMsg(err)}${suffix}`,
     };
   } finally {
     if (!opts.pageOverride) {
@@ -182,11 +138,7 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   }
 }
 
-async function dumpScreenshotOnFailure(
-  page: Page,
-  toolName: string,
-  stepNum: number,
-): Promise<string | null> {
+async function screenshot(page: Page, toolName: string, stepNum: number): Promise<string | null> {
   try {
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -230,12 +182,13 @@ async function executeStep(
 ): Promise<void> {
   switch (step.action) {
     case 'navigate': {
-      const url = subst(step.url, params);
-      // SPAs (especially behind enterprise WAFs) keep persistent
-      // connections alive so the default 'load' waitUntil hangs. Use
-      // 'domcontentloaded' — the explicit wait_for handles the
-      // semantic "page is ready" condition.
-      await page.goto(url, { timeout: timeoutMs, waitUntil: 'domcontentloaded' });
+      // 'domcontentloaded' instead of 'load' — SPAs behind enterprise
+      // WAFs keep persistent connections alive so 'load' hangs forever.
+      // Explicit wait_for handles "page is ready" semantics.
+      await page.goto(subst(step.url, params), {
+        timeout: timeoutMs,
+        waitUntil: 'domcontentloaded',
+      });
       await applyWait(page, step.wait_for, undefined, timeoutMs);
       return;
     }
@@ -244,12 +197,10 @@ async function executeStep(
       try {
         await locator.click({ timeout: timeoutMs });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // Common pattern: a styled wrapper (role=checkbox, role=option,
-        // or a positioned overlay) intercepts pointer events. Playwright
-        // refuses to click in that case, but the click event bubbles —
-        // dispatching with force:true lets the wrapper's handler fire.
-        if (msg.includes('intercepts pointer events')) {
+        // Styled wrappers (role=checkbox/option, positioned overlays)
+        // often intercept pointer events. force:true bubbles the event
+        // through to the wrapper's handler.
+        if (errMsg(err).includes('intercepts pointer events')) {
           await locator.click({ timeout: timeoutMs, force: true });
         } else {
           throw err;
@@ -270,18 +221,14 @@ async function executeStep(
       return;
     }
     case 'submit': {
+      // Press Enter on the focused form — more reliable cross-site than
+      // clicking a submit-typed descendant.
       const locator = await firstMatching(page, step.locators, params, timeoutMs);
-      // Playwright doesn't expose form.submit(); press Enter on the form
-      // or click a submit-typed descendant. Press Enter is the more
-      // reliable cross-site behavior.
       await locator.press('Enter', { timeout: timeoutMs });
       await applyWait(page, step.wait_for, locator, timeoutMs);
       return;
     }
     case 'press': {
-      // Page-level press dispatches to whatever has focus; useful for
-      // dismissing overlays (Escape) or submitting a focused form (Enter).
-      // Locator-scoped press focuses the element first.
       let focusedLocator: PWLocator | undefined;
       if (step.locators && step.locators.length > 0) {
         focusedLocator = await firstMatching(page, step.locators, params, timeoutMs);
@@ -299,9 +246,9 @@ async function executeStep(
 }
 
 /**
- * Try each locator in priority order. Returns the first one that
- * resolves to a visible element within a short probe window. Throws
- * if none match.
+ * Try each locator in priority order with a tight per-locator timeout.
+ * Filter to visible elements before .first() — many sites have hidden
+ * mirrors (e.g. a hidden native <select> alongside a custom dropdown).
  */
 async function firstMatching(
   page: Page,
@@ -309,25 +256,15 @@ async function firstMatching(
   params: Record<string, string | number | boolean>,
   timeoutMs: number,
 ): Promise<PWLocator> {
-  // Probe each locator with a tight individual timeout — we want to
-  // try fallbacks quickly, not spend the full step timeout on the
-  // first locator that may have rotted between deploys.
-  //
-  // Filter to visible elements before picking .first(): many sites have
-  // hidden duplicates (a hidden native <select> alongside a custom
-  // autocomplete dropdown, for example). Without this filter, .first()
-  // may pick a hidden mirror that never becomes visible and the wait
-  // times out even though the visible match is right there.
   const probeMs = Math.max(1000, Math.floor(timeoutMs / Math.max(locators.length, 1)));
   const errors: string[] = [];
   for (const loc of locators) {
-    const pwLocator = buildLocator(page, loc, params);
-    const visibleOnly = pwLocator.locator('visible=true');
+    const visibleOnly = buildLocator(page, loc, params).locator('visible=true');
     try {
       await visibleOnly.first().waitFor({ state: 'visible', timeout: probeMs });
       return visibleOnly.first();
     } catch (err) {
-      errors.push(`${describeLocator(loc)}: ${err instanceof Error ? err.message : String(err)}`);
+      errors.push(`${describeLocator(loc)}: ${errMsg(err)}`);
     }
   }
   throw new Error(`No locator matched. Tried:\n  - ${errors.join('\n  - ')}`);
@@ -390,29 +327,23 @@ async function applyWait(
 ): Promise<void> {
   if (!wait) return;
   if (typeof wait === 'string') {
-    if (wait === 'networkidle') {
-      await page.waitForLoadState('networkidle', { timeout: timeoutMs });
-    } else if (wait === 'load') {
-      await page.waitForLoadState('load', { timeout: timeoutMs });
-    } else if (wait === 'visible') {
-      if (ctxLocator) await ctxLocator.waitFor({ state: 'visible', timeout: timeoutMs });
-    } else if (wait === 'hidden') {
-      if (ctxLocator) await ctxLocator.waitFor({ state: 'hidden', timeout: timeoutMs });
+    if (wait === 'networkidle' || wait === 'load') {
+      await page.waitForLoadState(wait, { timeout: timeoutMs });
+    } else if ((wait === 'visible' || wait === 'hidden') && ctxLocator) {
+      await ctxLocator.waitFor({ state: wait, timeout: timeoutMs });
     }
     return;
   }
   if ('xhr' in wait) {
     const re = new RegExp(wait.xhr);
-    const t = wait.timeout_ms ?? timeoutMs;
     await page.waitForResponse(
       (resp) => re.test(resp.url()) && (!wait.method || resp.request().method() === wait.method),
-      { timeout: t },
+      { timeout: wait.timeout_ms ?? timeoutMs },
     );
     return;
   }
   if ('sleep_ms' in wait) {
     await page.waitForTimeout(wait.sleep_ms);
-    return;
   }
 }
 
@@ -430,16 +361,13 @@ async function extractResult(
     if (!last || last.body === null) {
       throw new Error(`No captured XHR matched ${result.url_pattern} (with a readable body)`);
     }
-    // The result XHR fired but came back as an error — typically Akamai/
-    // Cloudflare bot block (403) even from a real Chromium. Surface it
-    // instead of silently returning empty data.
     if (last.status >= 400) {
       const hint =
         last.status === 403
-          ? 'Likely bot detection — even headless Chromium can get flagged. Try --headed, or use a stealth-patched browser (rebrowser-patches / playwright-stealth).'
+          ? ' Likely bot detection — try --headed, or capture a fresh recording.'
           : '';
       throw new Error(
-        `Result XHR returned ${last.status} (${last.url}): ${last.body.slice(0, 300)}. ${hint}`,
+        `Result XHR returned ${last.status} (${last.url}): ${last.body.slice(0, 300)}.${hint}`,
       );
     }
     let parsed: unknown;
@@ -448,12 +376,10 @@ async function extractResult(
     } catch {
       throw new Error(`Result XHR body was not JSON (${last.url}): ${last.body.slice(0, 200)}`);
     }
-    const values = extractAt(parsed, result.extract);
-    return { [result.return_as]: values, source_url: last.url };
+    return { [result.return_as]: extractAt(parsed, result.extract), source_url: last.url };
   }
   // dom source
-  const params = {} as Record<string, string | number | boolean>;
-  const locator = await firstMatching(page, result.locators, params, 5000);
+  const locator = await firstMatching(page, result.locators, {}, 5000);
   const value =
     result.extract === 'text'
       ? await locator.textContent()
@@ -461,10 +387,8 @@ async function extractResult(
   return { [result.return_as]: value };
 }
 
+/** Substitute ${X} or ${param.X} (we accept both for ergonomics). */
 function subst(template: string, params: Record<string, string | number | boolean>): string {
-  // Reuse workflow-runtime's substituter for ${param.X} consistency, but
-  // this template uses bare ${X} — so wrap to translate. We accept BOTH
-  // ${X} and ${param.X} for ergonomics.
   const mapped = template.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, '${param.$1}');
   return substituteString(mapped, params, { site: '', cookies: [], values: {} }, []);
 }
@@ -472,13 +396,12 @@ function subst(template: string, params: Record<string, string | number | boolea
 function escapeAttr(s: string): string {
   return s.replace(/"/g, '\\"');
 }
-
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-
 function cssEscape(s: string): string {
-  // Basic CSS identifier escaping. Playwright's #id selector tolerates
-  // most chars but we sanitize to avoid breaking compound selectors.
   return s.replace(/([!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~])/g, '\\$1');
+}
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
