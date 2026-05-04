@@ -101,3 +101,30 @@ examples/<site>/
 ├── cron.json                   schedule + params + replayBackend + notifyWhen
 └── backends.json               output of `imprint probe-backends`
 ```
+
+## Extending Imprint
+
+Three load-bearing extension points if you fork or contribute upstream:
+
+### Add a new `notifyWhen` predicate type
+
+`src/imprint/types.ts` — add a new variant to `NotifyWhenSchema` (z.discriminatedUnion). Then in `src/imprint/notify.ts`'s `evaluateNotifyWhen` add the matching switch case. The dispatcher pattern (single discriminator + exhaustive switch) means TypeScript will fail to compile if you forget to handle the new type.
+
+Example: `volume_above` (push when an array's length exceeds N) would be ~15 LOC across the schema + the case.
+
+### Add a per-site auth extractor (for `imprint login`)
+
+`src/imprint/login.ts` — the `EXTRACTORS` array is an ordered list of `{ name, match }`. Each `match` takes a Session and returns either a values map or `null`. Add a new entry for the auth pattern of your site (URL shape + response body shape that yields the named credential value). The runtime substitutes those values into workflow templates as `${credential.NAME}`.
+
+Pattern in v0.1: 1 extractor (Discover & Go's `Login` POST → `patron_id` / `session_id` / `patron_email`). Adding another is purely additive.
+
+### Add a new replay backend
+
+Less common, but if you build e.g. `paid-stealth-fetch` (an external stealth API) or `playwright-cdp-pool` (long-lived browser):
+
+1. Add the backend name to `ReplayBackendSchema` in `types.ts`.
+2. Add a switch case in `runWithLadder()` (`src/imprint/backend-ladder.ts`) — the case body invokes your backend and returns a `ToolResult`.
+3. Update `DEFAULT_LADDER` and `resolveLadder` if the new backend should be in the auto cascade.
+4. Add a probe entry in `probe-backends.ts`'s `allBackends` list.
+
+The ladder's escalation logic (FORBIDDEN → next rung; other errors → return) is shape-preserving — your backend just returns a `ToolResult`, the ladder handles routing.
