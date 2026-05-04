@@ -132,7 +132,7 @@ Verbs: `record`, `assemble`, `check`, `redact`, `generate`, `compile-playbook`, 
 
 ## Status
 
-v0.1 — pipeline complete, two demos live. v0.2 candidates in [TODOS.md](TODOS.md). What's changed: [CHANGELOG.md](CHANGELOG.md). Issues + PRs welcome.
+v0.1 — pipeline complete, two demos live. v0.2 candidates in [TODOS.md](TODOS.md). What's changed: [CHANGELOG.md](CHANGELOG.md). How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md). Issues + PRs welcome.
 
 ## License
 
