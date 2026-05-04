@@ -2,6 +2,8 @@
 
 A working MCP tool from a fresh clone in about 5 minutes.
 
+The fastest path is `imprint teach`, which runs the full pipeline interactively and handles platform integration automatically. For manual step-by-step control, follow the commands below.
+
 ## Prerequisites
 
 - [Bun](https://bun.sh) ≥ 1.3
@@ -70,32 +72,23 @@ imprint probe-backends mysite
 #   → Output: examples/mysite/backends.json
 
 # 7. Test it
-imprint mcp-server --site mysite    # stdio MCP server
+imprint mcp-server mysite    # stdio MCP server
 ```
 
 You now have an MCP tool any agent can call.
 
-## Wire it up to Claude Desktop
+## Connect to your AI tool
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+`imprint teach` handles platform integration automatically at the end of the pipeline. For manual setup, see [docs/integrations.md](integrations.md).
 
-```json
-{
-  "mcpServers": {
-    "imprint": {
-      "command": "imprint",
-      "args": ["mcp-server"]
-    }
-  }
-}
-```
-
-Restart Claude Desktop. The tools you've generated will appear in the MCP tools panel — Claude can now call them.
-
-## Wire it up to mcp-inspector (for debugging)
+Quick examples:
 
 ```bash
-npx @modelcontextprotocol/inspector imprint mcp-server
+# Claude Code (one command):
+claude mcp add --scope project imprint-mysite -- imprint mcp-server mysite
+
+# Test with mcp-inspector:
+npx @modelcontextprotocol/inspector imprint mcp-server mysite
 ```
 
 ## Schedule it

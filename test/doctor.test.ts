@@ -9,9 +9,9 @@ import { describe, expect, it } from 'bun:test';
 import { type CheckResult, doctor, reportDoctor } from '../src/imprint/doctor.ts';
 
 describe('doctor()', () => {
-  it('returns one CheckResult per check (currently 6)', () => {
+  it('returns one CheckResult per check (currently 9)', () => {
     const checks = doctor();
-    expect(checks.length).toBe(6);
+    expect(checks.length).toBe(9);
     for (const c of checks) {
       expect(typeof c.name).toBe('string');
       expect(typeof c.ok).toBe('boolean');
@@ -62,5 +62,28 @@ describe('reportDoctor()', () => {
   it('header line embeds the imprint version', () => {
     const r = reportDoctor([{ name: 'X', ok: true, detail: 'ok' }]);
     expect(r.lines[0]).toMatch(/imprint v\d+\.\d+\.\d+ doctor/);
+  });
+});
+
+describe('AI tool advisory checks', () => {
+  it('claude code check is always ok (advisory)', () => {
+    const checks = doctor();
+    const ccCheck = checks.find((c) => c.name === 'Claude Code');
+    expect(ccCheck).toBeDefined();
+    expect(ccCheck?.ok).toBe(true);
+  });
+
+  it('hermes check is always ok (advisory)', () => {
+    const checks = doctor();
+    const hCheck = checks.find((c) => c.name === 'Hermes Agent');
+    expect(hCheck).toBeDefined();
+    expect(hCheck?.ok).toBe(true);
+  });
+
+  it('openclaw check is always ok (advisory)', () => {
+    const checks = doctor();
+    const ocCheck = checks.find((c) => c.name === 'OpenClaw');
+    expect(ocCheck).toBeDefined();
+    expect(ocCheck?.ok).toBe(true);
   });
 });
