@@ -111,24 +111,16 @@ function writeConfig(site: string, body: object): string {
 }
 
 describe('CronConfigSchema', () => {
-  it('accepts a minimal valid config', () => {
-    const r = CronConfigSchema.safeParse({ schedule: '* * * * *', params: { x: 1 } });
-    expect(r.success).toBe(true);
-  });
-
-  it('defaults params to {} when omitted', () => {
+  it('accepts minimal config and defaults params to {}', () => {
     const r = CronConfigSchema.parse({ schedule: '* * * * *' });
     expect(r.params).toEqual({});
   });
 
-  it('rejects when schedule is missing', () => {
-    const r = CronConfigSchema.safeParse({ params: {} });
-    expect(r.success).toBe(false);
-  });
-
-  it('rejects non-primitive param values', () => {
-    const r = CronConfigSchema.safeParse({ schedule: '* * * * *', params: { x: { nested: 1 } } });
-    expect(r.success).toBe(false);
+  it.each([
+    ['missing schedule', { params: {} }],
+    ['non-primitive param', { schedule: '* * * * *', params: { x: { nested: 1 } } }],
+  ])('rejects: %s', (_label, input) => {
+    expect(CronConfigSchema.safeParse(input).success).toBe(false);
   });
 });
 
