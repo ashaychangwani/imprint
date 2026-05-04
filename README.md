@@ -13,7 +13,9 @@
 <br>
 
 ```bash
-bun install -g imprint
+git clone https://github.com/ashaychangwani/imprint.git && cd imprint
+bun install && bun link && bunx playwright install chromium
+
 imprint teach southwest --url https://www.southwest.com
 ```
 
@@ -85,8 +87,9 @@ A typed MCP tool is generated and wired into your AI platform. Your agent calls 
 ## Install
 
 ```bash
-bun install -g imprint            # install the CLI
-bunx playwright install chromium  # browser engine for stealth-fetch + playbook
+git clone https://github.com/ashaychangwani/imprint.git && cd imprint
+bun install && bun link            # makes `imprint` available globally
+bunx playwright install chromium   # browser engine for stealth-fetch + playbook
 ```
 
 Set your LLM credentials and verify:
@@ -97,17 +100,6 @@ imprint doctor
 ```
 
 Requires [Bun](https://bun.sh) >= 1.3 and a GCP project with [Vertex AI](https://cloud.google.com/vertex-ai) Anthropic models enabled.
-
-<details>
-<summary><strong>Install from source</strong></summary>
-
-```bash
-git clone https://github.com/ashaychangwani/imprint.git && cd imprint
-bun install && bun link
-bunx playwright install chromium
-```
-
-</details>
 
 <br>
 
