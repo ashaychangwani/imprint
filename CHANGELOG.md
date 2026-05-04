@@ -31,6 +31,14 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - **Typo suggestions** for unknown verbs: `imprint recrod` → "did you mean `imprint record`?" via Levenshtein distance (≤ 3 edits AND ≤ half-length). Same UX pattern as git/bun. Tested.
 - **Capped cron success-log preview** at 500 chars (full payload still available via IMPRINT_DEBUG=1) so long-running daemons don't flood stderr. Southwest's ~100KB shopping response went from log-flooding to one-line.
 - **`--quiet` flag for `imprint cron`** (and `IMPRINT_QUIET=1` env var) — suppresses info logs on success so OS schedulers (cron, systemd, launchd) only mail/alert when something's actually broken. Failures still surface to stderr (separate code path).
+- **`isDebug()` / `isQuiet()` env helpers** — internal `=== '1'` semantics. Fixes a subtle bug where `if (process.env.IMPRINT_DEBUG)` was truthy for the string `"0"` (non-empty string coerces to true), so `IMPRINT_DEBUG=0` would actually enable debug mode.
+- **Per-verb missing-arg errors point to `--help`**: `imprint record` (no site) → "→ run `imprint record --help` for usage." Shared via the `requirePositional` helper so all 11 positional-taking verbs benefit.
+- **`--param k=v` malformed input** now shows a concrete example (`→ example: --param origin_airport_code=SJC`) instead of just "requires k=v form".
+- **Pipeline next-step hints**: `record` → `redact` → `generate` → `emit` → `cron`. Every successful verb now ends with the exact command for the next step, including the file path produced. A first-time user can chain the entire pipeline by following the printed commands.
+- **MCP no-tools error** suggests the bundled `echo` fixture so first-time users can verify the MCP wire-up before they've recorded anything.
+- **Cron expression error** now shows the format and links crontab.guru.
+- **Vertex project ID error** shows the exact `export ANTHROPIC_VERTEX_PROJECT_ID=…` command and points at `imprint doctor` for the rest of the env-var checklist.
+- **Workflow placeholder error** lists the params that *were* passed (or, if none, shows the exact `--param X=<value>` to add).
 - **Single source of truth for the backend enum** — `BackendsCacheSchema` previously duplicated `['fetch', 'stealth-fetch', 'playbook']` literally. Now derives from `ReplayBackendSchema.exclude(['auto'])`. Adding a new backend updates one place.
 - **Tighter type narrowing** — `runWithLadder` parameter changed from `ReplayBackend[]` to `ConcreteBackend[]` (= `Exclude<ReplayBackend, 'auto'>`); the unreachable `case 'auto'` defensive throw deleted.
 - **Zero dead code, enforced** — three-tool defense:
