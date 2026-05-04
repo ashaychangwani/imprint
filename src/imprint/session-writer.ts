@@ -119,7 +119,9 @@ export function assembleFromJsonl(jsonlPath: string): Session {
   }
 
   if (!meta) {
-    throw new Error(`Session JSONL ${jsonlPath} has no meta header — cannot rehydrate`);
+    throw new Error(
+      `Session JSONL ${jsonlPath} has no meta header — cannot rehydrate.\n→ this usually means recording was killed before the first event fired; re-record.`,
+    );
   }
 
   const session: Session = {
