@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 // ─── Captured session (output of `imprint record`) ──────────────────────────
 
-export const CapturedRequestSchema = z.object({
+const CapturedRequestSchema = z.object({
   seq: z.number().int().nonnegative(),
   /** ms since recording started */
   timestamp: z.number(),
@@ -31,7 +31,7 @@ export const CapturedRequestSchema = z.object({
 });
 export type CapturedRequest = z.infer<typeof CapturedRequestSchema>;
 
-export const CapturedEventSchema = z.object({
+const CapturedEventSchema = z.object({
   seq: z.number().int().nonnegative(),
   timestamp: z.number(),
   type: z.enum([
@@ -54,7 +54,7 @@ export const CapturedEventSchema = z.object({
 });
 export type CapturedEvent = z.infer<typeof CapturedEventSchema>;
 
-export const CookieSnapshotSchema = z.object({
+const CookieSnapshotSchema = z.object({
   takenAt: z.string(),
   timestamp: z.number(),
   label: z.enum(['start', 'end', 'manual']),
@@ -73,7 +73,7 @@ export const CookieSnapshotSchema = z.object({
 });
 export type CookieSnapshot = z.infer<typeof CookieSnapshotSchema>;
 
-export const NarrationSchema = z.object({
+const NarrationSchema = z.object({
   seq: z.number().int().nonnegative(),
   timestamp: z.number(),
   text: z.string(),
@@ -94,7 +94,7 @@ export type Session = z.infer<typeof SessionSchema>;
 
 // ─── Workflow (output of `imprint generate`) ────────────────────────────────
 
-export const WorkflowParameterSchema = z.object({
+const WorkflowParameterSchema = z.object({
   name: z.string(),
   type: z.enum(['string', 'number', 'boolean']),
   description: z.string(),
@@ -103,7 +103,7 @@ export const WorkflowParameterSchema = z.object({
 });
 export type WorkflowParameter = z.infer<typeof WorkflowParameterSchema>;
 
-export const WorkflowRequestSchema = z.object({
+const WorkflowRequestSchema = z.object({
   method: z.string(),
   /** Template; ${param.X} substitutes a parameter, ${response[N].path} an
    *  earlier extracted value. */
@@ -150,7 +150,7 @@ export type ToolResult<T = unknown> =
 
 /** Push-on-success predicate. Without one, cron only pushes on failure.
  *  See docs/architecture.md for the predicate language. */
-export const NotifyWhenSchema = z.discriminatedUnion('type', [
+const NotifyWhenSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('price_below'),
     threshold: z.number(),
@@ -167,13 +167,13 @@ export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
 /** fetch (cheap, breaks on Akamai) → stealth-fetch (mint tokens, ~1s) →
  *  playbook (full DOM walk, ~9s, universal). 'auto' walks the ladder,
  *  escalating only on FORBIDDEN. */
-export const ReplayBackendSchema = z.enum(['fetch', 'stealth-fetch', 'playbook', 'auto']);
+const ReplayBackendSchema = z.enum(['fetch', 'stealth-fetch', 'playbook', 'auto']);
 export type ReplayBackend = z.infer<typeof ReplayBackendSchema>;
 
 /** Per-backend probe result. Written to examples/<site>/backends.json
  *  by `imprint probe-backends`; cron + MCP read it at startup so they
  *  start with the cheapest known-working backend. */
-export const BackendProbeResultSchema = z.discriminatedUnion('outcome', [
+const BackendProbeResultSchema = z.discriminatedUnion('outcome', [
   z.object({
     outcome: z.literal('ok'),
     durationMs: z.number(),
@@ -198,7 +198,7 @@ export const BackendProbeResultSchema = z.discriminatedUnion('outcome', [
     detail: z.string(),
   }),
 ]);
-export type BackendProbeResult = z.infer<typeof BackendProbeResultSchema>;
+type BackendProbeResult = z.infer<typeof BackendProbeResultSchema>;
 
 export const BackendsCacheSchema = z.object({
   probedAt: z.string(),
@@ -222,7 +222,7 @@ export type CronConfig = z.infer<typeof CronConfigSchema>;
 // ─── Playbook (DOM-replay artifact) ─────────────────────────────────────────
 
 /** Locator strategies, in priority order: role+name → aria_label → text → id → css. */
-export const LocatorSchema = z.discriminatedUnion('by', [
+const LocatorSchema = z.discriminatedUnion('by', [
   z.object({
     by: z.literal('role'),
     value: z.string(),
@@ -243,7 +243,7 @@ export const LocatorSchema = z.discriminatedUnion('by', [
 ]);
 export type Locator = z.infer<typeof LocatorSchema>;
 
-export const WaitForSchema = z.union([
+const WaitForSchema = z.union([
   z.literal('networkidle'),
   z.literal('load'),
   z.literal('visible'),
@@ -257,7 +257,7 @@ export const WaitForSchema = z.union([
 ]);
 export type WaitFor = z.infer<typeof WaitForSchema>;
 
-export const PlaybookStepSchema = z.discriminatedUnion('action', [
+const PlaybookStepSchema = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('navigate'),
     url: z.string(),
@@ -293,7 +293,7 @@ export const PlaybookStepSchema = z.discriminatedUnion('action', [
 ]);
 export type PlaybookStep = z.infer<typeof PlaybookStepSchema>;
 
-export const PlaybookResultSchema = z.discriminatedUnion('source', [
+const PlaybookResultSchema = z.discriminatedUnion('source', [
   z.object({
     source: z.literal('xhr'),
     url_pattern: z.string(),
@@ -312,14 +312,12 @@ export const PlaybookResultSchema = z.discriminatedUnion('source', [
 ]);
 export type PlaybookResult = z.infer<typeof PlaybookResultSchema>;
 
-// Playbook params are structurally identical to workflow params; share the schema.
-export const PlaybookParameterSchema = WorkflowParameterSchema;
-export type PlaybookParameter = WorkflowParameter;
-
+// Playbook params are structurally identical to workflow params — reuse
+// the same schema directly to stay in sync.
 export const PlaybookSchema = z.object({
   toolName: z.string(),
   summary: z.string(),
-  parameters: z.array(PlaybookParameterSchema),
+  parameters: z.array(WorkflowParameterSchema),
   steps: z.array(PlaybookStepSchema).min(1),
   result: PlaybookResultSchema,
   notes: z.string().optional(),

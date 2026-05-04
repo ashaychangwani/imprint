@@ -25,7 +25,7 @@ import {
   type ToolResult,
 } from './types.ts';
 
-export interface RunCronOptions {
+interface RunCronOptions {
   /** Example directory under examples/, e.g. "discoverandgo". */
   site: string;
   /** Override examples directory. Defaults to <cwd>/examples. */

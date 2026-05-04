@@ -9,7 +9,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-export interface LaunchOptions {
+interface LaunchOptions {
   /** CDP port. If omitted, picks a free ephemeral port. */
   port?: number;
   /** Initial URL to open. Defaults to about:blank. */
@@ -22,7 +22,7 @@ export interface LaunchOptions {
   extraArgs?: string[];
 }
 
-export interface LaunchedChromium {
+interface LaunchedChromium {
   process: ChildProcess;
   port: number;
   userDataDir: string;
@@ -125,7 +125,7 @@ export function findChromium(): string {
   );
 }
 
-export async function pickFreePort(): Promise<number> {
+async function pickFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
     server.unref();

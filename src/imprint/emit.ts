@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin, resolve as pathResolve, relative } from 'node:path';
 import { type Workflow, WorkflowSchema } from './types.ts';
 
-export interface EmitOptions {
+interface EmitOptions {
   /** Path to workflow.json */
   workflowPath: string;
   /** Output dir; defaults to dirname(workflowPath). File: <outDir>/index.ts. */
@@ -14,7 +14,7 @@ export interface EmitOptions {
   force?: boolean;
 }
 
-export interface EmitResult {
+interface EmitResult {
   workflowPath: string;
   outPath: string;
   toolName: string;

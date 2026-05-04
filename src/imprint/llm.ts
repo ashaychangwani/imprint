@@ -3,7 +3,7 @@
 
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 
-export interface LLMConfig {
+interface LLMConfig {
   projectId: string;
   region: string;
   model: string;
@@ -34,7 +34,7 @@ export function loadConfig(overrides: Partial<LLMConfig> = {}): LLMConfig {
   };
 }
 
-export interface AnalyzeResult {
+interface AnalyzeResult {
   text: string;
   inputTokens: number;
   outputTokens: number;

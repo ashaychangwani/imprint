@@ -205,7 +205,7 @@ export function redactHeaders(
   return { redacted: out, redactionsCount: count };
 }
 
-export interface RedactionStats {
+interface RedactionStats {
   /** Number of individual values replaced across the entire session. */
   totalRedactions: number;
   /** Number of requests touched (had at least one redaction). */
@@ -216,7 +216,7 @@ export interface RedactionStats {
   warnings: string[];
 }
 
-export interface RedactOptions {
+interface RedactOptions {
   /**
    * Header names (case-insensitive) to NEVER redact even if they match
    * the sensitive header list. Use for known-public headers like

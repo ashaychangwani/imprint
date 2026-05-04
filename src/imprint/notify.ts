@@ -14,14 +14,14 @@ import type { NotifyWhen } from './types.ts';
 
 const PUSHOVER_URL = 'https://api.pushover.net/1/messages.json';
 
-export interface NotifyResult {
+interface NotifyResult {
   /** True if the provider was configured AND the API accepted the message. */
   delivered: boolean;
   /** Set when delivery was attempted-but-failed, OR provider was skipped. */
   reason?: string;
 }
 
-export interface NotifyDecision {
+interface NotifyDecision {
   notify: boolean;
   /** Used as the push title when notify=true. */
   title?: string;
@@ -77,7 +77,7 @@ export async function notify(
   return { pushover, ntfy };
 }
 
-export async function notifyPushover(
+async function notifyPushover(
   title: string,
   message: string,
   fetchImpl: typeof fetch = fetch,
@@ -113,7 +113,7 @@ export async function notifyPushover(
   }
 }
 
-export async function notifyNtfy(
+async function notifyNtfy(
   title: string,
   message: string,
   fetchImpl: typeof fetch = fetch,

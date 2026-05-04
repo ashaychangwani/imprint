@@ -38,7 +38,7 @@ export interface FetchInit {
   body?: string;
 }
 
-export interface FetchResult {
+interface FetchResult {
   status: number;
   ok: boolean;
   body: string;
@@ -63,7 +63,7 @@ export interface StealthFetch {
   close(): Promise<void>;
 }
 
-export interface BootstrapArgs {
+interface BootstrapArgs {
   baseUrl: string;
   probeUrl?: string;
   userAgent: string;
@@ -76,7 +76,7 @@ export interface BootstrapArgs {
  * sensor-headered network call. Production code never passes these —
  * defaults are real Chromium + globalThis.fetch.
  */
-export interface StealthFetchInternals {
+interface StealthFetchInternals {
   bootstrap?: (args: BootstrapArgs) => Promise<TokenCache>;
   underlyingFetch?: (url: string, init: FetchInit, tokens: TokenCache) => Promise<FetchResult>;
 }

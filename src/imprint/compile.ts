@@ -24,7 +24,7 @@ import {
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
 const log = createLog('compile');
 
-export interface CompileOptions {
+interface CompileOptions {
   /** Path to session.json or session.redacted.json */
   sessionPath: string;
   /** Where to write the artifact. Defaults to <sessionDir>/../<task.defaultOutFile> */
@@ -33,7 +33,7 @@ export interface CompileOptions {
   llmConfig?: Parameters<typeof loadConfig>[0];
 }
 
-export interface CompileResult<T> {
+interface CompileResult<T> {
   value: T;
   outPath: string;
   inputTokens: number;
@@ -112,7 +112,7 @@ async function compile<T>(opts: CompileOptions, task: CompileTask<T>): Promise<C
 
 // ─── generate (workflow.json) ────────────────────────────────────────────────
 
-export interface GenerateOptions extends CompileOptions {
+interface GenerateOptions extends CompileOptions {
   /** If true, send the FULL session to the LLM (don't shrink). Useful for
    *  debugging when shrinking might be over-aggressive. Default false. */
   noShrink?: boolean;
@@ -121,7 +121,7 @@ export interface GenerateOptions extends CompileOptions {
   saveShrunken?: boolean;
 }
 
-export interface GenerateResult {
+interface GenerateResult {
   workflow: Workflow;
   workflowPath: string;
   /** Number of requests the LLM saw (after shrinking). */
@@ -252,7 +252,7 @@ function rootDomain(hostname: string): string {
 
 // ─── compilePlaybook (playbook.yaml) ─────────────────────────────────────────
 
-export interface CompilePlaybookResult {
+interface CompilePlaybookResult {
   playbook: Playbook;
   playbookPath: string;
   inputTokens: number;

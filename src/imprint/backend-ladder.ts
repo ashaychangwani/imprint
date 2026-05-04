@@ -13,7 +13,7 @@ import { type StealthFetch, createStealthFetch } from './stealth-fetch.ts';
 import type { ResolvedTool } from './tool-loader.ts';
 import type { ReplayBackend, ToolResult } from './types.ts';
 
-export interface LadderResult {
+interface LadderResult {
   result: ToolResult;
   usedBackend: ReplayBackend;
   /** One entry per rung that was tried. */
