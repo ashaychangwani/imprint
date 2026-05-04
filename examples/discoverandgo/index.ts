@@ -5,7 +5,7 @@
  * Site: discoverandgo
  * Intent: Reserve a museum pass on Discover & Go for a specific offer and date using a San Diego Public Library card.
  *
- * To regenerate: bun run dev emit examples/discoverandgo/workflow.json --force
+ * To regenerate: imprint emit examples/discoverandgo/workflow.json --force
  */
 
 import {
