@@ -198,7 +198,9 @@ function isVerbHelpRequest(argv: string[]): boolean {
 function requirePositional(argv: string[], verb: string, label: string): string | null {
   const v = argv[1];
   if (!v) {
-    console.error(`error: \`imprint ${verb}\` requires ${label}`);
+    console.error(
+      `error: \`imprint ${verb}\` requires ${label}\n→ run \`imprint ${verb} --help\` for usage.`,
+    );
     return null;
   }
   return v;
@@ -209,7 +211,11 @@ function parseParamKV(entries: string[]): Record<string, string | number | boole
   const out: Record<string, string | number | boolean> = {};
   for (const kv of entries) {
     const eq = kv.indexOf('=');
-    if (eq === -1) throw new Error(`--param requires k=v form, got "${kv}"`);
+    if (eq === -1) {
+      throw new Error(
+        `--param requires k=v form, got "${kv}"\n→ example: --param origin_airport_code=SJC`,
+      );
+    }
     const k = kv.slice(0, eq);
     const v = kv.slice(eq + 1);
     if (v === 'true' || v === 'false') out[k] = v === 'true';
