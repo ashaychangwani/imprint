@@ -49,6 +49,12 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - **Vertex SDK error enrichment** — `llm.ts` wraps `messages.create` and translates the four common SDK errors (404 model not enabled in region, 401 not authenticated, 403 permission denied, 429 quota) into actionable messages with the exact `gcloud` / IAM / Model Garden link to fix. The raw SDK error is preserved as the JS `cause` chain (visible under `IMPRINT_DEBUG=1`). Documented in docs/troubleshooting.md.
 - **Credential store malformed-file error** — `loadCredentialStore` now throws with the file path + "→ delete and re-run \`imprint login <site>\`" hint instead of letting `JSON.parse` throw bare.
 - **Test coverage for the JSON extractor** — `test/llm.test.ts` (+9 tests for `extractJsonObject`'s fenced-block / nested-brace / escaped-quote branches).
+- **`assemble` next-step hint** — points users to `imprint check` after recovering a session.json from a partial .jsonl. Closes the last verb that was missing a next-step pointer.
+- **Credential placeholder error** matches the param error style — lists available credential keys and suggests re-running `imprint login` if the named key is missing. Helps when the credential store has a partial set (e.g. session_id captured but patron_id wasn't).
+- **`notifyWhen` decision logging** — every cron tick now logs `notifyWhen X: matched → pushing` or `notifyWhen X: no match (predicate ran, threshold not crossed)`. Silent no-match used to confuse users. Suppressed by `--quiet`.
+- **Vertex error troubleshooting docs** — `docs/troubleshooting.md` covers the four Vertex SDK error buckets (404 / 401 / 403 / 429) with the exact gcloud / IAM / Model Garden remediation for each.
+- **D13 + D14 added to `docs/decisions.md`** — three-tool dead-code defense (knip + tsc-strict + madge) and "user-friendly errors are worth the LOC" become ADR entries.
+- **`scripts/mcp-smoke-test.ts` fixed** — was using positional `discoverandgo` (wrong syntax for the `--site=<name>` flag) AND requiring a generated demo. Now defaults to the bundled `echo` fixture so it actually works on a clean checkout. Override via `IMPRINT_SMOKE_SITE=<other>`.
 - **Single source of truth for the backend enum** — `BackendsCacheSchema` previously duplicated `['fetch', 'stealth-fetch', 'playbook']` literally. Now derives from `ReplayBackendSchema.exclude(['auto'])`. Adding a new backend updates one place.
 - **Tighter type narrowing** — `runWithLadder` parameter changed from `ReplayBackend[]` to `ConcreteBackend[]` (= `Exclude<ReplayBackend, 'auto'>`); the unreachable `case 'auto'` defensive throw deleted.
 - **Zero dead code, enforced** — three-tool defense:
@@ -84,12 +90,13 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 
 | | Before | After |
 |---|---|---|
-| `src/imprint/` + `src/cli.ts` LOC | 5,828 | ~5,000 (-14%, includes +110 LOC for new doctor + +50 LOC load-json helper amortized across 4 callers) |
-| Source files | 26 | 24 (− 4 renames/folds + 4 new: compile.ts, doctor.ts, version.ts, load-json.ts) |
-| Tests | 137 / 13 files | 224 / 18 files (more user-path coverage) |
+| `src/imprint/` + `src/cli.ts` LOC | 5,828 | 5,714 (-2%, includes +137 LOC for new doctor verb + 5 new shared helpers: compile/doctor/version/load-json/sites) |
+| Source files | 26 | 25 (− 4 renames/folds + 5 new) |
+| Tests | 137 / 13 files | 238 / 20 files (more user-path coverage) |
 | README | sprint-changelog flavor (285 lines) | adoption-friendly (110 lines) |
 | Docs files | 3 | 10 (+ CHANGELOG, CONTRIBUTING, scripts/README) |
 | CLI verbs | 12 | 13 (+ doctor) |
+| ADR entries | — | 14 (D1-D14, including D13 dead-code defense + D14 errors-over-LOC) |
 
 ---
 
