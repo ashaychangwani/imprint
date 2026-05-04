@@ -123,6 +123,9 @@ export function reportCheck(path: string, result: CheckResult): void {
   console.log('');
   if (result.warnings.length === 0) {
     console.log('  ✓ no warnings — capture looks complete');
+    console.log('');
+    console.log('next step:');
+    console.log(`  imprint redact ${path}    # scrub credentials before LLM analysis`);
   } else {
     console.log(`  ⚠ ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'}:`);
     for (const w of result.warnings) {
