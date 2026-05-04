@@ -17,6 +17,7 @@ v0.1 shipped. Working demos: `examples/southwest` (live, defeats Akamai via stea
 - **Capture protocol** (CDP details): [docs/capture-protocol.md](docs/capture-protocol.md)
 - **Playbook debugging**: [docs/playbook-debugging.md](docs/playbook-debugging.md)
 - **Notification setup**: [docs/notifications.md](docs/notifications.md)
+- **Security model + redaction guarantees**: [docs/security.md](docs/security.md)
 
 ## Project layout
 
