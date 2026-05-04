@@ -5,10 +5,12 @@
 Show Imprint a workflow in a real browser — drive the page, narrate what you're doing — and you get back two deterministic replay artifacts plus a generated MCP tool any AI agent can call from then on. No re-decisions, no exploration tokens, no "the LLM clicked the wrong button" variance. The recording **is** the executable.
 
 ```
-imprint teach mysite --url https://...
+imprint teach google-flights --url https://flights.google.com
   → record → redact → generate → compile-playbook → emit
   → pick your platform → done
 ```
+
+`<site>` is a label you choose — it names the output folder under `examples/`. Pick something short and descriptive.
 
 ---
 
@@ -24,7 +26,7 @@ export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
 imprint doctor                    # verify setup
 
 # Teach your agent a new workflow (interactive — walks you through everything):
-imprint teach mysite --url https://your-site-here.example.com
+imprint teach google-flights --url https://flights.google.com
 ```
 
 `imprint teach` records the workflow, compiles both artifacts (API workflow + DOM playbook), generates the tool, and asks which AI platform you use. It then either runs the setup command or prints a paste-ready snippet.
