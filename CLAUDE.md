@@ -1,59 +1,42 @@
-# Imprint
+# Imprint — agent context
 
-**"Postman for AI Agents"** — Show an AI agent how to use a website once, and it can do it autonomously forever.
+Imprint is a CLI tool: record a real browser session once, get back two deterministic replay artifacts (an API workflow + a DOM playbook) plus a generated MCP tool an AI agent can call. "Postman for AI agents."
 
-## What is this?
+## Status
 
-Imprint is a Chrome extension that watches you browse a website, captures the underlying API calls (network requests) and your narration of what you're doing, then generates a reusable automation that an AI agent can execute on its own. Think "teach by demonstration" for AI agents.
+v0.1 shipped. Working demos: `examples/southwest` (live, defeats Akamai via stealth-fetch) and `examples/discoverandgo` (authed booking). `examples/luma` is WIP for the next demo. `examples/echo` is the MCP smoke-test fixture.
 
-## Stage
+## Where to look
 
-Pre-product. Idea validated through design doc, not yet validated with users.
+- **Architecture + module map**: [docs/architecture.md](docs/architecture.md)
+- **Glossary** (Workflow, Playbook, Backend, Stealth-fetch, etc.): [docs/glossary.md](docs/glossary.md)
+- **Decisions log** (why YAML, why ladder, why MCP-stdio default): [docs/decisions.md](docs/decisions.md)
+- **Getting started** (60-second quickstart): [docs/getting-started.md](docs/getting-started.md)
+- **Troubleshooting**: [docs/troubleshooting.md](docs/troubleshooting.md)
+- **Original design doc** (April 2026 office-hours approval): [docs/design.md](docs/design.md)
+- **Capture protocol** (CDP details): [docs/capture-protocol.md](docs/capture-protocol.md)
+- **Playbook debugging**: [docs/playbook-debugging.md](docs/playbook-debugging.md)
+- **Notification setup**: [docs/notifications.md](docs/notifications.md)
 
-## Key decisions made
-
-- **Approach:** Teach + Replay (Approach B). User teaches by demonstrating, agent replays for verification, user approves before autonomous execution.
-- **Graduation path:** Approach C (Teach + Expand) where the agent learns related workflows autonomously. Research-stage, not committed.
-- **Go-to-market:** Internal tools first. Companies automating their own admin panels/dashboards. Zero legal/ToS risk.
-- **Positioning:** "Postman for AI agents." Turn any internal tool into an MCP server in 5 minutes.
-- **Target user:** AI engineering teams at companies building agent products. NOT consumers (yet).
-- **Name:** Imprint
-
-## Core thesis
-
-Personal AI agents are emerging and they need a teaching mechanism. "Similar to how you would teach a human" — show them, narrate what you're doing, and they learn the workflow. Network-level capture (API calls) is more durable than vision-based automation (screenshots/CSS selectors).
-
-## Key risks
-
-1. **Platform risk:** Anthropic/OpenAI could ship native MCP learning as a built-in feature
-2. **Lesson rot:** Automations break as websites change (auth, API versions, A/B tests)
-3. **Auth handling:** httpOnly cookies, token expiry, CSRF — the hardest technical problem
-4. **Distribution:** Getting discovered in Chrome Web Store
-
-## Terminology
-
-- **Lesson:** A captured teaching session processed into a replayable workflow
-- **Automation:** The executable artifact generated from a lesson (MCP server, API wrapper, script)
-- **Replay:** Agent executing a learned lesson while the user watches for verification
-
-## Project structure
+## Project layout
 
 ```
-docs/
-  design.md      — Full design doc (approved, from /office-hours)
-  wireframe.html — UI sketch (Chrome extension + dashboard + replay view)
+src/
+├── cli.ts                  # 13 verbs (run `imprint --help`)
+├── imprint/                # core modules — see docs/architecture.md for the map
+examples/
+├── <site>/{sessions, workflow.json, playbook.yaml, index.ts, cron.json, backends.json}
+prompts/
+├── intent-detection.md     # generate (workflow.json) system prompt
+├── playbook-compilation.md # compile-playbook (playbook.yaml) system prompt
+docs/                       # human-facing documentation
+test/                       # bun test, ~130 tests
+scripts/                    # smoke tests + one-off dev helpers
 ```
 
-## The assignment (before writing any code)
+## Key risks (still open)
 
-Find 5 AI engineering teams. Ask: "If you could turn any internal tool into an MCP server in 5 minutes by showing an AI how to use it, would you pay $29/month?"
-
-3+ yes = build it. 0-2 yes = revisit target user.
-
-## Tech stack (planned, not committed)
-
-- Chrome Extension (Manifest V3, webRequest API, sidePanel)
-- TypeScript
-- Anthropic Claude Sonnet API (session analysis)
-- Playwright (replay execution, health checks)
-- Web dashboard (framework TBD)
+1. **Platform risk**: Anthropic / OpenAI could ship native MCP learning as a first-class feature.
+2. **Lesson rot**: automations break as websites change. Mitigation: ladder fallback (DOM playbook still works when API moves).
+3. **Auth handling**: httpOnly cookies, token expiry, CSRF — the hardest technical problem. Partially solved via per-site credential store + `imprint login`.
+4. **Distribution**: needs to be discoverable. v0.1 is CLI-first; future v0.2 may add a Chrome extension UX.

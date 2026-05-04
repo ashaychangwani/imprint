@@ -1,0 +1,116 @@
+# Troubleshooting
+
+The predictable failure modes. Most error messages in Imprint already include a `→ next step:` hint — this doc is the longer form of those hints.
+
+## "Could not locate Chromium"
+
+Imprint prefers Playwright's bundled Chromium over the system Chrome (corporate-managed Chrome installs often disallow `--remote-debugging-port`).
+
+**Fix:**
+```bash
+bunx playwright install chromium
+```
+
+Or set `CHROMIUM_PATH` to an explicit binary path.
+
+## "Playwright not available" (when running playbook backend)
+
+**Fix:**
+```bash
+bunx playwright install chromium
+```
+
+Same as above — ensure Playwright's Chromium is installed.
+
+## "FORBIDDEN" / 403 from a real site
+
+The site has bot detection. Three escalating fixes:
+
+1. **Set `replayBackend: "auto"`** in `cron.json` (or `imprint cron --once` will use it). The ladder will try `stealth-fetch` next, which mints sensor tokens via a brief Playwright bootstrap.
+
+2. **Probe and cache the working backend:**
+   ```bash
+   imprint probe-backends <site>
+   ```
+   This writes `backends.json`; cron + MCP read it at startup.
+
+3. **Compile a playbook fallback:**
+   ```bash
+   imprint compile-playbook examples/<site>/sessions/<ts>.redacted.json
+   ```
+   With a `playbook.yaml` present, the `auto` ladder escalates to a real DOM walk when fetch + stealth-fetch both fail.
+
+## "AUTH_EXPIRED" / 401
+
+Cookies have aged out.
+
+**Fix:**
+```bash
+imprint record <site> --persist-profile    # record while logged in
+imprint login <site> --from-session examples/<site>/sessions/<ts>.json
+```
+
+This rebuilds `~/.config/imprint/credentials/<site>.json`.
+
+## "RATE_LIMITED" / 429
+
+Back off. The cron schedule is probably too aggressive — every 5 minutes is fine for most sites; every 30 seconds is not.
+
+## "PUSHOVER_TOKEN / PUSHOVER_USER not set"
+
+You configured `notifyWhen` in `cron.json` but no push provider is set up.
+
+**Fix (free):**
+```bash
+export NTFY_URL=https://ntfy.sh/your-secret-topic-name
+```
+
+See [docs/notifications.md](notifications.md) for setup.
+
+## "LLM response did not contain a JSON object"
+
+The Vertex Anthropic call returned text instead of JSON. This happens occasionally when:
+- The prompt is being clipped (very large session)
+- The model returned an apology / refusal (rare)
+
+**Fix:** re-run `imprint generate`. If it persists, try `--no-shrink` or split the recording into smaller workflows.
+
+## "MCP tools panel is empty in Claude Desktop"
+
+Common causes:
+
+1. **Wrong path in claude_desktop_config.json.** If you didn't `bun link`, the entry needs to be `bun run /abs/path/to/imprint/src/cli.ts mcp-server`.
+
+2. **Restart required.** Claude Desktop reads config only at startup.
+
+3. **No examples/<site>/index.ts.** Imprint discovers tools by scanning `examples/`. If you haven't run `imprint emit`, there's nothing to expose.
+
+4. **Vertex env not set.** MCP server starts fine without it, but tool calls fail. Set `ANTHROPIC_VERTEX_PROJECT_ID`.
+
+Verify with mcp-inspector instead — it's faster to iterate on:
+```bash
+npx @modelcontextprotocol/inspector imprint mcp-server
+```
+
+## "No backend succeeded for <site>"
+
+`probe-backends` failed every rung. Either:
+
+- The recording is broken (check with `imprint check <session>`)
+- The site is genuinely uncrawlable from your network (corporate proxy, geo-block, anti-VPN)
+- Your `params` are wrong (a search with no results returns 200 OK with empty data — that's fine; if it returns 4xx, it's the params)
+
+Try the playbook backend manually:
+```bash
+imprint playbook <site> --headed --param key=value
+```
+
+Headed mode opens a visible Chromium so you can watch it run.
+
+## "No locator matched" (in playbook runner)
+
+The site's DOM changed since the recording. Locators are tried in priority order: `role+name → aria_label → text → id → css`. Roles and aria-labels are most stable; CSS selectors break first.
+
+**Fix:** re-record the session, then `imprint compile-playbook` again. Locators are LLM-generated from the recorded DOM, so a fresh recording captures the current shape.
+
+For deeper debugging, see [docs/playbook-debugging.md](playbook-debugging.md).
