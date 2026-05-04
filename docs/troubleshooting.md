@@ -2,6 +2,14 @@
 
 The predictable failure modes. Most error messages in Imprint already include a `→ next step:` hint — this doc is the longer form of those hints.
 
+## Before anything else: `imprint doctor`
+
+```bash
+imprint doctor
+```
+
+Checks every prerequisite (Bun, Chromium binary, Playwright Chromium install, Vertex project ID, region, push providers). Catches ~80% of "I just installed and nothing works" cases in one command. If a check fails the output includes the exact fix command.
+
 ## "Could not locate Chromium"
 
 Imprint prefers Playwright's bundled Chromium over the system Chrome (corporate-managed Chrome installs often disallow `--remote-debugging-port`).

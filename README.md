@@ -19,6 +19,7 @@ bun install
 bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
 bunx playwright install chromium
 export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
+imprint doctor                    # verify everything is wired up before recording
 
 # (alternative: skip `bun link` and call directly via `bun src/cli.ts <verb>`)
 

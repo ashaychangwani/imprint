@@ -27,6 +27,14 @@ export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
 export CLOUD_ML_REGION=us-east5    # optional; defaults to us-east5
 ```
 
+Verify the install with the built-in environment check:
+
+```bash
+imprint doctor
+# → checks Bun, Chromium, Playwright Chromium, Vertex env, push providers.
+# → exits 0 if all required checks pass; 1 otherwise (CI-friendly).
+```
+
 ## Your first tool — step by step
 
 Pick a site you want to automate. Internal admin panels, dashboards, and authed tools all work — anything you can drive in a browser.
