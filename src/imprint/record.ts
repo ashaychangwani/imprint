@@ -14,10 +14,9 @@ import { launchChromium } from './chromium.ts';
 import { IMPRINT_SENTINEL, INJECTED_LISTENER_SOURCE } from './inject-listener.ts';
 import { createSessionWriter } from './session-writer.ts';
 import type { CapturedEvent, CapturedRequest, CookieSnapshot } from './types.ts';
+import { VERSION } from './version.ts';
 
 const PATHS = envPaths('imprint', { suffix: '' });
-
-const VERSION = '0.1.0';
 
 export interface RecordOptions {
   /** Site label, e.g. "southwest". Determines output path. */

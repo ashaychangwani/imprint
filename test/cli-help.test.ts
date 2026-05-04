@@ -5,9 +5,9 @@
  * a real user staring at "No help for unknown verb" or a broken `--help`.
  */
 
+import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
-import { describe, expect, it } from 'bun:test';
 import { VERB_HELP } from '../src/cli.ts';
 
 const CLI_SOURCE = readFileSync(pathResolve(import.meta.dir, '..', 'src', 'cli.ts'), 'utf8');

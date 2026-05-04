@@ -12,6 +12,7 @@ import { createLog } from './log.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { discoverTools } from './tool-loader.ts';
 import { type BackendsCache, BackendsCacheSchema, CronConfigSchema } from './types.ts';
+import { VERSION } from './version.ts';
 
 export interface ProbeBackendsOptions {
   site: string;
@@ -27,7 +28,6 @@ export interface ProbeBackendsResult {
   outPath: string;
 }
 
-const IMPRINT_VERSION = '0.1.0';
 const log = createLog('probe');
 
 export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBackendsResult> {
@@ -114,7 +114,7 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
 
   const cache: BackendsCache = {
     probedAt: new Date().toISOString(),
-    imprintVersion: IMPRINT_VERSION,
+    imprintVersion: VERSION,
     preferredOrder: working,
     results,
   };
