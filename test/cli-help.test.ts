@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
-import { VERB_HELP } from '../src/cli.ts';
+import { VERB_HELP, closestVerb } from '../src/cli.ts';
 
 const CLI_SOURCE = readFileSync(pathResolve(import.meta.dir, '..', 'src', 'cli.ts'), 'utf8');
 
@@ -48,5 +48,29 @@ describe('CLI verb / VERB_HELP drift', () => {
 
   it.each(Object.keys(VERB_HELP))('%s example starts with `imprint %s`', (verb) => {
     expect(VERB_HELP[verb]?.example.startsWith(`imprint ${verb}`)).toBe(true);
+  });
+});
+
+describe('closestVerb (typo suggestions)', () => {
+  it.each([
+    ['recrod', 'record'],
+    ['recor', 'record'],
+    ['crn', 'cron'],
+    ['mcpserver', 'mcp-server'],
+    ['emt', 'emit'],
+    ['doctr', 'doctor'],
+  ])('%s → %s', (typo, expected) => {
+    expect(closestVerb(typo)).toBe(expected);
+  });
+
+  it.each(['xyzzy', 'foobar', 'gen', 'aaaaaaaa'])(
+    '%s → null (too far from any verb)',
+    (input) => {
+      expect(closestVerb(input)).toBeNull();
+    },
+  );
+
+  it('returns the exact verb when input matches one', () => {
+    expect(closestVerb('record')).toBe('record');
   });
 });
