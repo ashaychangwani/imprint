@@ -36,3 +36,10 @@ Thumbs.db
 # Test artifacts
 coverage/
 .nyc_output/
+
+# Claude Code — local-only state. Anything else under .claude/
+# (e.g. agents/, commands/, hooks/, mcp.json) is intentionally
+# tracked so it's shared with the rest of the team.
+.claude/plans/
+.claude/worktrees/
+.claude/settings.local.json
