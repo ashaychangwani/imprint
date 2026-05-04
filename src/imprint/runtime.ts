@@ -20,12 +20,18 @@ export interface CredentialStore {
   values: Record<string, string>;
 }
 
-/** Load credentials for a site from disk. Returns null if no login is recorded. */
+/** Load credentials for a site from disk. Returns null if no login is recorded.
+ *  Throws with a remediation hint if the file exists but is malformed. */
 export function loadCredentialStore(site: string): CredentialStore | null {
   const path = pathJoin(PATHS.config, 'credentials', `${site}.json`);
   if (!existsSync(path)) return null;
-  const raw = JSON.parse(readFileSync(path, 'utf8')) as CredentialStore;
-  return raw;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as CredentialStore;
+  } catch (err) {
+    throw new Error(
+      `Credential store at ${path} is corrupted: ${err instanceof Error ? err.message : String(err)}\n→ delete the file and re-run \`imprint login ${site}\` to regenerate.`,
+    );
+  }
 }
 
 interface ExecuteOptions {
