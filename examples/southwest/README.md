@@ -8,6 +8,7 @@
 - **`probe-backends` skipping the futile rung.** The cached `backends.json` orders the ladder `stealth-fetch → playbook` so cron doesn't burn 200ms on a fetch attempt every tick.
 - **`notifyWhen: price_below`** pushing only on real drops, with the `pricePath` extracting from real Southwest response shape.
 - **The fresh-UUID header trick** — Southwest rejects stale `X-User-Experience-ID`; stealth-fetch regenerates per call.
+- **Multi-path `pricePath`** — `cron.json`'s notifyWhen lists both the raw API shape (when stealth-fetch wins) and the playbook's reshaped output, so the push fires regardless of which backend produced the result.
 
 ## Run it
 

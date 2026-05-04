@@ -154,8 +154,12 @@ export const NotifyWhenSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('price_below'),
     threshold: z.number(),
-    /** Dot-path with [] for array iteration; see json-path.ts. */
-    pricePath: z.string(),
+    /** Dot-path with [] for array iteration; see json-path.ts.
+     *  Accepts an array of paths to try in order — useful when a tool
+     *  returns different shapes from different backends (e.g. raw API
+     *  shape from stealth-fetch vs. reshaped output from playbook).
+     *  The union of values from every matching path is taken. */
+    pricePath: z.union([z.string(), z.array(z.string()).min(1)]),
   }),
 ]);
 export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;

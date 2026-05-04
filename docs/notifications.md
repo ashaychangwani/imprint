@@ -63,7 +63,22 @@ Configure in `cron.json`:
 
 Currently supported:
 
-- `price_below` — pushes when `min(extracted prices) < threshold`. The `pricePath` uses the dot-path-with-`[]` syntax from `src/imprint/json-path.ts`. See [docs/glossary.md](glossary.md#NotifyWhen).
+- `price_below` — pushes when `min(extracted prices) < threshold`. The `pricePath` uses the dot-path-with-`[]` syntax from `src/imprint/json-path.ts` (see [docs/glossary.md](glossary.md#NotifyWhen)).
+
+  `pricePath` accepts either a single string or an array. Use an array when a tool returns different shapes from different backends — e.g. Southwest's stealth-fetch path returns the raw API JSON (`data.searchResults.airProducts[].lowestFare.value`) while the playbook path returns a reshaped envelope (`prices[]`):
+
+  ```json
+  "notifyWhen": {
+    "type": "price_below",
+    "threshold": 99,
+    "pricePath": [
+      "data.searchResults.airProducts[].lowestFare.value",
+      "prices[]"
+    ]
+  }
+  ```
+
+  The first path that matches the data shape wins; values from every matching path are unioned.
 
 Without a `notifyWhen`, the daemon only pushes on tool failures (with the error class + remediation).
 
