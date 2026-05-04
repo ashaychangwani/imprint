@@ -39,14 +39,14 @@ Quick start: docs/getting-started.md
 Full docs:   docs/architecture.md, docs/glossary.md, docs/decisions.md
 `;
 
-interface VerbHelp {
+export interface VerbHelp {
   summary: string;
   usage: string[];
   flags?: Array<{ name: string; description: string }>;
   example: string;
 }
 
-const VERB_HELP: Record<string, VerbHelp> = {
+export const VERB_HELP: Record<string, VerbHelp> = {
   record: {
     summary: 'Drive a workflow in Chromium and stream the session to JSONL.',
     usage: ['imprint record <site> [--url <url>] [--persist-profile] [--out <path>]'],
@@ -537,12 +537,16 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-main(process.argv.slice(2))
-  .then((code) => process.exit(code))
-  .catch((err) => {
-    console.error('imprint: fatal:', err instanceof Error ? err.message : String(err));
-    if (process.env.IMPRINT_DEBUG) {
-      console.error(err);
-    }
-    process.exit(1);
-  });
+// Only run when invoked as the entry point — importing this module
+// (e.g. for VERB_HELP from tests) must not trigger the CLI dispatch.
+if (import.meta.main) {
+  main(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error('imprint: fatal:', err instanceof Error ? err.message : String(err));
+      if (process.env.IMPRINT_DEBUG) {
+        console.error(err);
+      }
+      process.exit(1);
+    });
+}
