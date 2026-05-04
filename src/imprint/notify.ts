@@ -76,7 +76,8 @@ export async function notifyPushover(
   if (!token || !user) {
     return {
       delivered: false,
-      reason: 'PUSHOVER_TOKEN / PUSHOVER_USER not set (or set NTFY_URL for free push — see docs/notifications.md)',
+      reason:
+        'PUSHOVER_TOKEN / PUSHOVER_USER not set (or set NTFY_URL for free push — see docs/notifications.md)',
     };
   }
 
@@ -110,7 +111,8 @@ export async function notifyNtfy(
   if (!url) {
     return {
       delivered: false,
-      reason: 'NTFY_URL not set (e.g. https://ntfy.sh/your-secret-topic — see docs/notifications.md)',
+      reason:
+        'NTFY_URL not set (e.g. https://ntfy.sh/your-secret-topic — see docs/notifications.md)',
     };
   }
 
