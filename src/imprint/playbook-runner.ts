@@ -153,7 +153,11 @@ async function screenshot(page: Page, toolName: string, stepNum: number): Promis
 
 async function loadPlaybook(input: string | Playbook): Promise<Playbook> {
   if (typeof input !== 'string') return input;
-  if (!existsSync(input)) throw new Error(`Playbook not found: ${input}`);
+  if (!existsSync(input)) {
+    throw new Error(
+      `Playbook not found: ${input}\n→ run \`imprint compile-playbook <session.json>\` to create one.`,
+    );
+  }
   return parsePlaybook(readFileSync(input, 'utf8'));
 }
 
@@ -168,7 +172,9 @@ function coerceParams(
     } else if (p.default !== undefined) {
       merged[p.name] = p.default;
     } else {
-      throw new Error(`Missing required parameter: ${p.name}`);
+      throw new Error(
+        `Missing required parameter: ${p.name}\n→ pass --param ${p.name}=<value> on the CLI, or set it in cron.json.`,
+      );
     }
   }
   return merged;

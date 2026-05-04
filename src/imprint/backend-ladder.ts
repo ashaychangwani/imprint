@@ -164,12 +164,14 @@ function pickBaseUrl(tool: ResolvedTool): string {
   const firstRequest = tool.workflow.requests[0];
   if (!firstRequest) {
     throw new Error(
-      `Workflow ${tool.workflow.toolName} has no requests — stealth-fetch needs at least one request URL to derive the bootstrap origin.`,
+      `Workflow ${tool.workflow.toolName} has no requests — stealth-fetch needs at least one request URL.\n→ re-record the session; recording probably stopped before any XHR fired.`,
     );
   }
   const m = firstRequest.url.match(/^(https?:\/\/[^/]+)/);
   if (m?.[1]) return m[1];
-  throw new Error(`Could not derive bootstrap origin from URL: ${firstRequest.url}`);
+  throw new Error(
+    `Could not derive bootstrap origin from URL: ${firstRequest.url}\n→ check workflow.json — the first request URL must start with https://<domain>.`,
+  );
 }
 
 function playbookPath(examplesDir: string, site: string): string {
