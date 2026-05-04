@@ -72,9 +72,13 @@ src/imprint/
 ├── login.ts             Session.json → credentials store
 │
 ├── chromium.ts          Locate + launch Chromium for CDP
+├── doctor.ts            Environment health check (Bun, Chromium, Vertex env)
 ├── json-path.ts         Dot-path walker (a[].b.c)
-├── log.ts               createLog factory
-└── types.ts             Zod schemas (Session, Workflow, Playbook, Cron, etc.)
+├── load-json.ts         Shared file/JSON/schema-validation helper
+├── log.ts               createLog factory + isDebug/isQuiet env helpers
+├── sites.ts             availableSitesHint — "did you mean?" for site typos
+├── types.ts             Zod schemas (Session, Workflow, Playbook, Cron, etc.)
+└── version.ts           Single source for VERSION (read from package.json)
 ```
 
 ## Backend ladder
