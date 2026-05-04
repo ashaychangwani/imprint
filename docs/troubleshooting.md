@@ -10,6 +10,25 @@ imprint doctor
 
 Checks every prerequisite (Bun, Chromium binary, Playwright Chromium install, Vertex project ID, region, push providers). Catches ~80% of "I just installed and nothing works" cases in one command. If a check fails the output includes the exact fix command.
 
+## "command not found: imprint"
+
+You ran `bun link` from inside the imprint directory but the binary isn't on PATH. Two fixes:
+
+1. **Add `~/.bun/bin` to PATH.** Bun's installer does this by default in `~/.zshrc` / `~/.bashrc`; if you skipped that step or installed via a non-standard route:
+   ```bash
+   echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.zshrc
+   source ~/.zshrc
+   imprint --help    # should now work
+   ```
+
+2. **Skip linking entirely.** Run every verb via `bun src/cli.ts` from the imprint repo:
+   ```bash
+   bun src/cli.ts doctor
+   bun src/cli.ts record mysite --url https://...
+   bun src/cli.ts cron mysite --once
+   ```
+   Same behavior, no PATH dance.
+
 ## "Could not locate Chromium"
 
 Imprint prefers Playwright's bundled Chromium over the system Chrome (corporate-managed Chrome installs often disallow `--remote-debugging-port`).
