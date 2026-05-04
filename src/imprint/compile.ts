@@ -82,7 +82,9 @@ async function compile<T>(opts: CompileOptions, task: CompileTask<T>): Promise<C
 
   const promptPath = pathJoin(PROMPTS_DIR, task.promptFile);
   if (!existsSync(promptPath)) {
-    throw new Error(`Prompt not found at ${promptPath}`);
+    throw new Error(
+      `Prompt not found at ${promptPath}\n→ this is an Imprint installation problem; please file an issue at https://github.com/<repo>/issues with the steps you ran.`,
+    );
   }
   const systemPrompt = readFileSync(promptPath, 'utf8');
 
