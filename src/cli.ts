@@ -2,8 +2,7 @@
 /** CLI entry point. Run `imprint --help` for the verb list. */
 
 import { parseArgs } from 'node:util';
-
-const VERSION = '0.1.0';
+import { VERSION } from './imprint/version.ts';
 
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
 
