@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import { runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
+import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { discoverTools } from './tool-loader.ts';
 import {
@@ -43,7 +44,7 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
   const tool = discovered[0];
   if (!tool) {
     throw new Error(
-      `No generated tool found for site "${opts.site}". Run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
+      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
     );
   }
 

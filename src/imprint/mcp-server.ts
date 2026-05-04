@@ -19,6 +19,7 @@ import {
 import { resolveLadder, runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
 import { loadBackendsCache } from './probe-backends.ts';
+import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import {
   type ResolvedTool as DiscoveredTool,
@@ -181,8 +182,9 @@ export async function runMcpServer(opts: RunMcpServerOptions = {}): Promise<void
   });
   if (tools.length === 0) {
     const target = opts.site ? `for site "${opts.site}"` : `under ${examplesDir}`;
+    const sitesLine = opts.site ? `${availableSitesHint(examplesDir, opts.site)}\n` : '';
     throw new Error(
-      `No generated tools found ${target}\n→ run \`imprint emit examples/<site>/workflow.json\` to codegen a tool.\n→ or test with the bundled fixture: \`imprint mcp-server --site echo\`.`,
+      `No generated tools found ${target}\n${sitesLine}→ run \`imprint emit examples/<site>/workflow.json\` to codegen a tool.\n→ or test with the bundled fixture: \`imprint mcp-server --site echo\`.`,
     );
   }
 
