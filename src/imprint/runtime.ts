@@ -232,10 +232,16 @@ export function substituteString(
       }
       if (kind === 'credential' && name) {
         const v = credentials.values[name];
-        if (v === undefined)
+        if (v === undefined) {
+          const available = Object.keys(credentials.values);
+          const hint =
+            available.length === 0
+              ? `→ no credentials stored for "${credentials.site}"; run \`imprint login ${credentials.site}\``
+              : `→ available credentials: ${available.join(', ')}\n→ if "${name}" is missing, the login session may be incomplete; re-run \`imprint login ${credentials.site}\``;
           throw new Error(
-            `Workflow placeholder ${match} but credential "${name}" not in store (run \`imprint login ${credentials.site}\`)`,
+            `Workflow placeholder ${match} but credential "${name}" not in store\n${hint}`,
           );
+        }
         return encodePart(v, template, match);
       }
       return match;
