@@ -63,12 +63,9 @@ describe('closestVerb (typo suggestions)', () => {
     expect(closestVerb(typo)).toBe(expected);
   });
 
-  it.each(['xyzzy', 'foobar', 'gen', 'aaaaaaaa'])(
-    '%s → null (too far from any verb)',
-    (input) => {
-      expect(closestVerb(input)).toBeNull();
-    },
-  );
+  it.each(['xyzzy', 'foobar', 'gen', 'aaaaaaaa'])('%s → null (too far from any verb)', (input) => {
+    expect(closestVerb(input)).toBeNull();
+  });
 
   it('returns the exact verb when input matches one', () => {
     expect(closestVerb('record')).toBe('record');
