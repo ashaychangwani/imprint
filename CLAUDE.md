@@ -35,6 +35,23 @@ test/                       # bun test, ~130 tests
 scripts/                    # smoke tests + one-off dev helpers
 ```
 
+## CI/CD & releases
+
+Three GitHub Actions workflows:
+- **test** (`test.yml`): lint + typecheck + test on push to `main` and all PRs
+- **commitlint** (`commitlint.yml`): validates PR title + commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) on PRs
+- **release** (`release.yml`): tag-triggered (`v*`) — generates changelog via git-cliff and creates a GitHub Release
+
+Changelog config lives in `cliff.toml`. Preview unreleased changelog: `bun run changelog`.
+
+### Claude skills
+
+- `/release` — bump version, tag, push, trigger release workflow
+- `/commit` — create a conventional commit from staged changes
+- `/pr` — open a PR with conventional title and pre-flight checks
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for commit conventions and release process.
+
 ## Key risks (still open)
 
 1. **Platform risk**: Anthropic / OpenAI could ship native MCP learning as a first-class feature.
