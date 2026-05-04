@@ -15,7 +15,7 @@ import type {
   WaitFor,
 } from './types.ts';
 
-export interface RunPlaybookOptions {
+interface RunPlaybookOptions {
   /** Path to playbook.yaml OR an already-parsed Playbook. */
   playbook: string | Playbook;
   params: Record<string, string | number | boolean>;

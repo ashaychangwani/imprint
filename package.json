@@ -26,7 +26,8 @@
     "lint": "biome check src test",
     "lint:fix": "biome check --write src test",
     "typecheck": "tsc --noEmit",
-    "check": "bun run typecheck && bun run lint && bun test"
+    "knip": "bunx knip --no-progress",
+    "check": "bun run typecheck && bun run lint && bun test && bun run knip"
   },
   "dependencies": {
     "@anthropic-ai/vertex-sdk": "^0.13.0",

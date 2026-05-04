@@ -28,7 +28,7 @@ export function loadCredentialStore(site: string): CredentialStore | null {
   return raw;
 }
 
-export interface ExecuteOptions {
+interface ExecuteOptions {
   workflow: Workflow;
   params: Record<string, string | number | boolean>;
   /** Inject a synthetic credential store; otherwise loads from disk. */
@@ -162,7 +162,7 @@ interface SubstitutedRequest {
   body?: string;
 }
 
-export function substituteRequest(
+function substituteRequest(
   req: WorkflowRequest,
   params: Record<string, string | number | boolean>,
   credentials: CredentialStore,

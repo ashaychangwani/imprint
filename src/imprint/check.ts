@@ -6,7 +6,7 @@ import { extname } from 'node:path';
 import { assembleFromJsonl } from './session-writer.ts';
 import { type Session, SessionSchema } from './types.ts';
 
-export interface CheckResult {
+interface CheckResult {
   ok: boolean;
   warnings: string[];
   summary: string;

@@ -9,7 +9,7 @@ import { type Session, SessionSchema } from './types.ts';
 
 const PATHS = envPaths('imprint', { suffix: '' });
 
-export interface LoginOptions {
+interface LoginOptions {
   site: string;
   /** Path to a session.json from which to extract credentials. */
   fromSession: string;
@@ -17,7 +17,7 @@ export interface LoginOptions {
   outPath?: string;
 }
 
-export interface LoginResult {
+interface LoginResult {
   outPath: string;
   cookieCount: number;
   values: Record<string, string>;

@@ -18,7 +18,7 @@ type Record =
   | { kind: 'request-body'; data: { seq: number; body: string } }
   | { kind: 'cookies'; data: CookieSnapshot };
 
-export interface SessionWriter {
+interface SessionWriter {
   request(req: CapturedRequest): void;
   /** Late-arriving response body for a request already written. Merged on assemble. */
   requestBody(seq: number, body: string): void;
@@ -29,7 +29,7 @@ export interface SessionWriter {
   close(): Promise<{ jsonlPath: string; sessionPath: string }>;
 }
 
-export interface SessionMeta {
+interface SessionMeta {
   site: string;
   url: string;
   imprintVersion: string;
