@@ -55,13 +55,18 @@ export class LLM {
     const t0 = Date.now();
     const userText = JSON.stringify(userPayload);
 
-    const response = await this.client.messages.create({
-      model: this.config.model,
-      max_tokens: this.config.maxTokens,
-      temperature: this.config.temperature,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userText }],
-    });
+    let response: Awaited<ReturnType<typeof this.client.messages.create>>;
+    try {
+      response = await this.client.messages.create({
+        model: this.config.model,
+        max_tokens: this.config.maxTokens,
+        temperature: this.config.temperature,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userText }],
+      });
+    } catch (err) {
+      throw enrichVertexError(err, this.config);
+    }
 
     const text = response.content
       .filter((block) => block.type === 'text')
@@ -76,6 +81,50 @@ export class LLM {
       stopReason: response.stop_reason ?? null,
     };
   }
+}
+
+/** Map common Vertex SDK errors to actionable messages. The SDK's
+ *  raw error is preserved as the `cause`; it shows under IMPRINT_DEBUG=1. */
+function enrichVertexError(err: unknown, config: LLMConfig): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  const lc = msg.toLowerCase();
+
+  // 404 NOT_FOUND on the model — usually wrong region for the model id,
+  // or the model isn't enabled on the project yet.
+  if (lc.includes('not_found') || lc.includes('publisher model') || lc.includes('404')) {
+    return new Error(
+      `Vertex Anthropic call failed (${msg.split('\n')[0]?.slice(0, 200)})\n→ check that "${config.model}" is enabled in region "${config.region}" for project "${config.projectId}"\n→ enable models at: https://console.cloud.google.com/vertex-ai/model-garden\n→ run \`imprint doctor\` to verify env vars.`,
+      { cause: err },
+    );
+  }
+
+  // 401 UNAUTHENTICATED — credentials missing or wrong account.
+  if (lc.includes('unauthenticated') || lc.includes('401') || lc.includes('credentials')) {
+    return new Error(
+      `Vertex Anthropic call failed: not authenticated\n→ run \`gcloud auth application-default login\`\n→ ensure the active account has the Vertex AI User role on project "${config.projectId}"`,
+      { cause: err },
+    );
+  }
+
+  // 403 PERMISSION_DENIED — auth worked but role isn't sufficient.
+  if (lc.includes('permission_denied') || lc.includes('403')) {
+    return new Error(
+      `Vertex Anthropic call failed: permission denied\n→ active account needs "roles/aiplatform.user" on project "${config.projectId}"\n→ check IAM at: https://console.cloud.google.com/iam-admin/iam`,
+      { cause: err },
+    );
+  }
+
+  // 429 RESOURCE_EXHAUSTED — quota.
+  if (lc.includes('resource_exhausted') || lc.includes('429') || lc.includes('quota')) {
+    return new Error(
+      'Vertex Anthropic call failed: quota exceeded\n→ check quota at: https://console.cloud.google.com/iam-admin/quotas\n→ or wait + retry; transient quota errors are common at peak',
+      { cause: err },
+    );
+  }
+
+  // Fallback: surface the raw message but prefix it so the user knows
+  // it's a Vertex error and not e.g. a JSON parse problem.
+  return new Error(`Vertex Anthropic call failed: ${msg}`, { cause: err });
 }
 
 /** Extract the first balanced top-level JSON object — handles fenced
