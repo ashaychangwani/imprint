@@ -8,7 +8,7 @@
  * launchd are organized and keeps failure isolation clean.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import cron from 'node-cron';
 import { resolveLadder, runWithLadder } from './backend-ladder.ts';
@@ -16,6 +16,7 @@ import { loadJsonFile } from './load-json.ts';
 import { createLog, isDebug } from './log.ts';
 import { evaluateNotifyWhen, notify } from './notify.ts';
 import { loadBackendsCache } from './probe-backends.ts';
+import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { type ResolvedTool, buildZodValidator, discoverTools } from './tool-loader.ts';
 import {
@@ -246,22 +247,4 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     process.once('SIGINT', () => shutdown('SIGINT'));
     process.once('SIGTERM', () => shutdown('SIGTERM'));
   });
-}
-
-/** List the configured sites under examples/ to suggest in error messages. */
-function availableSitesHint(examplesDir: string, badSite: string): string {
-  if (!existsSync(examplesDir)) {
-    return "→ examples/ doesn't exist — run `imprint record <site>` to create one.";
-  }
-  const sites = readdirSync(examplesDir).filter((d) => {
-    try {
-      return statSync(pathResolve(examplesDir, d)).isDirectory();
-    } catch {
-      return false;
-    }
-  });
-  if (sites.length === 0) {
-    return '→ examples/ is empty — run `imprint record <site>` to create one.';
-  }
-  return `→ available sites: ${sites.join(', ')} (you asked for "${badSite}").`;
 }
