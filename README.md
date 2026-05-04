@@ -13,7 +13,7 @@ record once  →  workflow.json + playbook.yaml + index.ts  →  MCP tool / cron
 ## 60-second quickstart
 
 ```bash
-git clone https://github.com/<you>/imprint.git
+git clone https://github.com/ashaychangwani/imprint.git
 cd imprint
 bun install
 bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
