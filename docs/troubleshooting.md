@@ -134,6 +134,24 @@ imprint playbook <site> --headed --param key=value
 
 Headed mode opens a visible Chromium so you can watch it run.
 
+## "Workflow placeholder ${param.X} but no param "X" provided"
+
+The generated workflow expects a `param.X`, but you didn't pass it. The error message lists which params *were* passed (or, if none, the exact `--param X=<value>` to add).
+
+For `imprint cron`, the params live in `examples/<site>/cron.json` under the `params` key. For `imprint mcp-server`, the agent passes them in the tool call.
+
+If the param name in the workflow looks wrong (e.g. `q` instead of `query`), edit `examples/<site>/workflow.json`'s `parameters` array — the runtime substitutes by name.
+
+## "Invalid cron expression in cron.json"
+
+The `schedule` field must be a 5-field cron expression (`minute hour day-of-month month day-of-week`). Test new expressions at https://crontab.guru. Examples:
+
+```
+"0 9 * * *"       # 9am every day
+"*/15 * * * *"    # every 15 minutes
+"0 9 * * 1-5"     # 9am weekdays only
+```
+
 ## "No locator matched" (in playbook runner)
 
 The site's DOM changed since the recording. Locators are tried in priority order: `role+name → aria_label → text → id → css`. Roles and aria-labels are most stable; CSS selectors break first.
