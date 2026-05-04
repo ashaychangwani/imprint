@@ -18,13 +18,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Lint
-        run: bun run lint
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Unit + e2e tests
-        # Eval tests (test/eval/*) are gated behind RUN_EVALS=1 so CI
-        # never spends real Anthropic credits.
-        run: bun test
+      # `bun run check` = typecheck + lint + tests + knip + madge.
+      # Same command CONTRIBUTING.md tells contributors to run before
+      # pushing, so a green local run guarantees a green CI run.
+      - name: Check (typecheck + lint + tests + dead-code)
+        run: bun run check

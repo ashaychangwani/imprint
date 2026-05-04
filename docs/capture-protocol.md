@@ -13,7 +13,7 @@ For high-stakes recordings (a real booking flow you can't easily redo), follow t
 
 ```bash
 cd /Users/achangwani/Desktop/repos/imprint
-bun run dev record discoverandgo --url https://www.discoverandgo.net --persist-profile
+imprint record discoverandgo --url https://www.discoverandgo.net --persist-profile
 ```
 
 What `--persist-profile` does: stores the Chrome profile at `~/Library/Application Support/imprint/profiles/discoverandgo`, so the second time you run this command (later, when iterating), you'll already be logged in. **First run only:** you log in fresh inside the Chromium window.
@@ -70,14 +70,14 @@ Password fields are auto-redacted before being captured. Other input values are 
 
 **One recording, two artifacts.** The same session.json compiles to both:
 - `imprint generate` → `workflow.json` → `imprint emit` → `index.ts` (API replay path)
-- `imprint compile-playbook` → `playbook.md` (DOM replay path)
+- `imprint compile-playbook` → `playbook.yaml` (DOM replay path)
 
 You don't have to commit to one or the other when you record. Generate both; the cron / MCP layer picks which to use per `replayBackend` config (`fetch` / `playbook` / `auto`).
 
 ## After the recording — verify it worked
 
 ```bash
-bun run dev check examples/discoverandgo/sessions/<timestamp>.json
+imprint check examples/discoverandgo/sessions/<timestamp>.json
 ```
 
 You should see something like:
@@ -109,7 +109,7 @@ If `imprint check` reports warnings, **don't move on yet** — re-record or tell
 
 **Recorder crashes mid-session, no `session.json` written:**
 ```bash
-bun run dev assemble examples/discoverandgo/sessions/<timestamp>.jsonl
+imprint assemble examples/discoverandgo/sessions/<timestamp>.jsonl
 # reconstructs the .json from the streamed JSONL
 ```
 
@@ -130,7 +130,7 @@ The recording will succeed (you're using a real browser), but **replay may fail*
 **The redactor scrubbed `X-API-Key` (or another header) you know is public:**
 Re-run with `--keep-header`:
 ```bash
-bun run dev redact examples/<site>/sessions/<ts>.json --keep-header x-api-key
+imprint redact examples/<site>/sessions/<ts>.json --keep-header x-api-key
 ```
 You can pass `--keep-header` multiple times. Use this when the redacted value is an app-level identifier embedded in the site's JavaScript (every visitor sees the same value), not a per-user secret. The default is to redact `X-API-Key` because some sites do use it as a per-user credential — you opt out per-site.
 

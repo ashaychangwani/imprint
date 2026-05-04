@@ -1,56 +1,245 @@
 #!/usr/bin/env bun
-/**
- * Imprint CLI entry point.
- *
- * Verbs:
- *   imprint record <site>            Open Chromium, capture a session, write session.json
- *   imprint generate <session.json>  Run LLM intent-detection, write workflow.json
- *   imprint emit <workflow.json>     Generate the MCP server TS module
- *   imprint login <site>             Open Chromium for user-driven login, persist cookies
- *   imprint cron <example>           Start the polling daemon for a generated workflow
- *   imprint mcp-server <example>     Speak MCP stdio protocol, exposing the workflow as a tool
- */
+/** CLI entry point. Run `imprint --help` for the verb list. */
 
 import { parseArgs } from 'node:util';
+import { isDebug } from './imprint/log.ts';
+import { VERSION } from './imprint/version.ts';
 
-const VERSION = '0.1.0';
+const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
 
-const HELP = `imprint v${VERSION} — teach AI agents to use any website
+USAGE
+  imprint <verb> [args]
+  imprint <verb> --help    Per-verb help with flags and examples.
 
-USAGE:
-  imprint <verb> [args] [options]
+CAPTURE
+  record <site>            Drive a workflow in Chromium, capture session.
+  redact <session.json>    Scrub credentials + PII before LLM analysis.
 
-VERBS:
-  record <site>             Capture a teaching session for <site>
-  assemble <session.jsonl>  Reconstruct session.json from streaming JSONL
-                            (recovery if 'record' shutdown didn't finish)
-  check <session>           Sanity-check a captured session.json or .jsonl
-  redact <session.json>     Scrub credentials + PII; write <session>.redacted.json
-                            (always do this before sharing or LLM analysis)
-  generate <session.json>   Analyze a session, produce workflow.json
-  emit <workflow.json>      Generate the MCP server TS module
-  login <site>              Persist auth cookies for <site>
-  cron <site>               Start the polling daemon for examples/<site>/cron.json
-                            options: --once  --run-now  --config <path>
-  mcp-server                Run the MCP server (stdio by default; --http for HTTP)
-                            options: --site <name>  --http  --port <num>
-  compile-playbook <s.json> Turn a recorded session into a markdown playbook
-                            (DOM fallback for sites where API replay is blocked)
-                            options: --out <path>
-  playbook <site>           Run examples/<site>/playbook.md against a real browser
-                            options: --headed  --param k=v  --path <path>
+COMPILE
+  generate <session>       Session → workflow.json (API replay).
+  compile-playbook <sess>  Session → playbook.yaml (DOM replay).
+  emit <workflow.json>     workflow.json → examples/<site>/index.ts.
+  probe-backends <site>    Try each backend once, cache the working order.
 
-OPTIONS for \`record\`:
-  --url <url>               Starting URL (else opens about:blank)
-  --out <path>              Output path for session.jsonl
-  --persist-profile         Reuse Chrome profile for this site between recordings
-                            (preserves login state — useful for repeated captures
-                             against an authed site like Discover & Go)
+RUN
+  mcp-server               Expose every generated tool as MCP (stdio default).
+  cron <site>              Polling daemon for examples/<site>/cron.json.
+  playbook <site>          Run a playbook directly (debugging).
 
-OPTIONS:
-  --help, -h                Show this help
-  --version, -v             Print version
+OTHER
+  doctor                   Check that the environment is set up correctly.
+  assemble <session.jsonl> Recover session.json from a partial JSONL.
+  check <session>          Sanity-check a captured session.
+  login <site>             Persist cookies for <site> from a session.
+
+GLOBAL
+  --help, -h               Show this help.
+  --version, -v            Print version.
+
+Quick start: docs/getting-started.md
+Full docs:   docs/architecture.md, docs/glossary.md, docs/decisions.md
 `;
+
+export interface VerbHelp {
+  summary: string;
+  usage: string[];
+  flags?: Array<{ name: string; description: string }>;
+  example: string;
+}
+
+export const VERB_HELP: Record<string, VerbHelp> = {
+  record: {
+    summary: 'Drive a workflow in Chromium and stream the session to JSONL.',
+    usage: ['imprint record <site> [--url <url>] [--persist-profile] [--out <path>]'],
+    flags: [
+      { name: '--url <url>', description: 'Starting URL (else about:blank — navigate manually).' },
+      { name: '--out <path>', description: 'Override the JSONL output path.' },
+      {
+        name: '--persist-profile',
+        description: 'Reuse a stable Chrome profile for this site (preserves login state).',
+      },
+    ],
+    example: 'imprint record acmecorp --url https://app.acmecorp.com',
+  },
+  doctor: {
+    summary: 'Check that the environment is set up correctly (Bun, Chromium, Vertex env, push).',
+    usage: ['imprint doctor'],
+    example: 'imprint doctor',
+  },
+  assemble: {
+    summary: 'Reconstruct session.json from a partial session.jsonl.',
+    usage: ['imprint assemble <session.jsonl>'],
+    example: 'imprint assemble examples/mysite/sessions/2026-05-03T22-00-00Z.jsonl',
+  },
+  check: {
+    summary: 'Sanity-check a captured session for completeness.',
+    usage: ['imprint check <session.json | session.jsonl>'],
+    example: 'imprint check examples/acmecorp/sessions/2026-05-03T22-00-00Z.json',
+  },
+  redact: {
+    summary: 'Scrub credentials + PII; write <session>.redacted.json.',
+    usage: ['imprint redact <session.json> [--keep-header <name>]…'],
+    flags: [
+      {
+        name: '--keep-header <name>',
+        description:
+          'Keep this header un-redacted (repeatable). Use when a non-credential header has a "secret" name.',
+      },
+    ],
+    example: 'imprint redact examples/acmecorp/sessions/<ts>.json',
+  },
+  generate: {
+    summary: 'LLM-compile a session into workflow.json (API replay artifact).',
+    usage: ['imprint generate <session.json> [--out <path>] [--no-shrink] [--save-shrunken]'],
+    flags: [
+      { name: '--out <path>', description: 'Override the workflow.json output path.' },
+      { name: '--no-shrink', description: 'Send the FULL session to the LLM (debugging).' },
+      {
+        name: '--save-shrunken',
+        description: 'Write the shrunken view next to workflow.json (prompt iteration).',
+      },
+    ],
+    example: 'imprint generate examples/acmecorp/sessions/<ts>.redacted.json',
+  },
+  'compile-playbook': {
+    summary: 'LLM-compile a session into playbook.yaml (DOM replay artifact).',
+    usage: ['imprint compile-playbook <session.json> [--out <path>]'],
+    flags: [{ name: '--out <path>', description: 'Override the playbook.yaml output path.' }],
+    example: 'imprint compile-playbook examples/acmecorp/sessions/<ts>.redacted.json',
+  },
+  emit: {
+    summary: 'Generate the executable TS module from workflow.json.',
+    usage: ['imprint emit <workflow.json> [--out-dir <dir>] [--force]'],
+    flags: [
+      { name: '--out-dir <dir>', description: 'Override the output directory.' },
+      { name: '--force', description: 'Overwrite an existing index.ts.' },
+    ],
+    example: 'imprint emit examples/acmecorp/workflow.json',
+  },
+  login: {
+    summary: 'Persist auth cookies for <site> from a captured session.',
+    usage: ['imprint login <site> --from-session <session.json>'],
+    flags: [
+      { name: '--from-session <path>', description: 'Source session.json (required in v0.1).' },
+    ],
+    example: 'imprint login discoverandgo --from-session examples/discoverandgo/sessions/<ts>.json',
+  },
+  'probe-backends': {
+    summary: 'Try each backend once and cache the working order to backends.json.',
+    usage: ['imprint probe-backends <site> [--out <path>] [--param k=v]…'],
+    flags: [
+      { name: '--out <path>', description: 'Override backends.json output path.' },
+      { name: '--param k=v', description: 'Override a workflow parameter (repeatable).' },
+    ],
+    example: 'imprint probe-backends southwest',
+  },
+  playbook: {
+    summary: 'Run a playbook against a real Chromium (debugging).',
+    usage: ['imprint playbook <site> [--headed] [--trace] [--path <yaml>] [--param k=v]…'],
+    flags: [
+      { name: '--headed', description: 'Show the browser window (default headless).' },
+      { name: '--trace', description: 'Screenshot after every step.' },
+      { name: '--path <yaml>', description: 'Override the playbook.yaml path.' },
+      { name: '--param k=v', description: 'Set a playbook parameter (repeatable).' },
+    ],
+    example:
+      'imprint playbook southwest --param origin_airport_code=SJC --param destination_airport_code=SAN',
+  },
+  cron: {
+    summary: 'Polling daemon for examples/<site>/cron.json.',
+    usage: ['imprint cron <site> [--once | --run-now] [--config <path>] [--quiet]'],
+    flags: [
+      { name: '--once', description: 'Run a single tick and exit (for OS schedulers).' },
+      { name: '--run-now', description: 'Run once immediately, then continue scheduling.' },
+      { name: '--config <path>', description: 'Override the cron.json path.' },
+      {
+        name: '--quiet',
+        description:
+          'Suppress logs on successful runs (errors still surface). For OS schedulers that mail on stderr.',
+      },
+    ],
+    example: 'imprint cron southwest --once --quiet',
+  },
+  'mcp-server': {
+    summary: 'Expose every generated tool as MCP (stdio default).',
+    usage: ['imprint mcp-server [--site <name>] [--http] [--port <num>]'],
+    flags: [
+      { name: '--site <name>', description: 'Restrict to one example.' },
+      { name: '--http', description: 'Use Streamable HTTP transport instead of stdio.' },
+      { name: '--port <num>', description: 'Port for HTTP transport (default 8765).' },
+    ],
+    example: 'imprint mcp-server --site echo',
+  },
+};
+
+function printVerbHelp(verb: string): void {
+  const h = VERB_HELP[verb];
+  if (!h) {
+    console.error(`No help for unknown verb: ${verb}`);
+    return;
+  }
+  console.log(`imprint ${verb} — ${h.summary}\n`);
+  console.log('USAGE');
+  for (const u of h.usage) console.log(`  ${u}`);
+  if (h.flags && h.flags.length > 0) {
+    console.log('\nFLAGS');
+    const pad = Math.max(...h.flags.map((f) => f.name.length));
+    for (const f of h.flags) console.log(`  ${f.name.padEnd(pad)}  ${f.description}`);
+  }
+  console.log('\nEXAMPLE');
+  console.log(`  ${h.example}\n`);
+}
+
+function isVerbHelpRequest(argv: string[]): boolean {
+  return argv.includes('--help') || argv.includes('-h');
+}
+
+/** Pull `argv[1]` or print a uniform error and return null for early-return. */
+function requirePositional(argv: string[], verb: string, label: string): string | null {
+  const v = argv[1];
+  if (!v) {
+    console.error(
+      `error: \`imprint ${verb}\` requires ${label}\n→ run \`imprint ${verb} --help\` for usage.`,
+    );
+    return null;
+  }
+  return v;
+}
+
+/** Parse `--param k=v` entries; coerces only well-formed decimal numbers
+ *  and booleans, leaves everything else as strings. Returns null and prints
+ *  an error on malformed input — caller returns its own exit code.
+ *
+ *  Numeric coercion is intentionally stricter than `Number(v)`:
+ *  - Leading zeros stay strings ("0123" → "0123", not 123) so airport / ZIP /
+ *    library-card codes survive.
+ *  - "Infinity" / "-Infinity" / "NaN" stay strings (Number() accepts them).
+ *  - Empty / whitespace stays as the literal string.
+ *  - Hex / binary / octal literals stay strings.
+ *  Pattern matches: optional minus, single 0 or non-zero-leading digits,
+ *  optional .digits, optional eN exponent. */
+const NUMERIC_PARAM_RE = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
+export function tryParseParamKV(
+  entries: string[] | undefined,
+): Record<string, string | number | boolean> | null {
+  const out: Record<string, string | number | boolean> = {};
+  for (const kv of entries ?? []) {
+    const eq = kv.indexOf('=');
+    if (eq === -1) {
+      console.error(
+        `error: --param requires k=v form, got "${kv}"\n→ example: --param origin_airport_code=SJC`,
+      );
+      return null;
+    }
+    const k = kv.slice(0, eq);
+    const v = kv.slice(eq + 1);
+    if (v === 'true' || v === 'false') out[k] = v === 'true';
+    else if (NUMERIC_PARAM_RE.test(v)) out[k] = Number(v);
+    else out[k] = v;
+  }
+  return out;
+}
 
 async function main(argv: string[]): Promise<number> {
   const verb = argv[0];
@@ -64,14 +253,17 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // Per-verb help: `imprint <verb> --help` or `-h`.
+  if (verb in VERB_HELP && isVerbHelpRequest(argv.slice(1))) {
+    printVerbHelp(verb);
+    return 0;
+  }
+
   switch (verb) {
     case 'record': {
+      const site = requirePositional(argv, 'record', 'a <site> argument');
+      if (site === null) return 2;
       const { record } = await import('./imprint/record.ts');
-      const site = argv[1];
-      if (!site) {
-        console.error('error: `imprint record` requires a <site> argument');
-        return 2;
-      }
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {
@@ -82,9 +274,7 @@ async function main(argv: string[]): Promise<number> {
         allowPositionals: false,
       });
 
-      // Wire SIGINT (Ctrl+C) to a clean shutdown via AbortController instead of
-      // tearing the process down mid-flight. The recorder writes its files, then
-      // returns; only then does the CLI exit.
+      // SIGINT → AbortController so the recorder flushes files before exit.
       const ctrl = new AbortController();
       const onSigint = (): void => ctrl.abort();
       process.once('SIGINT', onSigint);
@@ -103,12 +293,16 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
+    case 'doctor': {
+      const { doctor, reportDoctor } = await import('./imprint/doctor.ts');
+      const report = reportDoctor(doctor());
+      for (const line of report.lines) console.log(line);
+      return report.ok ? 0 : 1;
+    }
+
     case 'assemble': {
-      const jsonlPath = argv[1];
-      if (!jsonlPath) {
-        console.error('error: `imprint assemble` requires a <session.jsonl> argument');
-        return 2;
-      }
+      const jsonlPath = requirePositional(argv, 'assemble', 'a <session.jsonl> argument');
+      if (jsonlPath === null) return 2;
       const { assembleFromJsonl } = await import('./imprint/session-writer.ts');
       const { writeFileSync } = await import('node:fs');
       const session = assembleFromJsonl(jsonlPath);
@@ -118,17 +312,19 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `[imprint] ${session.requests.length} requests, ${session.events.length} events, ${session.narration.length} narration lines`,
       );
+      console.log('');
+      console.log('next step:');
+      console.log(`  imprint check ${outPath}    # sanity-check what was captured`);
       return 0;
     }
 
     case 'check': {
-      const sessionPath = argv[1];
-      if (!sessionPath) {
-        console.error(
-          'error: `imprint check` requires a <session.json> or <session.jsonl> argument',
-        );
-        return 2;
-      }
+      const sessionPath = requirePositional(
+        argv,
+        'check',
+        'a <session.json> or <session.jsonl> argument',
+      );
+      if (sessionPath === null) return 2;
       const { checkSession, reportCheck } = await import('./imprint/check.ts');
       const result = checkSession(sessionPath);
       reportCheck(sessionPath, result);
@@ -136,21 +332,33 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'redact': {
-      const sessionPath = argv[1];
-      if (!sessionPath) {
-        console.error('error: `imprint redact` requires a <session.json> argument');
-        return 2;
-      }
+      const sessionPath = requirePositional(argv, 'redact', 'a <session.json> argument');
+      if (sessionPath === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: { 'keep-header': { type: 'string', multiple: true } },
         allowPositionals: false,
       });
-      const { readFileSync, writeFileSync } = await import('node:fs');
+      const { writeFileSync } = await import('node:fs');
       const { SessionSchema } = await import('./imprint/types.ts');
       const { redactSession } = await import('./imprint/redact.ts');
-      const raw = JSON.parse(readFileSync(sessionPath, 'utf8'));
-      const session = SessionSchema.parse(raw);
+      const { loadJsonFile } = await import('./imprint/load-json.ts');
+      let session: ReturnType<typeof SessionSchema.parse>;
+      try {
+        session = loadJsonFile(
+          sessionPath,
+          SessionSchema,
+          {
+            notFound: '→ run `imprint record <site>` to capture one.',
+            notJson: `→ if this is a .jsonl from a crashed recording, run \`imprint assemble ${sessionPath}\` first.`,
+            badSchema: '→ hand-edited session files often drift; re-record if needed.',
+          },
+          'session',
+        );
+      } catch (err) {
+        console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+        return 2;
+      }
       const keepHeaders = values['keep-header'] ?? [];
       const { session: scrubbed, stats } = redactSession(session, { keepHeaders });
       const outPath = sessionPath.replace(/\.json$/, '.redacted.json');
@@ -165,15 +373,15 @@ async function main(argv: string[]): Promise<number> {
       for (const w of stats.warnings) {
         console.log(`[imprint]   ⚠ ${w}`);
       }
+      console.log('');
+      console.log('next step:');
+      console.log(`  imprint generate ${outPath}    # LLM → workflow.json`);
       return 0;
     }
 
     case 'generate': {
-      const sessionPath = argv[1];
-      if (!sessionPath) {
-        console.error('error: `imprint generate` requires a <session.json> argument');
-        return 2;
-      }
+      const sessionPath = requirePositional(argv, 'generate', 'a <session.json> argument');
+      if (sessionPath === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {
@@ -183,7 +391,7 @@ async function main(argv: string[]): Promise<number> {
         },
         allowPositionals: false,
       });
-      const { generate } = await import('./imprint/generate.ts');
+      const { generate } = await import('./imprint/compile.ts');
       const result = await generate({
         sessionPath,
         outPath: values.out,
@@ -198,15 +406,15 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `[imprint] tokens: ${result.inputTokens} in, ${result.outputTokens} out — ${(result.durationMs / 1000).toFixed(1)}s`,
       );
+      console.log('');
+      console.log('next step:');
+      console.log(`  imprint emit ${result.workflowPath}    # codegen the runtime tool`);
       return 0;
     }
 
     case 'emit': {
-      const workflowPath = argv[1];
-      if (!workflowPath) {
-        console.error('error: `imprint emit` requires a <workflow.json> argument');
-        return 2;
-      }
+      const workflowPath = requirePositional(argv, 'emit', 'a <workflow.json> argument');
+      if (workflowPath === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: { force: { type: 'boolean' }, 'out-dir': { type: 'string' } },
@@ -222,15 +430,19 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `[imprint] tool: ${result.toolName} (${result.parameters.length} parameter${result.parameters.length === 1 ? '' : 's'})`,
       );
+      // Surface what to do next so users don't have to alt-tab to docs.
+      const site = result.outPath.split('/').slice(-2, -1)[0] ?? '<site>';
+      console.log('');
+      console.log('next steps:');
+      console.log(`  imprint probe-backends ${site}    # cache the working backend order`);
+      console.log('  imprint mcp-server                # expose every generated tool as MCP');
+      console.log(`  imprint cron ${site} --once       # one-shot test (after creating cron.json)`);
       return 0;
     }
 
     case 'login': {
-      const site = argv[1];
-      if (!site) {
-        console.error('error: `imprint login` requires a <site> argument');
-        return 2;
-      }
+      const site = requirePositional(argv, 'login', 'a <site> argument');
+      if (site === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: { 'from-session': { type: 'string' } },
@@ -257,6 +469,10 @@ async function main(argv: string[]): Promise<number> {
       if (result.matchedExtractors.length > 0) {
         console.log(`[imprint] extractors matched: ${result.matchedExtractors.join(', ')}`);
       }
+      console.log('');
+      console.log(
+        `[imprint] credentials are loaded automatically by \`imprint cron ${site}\` and \`imprint mcp-server\` — no extra wiring needed.`,
+      );
       return 0;
     }
 
@@ -280,17 +496,15 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'cron': {
-      const site = argv[1];
-      if (!site) {
-        console.error('error: `imprint cron` requires a <site> argument');
-        return 2;
-      }
+      const site = requirePositional(argv, 'cron', 'a <site> argument');
+      if (site === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {
           config: { type: 'string' },
           once: { type: 'boolean' },
           'run-now': { type: 'boolean' },
+          quiet: { type: 'boolean' },
         },
         allowPositionals: false,
       });
@@ -300,22 +514,49 @@ async function main(argv: string[]): Promise<number> {
         configPath: values.config,
         once: values.once,
         runNow: values['run-now'],
+        // --quiet suppresses successful-run logs so OS schedulers
+        // (cron, systemd, launchd) don't mail noise on green runs.
+        // runCron scopes the env mutation to its own lifetime.
+        quiet: values.quiet,
       });
       return 0;
     }
 
+    case 'probe-backends': {
+      const site = requirePositional(argv, 'probe-backends', 'a <site> argument');
+      if (site === null) return 2;
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          out: { type: 'string' },
+          param: { type: 'string', multiple: true },
+        },
+        allowPositionals: false,
+      });
+      const overrides = tryParseParamKV(values.param);
+      if (overrides === null) return 2;
+      const { probeBackends } = await import('./imprint/probe-backends.ts');
+      const result = await probeBackends({
+        site,
+        outPath: values.out,
+        paramOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
+      });
+      console.log(`[imprint] probed → ${result.outPath}`);
+      console.log(`[imprint] preferred order: ${result.cache.preferredOrder.join(' → ')}`);
+      console.log('');
+      console.log('[imprint] cron + mcp-server now skip futile rungs at startup using this cache.');
+      return 0;
+    }
+
     case 'compile-playbook': {
-      const sessionPath = argv[1];
-      if (!sessionPath) {
-        console.error('error: `imprint compile-playbook` requires a <session.json> argument');
-        return 2;
-      }
+      const sessionPath = requirePositional(argv, 'compile-playbook', 'a <session.json> argument');
+      if (sessionPath === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: { out: { type: 'string' } },
         allowPositionals: false,
       });
-      const { compilePlaybook } = await import('./imprint/playbook-compiler.ts');
+      const { compilePlaybook } = await import('./imprint/compile.ts');
       const result = await compilePlaybook({ sessionPath, outPath: values.out });
       console.log(`[imprint] playbook → ${result.playbookPath}`);
       console.log(
@@ -324,15 +565,19 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `[imprint] tokens: ${result.inputTokens} in, ${result.outputTokens} out — ${(result.durationMs / 1000).toFixed(1)}s`,
       );
+      // Suggest a smoke run; the playbook is most useful behind the cron ladder.
+      const playbookSite = result.playbookPath.split('/').slice(-2, -1)[0] ?? '<site>';
+      console.log('');
+      console.log('next step:');
+      console.log(
+        `  imprint playbook ${playbookSite} --param k=v  # smoke-test the playbook directly`,
+      );
       return 0;
     }
 
     case 'playbook': {
-      const site = argv[1];
-      if (!site) {
-        console.error('error: `imprint playbook` requires a <site> argument');
-        return 2;
-      }
+      const site = requirePositional(argv, 'playbook', 'a <site> argument');
+      if (site === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {
@@ -345,21 +590,9 @@ async function main(argv: string[]): Promise<number> {
       });
       const { resolve: pathResolve } = await import('node:path');
       const playbookPath =
-        values.path ?? pathResolve(process.cwd(), 'examples', site, 'playbook.md');
-      const params: Record<string, string | number | boolean> = {};
-      for (const kv of values.param ?? []) {
-        const eq = kv.indexOf('=');
-        if (eq === -1) {
-          console.error(`error: --param requires k=v form, got "${kv}"`);
-          return 2;
-        }
-        const k = kv.slice(0, eq);
-        const v = kv.slice(eq + 1);
-        // Best-effort coerce: number if numeric, boolean if true/false, else string
-        if (v === 'true' || v === 'false') params[k] = v === 'true';
-        else if (v !== '' && !Number.isNaN(Number(v))) params[k] = Number(v);
-        else params[k] = v;
-      }
+        values.path ?? pathResolve(process.cwd(), 'examples', site, 'playbook.yaml');
+      const params = tryParseParamKV(values.param);
+      if (params === null) return 2;
       const { runPlaybook } = await import('./imprint/playbook-runner.ts');
       const result = await runPlaybook({
         playbook: playbookPath,
@@ -376,19 +609,60 @@ async function main(argv: string[]): Promise<number> {
       return 1;
     }
 
-    default:
-      console.error(`error: unknown verb '${verb}'\n`);
-      console.log(HELP);
+    default: {
+      const suggestion = closestVerb(verb);
+      const tail = suggestion ? `did you mean \`imprint ${suggestion}\`?` : 'run `imprint --help`';
+      console.error(`error: unknown verb '${verb}' — ${tail}`);
       return 2;
+    }
   }
 }
 
-main(process.argv.slice(2))
-  .then((code) => process.exit(code))
-  .catch((err) => {
-    console.error('imprint: fatal:', err instanceof Error ? err.message : String(err));
-    if (process.env.IMPRINT_DEBUG) {
-      console.error(err);
+/** Suggest the closest known verb to a typo via Levenshtein distance.
+ *  Returns the suggestion only if it's plausibly close (≤ 3 edits). */
+export function closestVerb(input: string): string | null {
+  const verbs = Object.keys(VERB_HELP);
+  let best: { verb: string; dist: number } | null = null;
+  for (const v of verbs) {
+    const d = levenshtein(input, v);
+    if (best === null || d < best.dist) best = { verb: v, dist: d };
+  }
+  if (best === null) return null;
+  // Require absolute distance ≤ 3 AND ≤ half the longer string's length —
+  // catches typos and short truncations without suggesting wildly different verbs.
+  const maxLen = Math.max(input.length, best.verb.length);
+  if (best.dist > 3 || best.dist > Math.floor(maxLen / 2)) return null;
+  return best.verb;
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const prev = new Array<number>(b.length + 1);
+  const curr = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min((curr[j - 1] ?? 0) + 1, (prev[j] ?? 0) + 1, (prev[j - 1] ?? 0) + cost);
     }
-    process.exit(1);
-  });
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j] ?? 0;
+  }
+  return prev[b.length] ?? a.length;
+}
+
+// Only run when invoked as the entry point — importing this module
+// (e.g. for VERB_HELP from tests) must not trigger the CLI dispatch.
+if (import.meta.main) {
+  main(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error('imprint: fatal:', err instanceof Error ? err.message : String(err));
+      if (isDebug()) {
+        console.error(err);
+      }
+      process.exit(1);
+    });
+}

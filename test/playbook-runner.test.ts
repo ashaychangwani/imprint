@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { runPlaybook } from '../src/imprint/playbook-runner.ts';
-import type { Playbook } from '../src/imprint/playbook-types.ts';
+import type { Playbook } from '../src/imprint/types.ts';
 
 const MIN_PLAYBOOK: Playbook = {
   toolName: 'test_tool',
@@ -66,13 +66,13 @@ describe('runPlaybook', () => {
     expect(r.message).toContain('stub-page failure');
   });
 
-  it('loads playbook from a markdown path string', async () => {
+  it('loads playbook from a YAML path string', async () => {
     // The path-loading branch is covered just by reaching the next
     // step (parameter coercion) without a "Playbook not found" error.
     // We use a definitely-bad path to confirm THAT specific failure
     // surfaces with the right error text.
     const r = await runPlaybook({
-      playbook: '/tmp/imprint-no-such-playbook.md',
+      playbook: '/tmp/imprint-no-such-playbook.yaml',
       params: { q: 'x' },
     });
     expect(r.ok).toBe(false);

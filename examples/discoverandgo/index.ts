@@ -5,13 +5,13 @@
  * Site: discoverandgo
  * Intent: Reserve a museum pass on Discover & Go for a specific offer and date using a San Diego Public Library card.
  *
- * To regenerate: bun run dev emit examples/discoverandgo/workflow.json --force
+ * To regenerate: imprint emit examples/discoverandgo/workflow.json --force
  */
 
 import {
   executeWorkflow,
   type CredentialStore,
-} from '../../src/imprint/workflow-runtime.ts';
+} from '../../src/imprint/runtime.ts';
 import type { ToolResult, Workflow } from '../../src/imprint/types.ts';
 
 const WORKFLOW: Workflow = {

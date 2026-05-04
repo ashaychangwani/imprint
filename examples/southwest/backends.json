@@ -1,0 +1,23 @@
+{
+  "probedAt": "2026-05-03T22:23:26.619Z",
+  "imprintVersion": "0.1.0",
+  "preferredOrder": [
+    "stealth-fetch",
+    "playbook"
+  ],
+  "results": {
+    "fetch": {
+      "outcome": "forbidden",
+      "durationMs": 579,
+      "detail": "Request 0 returned 403: {\n  \"code\": 403050700\n}"
+    },
+    "stealth-fetch": {
+      "outcome": "ok",
+      "durationMs": 12419
+    },
+    "playbook": {
+      "outcome": "ok",
+      "durationMs": 13597
+    }
+  }
+}

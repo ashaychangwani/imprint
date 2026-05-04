@@ -1,20 +1,12 @@
-/**
- * `imprint check <session>` — sanity-check a captured session.
- *
- * Tells the user at a glance whether the recording looks complete enough to
- * generate a workflow from. We can't validate WHAT the user did, but we can
- * spot obviously truncated captures (no requests, missing end-of-flow markers,
- * suspicious zero-narration sessions).
- *
- * Accepts either the assembled session.json OR the raw session.jsonl.
- */
+/** `imprint check` — sanity-check a captured session.json or .jsonl
+ *  for obvious gaps (no requests, no narration, no end markers). */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import { assembleFromJsonl } from './session-writer.ts';
 import { type Session, SessionSchema } from './types.ts';
 
-export interface CheckResult {
+interface CheckResult {
   ok: boolean;
   warnings: string[];
   summary: string;
@@ -131,6 +123,9 @@ export function reportCheck(path: string, result: CheckResult): void {
   console.log('');
   if (result.warnings.length === 0) {
     console.log('  ✓ no warnings — capture looks complete');
+    console.log('');
+    console.log('next step:');
+    console.log(`  imprint redact ${path}    # scrub credentials before LLM analysis`);
   } else {
     console.log(`  ⚠ ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'}:`);
     for (const w of result.warnings) {
