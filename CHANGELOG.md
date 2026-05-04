@@ -30,6 +30,9 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - "command not found" troubleshooting section explicitly covering the bun-link / PATH failure mode.
 - **Typo suggestions** for unknown verbs: `imprint recrod` → "did you mean `imprint record`?" via Levenshtein distance (≤ 3 edits AND ≤ half-length). Same UX pattern as git/bun. Tested.
 - **Capped cron success-log preview** at 500 chars (full payload still available via IMPRINT_DEBUG=1) so long-running daemons don't flood stderr. Southwest's ~100KB shopping response went from log-flooding to one-line.
+- **`--quiet` flag for `imprint cron`** (and `IMPRINT_QUIET=1` env var) — suppresses info logs on success so OS schedulers (cron, systemd, launchd) only mail/alert when something's actually broken. Failures still surface to stderr (separate code path).
+- **Single source of truth for the backend enum** — `BackendsCacheSchema` previously duplicated `['fetch', 'stealth-fetch', 'playbook']` literally. Now derives from `ReplayBackendSchema.exclude(['auto'])`. Adding a new backend updates one place.
+- **Tighter type narrowing** — `runWithLadder` parameter changed from `ReplayBackend[]` to `ConcreteBackend[]` (= `Exclude<ReplayBackend, 'auto'>`); the unreachable `case 'auto'` defensive throw deleted.
 - **Zero dead code, enforced** — three-tool defense:
   - `knip` (unused exports/files/types/deps)
   - `tsc` (`noUnusedLocals` + `noUnusedParameters` enabled — unused locals/params/imports)
