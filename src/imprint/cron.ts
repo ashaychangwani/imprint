@@ -101,11 +101,16 @@ async function runOnce(
       try {
         const decision = evaluateNotifyWhen(notifyWhen, result.data, tool.workflow.toolName);
         if (decision.notify) {
+          log(`  notifyWhen ${notifyWhen.type}: matched → pushing`);
           await notify(
             decision.title ?? `imprint: ${tool.workflow.toolName}`,
             decision.message ?? '(no message)',
             notifyFetchImpl,
           );
+        } else {
+          // Silent no-match used to confuse users ("did the predicate
+          // even fire?"). Surface a one-liner so they can confirm.
+          log(`  notifyWhen ${notifyWhen.type}: no match (predicate ran, threshold not crossed)`);
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
