@@ -13,7 +13,7 @@ USAGE
 
 CAPTURE
   record <site>            Drive a workflow in Chromium, capture session.
-  teach <site>             Record + compile + emit in one interactive flow.
+  teach <site>             Record + compile + emit in one flow. <site> is a label you pick.
   redact <session.json>    Scrub credentials + PII before LLM analysis.
 
 COMPILE
@@ -60,7 +60,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
         description: 'Reuse a stable Chrome profile for this site (preserves login state).',
       },
     ],
-    example: 'imprint record acmecorp --url https://app.acmecorp.com',
+    example: 'imprint record southwest --url https://www.southwest.com',
   },
   teach: {
     summary:
@@ -74,7 +74,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
         description: 'Run the full pipeline without prompts; print all integration snippets.',
       },
     ],
-    example: 'imprint teach mysite --url https://app.example.com',
+    example: 'imprint teach google-flights --url https://flights.google.com',
   },
   doctor: {
     summary: 'Check that the environment is set up correctly (Bun, Chromium, Vertex env, push).',
@@ -214,6 +214,12 @@ function requirePositional(argv: string[], verb: string, label: string): string 
   if (!v) {
     console.error(
       `error: \`imprint ${verb}\` requires ${label}\n→ run \`imprint ${verb} --help\` for usage.`,
+    );
+    return null;
+  }
+  if (v.startsWith('-')) {
+    console.error(
+      `error: \`imprint ${verb}\` requires a <site> name before any flags.\n  <site> is a label you choose — it names the output folder under examples/.\n\n  example: imprint ${verb} google-flights --url https://flights.google.com\n→ run \`imprint ${verb} --help\` for usage.`,
     );
     return null;
   }
