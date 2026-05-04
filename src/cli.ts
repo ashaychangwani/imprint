@@ -5,48 +5,183 @@ import { parseArgs } from 'node:util';
 
 const VERSION = '0.1.0';
 
-const HELP = `imprint v${VERSION} — teach AI agents to use any website
+const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
 
-USAGE:
-  imprint <verb> [args] [options]
+USAGE
+  imprint <verb> [args]
+  imprint <verb> --help    Per-verb help with flags and examples.
 
-VERBS:
-  record <site>             Capture a teaching session for <site>
-  assemble <session.jsonl>  Reconstruct session.json from streaming JSONL
-                            (recovery if 'record' shutdown didn't finish)
-  check <session>           Sanity-check a captured session.json or .jsonl
-  redact <session.json>     Scrub credentials + PII; write <session>.redacted.json
-                            (always do this before sharing or LLM analysis)
-  generate <session.json>   Analyze a session, produce workflow.json
-  emit <workflow.json>      Generate the MCP server TS module
-  login <site>              Persist auth cookies for <site>
-  cron <site>               Start the polling daemon for examples/<site>/cron.json
-                            options: --once  --run-now  --config <path>
-  mcp-server                Run the MCP server (stdio by default; --http for HTTP)
-                            options: --site <name>  --http  --port <num>
-  compile-playbook <s.json> Turn a recorded session into a YAML playbook
-                            (DOM fallback for sites where API replay is blocked)
-                            options: --out <path>
-  playbook <site>           Run examples/<site>/playbook.yaml against a real browser
-                            options: --headed  --param k=v  --path <path>
-  probe-backends <site>     Try each backend (fetch / stealth-fetch / playbook)
-                            once and write examples/<site>/backends.json with
-                            the ranked order. cron + MCP read this so they
-                            don't burn a fetch attempt every tick on bot-
-                            protected sites.
-                            options: --out <path>  --param k=v
+CAPTURE
+  record <site>            Drive a workflow in Chromium, capture session.
+  redact <session.json>    Scrub credentials + PII before LLM analysis.
 
-OPTIONS for \`record\`:
-  --url <url>               Starting URL (else opens about:blank)
-  --out <path>              Output path for session.jsonl
-  --persist-profile         Reuse Chrome profile for this site between recordings
-                            (preserves login state — useful for repeated captures
-                             against an authed site like Discover & Go)
+COMPILE
+  generate <session>       Session → workflow.json (API replay).
+  compile-playbook <sess>  Session → playbook.yaml (DOM replay).
+  emit <workflow.json>     workflow.json → examples/<site>/index.ts.
+  probe-backends <site>    Try each backend once, cache the working order.
 
-OPTIONS:
-  --help, -h                Show this help
-  --version, -v             Print version
+RUN
+  mcp-server               Expose every generated tool as MCP (stdio default).
+  cron <site>              Polling daemon for examples/<site>/cron.json.
+  playbook <site>          Run a playbook directly (debugging).
+
+OTHER
+  assemble <session.jsonl> Recover session.json from a partial JSONL.
+  check <session>          Sanity-check a captured session.
+  login <site>             Persist cookies for <site> from a session.
+
+GLOBAL
+  --help, -h               Show this help.
+  --version, -v            Print version.
+
+Quick start: docs/getting-started.md
+Full docs:   docs/architecture.md, docs/glossary.md, docs/decisions.md
 `;
+
+interface VerbHelp {
+  summary: string;
+  usage: string[];
+  flags?: Array<{ name: string; description: string }>;
+  example: string;
+}
+
+const VERB_HELP: Record<string, VerbHelp> = {
+  record: {
+    summary: 'Drive a workflow in Chromium and stream the session to JSONL.',
+    usage: ['imprint record <site> [--url <url>] [--persist-profile] [--out <path>]'],
+    flags: [
+      { name: '--url <url>', description: 'Starting URL (else about:blank — navigate manually).' },
+      { name: '--out <path>', description: 'Override the JSONL output path.' },
+      {
+        name: '--persist-profile',
+        description: 'Reuse a stable Chrome profile for this site (preserves login state).',
+      },
+    ],
+    example: 'imprint record acmecorp --url https://app.acmecorp.com',
+  },
+  assemble: {
+    summary: 'Reconstruct session.json from a partial session.jsonl.',
+    usage: ['imprint assemble <session.jsonl>'],
+    example: 'imprint assemble examples/acmecorp/sessions/2026-05-03T22-00-00Z.jsonl',
+  },
+  check: {
+    summary: 'Sanity-check a captured session for completeness.',
+    usage: ['imprint check <session.json | session.jsonl>'],
+    example: 'imprint check examples/acmecorp/sessions/2026-05-03T22-00-00Z.json',
+  },
+  redact: {
+    summary: 'Scrub credentials + PII; write <session>.redacted.json.',
+    usage: ['imprint redact <session.json> [--keep-header <name>]…'],
+    flags: [
+      {
+        name: '--keep-header <name>',
+        description:
+          'Keep this header un-redacted (repeatable). Use when a non-credential header has a "secret" name.',
+      },
+    ],
+    example: 'imprint redact examples/acmecorp/sessions/<ts>.json',
+  },
+  generate: {
+    summary: 'LLM-compile a session into workflow.json (API replay artifact).',
+    usage: ['imprint generate <session.json> [--out <path>] [--no-shrink] [--save-shrunken]'],
+    flags: [
+      { name: '--out <path>', description: 'Override the workflow.json output path.' },
+      { name: '--no-shrink', description: 'Send the FULL session to the LLM (debugging).' },
+      {
+        name: '--save-shrunken',
+        description: 'Write the shrunken view next to workflow.json (prompt iteration).',
+      },
+    ],
+    example: 'imprint generate examples/acmecorp/sessions/<ts>.redacted.json',
+  },
+  'compile-playbook': {
+    summary: 'LLM-compile a session into playbook.yaml (DOM replay artifact).',
+    usage: ['imprint compile-playbook <session.json> [--out <path>]'],
+    flags: [{ name: '--out <path>', description: 'Override the playbook.yaml output path.' }],
+    example: 'imprint compile-playbook examples/acmecorp/sessions/<ts>.redacted.json',
+  },
+  emit: {
+    summary: 'Generate the executable TS module from workflow.json.',
+    usage: ['imprint emit <workflow.json> [--out-dir <dir>] [--force]'],
+    flags: [
+      { name: '--out-dir <dir>', description: 'Override the output directory.' },
+      { name: '--force', description: 'Overwrite an existing index.ts.' },
+    ],
+    example: 'imprint emit examples/acmecorp/workflow.json',
+  },
+  login: {
+    summary: 'Persist auth cookies for <site> from a captured session.',
+    usage: ['imprint login <site> --from-session <session.json>'],
+    flags: [
+      { name: '--from-session <path>', description: 'Source session.json (required in v0.1).' },
+    ],
+    example: 'imprint login discoverandgo --from-session examples/discoverandgo/sessions/<ts>.json',
+  },
+  'probe-backends': {
+    summary: 'Try each backend once and cache the working order to backends.json.',
+    usage: ['imprint probe-backends <site> [--out <path>] [--param k=v]…'],
+    flags: [
+      { name: '--out <path>', description: 'Override backends.json output path.' },
+      { name: '--param k=v', description: 'Override a workflow parameter (repeatable).' },
+    ],
+    example: 'imprint probe-backends southwest',
+  },
+  playbook: {
+    summary: 'Run a playbook against a real Chromium (debugging).',
+    usage: ['imprint playbook <site> [--headed] [--trace] [--path <yaml>] [--param k=v]…'],
+    flags: [
+      { name: '--headed', description: 'Show the browser window (default headless).' },
+      { name: '--trace', description: 'Screenshot after every step.' },
+      { name: '--path <yaml>', description: 'Override the playbook.yaml path.' },
+      { name: '--param k=v', description: 'Set a playbook parameter (repeatable).' },
+    ],
+    example:
+      'imprint playbook southwest --param origin_airport_code=SJC --param destination_airport_code=SAN',
+  },
+  cron: {
+    summary: 'Polling daemon for examples/<site>/cron.json.',
+    usage: ['imprint cron <site> [--once | --run-now] [--config <path>]'],
+    flags: [
+      { name: '--once', description: 'Run a single tick and exit (for OS schedulers).' },
+      { name: '--run-now', description: 'Run once immediately, then continue scheduling.' },
+      { name: '--config <path>', description: 'Override the cron.json path.' },
+    ],
+    example: 'imprint cron southwest --once',
+  },
+  'mcp-server': {
+    summary: 'Expose every generated tool as MCP (stdio default).',
+    usage: ['imprint mcp-server [--site <name>] [--http] [--port <num>]'],
+    flags: [
+      { name: '--site <name>', description: 'Restrict to one example.' },
+      { name: '--http', description: 'Use Streamable HTTP transport instead of stdio.' },
+      { name: '--port <num>', description: 'Port for HTTP transport (default 8765).' },
+    ],
+    example: 'imprint mcp-server --site echo',
+  },
+};
+
+function printVerbHelp(verb: string): void {
+  const h = VERB_HELP[verb];
+  if (!h) {
+    console.error(`No help for unknown verb: ${verb}`);
+    return;
+  }
+  console.log(`imprint ${verb} — ${h.summary}\n`);
+  console.log('USAGE');
+  for (const u of h.usage) console.log(`  ${u}`);
+  if (h.flags && h.flags.length > 0) {
+    console.log('\nFLAGS');
+    const pad = Math.max(...h.flags.map((f) => f.name.length));
+    for (const f of h.flags) console.log(`  ${f.name.padEnd(pad)}  ${f.description}`);
+  }
+  console.log('\nEXAMPLE');
+  console.log(`  ${h.example}\n`);
+}
+
+function isVerbHelpRequest(argv: string[]): boolean {
+  return argv.includes('--help') || argv.includes('-h');
+}
 
 /** Pull `argv[1]` or print a uniform error and return null for early-return. */
 function requirePositional(argv: string[], verb: string, label: string): string | null {
@@ -82,6 +217,12 @@ async function main(argv: string[]): Promise<number> {
   }
   if (verb === '--version' || verb === '-v') {
     console.log(VERSION);
+    return 0;
+  }
+
+  // Per-verb help: `imprint <verb> --help` or `-h`.
+  if (verb in VERB_HELP && isVerbHelpRequest(argv.slice(1))) {
+    printVerbHelp(verb);
     return 0;
   }
 
