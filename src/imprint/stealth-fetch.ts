@@ -1,28 +1,13 @@
 /**
- * stealth-fetch — bypass bot detection without keeping a browser alive.
+ * Bypass bot detection without keeping a browser alive.
  *
- * Architecture (same as what paid stealth APIs sell — Bright Data Web
- * Unlocker, browser-use Cloud, ScrapingBee):
+ *   1. Bootstrap: brief headless Chromium navigation to mint cookies +
+ *      sensor headers the bot-detection JS (Akamai/Cloudflare/etc) injects.
+ *   2. Fetch: native fetch() with those cookies + sensor headers.
+ *   3. Refresh: re-bootstrap proactively after maxTokenAgeSeconds AND
+ *      reactively on 403.
  *
- *   1. Bootstrap: launch headless Chromium briefly, navigate to a URL on
- *      the target site, let the bot-detection JS (Akamai/Cloudflare/etc)
- *      run and generate its tokens. Capture the resulting cookies + the
- *      sensor headers the JS injects via Playwright route interception.
- *      Close the browser.
- *   2. Fetch: native `fetch()` with the captured cookies + sensor
- *      headers. No TLS impersonation needed — sensor tokens override
- *      the fingerprint check entirely.
- *   3. Refresh: tokens have a TTL (minutes to hours, site-dependent).
- *      Re-bootstrap proactively after `maxTokenAgeSeconds` AND reactively
- *      when a call returns 403.
- *
- * Total cost: ~12s for bootstrap (one-time), ~1s per API call after.
- *
- * Comes from PR #1 (https://github.com/ashaychangwani/imprint/pull/1)
- * which proved the bypass against real Southwest. This file refines it
- * for integration: proactive refresh, consecutive-failure escalation,
- * and a fetch-shape adapter so it plugs into workflow-runtime as
- * `fetchImpl` with zero workflow.json changes.
+ * ~12s bootstrap one-time, ~1s per API call after.
  */
 
 import { type Browser, chromium } from 'playwright';
@@ -39,18 +24,11 @@ export interface StealthFetchOptions {
   userAgent?: string;
   /** Max number of auto-re-bootstraps on 403 per fetch call. Default 1. */
   maxRetries?: number;
-  /**
-   * Refresh tokens proactively when older than this. Akamai's `_abck`
-   * lifetime varies; 10min is a safe middle ground (long enough to
-   * amortize the bootstrap, short enough to dodge most expirations).
-   */
+  /** Proactive refresh threshold. Default 600s (10min) — Akamai's _abck
+   *  lifetime varies; this amortizes the bootstrap without risking expiry. */
   maxTokenAgeSeconds?: number;
-  /**
-   * After this many CONSECUTIVE 403 responses across calls, the stealth
-   * fetcher reports the site as broken and stops auto-retrying so the
-   * caller (the ladder) can escalate to playbook. Avoids pathological
-   * re-bootstrap loops.
-   */
+  /** Stop auto-retrying after this many consecutive 403s so the ladder
+   *  can escalate to playbook. Default 3. */
   maxConsecutiveFailures?: number;
 }
 
@@ -73,25 +51,15 @@ export interface TokenCache {
   bootstrappedAt: number;
 }
 
-/**
- * The public surface of a stealth fetcher. Production callers use only
- * `fetchImpl` (and occasionally the introspection getters); the tests
- * use `invalidate` + the streak/age numbers to assert lifecycle.
- */
 export interface StealthFetch {
-  /**
-   * `typeof fetch`-shaped wrapper that routes through the bootstrap +
-   * sensor-token machinery. Drop into workflow-runtime as `fetchImpl`
-   * with zero workflow.json changes.
-   */
+  /** typeof fetch wrapper that auto-bootstraps + adds sensor headers. */
   readonly fetchImpl: typeof fetch;
-  /** Force-invalidate cached tokens. Next fetch will re-bootstrap. */
+  /** Drop cached tokens; next fetch re-bootstraps. */
   invalidate(): void;
   /** Token age in seconds; -1 if not bootstrapped yet. */
   readonly tokenAgeSeconds: number;
-  /** Consecutive 403s observed across recent calls. Resets on success. */
+  /** Consecutive 403s; resets on success. */
   readonly failureStreak: number;
-  /** Drop tokens. Kept for symmetry with future browser-pool variants. */
   close(): Promise<void>;
 }
 
@@ -116,11 +84,8 @@ export interface StealthFetchInternals {
 const DEFAULT_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-/**
- * Headers the operator/runtime sets explicitly. Anything in an outbound
- * request NOT in this set was injected by the bot-detection sensor JS
- * and should be captured for replay.
- */
+/** Standard headers the runtime sets — anything outbound NOT in this set
+ *  was injected by sensor JS and is what we capture for replay. */
 const STANDARD_HEADERS = new Set([
   'accept',
   'accept-encoding',
@@ -141,17 +106,9 @@ const STANDARD_HEADERS = new Set([
   'cookie',
 ]);
 
-/**
- * Headers that should be regenerated as fresh UUIDs on every call,
- * never reused from the captured workflow. Sites validate these as
- * "unique per request" or "session-bound" and reject replay of stale
- * values. Match is case-insensitive.
- *
- * Verified against Southwest: replaying the captured
- * `X-User-Experience-ID` produces a 400 VALIDATION__FIELD__INVALID
- * even with otherwise-valid Akamai sensor tokens. Generating a fresh
- * UUID per call clears it.
- */
+/** Regenerate as fresh UUIDs per call. Sites validate these as
+ *  unique-per-request and reject replay (verified vs. Southwest's
+ *  X-User-Experience-ID → 400 VALIDATION__FIELD__INVALID). */
 const FRESH_UUID_HEADERS = new Set([
   'x-user-experience-id',
   'x-request-id',
@@ -161,11 +118,6 @@ const FRESH_UUID_HEADERS = new Set([
 
 const log = createLog('stealth');
 
-/**
- * Build a stealth fetcher. Returns an object exposing `fetchImpl` plus
- * a few introspection accessors. Lifecycle (bootstrap, retry, refresh)
- * lives in closure variables — there is no class, no `new`, no `this`.
- */
 export function createStealthFetch(
   optsOrUrl: StealthFetchOptions | string,
   internals?: StealthFetchInternals,
@@ -192,10 +144,8 @@ export function createStealthFetch(
   };
 
   async function ensureTokens(probeUrl?: string): Promise<void> {
-    // Proactive refresh — if tokens have aged out, mint new ones now
-    // instead of paying the round-trip + 403 + re-bootstrap cost.
     if (tokens && tokenAge() >= opts.maxTokenAgeSeconds) {
-      log(`tokens are ${tokenAge()}s old (>= ${opts.maxTokenAgeSeconds}s), refreshing proactively`);
+      log(`tokens ${tokenAge()}s old (>= ${opts.maxTokenAgeSeconds}s), refreshing proactively`);
       tokens = null;
     }
     if (tokens) return;
@@ -208,20 +158,12 @@ export function createStealthFetch(
       headed: opts.headed,
       sensorWaitSeconds: opts.sensorWaitSeconds,
     });
-    // Successful bootstrap resets the failure counter — old failures
-    // were against stale tokens that we've now refreshed.
-    consecutiveFailures = 0;
+    consecutiveFailures = 0; // fresh tokens → past failures don't count
     log(
       `bootstrapped in ${Date.now() - t0}ms — ${tokens.cookies.length} cookies, ${Object.keys(tokens.sensorHeaders).length} sensor headers`,
     );
   }
 
-  /**
-   * Internal fetch — auto-bootstraps on demand, re-bootstraps on 403
-   * (within maxRetries), escalates after maxConsecutiveFailures. Returns
-   * a raw FetchResult (status/body/headers) for the public wrapper to
-   * adapt into a Response.
-   */
   async function fetchWithRetry(url: string, init?: FetchInit): Promise<FetchResult> {
     const fullUrl = url.startsWith('http') ? url : `${new URL(opts.baseUrl).origin}${url}`;
     await ensureTokens(fullUrl);
@@ -285,12 +227,9 @@ export function createStealthFetch(
         headers[k] = v;
       });
     }
-    // Regenerate "unique per call" headers — captured static values get
-    // rejected as stale by APIs that validate freshness. Also ensure
-    // they're present at all: some APIs require the header (Southwest
-    // returns VALIDATION__FIELD__INVALID for a missing
-    // x-user-experience-id), and the LLM may have dropped it during
-    // workflow generation.
+    // Regenerate per-call UUIDs (captured statics get rejected as stale).
+    // Always inject x-user-experience-id — Southwest requires it even
+    // when the recorded workflow omits it.
     const present = new Set(Object.keys(headers).map((k) => k.toLowerCase()));
     for (const k of Object.keys(headers)) {
       if (FRESH_UUID_HEADERS.has(k.toLowerCase())) {
@@ -357,17 +296,13 @@ async function defaultBootstrap(args: BootstrapArgs): Promise<TokenCache> {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
     });
 
-    // SPAs (Southwest, anything React-heavy) keep persistent connections
-    // alive so 'networkidle' hangs forever. Use 'domcontentloaded' + an
-    // explicit sensor-wait — long enough for Akamai's bot-detection JS
-    // to fire and inject sensor tokens.
+    // 'domcontentloaded' (not 'networkidle') because SPAs keep connections
+    // alive forever; explicit sensor-wait lets bot-detection JS fire.
     await page.goto(args.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(args.sensorWaitSeconds * 1000);
 
-    // Capture ONLY the bot-detection headers that the sensor injects.
-    // We send a probe with known headers, then any header in the
-    // outbound request that we didn't send is sensor-injected. This
-    // avoids capturing our own dummy values.
+    // Probe with known headers; any header we DIDN'T send was injected
+    // by the sensor — that's what we capture.
     const probeHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-API-Key': 'x',

@@ -1,22 +1,8 @@
-/**
- * YAML ↔ Playbook conversion. Parser is just `YAML.parse` + Zod —
- * the playbook format mirrors the schema directly so there's no
- * lossy structural translation.
- *
- * Pre-refactor this was a 425-line hand-rolled markdown state machine
- * (H3 step blocks, bullet attribute parsing, comma-separated locator
- * syntax). The format change to YAML deletes all of that without
- * losing any expressiveness — both humans and the LLM compiler can
- * write either format equally well.
- */
+/** YAML → Playbook (Zod-validated). */
 
 import YAML from 'yaml';
 import { type Playbook, PlaybookSchema } from './types.ts';
 
-/**
- * Parse a playbook YAML document. Throws with the underlying YAML or
- * Zod error message — both are already informative enough.
- */
 export function parsePlaybook(yaml: string): Playbook {
   let raw: unknown;
   try {

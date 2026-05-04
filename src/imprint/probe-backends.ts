@@ -1,18 +1,8 @@
 /**
- * `imprint probe-backends <site>` — try each backend once at record
- * time, write the ranked order to `examples/<site>/backends.json`.
- *
- * cron + MCP read this at startup so they don't burn a fetch attempt
- * on every tick for known-blocked sites. Without the probe, an
- * `"auto"` cron tick logs `fetch FORBIDDEN → escalate` every single
- * tick — wasted work + log noise. With it, the runtime starts with
- * the cheapest known-working backend and falls back through the rest
- * only if the preferred one stops working between probes.
- *
- * The probe uses cron.json's params if present (most realistic — those
- * are the values the operator actually intends to use). Otherwise
- * falls back to workflow defaults. If neither, fails loudly so the
- * operator supplies them.
+ * `imprint probe-backends <site>` — try each backend once and write the
+ * ranked working order to examples/<site>/backends.json. cron + MCP
+ * read it at startup so they skip futile rungs every tick for sites
+ * where one backend is known-blocked.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -57,12 +47,9 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
   log(`probing fetch / stealth-fetch / playbook for ${tool.workflow.toolName}…`);
   log(`  params: ${JSON.stringify(params)}`);
 
-  // Probe the full ladder. Unlike runtime use, the probe attempts EVERY
-  // rung even when an earlier one succeeded — operators want to know
-  // which backends WOULD work, not just the first one that did.
+  // Try every backend (single-rung ladders) — operators want the full
+  // matrix, not just the first that worked.
   const stealthCache = new Map<string, StealthFetch>();
-  // The probe targets the three real backends (not 'auto', which is a
-  // meta-value that expands to a ladder of these).
   type ConcreteBackend = 'fetch' | 'stealth-fetch' | 'playbook';
   const allBackends: ConcreteBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
   const results: BackendsCache['results'] = {};
@@ -71,8 +58,6 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
   for (const backend of allBackends) {
     log(`probing ${backend}…`);
     const t0 = Date.now();
-    // Run each rung as a single-rung ladder so escalation logic doesn't
-    // skip over any backends.
     const { result, attempts } = await runWithLadder(
       [backend],
       tool,
@@ -84,7 +69,6 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
     const attempt = attempts[0];
 
     if (!attempt) {
-      // Shouldn't happen — runWithLadder always records at least one attempt.
       results[backend] = { outcome: 'skipped', detail: 'no attempt recorded' };
       continue;
     }
@@ -134,8 +118,7 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
     preferredOrder: working,
     results,
   };
-  // Validate via Zod before write — catches schema drift early.
-  BackendsCacheSchema.parse(cache);
+  BackendsCacheSchema.parse(cache); // catch schema drift early
 
   writeFileSync(outPath, `${JSON.stringify(cache, null, 2)}\n`);
   log(`wrote ${outPath} — preferred: ${working.join(' → ')}`);
@@ -143,12 +126,8 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
   return { cache, outPath };
 }
 
-/**
- * Read the backends.json cache for a site. Returns null if the file
- * doesn't exist or fails to parse — runtime falls back to the default
- * ladder. Schema validation errors are warnings, not throws, since a
- * stale cache shouldn't break the cron loop.
- */
+/** Read backends.json. Returns null on missing/malformed — runtime
+ *  falls back to the default ladder; a stale cache must never break cron. */
 export function loadBackendsCache(site: string, examplesDir: string): BackendsCache | null {
   const path = pathResolve(examplesDir, site, 'backends.json');
   if (!existsSync(path)) return null;
@@ -163,14 +142,7 @@ export function loadBackendsCache(site: string, examplesDir: string): BackendsCa
   }
 }
 
-/**
- * Pick params for the probe in priority order:
- *   1. Explicit overrides passed by the caller
- *   2. cron.json's params block (most realistic — what the operator
- *      will actually use in production)
- *   3. The workflow's parameter defaults
- * Throws if no values can be assembled for a required parameter.
- */
+/** Param priority: caller overrides → cron.json → workflow defaults. */
 function resolveParams(
   site: string,
   examplesDir: string,

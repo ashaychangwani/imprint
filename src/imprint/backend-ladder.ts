@@ -1,20 +1,8 @@
 /**
- * Backend ladder for replay.
- *
- * Three backends, in increasing order of cost + bot-detection robustness:
- *   1. `fetch`         — captured workflow.json via Node fetch (~200ms)
- *   2. `stealth-fetch` — Playwright-bootstrapped sensor tokens + native
- *                        fetch (~12s bootstrap one-time, ~1s per call)
- *   3. `playbook`      — full Playwright + stealth + DOM walk (~9.4s)
- *
- * `runWithLadder([...], tool, params, examplesDir, stealthCache)` walks
- * them in order, escalating only on FORBIDDEN. Other error classes
- * (AUTH_EXPIRED, NETWORK, RATE_LIMITED, etc) return immediately —
- * a different backend can't fix those.
- *
- * The principle: as long as some backend would have worked, the call
- * succeeds. "Imprint can't help here" is the failure mode we're
- * eliminating.
+ * Walk a list of backends in order, escalating on FORBIDDEN; any
+ * non-FORBIDDEN error returns immediately. Three backends in cost
+ * order: fetch (~200ms) → stealth-fetch (~12s bootstrap then ~1s) →
+ * playbook (~9.4s, universal). See docs/architecture.md for design.
  */
 
 import { existsSync } from 'node:fs';
@@ -27,9 +15,8 @@ import type { ReplayBackend, ToolResult } from './types.ts';
 
 export interface LadderResult {
   result: ToolResult;
-  /** Which backend produced the returned result. */
   usedBackend: ReplayBackend;
-  /** Per-backend log entries — one per ladder rung that was tried. */
+  /** One entry per rung that was tried. */
   attempts: Array<{
     backend: ReplayBackend;
     outcome: 'ok' | 'escalate' | 'failed' | 'unavailable';
@@ -42,12 +29,8 @@ const log = createLog('backend');
 
 const DEFAULT_LADDER: ReplayBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
 
-/**
- * Expand a user-facing replayBackend choice into the concrete ladder
- * `runWithLadder` will walk. 'auto' uses the cached preferredOrder
- * (from `imprint probe-backends`) if present, otherwise the default
- * cost-ranked ladder. Explicit single-backend choices become single-rung.
- */
+/** Expand a replayBackend choice into a concrete ladder. 'auto' prefers
+ *  the probed order (if any), else the default. Explicit choice → single rung. */
 export function resolveLadder(
   backend: ReplayBackend,
   cachedPreferredOrder?: ReplayBackend[],
@@ -60,11 +43,7 @@ export function resolveLadder(
   return [backend];
 }
 
-/**
- * Walk a list of backends in order, escalating on FORBIDDEN. Returns
- * the first non-FORBIDDEN result OR the last FORBIDDEN if every
- * backend failed.
- */
+/** First non-FORBIDDEN result wins; last FORBIDDEN returned if every rung escalates. */
 export async function runWithLadder(
   ladder: ReplayBackend[],
   tool: ResolvedTool,
@@ -137,8 +116,8 @@ export async function runWithLadder(
       continue;
     }
 
-    // Non-FORBIDDEN errors don't escalate — a different backend can't
-    // fix AUTH_EXPIRED or NETWORK or RATE_LIMITED.
+    // Non-FORBIDDEN errors don't escalate — different backend can't fix
+    // AUTH_EXPIRED, NETWORK, RATE_LIMITED.
     attempts.push({
       backend,
       outcome: 'failed',
@@ -169,10 +148,7 @@ export async function runWithLadder(
   };
 }
 
-/**
- * Lazily mint a per-site stealth fetcher, cached across calls so the
- * Playwright bootstrap cost is paid once per site per process.
- */
+/** Per-site stealth fetcher; bootstrap pays its ~12s once per process. */
 function ensureStealthFetch(tool: ResolvedTool, cache: Map<string, StealthFetch>): StealthFetch {
   const cached = cache.get(tool.site);
   if (cached) return cached;
@@ -181,15 +157,9 @@ function ensureStealthFetch(tool: ResolvedTool, cache: Map<string, StealthFetch>
   return sf;
 }
 
-/**
- * Heuristic: use the workflow's first request URL's origin as the base
- * for the stealth-fetch bootstrap. This is the right domain to load so
- * Akamai's sensor JS runs and binds tokens to that origin. The origin
- * comes from the URL prefix before any path segment, which is always
- * literal — `${param.X}` substitutions only appear after the domain in
- * well-formed workflows — so a regex extract is safe and doesn't need
- * access to runtime substitution.
- */
+/** First request URL's origin — Akamai binds sensor tokens to that
+ *  origin, and the origin is always literal (substitutions only appear
+ *  after the domain in well-formed workflows). */
 function pickBaseUrl(tool: ResolvedTool): string {
   const firstRequest = tool.workflow.requests[0];
   if (!firstRequest) {

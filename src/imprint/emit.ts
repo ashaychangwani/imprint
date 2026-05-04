@@ -1,12 +1,5 @@
-/**
- * `imprint emit <workflow.json>` — generate the executable TypeScript module.
- *
- * Output: examples/<site>/index.ts that exports `runWorkflow(params)`.
- *
- * The generated file is intentionally a thin wrapper around
- * workflow-runtime.executeWorkflow. The workflow.json is embedded inline so
- * the generated file is self-sufficient and committable.
- */
+/** `imprint emit` — generate examples/<site>/index.ts: a thin wrapper
+ *  around runtime.executeWorkflow with the workflow JSON embedded inline. */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin, resolve as pathResolve, relative } from 'node:path';
@@ -15,15 +8,9 @@ import { type Workflow, WorkflowSchema } from './types.ts';
 export interface EmitOptions {
   /** Path to workflow.json */
   workflowPath: string;
-  /**
-   * Output directory. Defaults to `examples/<site>/`. The file will be
-   * <outDir>/index.ts. Tests pass an explicit outDir.
-   */
+  /** Output dir; defaults to dirname(workflowPath). File: <outDir>/index.ts. */
   outDir?: string;
-  /**
-   * If true, overwrite without prompting. Default false. When false, the verb
-   * will refuse to overwrite an existing index.ts unless --force is passed.
-   */
+  /** Overwrite an existing index.ts. Default false. */
   force?: boolean;
 }
 
@@ -50,9 +37,7 @@ export function emit(opts: EmitOptions): EmitResult {
     );
   }
 
-  // Compute the import path from the generated file back to workflow-runtime
-  // in src/. Generated files live in examples/<site>/ which is two levels
-  // deep from src/imprint/.
+  // Generated files live in examples/<site>/, two levels deep from src/imprint/.
   const runtimeModule = pathResolve(import.meta.dir, 'runtime.ts');
   const importPath = relative(outDir, runtimeModule);
 
@@ -85,7 +70,6 @@ function renderModule(workflow: Workflow, runtimeImportPath: string): string {
     .map((p) => `    ${p.name}: input.${p.name},`)
     .join('\n');
 
-  // Embed the workflow JSON inline so the file is self-contained.
   const workflowJson = JSON.stringify(workflow, null, 2);
 
   return `/**
@@ -147,6 +131,5 @@ function escapeJsdoc(s: string): string {
 }
 
 function pathRel(from: string, sibling: string): string {
-  // Replace the last path segment of `from` with `sibling`.
   return from.replace(/[^/]+$/, sibling);
 }

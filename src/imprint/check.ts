@@ -1,13 +1,5 @@
-/**
- * `imprint check <session>` — sanity-check a captured session.
- *
- * Tells the user at a glance whether the recording looks complete enough to
- * generate a workflow from. We can't validate WHAT the user did, but we can
- * spot obviously truncated captures (no requests, missing end-of-flow markers,
- * suspicious zero-narration sessions).
- *
- * Accepts either the assembled session.json OR the raw session.jsonl.
- */
+/** `imprint check` — sanity-check a captured session.json or .jsonl
+ *  for obvious gaps (no requests, no narration, no end markers). */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { extname } from 'node:path';
