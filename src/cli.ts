@@ -206,15 +206,19 @@ function requirePositional(argv: string[], verb: string, label: string): string 
   return v;
 }
 
-/** Parse `--param k=v` entries; coerces numeric/boolean values; throws on malformed input. */
-function parseParamKV(entries: string[]): Record<string, string | number | boolean> {
+/** Parse `--param k=v` entries; coerces numeric/boolean values. Returns null
+ *  and prints an error on malformed input — caller returns its own exit code. */
+function tryParseParamKV(
+  entries: string[] | undefined,
+): Record<string, string | number | boolean> | null {
   const out: Record<string, string | number | boolean> = {};
-  for (const kv of entries) {
+  for (const kv of entries ?? []) {
     const eq = kv.indexOf('=');
     if (eq === -1) {
-      throw new Error(
-        `--param requires k=v form, got "${kv}"\n→ example: --param origin_airport_code=SJC`,
+      console.error(
+        `error: --param requires k=v form, got "${kv}"\n→ example: --param origin_airport_code=SJC`,
       );
+      return null;
     }
     const k = kv.slice(0, eq);
     const v = kv.slice(eq + 1);
@@ -498,13 +502,8 @@ async function main(argv: string[]): Promise<number> {
         },
         allowPositionals: false,
       });
-      let overrides: Record<string, string | number | boolean>;
-      try {
-        overrides = parseParamKV(values.param ?? []);
-      } catch (err) {
-        console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
-        return 2;
-      }
+      const overrides = tryParseParamKV(values.param);
+      if (overrides === null) return 2;
       const { probeBackends } = await import('./imprint/probe-backends.ts');
       const result = await probeBackends({
         site,
@@ -513,6 +512,8 @@ async function main(argv: string[]): Promise<number> {
       });
       console.log(`[imprint] probed → ${result.outPath}`);
       console.log(`[imprint] preferred order: ${result.cache.preferredOrder.join(' → ')}`);
+      console.log('');
+      console.log('[imprint] cron + mcp-server now skip futile rungs at startup using this cache.');
       return 0;
     }
 
@@ -559,13 +560,8 @@ async function main(argv: string[]): Promise<number> {
       const { resolve: pathResolve } = await import('node:path');
       const playbookPath =
         values.path ?? pathResolve(process.cwd(), 'examples', site, 'playbook.yaml');
-      let params: Record<string, string | number | boolean>;
-      try {
-        params = parseParamKV(values.param ?? []);
-      } catch (err) {
-        console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
-        return 2;
-      }
+      const params = tryParseParamKV(values.param);
+      if (params === null) return 2;
       const { runPlaybook } = await import('./imprint/playbook-runner.ts');
       const result = await runPlaybook({
         playbook: playbookPath,
