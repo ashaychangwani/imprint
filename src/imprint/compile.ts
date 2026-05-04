@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
+import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { LLM, extractJsonObject, loadConfig } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
@@ -216,7 +217,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
  */
 export function shrinkSession(session: Session): Session {
   const startUrl = safeUrl(session.url);
-  const startRoot = startUrl ? rootDomain(startUrl.hostname) : null;
+  const startRoot = startUrl ? registrableDomain(startUrl.hostname) : null;
 
   const NOISE_RESOURCE_TYPES = new Set([
     'Image',
@@ -234,7 +235,7 @@ export function shrinkSession(session: Session): Session {
     const url = safeUrl(r.url);
     if (!url) return false;
     if (NOISE_RESOURCE_TYPES.has(r.resourceType)) return false;
-    if (startRoot && !url.hostname.endsWith(startRoot)) return false;
+    if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) return false;
     return true;
   });
 
@@ -247,12 +248,6 @@ function safeUrl(s: string): URL | null {
   } catch {
     return null;
   }
-}
-
-function rootDomain(hostname: string): string {
-  const parts = hostname.split('.');
-  if (parts.length <= 2) return hostname;
-  return parts.slice(-2).join('.');
 }
 
 // ─── compilePlaybook (playbook.yaml) ─────────────────────────────────────────

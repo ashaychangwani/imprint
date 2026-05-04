@@ -11,6 +11,7 @@
  */
 
 import { type Browser, chromium } from 'playwright';
+import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { createLog } from './log.ts';
 
 export interface StealthFetchOptions {
@@ -351,12 +352,18 @@ async function defaultBootstrap(args: BootstrapArgs): Promise<TokenCache> {
 
     await page.waitForTimeout(300);
 
-    // Capture cookies for the registrable domain.
+    // Capture cookies scoped to the recording's registrable domain
+    // (eTLD+1). Naive `.split('.').slice(-2)` was wrong for multi-part
+    // suffixes like .co.uk — it would match any cookie whose domain
+    // contained "co.uk".
     const allCookies = await context.cookies();
     const origin = new URL(args.baseUrl);
-    const rootDomain = origin.hostname.split('.').slice(-2).join('.');
+    const root = registrableDomain(origin.hostname);
     const cookies = allCookies
-      .filter((c) => c.domain.includes(rootDomain))
+      .filter((c) => {
+        const cookieHost = c.domain.replace(/^\./, '');
+        return isSameRegistrableDomain(cookieHost, root);
+      })
       .map((c) => ({ name: c.name, value: c.value }));
 
     return { cookies, sensorHeaders, bootstrappedAt: Date.now() };

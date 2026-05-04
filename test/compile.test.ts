@@ -110,6 +110,37 @@ describe('shrinkSession', () => {
     expect(shrinkSession(session).requests).toHaveLength(1);
   });
 
+  it('correctly scopes same-site under multi-part TLDs (.co.uk bug-fix)', () => {
+    // Pre-fix: rootDomain('www.example.co.uk') returned 'co.uk', so
+    // every other .co.uk hostname (an unrelated tracker, a competitor's
+    // CDN) would survive the filter. Now only example.co.uk's own
+    // subdomains pass.
+    const session = makeSession({
+      url: 'https://www.example.co.uk/start',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://api.example.co.uk/v1/search',
+          headers: {},
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 2,
+          timestamp: 200,
+          method: 'POST',
+          url: 'https://tracker.unrelated.co.uk/log',
+          headers: {},
+          resourceType: 'Fetch',
+        },
+      ],
+    });
+    const kept = shrinkSession(session).requests;
+    expect(kept).toHaveLength(1);
+    expect(kept[0]?.url).toContain('example.co.uk');
+  });
+
   it('drops requests with malformed URLs', () => {
     const session = makeSession({
       requests: [
