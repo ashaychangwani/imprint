@@ -113,8 +113,12 @@ Drop a `cron.json` next to your generated tool:
 Then run the daemon:
 
 ```bash
-imprint cron acmecorp
+imprint cron acmecorp                      # foreground daemon (Ctrl+C to stop)
+imprint cron acmecorp --once               # single tick (for OS schedulers)
+imprint cron acmecorp --once --quiet       # silent on success — pair with cron/systemd
 ```
+
+`--quiet` suppresses all info logs on successful runs; failures still print to stderr. Use it from `cron`/`systemd timer`/`launchd` so you only get mail/alerts when something's actually broken.
 
 Optional: configure push notifications by setting `PUSHOVER_TOKEN` + `PUSHOVER_USER`, or `NTFY_URL`. See [docs/notifications.md](notifications.md).
 
