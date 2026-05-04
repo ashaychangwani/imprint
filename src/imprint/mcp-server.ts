@@ -16,7 +16,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { type ConcreteBackend, resolveLadder, runWithLadder } from './backend-ladder.ts';
+import { resolveLadder, runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
 import { loadBackendsCache } from './probe-backends.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
@@ -25,7 +25,7 @@ import {
   buildZodValidator,
   discoverTools,
 } from './tool-loader.ts';
-import type { WorkflowParameter } from './types.ts';
+import type { ConcreteBackend, WorkflowParameter } from './types.ts';
 
 interface RunMcpServerOptions {
   /** Restrict to one example. Otherwise every generated example is registered. */
