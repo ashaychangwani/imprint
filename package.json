@@ -1,7 +1,7 @@
 {
   "name": "imprint",
   "version": "0.1.0",
-  "description": "Teach AI agents to use any website by demonstrating once. Captures network requests + narration, generates an MCP server.",
+  "description": "Teach an AI agent how to use any website. Once. Records a real browser session + narration; generates a deterministic MCP tool plus a DOM-replay playbook fallback.",
   "type": "module",
   "license": "MIT",
   "author": "Ashay Changwani",
@@ -19,11 +19,14 @@
   },
   "scripts": {
     "dev": "bun run src/cli.ts",
+    "imprint": "bun run src/cli.ts",
+    "doctor": "bun run src/cli.ts doctor",
     "test": "bun test",
     "test:eval": "RUN_EVALS=1 bun test test/eval",
     "lint": "biome check src test",
     "lint:fix": "biome check --write src test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "bun run typecheck && bun run lint && bun test"
   },
   "dependencies": {
     "@anthropic-ai/vertex-sdk": "^0.13.0",
