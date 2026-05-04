@@ -10,6 +10,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { LLM, extractJsonObject, loadConfig } from './llm.ts';
+import { createLog } from './log.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { redactSession } from './redact.ts';
 import {
@@ -21,6 +22,7 @@ import {
 } from './types.ts';
 
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
+const log = createLog('compile');
 
 export interface CompileOptions {
   /** Path to session.json or session.redacted.json */
@@ -70,8 +72,8 @@ async function compile<T>(opts: CompileOptions, task: CompileTask<T>): Promise<C
     const r = redactSession(session);
     session = r.session;
     if (r.stats.totalRedactions > 0) {
-      console.log(
-        `[imprint] redacted ${r.stats.totalRedactions} value(s) before sending to LLM (use \`imprint redact\` to scrub the file on disk too)`,
+      log(
+        `redacted ${r.stats.totalRedactions} value(s) before sending to LLM (use \`imprint redact\` to scrub the file on disk too)`,
       );
     }
   }
@@ -146,11 +148,9 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       if (opts.saveShrunken) {
         const path = opts.sessionPath.replace(/\.(redacted\.)?json$/, '.shrunken.json');
         writeFileSync(path, `${JSON.stringify(shrunken, null, 2)}\n`);
-        console.log(`[imprint] saved shrunken view → ${path}`);
+        log(`saved shrunken view → ${path}`);
       }
-      console.log(
-        `[imprint] sending ${requestsSent} requests (down from ${requestsOriginal}) to LLM…`,
-      );
+      log(`sending ${requestsSent} requests (down from ${requestsOriginal}) to LLM…`);
       return shrunken;
     },
     parse: (raw) => {
@@ -286,8 +286,8 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
             response_body: truncate(r.response?.body, RESPONSE_BODY_LIMIT),
           })),
       };
-      console.log(
-        `[imprint] compiling playbook from ${session.events.length} events / ${slim.requests.length} XHRs / ${session.narration.length} narration lines…`,
+      log(
+        `compiling playbook from ${session.events.length} events / ${slim.requests.length} XHRs / ${session.narration.length} narration lines…`,
       );
       return slim;
     },
