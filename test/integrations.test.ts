@@ -114,7 +114,7 @@ describe('generatePasteSnippet', () => {
     });
 
     expect(snippet).toContain(
-      'claude mcp add --scope project imprint-testsite -- imprint mcp-server testsite',
+      'claude mcp add --scope user imprint-testsite -- imprint mcp-server testsite',
     );
   });
 
@@ -220,7 +220,7 @@ describe('buildRegistrationCommand', () => {
       'mcp',
       'add',
       '--scope',
-      'project',
+      'user',
       'imprint-testsite',
       '--',
       'imprint',

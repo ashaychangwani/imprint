@@ -19,13 +19,13 @@ Claude Code is the CLI for Claude. It ships with first-class MCP support.
 ### Quick setup
 
 ```bash
-claude mcp add --scope project imprint-mysite -- imprint mcp-server mysite
+claude mcp add --scope user imprint-google-flights -- imprint mcp-server google-flights
 ```
 
-This registers the tool for the current project only. To make it available globally:
+This registers the tool globally (available in every Claude Code session). To restrict to a single project:
 
 ```bash
-claude mcp add --scope user imprint-mysite -- imprint mcp-server mysite
+claude mcp add --scope project imprint-google-flights -- imprint mcp-server google-flights
 ```
 
 ### Debugging

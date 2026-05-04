@@ -41,38 +41,38 @@ imprint doctor
 
 Pick a site you want to automate. Internal admin panels, dashboards, and authed tools all work — anything you can drive in a browser.
 
-Throughout this walkthrough we'll use the placeholder site name `mysite`. Substitute your own (any short label; it becomes the directory name under `examples/`).
+Pick a short, descriptive label for `<site>` — it becomes the directory name under `examples/`. Examples: `google-flights`, `southwest`, `company-dashboard`.
 
 ```bash
 # 1. Record yourself doing the thing once
-imprint record mysite --url https://your-site-here.example.com
+imprint record google-flights --url https://flights.google.com
 #   → Chromium opens. Drive the workflow end-to-end. Narrate what
 #     you're doing in the terminal. Press /done (or Ctrl+C) when finished.
-#   → Output: examples/mysite/sessions/<timestamp>.{jsonl,json}
+#   → Output: examples/google-flights/sessions/<timestamp>.{jsonl,json}
 
 # 2. Pick the session you just recorded
-SESSION=$(ls examples/mysite/sessions/*.json | grep -v redacted | tail -1)
+SESSION=$(ls examples/google-flights/sessions/*.json | grep -v redacted | tail -1)
 
 # 3. Scrub credentials and PII before sending to the LLM
 imprint redact "$SESSION"
-#   → Output: examples/mysite/sessions/<timestamp>.redacted.json
+#   → Output: examples/google-flights/sessions/<timestamp>.redacted.json
 
 # 4. LLM-compile two artifacts (workflow.json + playbook.yaml)
 imprint generate "${SESSION%.json}.redacted.json"
 imprint compile-playbook "${SESSION%.json}.redacted.json"
-#   → Outputs: examples/mysite/{workflow.json, playbook.yaml}
+#   → Outputs: examples/google-flights/{workflow.json, playbook.yaml}
 
 # 5. Emit the executable TS module
-imprint emit examples/mysite/workflow.json
-#   → Output: examples/mysite/index.ts
+imprint emit examples/google-flights/workflow.json
+#   → Output: examples/google-flights/index.ts
 
 # 6. (Optional) Probe which backends work and cache the order.
 #    Safe to skip for plain APIs; useful for bot-protected sites.
 imprint probe-backends mysite
-#   → Output: examples/mysite/backends.json
+#   → Output: examples/google-flights/backends.json
 
 # 7. Test it
-imprint mcp-server mysite    # stdio MCP server
+imprint mcp-server google-flights    # stdio MCP server
 ```
 
 You now have an MCP tool any agent can call.
@@ -85,10 +85,10 @@ Quick examples:
 
 ```bash
 # Claude Code (one command):
-claude mcp add --scope project imprint-mysite -- imprint mcp-server mysite
+claude mcp add --scope user imprint-google-flights -- imprint mcp-server google-flights
 
 # Test with mcp-inspector:
-npx @modelcontextprotocol/inspector imprint mcp-server mysite
+npx @modelcontextprotocol/inspector imprint mcp-server google-flights
 ```
 
 ## Schedule it
