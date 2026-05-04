@@ -39,6 +39,11 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - **Cron expression error** now shows the format and links crontab.guru.
 - **Vertex project ID error** shows the exact `export ANTHROPIC_VERTEX_PROJECT_ID=…` command and points at `imprint doctor` for the rest of the env-var checklist.
 - **Workflow placeholder error** lists the params that *were* passed (or, if none, shows the exact `--param X=<value>` to add).
+- **`loadJsonFile()` helper** — `src/imprint/load-json.ts`. Single-source for the file-not-found / invalid-JSON / schema-mismatch error pipeline used by cron.ts, emit.ts, compile.ts, and the cli.ts redact case. -44 LOC across the four callers, plus user-friendly messages everywhere ZodError used to spill raw to stderr (cron.json `{badkey:1}` → "  - schedule: Required" + minimum example + docs link, instead of `[{code:'invalid_type',...}]`).
+- **Pipeline next-step hints** — `imprint redact`, `generate`, `compile-playbook`, `record`, `check`, `login`, `probe-backends`, `mcp-server` (no-tools path) all now print "next step: imprint <verb> ..." after a successful run or hint-worthy error, so the full pipeline can be chained without alt-tabbing to docs.
+- **isDebug() / isQuiet() env helpers** — `=== '1'` semantics (not truthy coercion), so `IMPRINT_DEBUG=0` actually disables. Replaces 8 raw `process.env.IMPRINT_DEBUG` checks across record.ts, chromium.ts, cron.ts, cli.ts.
+- **`tryParseParamKV()` helper** in cli.ts — return-null-on-error pattern eliminates the duplicated try/catch for the two `--param` callers.
+- **Test coverage gap-fills**: `test/check.test.ts` (+8 tests pinning warning heuristics), `test/load-json.test.ts` (+7 tests pinning the shared error shape).
 - **Single source of truth for the backend enum** — `BackendsCacheSchema` previously duplicated `['fetch', 'stealth-fetch', 'playbook']` literally. Now derives from `ReplayBackendSchema.exclude(['auto'])`. Adding a new backend updates one place.
 - **Tighter type narrowing** — `runWithLadder` parameter changed from `ReplayBackend[]` to `ConcreteBackend[]` (= `Exclude<ReplayBackend, 'auto'>`); the unreachable `case 'auto'` defensive throw deleted.
 - **Zero dead code, enforced** — three-tool defense:
@@ -68,16 +73,17 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - `src/imprint/generate.ts`, `src/imprint/playbook-compiler.ts` (merged into `compile.ts`).
 - `test/sanity.test.ts` — its 3 cases tested Zod's `safeParse` on inline schemas, not Imprint logic.
 - `scripts/minimal-mcp.ts`, `scripts/minimal-mcp-with-import.ts`, `scripts/min-node-mcp.ts` — superseded MCP scratchpads from v0.1 bring-up.
+- `scripts/zoo-sniper.py` — standalone Python script for a personal use case (Zoo Pass automation), unrelated to imprint's pipeline. Pre-pivot artifact.
 
 ### Metrics
 
 | | Before | After |
 |---|---|---|
-| `src/imprint/` + `src/cli.ts` LOC | 5,828 | ~4,950 (-15%, including +110 LOC for the new doctor verb) |
-| Source files | 26 | 23 (− 4 renames/folds + 2 new: compile.ts, doctor.ts, version.ts) |
-| Tests | 137 / 13 files | 204 / 15 files (more user-path coverage) |
+| `src/imprint/` + `src/cli.ts` LOC | 5,828 | ~5,000 (-14%, includes +110 LOC for new doctor + +50 LOC load-json helper amortized across 4 callers) |
+| Source files | 26 | 24 (− 4 renames/folds + 4 new: compile.ts, doctor.ts, version.ts, load-json.ts) |
+| Tests | 137 / 13 files | 224 / 18 files (more user-path coverage) |
 | README | sprint-changelog flavor (285 lines) | adoption-friendly (110 lines) |
-| Docs files | 3 | 10 (+ CHANGELOG, CONTRIBUTING) |
+| Docs files | 3 | 10 (+ CHANGELOG, CONTRIBUTING, scripts/README) |
 | CLI verbs | 12 | 13 (+ doctor) |
 
 ---
