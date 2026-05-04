@@ -9,12 +9,11 @@ git clone https://github.com/<you>/imprint.git
 cd imprint
 bun install
 bunx playwright install chromium
-bun test                          # 132 tests, ~10s
-bun run typecheck                 # tsc --noEmit
-bun run lint                      # biome
+bun run check                     # typecheck + lint + 193 tests, ~12s combined
+imprint doctor                    # verify env (after `bun link`)
 ```
 
-If those four commands all pass on `main`, your environment is good.
+If `bun run check` passes on `main` and `imprint doctor` is all green, your environment is good.
 
 ## Reporting bugs
 
@@ -33,7 +32,7 @@ Small tweaks (typo fixes, doc clarifications, narrow bug fixes): just open a PR.
 Anything bigger:
 1. **Open an issue first** describing the change. It's faster than rewriting code we'll have to push back on.
 2. **Keep PRs focused.** One concern per PR. Refactors that touch many files should be in their own PR, separate from feature work.
-3. **Tests pass before review.** `bun test`, `bun run typecheck`, `bun run lint` — all green.
+3. **Tests pass before review.** `bun run check` (combined typecheck + lint + tests) — all green.
 4. **Live-verify when relevant.** If your change touches the cron path, the MCP server, or a backend, run a live tick against `examples/southwest` (or a similar real-world fixture). Note in the PR description.
 
 ## Repo conventions
