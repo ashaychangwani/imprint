@@ -55,7 +55,9 @@ interface CompileTask<T> {
 
 async function compile<T>(opts: CompileOptions, task: CompileTask<T>): Promise<CompileResult<T>> {
   if (!existsSync(opts.sessionPath)) {
-    throw new Error(`Session not found: ${opts.sessionPath}`);
+    throw new Error(
+      `Session not found: ${opts.sessionPath}\n→ run \`imprint record <site>\` to create one.`,
+    );
   }
 
   const raw = JSON.parse(readFileSync(opts.sessionPath, 'utf8'));
@@ -170,7 +172,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         return WorkflowSchema.parse(parsed);
       } catch (err) {
         throw new Error(
-          `LLM output failed schema validation: ${err instanceof Error ? err.message : String(err)}\nRaw JSON: ${jsonText.slice(0, 1000)}`,
+          `LLM output failed schema validation: ${err instanceof Error ? err.message : String(err)}\nRaw JSON: ${jsonText.slice(0, 1000)}\n→ if this keeps happening, re-record the session or check prompts/intent-detection.md.`,
         );
       }
     },

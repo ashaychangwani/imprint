@@ -45,7 +45,7 @@ const log = createLog('cron');
 function loadCronConfig(configPath: string): CronConfig {
   if (!existsSync(configPath)) {
     throw new Error(
-      `cron.json not found at ${configPath}. Create one with {"schedule":"...","params":{...}}.`,
+      `cron.json not found at ${configPath}\n→ create one with: {"schedule":"0 9 * * *","params":{},"replayBackend":"auto"}\n→ see docs/getting-started.md for full schema.`,
     );
   }
   const raw = JSON.parse(readFileSync(configPath, 'utf8'));
