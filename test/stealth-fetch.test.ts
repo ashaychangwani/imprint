@@ -197,4 +197,49 @@ describe('fetchImpl', () => {
     const resp = await sf.fetchImpl(new URL('https://example.com/api/x'));
     expect(resp.status).toBe(200);
   });
+
+  it('passes non-string bodies through to the underlying fetch', async () => {
+    // Workflow generated tools always send strings today, but the
+    // wrapper is typed as `typeof fetch` and silently dropping a Blob /
+    // FormData / URLSearchParams body would be a confusing real-user
+    // failure mode. This test pins each of the BodyInit variants.
+    const observed: Array<RequestInit['body']> = [];
+    const sf = createStealthFetch(
+      { baseUrl: 'https://example.com' },
+      {
+        bootstrap: async (): Promise<TokenCache> => ({
+          cookies: [],
+          sensorHeaders: {},
+          bootstrappedAt: Date.now(),
+        }),
+        underlyingFetch: async (_url, init) => {
+          observed.push(init.body);
+          return { status: 200, ok: true, body: '{}', headers: {} };
+        },
+      },
+    );
+
+    const blob = new Blob(['hello']);
+    await sf.fetchImpl('https://example.com/x', { method: 'POST', body: blob });
+
+    const form = new FormData();
+    form.append('q', 'value');
+    await sf.fetchImpl('https://example.com/x', { method: 'POST', body: form });
+
+    const params = new URLSearchParams({ q: 'v' });
+    await sf.fetchImpl('https://example.com/x', { method: 'POST', body: params });
+
+    const buf = new TextEncoder().encode('binary-payload');
+    await sf.fetchImpl('https://example.com/x', { method: 'POST', body: buf });
+
+    await sf.fetchImpl('https://example.com/x', { method: 'POST', body: 'plain-string' });
+
+    // No call should have observed a dropped (undefined) body.
+    expect(observed).toHaveLength(5);
+    expect(observed[0]).toBe(blob);
+    expect(observed[1]).toBe(form);
+    expect(observed[2]).toBe(params);
+    expect(observed[3]).toBe(buf);
+    expect(observed[4]).toBe('plain-string');
+  });
 });
