@@ -8,6 +8,7 @@ import { createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { isDebug } from './log.ts';
 
 interface LaunchOptions {
   /** CDP port. If omitted, picks a free ephemeral port. */
@@ -185,7 +186,7 @@ export async function launchChromium(opts: LaunchOptions = {}): Promise<Launched
   });
 
   // Chromium is noisy — only surface stderr under IMPRINT_DEBUG.
-  if (process.env.IMPRINT_DEBUG) {
+  if (isDebug()) {
     child.stderr?.on('data', (chunk) => process.stderr.write(chunk));
   }
 

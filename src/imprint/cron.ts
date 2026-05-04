@@ -12,7 +12,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import cron from 'node-cron';
 import { resolveLadder, runWithLadder } from './backend-ladder.ts';
-import { createLog } from './log.ts';
+import { createLog, isDebug } from './log.ts';
 import { evaluateNotifyWhen, notify } from './notify.ts';
 import { loadBackendsCache } from './probe-backends.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
@@ -86,7 +86,7 @@ async function runOnce(
     // Cap the inline preview at ~500 chars; full payload available via
     // IMPRINT_DEBUG=1. Long-running daemons flood stderr otherwise.
     const preview =
-      process.env.IMPRINT_DEBUG || data.length <= 500
+      isDebug() || data.length <= 500
         ? data
         : `${data.slice(0, 500)}…(${data.length - 500} more chars; set IMPRINT_DEBUG=1 to log full payload)`;
     log(`  OK in ${elapsed}ms via ${usedBackend}: ${preview}`);
