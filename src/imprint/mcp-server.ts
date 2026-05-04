@@ -16,7 +16,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { resolveLadder, runWithLadder } from './backend-ladder.ts';
+import { type ConcreteBackend, resolveLadder, runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
 import { loadBackendsCache } from './probe-backends.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
@@ -25,7 +25,7 @@ import {
   buildZodValidator,
   discoverTools,
 } from './tool-loader.ts';
-import type { ReplayBackend, WorkflowParameter } from './types.ts';
+import type { WorkflowParameter } from './types.ts';
 
 interface RunMcpServerOptions {
   /** Restrict to one example. Otherwise every generated example is registered. */
@@ -48,7 +48,7 @@ interface ResolvedTool extends DiscoveredTool {
   inputSchema: Tool['inputSchema'];
   playbookPath?: string;
   /** Probe-cached ladder; runtime starts here instead of the default. */
-  preferredOrder?: ReplayBackend[];
+  preferredOrder?: ConcreteBackend[];
 }
 
 /** Tool description shown to MCP clients. Includes the operator's
