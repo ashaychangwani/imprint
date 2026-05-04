@@ -48,8 +48,24 @@ function loadCronConfig(configPath: string): CronConfig {
       `cron.json not found at ${configPath}\n→ create one with: {"schedule":"0 9 * * *","params":{},"replayBackend":"auto"}\n→ see docs/getting-started.md for full schema.`,
     );
   }
-  const raw = JSON.parse(readFileSync(configPath, 'utf8'));
-  return CronConfigSchema.parse(raw);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch (err) {
+    throw new Error(
+      `cron.json at ${configPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}\n→ check for a stray comma or unquoted key.`,
+    );
+  }
+  const parsed = CronConfigSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issues = parsed.error.errors
+      .map((e) => `  - ${e.path.join('.') || '(root)'}: ${e.message}`)
+      .join('\n');
+    throw new Error(
+      `cron.json at ${configPath} failed schema validation:\n${issues}\n→ minimum required: {"schedule":"0 9 * * *","params":{}}\n→ full schema: docs/getting-started.md (look for "Schedule it").`,
+    );
+  }
+  return parsed.data;
 }
 
 /** One tool tick: walk the ladder, log, push notification on result. */
