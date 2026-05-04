@@ -74,7 +74,10 @@ export async function notifyPushover(
   const token = process.env.PUSHOVER_TOKEN;
   const user = process.env.PUSHOVER_USER;
   if (!token || !user) {
-    return { delivered: false, reason: 'PUSHOVER_TOKEN / PUSHOVER_USER not set' };
+    return {
+      delivered: false,
+      reason: 'PUSHOVER_TOKEN / PUSHOVER_USER not set (or set NTFY_URL for free push — see docs/notifications.md)',
+    };
   }
 
   const body = new URLSearchParams({ token, user, title, message });
@@ -105,7 +108,10 @@ export async function notifyNtfy(
 ): Promise<NotifyResult> {
   const url = process.env.NTFY_URL;
   if (!url) {
-    return { delivered: false, reason: 'NTFY_URL not set' };
+    return {
+      delivered: false,
+      reason: 'NTFY_URL not set (e.g. https://ntfy.sh/your-secret-topic — see docs/notifications.md)',
+    };
   }
 
   // POST body to /<topic>; title + priority ride as headers; bearer auth
