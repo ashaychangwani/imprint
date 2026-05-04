@@ -28,6 +28,8 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 - `imprint emit` prints "next steps" after generating, removing the "I have a tool, now what?" friction point.
 - `imprint cron <unknown-site>` now lists the configured sites in the error message ("available sites: a, b, c").
 - "command not found" troubleshooting section explicitly covering the bun-link / PATH failure mode.
+- **Typo suggestions** for unknown verbs: `imprint recrod` → "did you mean `imprint record`?" via Levenshtein distance (≤ 3 edits AND ≤ half-length). Same UX pattern as git/bun. Tested.
+- **Capped cron success-log preview** at 500 chars (full payload still available via IMPRINT_DEBUG=1) so long-running daemons don't flood stderr. Southwest's ~100KB shopping response went from log-flooding to one-line.
 
 ### Changed
 - **Module reshape**: clearer file boundaries.
@@ -57,7 +59,7 @@ A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implem
 |---|---|---|
 | `src/imprint/` + `src/cli.ts` LOC | 5,828 | ~4,950 (-15%, including +110 LOC for the new doctor verb) |
 | Source files | 26 | 23 (− 4 renames/folds + 2 new: compile.ts, doctor.ts, version.ts) |
-| Tests | 137 / 13 files | 193 / 15 files (more user-path coverage) |
+| Tests | 137 / 13 files | 204 / 15 files (more user-path coverage) |
 | README | sprint-changelog flavor (285 lines) | adoption-friendly (110 lines) |
 | Docs files | 3 | 10 (+ CHANGELOG, CONTRIBUTING) |
 | CLI verbs | 12 | 13 (+ doctor) |
