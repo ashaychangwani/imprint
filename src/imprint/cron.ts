@@ -148,7 +148,9 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
   }
 
   if (!cron.validate(config.schedule)) {
-    throw new Error(`Invalid cron expression in ${configPath}: "${config.schedule}"`);
+    throw new Error(
+      `Invalid cron expression in ${configPath}: "${config.schedule}"\n→ format: "min hour dom month dow" (e.g., "0 9 * * *" = 9am daily)\n→ test expressions at https://crontab.guru`,
+    );
   }
 
   const replayBackend = config.replayBackend ?? 'fetch';
