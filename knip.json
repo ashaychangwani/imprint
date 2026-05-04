@@ -9,12 +9,5 @@
     "test/**/*.ts",
     "examples/**/*.ts",
     "scripts/**/*.ts"
-  ],
-  "ignoreBinaries": [
-    "biome",
-    "tsc"
-  ],
-  "ignoreDependencies": [
-    "@biomejs/biome"
   ]
 }
