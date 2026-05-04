@@ -146,7 +146,7 @@ describe('generate — input validation', () => {
   it('rejects a missing session path with an actionable hint', async () => {
     await expect(
       generate({ sessionPath: '/tmp/imprint-no-such-session-12345.json', params: {} } as never),
-    ).rejects.toThrow(/Session not found.*imprint record/s);
+    ).rejects.toThrow(/session not found.*imprint record/is);
   });
 
   it('rejects a malformed JSON file', async () => {
