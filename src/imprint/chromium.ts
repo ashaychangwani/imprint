@@ -114,13 +114,15 @@ export function findChromium(): string {
     [
       'Could not locate Chromium.',
       '',
-      'Try one of:',
+      'Fix:',
       '  bunx playwright install chromium    # installs an unmanaged Chromium',
       '  export CHROMIUM_PATH=/path/to/chromium    # explicit override',
       '',
-      'On corporate-managed devices, the system Chrome usually has a policy that',
-      "disallows `--remote-debugging-port`. Playwright's bundled Chromium does NOT",
-      'pick up those policies and is the recommended path.',
+      'Or run `imprint doctor` to see exactly which prerequisites are missing.',
+      '',
+      'On corporate-managed devices the system Chrome usually has a policy that',
+      "disallows `--remote-debugging-port`. Playwright's bundled Chromium isn't",
+      'managed and is the recommended path.',
     ].join('\n'),
   );
 }
