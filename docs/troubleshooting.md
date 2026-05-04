@@ -94,6 +94,17 @@ export NTFY_URL=https://ntfy.sh/your-secret-topic-name
 
 See [docs/notifications.md](notifications.md) for setup.
 
+## "Vertex Anthropic call failed: ..."
+
+The new error message will tell you which of the four common cases hit:
+
+- **404 / publisher model not found** — the model isn't enabled on your project in the configured region. Open https://console.cloud.google.com/vertex-ai/model-garden, find Claude, click "Enable". Or set `CLOUD_ML_REGION` to a region that already has it (`us-east5` is the default).
+- **401 / not authenticated** — `gcloud auth application-default login` hasn't been run, or your active account doesn't have credentials. The fix command is in the error.
+- **403 / permission denied** — auth worked but your account is missing `roles/aiplatform.user` on the project. Add it via IAM console.
+- **429 / quota exceeded** — you hit a quota limit (per-minute or per-day). Retry, or request more quota.
+
+The raw SDK error is preserved as the JS `cause` chain — set `IMPRINT_DEBUG=1` to see it.
+
 ## "LLM response did not contain a JSON object"
 
 The Vertex Anthropic call returned text instead of JSON. This happens occasionally when:
