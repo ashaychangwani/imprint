@@ -339,6 +339,9 @@ async function main(argv: string[]): Promise<number> {
       for (const w of stats.warnings) {
         console.log(`[imprint]   ⚠ ${w}`);
       }
+      console.log('');
+      console.log('next step:');
+      console.log(`  imprint generate ${outPath}    # LLM → workflow.json`);
       return 0;
     }
 
@@ -369,6 +372,9 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `[imprint] tokens: ${result.inputTokens} in, ${result.outputTokens} out — ${(result.durationMs / 1000).toFixed(1)}s`,
       );
+      console.log('');
+      console.log('next step:');
+      console.log(`  imprint emit ${result.workflowPath}    # codegen the runtime tool`);
       return 0;
     }
 
@@ -522,6 +528,13 @@ async function main(argv: string[]): Promise<number> {
       );
       console.log(
         `[imprint] tokens: ${result.inputTokens} in, ${result.outputTokens} out — ${(result.durationMs / 1000).toFixed(1)}s`,
+      );
+      // Suggest a smoke run; the playbook is most useful behind the cron ladder.
+      const playbookSite = result.playbookPath.split('/').slice(-2, -1)[0] ?? '<site>';
+      console.log('');
+      console.log('next step:');
+      console.log(
+        `  imprint playbook ${playbookSite} --param k=v  # smoke-test the playbook directly`,
       );
       return 0;
     }
