@@ -38,6 +38,11 @@ interface RunCronOptions {
   once?: boolean;
   /** Run immediately on startup AND continue scheduling. */
   runNow?: boolean;
+  /** Suppress info logs on success — failures still go to stderr.
+   *  Implementation note: temporarily sets IMPRINT_QUIET=1 for the
+   *  lifetime of this call (restored on exit) so other code in the
+   *  same process isn't affected. */
+  quiet?: boolean;
   /** Inject for tests; defaults to global fetch. Used by Pushover/ntfy notifications. */
   notifyFetchImpl?: typeof fetch;
 }
@@ -141,6 +146,26 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     throw new Error('cannot combine --once with --run-now (use one or the other)');
   }
 
+  // Scope the IMPRINT_QUIET env mutation to this call only — restore on
+  // exit so other code in the same process (e.g. an in-process MCP server,
+  // or test harnesses) isn't silenced by a leaked env var.
+  const prevQuiet = process.env.IMPRINT_QUIET;
+  if (opts.quiet) process.env.IMPRINT_QUIET = '1';
+  try {
+    return await runCronImpl(opts);
+  } finally {
+    if (opts.quiet) {
+      if (prevQuiet === undefined) {
+        // biome-ignore lint/performance/noDelete: env restoration needs real deletion
+        delete process.env.IMPRINT_QUIET;
+      } else {
+        process.env.IMPRINT_QUIET = prevQuiet;
+      }
+    }
+  }
+}
+
+async function runCronImpl(opts: RunCronOptions): Promise<void> {
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
   const configPath = opts.configPath ?? pathResolve(examplesDir, opts.site, 'cron.json');
   if (!existsSync(configPath)) {

@@ -508,15 +508,16 @@ async function main(argv: string[]): Promise<number> {
         },
         allowPositionals: false,
       });
-      // --quiet suppresses successful-run logs so OS schedulers
-      // (cron, systemd, launchd) don't mail noise on green runs.
-      if (values.quiet) process.env.IMPRINT_QUIET = '1';
       const { runCron } = await import('./imprint/cron.ts');
       await runCron({
         site,
         configPath: values.config,
         once: values.once,
         runNow: values['run-now'],
+        // --quiet suppresses successful-run logs so OS schedulers
+        // (cron, systemd, launchd) don't mail noise on green runs.
+        // runCron scopes the env mutation to its own lifetime.
+        quiet: values.quiet,
       });
       return 0;
     }
