@@ -124,6 +124,7 @@ Verbs: `record`, `assemble`, `check`, `redact`, `generate`, `compile-playbook`, 
 - **[docs/decisions.md](docs/decisions.md)** — the load-bearing calls (why YAML, why ladder, why MCP-stdio default)
 - **[docs/troubleshooting.md](docs/troubleshooting.md)** — predictable failures + fixes
 - **[docs/notifications.md](docs/notifications.md)** — Pushover + ntfy setup, predicate language
+- **[docs/security.md](docs/security.md)** — what Imprint stores, redaction guarantees, credential handling
 - **[docs/capture-protocol.md](docs/capture-protocol.md)** — what a clean recording looks like
 - **[docs/playbook-debugging.md](docs/playbook-debugging.md)** — when DOM walks misbehave
 - **[docs/design.md](docs/design.md)** — original thesis (April 2026 office-hours)
