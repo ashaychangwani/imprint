@@ -178,9 +178,10 @@ async function interactivePlatformSetup(opts: {
 
     if (setupChoice === 'run') {
       const spinner = p.spinner();
-      spinner.start(`Running: ${regCommand}`);
+      const cmdDisplay = regCommand.join(' ');
+      spinner.start(`Running: ${cmdDisplay}`);
       try {
-        const proc = Bun.spawnSync(regCommand.split(' '), { stdio: ['ignore', 'pipe', 'pipe'] });
+        const proc = Bun.spawnSync(regCommand, { stdio: ['ignore', 'pipe', 'pipe'] });
         if (proc.exitCode === 0) {
           spinner.stop(
             `imprint-${site} is now available in ${platform === 'claude-code' ? 'Claude Code' : 'Codex'}.`,
@@ -188,14 +189,13 @@ async function interactivePlatformSetup(opts: {
         } else {
           const stderr = proc.stderr.toString().trim();
           spinner.stop(`Command exited with code ${proc.exitCode}${stderr ? `: ${stderr}` : ''}`);
-          // Fall back to showing the snippet.
           console.log('\nRun this manually instead:');
-          console.log(`  ${regCommand}\n`);
+          console.log(`  ${cmdDisplay}\n`);
         }
       } catch (err) {
         spinner.stop(`Failed: ${err instanceof Error ? err.message : String(err)}`);
         console.log('\nRun this manually instead:');
-        console.log(`  ${regCommand}\n`);
+        console.log(`  ${cmdDisplay}\n`);
       }
     } else {
       // Print paste snippet.

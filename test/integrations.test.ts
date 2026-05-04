@@ -61,7 +61,7 @@ describe('generatePasteSnippet', () => {
         site: 'testsite',
         workflow: FIXTURE_WORKFLOW,
         platform,
-        imprintCommand: 'imprint',
+        imprintCommand: { command: 'imprint', args: [] },
       });
 
       // All snippets should reference the tool name.
@@ -82,7 +82,7 @@ describe('generatePasteSnippet', () => {
       site: 'testsite',
       workflow: FIXTURE_WORKFLOW,
       platform: 'claude-code',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
     expect(snippet).toContain('origin (string, default: "SJC")');
@@ -99,7 +99,7 @@ describe('generatePasteSnippet', () => {
       site: 'testsite',
       workflow: noParamsWorkflow,
       platform: 'codex',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
     expect(snippet).toContain('Parameters: none');
@@ -110,7 +110,7 @@ describe('generatePasteSnippet', () => {
       site: 'testsite',
       workflow: FIXTURE_WORKFLOW,
       platform: 'claude-code',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
     expect(snippet).toContain(
@@ -123,7 +123,7 @@ describe('generatePasteSnippet', () => {
       site: 'testsite',
       workflow: FIXTURE_WORKFLOW,
       platform: 'codex',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
     expect(snippet).toContain('codex mcp add imprint-testsite -- imprint mcp-server testsite');
@@ -134,7 +134,7 @@ describe('generatePasteSnippet', () => {
       site: 'testsite',
       workflow: FIXTURE_WORKFLOW,
       platform: 'claude-desktop',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
     expect(snippet).toContain('~/Library/Application Support/Claude/claude_desktop_config.json');
@@ -148,7 +148,7 @@ describe('generatePasteSnippet', () => {
       site: 'testsite',
       workflow: FIXTURE_WORKFLOW,
       platform: 'openclaw',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
     expect(snippet).toContain('~/.openclaw/openclaw.json');
@@ -162,7 +162,7 @@ describe('generatePasteSnippet', () => {
       site: 'testsite',
       workflow: FIXTURE_WORKFLOW,
       platform: 'hermes',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
     expect(snippet).toContain('~/.hermes/config.yaml');
@@ -176,41 +176,83 @@ describe('generatePasteSnippet', () => {
       site: 'testsite',
       workflow: FIXTURE_WORKFLOW,
       platform: 'claude-code',
-      imprintCommand: 'bun run /custom/path/cli.ts',
+      imprintCommand: { command: 'bun', args: ['run', '/custom/path/cli.ts'] },
     });
 
     expect(snippet).toContain('bun run /custom/path/cli.ts mcp-server testsite');
   });
+
+  it('separates command and args in JSON config for fallback imprintCommand', () => {
+    const snippet = generatePasteSnippet({
+      site: 'testsite',
+      workflow: FIXTURE_WORKFLOW,
+      platform: 'claude-desktop',
+      imprintCommand: { command: 'bun', args: ['run', '/custom/path/cli.ts'] },
+    });
+
+    expect(snippet).toContain('"command": "bun"');
+    expect(snippet).toContain('"args": ["run", "/custom/path/cli.ts", "mcp-server", "testsite"]');
+  });
+
+  it('separates command and args in YAML config for fallback imprintCommand', () => {
+    const snippet = generatePasteSnippet({
+      site: 'testsite',
+      workflow: FIXTURE_WORKFLOW,
+      platform: 'hermes',
+      imprintCommand: { command: 'bun', args: ['run', '/custom/path/cli.ts'] },
+    });
+
+    expect(snippet).toContain('command: "bun"');
+    expect(snippet).toContain('args: ["run", "/custom/path/cli.ts", "mcp-server", "testsite"]');
+  });
 });
 
 describe('buildRegistrationCommand', () => {
-  it('returns a command for claude-code', () => {
+  it('returns an argv array for claude-code', () => {
     const cmd = buildRegistrationCommand({
       site: 'testsite',
       platform: 'claude-code',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
-    expect(cmd).toBe(
-      'claude mcp add --scope project imprint-testsite -- imprint mcp-server testsite',
-    );
+    expect(cmd).toEqual([
+      'claude',
+      'mcp',
+      'add',
+      '--scope',
+      'project',
+      'imprint-testsite',
+      '--',
+      'imprint',
+      'mcp-server',
+      'testsite',
+    ]);
   });
 
-  it('returns a command for codex', () => {
+  it('returns an argv array for codex', () => {
     const cmd = buildRegistrationCommand({
       site: 'testsite',
       platform: 'codex',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
-    expect(cmd).toBe('codex mcp add imprint-testsite -- imprint mcp-server testsite');
+    expect(cmd).toEqual([
+      'codex',
+      'mcp',
+      'add',
+      'imprint-testsite',
+      '--',
+      'imprint',
+      'mcp-server',
+      'testsite',
+    ]);
   });
 
   it('returns null for claude-desktop (manual config)', () => {
     const cmd = buildRegistrationCommand({
       site: 'testsite',
       platform: 'claude-desktop',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
     expect(cmd).toBeNull();
@@ -220,7 +262,7 @@ describe('buildRegistrationCommand', () => {
     const cmd = buildRegistrationCommand({
       site: 'testsite',
       platform: 'openclaw',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
     expect(cmd).toBeNull();
@@ -230,7 +272,7 @@ describe('buildRegistrationCommand', () => {
     const cmd = buildRegistrationCommand({
       site: 'testsite',
       platform: 'hermes',
-      imprintCommand: 'imprint',
+      imprintCommand: { command: 'imprint', args: [] },
     });
 
     expect(cmd).toBeNull();
@@ -375,14 +417,14 @@ describe('generateSkillMd', () => {
 });
 
 describe('detectImprintCommand', () => {
-  it('returns either "imprint" or "bun run <path>"', () => {
-    // This test doesn't mock — it verifies the function returns a valid command.
-    // The actual result depends on whether `imprint` is on PATH in the test env.
-    const cmd = detectImprintCommand();
+  it('returns an ImprintCommand with command and args', () => {
+    const ic = detectImprintCommand();
 
-    // Should be one of the two forms.
-    const isImprint = cmd === 'imprint';
-    const isBunRun = cmd.startsWith('bun run') && cmd.includes('cli.ts');
+    expect(typeof ic.command).toBe('string');
+    expect(Array.isArray(ic.args)).toBe(true);
+
+    const isImprint = ic.command === 'imprint' && ic.args.length === 0;
+    const isBunRun = ic.command === 'bun' && ic.args[0] === 'run' && ic.args[1]?.includes('cli.ts');
 
     expect(isImprint || isBunRun).toBe(true);
   });

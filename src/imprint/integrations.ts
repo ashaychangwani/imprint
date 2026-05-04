@@ -11,18 +11,22 @@ import type { CronConfig, Playbook, Workflow, WorkflowParameter } from './types.
 
 export type Platform = 'claude-code' | 'codex' | 'claude-desktop' | 'openclaw' | 'hermes';
 
+interface ImprintCommand {
+  command: string;
+  args: string[];
+}
+
 /**
  * Detects whether `imprint` is available on PATH; falls back to
  * `bun run <abs-path>` if not. Used by teach.ts to generate paste snippets.
  */
-export function detectImprintCommand(): string {
+export function detectImprintCommand(): ImprintCommand {
   try {
     execSync('which imprint', { stdio: 'ignore' });
-    return 'imprint';
+    return { command: 'imprint', args: [] };
   } catch {
-    // Fall back to absolute path via bun.
     const cliPath = pathResolve(import.meta.dir, '..', 'cli.ts');
-    return `bun run ${cliPath}`;
+    return { command: 'bun', args: ['run', cliPath] };
   }
 }
 
@@ -34,29 +38,32 @@ export function generatePasteSnippet(opts: {
   site: string;
   workflow: Workflow;
   platform: Platform;
-  imprintCommand: string;
+  imprintCommand: ImprintCommand;
 }): string {
-  const { site, workflow, platform, imprintCommand } = opts;
+  const { site, workflow, platform, imprintCommand: ic } = opts;
   const toolName = `imprint-${site}`;
   const descLower = workflow.intent.description.toLowerCase();
   const paramList = formatParams(workflow.parameters);
+  const shellCmd = [ic.command, ...ic.args, 'mcp-server', site].join(' ');
+  const mcpArgs = [...ic.args, 'mcp-server', site];
+  const argsStr = `[${mcpArgs.map((a) => `"${a}"`).join(', ')}]`;
 
   switch (platform) {
     case 'claude-code':
-      return `Add the ${toolName} tool: run \`claude mcp add --scope project ${toolName} -- ${imprintCommand} mcp-server ${site}\` to register ${descLower}. Parameters: ${paramList}. The backend ladder handles bot detection automatically (fetch → stealth-fetch → playbook).`;
+      return `Add the ${toolName} tool: run \`claude mcp add --scope project ${toolName} -- ${shellCmd}\` to register ${descLower}. Parameters: ${paramList}. The backend ladder handles bot detection automatically (fetch → stealth-fetch → playbook).`;
 
     case 'codex':
-      return `Add the ${toolName} tool: run \`codex mcp add ${toolName} -- ${imprintCommand} mcp-server ${site}\` to register ${descLower}. Parameters: ${paramList}.`;
+      return `Add the ${toolName} tool: run \`codex mcp add ${toolName} -- ${shellCmd}\` to register ${descLower}. Parameters: ${paramList}.`;
 
     case 'claude-desktop':
       return `Add to ~/Library/Application Support/Claude/claude_desktop_config.json under "mcpServers":
 
-  "${toolName}": { "command": "${imprintCommand}", "args": ["mcp-server", "${site}"] }`;
+  "${toolName}": { "command": "${ic.command}", "args": ${argsStr} }`;
 
     case 'openclaw':
       return `Add the ${toolName} tool: add to ~/.openclaw/openclaw.json under mcp.servers:
 
-  "${toolName}": { "command": "${imprintCommand}", "args": ["mcp-server", "${site}"] }
+  "${toolName}": { "command": "${ic.command}", "args": ${argsStr} }
 
 This gives your agent a tool that ${descLower}. Parameters: ${paramList}.`;
 
@@ -64,13 +71,12 @@ This gives your agent a tool that ${descLower}. Parameters: ${paramList}.`;
       return `Add the ${toolName} tool: add to ~/.hermes/config.yaml under mcp_servers:
 
   ${toolName}:
-    command: "${imprintCommand}"
-    args: ["mcp-server", "${site}"]
+    command: "${ic.command}"
+    args: ${argsStr}
 
 This gives your agent a tool that ${descLower}. Parameters: ${paramList}.`;
 
     default: {
-      // TypeScript exhaustiveness check.
       const _exhaustive: never = platform;
       throw new Error(`Unknown platform: ${_exhaustive}`);
     }
@@ -99,24 +105,22 @@ function formatParams(params: WorkflowParameter[]): string {
 export function buildRegistrationCommand(opts: {
   site: string;
   platform: Platform;
-  imprintCommand: string;
-}): string | null {
-  const { site, platform, imprintCommand } = opts;
+  imprintCommand: ImprintCommand;
+}): string[] | null {
+  const { site, platform, imprintCommand: ic } = opts;
   const toolName = `imprint-${site}`;
+  const imprintArgs = [ic.command, ...ic.args, 'mcp-server', site];
 
   switch (platform) {
     case 'claude-code':
-      return `claude mcp add --scope project ${toolName} -- ${imprintCommand} mcp-server ${site}`;
+      return ['claude', 'mcp', 'add', '--scope', 'project', toolName, '--', ...imprintArgs];
     case 'codex':
-      return `codex mcp add ${toolName} -- ${imprintCommand} mcp-server ${site}`;
+      return ['codex', 'mcp', 'add', toolName, '--', ...imprintArgs];
     case 'claude-desktop':
-      // Claude Desktop requires manual JSON editing.
       return null;
     case 'openclaw':
-      // OpenClaw requires manual JSON editing.
       return null;
     case 'hermes':
-      // Hermes requires manual YAML editing.
       return null;
     default: {
       const _exhaustive: never = platform;
