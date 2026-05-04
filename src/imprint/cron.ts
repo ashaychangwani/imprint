@@ -8,7 +8,7 @@
  * launchd are organized and keeps failure isolation clean.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import cron from 'node-cron';
 import { resolveLadder, runWithLadder } from './backend-ladder.ts';
@@ -118,6 +118,11 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
 
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
   const configPath = opts.configPath ?? pathResolve(examplesDir, opts.site, 'cron.json');
+  if (!existsSync(configPath)) {
+    throw new Error(
+      `cron.json not found at ${configPath}\n${availableSitesHint(examplesDir, opts.site)}\n→ create one with: {"schedule":"0 9 * * *","params":{},"replayBackend":"auto"}\n→ see docs/getting-started.md for full schema.`,
+    );
+  }
   const config = loadCronConfig(configPath);
   log(`config: ${configPath}`);
 
@@ -125,7 +130,7 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
   const tool = discovered[0];
   if (!tool) {
     throw new Error(
-      `No generated tool found for site "${opts.site}". Run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
+      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
     );
   }
 
@@ -220,4 +225,22 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     process.once('SIGINT', () => shutdown('SIGINT'));
     process.once('SIGTERM', () => shutdown('SIGTERM'));
   });
+}
+
+/** List the configured sites under examples/ to suggest in error messages. */
+function availableSitesHint(examplesDir: string, badSite: string): string {
+  if (!existsSync(examplesDir)) {
+    return `→ examples/ doesn't exist — run \`imprint record <site>\` to create one.`;
+  }
+  const sites = readdirSync(examplesDir).filter((d) => {
+    try {
+      return statSync(pathResolve(examplesDir, d)).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (sites.length === 0) {
+    return `→ examples/ is empty — run \`imprint record <site>\` to create one.`;
+  }
+  return `→ available sites: ${sites.join(', ')} (you asked for "${badSite}").`;
 }
