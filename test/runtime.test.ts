@@ -6,12 +6,8 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { type CredentialStore, executeWorkflow, substituteString } from '../src/imprint/runtime.ts';
 import type { Workflow } from '../src/imprint/types.ts';
-import {
-  type CredentialStore,
-  executeWorkflow,
-  substituteString,
-} from '../src/imprint/workflow-runtime.ts';
 
 const STORE: CredentialStore = {
   site: 'test',
@@ -201,6 +197,20 @@ describe('executeWorkflow', () => {
     if (r.ok) return;
     expect(r.error).toBe('UNKNOWN');
     expect(r.message).toContain('q');
+  });
+
+  it('fails loud when a workflow has zero requests (empty `requests` array)', async () => {
+    const empty: Workflow = { ...baseWorkflow, requests: [] };
+    const r = await executeWorkflow({
+      workflow: empty,
+      params: { q: 'x' },
+      credentials: STORE,
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toBe('UNKNOWN');
+    expect(r.message).toMatch(/no requests/);
+    expect(r.remediation).toMatch(/re-record|re-run/);
   });
 
   it('chains responses: request 1 references ${response[0].field}', async () => {

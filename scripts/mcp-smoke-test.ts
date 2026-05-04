@@ -7,7 +7,10 @@ import { spawn } from 'node:child_process';
 import { resolve as pathResolve } from 'node:path';
 
 const cliPath = pathResolve(import.meta.dir, '..', 'src', 'cli.ts');
-const proc = spawn('bun', [cliPath, 'mcp-server', 'discoverandgo'], {
+// Use the bundled echo fixture so this works on any clean checkout
+// without needing a generated tool. Override with --site=<name> via env if needed.
+const site = process.env.IMPRINT_SMOKE_SITE ?? 'echo';
+const proc = spawn('bun', [cliPath, 'mcp-server', `--site=${site}`], {
   stdio: ['pipe', 'pipe', 'inherit'],
   env: { ...process.env, IMPRINT_DEBUG: '1' },
 });

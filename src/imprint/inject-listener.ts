@@ -1,19 +1,8 @@
 /**
- * Injected into every page on load via `Page.addScriptToEvaluateOnNewDocument`.
- *
- * Adds passive event listeners for click / input / change / submit that emit
- * a structured `console.log` line with a sentinel prefix. The recorder
- * subscribes to `Runtime.consoleAPICalled` and parses these out into
- * CapturedEvent records.
- *
- * Defensive design:
- *   - All listeners wrapped in try/catch so a broken site doesn't crash the page
- *   - Passive only — never preventDefault, never mutate the DOM
- *   - Capture phase so we see events even if the page swallows them later
- *   - Truncates payloads aggressively to keep console output sane
- *
- * The sentinel prefix `[IMPRINT]` is exact-match-checked on the recorder side.
- * Keep it stable.
+ * Injected per-page (Page.addScriptToEvaluateOnNewDocument). Passive
+ * capture-phase listeners emit sentinel-prefixed console.log lines that
+ * the recorder picks up via Runtime.consoleAPICalled. Sentinel
+ * `[IMPRINT]` is exact-match — keep stable.
  */
 
 export const INJECTED_LISTENER_SOURCE = `

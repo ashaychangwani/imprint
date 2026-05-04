@@ -1,39 +1,33 @@
 /**
- * `imprint cron <site>` — polling daemon for a generated workflow.
+ * `imprint cron <site>` — polling daemon for a generated tool. Loads
+ * examples/<site>/cron.json, schedules via node-cron, runs the tool
+ * through the configured backend ladder per tick, and pushes via
+ * notify.ts on failure (or on a notifyWhen predicate match).
  *
- * Loads `examples/<site>/cron.json`, validates the schedule + params
- * against the generated workflow, then schedules the tool function via
- * node-cron. Each tick logs start/end + result; failures additionally
- * fire a Pushover notification when configured.
- *
- * USAGE:
- *
- *   imprint cron discoverandgo                  # schedule and block until SIGINT
- *   imprint cron discoverandgo --run-now        # also run once immediately
- *   imprint cron discoverandgo --once           # run once and exit (for tests / OS scheduler)
- *   imprint cron discoverandgo --config /tmp/x  # override config path
- *
- * The cron daemon is single-example by design — run one process per
- * schedule. This matches how systemd timers and launchd are typically
- * organized and keeps failure isolation clean.
+ * One process per schedule by design — matches how systemd timers /
+ * launchd are organized and keeps failure isolation clean.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import cron from 'node-cron';
-import { type ResolvedTool, buildZodValidator, discoverTools } from './discover-tools.ts';
-import { evaluateNotifyWhen } from './notify-when.ts';
-import { notify } from './notify.ts';
-import { runPlaybook } from './playbook-runner.ts';
+import { resolveLadder, runWithLadder } from './backend-ladder.ts';
+import { loadJsonFile } from './load-json.ts';
+import { createLog, isDebug } from './log.ts';
+import { evaluateNotifyWhen, notify } from './notify.ts';
+import { loadBackendsCache } from './probe-backends.ts';
+import { availableSitesHint } from './sites.ts';
+import type { StealthFetch } from './stealth-fetch.ts';
+import { type ResolvedTool, buildZodValidator, discoverTools } from './tool-loader.ts';
 import {
+  type ConcreteBackend,
   type CronConfig,
   CronConfigSchema,
   type NotifyWhen,
-  type ReplayBackend,
   type ToolResult,
 } from './types.ts';
 
-export interface RunCronOptions {
+interface RunCronOptions {
   /** Example directory under examples/, e.g. "discoverandgo". */
   site: string;
   /** Override examples directory. Defaults to <cwd>/examples. */
@@ -44,82 +38,84 @@ export interface RunCronOptions {
   once?: boolean;
   /** Run immediately on startup AND continue scheduling. */
   runNow?: boolean;
-  /** Inject for tests; defaults to global fetch. Forwarded to the tool function. */
-  fetchImpl?: typeof fetch;
-  /** Inject for tests; defaults to global fetch. Used by Pushover notifications. */
+  /** Suppress info logs on success — failures still go to stderr.
+   *  Implementation note: temporarily sets IMPRINT_QUIET=1 for the
+   *  lifetime of this call (restored on exit) so other code in the
+   *  same process isn't affected. */
+  quiet?: boolean;
+  /** Inject for tests; defaults to global fetch. Used by Pushover/ntfy notifications. */
   notifyFetchImpl?: typeof fetch;
 }
 
-const log = (msg: string): void => {
-  process.stderr.write(`[imprint cron] ${msg}\n`);
-};
+const log = createLog('cron');
 
 function loadCronConfig(configPath: string): CronConfig {
-  if (!existsSync(configPath)) {
-    throw new Error(
-      `cron.json not found at ${configPath}. Create one with {"schedule":"...","params":{...}}.`,
-    );
-  }
-  const raw = JSON.parse(readFileSync(configPath, 'utf8'));
-  return CronConfigSchema.parse(raw);
+  return loadJsonFile(
+    configPath,
+    CronConfigSchema,
+    {
+      notFound:
+        '→ create one with: {"schedule":"0 9 * * *","params":{},"replayBackend":"auto"}\n→ see docs/getting-started.md for full schema.',
+      notJson: '→ check for a stray comma or unquoted key.',
+      badSchema:
+        '→ minimum required: {"schedule":"0 9 * * *","params":{}}\n→ full schema: docs/getting-started.md (look for "Schedule it").',
+    },
+    'cron.json',
+  );
 }
 
-/**
- * One execution of the workflow + result handling. Used both for
- * scheduled ticks and the --once / --run-now paths.
- */
+/** One tool tick: walk the ladder, log, push notification on result. */
 async function runOnce(
   tool: ResolvedTool,
-  params: Record<string, unknown>,
-  fetchImpl: typeof fetch | undefined,
+  params: Record<string, string | number | boolean>,
   notifyFetchImpl: typeof fetch | undefined,
   notifyWhen: NotifyWhen | undefined,
-  replayBackend: ReplayBackend,
-  playbookPath: string | undefined,
+  ladder: ConcreteBackend[],
+  examplesDir: string,
+  stealthCache: Map<string, StealthFetch>,
 ): Promise<ToolResult> {
   const startedAt = new Date();
-  log(`${startedAt.toISOString()} ${tool.workflow.toolName} starting (backend: ${replayBackend})`);
+  log(
+    `${startedAt.toISOString()} ${tool.workflow.toolName} starting (ladder: ${ladder.join(' → ')})`,
+  );
   const t0 = Date.now();
-  let result: ToolResult;
 
-  if (replayBackend === 'playbook' && playbookPath) {
-    result = await runPlaybook({
-      playbook: playbookPath,
-      params: params as Record<string, string | number | boolean>,
-    });
-  } else {
-    try {
-      result = await tool.toolFn(params, fetchImpl ? { fetchImpl } : undefined);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      result = { ok: false, error: 'UNKNOWN', message: `tool threw: ${msg}` };
-    }
-    // Auto fallback: if API returned FORBIDDEN and we have a playbook,
-    // re-run via the browser. Bot detection is the canonical case.
-    if (replayBackend === 'auto' && !result.ok && result.error === 'FORBIDDEN' && playbookPath) {
-      log('  API returned FORBIDDEN, falling back to playbook…');
-      result = await runPlaybook({
-        playbook: playbookPath,
-        params: params as Record<string, string | number | boolean>,
-      });
-    }
-  }
+  const { result, usedBackend, attempts } = await runWithLadder(
+    ladder,
+    tool,
+    params,
+    examplesDir,
+    stealthCache,
+  );
 
   const elapsed = Date.now() - t0;
+  for (const a of attempts) {
+    if (a.outcome === 'escalate') log(`  ${a.backend} → ${a.detail} (escalating)`);
+  }
+
   if (result.ok) {
     const data = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-    log(`  OK in ${elapsed}ms: ${data}`);
+    // Cap the inline preview at ~500 chars; full payload available via
+    // IMPRINT_DEBUG=1. Long-running daemons flood stderr otherwise.
+    const preview =
+      isDebug() || data.length <= 500
+        ? data
+        : `${data.slice(0, 500)}…(${data.length - 500} more chars; set IMPRINT_DEBUG=1 to log full payload)`;
+    log(`  OK in ${elapsed}ms via ${usedBackend}: ${preview}`);
     if (notifyWhen) {
-      // A bad pricePath against an unexpected response shape would throw;
-      // catch + log so a flaky predicate never crashes the cron loop.
       try {
         const decision = evaluateNotifyWhen(notifyWhen, result.data, tool.workflow.toolName);
         if (decision.notify) {
+          log(`  notifyWhen ${notifyWhen.type}: matched → pushing`);
           await notify(
             decision.title ?? `imprint: ${tool.workflow.toolName}`,
             decision.message ?? '(no message)',
             notifyFetchImpl,
           );
+        } else {
+          // Silent no-match used to confuse users ("did the predicate
+          // even fire?"). Surface a one-liner so they can confirm.
+          log(`  notifyWhen ${notifyWhen.type}: no match (predicate ran, threshold not crossed)`);
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -127,8 +123,15 @@ async function runOnce(
       }
     }
   } else {
-    log(`  FAILED [${result.error}] ${result.message} (${elapsed}ms)`);
-    if (result.remediation) log(`  → ${result.remediation}`);
+    // Failures must surface even in --quiet mode — that's the whole point
+    // (cron runs silently on success, mails on failure). Bypass createLog's
+    // quiet-aware path and write directly to stderr.
+    process.stderr.write(
+      `[imprint cron]   FAILED [${result.error}] via ${usedBackend} in ${elapsed}ms: ${result.message}\n`,
+    );
+    if (result.remediation) {
+      process.stderr.write(`[imprint cron]   → ${result.remediation}\n`);
+    }
     await notify(
       `imprint: ${tool.workflow.toolName} failed`,
       `[${result.error}] ${result.message}${result.remediation ? `\n→ ${result.remediation}` : ''}`,
@@ -143,8 +146,33 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     throw new Error('cannot combine --once with --run-now (use one or the other)');
   }
 
+  // Scope the IMPRINT_QUIET env mutation to this call only — restore on
+  // exit so other code in the same process (e.g. an in-process MCP server,
+  // or test harnesses) isn't silenced by a leaked env var.
+  const prevQuiet = process.env.IMPRINT_QUIET;
+  if (opts.quiet) process.env.IMPRINT_QUIET = '1';
+  try {
+    return await runCronImpl(opts);
+  } finally {
+    if (opts.quiet) {
+      if (prevQuiet === undefined) {
+        // biome-ignore lint/performance/noDelete: env restoration needs real deletion
+        delete process.env.IMPRINT_QUIET;
+      } else {
+        process.env.IMPRINT_QUIET = prevQuiet;
+      }
+    }
+  }
+}
+
+async function runCronImpl(opts: RunCronOptions): Promise<void> {
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
   const configPath = opts.configPath ?? pathResolve(examplesDir, opts.site, 'cron.json');
+  if (!existsSync(configPath)) {
+    throw new Error(
+      `cron.json not found at ${configPath}\n${availableSitesHint(examplesDir, opts.site)}\n→ create one with: {"schedule":"0 9 * * *","params":{},"replayBackend":"auto"}\n→ see docs/getting-started.md for full schema.`,
+    );
+  }
   const config = loadCronConfig(configPath);
   log(`config: ${configPath}`);
 
@@ -152,34 +180,38 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
   const tool = discovered[0];
   if (!tool) {
     throw new Error(
-      `No generated tool found for site "${opts.site}". Run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
+      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
     );
   }
 
   if (!cron.validate(config.schedule)) {
-    throw new Error(`Invalid cron expression in ${configPath}: "${config.schedule}"`);
+    throw new Error(
+      `Invalid cron expression in ${configPath}: "${config.schedule}"\n→ format: "min hour dom month dow" (e.g., "0 9 * * *" = 9am daily)\n→ test expressions at https://crontab.guru`,
+    );
   }
 
-  // Locate the playbook (if any) for the playbook / auto-fallback paths.
-  const { existsSync: fsExists } = await import('node:fs');
-  const playbookPath = pathResolve(examplesDir, opts.site, 'playbook.md');
-  const playbookExists = fsExists(playbookPath);
   const replayBackend = config.replayBackend ?? 'fetch';
-  if (replayBackend === 'playbook' && !playbookExists) {
+  const playbookPath = pathResolve(examplesDir, opts.site, 'playbook.yaml');
+  if (replayBackend === 'playbook' && !existsSync(playbookPath)) {
     throw new Error(
       `replayBackend="playbook" but ${playbookPath} doesn't exist. Run \`imprint compile-playbook\` first.`,
     );
   }
 
-  // Param validation only runs against the API workflow's parameters when
-  // the API path will be taken. The playbook backend has its own parameter
-  // schema (read from playbook.md) that the runner enforces; validating
-  // here would fail because parameter names typically differ between the
-  // API workflow (`origin_airport_code`) and the playbook (`origin`).
+  // Probe cache reorders the 'auto' ladder to start with the empirically
+  // cheapest known-working backend.
+  const cached = loadBackendsCache(opts.site, examplesDir);
+  if (cached) {
+    log(
+      `backends.json: probed ${cached.probedAt}, preferred order: ${cached.preferredOrder.join(' → ')}`,
+    );
+  }
+
+  // Validate params against the API workflow only when fetch/stealth-fetch
+  // is in the ladder; playbook has its own param schema with different names.
+  const ladder = resolveLadder(replayBackend, cached?.preferredOrder);
   let params: Record<string, string | number | boolean>;
-  if (replayBackend === 'playbook') {
-    params = config.params;
-  } else {
+  if (ladder.includes('fetch') || ladder.includes('stealth-fetch')) {
     const validator = buildZodValidator(tool.workflow.parameters);
     const parsed = validator.safeParse(config.params);
     if (!parsed.success) {
@@ -187,22 +219,28 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
       throw new Error(`cron.json params invalid for ${tool.workflow.toolName}: ${issues}`);
     }
     params = parsed.data;
+  } else {
+    params = config.params;
   }
 
   log(`tool: ${tool.workflow.toolName} (${tool.workflow.parameters.length} param(s))`);
   log(`schedule: ${config.schedule}`);
   if (config.notifyWhen) log(`notifyWhen: ${config.notifyWhen.type}`);
-  log(`replayBackend: ${replayBackend}${playbookExists ? '' : ' (no playbook.md found)'}`);
+  log(
+    `replayBackend: ${replayBackend}${ladder.length > 1 ? ` (ladder: ${ladder.join(' → ')})` : ''}`,
+  );
 
-  const playbookForRun = playbookExists ? playbookPath : undefined;
+  // Per-site stealth-fetch cache — bootstrap cost paid once per process.
+  const stealthCache = new Map<string, StealthFetch>();
+
   const tickArgs = [
     tool,
     params,
-    opts.fetchImpl,
     opts.notifyFetchImpl,
     config.notifyWhen,
-    replayBackend,
-    playbookForRun,
+    ladder,
+    examplesDir,
+    stealthCache,
   ] as const;
 
   if (opts.once) {
@@ -229,6 +267,11 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
     const shutdown = (sig: NodeJS.Signals): void => {
       log(`received ${sig}, stopping schedule`);
       task.stop();
+      // Clean up StealthFetch instances (no-op currently, but future-
+      // proof for if we add long-lived browser support).
+      for (const sf of stealthCache.values()) {
+        void sf.close();
+      }
       resolve();
     };
     process.once('SIGINT', () => shutdown('SIGINT'));

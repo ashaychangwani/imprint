@@ -1,15 +1,8 @@
 /**
- * The shared execution engine that every generated workflow imports.
- *
- * Responsibilities:
- *   - Substitute ${param.X}, ${response[N].JSON_PATH}, ${credential.X}
- *     placeholders in URL / headers / body templates
- *   - Load cookies from the site's env-paths credential store
- *   - Execute the request chain sequentially
- *   - Extract response values per the `extract` config
- *   - Return a structured ToolResult (success or classified error)
- *
- * Generated files are thin wrappers around `executeWorkflow()`.
+ * Workflow execution engine — substitutes ${param/credential/response[N]}
+ * placeholders, loads cookies from the site credential store, runs the
+ * chain sequentially, returns a classified ToolResult. Generated tool
+ * files are thin wrappers around executeWorkflow().
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -20,50 +13,54 @@ import type { ToolResult, Workflow, WorkflowRequest } from './types.ts';
 const PATHS = envPaths('imprint', { suffix: '' });
 
 export interface CredentialStore {
-  /** Site label, e.g. "discoverandgo" */
   site: string;
-  /**
-   * Cookies persisted from `imprint login`. Sent on every request to the same
-   * registrable domain as the workflow's URLs.
-   */
+  /** Persisted via `imprint login`; sent on every same-domain request. */
   cookies: Array<{ name: string; value: string; domain: string; path: string }>;
-  /**
-   * Per-account values extracted at login time and referenced as ${credential.X}.
-   * Examples: patron_id, account_uuid, csrf_token.
-   */
+  /** ${credential.X} substitutions (patron_id, csrf_token, etc). */
   values: Record<string, string>;
 }
 
-/** Load credentials for a site from disk. Returns null if no login is recorded. */
+/** Load credentials for a site from disk. Returns null if no login is recorded.
+ *  Throws with a remediation hint if the file exists but is malformed. */
 export function loadCredentialStore(site: string): CredentialStore | null {
   const path = pathJoin(PATHS.config, 'credentials', `${site}.json`);
   if (!existsSync(path)) return null;
-  const raw = JSON.parse(readFileSync(path, 'utf8')) as CredentialStore;
-  return raw;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as CredentialStore;
+  } catch (err) {
+    throw new Error(
+      `Credential store at ${path} is corrupted: ${err instanceof Error ? err.message : String(err)}\n→ delete the file and re-run \`imprint login ${site}\` to regenerate.`,
+    );
+  }
 }
 
-export interface ExecuteOptions {
+interface ExecuteOptions {
   workflow: Workflow;
-  /** User-supplied parameters keyed by name. */
   params: Record<string, string | number | boolean>;
-  /**
-   * If provided, used instead of loading from disk. Lets tests / the cron
-   * inject a synthetic store without writing to env-paths.
-   */
+  /** Inject a synthetic credential store; otherwise loads from disk. */
   credentials?: CredentialStore;
-  /**
-   * Override fetch. Tests inject a mock here. Defaults to the global fetch.
-   */
+  /** Override global fetch (tests, stealth-fetch). */
   fetchImpl?: typeof fetch;
-  /**
-   * Per-request timeout in ms. Defaults to 30s.
-   */
+  /** Per-request timeout in ms. Default 30000. */
   requestTimeoutMs?: number;
 }
 
 export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promise<ToolResult<T>> {
   const fetchFn = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.requestTimeoutMs ?? 30_000;
+
+  // A zero-request workflow would silently return null data — almost
+  // certainly a misconfigured workflow (LLM produced an empty `requests`
+  // array). Fail loud so the user knows to re-record or re-generate.
+  if (opts.workflow.requests.length === 0) {
+    return {
+      ok: false,
+      error: 'UNKNOWN',
+      message: `Workflow ${opts.workflow.toolName} has no requests — nothing to execute.`,
+      remediation:
+        're-record the session (capture probably stopped before any XHR fired), or re-run `imprint generate` if the workflow JSON looks empty.',
+    };
+  }
 
   const credentials =
     opts.credentials ?? loadCredentialStore(opts.workflow.site) ?? emptyStore(opts.workflow.site);
@@ -129,11 +126,8 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       };
     }
     if (resp.status === 403) {
-      // 403 has many causes besides expired auth — most often bot
-      // detection (Akamai, Cloudflare, DataDome) on consumer sites,
-      // sometimes geo-block, ToS violation, or missing capability. The
-      // body usually has a code or message that disambiguates. Surface
-      // it instead of guessing.
+      // 403 = bot detection / geo / ToS / missing capability. The body
+      // usually disambiguates — surface it rather than guessing.
       const text = await safeText(resp);
       return {
         ok: false,
@@ -172,7 +166,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     responses.push(parsed);
   }
 
-  // The "data" of a workflow result is the LAST response's parsed body.
+  // Return the LAST response as the workflow's `data`.
   return { ok: true, data: (responses.at(-1) ?? null) as T };
 }
 
@@ -187,7 +181,7 @@ interface SubstitutedRequest {
   body?: string;
 }
 
-export function substituteRequest(
+function substituteRequest(
   req: WorkflowRequest,
   params: Record<string, string | number | boolean>,
   credentials: CredentialStore,
@@ -239,16 +233,28 @@ export function substituteString(
       }
       // ${param.X} / ${credential.X}
       if (kind === 'param' && name) {
-        if (!(name in params))
-          throw new Error(`Workflow placeholder ${match} but no param "${name}" provided`);
+        if (!(name in params)) {
+          const available = Object.keys(params);
+          const hint =
+            available.length === 0
+              ? `→ no params were passed; the tool needs --param ${name}=<value>`
+              : `→ available params: ${available.join(', ')}`;
+          throw new Error(`Workflow placeholder ${match} but no param "${name}" provided\n${hint}`);
+        }
         return encodePart(params[name], template, match);
       }
       if (kind === 'credential' && name) {
         const v = credentials.values[name];
-        if (v === undefined)
+        if (v === undefined) {
+          const available = Object.keys(credentials.values);
+          const hint =
+            available.length === 0
+              ? `→ no credentials stored for "${credentials.site}"; run \`imprint login ${credentials.site}\``
+              : `→ available credentials: ${available.join(', ')}\n→ if "${name}" is missing, the login session may be incomplete; re-run \`imprint login ${credentials.site}\``;
           throw new Error(
-            `Workflow placeholder ${match} but credential "${name}" not in store (run \`imprint login ${credentials.site}\`)`,
+            `Workflow placeholder ${match} but credential "${name}" not in store\n${hint}`,
           );
+        }
         return encodePart(v, template, match);
       }
       return match;

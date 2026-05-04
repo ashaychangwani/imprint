@@ -1,40 +1,70 @@
 /**
- * Notification hooks for the cron daemon. Multi-provider: every provider
- * configured via env vars fires on each call, so you can mirror to both
- * Pushover and ntfy if you want, or just pick one. With nothing
- * configured, `notify()` is a silent no-op.
+ * Notification hooks for the cron daemon. Two concerns:
+ *   - evaluateNotifyWhen: predicate engine ("price_below" etc).
+ *   - notify / providers: deliver to Pushover + ntfy in parallel.
  *
- * Failures are caught and logged so a flaky push provider can never
- * crash the cron loop.
- *
- * Providers:
- *
- *   Pushover  PUSHOVER_TOKEN + PUSHOVER_USER
- *             https://pushover.net/api  (paid app, $5 one-time per platform)
- *
- *   ntfy      NTFY_URL  (e.g. https://ntfy.sh/your-secret-topic-name)
- *             NTFY_TOKEN  (optional bearer token for protected topics)
- *             https://docs.ntfy.sh/publish/  (free public, self-hostable)
+ * Every configured provider fires on each call; nothing configured is
+ * a silent no-op. Failures are caught and logged so a flaky provider
+ * can't crash the cron loop. See docs/notifications.md for setup.
  */
+
+import { extractAt } from './json-path.ts';
+import { createLog } from './log.ts';
+import type { NotifyWhen } from './types.ts';
 
 const PUSHOVER_URL = 'https://api.pushover.net/1/messages.json';
 
-export interface NotifyResult {
+interface NotifyResult {
   /** True if the provider was configured AND the API accepted the message. */
   delivered: boolean;
   /** Set when delivery was attempted-but-failed, OR provider was skipped. */
   reason?: string;
 }
 
-const log = (msg: string): void => {
-  process.stderr.write(`[imprint notify] ${msg}\n`);
-};
+interface NotifyDecision {
+  notify: boolean;
+  /** Used as the push title when notify=true. */
+  title?: string;
+  /** Used as the push body when notify=true. */
+  message?: string;
+}
 
-/**
- * Dispatch a notification to every configured provider in parallel.
- * Returns a per-provider result map so callers can log diagnostics
- * without blocking on individual provider failures.
- */
+export function evaluateNotifyWhen(
+  pred: NotifyWhen,
+  data: unknown,
+  toolName = 'workflow',
+): NotifyDecision {
+  switch (pred.type) {
+    case 'price_below': {
+      const paths = Array.isArray(pred.pricePath) ? pred.pricePath : [pred.pricePath];
+      // Union the values from every path that matches — gracefully handles
+      // tools that return different shapes from different backends.
+      const prices: number[] = [];
+      for (const p of paths) {
+        try {
+          prices.push(...extractAt(data, p));
+        } catch {
+          // Path didn't match this shape — try the next one. If ALL paths
+          // throw, prices stays empty and we treat it as "no signal" below.
+        }
+      }
+      if (prices.length === 0) return { notify: false }; // empty / misconfigured path
+      const min = Math.min(...prices);
+      if (min < pred.threshold) {
+        return {
+          notify: true,
+          title: `imprint: price drop on ${toolName}`,
+          message: `Lowest price $${min} (under your $${pred.threshold} threshold) — ${prices.length} option${prices.length === 1 ? '' : 's'} found.`,
+        };
+      }
+      return { notify: false };
+    }
+  }
+}
+
+const log = createLog('notify');
+
+/** Push to every configured provider in parallel; returns per-provider results. */
 export async function notify(
   title: string,
   message: string,
@@ -47,7 +77,7 @@ export async function notify(
   return { pushover, ntfy };
 }
 
-export async function notifyPushover(
+async function notifyPushover(
   title: string,
   message: string,
   fetchImpl: typeof fetch = fetch,
@@ -55,7 +85,11 @@ export async function notifyPushover(
   const token = process.env.PUSHOVER_TOKEN;
   const user = process.env.PUSHOVER_USER;
   if (!token || !user) {
-    return { delivered: false, reason: 'PUSHOVER_TOKEN / PUSHOVER_USER not set' };
+    return {
+      delivered: false,
+      reason:
+        'PUSHOVER_TOKEN / PUSHOVER_USER not set (or set NTFY_URL for free push — see docs/notifications.md)',
+    };
   }
 
   const body = new URLSearchParams({ token, user, title, message });
@@ -79,19 +113,22 @@ export async function notifyPushover(
   }
 }
 
-export async function notifyNtfy(
+async function notifyNtfy(
   title: string,
   message: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<NotifyResult> {
   const url = process.env.NTFY_URL;
   if (!url) {
-    return { delivered: false, reason: 'NTFY_URL not set' };
+    return {
+      delivered: false,
+      reason:
+        'NTFY_URL not set (e.g. https://ntfy.sh/your-secret-topic — see docs/notifications.md)',
+    };
   }
 
-  // ntfy publishes by POST-ing the message body to /<topic>. Title and
-  // priority ride along as headers. Bearer auth is only needed for
-  // protected topics on self-hosted instances.
+  // POST body to /<topic>; title + priority ride as headers; bearer auth
+  // only needed for protected topics on self-hosted instances.
   const headers: Record<string, string> = {
     'content-type': 'text/plain; charset=utf-8',
     Title: title,

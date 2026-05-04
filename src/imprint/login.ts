@@ -1,30 +1,15 @@
-/**
- * `imprint login <site>` — populate the per-site credential store.
- *
- * v0.1 supports the simplest possible mode: extract cookies + values from
- * an already-captured session.json. The user has just done the workflow
- * inside the recorder; we mine the resulting capture for everything the
- * runtime needs.
- *
- * What gets extracted:
- *   - All cookies present in the END-of-session snapshot, scoped to the
- *     workflow's primary domain
- *   - Per-site values from a small set of well-known patterns (currently:
- *     Discover & Go's patronID returned in the Login POST response)
- *
- * A future v0.2 will offer `--interactive` mode that opens Playwright,
- * waits for the user to log in, and intercepts the auth response live.
- */
+/** `imprint login` — extract cookies + per-site values from a captured
+ *  session.json into the per-site credential store. */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import envPaths from 'env-paths';
+import type { CredentialStore } from './runtime.ts';
 import { type Session, SessionSchema } from './types.ts';
-import type { CredentialStore } from './workflow-runtime.ts';
 
 const PATHS = envPaths('imprint', { suffix: '' });
 
-export interface LoginOptions {
+interface LoginOptions {
   site: string;
   /** Path to a session.json from which to extract credentials. */
   fromSession: string;
@@ -32,7 +17,7 @@ export interface LoginOptions {
   outPath?: string;
 }
 
-export interface LoginResult {
+interface LoginResult {
   outPath: string;
   cookieCount: number;
   values: Record<string, string>;
@@ -65,11 +50,8 @@ export function login(opts: LoginOptions): LoginResult {
   };
 }
 
-/**
- * Pull cookies from the END snapshot (most authoritative — captures everything
- * set during the workflow, including post-login session cookies). Falls back
- * to start snapshot if no end is present.
- */
+/** End snapshot captures everything set during the workflow (post-login
+ *  cookies); fall back to start snapshot if absent. */
 function collectCookies(session: Session): CredentialStore['cookies'] {
   const snaps = session.cookieSnapshots ?? [];
   const end = snaps.find((s) => s.label === 'end');
@@ -84,13 +66,8 @@ function collectCookies(session: Session): CredentialStore['cookies'] {
   }));
 }
 
-/**
- * Apply per-site extractors to the captured requests. Each extractor knows
- * how to recognize a particular auth pattern (URL shape + response body
- * shape) and pull a named value out.
- *
- * Ordered list — first match wins.
- */
+/** Per-site extractors pull named values out of recognized auth shapes;
+ *  ordered list, first match wins. */
 const EXTRACTORS: Array<{
   name: string;
   match: (session: Session) => Record<string, string> | null;

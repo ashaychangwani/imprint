@@ -1,18 +1,7 @@
 /**
- * `imprint record` — capture a teaching session.
- *
- * Spawns a real Chromium with `--remote-debugging-port`, connects via the
- * Chrome DevTools Protocol (CDP), and streams every network request, DOM
- * navigation event, and user narration to a JSONL session file.
- *
- *   chromium ──CDP──▶ recorder ──▶ session.jsonl ──▶ session.json (on close)
- *      │
- *      └─ user does the workflow in a visible window
- *
- *   stdin ──narration loop──▶ recorder
- *
- * Ctrl+C stops the recording cleanly: stops accepting CDP events, flushes the
- * JSONL stream, writes the assembled `session.json`, kills Chromium.
+ * `imprint record` — capture a teaching session via CDP. Streams network
+ * requests, DOM events, and stdin narration to JSONL; assembles session.json
+ * on clean shutdown (Ctrl+C, /done, or external AbortSignal).
  */
 
 import { mkdirSync } from 'node:fs';
@@ -23,45 +12,30 @@ import CDP from 'chrome-remote-interface';
 import envPaths from 'env-paths';
 import { launchChromium } from './chromium.ts';
 import { IMPRINT_SENTINEL, INJECTED_LISTENER_SOURCE } from './inject-listener.ts';
+import { isDebug } from './log.ts';
 import { createSessionWriter } from './session-writer.ts';
 import type { CapturedEvent, CapturedRequest, CookieSnapshot } from './types.ts';
+import { VERSION } from './version.ts';
 
 const PATHS = envPaths('imprint', { suffix: '' });
 
-const VERSION = '0.1.0';
-
-export interface RecordOptions {
+interface RecordOptions {
   /** Site label, e.g. "southwest". Determines output path. */
   site: string;
   /** Starting URL. If omitted, opens about:blank — user navigates manually. */
   url?: string;
   /** Output path for session.jsonl. Defaults to examples/<site>/sessions/<timestamp>.jsonl */
   outPath?: string;
-  /**
-   * Persist Chromium profile across recording sessions for this site. When
-   * true, Chromium uses a stable user-data-dir at $IMPRINT_DATA/profiles/<site>
-   * so cookies + login state survive between captures. Useful for the dev
-   * iteration loop against a real authed site (Discover & Go, etc.) — log in
-   * once, re-record many times.
-   *
-   * Default false (throwaway profile each session). Production use of the
-   * generated MCP server uses the dedicated `imprint login` cookie store
-   * instead.
-   */
+  /** Persist a stable profile at $IMPRINT_DATA/profiles/<site> so cookies + login
+   *  survive between captures. Useful for re-recording an authed site. Default false. */
   persistProfile?: boolean;
-  /**
-   * Stop signal. CLI wires this to SIGINT; tests can fire it from an
-   * AbortController to shut down cleanly without process.exit.
-   */
+  /** Stop signal. CLI wires this to SIGINT. */
   signal?: AbortSignal;
-  /**
-   * If true, skip the interactive narration prompt (terminal stdin loop).
-   * Tests use this. CLI never sets it.
-   */
+  /** Skip the interactive stdin narration loop (tests). */
   noNarration?: boolean;
 }
 
-export interface RecordResult {
+interface RecordResult {
   jsonlPath: string;
   sessionPath: string;
   /** Number of records written (requests + events + narration). */
@@ -91,10 +65,8 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
   console.log(`[imprint] recording → ${outPath}`);
   console.log('[imprint] launching chromium...');
 
-  // Critical: launch Chromium with about:blank, NOT the target URL. We need to
-  // attach CDP and enable Network BEFORE the first request fires. If we passed
-  // the URL up front, Chromium would race ahead and the page would already be
-  // loaded by the time we subscribe.
+  // Launch with about:blank so we attach CDP + enable Network BEFORE the
+  // first real request fires. Passing the target URL up front loses events.
   const userDataDir = opts.persistProfile ? pathJoin(PATHS.data, 'profiles', opts.site) : undefined;
   if (userDataDir) {
     mkdirSync(userDataDir, { recursive: true });
@@ -114,9 +86,9 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
   }
   console.log(`[imprint] chromium up on CDP port ${chromium.port}`);
 
-  // Give Chromium a beat to publish the target list, then attach to the page tab.
-  // chrome-remote-interface's `target` callback must return a number (index) or
-  // a Target — never undefined. We pick the index of the first real page tab.
+  // Wait for Chromium to publish the target list, then attach to the first
+  // real page tab (skip chrome-extension://). The callback must return a
+  // number index — never undefined.
   await sleep(250);
   const client = await CDP({
     port: chromium.port,
@@ -131,9 +103,8 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
 
   await Promise.all([Network.enable(), Page.enable(), Runtime.enable()]);
 
-  // Inject our passive event listener on every page load. This captures
-  // clicks/inputs/changes/submits as console.log lines that we parse via
-  // Runtime.consoleAPICalled below.
+  // Passive DOM listener emits sentinel-prefixed console.log lines we parse
+  // via Runtime.consoleAPICalled below.
   await Page.addScriptToEvaluateOnNewDocument({ source: INJECTED_LISTENER_SOURCE });
 
   const writer = createSessionWriter(outPath, {
@@ -149,32 +120,16 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
   let seq = 0;
   const nextSeq = (): number => seq++;
 
-  // ── Network capture ────────────────────────────────────────────────────────
-  //
-  // CDP fires events per request roughly in this order:
-  //
-  //   requestWillBeSent  → request method, url, body, headers
-  //   responseReceived   → response status, headers, mimeType   ← we WRITE here
-  //   loadingFinished    → response body fetchable via getResponseBody
-  //
-  // We deliberately write the captured record on `responseReceived` instead of
-  // waiting for `loadingFinished`. Two reasons:
-  //   (1) `loadingFinished` is unreliable in practice — for navigation requests
-  //       it can be deferred indefinitely or never fire at all.
-  //   (2) For LLM intent detection, the request method/url/body and response
-  //       status/headers are sufficient. Response BODIES are only needed when
-  //       a later request in a chained workflow references them via ${response[N]}.
-  //
-  // Body fetching is opportunistic and async: we attempt it after writing the
-  // request line and append a `body` to the JSONL via a separate `request-body`
-  // record. The Workflow generator merges these when assembling the request
-  // chain.
+  // CDP order: requestWillBeSent → responseReceived → loadingFinished.
+  // We write on responseReceived (loadingFinished is unreliable for nav
+  // requests). Body fetch runs in the background and writes a separate
+  // request-body JSONL record keyed by seq; the assembler merges them.
   const pending = new Map<string, PendingRequest>();
   const inflight = new Set<Promise<void>>();
 
   Network.requestWillBeSent((params) => {
     const { request, requestId, type } = params;
-    if (process.env.IMPRINT_DEBUG) {
+    if (isDebug()) {
       console.error(`[debug] requestWillBeSent ${requestId} ${request.method} ${request.url}`);
     }
     pending.set(requestId, {
@@ -192,11 +147,9 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     const { requestId, response } = params;
     const reqInfo = pending.get(requestId);
     if (!reqInfo) return;
-    // Don't delete from pending yet — we may still try to fetch the body on
-    // loadingFinished. Mark "written" by writing the line now.
     pending.delete(requestId);
 
-    if (process.env.IMPRINT_DEBUG) {
+    if (isDebug()) {
       console.error(
         `[debug] responseReceived ${requestId} status=${response.status} ${reqInfo.url}`,
       );
@@ -219,11 +172,9 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     };
     writer.request(captured);
 
-    // Best-effort: kick off a body fetch in the background. If it succeeds,
-    // we write a companion `request-body` record keyed by seq. If
-    // `loadingFinished` never fires, we just don't get a body — fine.
+    // Background body fetch. getResponseBody errors before loadingFinished
+    // fires, so we sleep briefly first; failure is fine (preflight, evicted).
     const bodyWork = (async () => {
-      // Wait briefly — getResponseBody often errors before loadingFinished.
       await sleep(100);
       try {
         const bodyResp = await Network.getResponseBody({ requestId });
@@ -242,22 +193,20 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     bodyWork.finally(() => inflight.delete(bodyWork));
   });
 
-  // Failed requests still need to drop out of pending so the map doesn't leak.
   Network.loadingFailed((params) => {
-    if (process.env.IMPRINT_DEBUG) {
+    if (isDebug()) {
       console.error(`[debug] loadingFailed ${params.requestId} ${params.errorText}`);
     }
     pending.delete(params.requestId);
   });
 
-  // Now that Network is wired, navigate to the user's URL. If they didn't pass
-  // one, leave the user on about:blank — they'll navigate manually.
+  // Network is wired — safe to drive Chromium to the target URL.
   if (opts.url && opts.url !== 'about:blank') {
-    if (process.env.IMPRINT_DEBUG) {
+    if (isDebug()) {
       console.error(`[debug] navigating to ${opts.url}`);
     }
     const navResult = await Page.navigate({ url: opts.url });
-    if (process.env.IMPRINT_DEBUG) {
+    if (isDebug()) {
       console.error(`[debug] navigate returned: ${JSON.stringify(navResult)}`);
     }
   }
@@ -300,10 +249,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     }
   });
 
-  // ── WebSocket frames ──────────────────────────────────────────────────────
-  // Defensive: most demo sites won't use WS but if they do for inventory or
-  // notifications, missing frames silently breaks the LLM intent inference.
-  // We capture sent + received and dedupe payload to a 1KB preview.
+  // ── WebSocket frames (sent + received, payload truncated to 1KB) ─────────
   const wsUrls = new Map<string, string>();
   Network.webSocketCreated((params) => {
     wsUrls.set(params.requestId, params.url);
@@ -340,10 +286,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     wsUrls.delete(params.requestId);
   });
 
-  // ── Cookie snapshots ──────────────────────────────────────────────────────
-  // Capture once at the start (so we know the initial auth state) and once
-  // at the end (so we know what was set during the session — booking
-  // confirmations sometimes set a session ID cookie we need for replay).
+  // ── Cookie snapshots: start (initial auth) + end (e.g. confirmation cookies) ─
   const snapshotCookies = async (label: CookieSnapshot['label']): Promise<void> => {
     try {
       const all = await Network.getAllCookies();
@@ -363,7 +306,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
         })),
       });
     } catch (err) {
-      if (process.env.IMPRINT_DEBUG) {
+      if (isDebug()) {
         console.error(`[debug] cookie snapshot ${label} failed: ${String(err)}`);
       }
     }
@@ -378,8 +321,6 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     const secs = Math.floor(elapsed() / 1000);
     const mm = Math.floor(secs / 60);
     const ss = String(secs % 60).padStart(2, '0');
-    // `seq` counts requests + events + narration combined — it's the right
-    // "captured records so far" number for the prompt.
     return `[${mm}:${ss} • ${seq} captured] narrate (or /done): `;
   };
 
@@ -402,8 +343,6 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
       const trimmed = line.trim();
       if (trimmed.length === 0) continue;
       if (trimmed === '/done' || trimmed === '/quit' || trimmed === '/q') {
-        // Trigger graceful shutdown from within the narration loop.
-        // Caller's signal/SIGINT handlers also work; this is a UX convenience.
         narrationOpen = false;
         break;
       }
@@ -428,18 +367,17 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     narrationOpen = false;
     rl?.close();
 
-    // Drain in-flight loadingFinished handlers so their writer.request() calls
-    // land before we close the JSONL stream. CDP body-fetch is async; without
-    // this, late-arriving requests get silently dropped.
+    // Drain in-flight body fetches before closing the JSONL stream — CDP
+    // body fetch is async, late arrivals would be silently dropped.
     if (inflight.size > 0) {
-      if (process.env.IMPRINT_DEBUG) {
+      if (isDebug()) {
         console.error(`[debug] draining ${inflight.size} inflight handlers`);
       }
       await Promise.allSettled(Array.from(inflight));
     }
 
-    // Final cookie snapshot before tearing CDP down. The booking-confirmation
-    // page may have set a fresh session cookie that the replay needs.
+    // Final cookie snapshot before CDP teardown — confirmation pages
+    // sometimes set fresh session cookies the replay needs.
     await snapshotCookies('end');
 
     try {
@@ -454,26 +392,19 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     console.log(`[imprint] saved ${jsonlPath}`);
     console.log(`[imprint] assembled ${sessionPath}`);
     console.log(`[imprint] ${seq} captured records`);
+    console.log('');
+    console.log('next step:');
+    console.log(`  imprint redact ${sessionPath}    # scrub credentials before LLM analysis`);
     return { jsonlPath, sessionPath, count: seq };
   };
 
-  // External AbortSignal (tests, programmatic API).
   if (opts.signal) {
-    if (opts.signal.aborted) {
-      return shutdown();
-    }
-    opts.signal.addEventListener('abort', () => {
-      void shutdown();
-    });
+    if (opts.signal.aborted) return shutdown();
+    opts.signal.addEventListener('abort', () => void shutdown());
   }
+  // If the user closes the window, wind down.
+  chromium.process.once('exit', () => void shutdown());
 
-  // If Chromium dies on its own (user closes the window), wind down too.
-  chromium.process.once('exit', () => {
-    void shutdown();
-  });
-
-  // Wait for narration loop to terminate (only happens on shutdown).
   await narrationLoop;
-  // Belt and suspenders: ensure shutdown ran even if narration loop exited via other path.
   return shutdown();
 }

@@ -1,44 +1,40 @@
 /**
- * Tests for the playbook markdown parser. Format spec lives in
- * prompts/playbook-compilation.md; the parser is hand-written and
- * intentionally strict so a malformed playbook fails fast.
+ * Tests for the YAML playbook parser. Most edge cases are now handled
+ * by the YAML library + Zod — the parser is just a thin glue. These
+ * tests cover the glue + a few representative shapes.
  */
 
 import { describe, expect, it } from 'bun:test';
 import { parsePlaybook } from '../src/imprint/playbook-parser.ts';
 
-const MIN = `# search_test
-
-## Summary
-Test fixture.
-
-## Parameters
-- \`q\` (string, required) — query string
-
-## Steps
-
-### Step 1: Open page
-- action: navigate
-- url: https://example.com/?q=\${q}
-- wait_for: networkidle
-
-## Result
-- source: xhr
-- url_pattern: /api/search
-- extract: items[].id
-- return_as: hits
+const MIN = `
+toolName: search_test
+summary: Test fixture
+parameters:
+  - name: q
+    type: string
+    description: query
+steps:
+  - action: navigate
+    url: https://example.com/?q=\${q}
+    wait_for: networkidle
+result:
+  source: xhr
+  url_pattern: /api/search
+  extract: items[].id
+  return_as: hits
 `;
 
-describe('parsePlaybook', () => {
+describe('parsePlaybook (YAML)', () => {
   it('parses a minimal valid playbook', () => {
     const p = parsePlaybook(MIN);
     expect(p.toolName).toBe('search_test');
-    expect(p.summary).toBe('Test fixture.');
+    expect(p.summary).toBe('Test fixture');
     expect(p.parameters).toHaveLength(1);
     expect(p.parameters[0]).toEqual({
       name: 'q',
       type: 'string',
-      description: 'query string',
+      description: 'query',
     });
     expect(p.steps).toHaveLength(1);
     expect(p.steps[0]).toEqual({
@@ -54,192 +50,192 @@ describe('parsePlaybook', () => {
     });
   });
 
-  it('strips a trailing " playbook" from the H1', () => {
-    const md = MIN.replace('# search_test', '# search_test playbook');
-    expect(parsePlaybook(md).toolName).toBe('search_test');
+  it('parses parameters with defaults of all primitive types', () => {
+    const p = parsePlaybook(`
+toolName: t
+summary: x
+parameters:
+  - name: count
+    type: number
+    description: how many
+    default: 10
+  - name: enabled
+    type: boolean
+    description: switch
+    default: true
+  - name: env
+    type: string
+    description: env name
+    default: prod
+steps:
+  - action: navigate
+    url: https://x.com
+result:
+  source: xhr
+  url_pattern: /x
+  extract: a
+  return_as: r
+`);
+    expect(p.parameters[0]).toMatchObject({ name: 'count', default: 10 });
+    expect(p.parameters[1]).toMatchObject({ name: 'enabled', default: true });
+    expect(p.parameters[2]).toMatchObject({ name: 'env', default: 'prod' });
   });
 
-  it('rejects an H1 that is not snake_case', () => {
-    const md = MIN.replace('# search_test', '# Search Test');
-    expect(() => parsePlaybook(md)).toThrow(/snake_case/);
-  });
-
-  it('parses parameters with explicit defaults', () => {
-    const md = MIN.replace(
-      '- `q` (string, required) — query string',
-      '- `count` (number) — how many results default: 10',
-    );
-    const p = parsePlaybook(md);
-    expect(p.parameters[0]).toEqual({
-      name: 'count',
-      type: 'number',
-      description: 'how many results',
-      default: 10,
-    });
-  });
-
-  it('parses multi-locator click steps with priority order', () => {
-    const md = `# search_test
-
-## Summary
-multi-locator fixture
-
-## Parameters
-- \`q\` (string, required) — query
-
-## Steps
-
-### Step 1: Open page
-- action: navigate
-- url: https://example.com
-- wait_for: networkidle
-
-### Step 2: Click search
-- action: click
-- locators:
-  - by: role, value: button, name: Search
-  - by: text, value: Search
-  - by: id, value: search-btn
-  - by: css, value: button.search
-- wait_for: visible
-
-## Result
-- source: xhr
-- url_pattern: /api/search
-- extract: items[].id
-- return_as: hits
-`;
-    const p = parsePlaybook(md);
-    expect(p.steps).toHaveLength(2);
-    const step2 = p.steps[1];
-    if (step2?.action !== 'click') throw new Error('expected click step');
-    expect(step2.locators).toEqual([
-      { by: 'role', value: 'button', name: 'Search' },
-      { by: 'text', value: 'Search' },
-      { by: 'id', value: 'search-btn' },
-      { by: 'css', value: 'button.search' },
-    ]);
-    expect(step2.wait_for).toBe('visible');
-  });
-
-  it('parses type steps with value substitution and clear=false', () => {
-    const md = `# t
-
-## Summary
-x
-
-## Parameters
-- \`q\` (string, required) — q
-
-## Steps
-
-### Step 1: Type
-- action: type
-- locators:
-  - by: id, value: input
-- value: \${q}
-
-## Result
-- source: xhr
-- url_pattern: /x
-- extract: a
-- return_as: r
-`;
-    const p = parsePlaybook(md);
+  it('parses multi-locator click step with priority order', () => {
+    const p = parsePlaybook(`
+toolName: t
+summary: x
+parameters: []
+steps:
+  - action: click
+    locators:
+      - by: role
+        value: button
+        name: Search
+      - by: text
+        value: Search
+      - by: id
+        value: search-btn
+      - by: css
+        value: button.search
+    wait_for: visible
+result:
+  source: xhr
+  url_pattern: /x
+  extract: a
+  return_as: r
+`);
     const step = p.steps[0];
-    if (step?.action !== 'type') throw new Error('expected type step');
-    expect(step.value).toBe('${q}');
+    if (step?.action !== 'click') throw new Error('expected click step');
+    expect(step.locators).toHaveLength(4);
+    expect(step.locators[0]).toEqual({ by: 'role', value: 'button', name: 'Search' });
+    expect(step.locators[3]).toEqual({ by: 'css', value: 'button.search' });
+    expect(step.wait_for).toBe('visible');
   });
 
-  it('parses xhr wait_for with a method', () => {
-    const md = MIN.replace('- wait_for: networkidle', '- wait_for: xhr:/api/search method:POST');
-    const p = parsePlaybook(md);
+  it('parses xhr wait_for with optional method', () => {
+    const p = parsePlaybook(`
+toolName: t
+summary: x
+parameters: []
+steps:
+  - action: navigate
+    url: https://x.com
+    wait_for:
+      xhr: /api/search
+      method: POST
+result:
+  source: xhr
+  url_pattern: /api/search
+  extract: a
+  return_as: r
+`);
     expect(p.steps[0]?.wait_for).toEqual({ xhr: '/api/search', method: 'POST' });
   });
 
-  it('parses sleep wait_for', () => {
-    const md = MIN.replace('- wait_for: networkidle', '- wait_for: sleep:500');
-    const p = parsePlaybook(md);
+  it('parses sleep_ms wait_for', () => {
+    const p = parsePlaybook(`
+toolName: t
+summary: x
+parameters: []
+steps:
+  - action: navigate
+    url: https://x.com
+    wait_for:
+      sleep_ms: 500
+result:
+  source: xhr
+  url_pattern: /x
+  extract: a
+  return_as: r
+`);
     expect(p.steps[0]?.wait_for).toEqual({ sleep_ms: 500 });
   });
 
+  it('parses press steps for overlay dismissal', () => {
+    const p = parsePlaybook(`
+toolName: t
+summary: x
+parameters: []
+steps:
+  - action: press
+    key: Escape
+    wait_for:
+      sleep_ms: 300
+result:
+  source: xhr
+  url_pattern: /x
+  extract: a
+  return_as: r
+`);
+    const step = p.steps[0];
+    if (step?.action !== 'press') throw new Error('expected press step');
+    expect(step.key).toBe('Escape');
+  });
+
   it('parses dom-source result blocks', () => {
-    const md = MIN.replace(
-      `## Result
-- source: xhr
-- url_pattern: /api/search
-- extract: items[].id
-- return_as: hits`,
-      `## Result
-- source: dom
-- css: .price
-- extract: text
-- return_as: prices`,
-    );
-    const p = parsePlaybook(md);
+    const p = parsePlaybook(`
+toolName: t
+summary: x
+parameters: []
+steps:
+  - action: navigate
+    url: https://x.com
+result:
+  source: dom
+  locators:
+    - by: css
+      value: .price
+  extract: text
+  return_as: prices
+`);
     expect(p.result.source).toBe('dom');
     if (p.result.source !== 'dom') throw new Error('unreachable');
     expect(p.result.locators).toEqual([{ by: 'css', value: '.price' }]);
     expect(p.result.extract).toBe('text');
   });
 
-  it('rejects a missing ## Steps section', () => {
-    const md = MIN.replace(/## Steps[\s\S]*?(?=## Result)/, '');
-    expect(() => parsePlaybook(md)).toThrow(/Steps/);
+  it('preserves the optional notes field', () => {
+    const p = parsePlaybook(`${MIN}\nnotes: must run --headed against this site\n`);
+    expect(p.notes).toContain('--headed');
   });
 
-  it('rejects a missing ## Result section', () => {
-    const md = MIN.replace(/## Result[\s\S]*$/, '');
-    expect(() => parsePlaybook(md)).toThrow(/Result/);
+  it('rejects invalid YAML', () => {
+    expect(() => parsePlaybook(': : not valid yaml ::')).toThrow(/YAML/);
   });
 
-  it('rejects a step missing required action attribute', () => {
-    const md = `# t
-
-## Summary
-x
-
-## Steps
-
-### Step 1: Bad
-- url: https://example.com
-
-## Result
-- source: xhr
-- url_pattern: /x
-- extract: a
-- return_as: r
-`;
-    expect(() => parsePlaybook(md)).toThrow(/missing required attribute "action"/);
+  it('rejects schema-invalid documents (missing required field)', () => {
+    expect(() =>
+      parsePlaybook(`
+toolName: t
+parameters: []
+steps:
+  - action: navigate
+    url: https://x.com
+result:
+  source: xhr
+  url_pattern: /x
+  extract: a
+  return_as: r
+`),
+    ).toThrow(/summary/);
   });
 
   it('rejects a click step with no locators', () => {
-    const md = `# t
-
-## Summary
-x
-
-## Steps
-
-### Step 1: Click
-- action: click
-- wait_for: visible
-
-## Result
-- source: xhr
-- url_pattern: /x
-- extract: a
-- return_as: r
-`;
-    expect(() => parsePlaybook(md)).toThrow(/at least one locator/);
-  });
-
-  it('preserves the optional notes section', () => {
-    const md = `${MIN}
-## Notes
-must run --headed against this site
-`;
-    const p = parsePlaybook(md);
-    expect(p.notes).toContain('--headed');
+    expect(() =>
+      parsePlaybook(`
+toolName: t
+summary: x
+parameters: []
+steps:
+  - action: click
+    wait_for: visible
+result:
+  source: xhr
+  url_pattern: /x
+  extract: a
+  return_as: r
+`),
+    ).toThrow(/locators/);
   });
 });

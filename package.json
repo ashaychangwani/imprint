@@ -1,7 +1,7 @@
 {
   "name": "imprint",
   "version": "0.1.0",
-  "description": "Teach AI agents to use any website by demonstrating once. Captures network requests + narration, generates an MCP server.",
+  "description": "Teach an AI agent how to use any website. Once. Records a real browser session + narration; generates a deterministic MCP tool plus a DOM-replay playbook fallback.",
   "type": "module",
   "license": "MIT",
   "author": "Ashay Changwani",
@@ -19,11 +19,16 @@
   },
   "scripts": {
     "dev": "bun run src/cli.ts",
+    "imprint": "bun run src/cli.ts",
+    "doctor": "bun run src/cli.ts doctor",
     "test": "bun test",
-    "test:eval": "RUN_EVALS=1 bun test test/eval",
     "lint": "biome check src test",
     "lint:fix": "biome check --write src test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "knip": "knip --no-progress",
+    "deadcode": "bun run knip && bun run circular",
+    "circular": "madge --circular --extensions ts src/",
+    "check": "bun run typecheck && bun run lint && bun test && bun run deadcode"
   },
   "dependencies": {
     "@anthropic-ai/vertex-sdk": "^0.13.0",
@@ -34,6 +39,7 @@
     "playwright": "^1.49.0",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "yaml": "^2.8.4",
     "zod": "^3.24.0"
   },
   "devDependencies": {
@@ -42,6 +48,8 @@
     "@types/chrome-remote-interface": "^0.31.14",
     "@types/node": "^22.10.0",
     "@types/node-cron": "^3.0.11",
+    "knip": "^5.0.0",
+    "madge": "^8.0.0",
     "typescript": "^5.7.0"
   }
 }
