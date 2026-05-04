@@ -4,7 +4,7 @@ Imprint is a CLI tool: record a real browser session once, get back two determin
 
 ## Status
 
-v0.1 shipped. Working demos: `examples/southwest` (live, defeats Akamai via stealth-fetch) and `examples/discoverandgo` (authed booking). `examples/luma` is WIP for the next demo. `examples/echo` is the MCP smoke-test fixture.
+v0.1 shipped. Working demos: `examples/southwest` (live, defeats Akamai via stealth-fetch) and `examples/discoverandgo` (authed museum-pass booking). `examples/echo` is the MCP smoke-test fixture. Future demos (Luma SF event finder, internal canteen ordering) live in [TODOS.md](TODOS.md), not yet committed.
 
 ## Where to look
 
