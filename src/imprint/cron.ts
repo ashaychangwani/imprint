@@ -83,7 +83,13 @@ async function runOnce(
 
   if (result.ok) {
     const data = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-    log(`  OK in ${elapsed}ms via ${usedBackend}: ${data}`);
+    // Cap the inline preview at ~500 chars; full payload available via
+    // IMPRINT_DEBUG=1. Long-running daemons flood stderr otherwise.
+    const preview =
+      process.env.IMPRINT_DEBUG || data.length <= 500
+        ? data
+        : `${data.slice(0, 500)}…(${data.length - 500} more chars; set IMPRINT_DEBUG=1 to log full payload)`;
+    log(`  OK in ${elapsed}ms via ${usedBackend}: ${preview}`);
     if (notifyWhen) {
       try {
         const decision = evaluateNotifyWhen(notifyWhen, result.data, tool.workflow.toolName);
