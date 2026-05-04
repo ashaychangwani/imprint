@@ -15,9 +15,12 @@ record once  →  workflow.json + playbook.yaml + index.ts  →  MCP tool / cron
 ```bash
 git clone https://github.com/<you>/imprint.git
 cd imprint
-bun install && bun link
+bun install
+bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
 bunx playwright install chromium
 export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
+
+# (alternative: skip `bun link` and call directly via `bun src/cli.ts <verb>`)
 
 # 1. Drive the workflow once. Pick any site you want to automate.
 imprint record mysite --url https://your-site-here.example.com
@@ -129,7 +132,7 @@ Verbs: `record`, `assemble`, `check`, `redact`, `generate`, `compile-playbook`, 
 
 ## Status
 
-v0.1 — pipeline complete, two demos live. v0.2 candidates in [TODOS.md](TODOS.md). Issues + PRs welcome.
+v0.1 — pipeline complete, two demos live. v0.2 candidates in [TODOS.md](TODOS.md). What's changed: [CHANGELOG.md](CHANGELOG.md). Issues + PRs welcome.
 
 ## License
 
