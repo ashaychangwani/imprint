@@ -2,9 +2,21 @@
  * `imprint teach` — interactive pipeline that chains record → redact → generate
  * → compile-playbook → emit automatically, then presents a platform picker
  * and outputs paste snippets or runs registration commands.
+ *
+ * Supports resuming from the last successful step, re-doing from a chosen
+ * step, and multiple workflows per site (each in its own subdirectory).
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import * as p from '@clack/prompts';
@@ -22,17 +34,35 @@ import { loadJsonFile } from './load-json.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { redactSession } from './redact.ts';
-import { CronConfigSchema, SessionSchema } from './types.ts';
+import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
 import type { CronConfig, Playbook, Workflow } from './types.ts';
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+const STEPS = ['record', 'redact', 'generate', 'compile-playbook', 'emit', 'register'] as const;
+type Step = (typeof STEPS)[number];
+
+interface WorkflowState {
+  sessionPath: string;
+  redactedPath?: string;
+  completedSteps: Step[];
+  error?: string;
+  startedAt: string;
+  updatedAt: string;
+}
+
+interface TeachState {
+  workflows: Record<string, WorkflowState>;
+}
 
 interface TeachOptions {
   site: string;
   url?: string;
   persistProfile?: boolean;
   signal?: AbortSignal;
-  /** Skip interactive prompts — print all snippets. For CI/scripting. */
   noInteractive?: boolean;
   provider?: ProviderName;
+  fromSession?: string;
 }
 
 interface TeachResult {
@@ -44,135 +74,629 @@ interface TeachResult {
   playbook: Playbook;
 }
 
+// ─── State management ───────────────────────────────────────────────────────
+
+function statePath(site: string): string {
+  return pathResolve('examples', site, '.teach-state.json');
+}
+
+function loadTeachState(site: string): TeachState {
+  const path = statePath(site);
+  if (!existsSync(path)) return { workflows: {} };
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as TeachState;
+  } catch {
+    return { workflows: {} };
+  }
+}
+
+function saveTeachState(site: string, state: TeachState): void {
+  const path = statePath(site);
+  mkdirSync(pathJoin(path, '..'), { recursive: true });
+  if (Object.keys(state.workflows).length === 0) {
+    try {
+      unlinkSync(path);
+    } catch {
+      // File might not exist — fine.
+    }
+    return;
+  }
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  try {
+    renameSync(tmp, path);
+  } catch {
+    // On Windows, rename can fail if dest exists. Fall back to overwrite.
+    writeFileSync(path, readFileSync(tmp, 'utf8'), 'utf8');
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function nextStep(completed: Step[]): Step {
+  if (completed.length === 0) return 'record';
+  const last = completed.at(-1);
+  if (!last) return 'record';
+  const lastIdx = STEPS.indexOf(last);
+  if (lastIdx < 0 || lastIdx >= STEPS.length - 1) return 'record';
+  return STEPS[lastIdx + 1] as Step;
+}
+
+/** Scan examples/<site>/ for completed workflows. A workflow is "complete"
+ *  only when it has both workflow.json AND index.ts (emit ran successfully).
+ *  Checks both flat layout (site root) and new subdirectory layout. */
+function discoverCompletedWorkflows(site: string): string[] {
+  const siteDir = pathResolve('examples', site);
+  if (!existsSync(siteDir)) return [];
+  const names: string[] = [];
+
+  // Old flat layout: both workflow.json AND index.ts at the site root.
+  if (existsSync(pathJoin(siteDir, 'workflow.json')) && existsSync(pathJoin(siteDir, 'index.ts'))) {
+    names.push(site);
+  }
+
+  // New layout: subdirectories with index.ts (implies workflow.json too).
+  for (const entry of readdirSync(siteDir)) {
+    if (entry === 'sessions' || entry.startsWith('.')) continue;
+    const dir = pathResolve(siteDir, entry);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (existsSync(pathJoin(dir, 'index.ts'))) {
+      names.push(entry);
+    }
+  }
+  return names;
+}
+
+/** Scan for partially-completed workflows at the site root (flat layout)
+ *  that aren't tracked by state. E.g., a crashed teach left workflow.json
+ *  but never made it to emit. Returns a WorkflowState or null. */
+function discoverFlatIncomplete(site: string): WorkflowState | null {
+  const siteDir = pathResolve('examples', site);
+  const hasWorkflow = existsSync(pathJoin(siteDir, 'workflow.json'));
+  const hasIndex = existsSync(pathJoin(siteDir, 'index.ts'));
+  if (!hasWorkflow || hasIndex) return null;
+
+  // workflow.json exists but index.ts doesn't → stopped after generate.
+  // Find which session produced it (latest redacted session).
+  const sessDir = pathJoin(siteDir, 'sessions');
+  if (!existsSync(sessDir)) return null;
+  const sessions = readdirSync(sessDir)
+    .filter((f) => f.endsWith('.redacted.json'))
+    .sort()
+    .reverse();
+  const latest = sessions[0];
+  if (!latest) return null;
+
+  const sessionFile = latest.replace('.redacted.json', '.json');
+  const completedSteps: Step[] = ['record', 'redact', 'generate'];
+  if (existsSync(pathJoin(siteDir, 'playbook.yaml'))) completedSteps.push('compile-playbook');
+
+  return {
+    sessionPath: `sessions/${sessionFile}`,
+    redactedPath: `sessions/${latest}`,
+    completedSteps,
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/** Find the latest session in examples/<site>/sessions/ that has no
+ *  matching state entry. Returns an incomplete WorkflowState or null. */
+function discoverOrphanSession(site: string, state: TeachState): WorkflowState | null {
+  const sessDir = pathResolve('examples', site, 'sessions');
+  if (!existsSync(sessDir)) return null;
+
+  const trackedPaths = new Set(Object.values(state.workflows).map((ws) => ws.sessionPath));
+
+  const sessions = readdirSync(sessDir)
+    .filter((f) => f.endsWith('.json') && !f.endsWith('.redacted.json'))
+    .sort()
+    .reverse();
+
+  for (const file of sessions) {
+    const relPath = `sessions/${file}`;
+    if (trackedPaths.has(relPath)) continue;
+
+    const absPath = pathJoin(sessDir, file);
+    const redactedPath = absPath.replace(/\.json$/, '.redacted.json');
+    const hasRedacted = existsSync(redactedPath);
+    const completedSteps: Step[] = ['record'];
+    if (hasRedacted) completedSteps.push('redact');
+
+    return {
+      sessionPath: relPath,
+      redactedPath: hasRedacted
+        ? `sessions/${file.replace(/\.json$/, '.redacted.json')}`
+        : undefined,
+      completedSteps,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  return null;
+}
+
+// ─── Main teach function ────────────────────────────────────────────────────
+
 export async function teach(opts: TeachOptions): Promise<TeachResult> {
   p.intro(`imprint teach — teaching your agent to use ${opts.site}`);
 
-  // ── 1. Record ──────────────────────────────────────────────────────
-  const spinner = p.spinner();
-  spinner.start('Recording...');
-  // Stop the spinner before recording because record() is interactive
-  // (user drives the browser and types narration)
-  spinner.stop('Ready to record.');
+  const state = loadTeachState(opts.site);
 
-  console.log(''); // blank line before record output
-  const recordResult = await record({
-    site: opts.site,
-    url: opts.url,
-    persistProfile: opts.persistProfile,
-    signal: opts.signal,
-  });
-  const { sessionPath } = recordResult;
+  // Rename legacy _orphan_ keys to human-readable names.
+  for (const key of Object.keys(state.workflows)) {
+    if (!key.startsWith('_orphan_')) continue;
+    const ws = state.workflows[key];
+    if (!ws) continue;
+    const newKey = `session from ${friendlySessionTimestamp(ws.sessionPath)}`;
+    delete state.workflows[key];
+    state.workflows[newKey] = ws;
+  }
 
-  // ── 2. Redact ──────────────────────────────────────────────────────
-  spinner.start('Redacting credentials...');
-  const session = loadJsonFile(
-    sessionPath,
-    SessionSchema,
-    {
-      notFound: 'Session file not found after recording.',
-      badSchema: 'Session file is malformed.',
-    },
-    'session',
-  );
-  const { session: scrubbed, stats } = redactSession(session);
-  const redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
-  writeFileSync(redactedPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
-  spinner.stop(
-    `Redacted ${stats.totalRedactions} value(s) across ${stats.requestsRedacted} request(s) and ${stats.cookiesRedacted} cookie(s).`,
-  );
+  // Pick up a partially-completed flat-layout workflow (workflow.json exists
+  // at site root but no index.ts — crashed between generate and emit).
+  const flatIncomplete = discoverFlatIncomplete(opts.site);
+  if (flatIncomplete) {
+    const key = `${opts.site} (previous run)`;
+    if (!state.workflows[key]) state.workflows[key] = flatIncomplete;
+  }
 
-  // ── 3. Generate workflow (agentic — long-running) ──────────────────
-  const providerName = opts.provider ?? detectProvider();
-  // The compile-agent picks the best Claude model for the chosen provider —
-  // see resolveCompileAgentModel() in compile-agent.ts. Show it now so the
-  // user knows which billing/quota will be hit.
-  const { resolveCompileAgentModel } = await import('./compile-agent.ts');
-  const compileModel = resolveCompileAgentModel(providerName);
-  p.note(
-    [
-      `Provider: ${providerName}    Model: ${compileModel}`,
-      '',
-      'An LLM agent will reverse-engineer the API response format.',
-      'Expect ~3-5 minutes and moderate to high token use, depending on',
-      'the complexity of the recording. You can interrupt with Ctrl-C.',
-    ].join('\n'),
-    'Compile step',
+  // Pick up sessions that were recorded but never tracked (e.g., old teach
+  // runs or manual `imprint record` invocations).
+  const orphan = discoverOrphanSession(opts.site, state);
+  if (orphan) {
+    const key = `session from ${friendlySessionTimestamp(orphan.sessionPath)}`;
+    if (!state.workflows[key]) state.workflows[key] = orphan;
+  }
+
+  const completedWorkflows = discoverCompletedWorkflows(opts.site);
+  const completedSet = new Set(completedWorkflows);
+  const incompleteWorkflows = Object.entries(state.workflows).filter(
+    ([name]) => !completedSet.has(name),
   );
 
-  spinner.start('Compiling...');
-  const genResult = await generate({
-    sessionPath: redactedPath,
-    llmConfig: { provider: providerName, model: compileModel },
-    onProgress: (progress) => {
-      spinner.message(formatCompileProgress(progress));
-    },
-  });
-  spinner.stop(
-    `workflow.json → ${genResult.workflow.toolName} (${genResult.workflow.requests.length} request(s), ${genResult.workflow.parameters.length} param(s))`,
-  );
+  // Decide what to do: resume, redo, or start fresh.
+  let startFrom: Step = 'record';
+  let workflowKey: string | null = null;
+  let sessionPath: string | null = opts.fromSession ?? null;
+  let redactedPath: string | null = null;
 
-  // ── 4. Compile playbook (single-shot — sonnet is plenty) ──────────
-  spinner.start('Compiling DOM playbook...');
-  const pbResult = await compilePlaybook({
-    sessionPath: redactedPath,
-    llmConfig: { provider: providerName },
-  });
-  spinner.stop(
-    `playbook.yaml → ${pbResult.playbook.steps.length} step(s), ${pbResult.playbook.parameters.length} param(s)`,
-  );
+  const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
 
-  // ── 5. Emit ────────────────────────────────────────────────────────
-  spinner.start('Emitting tool...');
-  const emitResult = emit({
-    workflowPath: genResult.workflowPath,
-    force: true, // teach always overwrites
-  });
-  spinner.stop(`${emitResult.outPath} generated.`);
-
-  // ── 6. Platform integration ────────────────────────────────────────
-  if (opts.noInteractive) {
-    // Print all snippets for every platform.
-    const imprintCommand = detectImprintCommand();
-    const platforms: Platform[] = ['claude-code', 'codex', 'claude-desktop', 'openclaw', 'hermes'];
-    console.log('\n── Integration snippets ──\n');
-    for (const plat of platforms) {
-      console.log(`[${plat}]`);
-      console.log(
-        generatePasteSnippet({
-          site: opts.site,
-          workflow: genResult.workflow,
-          platform: plat,
-          imprintCommand,
-        }),
-      );
-      console.log('');
+  if (hasExisting && !opts.noInteractive) {
+    const choice = await promptResumeChoice(opts.site, completedWorkflows, incompleteWorkflows);
+    if (p.isCancel(choice)) {
+      p.outro('Cancelled.');
+      process.exit(0);
     }
-  } else {
-    await interactivePlatformSetup({
+
+    if (choice.action === 'new') {
+      startFrom = 'record';
+    } else if (choice.action === 'continue') {
+      workflowKey = choice.workflowKey;
+      const ws = state.workflows[workflowKey];
+      if (!ws) {
+        throw new Error(
+          `No state found for workflow "${workflowKey}" — try starting a new workflow.`,
+        );
+      }
+      startFrom = nextStep(ws.completedSteps);
+      sessionPath = pathResolve('examples', opts.site, ws.sessionPath);
+      redactedPath = ws.redactedPath ? pathResolve('examples', opts.site, ws.redactedPath) : null;
+    } else if (choice.action === 'redo') {
+      workflowKey = choice.workflowKey;
+      startFrom = choice.fromStep;
+      const ws = state.workflows[workflowKey];
+      if (ws) {
+        sessionPath = pathResolve('examples', opts.site, ws.sessionPath);
+        redactedPath = ws.redactedPath ? pathResolve('examples', opts.site, ws.redactedPath) : null;
+      }
+      if (!sessionPath && startFrom !== 'record') {
+        // Completed workflow with no state — find the latest session.
+        const orphan = discoverOrphanSession(opts.site, state);
+        if (orphan) {
+          sessionPath = pathResolve('examples', opts.site, orphan.sessionPath);
+          redactedPath = orphan.redactedPath
+            ? pathResolve('examples', opts.site, orphan.redactedPath)
+            : null;
+        }
+      }
+    }
+  } else if (opts.fromSession) {
+    startFrom = existsSync(opts.fromSession.replace(/\.json$/, '.redacted.json'))
+      ? 'generate'
+      : 'redact';
+    sessionPath = pathResolve(opts.fromSession);
+    const candidateRedacted = opts.fromSession.replace(/\.json$/, '.redacted.json');
+    if (existsSync(candidateRedacted)) redactedPath = pathResolve(candidateRedacted);
+  }
+
+  const startIdx = STEPS.indexOf(startFrom);
+  const spinner = p.spinner();
+  const providerName = opts.provider ?? detectProvider();
+
+  // Temp key for state tracking before we know the toolName.
+  if (!workflowKey) {
+    workflowKey = `_pending_${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  }
+
+  // ── 1. Record ──────────────────────────────────────────────────────
+  if (startIdx <= STEPS.indexOf('record')) {
+    spinner.start('Recording...');
+    spinner.stop('Ready to record.');
+    console.log('');
+
+    const recordResult = await record({
       site: opts.site,
-      workflow: genResult.workflow,
-      playbook: pbResult.playbook,
+      url: opts.url,
+      persistProfile: opts.persistProfile,
+      signal: opts.signal,
+    });
+    sessionPath = recordResult.sessionPath;
+
+    checkpoint(opts.site, state, workflowKey, {
+      sessionPath: toRelative(opts.site, sessionPath),
+      completedSteps: ['record'],
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     });
   }
+
+  if (!sessionPath) {
+    throw new Error(
+      'No session path — cannot continue. Re-run with --from-session or start fresh.',
+    );
+  }
+
+  // ── 2. Redact ──────────────────────────────────────────────────────
+  if (startIdx <= STEPS.indexOf('redact')) {
+    spinner.start('Redacting credentials...');
+    const session = loadJsonFile(
+      sessionPath,
+      SessionSchema,
+      {
+        notFound: 'Session file not found after recording.',
+        badSchema: 'Session file is malformed.',
+      },
+      'session',
+    );
+    const { session: scrubbed, stats } = redactSession(session);
+    redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
+    writeFileSync(redactedPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
+    spinner.stop(
+      `Redacted ${stats.totalRedactions} value(s) across ${stats.requestsRedacted} request(s) and ${stats.cookiesRedacted} cookie(s).`,
+    );
+
+    updateCheckpoint(opts.site, state, workflowKey, 'redact', {
+      redactedPath: toRelative(opts.site, redactedPath),
+    });
+  }
+
+  if (!redactedPath) {
+    redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
+  }
+
+  // ── 3. Generate workflow (agentic — long-running) ──────────────────
+  let workflowDir: string;
+  let genResult: { workflow: Workflow; workflowPath: string };
+
+  if (startIdx <= STEPS.indexOf('generate')) {
+    const { resolveCompileAgentModel } = await import('./compile-agent.ts');
+    const compileModel = resolveCompileAgentModel(providerName);
+    p.note(
+      [
+        `Provider: ${providerName}    Model: ${compileModel}`,
+        '',
+        'An LLM agent will reverse-engineer the API response format.',
+        'Expect ~3-5 minutes and moderate to high token use, depending on',
+        'the complexity of the recording. You can interrupt with Ctrl-C.',
+      ].join('\n'),
+      'Compile step',
+    );
+
+    spinner.start('Compiling...');
+    // compileAgent writes workflow.json (+ parser.ts etc.) to examples/<site>/.
+    // We move them into the toolName subdirectory after we know the name.
+    const result = await generate({
+      sessionPath: redactedPath,
+      llmConfig: { provider: providerName, model: compileModel },
+      onProgress: (progress) => {
+        spinner.message(formatCompileProgress(progress));
+      },
+    });
+
+    const toolName = result.workflow.toolName;
+    workflowDir = pathResolve('examples', opts.site, toolName);
+    mkdirSync(workflowDir, { recursive: true });
+
+    // Move agent-written artifacts into the workflow subdirectory.
+    const siteDir = pathResolve('examples', opts.site);
+    for (const artifact of ['workflow.json', 'parser.ts', 'parser.test.ts']) {
+      const src = pathJoin(siteDir, artifact);
+      if (!existsSync(src)) continue;
+      const dest = pathJoin(workflowDir, artifact);
+      try {
+        renameSync(src, dest);
+      } catch {
+        writeFileSync(dest, readFileSync(src, 'utf8'), 'utf8');
+        unlinkSync(src);
+      }
+    }
+
+    const finalWorkflowPath = pathJoin(workflowDir, 'workflow.json');
+    genResult = { workflow: result.workflow, workflowPath: finalWorkflowPath };
+
+    spinner.stop(
+      `workflow.json → ${toolName} (${result.workflow.requests.length} request(s), ${result.workflow.parameters.length} param(s))`,
+    );
+
+    // Rename state key from temp to toolName, carrying over prior state.
+    if (workflowKey !== toolName) {
+      const prior = state.workflows[workflowKey];
+      delete state.workflows[workflowKey];
+      workflowKey = toolName;
+      if (prior) state.workflows[workflowKey] = prior;
+    }
+
+    updateCheckpoint(opts.site, state, workflowKey, 'generate');
+  } else {
+    // Resuming after generate — workflowKey IS the toolName.
+    workflowDir = pathResolve('examples', opts.site, workflowKey);
+    const workflowPath = pathJoin(workflowDir, 'workflow.json');
+    const workflow = loadJsonFile(
+      workflowPath,
+      WorkflowSchema,
+      { notFound: `workflow.json not found at ${workflowPath}` },
+      'workflow.json',
+    );
+    genResult = { workflow, workflowPath };
+  }
+
+  // ── 4. Compile playbook ────────────────────────────────────────────
+  let pbResult: { playbook: Playbook; playbookPath: string };
+
+  if (startIdx <= STEPS.indexOf('compile-playbook')) {
+    spinner.start('Compiling DOM playbook...');
+    const playbookOutPath = pathJoin(workflowDir, 'playbook.yaml');
+    const result = await compilePlaybook({
+      sessionPath: redactedPath,
+      outPath: playbookOutPath,
+      llmConfig: { provider: providerName },
+    });
+    pbResult = { playbook: result.playbook, playbookPath: result.playbookPath };
+    spinner.stop(
+      `playbook.yaml → ${result.playbook.steps.length} step(s), ${result.playbook.parameters.length} param(s)`,
+    );
+
+    updateCheckpoint(opts.site, state, workflowKey, 'compile-playbook');
+  } else {
+    const playbookPath = pathJoin(workflowDir, 'playbook.yaml');
+    const { parsePlaybook } = await import('./playbook-parser.ts');
+    const playbook = parsePlaybook(readFileSync(playbookPath, 'utf8'));
+    pbResult = { playbook, playbookPath };
+  }
+
+  // ── 5. Emit ────────────────────────────────────────────────────────
+  let emitOutPath: string;
+
+  if (startIdx <= STEPS.indexOf('emit')) {
+    spinner.start('Emitting tool...');
+    const emitResult = emit({
+      workflowPath: genResult.workflowPath,
+      outDir: workflowDir,
+      force: true,
+    });
+    emitOutPath = emitResult.outPath;
+    spinner.stop(`${emitOutPath} generated.`);
+
+    updateCheckpoint(opts.site, state, workflowKey, 'emit');
+  } else {
+    emitOutPath = pathJoin(workflowDir, 'index.ts');
+  }
+
+  // ── 6. Platform integration ────────────────────────────────────────
+  if (startIdx <= STEPS.indexOf('register')) {
+    if (opts.noInteractive) {
+      const imprintCommand = detectImprintCommand();
+      const platforms: Platform[] = [
+        'claude-code',
+        'codex',
+        'claude-desktop',
+        'openclaw',
+        'hermes',
+      ];
+      console.log('\n── Integration snippets ──\n');
+      for (const plat of platforms) {
+        console.log(`[${plat}]`);
+        console.log(
+          generatePasteSnippet({
+            site: opts.site,
+            workflow: genResult.workflow,
+            platform: plat,
+            imprintCommand,
+          }),
+        );
+        console.log('');
+      }
+    } else {
+      await interactivePlatformSetup({
+        site: opts.site,
+        workflowDir,
+        workflow: genResult.workflow,
+        playbook: pbResult.playbook,
+      });
+    }
+  }
+
+  // Mark all steps complete (keep the entry for future redo).
+  updateCheckpoint(opts.site, state, workflowKey, 'register');
 
   p.outro('Done! Your agent is ready.');
 
   return {
-    sessionPath,
+    sessionPath: sessionPath as string,
     workflowPath: genResult.workflowPath,
     playbookPath: pbResult.playbookPath,
-    indexPath: emitResult.outPath,
+    indexPath: emitOutPath,
     workflow: genResult.workflow,
     playbook: pbResult.playbook,
   };
 }
 
+// ─── Checkpoint helpers ─────────────────────────────────────────────────────
+
+function checkpoint(site: string, state: TeachState, key: string, ws: WorkflowState): void {
+  state.workflows[key] = ws;
+  saveTeachState(site, state);
+}
+
+function updateCheckpoint(
+  site: string,
+  state: TeachState,
+  key: string,
+  step: Step,
+  extra?: Partial<WorkflowState>,
+): void {
+  const ws = state.workflows[key] ?? {
+    sessionPath: '',
+    completedSteps: [],
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  if (!ws.completedSteps.includes(step)) {
+    ws.completedSteps.push(step);
+  }
+  ws.updatedAt = new Date().toISOString();
+  ws.error = undefined;
+  if (extra) Object.assign(ws, extra);
+  state.workflows[key] = ws;
+  saveTeachState(site, state);
+}
+
+function friendlySessionTimestamp(sessionPath: string): string {
+  const m = sessionPath.match(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})/);
+  if (!m) return 'unknown';
+  return `${m[1]} ${m[2]}:${m[3]}`;
+}
+
+function toRelative(site: string, absPath: string): string {
+  const siteDir = pathResolve('examples', site);
+  if (absPath.startsWith(siteDir)) {
+    return absPath.slice(siteDir.length + 1);
+  }
+  return absPath;
+}
+
+// ─── Resume TUI ─────────────────────────────────────────────────────────────
+
+interface ResumeChoice {
+  action: 'new' | 'continue' | 'redo';
+  workflowKey: string;
+  fromStep: Step;
+}
+
+async function promptResumeChoice(
+  _site: string,
+  completed: string[],
+  incomplete: [string, WorkflowState][],
+): Promise<ResumeChoice | symbol> {
+  // Show what exists.
+  if (completed.length > 0 || incomplete.length > 0) {
+    const lines: string[] = [];
+    for (const name of completed) lines.push(`  ✓ ${name} (complete)`);
+    for (const [name, ws] of incomplete) {
+      const next = nextStep(ws.completedSteps) ?? 'unknown';
+      const errHint = ws.error ? ` — error: ${ws.error.slice(0, 60)}` : '';
+      lines.push(`  ✗ ${name} (stopped at: ${next}${errHint})`);
+    }
+    p.log.info(`Found existing workflows:\n${lines.join('\n')}`);
+  }
+
+  type OptionValue = string;
+  const options: { value: OptionValue; label: string }[] = [];
+
+  // Offer continue for incomplete workflows.
+  for (const [name, ws] of incomplete) {
+    const next = nextStep(ws.completedSteps);
+    if (next) {
+      options.push({
+        value: `continue:${name}`,
+        label: `Continue "${name}" from ${next}`,
+      });
+    }
+  }
+
+  // Offer redo for all workflows (incomplete + completed).
+  for (const [name] of incomplete) {
+    options.push({
+      value: `redo:${name}`,
+      label: `Redo "${name}" from a specific step`,
+    });
+  }
+  for (const name of completed) {
+    options.push({
+      value: `redo:${name}`,
+      label: `Redo "${name}" from a specific step`,
+    });
+  }
+
+  options.push({
+    value: 'new',
+    label: 'Start a new workflow (record a new session)',
+  });
+
+  const choice = await p.select({
+    message: 'What would you like to do?',
+    options,
+  });
+
+  if (p.isCancel(choice)) return choice;
+
+  const choiceStr = choice as string;
+
+  if (choiceStr === 'new') {
+    return { action: 'new', workflowKey: '', fromStep: 'record' };
+  }
+
+  if (choiceStr.startsWith('continue:')) {
+    const key = choiceStr.slice('continue:'.length);
+    const ws = incomplete.find(([n]) => n === key)?.[1];
+    const from = ws ? (nextStep(ws.completedSteps) ?? 'record') : 'record';
+    return { action: 'continue', workflowKey: key, fromStep: from };
+  }
+
+  if (choiceStr.startsWith('redo:')) {
+    const key = choiceStr.slice('redo:'.length);
+
+    const stepChoice = await p.select({
+      message: `Redo "${key}" — start from which step?`,
+      options: STEPS.map((s) => ({ value: s, label: s })),
+    });
+
+    if (p.isCancel(stepChoice)) return stepChoice;
+
+    return { action: 'redo', workflowKey: key, fromStep: stepChoice as Step };
+  }
+
+  return { action: 'new', workflowKey: '', fromStep: 'record' };
+}
+
+// ─── Platform integration (unchanged) ───────────────────────────────────────
+
 async function interactivePlatformSetup(opts: {
   site: string;
+  workflowDir: string;
   workflow: Workflow;
   playbook: Playbook;
 }): Promise<void> {
-  const { site, workflow, playbook } = opts;
+  const { site, workflowDir, workflow, playbook } = opts;
   const imprintCommand = detectImprintCommand();
 
   const platformChoice = await p.select({
@@ -193,7 +717,6 @@ async function interactivePlatformSetup(opts: {
   const regCommand = buildRegistrationCommand({ site, platform, imprintCommand });
 
   if (regCommand !== null) {
-    // Platform supports auto-registration (claude-code, codex).
     const setupChoice = await p.select({
       message: 'How would you like to set it up?',
       options: [
@@ -210,8 +733,40 @@ async function interactivePlatformSetup(opts: {
       const cmdDisplay = regCommand.join(' ');
       spinner.start(`Running: ${cmdDisplay}`);
       try {
-        const proc = Bun.spawnSync(regCommand, { stdio: ['ignore', 'pipe', 'pipe'] });
-        if (proc.exitCode === 0) {
+        let proc = Bun.spawnSync(regCommand, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+        // If it failed because the server already exists, ask to replace.
+        if (proc.exitCode !== 0 && proc.stderr.toString().includes('already exists')) {
+          spinner.stop(`imprint-${site} is already registered.`);
+          const replace = await p.confirm({
+            message: 'Replace existing registration?',
+            initialValue: true,
+          });
+          if (!p.isCancel(replace) && replace) {
+            const toolName = `imprint-${site}`;
+            if (platform === 'claude-code') {
+              Bun.spawnSync(['claude', 'mcp', 'remove', '--scope', 'user', toolName], {
+                stdio: ['ignore', 'ignore', 'ignore'],
+              });
+            } else if (platform === 'codex') {
+              Bun.spawnSync(['codex', 'mcp', 'remove', toolName], {
+                stdio: ['ignore', 'ignore', 'ignore'],
+              });
+            }
+            spinner.start(`Re-registering: ${cmdDisplay}`);
+            proc = Bun.spawnSync(regCommand, { stdio: ['ignore', 'pipe', 'pipe'] });
+            if (proc.exitCode === 0) {
+              spinner.stop(
+                `imprint-${site} replaced in ${platform === 'claude-code' ? 'Claude Code' : 'Codex'}.`,
+              );
+            } else {
+              const stderr = proc.stderr.toString().trim();
+              spinner.stop(
+                `Command exited with code ${proc.exitCode}${stderr ? `: ${stderr}` : ''}`,
+              );
+            }
+          }
+        } else if (proc.exitCode === 0) {
           spinner.stop(
             `imprint-${site} is now available in ${platform === 'claude-code' ? 'Claude Code' : 'Codex'}.`,
           );
@@ -227,33 +782,30 @@ async function interactivePlatformSetup(opts: {
         console.log(`  ${cmdDisplay}\n`);
       }
     } else {
-      // Print paste snippet.
       const snippet = generatePasteSnippet({ site, workflow, platform, imprintCommand });
       console.log('\nPaste this into your terminal or AI tool:\n');
       console.log(`  ${snippet}\n`);
     }
   } else {
-    // Platform requires manual config (claude-desktop, openclaw, hermes).
     const snippet = generatePasteSnippet({ site, workflow, platform, imprintCommand });
     console.log(`\n${snippet}\n`);
   }
 
-  // For OpenClaw/Hermes, offer SKILL.md export.
   if (platform === 'openclaw' || platform === 'hermes') {
-    await offerSkillExport({ site, workflow, playbook, platform });
+    await offerSkillExport({ site, workflowDir, workflow, playbook, platform });
   }
 }
 
 async function offerSkillExport(opts: {
   site: string;
+  workflowDir: string;
   workflow: Workflow;
   playbook: Playbook;
   platform: 'openclaw' | 'hermes';
 }): Promise<void> {
-  const { site, workflow, playbook, platform } = opts;
+  const { site, workflowDir, workflow, playbook, platform } = opts;
 
-  // Check for optional cron config.
-  const cronPath = pathResolve(process.cwd(), 'examples', site, 'cron.json');
+  const cronPath = pathResolve(workflowDir, 'cron.json');
   let cronConfig: CronConfig | undefined;
   if (existsSync(cronPath)) {
     try {
@@ -272,7 +824,6 @@ async function offerSkillExport(opts: {
 
   const skillContent = generateSkillMd({ site, workflow, playbook, cronConfig, platform });
 
-  // Determine output path.
   let outDir: string;
   if (platform === 'hermes') {
     const hermesSkills = pathResolve(homedir(), '.hermes', 'skills', `imprint-${site}`);

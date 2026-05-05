@@ -65,12 +65,16 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   teach: {
     summary:
-      'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow.',
+      'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
     usage: [
-      'imprint teach <site> [--url <url>] [--persist-profile] [--no-interactive] [--provider <name>]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--provider <name>]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
+      {
+        name: '--from-session <path>',
+        description: 'Skip recording; use an existing session file to compile from.',
+      },
       { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
       {
         name: '--no-interactive',
@@ -114,18 +118,13 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   generate: {
     summary: 'LLM-compile a session into workflow.json (API replay artifact).',
     usage: [
-      'imprint generate <session.json> [--out <path>] [--max-duration <time>] [--no-shrink] [--save-shrunken] [--provider <name>]',
+      'imprint generate <session.json> [--out <path>] [--max-duration <time>] [--provider <name>]',
     ],
     flags: [
       { name: '--out <path>', description: 'Override the workflow.json output path.' },
       {
         name: '--max-duration <time>',
         description: 'Agent timeout (e.g., "30m", "1h", "300s"). Default 30m.',
-      },
-      { name: '--no-shrink', description: 'Send the FULL session to the LLM (debugging).' },
-      {
-        name: '--save-shrunken',
-        description: 'Write the shrunken view next to workflow.json (prompt iteration).',
       },
       {
         name: '--provider <name>',
@@ -137,9 +136,15 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   'compile-playbook': {
     summary: 'LLM-compile a session into playbook.yaml (DOM replay artifact).',
-    usage: ['imprint compile-playbook <session.json> [--out <path>] [--provider <name>]'],
+    usage: [
+      'imprint compile-playbook <session.json> [--out <path>] [--no-shrink] [--provider <name>]',
+    ],
     flags: [
       { name: '--out <path>', description: 'Override the playbook.yaml output path.' },
+      {
+        name: '--no-shrink',
+        description: 'Skip LLM-based triage; send all XHR/Fetch requests (debugging).',
+      },
       {
         name: '--provider <name>',
         description:
@@ -155,7 +160,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--out-dir <dir>', description: 'Override the output directory.' },
       { name: '--force', description: 'Overwrite an existing index.ts.' },
     ],
-    example: 'imprint emit examples/acmecorp/workflow.json',
+    example: 'imprint emit examples/acmecorp/my-workflow/workflow.json',
   },
   login: {
     summary: 'Persist auth cookies for <site> from a captured session.',
@@ -187,7 +192,8 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       'imprint playbook southwest --param origin_airport_code=SJC --param destination_airport_code=SAN',
   },
   cron: {
-    summary: 'Polling daemon for examples/<site>/cron.json.',
+    summary:
+      'Polling daemon for cron.json (flat layout: examples/<site>/cron.json, new layout: examples/<site>/<workflow>/cron.json).',
     usage: ['imprint cron <site> [--once | --run-now] [--config <path>] [--quiet]'],
     flags: [
       { name: '--once', description: 'Run a single tick and exit (for OS schedulers).' },
@@ -433,8 +439,6 @@ async function main(argv: string[]): Promise<number> {
         options: {
           out: { type: 'string' },
           'max-duration': { type: 'string' },
-          'no-shrink': { type: 'boolean' },
-          'save-shrunken': { type: 'boolean' },
           provider: { type: 'string' },
         },
         allowPositionals: false,
@@ -496,8 +500,6 @@ async function main(argv: string[]): Promise<number> {
         sessionPath,
         outPath: values.out,
         maxDurationMs,
-        noShrink: values['no-shrink'],
-        saveShrunken: values['save-shrunken'],
         llmConfig: { provider: providerName, model: compileModel },
         onProgress: (p) => {
           const activity = describeAgentActivity(p);
@@ -667,6 +669,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           out: { type: 'string' },
+          'no-shrink': { type: 'boolean' },
           provider: { type: 'string' },
         },
         allowPositionals: false,
@@ -686,6 +689,7 @@ async function main(argv: string[]): Promise<number> {
       const result = await compilePlaybook({
         sessionPath,
         outPath: values.out,
+        noShrink: values['no-shrink'],
         llmConfig: values.provider ? { provider: values.provider as ProviderName } : undefined,
       });
       console.log(`[imprint] playbook → ${result.playbookPath}`);
@@ -719,8 +723,23 @@ async function main(argv: string[]): Promise<number> {
         allowPositionals: false,
       });
       const { resolve: pathResolve } = await import('node:path');
-      const playbookPath =
-        values.path ?? pathResolve(process.cwd(), 'examples', site, 'playbook.yaml');
+      let playbookPath: string;
+      if (values.path) {
+        playbookPath = pathResolve(values.path);
+      } else {
+        const { discoverTools } = await import('./imprint/tool-loader.ts');
+        const tools = await discoverTools(pathResolve(process.cwd(), 'examples'), site);
+        if (tools.length > 1) {
+          console.error(
+            `error: site "${site}" has ${tools.length} workflows — specify which with --path:\n${tools.map((t) => `  --path ${pathResolve(t.dir, 'playbook.yaml')}`).join('\n')}`,
+          );
+          return 2;
+        }
+        const tool = tools[0];
+        playbookPath = tool
+          ? pathResolve(tool.dir, 'playbook.yaml')
+          : pathResolve(process.cwd(), 'examples', site, 'playbook.yaml');
+      }
       const params = tryParseParamKV(values.param);
       if (params === null) return 2;
       const { runPlaybook } = await import('./imprint/playbook-runner.ts');
@@ -746,6 +765,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           url: { type: 'string' },
+          'from-session': { type: 'string' },
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
           provider: { type: 'string' },
@@ -772,6 +792,7 @@ async function main(argv: string[]): Promise<number> {
         await teach({
           site,
           url: values.url,
+          fromSession: values['from-session'],
           persistProfile: values['persist-profile'],
           signal: ctrl.signal,
           noInteractive: values['no-interactive'],

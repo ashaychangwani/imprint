@@ -41,7 +41,7 @@ interface FakeToolBehavior {
   calls: { fetch: number; stealth: number };
 }
 
-function makeFakeTool(site: string, behavior: FakeToolBehavior): ResolvedTool {
+function makeFakeTool(site: string, behavior: FakeToolBehavior, dir = ''): ResolvedTool {
   const workflow: Workflow = {
     toolName: `tool_${site}`,
     intent: { description: `tool for ${site}` },
@@ -66,7 +66,7 @@ function makeFakeTool(site: string, behavior: FakeToolBehavior): ResolvedTool {
     behavior.calls.fetch++;
     return behavior.fetchResult ?? { ok: true, data: { via: 'fetch' } };
   };
-  return { site, workflow, toolFn };
+  return { site, dir, workflow, toolFn };
 }
 
 /**
@@ -257,7 +257,7 @@ result:
       stealthResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
       calls: { fetch: 0, stealth: 0 },
     };
-    const tool = makeFakeTool('alpha', behavior);
+    const tool = makeFakeTool('alpha', behavior, siteDir);
     const r = await runWithLadder(
       ['fetch', 'stealth-fetch', 'playbook'],
       tool,
