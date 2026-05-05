@@ -29,7 +29,8 @@
     "deadcode": "bun run knip && bun run circular",
     "circular": "madge --circular --extensions ts src/",
     "check": "bun run typecheck && bun run lint && bun test && bun run deadcode",
-    "changelog": "bunx git-cliff --config cliff.toml --unreleased --strip header"
+    "changelog": "bunx git-cliff --config cliff.toml --unreleased --strip header",
+    "postinstall": "bunx playwright install chromium"
   },
   "dependencies": {
     "@anthropic-ai/vertex-sdk": "^0.13.0",

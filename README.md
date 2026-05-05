@@ -1,149 +1,199 @@
-# Imprint
+<h1 align="center">Imprint</h1>
 
-> **Teach an AI agent how to use any website. Once.**
+<p align="center">
+  <strong>Don't do anything twice. Teach your AI agent once, and it remembers forever.</strong>
+</p>
 
-Show Imprint a workflow in a real browser — drive the page, narrate what you're doing — and you get back two deterministic replay artifacts plus a generated MCP tool any AI agent can call from then on. No re-decisions, no exploration tokens, no "the LLM clicked the wrong button" variance. The recording **is** the executable.
+<p align="center">
+  <a href="https://github.com/ashaychangwani/imprint/actions/workflows/test.yml"><img src="https://github.com/ashaychangwani/imprint/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
+  <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ashaychangwani/GIST_ID/raw/test-count.json" alt="Test count">
+  <a href="https://github.com/ashaychangwani/imprint/releases"><img src="https://img.shields.io/github/v/release/ashaychangwani/imprint?label=release" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
+</p>
 
-```
-imprint teach google-flights --url https://flights.google.com
-  → record → redact → generate → compile-playbook → emit
-  → pick your platform → done
-```
-
-`<site>` is a label you choose — it names the output folder under `examples/`. Pick something short and descriptive.
-
----
-
-## Quickstart
+<br>
 
 ```bash
-git clone https://github.com/ashaychangwani/imprint.git
-cd imprint
-bun install
-bun link                          # makes `imprint` global
-bunx playwright install chromium
-export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
-imprint doctor                    # verify setup
+git clone https://github.com/ashaychangwani/imprint.git && cd imprint
+bun install && bun link
 
-# Teach your agent a new workflow (interactive — walks you through everything):
-imprint teach google-flights --url https://flights.google.com
+imprint teach southwest --url https://www.southwest.com
 ```
 
-`imprint teach` records the workflow, compiles both artifacts (API workflow + DOM playbook), generates the tool, and asks which AI platform you use. It then either runs the setup command or prints a paste-ready snippet.
+That's it. Imprint opens a browser, you drive the workflow, and it compiles a deterministic **MCP tool** your AI agent can call from then on. No tokens burned on exploration, no "the LLM clicked the wrong button" variance. The recording *is* the executable.
 
-For the step-by-step walkthrough, see [docs/getting-started.md](docs/getting-started.md).
+<br>
 
----
+## See it in action
 
-## Connect to your AI tool
+After teaching, your agent has a tool called `search_southwest_flights`. Here's what happens when it runs:
 
-`imprint teach` handles integration at the end of the pipeline. It supports:
+```
+$ imprint cron southwest --once
 
-| Platform | Setup method |
-|----------|-------------|
-| **Claude Code** | Runs `claude mcp add` — one command |
-| **Codex CLI** | Runs `codex mcp add` — one command |
-| **Claude Desktop** | Prints JSON snippet for config file |
-| **OpenClaw** | Prints MCP config + optional SKILL.md export |
-| **Hermes** | Prints MCP config + optional SKILL.md export + cron mapping |
+stealth-fetch bootstrapping Chromium...       13.4s
+stealth-fetch request complete                 1.2s
 
-Each site gets its own MCP server: `imprint mcp-server southwest` registers as `imprint-southwest`.
+  SFO → LAX   2026-05-15   $87   Wanna Get Away
+  SFO → LAX   2026-05-15  $142   Anytime
+  SFO → LAX   2026-05-15  $177   Business Select
+```
 
-For manual setup or advanced configuration, see [docs/integrations.md](docs/integrations.md).
+Live Southwest fares, defeating Akamai bot detection — no paid proxy, no CAPTCHA solver.
 
----
-
-## Why use Imprint over the alternatives
-
-Other browser-tool frameworks (browser-use, Computer Use, openclaw) ask the LLM to **decide every click at runtime**. Token cost scales with workflow length; reliability is variable; bot-detection forces operators to pay for stealth APIs.
-
-Imprint is different: the recording is a frozen, deterministic artifact. The agent reads it and follows it verbatim. **Zero exploration tokens, zero re-decision variance**, and a real Chromium minted the auth tokens — so bot detection sees a real browser.
-
-When the cheap API replay gets blocked, the **backend ladder** automatically escalates:
-
-| Backend | Per call | Defeats |
-|---|---|---|
-| `fetch` | ~200ms | Plain APIs |
-| `stealth-fetch` | ~12s bootstrap (one-time per process) + ~1s | Akamai, Cloudflare, DataDome (token-validation tier) |
-| `playbook` | ~9.4s | Universal — handles form-fills, autocompletes, multi-page navigation |
-
-Every recording compiles to BOTH `workflow.json` and `playbook.yaml`, so the ladder always has a fallback. **"Imprint can't help here" is the failure mode this design eliminates.**
-
----
-
-## Demos
-
-| Demo | What it shows | How to run |
-|---|---|---|
-| [`examples/southwest`](examples/southwest) | Live flight-fare watcher; defeats Akamai via `stealth-fetch`; pushes when prices drop below your threshold | `imprint cron southwest --once` |
-| [`examples/discoverandgo`](examples/discoverandgo) | Authed museum-pass booking via the per-site credential store | `imprint cron discoverandgo --once` |
-| [`examples/echo`](examples/echo) | Trivial MCP smoke-test fixture (no LLM, no network) | `imprint mcp-server echo` |
-
----
+<br>
 
 ## How it works
 
-```
-   imprint teach  ─── interactive pipeline ───────────┐
-                                                       │
-   imprint record  ─┐                                 │
-                    ▼                                  │
-              session.json                             │
-                    │                                  │
-        ┌───────────┴───────────┐                      │
-        ▼                       ▼                      │
-  imprint generate     imprint compile-playbook        │
-        │                       │                      │
-        ▼                       ▼                      │
-  workflow.json          playbook.yaml                 │
-        │                                              │
-  imprint emit                                         │
-        ▼                                              │
-  examples/<site>/index.ts  ──┐                        │
-                              │                        │
-       imprint cron / mcp ────┼──► backend ladder ◄────┘
-                              │      fetch ─FORBIDDEN→
-                              │      stealth-fetch ─→
-                              │      playbook
-                              │
-                              └──► result
+<table>
+<tr>
+<td width="33%">
+
+### 1. Teach
+
+```bash
+imprint teach mysite \
+  --url https://example.com
 ```
 
-For the full architecture (module map, file taxonomy, design rationale), see [docs/architecture.md](docs/architecture.md) and [docs/decisions.md](docs/decisions.md).
+A browser opens. You drive the workflow and narrate what you're doing. Imprint records every network request and DOM interaction.
 
----
+</td>
+<td width="33%">
 
-## CLI
+### 2. Compile
+
+Imprint generates two replay artifacts:
+
+- **`workflow.json`** — API-level replay (fast)
+- **`playbook.yaml`** — DOM-level fallback (universal)
+
+Credentials and PII are redacted automatically.
+
+</td>
+<td width="34%">
+
+### 3. Use
+
+A typed MCP tool is generated and wired into your AI platform. Your agent calls it like any other tool — structured input in, structured results out.
+
+</td>
+</tr>
+</table>
+
+> All three steps happen in a single `imprint teach` command.
+
+<br>
+
+## Install
+
+```bash
+git clone https://github.com/ashaychangwani/imprint.git && cd imprint
+bun install && bun link
+```
+
+Set your LLM credentials and verify:
+
+```bash
+export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
+imprint doctor
+```
+
+Requires [Bun](https://bun.sh) >= 1.3 and a GCP project with [Vertex AI](https://cloud.google.com/vertex-ai) Anthropic models enabled.
+
+<br>
+
+## Platform support
+
+At the end of `imprint teach`, you pick your AI platform and Imprint handles the wiring:
+
+| Platform | Integration |
+|---|---|
+| **Claude Code** | Automatic — runs `claude mcp add` for you |
+| **Codex CLI** | Automatic — runs `codex mcp add` for you |
+| **Claude Desktop** | Paste-ready JSON config |
+| **OpenClaw** | MCP config + SKILL.md export |
+| **Hermes** | MCP config + SKILL.md + cron mapping |
+
+Each site registers as its own MCP server (`imprint-southwest`, `imprint-discoverandgo`, ...) so tools never collide. See [Integrations](docs/integrations.md) for HTTP transport, Docker, and systemd options.
+
+<br>
+
+## The backend ladder
+
+When an API call gets blocked, Imprint doesn't fail — it escalates:
+
+| | Speed | Handles |
+|---|---|---|
+| **fetch** | ~200ms | Plain APIs, no bot protection |
+| **stealth-fetch** | ~12s first call, ~1s after | Akamai, Cloudflare, DataDome |
+| **playbook** | ~9s | Anything — full DOM replay as fallback |
+
+Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder always has somewhere to go. If the API changes, the DOM playbook still works. If the page redesigns, re-record in two minutes.
+
+<br>
+
+## Why Imprint?
+
+Other browser-tool frameworks (browser-use, Computer Use) ask the LLM to **decide every click at runtime**.
+
+| | Imprint | browser-use / Computer Use |
+|---|---|---|
+| **How it works** | Record once, replay deterministically | LLM decides every click at runtime |
+| **Token cost** | Zero at runtime | Scales with workflow complexity |
+| **Reliability** | Deterministic — same input, same output | Variable — exploration can diverge |
+| **Bot detection** | Real Chromium + stealth-fetch | Detectable automation fingerprint |
+| **When it breaks** | Automatic fallback via backend ladder | No fallback |
+| **Time to result** | 200ms – 9s | 30s+ |
+
+<br>
+
+## Examples
+
+| Example | What it demonstrates | Run it |
+|---|---|---|
+| [**southwest**](examples/southwest) | Live fare watcher, defeats Akamai, price-drop notifications | `imprint cron southwest --once` |
+| [**discoverandgo**](examples/discoverandgo) | Authenticated booking via per-site credential store | `imprint cron discoverandgo --once` |
+| [**echo**](examples/echo) | MCP smoke-test fixture (no network, no LLM) | `imprint mcp-server echo` |
+
+<br>
+
+## CLI reference
 
 ```
-imprint --help        # full verb list
-imprint <verb> --help # per-verb help
+imprint --help              # all commands
+imprint <command> --help    # per-command options
 ```
 
-Verbs: `teach`, `record`, `redact`, `generate`, `compile-playbook`, `emit`, `probe-backends`, `cron`, `mcp-server`, `playbook`, `login`, `assemble`, `check`, `doctor`.
+| | Commands |
+|---|---|
+| **Pipeline** | `teach` · `record` · `redact` · `generate` · `compile-playbook` · `emit` |
+| **Runtime** | `cron` · `mcp-server` · `playbook` · `probe-backends` |
+| **Utilities** | `login` · `assemble` · `check` · `doctor` |
 
----
+<br>
 
 ## Docs
 
-- **[docs/integrations.md](docs/integrations.md)** — per-platform setup: Claude Code, Codex, Claude Desktop, OpenClaw, Hermes
-- **[docs/getting-started.md](docs/getting-started.md)** — full walkthrough, step-by-step
-- **[docs/architecture.md](docs/architecture.md)** — data flow, module map, file taxonomy
-- **[docs/glossary.md](docs/glossary.md)** — Session, Workflow, Playbook, Backend, Stealth-fetch, etc.
-- **[docs/decisions.md](docs/decisions.md)** — the load-bearing calls (why YAML, why ladder, why MCP-stdio default)
-- **[docs/troubleshooting.md](docs/troubleshooting.md)** — predictable failures + fixes
-- **[docs/notifications.md](docs/notifications.md)** — Pushover + ntfy setup, predicate language
-- **[docs/security.md](docs/security.md)** — what Imprint stores, redaction guarantees, credential handling
-- **[docs/capture-protocol.md](docs/capture-protocol.md)** — what a clean recording looks like
-- **[docs/playbook-debugging.md](docs/playbook-debugging.md)** — when DOM walks misbehave
-- **[docs/design.md](docs/design.md)** — original thesis (April 2026 office-hours)
+- [Getting Started](docs/getting-started.md) — full walkthrough
+- [Integrations](docs/integrations.md) — per-platform setup
+- [Architecture](docs/architecture.md) — data flow and module map
+- [Security](docs/security.md) — redaction, credential handling, what gets stored
+- [Troubleshooting](docs/troubleshooting.md) — common failures and fixes
+- [Decisions](docs/decisions.md) · [Glossary](docs/glossary.md) · [Capture Protocol](docs/capture-protocol.md) · [Playbook Debugging](docs/playbook-debugging.md) · [Notifications](docs/notifications.md)
 
----
+<br>
 
-## Status
+## Contributing
 
-v0.1 — pipeline complete, two demos live. v0.2 candidates in [TODOS.md](TODOS.md). What's changed: [CHANGELOG.md](CHANGELOG.md). How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md). Issues + PRs welcome.
+Conventional Commits enforced in CI. Run `bun run check` before submitting.
+
+Good first contributions: replay backends, notification predicates, auth extractors, example sites, docs.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
+
+<br>
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE)
