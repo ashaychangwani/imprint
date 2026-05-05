@@ -93,13 +93,6 @@ function checkLLMProvider(): CheckResult {
   const hasCodex = !!Bun.which('codex');
   const hasCursor = !!Bun.which('cursor');
 
-  if (hasApiKey) {
-    return { name: 'LLM provider', ok: true, detail: 'Anthropic API (ANTHROPIC_API_KEY set)' };
-  }
-  if (hasVertex) {
-    const id = process.env.ANTHROPIC_VERTEX_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT;
-    return { name: 'LLM provider', ok: true, detail: `Vertex AI (project: ${id})` };
-  }
   if (hasClaude) {
     return { name: 'LLM provider', ok: true, detail: 'Claude Code CLI (claude on PATH)' };
   }
@@ -109,12 +102,19 @@ function checkLLMProvider(): CheckResult {
   if (hasCursor) {
     return { name: 'LLM provider', ok: true, detail: 'Cursor CLI (cursor on PATH)' };
   }
+  if (hasApiKey) {
+    return { name: 'LLM provider', ok: true, detail: 'Anthropic API (ANTHROPIC_API_KEY set)' };
+  }
+  if (hasVertex) {
+    const id = process.env.ANTHROPIC_VERTEX_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT;
+    return { name: 'LLM provider', ok: true, detail: `Vertex AI (project: ${id})` };
+  }
 
   return {
     name: 'LLM provider',
     ok: false,
     detail: 'no provider detected',
-    fix: 'set ANTHROPIC_API_KEY, ANTHROPIC_VERTEX_PROJECT_ID, or install Claude Code / Codex / Cursor CLI',
+    fix: 'install Claude Code / Codex / Cursor CLI, or set ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID',
   };
 }
 

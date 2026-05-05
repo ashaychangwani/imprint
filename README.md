@@ -92,14 +92,21 @@ git clone https://github.com/ashaychangwani/imprint.git && cd imprint
 bun install && bun link
 ```
 
-Set your LLM credentials and verify:
+Requires [Bun](https://bun.sh) >= 1.3. Imprint auto-detects an LLM provider from what's already on your system — first match wins:
+
+| Priority | Provider | Triggered by |
+|---|---|---|
+| 1 | `claude-cli` | `claude` on PATH (Claude Code subscription) |
+| 2 | `codex-cli` | `codex` on PATH (Codex subscription) |
+| 3 | `cursor-cli` | `cursor` on PATH (Cursor subscription) |
+| 4 | `anthropic-api` | `ANTHROPIC_API_KEY` env var |
+| 5 | `vertex` | `ANTHROPIC_VERTEX_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT` env var |
 
 ```bash
-export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
 imprint doctor
 ```
 
-Requires [Bun](https://bun.sh) >= 1.3 and a GCP project with [Vertex AI](https://cloud.google.com/vertex-ai) Anthropic models enabled.
+Shows which provider was picked. To force a specific one, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`.
 
 <br>
 
@@ -170,6 +177,8 @@ imprint <command> --help    # per-command options
 | **Pipeline** | `teach` · `record` · `redact` · `generate` · `compile-playbook` · `emit` |
 | **Runtime** | `cron` · `mcp-server` · `playbook` · `probe-backends` |
 | **Utilities** | `login` · `assemble` · `check` · `doctor` |
+
+`teach`, `generate`, and `compile-playbook` accept `--provider <name>` to override the auto-detected LLM (see [Install](#install) for the five valid names).
 
 <br>
 
