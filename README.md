@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/ashaychangwani/imprint/actions/workflows/test.yml"><img src="https://github.com/ashaychangwani/imprint/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
+  <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ashaychangwani/GIST_ID/raw/test-count.json" alt="Test count">
   <a href="https://github.com/ashaychangwani/imprint/releases"><img src="https://img.shields.io/github/v/release/ashaychangwani/imprint?label=release" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
 </p>
@@ -111,8 +112,6 @@ At the end of `imprint teach`, you pick your AI platform and Imprint handles the
 | **Claude Code** | Automatic — runs `claude mcp add` for you |
 | **Codex CLI** | Automatic — runs `codex mcp add` for you |
 | **Claude Desktop** | Paste-ready JSON config |
-| **Cursor** | Paste-ready JSON config |
-| **Continue.dev** | Paste-ready JSON config |
 | **OpenClaw** | MCP config + SKILL.md export |
 | **Hermes** | MCP config + SKILL.md + cron mapping |
 
@@ -127,7 +126,7 @@ When an API call gets blocked, Imprint doesn't fail — it escalates:
 | | Speed | Handles |
 |---|---|---|
 | **fetch** | ~200ms | Plain APIs, no bot protection |
-| **stealth-fetch** | ~1s | Akamai, Cloudflare, DataDome |
+| **stealth-fetch** | ~12s first call, ~1s after | Akamai, Cloudflare, DataDome |
 | **playbook** | ~9s | Anything — full DOM replay as fallback |
 
 Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder always has somewhere to go. If the API changes, the DOM playbook still works. If the page redesigns, re-record in two minutes.
@@ -187,7 +186,7 @@ imprint <command> --help    # per-command options
 
 ## Contributing
 
-193 tests. Conventional Commits enforced in CI. Run `bun run check` before submitting.
+Conventional Commits enforced in CI. Run `bun run check` before submitting.
 
 Good first contributions: replay backends, notification predicates, auth extractors, example sites, docs.
 
