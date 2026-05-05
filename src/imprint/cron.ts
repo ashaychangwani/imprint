@@ -167,7 +167,15 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
 
 async function runCronImpl(opts: RunCronOptions): Promise<void> {
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
-  const configPath = opts.configPath ?? pathResolve(examplesDir, opts.site, 'cron.json');
+  // Discover tool first so we know the workflow directory.
+  const discovered = await discoverTools(examplesDir, opts.site, '[imprint cron]');
+  const tool = discovered[0];
+  if (!tool) {
+    throw new Error(
+      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
+    );
+  }
+  const configPath = opts.configPath ?? pathResolve(tool.dir, 'cron.json');
   if (!existsSync(configPath)) {
     throw new Error(
       `cron.json not found at ${configPath}\n${availableSitesHint(examplesDir, opts.site)}\n→ create one with: {"schedule":"0 9 * * *","params":{},"replayBackend":"auto"}\n→ see docs/getting-started.md for full schema.`,
@@ -176,14 +184,6 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
   const config = loadCronConfig(configPath);
   log(`config: ${configPath}`);
 
-  const discovered = await discoverTools(examplesDir, opts.site, '[imprint cron]');
-  const tool = discovered[0];
-  if (!tool) {
-    throw new Error(
-      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
-    );
-  }
-
   if (!cron.validate(config.schedule)) {
     throw new Error(
       `Invalid cron expression in ${configPath}: "${config.schedule}"\n→ format: "min hour dom month dow" (e.g., "0 9 * * *" = 9am daily)\n→ test expressions at https://crontab.guru`,
@@ -191,7 +191,7 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
   }
 
   const replayBackend = config.replayBackend ?? 'fetch';
-  const playbookPath = pathResolve(examplesDir, opts.site, 'playbook.yaml');
+  const playbookPath = pathResolve(tool.dir, 'playbook.yaml');
   if (replayBackend === 'playbook' && !existsSync(playbookPath)) {
     throw new Error(
       `replayBackend="playbook" but ${playbookPath} doesn't exist. Run \`imprint compile-playbook\` first.`,
@@ -200,7 +200,7 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
 
   // Probe cache reorders the 'auto' ladder to start with the empirically
   // cheapest known-working backend.
-  const cached = loadBackendsCache(opts.site, examplesDir);
+  const cached = loadBackendsCache(opts.site, examplesDir, tool.dir);
   if (cached) {
     log(
       `backends.json: probed ${cached.probedAt}, preferred order: ${cached.preferredOrder.join(' → ')}`,

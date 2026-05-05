@@ -129,7 +129,7 @@ class VertexProvider implements LLMProvider {
         messages: opts.messages,
         tools: opts.tools,
       });
-      return response;
+      return response as unknown as Anthropic.Message;
     } catch (err) {
       throw enrichVertexError(err, this.config);
     }
@@ -560,7 +560,7 @@ export function detectProvider(): ProviderName {
 }
 
 function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider {
-  const model = opts.model ?? process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6';
+  const model = opts.model ?? process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-7';
   const temperature = opts.temperature ?? 0;
   const maxTokens = opts.maxTokens ?? 8192;
 
@@ -615,6 +615,46 @@ export function preferredAgentModel(provider: ProviderName): string {
   }
 }
 
+/** Extract the first balanced top-level JSON array — handles fenced
+ *  code blocks and preamble text. Returns null if no array is found. */
+export function extractJsonArray(text: string): string | null {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const candidate = fenced?.[1] ?? text;
+
+  const start = candidate.indexOf('[');
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  for (let i = start; i < candidate.length; i++) {
+    const ch = candidate[i];
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '[') depth++;
+    else if (ch === ']') {
+      depth--;
+      if (depth === 0) {
+        return candidate.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
+/** Extract the first balanced top-level JSON object — handles fenced
+ *  code blocks and preamble text. Returns null if no object is found. */
 export function extractJsonObject(text: string): string | null {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   const candidate = fenced?.[1] ?? text;

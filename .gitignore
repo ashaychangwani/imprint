@@ -12,9 +12,10 @@ dist/
 .env.*.local
 
 # Captured sessions (may contain auth tokens, PII)
-examples/*/sessions/*.json
-examples/*/sessions/*.jsonl
 **/sessions/
+
+# Teach pipeline state (local, not shareable)
+.teach-state.json
 
 # Cookies (auth state, never commit)
 cookies/
@@ -45,7 +46,7 @@ coverage/
 .claude/settings.local.json
 
 # Compile agent conversation logs
-examples/*/.compile-log.json
+examples/**/.compile-log.json
 
 # tsc --generateTrace output (local debug artifacts)
 trace/

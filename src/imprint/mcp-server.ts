@@ -172,8 +172,8 @@ export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
   const discovered = await discoverTools(examplesDir, opts.site, '[imprint mcp]');
   const tools: ResolvedTool[] = discovered.map((t) => {
-    const playbookPath = pathResolve(examplesDir, t.site, 'playbook.yaml');
-    const cache = loadBackendsCache(t.site, examplesDir);
+    const playbookPath = pathResolve(t.dir, 'playbook.yaml');
+    const cache = loadBackendsCache(t.site, examplesDir, t.dir);
     return {
       ...t,
       inputSchema: buildJsonSchema(t.workflow.parameters),

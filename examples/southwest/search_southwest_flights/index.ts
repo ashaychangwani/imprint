@@ -8,11 +8,13 @@
  * To regenerate: imprint emit examples/southwest/workflow.json --force
  */
 
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
   type CredentialStore,
-} from '../../src/imprint/runtime.ts';
-import type { ToolResult, Workflow } from '../../src/imprint/types.ts';
+} from '../../../src/imprint/runtime.ts';
+import type { ToolResult, Workflow } from '../../../src/imprint/types.ts';
 
 const WORKFLOW: Workflow = {
   "toolName": "search_southwest_flights",
@@ -86,6 +88,7 @@ export async function searchSouthwestFlights(
   input: SearchSouthwestFlightsInput,
   opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch } = {},
 ): Promise<ToolResult> {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
     origin_airport_code: input.origin_airport_code ?? "SJC",
     destination_airport_code: input.destination_airport_code ?? "SAN",
@@ -99,6 +102,7 @@ export async function searchSouthwestFlights(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    workflowPath: join(__dirname, 'workflow.json'),
   });
 }
 

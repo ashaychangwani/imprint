@@ -8,11 +8,13 @@
  * To regenerate: imprint emit examples/discoverandgo/workflow.json --force
  */
 
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
   type CredentialStore,
-} from '../../src/imprint/runtime.ts';
-import type { ToolResult, Workflow } from '../../src/imprint/types.ts';
+} from '../../../src/imprint/runtime.ts';
+import type { ToolResult, Workflow } from '../../../src/imprint/types.ts';
 
 const WORKFLOW: Workflow = {
   "toolName": "book_discoverandgo_museum_pass",
@@ -67,6 +69,7 @@ export async function bookDiscoverandgoMuseumPass(
   input: BookDiscoverandgoMuseumPassInput,
   opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch } = {},
 ): Promise<ToolResult> {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
     offer_id: input.offer_id,
     offer_date: input.offer_date,
@@ -78,6 +81,7 @@ export async function bookDiscoverandgoMuseumPass(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    workflowPath: join(__dirname, 'workflow.json'),
   });
 }
 
