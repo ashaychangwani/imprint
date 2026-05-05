@@ -129,7 +129,7 @@ class VertexProvider implements LLMProvider {
         messages: opts.messages,
         tools: opts.tools,
       });
-      return response;
+      return response as unknown as Anthropic.Message;
     } catch (err) {
       throw enrichVertexError(err, this.config);
     }
