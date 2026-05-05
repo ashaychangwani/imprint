@@ -316,26 +316,29 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     );
 
     spinner.start('Compiling...');
-    // Write to a temp path first; we'll know the toolName after.
-    const tempOutPath = pathResolve('examples', opts.site, '_temp_workflow.json');
+    // compileAgent writes workflow.json (+ parser.ts etc.) to examples/<site>/.
+    // We move them into the toolName subdirectory after we know the name.
     const result = await generate({
       sessionPath: redactedPath,
-      outPath: tempOutPath,
       llmConfig: { provider: providerName, model: compileModel },
       onProgress: (progress) => {
         spinner.message(formatCompileProgress(progress));
       },
     });
 
-    // Now we know the toolName — create the workflow subdirectory.
     const toolName = result.workflow.toolName;
     workflowDir = pathResolve('examples', opts.site, toolName);
     mkdirSync(workflowDir, { recursive: true });
 
-    const finalWorkflowPath = pathJoin(workflowDir, 'workflow.json');
+    // Move agent-written artifacts into the workflow subdirectory.
+    const siteDir = pathResolve('examples', opts.site);
     const { renameSync } = require('node:fs');
-    renameSync(tempOutPath, finalWorkflowPath);
+    for (const artifact of ['workflow.json', 'parser.ts', 'parser.test.ts']) {
+      const src = pathJoin(siteDir, artifact);
+      if (existsSync(src)) renameSync(src, pathJoin(workflowDir, artifact));
+    }
 
+    const finalWorkflowPath = pathJoin(workflowDir, 'workflow.json');
     genResult = { workflow: result.workflow, workflowPath: finalWorkflowPath };
 
     spinner.stop(
