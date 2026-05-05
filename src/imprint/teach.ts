@@ -210,6 +210,21 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   const state = loadTeachState(opts.site);
 
+  // Rename legacy _orphan_ keys to human-readable names.
+  for (const key of Object.keys(state.workflows)) {
+    if (!key.startsWith('_orphan_')) continue;
+    const ws = state.workflows[key];
+    if (!ws) continue;
+    const ts =
+      ws.sessionPath
+        .match(/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2})/)?.[1]
+        ?.replace(/-/g, ':')
+        .replace('T', ' ') ?? 'unknown';
+    const newKey = `session from ${ts}`;
+    delete state.workflows[key];
+    state.workflows[newKey] = ws;
+  }
+
   // Pick up a partially-completed flat-layout workflow (workflow.json exists
   // at site root but no index.ts — crashed between generate and emit).
   const flatIncomplete = discoverFlatIncomplete(opts.site);
