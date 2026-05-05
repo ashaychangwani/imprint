@@ -96,11 +96,11 @@ Requires [Bun](https://bun.sh) >= 1.3. Imprint auto-detects an LLM provider from
 
 | Priority | Provider | Triggered by |
 |---|---|---|
-| 1 | `anthropic-api` | `ANTHROPIC_API_KEY` env var |
-| 2 | `vertex` | `ANTHROPIC_VERTEX_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT` env var |
-| 3 | `claude-cli` | `claude` on PATH (Claude Code subscription) |
-| 4 | `codex-cli` | `codex` on PATH (Codex subscription) |
-| 5 | `cursor-cli` | `cursor` on PATH (Cursor subscription) |
+| 1 | `claude-cli` | `claude` on PATH (Claude Code subscription) |
+| 2 | `codex-cli` | `codex` on PATH (Codex subscription) |
+| 3 | `cursor-cli` | `cursor` on PATH (Cursor subscription) |
+| 4 | `anthropic-api` | `ANTHROPIC_API_KEY` env var |
+| 5 | `vertex` | `ANTHROPIC_VERTEX_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT` env var |
 
 ```bash
 imprint doctor
