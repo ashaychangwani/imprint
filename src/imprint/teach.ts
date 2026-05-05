@@ -285,11 +285,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       `workflow.json → ${toolName} (${result.workflow.requests.length} request(s), ${result.workflow.parameters.length} param(s))`,
     );
 
-    // Rename state key from temp to toolName.
-    const oldState = state.workflows[workflowKey];
-    if (oldState && workflowKey !== toolName) {
+    // Rename state key from temp to toolName, carrying over prior state.
+    if (workflowKey !== toolName) {
+      const prior = state.workflows[workflowKey];
       delete state.workflows[workflowKey];
       workflowKey = toolName;
+      if (prior) state.workflows[workflowKey] = prior;
     }
 
     updateCheckpoint(opts.site, state, workflowKey, 'generate');
