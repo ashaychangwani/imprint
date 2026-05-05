@@ -19,8 +19,7 @@ export function doctor(): CheckResult[] {
     checkBun(),
     checkChromium(),
     checkPlaywrightChromium(),
-    checkVertexProject(),
-    checkVertexRegion(),
+    checkLLMProvider(),
     checkPushOptional(),
     checkClaudeCode(),
     checkHermes(),
@@ -87,22 +86,36 @@ function checkPlaywrightChromium(): CheckResult {
   };
 }
 
-function checkVertexProject(): CheckResult {
-  const id = process.env.ANTHROPIC_VERTEX_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT;
-  if (!id) {
-    return {
-      name: 'Vertex project ID',
-      ok: false,
-      detail: 'ANTHROPIC_VERTEX_PROJECT_ID and GOOGLE_CLOUD_PROJECT both unset',
-      fix: 'export ANTHROPIC_VERTEX_PROJECT_ID=<your-gcp-project>  (needed for `generate` + `compile-playbook`)',
-    };
-  }
-  return { name: 'Vertex project ID', ok: true, detail: id };
-}
+function checkLLMProvider(): CheckResult {
+  const hasApiKey = !!process.env.ANTHROPIC_API_KEY;
+  const hasVertex = !!(process.env.ANTHROPIC_VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT);
+  const hasClaude = !!Bun.which('claude');
+  const hasCodex = !!Bun.which('codex');
+  const hasCursor = !!Bun.which('cursor');
 
-function checkVertexRegion(): CheckResult {
-  const region = process.env.CLOUD_ML_REGION ?? 'us-east5 (default)';
-  return { name: 'Vertex region', ok: true, detail: region };
+  if (hasApiKey) {
+    return { name: 'LLM provider', ok: true, detail: 'Anthropic API (ANTHROPIC_API_KEY set)' };
+  }
+  if (hasVertex) {
+    const id = process.env.ANTHROPIC_VERTEX_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT;
+    return { name: 'LLM provider', ok: true, detail: `Vertex AI (project: ${id})` };
+  }
+  if (hasClaude) {
+    return { name: 'LLM provider', ok: true, detail: 'Claude Code CLI (claude on PATH)' };
+  }
+  if (hasCodex) {
+    return { name: 'LLM provider', ok: true, detail: 'Codex CLI (codex on PATH)' };
+  }
+  if (hasCursor) {
+    return { name: 'LLM provider', ok: true, detail: 'Cursor CLI (cursor on PATH)' };
+  }
+
+  return {
+    name: 'LLM provider',
+    ok: false,
+    detail: 'no provider detected',
+    fix: 'set ANTHROPIC_API_KEY, ANTHROPIC_VERTEX_PROJECT_ID, or install Claude Code / Codex / Cursor CLI',
+  };
 }
 
 function checkPushOptional(): CheckResult {
