@@ -94,7 +94,6 @@ function saveTeachState(site: string, state: TeachState): void {
   const path = statePath(site);
   mkdirSync(pathJoin(path, '..'), { recursive: true });
   if (Object.keys(state.workflows).length === 0) {
-    // Clean up empty state file.
     try {
       unlinkSync(path);
     } catch {
@@ -102,7 +101,10 @@ function saveTeachState(site: string, state: TeachState): void {
     }
     return;
   }
-  writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  // Atomic write: write to tmp, then rename (rename is atomic on POSIX).
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  renameSync(tmp, path);
 }
 
 function nextStep(completed: Step[]): Step {
@@ -224,12 +226,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     if (!key.startsWith('_orphan_')) continue;
     const ws = state.workflows[key];
     if (!ws) continue;
-    const ts =
-      ws.sessionPath
-        .match(/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2})/)?.[1]
-        ?.replace(/-/g, ':')
-        .replace('T', ' ') ?? 'unknown';
-    const newKey = `session from ${ts}`;
+    const newKey = `session from ${friendlySessionTimestamp(ws.sessionPath)}`;
     delete state.workflows[key];
     state.workflows[newKey] = ws;
   }
@@ -246,12 +243,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // runs or manual `imprint record` invocations).
   const orphan = discoverOrphanSession(opts.site, state);
   if (orphan) {
-    const ts =
-      orphan.sessionPath
-        .match(/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2})/)?.[1]
-        ?.replace(/-/g, ':')
-        .replace('T', ' ') ?? 'unknown';
-    const key = `session from ${ts}`;
+    const key = `session from ${friendlySessionTimestamp(orphan.sessionPath)}`;
     if (!state.workflows[key]) state.workflows[key] = orphan;
   }
 
@@ -570,6 +562,12 @@ function updateCheckpoint(
   if (extra) Object.assign(ws, extra);
   state.workflows[key] = ws;
   saveTeachState(site, state);
+}
+
+function friendlySessionTimestamp(sessionPath: string): string {
+  const m = sessionPath.match(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})/);
+  if (!m) return 'unknown';
+  return `${m[1]} ${m[2]}:${m[3]}`;
 }
 
 function toRelative(site: string, absPath: string): string {

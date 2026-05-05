@@ -1,0 +1,125 @@
+toolName: search_google_hotels
+summary: Search Google Hotels for a destination, date range, and guest count, returning hotel names with stay-total prices.
+parameters:
+  - name: destination
+    type: string
+    description: City or place name to search hotels in, e.g. "tahoe city"
+  - name: check_in_date
+    type: string
+    description: Check-in date as YYYY-MM-DD
+  - name: check_out_date
+    type: string
+    description: Check-out date as YYYY-MM-DD
+  - name: adults
+    type: number
+    description: Number of adult guests
+    default: 2
+  - name: children
+    type: number
+    description: Number of child guests
+    default: 0
+steps:
+  - action: navigate
+    url: https://www.google.com/travel/search
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: aria_label
+        value: Search for places, hotels and more
+      - by: css
+        value: input.II2One.j0Ppje
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: Search for places, hotels and more
+      - by: css
+        value: input.II2One.j0Ppje
+    value: ${destination}
+    wait_for:
+      sleep_ms: 800
+  - action: press
+    key: Enter
+    wait_for:
+      xhr: /TravelFrontendUi/data/batchexecute.*rpcids=AtySUc
+  - action: click
+    locators:
+      - by: aria_label
+        value: Check-in
+      - by: css
+        value: input.TP4Lpb.eoY5cb
+    wait_for:
+      sleep_ms: 500
+  - action: type
+    locators:
+      - by: aria_label
+        value: Check-in
+    value: ${check_in_date}
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: Check-out
+    value: ${check_out_date}
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: text
+        value: Done
+      - by: role
+        value: button
+        name: Done
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: guests
+      - by: css
+        value: div.cQnuXe.k0gFV button
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value: Set number of adults
+      - by: css
+        value: div.P634r.ZP29Te button
+    wait_for:
+      sleep_ms: 200
+    notes: Click adults increment N-2 times where N=${adults}; default capture used 2 extra clicks for 4 adults
+  - action: click
+    locators:
+      - by: text
+        value: Done
+      - by: role
+        value: button
+        name: Done
+    wait_for:
+      xhr: /TravelFrontendUi/data/batchexecute.*rpcids=AtySUc
+  - action: click
+    locators:
+      - by: text
+        value: Stay total
+      - by: css
+        value: label.LLYsl
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: aria_label
+        value: Done
+      - by: text
+        value: Done
+    wait_for:
+      xhr: /TravelFrontendUi/data/batchexecute.*rpcids=M0CRd
+result:
+  source: xhr
+  url_pattern: /TravelFrontendUi/data/batchexecute.*rpcids=M0CRd
+  extract: '[].[].[].[].[].[].179305178.1'
+  return_as: hotels
+notes: |
+  Google Travel uses the proprietary "batchexecute" RPC envelope; the relevant hotel results come back from the M0CRd RPC after the final search submission. The response is a deeply-nested JSON array (not a clean object), so extracting structured prices reliably requires custom parsing of the array indices in the response — the extract path above is approximate and the caller may need to walk the array manually. Date typing into Google's date inputs is finicky; if direct typing fails, fall back to clicking calendar day cells (text matches the day-of-month number). The guest count step requires multiple clicks on the +/- buttons; the playbook here assumes a fixed default (2 adults) and parameterizes via repeated clicks the agent must dispatch based on the adults/children parameter values. The "Stay total" toggle ensures prices reflect the full multi-night stay rather than the per-night rate. Filters (price range, hotel class, amenities, brands) shown in the recording were exploratory and are NOT codified as parameters — extend the playbook if a use case demands them.

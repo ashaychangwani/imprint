@@ -200,7 +200,7 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
 
   // Probe cache reorders the 'auto' ladder to start with the empirically
   // cheapest known-working backend.
-  const cached = loadBackendsCache(opts.site, examplesDir);
+  const cached = loadBackendsCache(opts.site, examplesDir, tool.dir);
   if (cached) {
     log(
       `backends.json: probed ${cached.probedAt}, preferred order: ${cached.preferredOrder.join(' → ')}`,
