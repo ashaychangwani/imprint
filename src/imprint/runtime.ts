@@ -6,7 +6,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join as pathJoin } from 'node:path';
+import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import envPaths from 'env-paths';
 import type { ToolResult, Workflow, WorkflowRequest } from './types.ts';
 
@@ -43,6 +43,8 @@ interface ExecuteOptions {
   fetchImpl?: typeof fetch;
   /** Per-request timeout in ms. Default 30000. */
   requestTimeoutMs?: number;
+  /** Absolute path of workflow.json — required for parserModule resolution. */
+  workflowPath?: string;
 }
 
 export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promise<ToolResult<T>> {
@@ -166,8 +168,33 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     responses.push(parsed);
   }
 
+  // Apply parser if present
+  let finalData = responses.at(-1) ?? null;
+  if (opts.workflow.parserModule && opts.workflowPath) {
+    try {
+      const parserModulePath = pathResolve(dirname(opts.workflowPath), opts.workflow.parserModule);
+      const mod = await import(parserModulePath);
+      if (typeof mod.extract !== 'function') {
+        return {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: 'parser module does not export extract function',
+          remediation: 'regenerate the workflow via `imprint compile`',
+        };
+      }
+      finalData = mod.extract(finalData);
+    } catch (err) {
+      return {
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: `parser failed: ${err instanceof Error ? err.message : String(err)}`,
+        remediation: 'check the parser module or regenerate the workflow',
+      };
+    }
+  }
+
   // Return the LAST response as the workflow's `data`.
-  return { ok: true, data: (responses.at(-1) ?? null) as T };
+  return { ok: true, data: finalData as T };
 }
 
 function emptyStore(site: string): CredentialStore {

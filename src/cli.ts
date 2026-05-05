@@ -114,10 +114,14 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   generate: {
     summary: 'LLM-compile a session into workflow.json (API replay artifact).',
     usage: [
-      'imprint generate <session.json> [--out <path>] [--no-shrink] [--save-shrunken] [--provider <name>]',
+      'imprint generate <session.json> [--out <path>] [--max-duration <time>] [--no-shrink] [--save-shrunken] [--provider <name>]',
     ],
     flags: [
       { name: '--out <path>', description: 'Override the workflow.json output path.' },
+      {
+        name: '--max-duration <time>',
+        description: 'Agent timeout (e.g., "30m", "1h", "300s"). Default 30m.',
+      },
       { name: '--no-shrink', description: 'Send the FULL session to the LLM (debugging).' },
       {
         name: '--save-shrunken',
@@ -428,6 +432,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           out: { type: 'string' },
+          'max-duration': { type: 'string' },
           'no-shrink': { type: 'boolean' },
           'save-shrunken': { type: 'boolean' },
           provider: { type: 'string' },
@@ -445,13 +450,64 @@ async function main(argv: string[]): Promise<number> {
         }
       }
 
+      // Parse --max-duration: "Nm" (minutes), "Nh" (hours), "Ns" (seconds), plain N (ms)
+      let maxDurationMs: number | undefined;
+      if (values['max-duration']) {
+        const dur = values['max-duration'];
+        const match = dur.match(/^(\d+)(m|h|s|ms)?$/);
+        if (!match) {
+          console.error(
+            `error: invalid --max-duration "${dur}"\n→ use format: 30m, 1h, 300s, or plain milliseconds`,
+          );
+          return 2;
+        }
+        const num = Number.parseInt(match[1] ?? '0', 10);
+        const unit = match[2] ?? 'ms';
+        if (unit === 'h') maxDurationMs = num * 60 * 60 * 1000;
+        else if (unit === 'm') maxDurationMs = num * 60 * 1000;
+        else if (unit === 's') maxDurationMs = num * 1000;
+        else maxDurationMs = num;
+      }
+
       const { generate } = await import('./imprint/compile.ts');
+      const { detectProvider } = await import('./imprint/llm.ts');
+      const { resolveCompileAgentModel } = await import('./imprint/compile-agent.ts');
+      const { describeAgentActivity, formatElapsed } = await import('./imprint/progress.ts');
+
+      // Resolve provider + model NOW so we can tell the user before silence
+      // sets in (the agent loop typically runs 3-5 min with no other output).
+      const providerName = (values.provider as ProviderName | undefined) ?? detectProvider();
+      const compileModel = resolveCompileAgentModel(providerName);
+      console.error('');
+      console.error(`[imprint compile] provider: ${providerName}    model: ${compileModel}`);
+      console.error(
+        '[imprint compile] An LLM agent will reverse-engineer the API response format.',
+      );
+      console.error(
+        '[imprint compile] Expect ~3-5 minutes and moderate to high token use, depending on',
+      );
+      console.error('[imprint compile] the complexity of the recording.');
+      console.error('');
+
+      // Stream one stderr line per *changed* activity so non-TTY runs (CI,
+      // piped, backgrounded) get visibility instead of silence.
+      let lastActivity = '';
       const result = await generate({
         sessionPath,
         outPath: values.out,
+        maxDurationMs,
         noShrink: values['no-shrink'],
         saveShrunken: values['save-shrunken'],
-        llmConfig: values.provider ? { provider: values.provider as ProviderName } : undefined,
+        llmConfig: { provider: providerName, model: compileModel },
+        onProgress: (p) => {
+          const activity = describeAgentActivity(p);
+          if (activity === lastActivity) return;
+          lastActivity = activity;
+          const retry = p.verificationCycle > 1 ? ` (retry ${p.verificationCycle - 1})` : '';
+          process.stderr.write(
+            `[imprint compile] ${formatElapsed(p.elapsedMs)} — ${activity}${retry}\n`,
+          );
+        },
       });
       console.log('');
       console.log(`[imprint] workflow → ${result.workflowPath}`);

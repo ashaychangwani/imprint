@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import * as p from '@clack/prompts';
-import { compilePlaybook, generate } from './compile.ts';
+import { type CompileAgentProgress, compilePlaybook, generate } from './compile.ts';
 import { emit } from './emit.ts';
 import {
   type Platform,
@@ -19,6 +19,7 @@ import {
 } from './integrations.ts';
 import { type ProviderName, detectProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
+import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { redactSession } from './redact.ts';
 import { CronConfigSchema, SessionSchema } from './types.ts';
@@ -80,20 +81,37 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     `Redacted ${stats.totalRedactions} value(s) across ${stats.requestsRedacted} request(s) and ${stats.cookiesRedacted} cookie(s).`,
   );
 
-  // ── 3. Generate workflow ───────────────────────────────────────────
+  // ── 3. Generate workflow (agentic — long-running) ──────────────────
   const providerName = opts.provider ?? detectProvider();
-  p.log.info(`Using LLM provider: ${providerName}`);
+  // The compile-agent picks the best Claude model for the chosen provider —
+  // see resolveCompileAgentModel() in compile-agent.ts. Show it now so the
+  // user knows which billing/quota will be hit.
+  const { resolveCompileAgentModel } = await import('./compile-agent.ts');
+  const compileModel = resolveCompileAgentModel(providerName);
+  p.note(
+    [
+      `Provider: ${providerName}    Model: ${compileModel}`,
+      '',
+      'An LLM agent will reverse-engineer the API response format.',
+      'Expect ~3-5 minutes and moderate to high token use, depending on',
+      'the complexity of the recording. You can interrupt with Ctrl-C.',
+    ].join('\n'),
+    'Compile step',
+  );
 
-  spinner.start('Generating API workflow...');
+  spinner.start('Compiling...');
   const genResult = await generate({
     sessionPath: redactedPath,
-    llmConfig: { provider: providerName },
+    llmConfig: { provider: providerName, model: compileModel },
+    onProgress: (progress) => {
+      spinner.message(formatCompileProgress(progress));
+    },
   });
   spinner.stop(
     `workflow.json → ${genResult.workflow.toolName} (${genResult.workflow.requests.length} request(s), ${genResult.workflow.parameters.length} param(s))`,
   );
 
-  // ── 4. Compile playbook ────────────────────────────────────────────
+  // ── 4. Compile playbook (single-shot — sonnet is plenty) ──────────
   spinner.start('Compiling DOM playbook...');
   const pbResult = await compilePlaybook({
     sessionPath: redactedPath,
@@ -276,4 +294,10 @@ async function offerSkillExport(opts: {
   if (platform === 'openclaw') {
     p.log.info(`Install: openclaw skill install ${outDir}`);
   }
+}
+
+function formatCompileProgress(progress: CompileAgentProgress): string {
+  const activity = describeAgentActivity(progress);
+  const retry = progress.verificationCycle > 1 ? `, retry ${progress.verificationCycle - 1}` : '';
+  return `Compiling • ${activity} (${formatElapsed(progress.elapsedMs)}${retry})`;
 }

@@ -1,0 +1,65 @@
+{
+  "toolName": "search_google_flights",
+  "intent": {
+    "description": "Search for round-trip or one-way flights on Google Flights between two cities for given dates.",
+    "userSaid": "i just searched for flights from San Fran to Tokyo. i messed around with all the filters available. i clicked one of the departure flights. i clicked one of the arrival options, its now showing me the cost and booking options etc. i changed from round trip to one way"
+  },
+  "parameters": [
+    {
+      "name": "origin_id",
+      "type": "string",
+      "description": "Google Knowledge Graph ID for the origin city (e.g. /m/0d6lp for San Francisco)",
+      "default": "/m/0d6lp"
+    },
+    {
+      "name": "origin_type",
+      "type": "number",
+      "description": "Origin location type: 4 for city, 5 for metro area",
+      "default": 4
+    },
+    {
+      "name": "destination_id",
+      "type": "string",
+      "description": "Google Knowledge Graph ID for the destination city (e.g. /m/07dfk for Tokyo)",
+      "default": "/m/07dfk"
+    },
+    {
+      "name": "destination_type",
+      "type": "number",
+      "description": "Destination location type: 4 for city, 5 for metro area",
+      "default": 5
+    },
+    {
+      "name": "depart_date",
+      "type": "string",
+      "description": "Outbound departure date in YYYY-MM-DD format",
+      "default": "2026-07-16"
+    },
+    {
+      "name": "return_date",
+      "type": "string",
+      "description": "Return departure date in YYYY-MM-DD format (for round trips)",
+      "default": "2026-07-24"
+    },
+    {
+      "name": "trip_type",
+      "type": "number",
+      "description": "Trip type: 1 for one-way, 3 for round-trip",
+      "default": 3
+    }
+  ],
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=-6624642551675808938&bl=boq_travel-frontend-flights-ui_20260429.01_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=1414686&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "Referer": "https://www.google.com/travel/flights",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=%5Bnull%2C%22%5B%5B%5D%2C%5Bnull%2Cnull%2C${param.trip_type}%2Cnull%2C%5B%5D%2C1%2C%5B1%2C0%2C0%2C0%5D%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B%5B%5B%5B%5C%22${param.origin_id}%5C%22%2C${param.origin_type}%5D%5D%5D%2C%5B%5B%5B%5C%22${param.destination_id}%5C%22%2C${param.destination_type}%5D%5D%5D%2Cnull%2C3%2Cnull%2Cnull%2C%5C%22${param.depart_date}%5C%22%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C3%5D%2C%5B%5B%5B%5B%5C%22${param.destination_id}%5C%22%2C${param.destination_type}%5D%5D%5D%2C%5B%5B%5B%5C%22${param.origin_id}%5C%22%2C${param.origin_type}%5D%5D%5D%2Cnull%2C3%2Cnull%2Cnull%2C%5C%22${param.return_date}%5C%22%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C3%5D%5D%2Cnull%2Cnull%2Cnull%2C1%5D%2C0%2C0%2C0%2C1%5D%22%5D&"
+    }
+  ],
+  "site": "google-flights",
+  "parserModule": "./parser.ts"
+}

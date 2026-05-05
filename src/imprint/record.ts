@@ -121,11 +121,13 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
   const nextSeq = (): number => seq++;
 
   // CDP order: requestWillBeSent → responseReceived → loadingFinished.
-  // We write on responseReceived (loadingFinished is unreliable for nav
-  // requests). Body fetch runs in the background and writes a separate
-  // request-body JSONL record keyed by seq; the assembler merges them.
+  // We write the request record on responseReceived. The body fetch waits
+  // for loadingFinished (with a 30s safety timeout) before calling
+  // getResponseBody — large bodies aren't ready immediately and the older
+  // sleep(100) heuristic dropped flight-search payloads silently.
   const pending = new Map<string, PendingRequest>();
   const inflight = new Set<Promise<void>>();
+  const bodyReady = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
 
   Network.requestWillBeSent((params) => {
     const { request, requestId, type } = params;
@@ -141,6 +143,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
       body: typeof request.postData === 'string' ? request.postData : undefined,
       resourceType: type ?? 'Other',
     });
+    bodyReady.set(requestId, Promise.withResolvers<void>());
   });
 
   Network.responseReceived((params) => {
@@ -172,31 +175,40 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     };
     writer.request(captured);
 
-    // Background body fetch. getResponseBody errors before loadingFinished
-    // fires, so we sleep briefly first; failure is fine (preflight, evicted).
     const bodyWork = (async () => {
-      await sleep(100);
+      const ready = bodyReady.get(requestId);
+      if (ready) {
+        await Promise.race([ready.promise, sleep(30_000)]);
+      }
+      bodyReady.delete(requestId);
       try {
         const bodyResp = await Network.getResponseBody({ requestId });
         const body = bodyResp.base64Encoded
           ? Buffer.from(bodyResp.body, 'base64').toString('utf8')
           : bodyResp.body;
-        // Truncate very large bodies (>256KB) to keep JSONL readable.
         const MAX = 256 * 1024;
         const truncated = body.length > MAX ? `${body.slice(0, MAX)}\n[…truncated…]` : body;
         writer.requestBody(captured.seq, truncated);
-      } catch {
-        // Body unavailable (preflight, navigation, evicted). Fine.
+      } catch (err) {
+        if (isDebug()) {
+          console.error(`[debug] body unavailable seq=${captured.seq} ${reqInfo.url}: ${err}`);
+        }
       }
     })();
     inflight.add(bodyWork);
     bodyWork.finally(() => inflight.delete(bodyWork));
   });
 
+  Network.loadingFinished((params) => {
+    bodyReady.get(params.requestId)?.resolve();
+  });
+
   Network.loadingFailed((params) => {
     if (isDebug()) {
       console.error(`[debug] loadingFailed ${params.requestId} ${params.errorText}`);
     }
+    bodyReady.get(params.requestId)?.resolve();
+    bodyReady.delete(params.requestId);
     pending.delete(params.requestId);
   });
 

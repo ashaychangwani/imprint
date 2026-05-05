@@ -10,10 +10,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join as pathJoin } from 'node:path';
-import { generate, shrinkSession } from '../src/imprint/compile.ts';
+import { shrinkSession } from '../src/imprint/compile.ts';
 import type { Session } from '../src/imprint/types.ts';
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -173,44 +170,6 @@ describe('shrinkSession', () => {
   });
 });
 
-describe('generate — input validation', () => {
-  it('rejects a missing session path with an actionable hint', async () => {
-    await expect(
-      generate({ sessionPath: '/tmp/imprint-no-such-session-12345.json', params: {} } as never),
-    ).rejects.toThrow(/session not found.*imprint record/is);
-  });
-
-  it('rejects a malformed JSON file', async () => {
-    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-compile-test-'));
-    const path = pathJoin(dir, 'bad.json');
-    writeFileSync(path, '{this is not json');
-    try {
-      await expect(generate({ sessionPath: path, params: {} } as never)).rejects.toThrow();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects a JSON that does not match the Session schema', async () => {
-    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-compile-test-'));
-    const path = pathJoin(dir, 'wrong-shape.json');
-    writeFileSync(path, JSON.stringify({ unrelated: 'object' }));
-    try {
-      await expect(generate({ sessionPath: path, params: {} } as never)).rejects.toThrow();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('generate — output path resolution', () => {
-  // Helper: a minimal valid session with no requests (so the LLM call would
-  // never need to fire). We bail before calling the LLM via a session path
-  // that exists but produces invalid LLM output... actually simpler: just
-  // confirm the path computation logic via the error from the LLM call.
-  // For now, this describe stays empty — full LLM integration tests live
-  // outside the unit suite.
-  it('placeholder — full LLM compile tested via examples/southwest end-to-end', () => {
-    expect(true).toBe(true);
-  });
-});
+// Tests for the old generate() function have been removed.
+// The new compileAgent() workflow is tested in test/compile-agent.test.ts.
+// This file now only tests shrinkSession() — the pure noise-stripping logic.
