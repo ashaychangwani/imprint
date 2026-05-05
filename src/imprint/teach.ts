@@ -17,6 +17,7 @@ import {
   generatePasteSnippet,
   generateSkillMd,
 } from './integrations.ts';
+import { type ProviderName, detectProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { record } from './record.ts';
 import { redactSession } from './redact.ts';
@@ -30,6 +31,7 @@ interface TeachOptions {
   signal?: AbortSignal;
   /** Skip interactive prompts — print all snippets. For CI/scripting. */
   noInteractive?: boolean;
+  provider?: ProviderName;
 }
 
 interface TeachResult {
@@ -79,15 +81,24 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   );
 
   // ── 3. Generate workflow ───────────────────────────────────────────
+  const providerName = opts.provider ?? detectProvider();
+  p.log.info(`Using LLM provider: ${providerName}`);
+
   spinner.start('Generating API workflow...');
-  const genResult = await generate({ sessionPath: redactedPath });
+  const genResult = await generate({
+    sessionPath: redactedPath,
+    llmConfig: { provider: providerName },
+  });
   spinner.stop(
     `workflow.json → ${genResult.workflow.toolName} (${genResult.workflow.requests.length} request(s), ${genResult.workflow.parameters.length} param(s))`,
   );
 
   // ── 4. Compile playbook ────────────────────────────────────────────
   spinner.start('Compiling DOM playbook...');
-  const pbResult = await compilePlaybook({ sessionPath: redactedPath });
+  const pbResult = await compilePlaybook({
+    sessionPath: redactedPath,
+    llmConfig: { provider: providerName },
+  });
   spinner.stop(
     `playbook.yaml → ${pbResult.playbook.steps.length} step(s), ${pbResult.playbook.parameters.length} param(s)`,
   );

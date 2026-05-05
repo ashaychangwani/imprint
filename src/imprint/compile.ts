@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
-import { LLM, extractJsonObject, loadConfig } from './llm.ts';
+import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { parsePlaybook } from './playbook-parser.ts';
@@ -32,14 +32,14 @@ interface CompileOptions {
   /** Where to write the artifact. Defaults to <sessionDir>/../<task.defaultOutFile> */
   outPath?: string;
   /** Override LLM config (region, model, project). */
-  llmConfig?: Parameters<typeof loadConfig>[0];
+  llmConfig?: LLMOptions;
 }
 
 interface CompileResult<T> {
   value: T;
   outPath: string;
-  inputTokens: number;
-  outputTokens: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
   durationMs: number;
 }
 
@@ -92,7 +92,7 @@ async function compile<T>(opts: CompileOptions, task: CompileTask<T>): Promise<C
   }
   const systemPrompt = readFileSync(promptPath, 'utf8');
 
-  const llm = new LLM(loadConfig(opts.llmConfig));
+  const llm = resolveProvider(opts.llmConfig ?? {});
   const result = await llm.analyze(systemPrompt, slimmed);
 
   let value: T;
@@ -134,8 +134,8 @@ interface GenerateResult {
   requestsSent: number;
   /** Original count before shrinking. */
   requestsOriginal: number;
-  inputTokens: number;
-  outputTokens: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
   durationMs: number;
 }
 
@@ -255,8 +255,8 @@ function safeUrl(s: string): URL | null {
 interface CompilePlaybookResult {
   playbook: Playbook;
   playbookPath: string;
-  inputTokens: number;
-  outputTokens: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
   durationMs: number;
 }
 

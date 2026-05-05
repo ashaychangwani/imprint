@@ -9,9 +9,9 @@ import { describe, expect, it } from 'bun:test';
 import { type CheckResult, doctor, reportDoctor } from '../src/imprint/doctor.ts';
 
 describe('doctor()', () => {
-  it('returns one CheckResult per check (currently 9)', () => {
+  it('returns one CheckResult per check (currently 8)', () => {
     const checks = doctor();
-    expect(checks.length).toBe(9);
+    expect(checks.length).toBe(8);
     for (const c of checks) {
       expect(typeof c.name).toBe('string');
       expect(typeof c.ok).toBe('boolean');
