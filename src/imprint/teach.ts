@@ -132,7 +132,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   const state = loadTeachState(opts.site);
   const completedWorkflows = discoverCompletedWorkflows(opts.site);
-  const incompleteWorkflows = Object.entries(state.workflows);
+  const completedSet = new Set(completedWorkflows);
+  const incompleteWorkflows = Object.entries(state.workflows).filter(
+    ([name]) => !completedSet.has(name),
+  );
 
   // Decide what to do: resume, redo, or start fresh.
   let startFrom: Step = 'record';
@@ -382,9 +385,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
   }
 
-  // All steps complete — remove from state.
-  delete state.workflows[workflowKey];
-  saveTeachState(opts.site, state);
+  // Mark all steps complete (keep the entry for future redo).
+  updateCheckpoint(opts.site, state, workflowKey, 'register');
 
   p.outro('Done! Your agent is ready.');
 
