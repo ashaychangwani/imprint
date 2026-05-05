@@ -47,7 +47,7 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
   }
   const outPath = opts.outPath ?? pathResolve(tool.dir, 'backends.json');
 
-  const params = resolveParams(opts.site, examplesDir, tool, opts.paramOverrides);
+  const params = resolveParams(tool, opts.paramOverrides);
 
   log(`probing fetch / stealth-fetch / playbook for ${tool.workflow.toolName}…`);
   log(`  params: ${JSON.stringify(params)}`);
@@ -132,7 +132,11 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
 
 /** Read backends.json. Returns null on missing/malformed — runtime
  *  falls back to the default ladder; a stale cache must never break cron. */
-export function loadBackendsCache(site: string, examplesDir: string, toolDir?: string): BackendsCache | null {
+export function loadBackendsCache(
+  site: string,
+  examplesDir: string,
+  toolDir?: string,
+): BackendsCache | null {
   const path = toolDir
     ? pathResolve(toolDir, 'backends.json')
     : pathResolve(examplesDir, site, 'backends.json');
@@ -150,8 +154,6 @@ export function loadBackendsCache(site: string, examplesDir: string, toolDir?: s
 
 /** Param priority: caller overrides → cron.json → workflow defaults. */
 function resolveParams(
-  _site: string,
-  _examplesDir: string,
   tool: ResolvedTool,
   overrides?: Record<string, string | number | boolean>,
 ): Record<string, string | number | boolean> {

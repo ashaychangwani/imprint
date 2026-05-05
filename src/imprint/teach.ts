@@ -107,7 +107,8 @@ function saveTeachState(site: string, state: TeachState): void {
 
 function nextStep(completed: Step[]): Step {
   if (completed.length === 0) return 'record';
-  const last = completed[completed.length - 1]!;
+  const last = completed.at(-1);
+  if (!last) return 'record';
   const lastIdx = STEPS.indexOf(last);
   if (lastIdx < 0 || lastIdx >= STEPS.length - 1) return 'record';
   return STEPS[lastIdx + 1] as Step;

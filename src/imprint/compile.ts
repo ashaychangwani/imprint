@@ -48,10 +48,6 @@ interface GenerateOptions extends CompileOptions {
   maxDurationMs?: number;
   /** Progress callback with verification cycle information. */
   onProgress?: (p: CompileAgentProgress) => void;
-  /** Legacy debug flag — kept for backward compat but ignored by the agentic compiler. */
-  noShrink?: boolean;
-  /** Legacy debug flag — kept for backward compat but ignored. */
-  saveShrunken?: boolean;
 }
 
 interface GenerateResult {
