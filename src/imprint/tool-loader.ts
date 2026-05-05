@@ -2,7 +2,7 @@
  *  by mcp-server, cron, and probe-backends. */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { resolve as pathResolve } from 'node:path';
+import { dirname, resolve as pathResolve } from 'node:path';
 import { z } from 'zod';
 import type { ToolResult, Workflow, WorkflowParameter } from './types.ts';
 
@@ -97,7 +97,6 @@ async function tryLoadTool(
     );
     return null;
   }
-  const { dirname } = require('node:path');
   return { site, dir: dirname(modulePath), workflow: mod.WORKFLOW, toolFn: fn };
 }
 

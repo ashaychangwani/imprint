@@ -7,7 +7,16 @@
  * step, and multiple workflows per site (each in its own subdirectory).
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import * as p from '@clack/prompts';
@@ -87,7 +96,6 @@ function saveTeachState(site: string, state: TeachState): void {
   if (Object.keys(state.workflows).length === 0) {
     // Clean up empty state file.
     try {
-      const { unlinkSync } = require('node:fs');
       unlinkSync(path);
     } catch {
       // File might not exist — fine.
@@ -271,7 +279,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       startFrom = 'record';
     } else if (choice.action === 'continue') {
       workflowKey = choice.workflowKey;
-      const ws = state.workflows[workflowKey]!;
+      const ws = state.workflows[workflowKey];
+      if (!ws) {
+        throw new Error(
+          `No state found for workflow "${workflowKey}" — try starting a new workflow.`,
+        );
+      }
       startFrom = nextStep(ws.completedSteps);
       sessionPath = pathResolve('examples', opts.site, ws.sessionPath);
       redactedPath = ws.redactedPath ? pathResolve('examples', opts.site, ws.redactedPath) : null;
@@ -282,6 +295,16 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       if (ws) {
         sessionPath = pathResolve('examples', opts.site, ws.sessionPath);
         redactedPath = ws.redactedPath ? pathResolve('examples', opts.site, ws.redactedPath) : null;
+      }
+      if (!sessionPath && startFrom !== 'record') {
+        // Completed workflow with no state — find the latest session.
+        const orphan = discoverOrphanSession(opts.site, state);
+        if (orphan) {
+          sessionPath = pathResolve('examples', opts.site, orphan.sessionPath);
+          redactedPath = orphan.redactedPath
+            ? pathResolve('examples', opts.site, orphan.redactedPath)
+            : null;
+        }
       }
     }
   } else if (opts.fromSession) {
@@ -393,7 +416,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
     // Move agent-written artifacts into the workflow subdirectory.
     const siteDir = pathResolve('examples', opts.site);
-    const { renameSync } = require('node:fs');
     for (const artifact of ['workflow.json', 'parser.ts', 'parser.test.ts']) {
       const src = pathJoin(siteDir, artifact);
       if (existsSync(src)) renameSync(src, pathJoin(workflowDir, artifact));
@@ -497,6 +519,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     } else {
       await interactivePlatformSetup({
         site: opts.site,
+        workflowDir,
         workflow: genResult.workflow,
         playbook: pbResult.playbook,
       });
@@ -509,7 +532,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   p.outro('Done! Your agent is ready.');
 
   return {
-    sessionPath: sessionPath!,
+    sessionPath: sessionPath as string,
     workflowPath: genResult.workflowPath,
     playbookPath: pbResult.playbookPath,
     indexPath: emitOutPath,
@@ -654,10 +677,11 @@ async function promptResumeChoice(
 
 async function interactivePlatformSetup(opts: {
   site: string;
+  workflowDir: string;
   workflow: Workflow;
   playbook: Playbook;
 }): Promise<void> {
-  const { site, workflow, playbook } = opts;
+  const { site, workflowDir, workflow, playbook } = opts;
   const imprintCommand = detectImprintCommand();
 
   const platformChoice = await p.select({
@@ -722,7 +746,9 @@ async function interactivePlatformSetup(opts: {
               );
             } else {
               const stderr = proc.stderr.toString().trim();
-              spinner.stop(`Command exited with code ${proc.exitCode}${stderr ? `: ${stderr}` : ''}`);
+              spinner.stop(
+                `Command exited with code ${proc.exitCode}${stderr ? `: ${stderr}` : ''}`,
+              );
             }
           }
         } else if (proc.exitCode === 0) {
@@ -751,19 +777,20 @@ async function interactivePlatformSetup(opts: {
   }
 
   if (platform === 'openclaw' || platform === 'hermes') {
-    await offerSkillExport({ site, workflow, playbook, platform });
+    await offerSkillExport({ site, workflowDir, workflow, playbook, platform });
   }
 }
 
 async function offerSkillExport(opts: {
   site: string;
+  workflowDir: string;
   workflow: Workflow;
   playbook: Playbook;
   platform: 'openclaw' | 'hermes';
 }): Promise<void> {
-  const { site, workflow, playbook, platform } = opts;
+  const { site, workflowDir, workflow, playbook, platform } = opts;
 
-  const cronPath = pathResolve(process.cwd(), 'examples', site, 'cron.json');
+  const cronPath = pathResolve(workflowDir, 'cron.json');
   let cronConfig: CronConfig | undefined;
   if (existsSync(cronPath)) {
     try {
