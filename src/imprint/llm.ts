@@ -543,18 +543,18 @@ export function isValidProvider(s: string): s is ProviderName {
 }
 
 export function detectProvider(): ProviderName {
-  if (process.env.ANTHROPIC_API_KEY) return 'anthropic-api';
-  if (process.env.ANTHROPIC_VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT) return 'vertex';
   if (Bun.which('claude')) return 'claude-cli';
   if (Bun.which('codex')) return 'codex-cli';
   if (Bun.which('cursor')) return 'cursor-cli';
+  if (process.env.ANTHROPIC_API_KEY) return 'anthropic-api';
+  if (process.env.ANTHROPIC_VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT) return 'vertex';
   throw new Error(
     'No LLM provider detected. Set up one of:\n' +
-      '  • export ANTHROPIC_API_KEY=sk-...        (Anthropic API)\n' +
-      '  • export ANTHROPIC_VERTEX_PROJECT_ID=...  (Vertex AI)\n' +
       '  • Install Claude Code CLI                 (claude-cli)\n' +
       '  • Install Codex CLI                       (codex-cli)\n' +
       '  • Install Cursor with CLI enabled         (cursor-cli)\n' +
+      '  • export ANTHROPIC_API_KEY=sk-...        (Anthropic API)\n' +
+      '  • export ANTHROPIC_VERTEX_PROJECT_ID=...  (Vertex AI)\n' +
       '→ run `imprint doctor` for more details.',
   );
 }

@@ -67,24 +67,56 @@ describe('isValidProvider', () => {
 });
 
 describe('detectProvider', () => {
-  it('prefers ANTHROPIC_API_KEY over other options', () => {
+  /** Run `fn` with Bun.which stubbed so none of the CLI providers are seen
+   *  on PATH. Lets us exercise the env-var branches deterministically even
+   *  when the dev machine has claude/codex/cursor installed. */
+  function withoutCliProviders<T>(fn: () => T): T {
+    const orig = Bun.which;
+    Bun.which = (() => null) as typeof Bun.which;
+    try {
+      return fn();
+    } finally {
+      Bun.which = orig;
+    }
+  }
+
+  it('prefers claude-cli over env-var providers when claude is on PATH', () => {
+    const origWhich = Bun.which;
+    const origKey = process.env.ANTHROPIC_API_KEY;
+    Bun.which = ((cmd: string) =>
+      cmd === 'claude' ? '/usr/bin/claude' : null) as typeof Bun.which;
+    try {
+      process.env.ANTHROPIC_API_KEY = 'sk-test';
+      expect(detectProvider()).toBe('claude-cli');
+    } finally {
+      Bun.which = origWhich;
+      if (origKey === undefined) process.env.ANTHROPIC_API_KEY = undefined;
+      else process.env.ANTHROPIC_API_KEY = origKey;
+    }
+  });
+
+  it('falls back to anthropic-api when no CLI is on PATH but ANTHROPIC_API_KEY is set', () => {
     const orig = process.env.ANTHROPIC_API_KEY;
     try {
       process.env.ANTHROPIC_API_KEY = 'sk-test';
-      expect(detectProvider()).toBe('anthropic-api');
+      withoutCliProviders(() => {
+        expect(detectProvider()).toBe('anthropic-api');
+      });
     } finally {
       if (orig === undefined) process.env.ANTHROPIC_API_KEY = undefined;
       else process.env.ANTHROPIC_API_KEY = orig;
     }
   });
 
-  it('falls back to vertex when ANTHROPIC_VERTEX_PROJECT_ID is set', () => {
+  it('falls back to vertex when no CLI and no API key but ANTHROPIC_VERTEX_PROJECT_ID is set', () => {
     const origKey = process.env.ANTHROPIC_API_KEY;
     const origProject = process.env.ANTHROPIC_VERTEX_PROJECT_ID;
     try {
       process.env.ANTHROPIC_API_KEY = undefined;
       process.env.ANTHROPIC_VERTEX_PROJECT_ID = 'test-project';
-      expect(detectProvider()).toBe('vertex');
+      withoutCliProviders(() => {
+        expect(detectProvider()).toBe('vertex');
+      });
     } finally {
       if (origKey === undefined) process.env.ANTHROPIC_API_KEY = undefined;
       else process.env.ANTHROPIC_API_KEY = origKey;
