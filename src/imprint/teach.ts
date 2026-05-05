@@ -105,11 +105,20 @@ function nextStep(completed: Step[]): Step {
   return STEPS[lastIdx + 1] as Step;
 }
 
-/** Scan examples/<site>/ for completed workflow subdirectories (have index.ts). */
+/** Scan examples/<site>/ for completed workflows. Checks both:
+ *  - New layout: examples/<site>/<workflow>/index.ts
+ *  - Old flat layout: examples/<site>/workflow.json (reported as site name) */
 function discoverCompletedWorkflows(site: string): string[] {
   const siteDir = pathResolve('examples', site);
   if (!existsSync(siteDir)) return [];
   const names: string[] = [];
+
+  // Old flat layout: workflow.json at the site root.
+  if (existsSync(pathJoin(siteDir, 'workflow.json'))) {
+    names.push(site);
+  }
+
+  // New layout: subdirectories with index.ts.
   for (const entry of readdirSync(siteDir)) {
     if (entry === 'sessions' || entry.startsWith('.')) continue;
     const dir = pathResolve(siteDir, entry);
@@ -125,12 +134,57 @@ function discoverCompletedWorkflows(site: string): string[] {
   return names;
 }
 
+/** Find the latest session in examples/<site>/sessions/ that has no
+ *  matching state entry. Returns an incomplete WorkflowState or null. */
+function discoverOrphanSession(site: string, state: TeachState): WorkflowState | null {
+  const sessDir = pathResolve('examples', site, 'sessions');
+  if (!existsSync(sessDir)) return null;
+
+  const trackedPaths = new Set(Object.values(state.workflows).map((ws) => ws.sessionPath));
+
+  const sessions = readdirSync(sessDir)
+    .filter((f) => f.endsWith('.json') && !f.endsWith('.redacted.json'))
+    .sort()
+    .reverse();
+
+  for (const file of sessions) {
+    const relPath = `sessions/${file}`;
+    if (trackedPaths.has(relPath)) continue;
+
+    const absPath = pathJoin(sessDir, file);
+    const redactedPath = absPath.replace(/\.json$/, '.redacted.json');
+    const hasRedacted = existsSync(redactedPath);
+    const completedSteps: Step[] = ['record'];
+    if (hasRedacted) completedSteps.push('redact');
+
+    return {
+      sessionPath: relPath,
+      redactedPath: hasRedacted
+        ? `sessions/${file.replace(/\.json$/, '.redacted.json')}`
+        : undefined,
+      completedSteps,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  return null;
+}
+
 // ─── Main teach function ────────────────────────────────────────────────────
 
 export async function teach(opts: TeachOptions): Promise<TeachResult> {
   p.intro(`imprint teach — teaching your agent to use ${opts.site}`);
 
   const state = loadTeachState(opts.site);
+
+  // Pick up sessions that were recorded but never tracked (e.g., old teach
+  // runs or manual `imprint record` invocations).
+  const orphan = discoverOrphanSession(opts.site, state);
+  if (orphan) {
+    const orphanKey = `_orphan_${orphan.sessionPath.replace(/[/\\:.]/g, '-')}`;
+    state.workflows[orphanKey] = orphan;
+  }
+
   const completedWorkflows = discoverCompletedWorkflows(opts.site);
   const completedSet = new Set(completedWorkflows);
   const incompleteWorkflows = Object.entries(state.workflows).filter(
