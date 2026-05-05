@@ -35,7 +35,7 @@ jobs:
         uses: schneegans/dynamic-badges-action@v1.7.0
         with:
           auth: ${{ secrets.GIST_SECRET }}
-          gistID: GIST_ID
+          gistID: cbd3134e06fb4fabf24aed94b251bdfd
           filename: test-count.json
           label: tests
           message: ${{ env.TEST_COUNT }} passing
