@@ -19,6 +19,8 @@ interface GeneratedModule {
 export interface ResolvedTool {
   /** Directory name under examples/, e.g. "discoverandgo". */
   site: string;
+  /** Absolute path to the directory containing workflow.json, playbook.yaml, etc. */
+  dir: string;
   workflow: Workflow;
   toolFn: GeneratedToolFn;
 }
@@ -95,7 +97,8 @@ async function tryLoadTool(
     );
     return null;
   }
-  return { site, workflow: mod.WORKFLOW, toolFn: fn };
+  const { dirname } = require('node:path');
+  return { site, dir: dirname(modulePath), workflow: mod.WORKFLOW, toolFn: fn };
 }
 
 /** Tool fn export is the camelCase of toolName: book_x_y → bookXY. */

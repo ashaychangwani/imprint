@@ -723,8 +723,17 @@ async function main(argv: string[]): Promise<number> {
         allowPositionals: false,
       });
       const { resolve: pathResolve } = await import('node:path');
-      const playbookPath =
-        values.path ?? pathResolve(process.cwd(), 'examples', site, 'playbook.yaml');
+      let playbookPath: string;
+      if (values.path) {
+        playbookPath = pathResolve(values.path);
+      } else {
+        const { discoverTools } = await import('./imprint/tool-loader.ts');
+        const tools = await discoverTools(pathResolve(process.cwd(), 'examples'), site);
+        const tool = tools[0];
+        playbookPath = tool
+          ? pathResolve(tool.dir, 'playbook.yaml')
+          : pathResolve(process.cwd(), 'examples', site, 'playbook.yaml');
+      }
       const params = tryParseParamKV(values.param);
       if (params === null) return 2;
       const { runPlaybook } = await import('./imprint/playbook-runner.ts');

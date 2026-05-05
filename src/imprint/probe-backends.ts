@@ -11,7 +11,7 @@ import { runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
 import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
-import { discoverTools } from './tool-loader.ts';
+import { type ResolvedTool, discoverTools } from './tool-loader.ts';
 import {
   type BackendsCache,
   BackendsCacheSchema,
@@ -38,8 +38,6 @@ const log = createLog('probe');
 
 export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBackendsResult> {
   const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
-  const outPath = opts.outPath ?? pathResolve(examplesDir, opts.site, 'backends.json');
-
   const discovered = await discoverTools(examplesDir, opts.site, '[imprint probe]');
   const tool = discovered[0];
   if (!tool) {
@@ -47,6 +45,7 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
       `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
     );
   }
+  const outPath = opts.outPath ?? pathResolve(tool.dir, 'backends.json');
 
   const params = resolveParams(opts.site, examplesDir, tool, opts.paramOverrides);
 
@@ -133,8 +132,10 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
 
 /** Read backends.json. Returns null on missing/malformed — runtime
  *  falls back to the default ladder; a stale cache must never break cron. */
-export function loadBackendsCache(site: string, examplesDir: string): BackendsCache | null {
-  const path = pathResolve(examplesDir, site, 'backends.json');
+export function loadBackendsCache(site: string, examplesDir: string, toolDir?: string): BackendsCache | null {
+  const path = toolDir
+    ? pathResolve(toolDir, 'backends.json')
+    : pathResolve(examplesDir, site, 'backends.json');
   if (!existsSync(path)) return null;
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8'));
@@ -149,12 +150,12 @@ export function loadBackendsCache(site: string, examplesDir: string): BackendsCa
 
 /** Param priority: caller overrides → cron.json → workflow defaults. */
 function resolveParams(
-  site: string,
-  examplesDir: string,
-  tool: { workflow: { parameters: Array<{ name: string; default?: unknown }> } },
+  _site: string,
+  _examplesDir: string,
+  tool: ResolvedTool,
   overrides?: Record<string, string | number | boolean>,
 ): Record<string, string | number | boolean> {
-  const cronPath = pathResolve(examplesDir, site, 'cron.json');
+  const cronPath = pathResolve(tool.dir, 'cron.json');
   let cronParams: Record<string, string | number | boolean> = {};
   if (existsSync(cronPath)) {
     try {
@@ -178,7 +179,7 @@ function resolveParams(
       out[p.name] = p.default as string | number | boolean;
     } else {
       throw new Error(
-        `Probe needs a value for required param "${p.name}". Either set it in examples/${site}/cron.json, give it a default in workflow.json, or pass --param ${p.name}=<value>.`,
+        `Probe needs a value for required param "${p.name}". Either set it in cron.json, give it a default in workflow.json, or pass --param ${p.name}=<value>.`,
       );
     }
   }
