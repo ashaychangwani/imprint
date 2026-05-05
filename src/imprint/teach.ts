@@ -694,8 +694,38 @@ async function interactivePlatformSetup(opts: {
       const cmdDisplay = regCommand.join(' ');
       spinner.start(`Running: ${cmdDisplay}`);
       try {
-        const proc = Bun.spawnSync(regCommand, { stdio: ['ignore', 'pipe', 'pipe'] });
-        if (proc.exitCode === 0) {
+        let proc = Bun.spawnSync(regCommand, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+        // If it failed because the server already exists, ask to replace.
+        if (proc.exitCode !== 0 && proc.stderr.toString().includes('already exists')) {
+          spinner.stop(`imprint-${site} is already registered.`);
+          const replace = await p.confirm({
+            message: 'Replace existing registration?',
+            initialValue: true,
+          });
+          if (!p.isCancel(replace) && replace) {
+            const toolName = `imprint-${site}`;
+            if (platform === 'claude-code') {
+              Bun.spawnSync(['claude', 'mcp', 'remove', '--scope', 'user', toolName], {
+                stdio: ['ignore', 'ignore', 'ignore'],
+              });
+            } else if (platform === 'codex') {
+              Bun.spawnSync(['codex', 'mcp', 'remove', toolName], {
+                stdio: ['ignore', 'ignore', 'ignore'],
+              });
+            }
+            spinner.start(`Re-registering: ${cmdDisplay}`);
+            proc = Bun.spawnSync(regCommand, { stdio: ['ignore', 'pipe', 'pipe'] });
+            if (proc.exitCode === 0) {
+              spinner.stop(
+                `imprint-${site} replaced in ${platform === 'claude-code' ? 'Claude Code' : 'Codex'}.`,
+              );
+            } else {
+              const stderr = proc.stderr.toString().trim();
+              spinner.stop(`Command exited with code ${proc.exitCode}${stderr ? `: ${stderr}` : ''}`);
+            }
+          }
+        } else if (proc.exitCode === 0) {
           spinner.stop(
             `imprint-${site} is now available in ${platform === 'claude-code' ? 'Claude Code' : 'Codex'}.`,
           );
