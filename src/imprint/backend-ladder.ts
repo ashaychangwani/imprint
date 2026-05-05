@@ -59,7 +59,7 @@ export async function runWithLadder(
   let lastResult: ToolResult | null = null;
 
   for (const backend of ladder) {
-    if (backend === 'playbook' && !existsSync(playbookPath(examplesDir, tool.site))) {
+    if (backend === 'playbook' && !existsSync(playbookPath(examplesDir, tool.site, tool.dir))) {
       attempts.push({
         backend,
         outcome: 'unavailable',
@@ -85,7 +85,7 @@ export async function runWithLadder(
         }
         case 'playbook':
           result = await runPlaybook({
-            playbook: playbookPath(examplesDir, tool.site),
+            playbook: playbookPath(examplesDir, tool.site, tool.dir),
             params,
           });
           break;
@@ -172,6 +172,7 @@ function pickBaseUrl(tool: ResolvedTool): string {
   );
 }
 
-function playbookPath(examplesDir: string, site: string): string {
+function playbookPath(examplesDir: string, site: string, toolDir?: string): string {
+  if (toolDir) return pathResolve(toolDir, 'playbook.yaml');
   return pathResolve(examplesDir, site, 'playbook.yaml');
 }

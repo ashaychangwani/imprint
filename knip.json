@@ -2,6 +2,7 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "entry": [
     "examples/*/index.ts",
+    "examples/*/*/index.ts",
     "scripts/*.ts"
   ],
   "project": [

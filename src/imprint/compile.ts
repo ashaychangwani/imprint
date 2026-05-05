@@ -11,7 +11,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
-import { type LLMOptions, resolveProvider } from './llm.ts';
+import { type LLMOptions, extractJsonArray, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { parsePlaybook } from './playbook-parser.ts';
@@ -36,87 +36,9 @@ interface CompileOptions {
   outPath?: string;
   /** Override LLM config (region, model, project). */
   llmConfig?: LLMOptions;
-}
-
-interface CompileResult<T> {
-  value: T;
-  outPath: string;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  durationMs: number;
-}
-
-interface CompileTask<T> {
-  promptFile: string;
-  /** Slim the session to what the LLM actually needs. */
-  slim: (session: Session) => unknown;
-  /** Parse the LLM raw text into a validated value. Throws on bad output. */
-  parse: (raw: string) => T;
-  /** Default filename, written next to the session's parent directory. */
-  defaultOutFile: string;
-  /** Serialize the value (or the raw LLM text) to disk. */
-  serialize: (value: T, raw: string) => string;
-  /** Friendly name for log messages. */
-  artifactName: string;
-}
-
-async function compile<T>(opts: CompileOptions, task: CompileTask<T>): Promise<CompileResult<T>> {
-  let session: Session = loadJsonFile(
-    opts.sessionPath,
-    SessionSchema,
-    {
-      notFound: '→ run `imprint record <site>` to create one.',
-      notJson: `→ if it's a partial .jsonl, run \`imprint assemble ${opts.sessionPath}\` first.`,
-      badSchema: '→ check the file came from `imprint record`.',
-    },
-    'session',
-  );
-
-  // Auto-redact if the input wasn't already scrubbed — we never let
-  // plaintext credentials leave this process.
-  const looksRedacted = JSON.stringify(session).includes('[REDACTED:');
-  if (!looksRedacted) {
-    const r = redactSession(session);
-    session = r.session;
-    if (r.stats.totalRedactions > 0) {
-      log(
-        `redacted ${r.stats.totalRedactions} value(s) before sending to LLM (use \`imprint redact\` to scrub the file on disk too)`,
-      );
-    }
-  }
-
-  const slimmed = task.slim(session);
-
-  const promptPath = pathJoin(PROMPTS_DIR, task.promptFile);
-  if (!existsSync(promptPath)) {
-    throw new Error(
-      `Prompt not found at ${promptPath}\n→ this is an Imprint installation problem; please file an issue at https://github.com/ashaychangwani/imprint/issues with the steps you ran.`,
-    );
-  }
-  const systemPrompt = readFileSync(promptPath, 'utf8');
-
-  const llm = resolveProvider(opts.llmConfig ?? {});
-  const result = await llm.analyze(systemPrompt, slimmed);
-
-  let value: T;
-  try {
-    value = task.parse(result.text);
-  } catch (err) {
-    throw new Error(
-      `Compiled ${task.artifactName} failed to parse: ${err instanceof Error ? err.message : String(err)}\nRaw output:\n${result.text.slice(0, 1500)}`,
-    );
-  }
-
-  const outPath = opts.outPath ?? pathJoin(dirname(opts.sessionPath), '..', task.defaultOutFile);
-  writeFileSync(outPath, task.serialize(value, result.text));
-
-  return {
-    value,
-    outPath,
-    inputTokens: result.inputTokens,
-    outputTokens: result.outputTokens,
-    durationMs: result.durationMs,
-  };
+  /** If true, send the FULL session to the LLM (don't shrink). Useful for
+   *  debugging when shrinking might be over-aggressive. Default false. */
+  noShrink?: boolean;
 }
 
 // ─── generate (workflow.json) ────────────────────────────────────────────────
@@ -126,10 +48,6 @@ interface GenerateOptions extends CompileOptions {
   maxDurationMs?: number;
   /** Progress callback with verification cycle information. */
   onProgress?: (p: CompileAgentProgress) => void;
-  /** Legacy debug flag — kept for backward compat but ignored by the agentic compiler. */
-  noShrink?: boolean;
-  /** Legacy debug flag — kept for backward compat but ignored. */
-  saveShrunken?: boolean;
 }
 
 interface GenerateResult {
@@ -241,6 +159,99 @@ function safeUrl(s: string): URL | null {
   }
 }
 
+// ─── triageRequests (LLM-based request filtering) ───────────────────────────
+
+const TRIAGE_RESOURCE_TYPES = new Set(['XHR', 'Fetch', 'Document']);
+const HEADER_TRUNCATE_LIMIT = 200;
+
+interface TriageResult {
+  session: Session;
+  selectedSeqs: number[];
+  consideredCount: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  durationMs: number;
+}
+
+async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise<TriageResult> {
+  const candidates = session.requests.filter((r) => TRIAGE_RESOURCE_TYPES.has(r.resourceType));
+
+  const metadata = candidates.map((r) => ({
+    seq: r.seq,
+    timestamp: r.timestamp,
+    method: r.method,
+    url: r.url,
+    resourceType: r.resourceType,
+    status: r.response?.status,
+    headers: truncateHeaders(r.headers),
+    body: r.body,
+  }));
+
+  const triagePayload = {
+    site: session.site,
+    url: session.url,
+    narration: session.narration,
+    requests: metadata,
+  };
+
+  const promptPath = pathJoin(PROMPTS_DIR, 'request-triage.md');
+  if (!existsSync(promptPath)) {
+    throw new Error(
+      `Triage prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
+    );
+  }
+  const systemPrompt = readFileSync(promptPath, 'utf8');
+
+  log(`triaging ${candidates.length} requests (from ${session.requests.length} total)…`);
+  const llm = resolveProvider(llmConfig ?? {});
+  const result = await llm.analyze(systemPrompt, triagePayload);
+
+  const arrayText = extractJsonArray(result.text);
+  if (!arrayText) {
+    throw new Error(
+      `Triage LLM did not return a JSON array.\nRaw response:\n${result.text.slice(0, 1000)}`,
+    );
+  }
+
+  let seqs: unknown;
+  try {
+    seqs = JSON.parse(arrayText);
+  } catch (err) {
+    throw new Error(
+      `Triage response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${arrayText.slice(0, 500)}`,
+    );
+  }
+
+  if (!Array.isArray(seqs) || !seqs.every((s) => typeof s === 'number')) {
+    throw new Error(
+      `Triage response is not an array of numbers.\nParsed: ${JSON.stringify(seqs).slice(0, 500)}`,
+    );
+  }
+
+  const selectedSet = new Set(seqs as number[]);
+  const triaged: Session = {
+    ...session,
+    requests: session.requests.filter((r) => selectedSet.has(r.seq)),
+  };
+
+  log(`triage selected ${selectedSet.size} requests out of ${candidates.length} candidates`);
+
+  return {
+    session: triaged,
+    selectedSeqs: seqs as number[],
+    consideredCount: candidates.length,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    durationMs: result.durationMs,
+  };
+}
+
+function truncateHeaders(headers: Record<string, string>): string {
+  const serialized = JSON.stringify(headers);
+  if (serialized.length <= HEADER_TRUNCATE_LIMIT) return serialized;
+  return `${serialized.slice(0, HEADER_TRUNCATE_LIMIT)}…`;
+}
+
 // ─── compilePlaybook (playbook.yaml) ─────────────────────────────────────────
 
 interface CompilePlaybookResult {
@@ -254,49 +265,105 @@ interface CompilePlaybookResult {
 const RESPONSE_BODY_LIMIT = 4000;
 
 export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlaybookResult> {
-  const r = await compile<Playbook>(opts, {
-    promptFile: 'playbook-compilation.md',
-    slim: (session) => {
-      // Slim view: events + narration + XHR/Fetch summary. Response bodies
-      // are included (truncated) so the LLM can identify the actual JSON
-      // shape of the result-bearing XHR — without them it has to guess
-      // the extract path and gets it wrong (verified against Southwest:
-      // hallucinated nested keys that don't exist).
-      const slim = {
-        site: session.site,
-        url: session.url,
-        narration: session.narration,
-        events: session.events,
-        requests: session.requests
-          .filter((r) => r.resourceType === 'XHR' || r.resourceType === 'Fetch')
-          .map((r) => ({
-            method: r.method,
-            url: r.url,
-            resourceType: r.resourceType,
-            status: r.response?.status,
-            response_body: truncate(r.response?.body, RESPONSE_BODY_LIMIT),
-          })),
-      };
-      log(
-        `compiling playbook from ${session.events.length} events / ${slim.requests.length} XHRs / ${session.narration.length} narration lines…`,
-      );
-      return slim;
+  // 1. Load session.
+  let session: Session = loadJsonFile(
+    opts.sessionPath,
+    SessionSchema,
+    {
+      notFound: '→ run `imprint record <site>` to create one.',
+      notJson: `→ if it's a partial .jsonl, run \`imprint assemble ${opts.sessionPath}\` first.`,
+      badSchema: '→ check the file came from `imprint record`.',
     },
-    parse: (raw) => parsePlaybook(stripCodeFences(raw).trim()),
-    defaultOutFile: 'playbook.yaml',
-    // Preserve the LLM's exact YAML rather than round-tripping through
-    // YAML.stringify (which would lose comments + reorder keys).
-    serialize: (_value, raw) => `${stripCodeFences(raw).trim()}\n`,
-    artifactName: 'playbook',
-  });
+    'session',
+  );
+
+  // 2. Auto-redact if needed.
+  const looksRedacted = JSON.stringify(session).includes('[REDACTED:');
+  if (!looksRedacted) {
+    const r = redactSession(session);
+    session = r.session;
+    if (r.stats.totalRedactions > 0) {
+      log(`redacted ${r.stats.totalRedactions} value(s) before sending to LLM`);
+    }
+  }
+
+  // 3. Triage: LLM selects which requests matter.
+  let triageTokens: { input: number | null; output: number | null; durationMs: number } = {
+    input: null,
+    output: null,
+    durationMs: 0,
+  };
+  if (!opts.noShrink) {
+    const triage = await triageRequests(session, opts.llmConfig);
+    session = triage.session;
+    triageTokens = {
+      input: triage.inputTokens,
+      output: triage.outputTokens,
+      durationMs: triage.durationMs,
+    };
+  }
+
+  // 4. Build slim payload from triaged requests (with response bodies).
+  const xhrs = session.requests
+    .filter((r) => r.resourceType === 'XHR' || r.resourceType === 'Fetch')
+    .map((r) => ({
+      method: r.method,
+      url: r.url,
+      resourceType: r.resourceType,
+      status: r.response?.status,
+      response_body: truncate(r.response?.body, RESPONSE_BODY_LIMIT),
+    }));
+
+  log(
+    `compiling playbook from ${session.events.length} events / ${xhrs.length} XHRs / ${session.narration.length} narration lines…`,
+  );
+
+  const slimmed = {
+    site: session.site,
+    url: session.url,
+    narration: session.narration,
+    events: session.events,
+    requests: xhrs,
+  };
+
+  // 5. Main compilation LLM call.
+  const promptPath = pathJoin(PROMPTS_DIR, 'playbook-compilation.md');
+  if (!existsSync(promptPath)) {
+    throw new Error(
+      `Prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
+    );
+  }
+  const systemPrompt = readFileSync(promptPath, 'utf8');
+
+  const llm = resolveProvider(opts.llmConfig ?? {});
+  const result = await llm.analyze(systemPrompt, slimmed);
+
+  let playbook: Playbook;
+  try {
+    playbook = parsePlaybook(stripCodeFences(result.text).trim());
+  } catch (err) {
+    throw new Error(
+      `Compiled playbook failed to parse: ${err instanceof Error ? err.message : String(err)}\nRaw output:\n${result.text.slice(0, 1500)}`,
+    );
+  }
+
+  const outPath = opts.outPath ?? pathJoin(dirname(opts.sessionPath), '..', 'playbook.yaml');
+  // Preserve the LLM's exact YAML rather than round-tripping through
+  // YAML.stringify (which would lose comments + reorder keys).
+  writeFileSync(outPath, `${stripCodeFences(result.text).trim()}\n`);
 
   return {
-    playbook: r.value,
-    playbookPath: r.outPath,
-    inputTokens: r.inputTokens,
-    outputTokens: r.outputTokens,
-    durationMs: r.durationMs,
+    playbook,
+    playbookPath: outPath,
+    inputTokens: addNullable(triageTokens.input, result.inputTokens),
+    outputTokens: addNullable(triageTokens.output, result.outputTokens),
+    durationMs: triageTokens.durationMs + result.durationMs,
   };
+}
+
+function addNullable(a: number | null, b: number | null): number | null {
+  if (a === null && b === null) return null;
+  return (a ?? 0) + (b ?? 0);
 }
 
 function truncate(s: string | undefined, limit: number): string | undefined {
