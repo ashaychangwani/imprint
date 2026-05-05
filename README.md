@@ -1,7 +1,7 @@
 <h1 align="center">Imprint</h1>
 
 <p align="center">
-  <strong>Teach an AI agent how to use any website. Once.</strong>
+  <strong>Don't do anything twice. Teach your AI agent once, and it remembers forever.</strong>
 </p>
 
 <p align="center">
