@@ -43,3 +43,9 @@ coverage/
 .claude/plans/
 .claude/worktrees/
 .claude/settings.local.json
+
+# Compile agent conversation logs
+examples/*/.compile-log.json
+
+# tsc --generateTrace output (local debug artifacts)
+trace/

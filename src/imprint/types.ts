@@ -125,6 +125,10 @@ export const WorkflowSchema = z.object({
   parameters: z.array(WorkflowParameterSchema),
   requests: z.array(WorkflowRequestSchema),
   site: z.string(),
+  /** Path to a sibling parser module (relative to the workflow.json file)
+   *  exporting `extract(rawResponse): unknown`. Applied by the runtime
+   *  to transform the raw API response into structured agent output. */
+  parserModule: z.string().optional(),
 });
 export type Workflow = z.infer<typeof WorkflowSchema>;
 

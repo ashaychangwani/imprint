@@ -9,8 +9,9 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
+import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
-import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
+import { type LLMOptions, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { parsePlaybook } from './playbook-parser.ts';
@@ -22,6 +23,8 @@ import {
   type Workflow,
   WorkflowSchema,
 } from './types.ts';
+
+export type { CompileAgentProgress } from './compile-agent.ts';
 
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
 const log = createLog('compile');
@@ -119,11 +122,13 @@ async function compile<T>(opts: CompileOptions, task: CompileTask<T>): Promise<C
 // ─── generate (workflow.json) ────────────────────────────────────────────────
 
 interface GenerateOptions extends CompileOptions {
-  /** If true, send the FULL session to the LLM (don't shrink). Useful for
-   *  debugging when shrinking might be over-aggressive. Default false. */
+  /** Hard wall-clock budget for the agent. Default 30 minutes. */
+  maxDurationMs?: number;
+  /** Progress callback with verification cycle information. */
+  onProgress?: (p: CompileAgentProgress) => void;
+  /** Legacy debug flag — kept for backward compat but ignored by the agentic compiler. */
   noShrink?: boolean;
-  /** If true, write the shrunken session next to workflow.json so we can
-   *  see what the LLM actually saw. Useful for prompt iteration. */
+  /** Legacy debug flag — kept for backward compat but ignored. */
   saveShrunken?: boolean;
 }
 
@@ -140,61 +145,47 @@ interface GenerateResult {
 }
 
 export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
-  // Capture per-task counters from inside the slim closure so we can
-  // surface them on the result without a separate slim pre-step.
-  let requestsOriginal = 0;
-  let requestsSent = 0;
-
-  const r = await compile<Workflow>(opts, {
-    promptFile: 'intent-detection.md',
-    slim: (session) => {
-      requestsOriginal = session.requests.length;
-      const shrunken = opts.noShrink ? session : shrinkSession(session);
-      requestsSent = shrunken.requests.length;
-      if (opts.saveShrunken) {
-        const path = opts.sessionPath.replace(/\.(redacted\.)?json$/, '.shrunken.json');
-        writeFileSync(path, `${JSON.stringify(shrunken, null, 2)}\n`);
-        log(`saved shrunken view → ${path}`);
-      }
-      log(`sending ${requestsSent} requests (down from ${requestsOriginal}) to LLM…`);
-      return shrunken;
-    },
-    parse: (raw) => {
-      const jsonText = extractJsonObject(raw);
-      if (!jsonText) {
-        throw new Error(
-          `LLM response did not contain a JSON object. Raw response:\n${raw.slice(0, 500)}`,
-        );
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(jsonText);
-      } catch (err) {
-        throw new Error(
-          `Extracted text was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${jsonText.slice(0, 500)}`,
-        );
-      }
-      try {
-        return WorkflowSchema.parse(parsed);
-      } catch (err) {
-        throw new Error(
-          `LLM output failed schema validation: ${err instanceof Error ? err.message : String(err)}\nRaw JSON: ${jsonText.slice(0, 1000)}\n→ if this keeps happening, re-record the session or check prompts/intent-detection.md.`,
-        );
-      }
-    },
-    defaultOutFile: 'workflow.json',
-    serialize: (workflow) => `${JSON.stringify(workflow, null, 2)}\n`,
-    artifactName: 'workflow',
+  const result = await compileAgent({
+    sessionPath: opts.sessionPath,
+    maxDurationMs: opts.maxDurationMs,
+    llmConfig: opts.llmConfig,
+    onProgress: opts.onProgress,
   });
 
+  if (!result.success) {
+    throw new Error(
+      [
+        'compile agent did not produce a verified workflow.',
+        `outcome: ${result.outcome}`,
+        `message: ${result.message}`,
+        `turns: ${result.turns}, duration: ${(result.durationMs / 1000).toFixed(1)}s`,
+        `conversation log: ${result.conversationLogPath}`,
+      ].join('\n'),
+    );
+  }
+
+  // Load the agent-written workflow.json from disk and validate.
+  if (!result.workflowPath) {
+    throw new Error('compile agent reported success but no workflowPath');
+  }
+  const workflow = loadJsonFile(
+    result.workflowPath,
+    WorkflowSchema,
+    {
+      notFound: 'compile agent reported success but workflow.json missing',
+      badSchema: 'compile agent wrote an invalid workflow.json',
+    },
+    'workflow',
+  );
+
   return {
-    workflow: r.value,
-    workflowPath: r.outPath,
-    requestsSent,
-    requestsOriginal,
-    inputTokens: r.inputTokens,
-    outputTokens: r.outputTokens,
-    durationMs: r.durationMs,
+    workflow,
+    workflowPath: result.workflowPath,
+    requestsSent: 0, // legacy field — no longer meaningful for agentic compile
+    requestsOriginal: 0, // legacy field
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    durationMs: result.durationMs,
   };
 }
 
