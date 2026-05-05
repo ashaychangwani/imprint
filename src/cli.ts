@@ -2,6 +2,7 @@
 /** CLI entry point. Run `imprint --help` for the verb list. */
 
 import { parseArgs } from 'node:util';
+import type { ProviderName } from './imprint/llm.ts';
 import { isDebug } from './imprint/log.ts';
 import { VERSION } from './imprint/version.ts';
 
@@ -65,13 +66,20 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   teach: {
     summary:
       'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow.',
-    usage: ['imprint teach <site> [--url <url>] [--persist-profile] [--no-interactive]'],
+    usage: [
+      'imprint teach <site> [--url <url>] [--persist-profile] [--no-interactive] [--provider <name>]',
+    ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
       { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
       {
         name: '--no-interactive',
         description: 'Run the full pipeline without prompts; print all integration snippets.',
+      },
+      {
+        name: '--provider <name>',
+        description:
+          'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
       },
     ],
     example: 'imprint teach google-flights --url https://flights.google.com',
@@ -105,7 +113,9 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   generate: {
     summary: 'LLM-compile a session into workflow.json (API replay artifact).',
-    usage: ['imprint generate <session.json> [--out <path>] [--no-shrink] [--save-shrunken]'],
+    usage: [
+      'imprint generate <session.json> [--out <path>] [--no-shrink] [--save-shrunken] [--provider <name>]',
+    ],
     flags: [
       { name: '--out <path>', description: 'Override the workflow.json output path.' },
       { name: '--no-shrink', description: 'Send the FULL session to the LLM (debugging).' },
@@ -113,13 +123,25 @@ export const VERB_HELP: Record<string, VerbHelp> = {
         name: '--save-shrunken',
         description: 'Write the shrunken view next to workflow.json (prompt iteration).',
       },
+      {
+        name: '--provider <name>',
+        description:
+          'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
+      },
     ],
     example: 'imprint generate examples/acmecorp/sessions/<ts>.redacted.json',
   },
   'compile-playbook': {
     summary: 'LLM-compile a session into playbook.yaml (DOM replay artifact).',
-    usage: ['imprint compile-playbook <session.json> [--out <path>]'],
-    flags: [{ name: '--out <path>', description: 'Override the playbook.yaml output path.' }],
+    usage: ['imprint compile-playbook <session.json> [--out <path>] [--provider <name>]'],
+    flags: [
+      { name: '--out <path>', description: 'Override the playbook.yaml output path.' },
+      {
+        name: '--provider <name>',
+        description:
+          'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
+      },
+    ],
     example: 'imprint compile-playbook examples/acmecorp/sessions/<ts>.redacted.json',
   },
   emit: {
@@ -408,15 +430,28 @@ async function main(argv: string[]): Promise<number> {
           out: { type: 'string' },
           'no-shrink': { type: 'boolean' },
           'save-shrunken': { type: 'boolean' },
+          provider: { type: 'string' },
         },
         allowPositionals: false,
       });
+
+      if (values.provider) {
+        const { isValidProvider } = await import('./imprint/llm.ts');
+        if (!isValidProvider(values.provider)) {
+          console.error(
+            `error: unknown provider '${values.provider}' — valid: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli`,
+          );
+          return 2;
+        }
+      }
+
       const { generate } = await import('./imprint/compile.ts');
       const result = await generate({
         sessionPath,
         outPath: values.out,
         noShrink: values['no-shrink'],
         saveShrunken: values['save-shrunken'],
+        llmConfig: values.provider ? { provider: values.provider as ProviderName } : undefined,
       });
       console.log('');
       console.log(`[imprint] workflow → ${result.workflowPath}`);
@@ -424,7 +459,7 @@ async function main(argv: string[]): Promise<number> {
         `[imprint] tool: ${result.workflow.toolName} (${result.workflow.requests.length} request${result.workflow.requests.length === 1 ? '' : 's'}, ${result.workflow.parameters.length} parameter${result.workflow.parameters.length === 1 ? '' : 's'})`,
       );
       console.log(
-        `[imprint] tokens: ${result.inputTokens} in, ${result.outputTokens} out — ${(result.durationMs / 1000).toFixed(1)}s`,
+        `[imprint] tokens: ${result.inputTokens ?? 'N/A'} in, ${result.outputTokens ?? 'N/A'} out — ${(result.durationMs / 1000).toFixed(1)}s`,
       );
       console.log('');
       console.log('next step:');
@@ -574,17 +609,35 @@ async function main(argv: string[]): Promise<number> {
       if (sessionPath === null) return 2;
       const { values } = parseArgs({
         args: argv.slice(2),
-        options: { out: { type: 'string' } },
+        options: {
+          out: { type: 'string' },
+          provider: { type: 'string' },
+        },
         allowPositionals: false,
       });
+
+      if (values.provider) {
+        const { isValidProvider } = await import('./imprint/llm.ts');
+        if (!isValidProvider(values.provider)) {
+          console.error(
+            `error: unknown provider '${values.provider}' — valid: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli`,
+          );
+          return 2;
+        }
+      }
+
       const { compilePlaybook } = await import('./imprint/compile.ts');
-      const result = await compilePlaybook({ sessionPath, outPath: values.out });
+      const result = await compilePlaybook({
+        sessionPath,
+        outPath: values.out,
+        llmConfig: values.provider ? { provider: values.provider as ProviderName } : undefined,
+      });
       console.log(`[imprint] playbook → ${result.playbookPath}`);
       console.log(
         `[imprint] tool: ${result.playbook.toolName} (${result.playbook.steps.length} step${result.playbook.steps.length === 1 ? '' : 's'}, ${result.playbook.parameters.length} parameter${result.playbook.parameters.length === 1 ? '' : 's'})`,
       );
       console.log(
-        `[imprint] tokens: ${result.inputTokens} in, ${result.outputTokens} out — ${(result.durationMs / 1000).toFixed(1)}s`,
+        `[imprint] tokens: ${result.inputTokens ?? 'N/A'} in, ${result.outputTokens ?? 'N/A'} out — ${(result.durationMs / 1000).toFixed(1)}s`,
       );
       // Suggest a smoke run; the playbook is most useful behind the cron ladder.
       const playbookSite = result.playbookPath.split('/').slice(-2, -1)[0] ?? '<site>';
@@ -639,9 +692,20 @@ async function main(argv: string[]): Promise<number> {
           url: { type: 'string' },
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
+          provider: { type: 'string' },
         },
         allowPositionals: false,
       });
+
+      if (values.provider) {
+        const { isValidProvider } = await import('./imprint/llm.ts');
+        if (!isValidProvider(values.provider)) {
+          console.error(
+            `error: unknown provider '${values.provider}' — valid: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli`,
+          );
+          return 2;
+        }
+      }
 
       const ctrl = new AbortController();
       const onSigint = (): void => ctrl.abort();
@@ -655,6 +719,7 @@ async function main(argv: string[]): Promise<number> {
           persistProfile: values['persist-profile'],
           signal: ctrl.signal,
           noInteractive: values['no-interactive'],
+          provider: values.provider as ProviderName | undefined,
         });
       } finally {
         process.removeListener('SIGINT', onSigint);
