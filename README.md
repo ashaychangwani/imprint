@@ -14,7 +14,7 @@
 
 ```bash
 git clone https://github.com/ashaychangwani/imprint.git && cd imprint
-bun install && bun link && bunx playwright install chromium
+bun install && bun link
 
 imprint teach southwest --url https://www.southwest.com
 ```
@@ -88,8 +88,7 @@ A typed MCP tool is generated and wired into your AI platform. Your agent calls 
 
 ```bash
 git clone https://github.com/ashaychangwani/imprint.git && cd imprint
-bun install && bun link            # makes `imprint` available globally
-bunx playwright install chromium   # browser engine for stealth-fetch + playbook
+bun install && bun link
 ```
 
 Set your LLM credentials and verify:
