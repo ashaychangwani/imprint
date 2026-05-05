@@ -91,6 +91,8 @@ function renderModule(workflow: Workflow, runtimeImportPath: string): string {
  * To regenerate: imprint emit examples/${workflow.site}/workflow.json --force
  */
 
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
   type CredentialStore,
@@ -107,6 +109,7 @@ export async function ${camelCase(workflow.toolName)}(
   input: ${pascalCase(workflow.toolName)}Input,
   opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch } = {},
 ): Promise<ToolResult> {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
 ${defaultsBlock || requiredCopies || '    // (no parameters)'}
 ${defaultsBlock && requiredCopies ? requiredCopies : ''}
@@ -116,6 +119,7 @@ ${defaultsBlock && requiredCopies ? requiredCopies : ''}
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    workflowPath: join(__dirname, 'workflow.json'),
   });
 }
 

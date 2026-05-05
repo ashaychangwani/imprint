@@ -19,6 +19,30 @@ interface LLMProvider {
   analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult>;
 }
 
+/** Subset of providers that support the Anthropic tool-use protocol.
+ *  vertex and anthropic-api qualify. claude-cli, codex-cli, and cursor-cli
+ *  do not expose tool-use in their CLI interfaces. */
+export interface ToolUseProvider extends LLMProvider {
+  messageWithTools(opts: {
+    system: string;
+    messages: Anthropic.MessageParam[];
+    tools: Anthropic.Tool[];
+    maxTokens?: number;
+  }): Promise<Anthropic.Message>;
+}
+
+export function isToolUseProvider(p: LLMProvider): p is ToolUseProvider {
+  return typeof (p as Partial<ToolUseProvider>).messageWithTools === 'function';
+}
+
+/** Some Claude models (opus-4-7+) reject the `temperature` parameter as
+ *  deprecated. This returns a fragment to spread into messages.create()
+ *  that includes temperature only when the model accepts it. */
+function temperatureFragment(model: string, temperature: number): { temperature?: number } {
+  if (/claude-opus-4-[7-9]/.test(model) || /claude-opus-[5-9]/.test(model)) return {};
+  return { temperature };
+}
+
 export interface LLMOptions {
   provider?: ProviderName;
   model?: string;
@@ -68,7 +92,7 @@ class VertexProvider implements LLMProvider {
       response = await this.client.messages.create({
         model: this.config.model,
         max_tokens: this.config.maxTokens,
-        temperature: this.config.temperature,
+        ...temperatureFragment(this.config.model, this.config.temperature),
         system: systemPrompt,
         messages: [{ role: 'user', content: userText }],
       });
@@ -88,6 +112,27 @@ class VertexProvider implements LLMProvider {
       durationMs: Date.now() - t0,
       stopReason: response.stop_reason ?? null,
     };
+  }
+
+  async messageWithTools(opts: {
+    system: string;
+    messages: Anthropic.MessageParam[];
+    tools: Anthropic.Tool[];
+    maxTokens?: number;
+  }): Promise<Anthropic.Message> {
+    try {
+      const response = await this.client.messages.create({
+        model: this.config.model,
+        max_tokens: opts.maxTokens ?? this.config.maxTokens,
+        ...temperatureFragment(this.config.model, this.config.temperature),
+        system: opts.system,
+        messages: opts.messages,
+        tools: opts.tools,
+      });
+      return response;
+    } catch (err) {
+      throw enrichVertexError(err, this.config);
+    }
   }
 }
 
@@ -160,7 +205,7 @@ class AnthropicApiProvider implements LLMProvider {
       response = await this.client.messages.create({
         model: this.config.model,
         max_tokens: this.config.maxTokens,
-        temperature: this.config.temperature,
+        ...temperatureFragment(this.config.model, this.config.temperature),
         system: systemPrompt,
         messages: [{ role: 'user', content: userText }],
       });
@@ -180,6 +225,27 @@ class AnthropicApiProvider implements LLMProvider {
       durationMs: Date.now() - t0,
       stopReason: response.stop_reason ?? null,
     };
+  }
+
+  async messageWithTools(opts: {
+    system: string;
+    messages: Anthropic.MessageParam[];
+    tools: Anthropic.Tool[];
+    maxTokens?: number;
+  }): Promise<Anthropic.Message> {
+    try {
+      const response = await this.client.messages.create({
+        model: this.config.model,
+        max_tokens: opts.maxTokens ?? this.config.maxTokens,
+        ...temperatureFragment(this.config.model, this.config.temperature),
+        system: opts.system,
+        messages: opts.messages,
+        tools: opts.tools,
+      });
+      return response;
+    } catch (err) {
+      throw enrichAnthropicApiError(err, this.config);
+    }
   }
 }
 
@@ -526,6 +592,27 @@ function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider 
 export function resolveProvider(opts: LLMOptions = {}): LLMProvider {
   const name = opts.provider ?? detectProvider();
   return createProvider(name, opts);
+}
+
+/** The model to use for the compile-agent (the agentic, tool-using compile
+ *  loop) on each provider. Defaults to Opus on Claude-capable backends —
+ *  the iterative reverse-engineering benefits significantly from the stronger
+ *  model, and Pro/Max claude-cli subscribers already pay for Opus access.
+ *  Honors $ANTHROPIC_MODEL_AGENT (preferred) or $ANTHROPIC_MODEL (fallback)
+ *  for explicit overrides. */
+export function preferredAgentModel(provider: ProviderName): string {
+  const override = process.env.ANTHROPIC_MODEL_AGENT ?? process.env.ANTHROPIC_MODEL;
+  if (override) return override;
+  switch (provider) {
+    case 'anthropic-api':
+    case 'vertex':
+    case 'claude-cli':
+      return 'claude-opus-4-7';
+    case 'codex-cli':
+      return 'o4-mini'; // codex's existing default
+    case 'cursor-cli':
+      return 'claude-opus-4-7'; // best-effort; cursor passes through
+  }
 }
 
 export function extractJsonObject(text: string): string | null {
