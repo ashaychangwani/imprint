@@ -41,87 +41,6 @@ interface CompileOptions {
   noShrink?: boolean;
 }
 
-interface CompileResult<T> {
-  value: T;
-  outPath: string;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  durationMs: number;
-}
-
-interface CompileTask<T> {
-  promptFile: string;
-  /** Slim the session to what the LLM actually needs. */
-  slim: (session: Session) => unknown;
-  /** Parse the LLM raw text into a validated value. Throws on bad output. */
-  parse: (raw: string) => T;
-  /** Default filename, written next to the session's parent directory. */
-  defaultOutFile: string;
-  /** Serialize the value (or the raw LLM text) to disk. */
-  serialize: (value: T, raw: string) => string;
-  /** Friendly name for log messages. */
-  artifactName: string;
-}
-
-async function compile<T>(opts: CompileOptions, task: CompileTask<T>): Promise<CompileResult<T>> {
-  let session: Session = loadJsonFile(
-    opts.sessionPath,
-    SessionSchema,
-    {
-      notFound: '→ run `imprint record <site>` to create one.',
-      notJson: `→ if it's a partial .jsonl, run \`imprint assemble ${opts.sessionPath}\` first.`,
-      badSchema: '→ check the file came from `imprint record`.',
-    },
-    'session',
-  );
-
-  // Auto-redact if the input wasn't already scrubbed — we never let
-  // plaintext credentials leave this process.
-  const looksRedacted = JSON.stringify(session).includes('[REDACTED:');
-  if (!looksRedacted) {
-    const r = redactSession(session);
-    session = r.session;
-    if (r.stats.totalRedactions > 0) {
-      log(
-        `redacted ${r.stats.totalRedactions} value(s) before sending to LLM (use \`imprint redact\` to scrub the file on disk too)`,
-      );
-    }
-  }
-
-  const slimmed = task.slim(session);
-
-  const promptPath = pathJoin(PROMPTS_DIR, task.promptFile);
-  if (!existsSync(promptPath)) {
-    throw new Error(
-      `Prompt not found at ${promptPath}\n→ this is an Imprint installation problem; please file an issue at https://github.com/ashaychangwani/imprint/issues with the steps you ran.`,
-    );
-  }
-  const systemPrompt = readFileSync(promptPath, 'utf8');
-
-  const llm = resolveProvider(opts.llmConfig ?? {});
-  const result = await llm.analyze(systemPrompt, slimmed);
-
-  let value: T;
-  try {
-    value = task.parse(result.text);
-  } catch (err) {
-    throw new Error(
-      `Compiled ${task.artifactName} failed to parse: ${err instanceof Error ? err.message : String(err)}\nRaw output:\n${result.text.slice(0, 1500)}`,
-    );
-  }
-
-  const outPath = opts.outPath ?? pathJoin(dirname(opts.sessionPath), '..', task.defaultOutFile);
-  writeFileSync(outPath, task.serialize(value, result.text));
-
-  return {
-    value,
-    outPath,
-    inputTokens: result.inputTokens,
-    outputTokens: result.outputTokens,
-    durationMs: result.durationMs,
-  };
-}
-
 // ─── generate (workflow.json) ────────────────────────────────────────────────
 
 interface GenerateOptions extends CompileOptions {
@@ -258,13 +177,8 @@ interface TriageResult {
   durationMs: number;
 }
 
-export async function triageRequests(
-  session: Session,
-  llmConfig?: LLMOptions,
-): Promise<TriageResult> {
-  const candidates = session.requests.filter((r) =>
-    TRIAGE_RESOURCE_TYPES.has(r.resourceType),
-  );
+async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise<TriageResult> {
+  const candidates = session.requests.filter((r) => TRIAGE_RESOURCE_TYPES.has(r.resourceType));
 
   const metadata = candidates.map((r) => ({
     seq: r.seq,
@@ -324,9 +238,7 @@ export async function triageRequests(
     requests: session.requests.filter((r) => selectedSet.has(r.seq)),
   };
 
-  log(
-    `triage selected ${selectedSet.size} requests out of ${candidates.length} candidates`,
-  );
+  log(`triage selected ${selectedSet.size} requests out of ${candidates.length} candidates`);
 
   return {
     session: triaged,
@@ -375,15 +287,16 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
     const r = redactSession(session);
     session = r.session;
     if (r.stats.totalRedactions > 0) {
-      log(
-        `redacted ${r.stats.totalRedactions} value(s) before sending to LLM`,
-      );
+      log(`redacted ${r.stats.totalRedactions} value(s) before sending to LLM`);
     }
   }
 
   // 3. Triage: LLM selects which requests matter.
-  let triageTokens: { input: number | null; output: number | null; durationMs: number } =
-    { input: null, output: null, durationMs: 0 };
+  let triageTokens: { input: number | null; output: number | null; durationMs: number } = {
+    input: null,
+    output: null,
+    durationMs: 0,
+  };
   if (!opts.noShrink) {
     const triage = await triageRequests(session, opts.llmConfig);
     session = triage.session;

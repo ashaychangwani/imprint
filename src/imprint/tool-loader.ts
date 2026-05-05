@@ -23,8 +23,10 @@ export interface ResolvedTool {
   toolFn: GeneratedToolFn;
 }
 
-/** Scan examples/, dynamically import each index.ts. Per-entry errors
- *  go to stderr and the entry is skipped — discovery never throws. */
+/** Scan examples/, dynamically import each index.ts. Supports both
+ *  flat layout (examples/<site>/index.ts) and multi-workflow layout
+ *  (examples/<site>/<workflow>/index.ts). Per-entry errors go to
+ *  stderr and the entry is skipped — discovery never throws. */
 export async function discoverTools(
   examplesDir: string,
   only?: string,
@@ -43,32 +45,57 @@ export async function discoverTools(
       continue;
     }
     if (!isDir) continue;
-    const modulePath = pathResolve(dir, 'index.ts');
-    if (!existsSync(modulePath)) continue;
 
-    let mod: GeneratedModule;
-    try {
-      mod = (await import(modulePath)) as GeneratedModule;
-    } catch (err) {
-      process.stderr.write(
-        `${logPrefix} skipping ${entry}: failed to load (${err instanceof Error ? err.message : String(err)})\n`,
-      );
-      continue;
+    // Flat layout: examples/<site>/index.ts
+    const flatModule = pathResolve(dir, 'index.ts');
+    if (existsSync(flatModule)) {
+      const tool = await tryLoadTool(flatModule, entry, logPrefix);
+      if (tool) out.push(tool);
     }
-    if (!mod.WORKFLOW) {
-      process.stderr.write(`${logPrefix} skipping ${entry}: missing WORKFLOW export\n`);
-      continue;
+
+    // Multi-workflow layout: examples/<site>/<workflow>/index.ts
+    for (const sub of readdirSync(dir)) {
+      const subDir = pathResolve(dir, sub);
+      try {
+        if (!statSync(subDir).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      const subModule = pathResolve(subDir, 'index.ts');
+      if (!existsSync(subModule)) continue;
+      const tool = await tryLoadTool(subModule, entry, logPrefix);
+      if (tool) out.push(tool);
     }
-    const fn = findToolFunction(mod);
-    if (!fn) {
-      process.stderr.write(
-        `${logPrefix} skipping ${entry}: missing exported function for "${mod.WORKFLOW.toolName}"\n`,
-      );
-      continue;
-    }
-    out.push({ site: entry, workflow: mod.WORKFLOW, toolFn: fn });
   }
   return out;
+}
+
+async function tryLoadTool(
+  modulePath: string,
+  site: string,
+  logPrefix: string,
+): Promise<ResolvedTool | null> {
+  let mod: GeneratedModule;
+  try {
+    mod = (await import(modulePath)) as GeneratedModule;
+  } catch (err) {
+    process.stderr.write(
+      `${logPrefix} skipping ${modulePath}: failed to load (${err instanceof Error ? err.message : String(err)})\n`,
+    );
+    return null;
+  }
+  if (!mod.WORKFLOW) {
+    process.stderr.write(`${logPrefix} skipping ${modulePath}: missing WORKFLOW export\n`);
+    return null;
+  }
+  const fn = findToolFunction(mod);
+  if (!fn) {
+    process.stderr.write(
+      `${logPrefix} skipping ${modulePath}: missing exported function for "${mod.WORKFLOW.toolName}"\n`,
+    );
+    return null;
+  }
+  return { site, workflow: mod.WORKFLOW, toolFn: fn };
 }
 
 /** Tool fn export is the camelCase of toolName: book_x_y → bookXY. */

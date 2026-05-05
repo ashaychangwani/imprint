@@ -65,12 +65,16 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   teach: {
     summary:
-      'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow.',
+      'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
     usage: [
-      'imprint teach <site> [--url <url>] [--persist-profile] [--no-interactive] [--provider <name>]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--provider <name>]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
+      {
+        name: '--from-session <path>',
+        description: 'Skip recording; use an existing session file to compile from.',
+      },
       { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
       {
         name: '--no-interactive',
@@ -746,6 +750,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           url: { type: 'string' },
+          'from-session': { type: 'string' },
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
           provider: { type: 'string' },
@@ -772,6 +777,7 @@ async function main(argv: string[]): Promise<number> {
         await teach({
           site,
           url: values.url,
+          fromSession: values['from-session'],
           persistProfile: values['persist-profile'],
           signal: ctrl.signal,
           noInteractive: values['no-interactive'],
