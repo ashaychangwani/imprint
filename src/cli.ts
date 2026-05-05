@@ -729,6 +729,12 @@ async function main(argv: string[]): Promise<number> {
       } else {
         const { discoverTools } = await import('./imprint/tool-loader.ts');
         const tools = await discoverTools(pathResolve(process.cwd(), 'examples'), site);
+        if (tools.length > 1) {
+          console.error(
+            `error: site "${site}" has ${tools.length} workflows — specify which with --path:\n${tools.map((t) => `  --path ${pathResolve(t.dir, 'playbook.yaml')}`).join('\n')}`,
+          );
+          return 2;
+        }
         const tool = tools[0];
         playbookPath = tool
           ? pathResolve(tool.dir, 'playbook.yaml')

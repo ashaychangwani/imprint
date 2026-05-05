@@ -101,10 +101,19 @@ function saveTeachState(site: string, state: TeachState): void {
     }
     return;
   }
-  // Atomic write: write to tmp, then rename (rename is atomic on POSIX).
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-  renameSync(tmp, path);
+  try {
+    renameSync(tmp, path);
+  } catch {
+    // On Windows, rename can fail if dest exists. Fall back to overwrite.
+    writeFileSync(path, readFileSync(tmp, 'utf8'), 'utf8');
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function nextStep(completed: Step[]): Step {
@@ -411,7 +420,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     const siteDir = pathResolve('examples', opts.site);
     for (const artifact of ['workflow.json', 'parser.ts', 'parser.test.ts']) {
       const src = pathJoin(siteDir, artifact);
-      if (existsSync(src)) renameSync(src, pathJoin(workflowDir, artifact));
+      if (!existsSync(src)) continue;
+      const dest = pathJoin(workflowDir, artifact);
+      try {
+        renameSync(src, dest);
+      } catch {
+        writeFileSync(dest, readFileSync(src, 'utf8'), 'utf8');
+        unlinkSync(src);
+      }
     }
 
     const finalWorkflowPath = pathJoin(workflowDir, 'workflow.json');
