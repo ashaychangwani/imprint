@@ -6,7 +6,7 @@ import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 
 export type ProviderName = 'anthropic-api' | 'vertex' | 'claude-cli' | 'codex-cli' | 'cursor-cli';
 
-export interface AnalyzeResult {
+interface AnalyzeResult {
   text: string;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -14,7 +14,7 @@ export interface AnalyzeResult {
   stopReason: string | null;
 }
 
-export interface LLMProvider {
+interface LLMProvider {
   readonly name: ProviderName;
   analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult>;
 }
@@ -493,7 +493,7 @@ export function detectProvider(): ProviderName {
   );
 }
 
-export function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider {
+function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider {
   const model = opts.model ?? process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6';
   const temperature = opts.temperature ?? 0;
   const maxTokens = opts.maxTokens ?? 8192;
