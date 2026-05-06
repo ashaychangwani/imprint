@@ -30,6 +30,7 @@
     "circular": "madge --circular --extensions ts src/",
     "check": "bun run typecheck && bun run lint && bun run test && bun run deadcode",
     "changelog": "bunx git-cliff --config cliff.toml --unreleased --strip header",
+    "prepare": "git config core.hooksPath .githooks",
     "postinstall": "bunx playwright install chromium"
   },
   "dependencies": {

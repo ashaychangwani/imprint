@@ -61,7 +61,7 @@ const WORKFLOW: Workflow = {
       "headers": {
         "Content-Type": "application/json",
         "Accept": "application/json, text/javascript, */*; q=0.01",
-        "X-API-Key": "REDACTED",
+        "X-API-Key": "${env.SOUTHWEST_API_KEY}",
         "X-App-ID": "air-booking",
         "X-Channel-ID": "southwest"
       },

@@ -1,5 +1,5 @@
 /**
- * Workflow execution engine — substitutes ${param/credential/response[N]}
+ * Workflow execution engine — substitutes ${param/credential/env/response[N]}
  * placeholders, loads cookies from the site credential store, runs the
  * chain sequentially, returns a classified ToolResult. Generated tool
  * files are thin wrappers around executeWorkflow().
@@ -229,7 +229,7 @@ function substituteRequest(
 }
 
 const PLACEHOLDER_RE =
-  /\$\{(param|credential|response)\.([^}]+)\}|\$\{response\[(\d+)\]\.([^}]+)\}/g;
+  /\$\{(param|credential|env|response)\.([^}]+)\}|\$\{response\[(\d+)\]\.([^}]+)\}/g;
 
 export function substituteString(
   template: string,
@@ -256,6 +256,16 @@ export function substituteString(
           );
         }
         const v = jsonpath(target, path);
+        return encodePart(v, template, match);
+      }
+      // ${env.X}
+      if (kind === 'env' && name) {
+        const v = process.env[name];
+        if (v === undefined) {
+          throw new Error(
+            `Workflow placeholder ${match} but environment variable "${name}" is not set`,
+          );
+        }
         return encodePart(v, template, match);
       }
       // ${param.X} / ${credential.X}
