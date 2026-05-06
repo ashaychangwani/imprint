@@ -48,6 +48,8 @@ interface GenerateOptions extends CompileOptions {
   maxDurationMs?: number;
   /** Progress callback with verification cycle information. */
   onProgress?: (p: CompileAgentProgress) => void;
+  /** Retain parser.test.ts after successful verification. */
+  keepTest?: boolean;
 }
 
 interface GenerateResult {
@@ -68,6 +70,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
     maxDurationMs: opts.maxDurationMs,
     llmConfig: opts.llmConfig,
     onProgress: opts.onProgress,
+    keepTest: opts.keepTest,
   });
 
   if (!result.success) {
@@ -163,6 +166,10 @@ function safeUrl(s: string): URL | null {
 
 const TRIAGE_RESOURCE_TYPES = new Set(['XHR', 'Fetch', 'Document']);
 const HEADER_TRUNCATE_LIMIT = 200;
+// Per-request body cap for triage. Triage only needs enough body to distinguish
+// data-bearing POSTs (search/booking) from telemetry; full bodies on a busy
+// site can total >1MB and blow the 200K-token cap on `claude-opus-4-7`.
+const TRIAGE_BODY_LIMIT = 500;
 
 interface TriageResult {
   session: Session;
@@ -184,7 +191,7 @@ async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise
     resourceType: r.resourceType,
     status: r.response?.status,
     headers: truncateHeaders(r.headers),
-    body: r.body,
+    body: truncate(r.body, TRIAGE_BODY_LIMIT),
   }));
 
   const triagePayload = {

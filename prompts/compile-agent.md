@@ -21,7 +21,7 @@ You will produce three artifacts in the `examples/<site>/` directory:
    ```
    The function takes the raw response body (already parsed if JSON, otherwise a string) and returns a clean, named-field object suitable for an AI agent's consumption.
 
-3. **parser.test.ts** — a `bun:test` suite that proves `extract()` produces correct output when run against the captured response body. Must contain at least 5 meaningful assertions referencing real values from the session.
+3. **parser.test.ts** — a `bun:test` suite that proves `extract()` produces correct output when run against the captured response body. Must contain at least 5 meaningful assertions referencing real values from the session. **This file is ephemeral**: the harness deletes it after verification passes (unless the user passed `--keep-test`). Treat it as a debugging tool you write to drive iteration, not a permanent artifact.
 
 ## The Loop
 
@@ -61,11 +61,32 @@ Follow these steps to compile the session:
    - Return a named-field object, not the raw input — the goal is to make the data usable by an AI agent without further parsing
 
 9. **Write parser.test.ts.** Create a `bun:test` suite:
-   - Import the captured response body (you can write it to a fixture file, or inline it as a const)
-   - Import `extract` from `./parser.ts`
-   - Call `extract(response)` and assert on the result
-   - Assertions must reference real values from the narration: `expect(result.flights.length).toBeGreaterThan(0)`, `expect(result.flights.some(f => f.origin === 'SFO')).toBe(true)`, `expect(result.flights[0].price).toBeGreaterThan(0)`
-   - Aim for at least 5 assertions — more is better
+   - **Load the response body from the redacted session at runtime via `process.env.IMPRINT_SESSION_PATH`.** The harness sets that env var to the absolute path of the redacted session file when it spawns `bun test`. Do NOT write a fixture file. Do NOT inline the response body as a string literal. The boilerplate looks like:
+     ```typescript
+     import { readFileSync } from 'node:fs';
+     import { expect, test } from 'bun:test';
+     import { extract } from './parser.ts';
+
+     const SESSION_PATH = process.env.IMPRINT_SESSION_PATH;
+     if (!SESSION_PATH) {
+       throw new Error('IMPRINT_SESSION_PATH is not set — run via `imprint generate` / `imprint teach`, not bare `bun test`.');
+     }
+     const session = JSON.parse(readFileSync(SESSION_PATH, 'utf8')) as {
+       requests: Array<{ seq: number; response?: { body?: string } }>;
+     };
+     const TARGET_SEQ = 17; // ← seq number of the load-bearing request you identified above
+     const target = session.requests.find((r) => r.seq === TARGET_SEQ);
+     if (!target?.response?.body) throw new Error(`seq ${TARGET_SEQ} has no captured response body`);
+     // Parse if JSON; otherwise pass the raw string. Mirror compile-agent's extract() contract.
+     let raw: unknown;
+     try { raw = JSON.parse(target.response.body); } catch { raw = target.response.body; }
+     ```
+   - Import `extract` from `./parser.ts`.
+   - Call `extract(raw)` and assert on the result.
+   - Assertions must reference real values from the narration: `expect(result.flights.length).toBeGreaterThan(0)`, `expect(result.flights.some(f => f.origin === 'SFO')).toBe(true)`, `expect(result.flights[0].price).toBeGreaterThan(0)`.
+   - Aim for at least 5 assertions — more is better.
+
+   The session under `sessions/` is gitignored (auth tokens / PII risk) and the test file is deleted after verification passes — together that means the test is local-and-ephemeral by design. Don't try to persist the response body to disk to dodge the env var.
 
 10. **Run tests.** Use `run_tests` (or `run_bash` with `bun test parser.test.ts`) to execute the suite. Read failures carefully — they tell you exactly what's wrong.
 
@@ -140,12 +161,12 @@ The response is a deeply nested array with no key names: `[null, [[...], [...], 
    }
    ```
 
-5. **Test with concrete assertions.** Run the extraction and assert known values from the narration appear in the output:
+5. **Test with concrete assertions.** Run the extraction (where `raw` came from `process.env.IMPRINT_SESSION_PATH` per step 9 above) and assert known values from the narration appear in the output:
    ```typescript
    test('extracts flights with known airports', () => {
-     const result = extract(capturedResponse);
-     expect(result.flights.some(f => f.origin === 'SFO')).toBe(true);
-     expect(result.flights.some(f => f.destination.includes('TYO') || f.destination.includes('HND'))).toBe(true);
+     const result = extract(raw) as { flights: Array<{ origin: string; destination: string }> };
+     expect(result.flights.some((f) => f.origin === 'SFO')).toBe(true);
+     expect(result.flights.some((f) => f.destination.includes('TYO') || f.destination.includes('HND'))).toBe(true);
    });
    ```
 

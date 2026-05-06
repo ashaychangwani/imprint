@@ -289,6 +289,9 @@ class ClaudeCliProvider implements LLMProvider {
     const t0 = Date.now();
     const userText = JSON.stringify(userPayload);
 
+    // NOTE: no --bare. Without it claude-cli reads OAuth from the keychain,
+    // so Pro/Max subscribers spend subscription tokens instead of needing
+    // ANTHROPIC_API_KEY. Same rationale as claude-cli-compile.ts.
     const args = [
       'claude',
       '-p',
@@ -298,7 +301,6 @@ class ClaudeCliProvider implements LLMProvider {
       'json',
       '--model',
       this.model,
-      '--bare',
     ];
 
     let proc: ReturnType<typeof Bun.spawn>;

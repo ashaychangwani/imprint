@@ -67,7 +67,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--provider <name>]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--provider <name>] [--keep-test]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
@@ -84,6 +84,11 @@ export const VERB_HELP: Record<string, VerbHelp> = {
         name: '--provider <name>',
         description:
           'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
+      },
+      {
+        name: '--keep-test',
+        description:
+          'Retain the agent-generated parser.test.ts after compile (debug). Default deletes it; the test reads the gitignored redacted session via $IMPRINT_SESSION_PATH and is not portable.',
       },
     ],
     example: 'imprint teach google-flights --url https://flights.google.com',
@@ -118,7 +123,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   generate: {
     summary: 'LLM-compile a session into workflow.json (API replay artifact).',
     usage: [
-      'imprint generate <session.json> [--out <path>] [--max-duration <time>] [--provider <name>]',
+      'imprint generate <session.json> [--out <path>] [--max-duration <time>] [--provider <name>] [--keep-test]',
     ],
     flags: [
       { name: '--out <path>', description: 'Override the workflow.json output path.' },
@@ -130,6 +135,11 @@ export const VERB_HELP: Record<string, VerbHelp> = {
         name: '--provider <name>',
         description:
           'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
+      },
+      {
+        name: '--keep-test',
+        description:
+          'Retain the agent-generated parser.test.ts after compile (debug). Default deletes it; the test reads the gitignored redacted session via $IMPRINT_SESSION_PATH and is not portable.',
       },
     ],
     example: 'imprint generate examples/acmecorp/sessions/<ts>.redacted.json',
@@ -440,6 +450,7 @@ async function main(argv: string[]): Promise<number> {
           out: { type: 'string' },
           'max-duration': { type: 'string' },
           provider: { type: 'string' },
+          'keep-test': { type: 'boolean' },
         },
         allowPositionals: false,
       });
@@ -501,6 +512,7 @@ async function main(argv: string[]): Promise<number> {
         outPath: values.out,
         maxDurationMs,
         llmConfig: { provider: providerName, model: compileModel },
+        keepTest: values['keep-test'],
         onProgress: (p) => {
           const activity = describeAgentActivity(p);
           if (activity === lastActivity) return;
@@ -779,6 +791,7 @@ async function main(argv: string[]): Promise<number> {
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
           provider: { type: 'string' },
+          'keep-test': { type: 'boolean' },
         },
         allowPositionals: false,
       });
@@ -814,10 +827,36 @@ async function main(argv: string[]): Promise<number> {
           signal: ctrl.signal,
           noInteractive: values['no-interactive'],
           provider: values.provider as ProviderName | undefined,
+          keepTest: values['keep-test'],
         });
       } finally {
         process.removeListener('SIGINT', onSigint);
       }
+      return 0;
+    }
+
+    // Hidden verb: spawned by claude-cli-compile.ts via --mcp-config. Not in
+    // VERB_HELP, not advertised. Double-underscore prefix marks it as internal.
+    case '__mcp-compile-server': {
+      const { values } = parseArgs({
+        args: argv.slice(1),
+        options: {
+          'session-path': { type: 'string' },
+          'example-dir': { type: 'string' },
+        },
+        allowPositionals: false,
+      });
+      if (!values['session-path'] || !values['example-dir']) {
+        console.error(
+          'error: __mcp-compile-server requires --session-path <path> and --example-dir <path>',
+        );
+        return 2;
+      }
+      const { runCompileMcpServer } = await import('./imprint/mcp-compile-server.ts');
+      await runCompileMcpServer({
+        sessionPath: values['session-path'],
+        exampleDir: values['example-dir'],
+      });
       return 0;
     }
 

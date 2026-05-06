@@ -181,7 +181,7 @@ imprint <command> --help    # per-command options
 | **Runtime** | `cron` · `mcp-server` · `playbook` · `probe-backends` |
 | **Utilities** | `login` · `assemble` · `check` · `doctor` |
 
-`teach`, `generate`, and `compile-playbook` accept `--provider <name>` to override the auto-detected LLM (see [Install](#install) for the five valid names).
+`teach`, `generate`, and `compile-playbook` accept `--provider <name>` to override the auto-detected LLM (see [Install](#install) for the five valid names). `teach` and `generate` also take `--keep-test` to retain the agent-written `parser.test.ts` for debugging — it's deleted by default since it reads the gitignored redacted session via `$IMPRINT_SESSION_PATH` and isn't reproducible elsewhere.
 
 <br>
 
