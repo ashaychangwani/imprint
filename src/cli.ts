@@ -759,10 +759,20 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case 'teach': {
-      const site = requirePositional(argv, 'teach', 'a <site> argument');
-      if (site === null) return 2;
+      const rawSite = argv[1];
+      let site: string | undefined;
+      if (rawSite?.startsWith('-')) {
+        // Looks like a flag — can't tell from a missing site, so error out
+        // with the explanation regardless of interactive mode.
+        console.error(
+          'error: `imprint teach` requires a <site> name before any flags.\n  <site> is a label you choose — it names the output folder under examples/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
+        );
+        return 2;
+      }
+      if (rawSite) site = rawSite;
+
       const { values } = parseArgs({
-        args: argv.slice(2),
+        args: argv.slice(rawSite ? 2 : 1),
         options: {
           url: { type: 'string' },
           'from-session': { type: 'string' },
@@ -772,6 +782,13 @@ async function main(argv: string[]): Promise<number> {
         },
         allowPositionals: false,
       });
+
+      if (!site && values['no-interactive']) {
+        console.error(
+          'error: `imprint teach` requires a <site> argument in --no-interactive mode.\n  <site> is a label you choose — it names the output folder under examples/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
+        );
+        return 2;
+      }
 
       if (values.provider) {
         const { isValidProvider } = await import('./imprint/llm.ts');
