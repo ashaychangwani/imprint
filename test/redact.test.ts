@@ -34,7 +34,7 @@ describe('redactFormBody', () => {
   });
 
   it('leaves non-sensitive fields alone', () => {
-    const body = 'name=alice&email=alice@example.com&attractionId=7';
+    const body = 'attractionId=7&color=blue&quantity=3';
     const r = redactFormBody(body);
     expect(r.redactionsCount).toBe(0);
     expect(r.redacted).toBe(body);
@@ -69,8 +69,8 @@ describe('redactUrl', () => {
   it('redacts sensitive query params', () => {
     const url = 'https://api.example.com/x?accessToken=abc&user=alice&apikey=xyz';
     const r = redactUrl(url);
-    expect(r.redactionsCount).toBe(2);
-    expect(r.redacted).toContain('user=alice');
+    expect(r.redactionsCount).toBe(3);
+    expect(r.redacted).not.toContain('user=alice');
     expect(r.redacted).not.toContain('accessToken=abc');
     expect(r.redacted).not.toContain('apikey=xyz');
   });
@@ -171,7 +171,7 @@ describe('redactSession', () => {
     expect(req).toBeDefined();
     if (!req) return;
     expect(req.body).not.toContain('hunter2');
-    expect(req.body).toContain('user=alice'); // non-sensitive preserved
+    expect(req.body).not.toContain('user=alice'); // user is now sensitive
     expect(req.headers.Cookie).toMatch(/^\[REDACTED:\d+\]$/);
     expect(req.response?.headers['Set-Cookie']).toMatch(/^\[REDACTED:\d+\]$/);
 
