@@ -160,7 +160,9 @@ Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the l
 
 | Example | What it demonstrates | Run it |
 |---|---|---|
-| [**southwest**](examples/southwest) | Live fare watcher, defeats Akamai, price-drop notifications | `imprint cron southwest --once` |
+| [**southwest**](examples/southwest) | Live fare watcher, defeats Akamai bot detection, price-drop notifications | `imprint cron southwest --once` |
+| [**google-flights**](examples/google-flights) | Real-time flight search across all carriers, parses Google's raw protobuf response | `imprint mcp-server google-flights` |
+| [**google-hotels**](examples/google-hotels) | Hotel search with star rating, guest scores, nightly + total prices | `imprint mcp-server google-hotels` |
 | [**discoverandgo**](examples/discoverandgo) | Authenticated booking via per-site credential store | `imprint cron discoverandgo --once` |
 | [**echo**](examples/echo) | MCP smoke-test fixture (no network, no LLM) | `imprint mcp-server echo` |
 
