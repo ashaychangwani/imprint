@@ -9,6 +9,7 @@
   <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ashaychangwani/cbd3134e06fb4fabf24aed94b251bdfd/raw/test-count.json" alt="Test count">
   <a href="https://github.com/ashaychangwani/imprint/releases"><img src="https://img.shields.io/github/v/release/ashaychangwani/imprint?label=release" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
+  <a href="https://github.com/ashaychangwani/imprint/stargazers"><img src="https://img.shields.io/github/stars/ashaychangwani/imprint?style=social" alt="GitHub Stars"></a>
 </p>
 
 <br>
@@ -85,6 +86,21 @@ A typed MCP tool is generated and wired into your AI platform. Your agent calls 
 
 <br>
 
+## Why Imprint?
+
+Other browser-tool frameworks (browser-use, Computer Use) ask the LLM to **decide every click at runtime**.
+
+| | Imprint | browser-use / Computer Use |
+|---|---|---|
+| **How it works** | Record once, replay deterministically | LLM decides every click at runtime |
+| **Token cost** | Zero at runtime | Scales with workflow complexity |
+| **Reliability** | Deterministic — same input, same output | Variable — exploration can diverge |
+| **Bot detection** | Real Chromium + stealth-fetch | Detectable automation fingerprint |
+| **When it breaks** | Automatic fallback via backend ladder | No fallback |
+| **Time to result** | 200ms – 9s | 30s+ |
+
+<br>
+
 ## Install
 
 ```bash
@@ -137,21 +153,6 @@ When an API call gets blocked, Imprint doesn't fail — it escalates:
 | **playbook** | ~9s | Anything — full DOM replay as fallback |
 
 Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder always has somewhere to go. If the API changes, the DOM playbook still works. If the page redesigns, re-record in two minutes.
-
-<br>
-
-## Why Imprint?
-
-Other browser-tool frameworks (browser-use, Computer Use) ask the LLM to **decide every click at runtime**.
-
-| | Imprint | browser-use / Computer Use |
-|---|---|---|
-| **How it works** | Record once, replay deterministically | LLM decides every click at runtime |
-| **Token cost** | Zero at runtime | Scales with workflow complexity |
-| **Reliability** | Deterministic — same input, same output | Variable — exploration can diverge |
-| **Bot detection** | Real Chromium + stealth-fetch | Detectable automation fingerprint |
-| **When it breaks** | Automatic fallback via backend ladder | No fallback |
-| **Time to result** | 200ms – 9s | 30s+ |
 
 <br>
 
