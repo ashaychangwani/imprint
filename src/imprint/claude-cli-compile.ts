@@ -25,9 +25,10 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
+import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
 import type { Session } from './types.ts';
@@ -47,6 +48,9 @@ interface CompileViaClaudeCliOptions {
   deadlineMs: number;
   startTime: number;
   onProgress?: (p: CompileAgentProgress) => void;
+  /** Retain parser.test.ts after successful verification. Mirrors the
+   *  in-process loop's `keepTest`. */
+  keepTest?: boolean;
 }
 
 interface StreamJsonEvent {
@@ -84,7 +88,7 @@ export async function compileViaClaudeCli(
     const p = pathJoin(opts.absoluteExampleDir, name);
     if (existsSync(p)) {
       try {
-        writeFileSync(p, ''); // truncate; we read sentinel content later, but we want to detect *new* writes
+        unlinkSync(p); // remove, not truncate — existsSync() is what gates success/give-up detection later
       } catch {
         // best effort
       }
@@ -169,7 +173,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     '--no-session-persistence',
     '--disable-slash-commands',
     '--model',
-    'claude-opus-4-7',
+    preferredAgentModel('claude-cli'),
     initialPrompt,
   ];
 
@@ -336,6 +340,26 @@ async function driveStreamJson(
   const workflowPath = pathJoin(opts.absoluteExampleDir, 'workflow.json');
   const parserPath = pathJoin(opts.absoluteExampleDir, 'parser.ts');
   const parserTestPath = pathJoin(opts.absoluteExampleDir, 'parser.test.ts');
+
+  // Determine success up-front so we can clean up the ephemeral parser.test.ts
+  // before constructing baseResult (which captures parserTestPath via existsSync).
+  const verifiedOk =
+    existsSync(doneSentinel) &&
+    (() => {
+      try {
+        const raw = readFileSync(doneSentinel, 'utf8').trim();
+        return raw ? JSON.parse(raw).verification === 'passed' : false;
+      } catch {
+        return false;
+      }
+    })();
+  if (verifiedOk && !opts.keepTest && existsSync(parserTestPath)) {
+    try {
+      unlinkSync(parserTestPath);
+    } catch {
+      // best effort
+    }
+  }
 
   const baseResult: Pick<
     CompileAgentResult,

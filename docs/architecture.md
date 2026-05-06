@@ -94,17 +94,24 @@ src/imprint/
 ## File taxonomy per example
 
 ```
-examples/<site>/
-├── sessions/
-│   ├── <ts>.jsonl              raw streaming capture
-│   └── <ts>.json               assembled session
-│   └── <ts>.redacted.json      after `imprint redact`
-├── workflow.json               output of `imprint generate`
-├── playbook.yaml               output of `imprint compile-playbook`
-├── index.ts                    output of `imprint emit` (consumed by cron + MCP)
+examples/<site>/<toolName>/
+├── workflow.json               output of `imprint generate`     (committed)
+├── parser.ts                   API-response → structured output (committed)
+├── playbook.yaml               output of `imprint compile-playbook` (committed)
+├── index.ts                    output of `imprint emit` (consumed by cron + MCP) (committed)
 ├── cron.json                   schedule + params + replayBackend + notifyWhen
 └── backends.json               output of `imprint probe-backends`
+
+examples/<site>/sessions/       (gitignored — auth tokens / PII)
+├── <ts>.jsonl                  raw streaming capture
+├── <ts>.json                   assembled session
+└── <ts>.redacted.json          after `imprint redact`
 ```
+
+**Ephemeral artifacts** the compile-agent writes during a run but does not persist:
+
+- `parser.test.ts` — `bun:test` suite that exercises `parser.extract()` against the load-bearing response body. Reads the redacted session via `process.env.IMPRINT_SESSION_PATH` set by the harness. Deleted after verification passes; pass `--keep-test` to `teach` / `generate` to retain it for local debugging.
+- `.compile-log.json`, `.compile-done.json`, `.compile-give-up.json` — agent loop transcript + sentinels (gitignored).
 
 ## Extending Imprint
 

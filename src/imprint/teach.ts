@@ -63,6 +63,8 @@ interface TeachOptions {
   noInteractive?: boolean;
   provider?: ProviderName;
   fromSession?: string;
+  /** Retain parser.test.ts after successful compile-agent verification. */
+  keepTest?: boolean;
 }
 
 interface TeachResult {
@@ -466,6 +468,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     const result = await generate({
       sessionPath: redactedPath,
       llmConfig: { provider: providerName, model: compileModel },
+      keepTest: opts.keepTest,
       onProgress: (progress) => {
         spinner.message(formatCompileProgress(progress));
       },

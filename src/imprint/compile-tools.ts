@@ -15,7 +15,18 @@ import { type CapturedRequest, type Session, WorkflowSchema } from './types.ts';
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 
-export function buildCompileTools(session: Session, exampleDir: string): AgentTool[] {
+// Env var read by the agent-written parser.test.ts to locate the redacted
+// session. The test loads it, finds the load-bearing request seq, and feeds
+// response.body to extract(). Set when we spawn `bun test parser.test.ts`
+// from run_tests / externalVerification — the test never reads from disk
+// without it, so leftover test files won't blow up under default `bun test`.
+const SESSION_PATH_ENV = 'IMPRINT_SESSION_PATH';
+
+export function buildCompileTools(
+  session: Session,
+  exampleDir: string,
+  sessionPath: string,
+): AgentTool[] {
   return [
     buildReadSessionSummaryTool(session),
     buildReadRequestTool(session),
@@ -24,7 +35,7 @@ export function buildCompileTools(session: Session, exampleDir: string): AgentTo
     buildWriteFileTool(exampleDir),
     buildReadFileTool(exampleDir),
     buildRunBashTool(exampleDir),
-    buildRunTestsTool(exampleDir),
+    buildRunTestsTool(exampleDir, sessionPath),
   ];
 }
 
@@ -391,11 +402,12 @@ async function runCommand(
   command: string,
   cwd: string,
   timeoutMs: number,
+  extraEnv?: Record<string, string>,
 ): Promise<{ result: string; isError?: boolean }> {
   return new Promise((resolve) => {
     const proc = spawn('sh', ['-c', command], {
       cwd,
-      env: process.env,
+      env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
     });
 
     let stdout = '';
@@ -442,7 +454,7 @@ async function runCommand(
 
 // ─── Tool: run_tests ─────────────────────────────────────────────────────────
 
-function buildRunTestsTool(exampleDir: string): AgentTool {
+function buildRunTestsTool(exampleDir: string, sessionPath: string): AgentTool {
   return {
     name: 'run_tests',
     description: 'Run bun test parser.test.ts and parse the output for pass/fail counts.',
@@ -460,7 +472,9 @@ function buildRunTestsTool(exampleDir: string): AgentTool {
         };
       }
 
-      const cmdResult = await runCommand('bun test parser.test.ts', exampleDir, 120000);
+      const cmdResult = await runCommand('bun test parser.test.ts', exampleDir, 120000, {
+        [SESSION_PATH_ENV]: sessionPath,
+      });
 
       const output = JSON.parse(cmdResult.result) as {
         stdout: string;
@@ -497,6 +511,7 @@ function buildRunTestsTool(exampleDir: string): AgentTool {
 export async function externalVerification(
   exampleDir: string,
   session: Session,
+  sessionPath: string,
 ): Promise<string[]> {
   const failures: string[] = [];
 
@@ -558,7 +573,9 @@ export async function externalVerification(
   }
 
   if (existsSync(parserTestPath)) {
-    const result = await runCommand('bun test parser.test.ts', exampleDir, 120000);
+    const result = await runCommand('bun test parser.test.ts', exampleDir, 120000, {
+      [SESSION_PATH_ENV]: sessionPath,
+    });
     const output = JSON.parse(result.result) as {
       stdout: string;
       stderr: string;

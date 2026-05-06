@@ -48,6 +48,8 @@ interface GenerateOptions extends CompileOptions {
   maxDurationMs?: number;
   /** Progress callback with verification cycle information. */
   onProgress?: (p: CompileAgentProgress) => void;
+  /** Retain parser.test.ts after successful verification. */
+  keepTest?: boolean;
 }
 
 interface GenerateResult {
@@ -68,6 +70,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
     maxDurationMs: opts.maxDurationMs,
     llmConfig: opts.llmConfig,
     onProgress: opts.onProgress,
+    keepTest: opts.keepTest,
   });
 
   if (!result.success) {

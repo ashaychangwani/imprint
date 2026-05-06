@@ -6,7 +6,7 @@
  * for the system prompt.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import {
   type AgentProgress,
@@ -56,6 +56,12 @@ interface CompileAgentOptions {
   llmProvider?: ToolUseProvider;
   /** Progress callback with verification cycle information. */
   onProgress?: (p: CompileAgentProgress) => void;
+  /** Retain parser.test.ts after successful verification. By default it's
+   *  deleted (the test reads the gitignored redacted session at
+   *  $IMPRINT_SESSION_PATH, so it's not reproducible elsewhere — keeping it
+   *  on disk just confuses `bun test`). Pass true with `--keep-test` to
+   *  inspect the agent's test output locally. */
+  keepTest?: boolean;
 }
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
@@ -98,7 +104,14 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
   const systemPrompt = readFileSync(systemPromptPath, 'utf8');
 
   // 5. Build the toolset (shared with the MCP server used by the claude-cli path)
-  const tools = [...buildCompileTools(session, absoluteExampleDir), doneTool(), giveUpTool()];
+  const sessionPathAbs = opts.sessionPath.startsWith('/')
+    ? opts.sessionPath
+    : pathJoin(REPO_ROOT, opts.sessionPath);
+  const tools = [
+    ...buildCompileTools(session, absoluteExampleDir, sessionPathAbs),
+    doneTool(),
+    giveUpTool(),
+  ];
 
   // 6. Build the initial user message
   const initialUserMessage = `A new compile task is starting.
@@ -131,6 +144,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         deadlineMs,
         onProgress: opts.onProgress,
         startTime,
+        keepTest: opts.keepTest,
       });
     }
     if (!isToolUseProvider(resolvedProvider)) {
@@ -195,11 +209,15 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     // Perform external verification
-    const failures = await externalVerification(absoluteExampleDir, session);
+    const failures = await externalVerification(absoluteExampleDir, session, sessionPathAbs);
 
     if (failures.length === 0) {
       // Success
       message = result.doneSummary ?? 'Task completed';
+      if (!opts.keepTest) {
+        const testPath = pathJoin(absoluteExampleDir, 'parser.test.ts');
+        if (existsSync(testPath)) unlinkSync(testPath);
+      }
       break;
     }
 
@@ -233,6 +251,7 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
     outcome,
     workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
     parserPath: existsSync(parserPath) ? parserPath : undefined,
+    // parserTestPath only set if it survived (--keep-test); otherwise undefined.
     parserTestPath: existsSync(parserTestPath) ? parserTestPath : undefined,
     message,
     conversationLogPath,

@@ -65,7 +65,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
   }
 
   // Build the 8 read/write tools (same as the in-process loop).
-  const compileTools = buildCompileTools(session, opts.exampleDir);
+  const compileTools = buildCompileTools(session, opts.exampleDir, opts.sessionPath);
 
   // The custom done/give_up tools live alongside in MCP space.
   const doneTool: Tool = {
@@ -130,7 +130,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     if (name === 'done') {
       const summary = (args as { summary?: string }).summary ?? 'Task completed';
       log(`done() called: ${summary}`);
-      const failures = await externalVerification(opts.exampleDir, session);
+      const failures = await externalVerification(opts.exampleDir, session, opts.sessionPath);
       if (failures.length === 0) {
         const sentinel = pathJoin(opts.exampleDir, DONE_SENTINEL);
         writeFileSync(

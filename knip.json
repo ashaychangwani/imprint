@@ -4,7 +4,6 @@
     "examples/*/index.ts",
     "examples/*/*/index.ts",
     "examples/*/*/parser.ts",
-    "examples/*/*/parser.test.ts",
     "scripts/*.ts"
   ],
   "project": [
