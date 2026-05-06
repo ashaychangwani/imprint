@@ -56,7 +56,7 @@ interface TeachState {
 }
 
 interface TeachOptions {
-  site: string;
+  site?: string;
   url?: string;
   persistProfile?: boolean;
   signal?: AbortSignal;
@@ -223,12 +223,69 @@ function discoverOrphanSession(site: string, state: TeachState): WorkflowState |
   return null;
 }
 
+// ─── Interactive prompts for missing CLI args ───────────────────────────────
+
+function validateSiteName(value: string | undefined): string | undefined {
+  const v = (value ?? '').trim();
+  if (!v) return 'Site name is required.';
+  if (/[\s/\\]/.test(v))
+    return 'No spaces or slashes — site becomes a folder name under examples/.';
+  return undefined;
+}
+
+async function resolveSite(opts: TeachOptions): Promise<string> {
+  if (opts.site) return opts.site;
+  // cli.ts already errors out when --no-interactive is set without a site,
+  // so reaching here means we're free to prompt.
+  const answer = await p.text({
+    message: 'What should we name this site?',
+    placeholder: 'google-flights',
+    validate: validateSiteName,
+  });
+  if (p.isCancel(answer)) {
+    p.outro('Cancelled.');
+    process.exit(0);
+  }
+  return (answer as string).trim();
+}
+
+function validateStartUrl(value: string | undefined): string | undefined {
+  const v = (value ?? '').trim();
+  if (!v) return undefined; // allow empty → falls back to about:blank
+  try {
+    const u = new URL(v);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      return 'URL must start with http:// or https://';
+    }
+  } catch {
+    return 'Not a valid URL.';
+  }
+  return undefined;
+}
+
+async function resolveStartUrl(opts: TeachOptions): Promise<string | undefined> {
+  if (opts.url) return opts.url;
+  if (opts.noInteractive) return undefined;
+  const answer = await p.text({
+    message: 'Starting URL? (leave blank for about:blank)',
+    placeholder: 'https://www.example.com',
+    validate: validateStartUrl,
+  });
+  if (p.isCancel(answer)) {
+    p.outro('Cancelled.');
+    process.exit(0);
+  }
+  const trimmed = (answer as string).trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 // ─── Main teach function ────────────────────────────────────────────────────
 
 export async function teach(opts: TeachOptions): Promise<TeachResult> {
-  p.intro(`imprint teach — teaching your agent to use ${opts.site}`);
+  const site = await resolveSite(opts);
+  p.intro(`imprint teach — teaching your agent to use ${site}`);
 
-  const state = loadTeachState(opts.site);
+  const state = loadTeachState(site);
 
   // Rename legacy _orphan_ keys to human-readable names.
   for (const key of Object.keys(state.workflows)) {
@@ -242,21 +299,21 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   // Pick up a partially-completed flat-layout workflow (workflow.json exists
   // at site root but no index.ts — crashed between generate and emit).
-  const flatIncomplete = discoverFlatIncomplete(opts.site);
+  const flatIncomplete = discoverFlatIncomplete(site);
   if (flatIncomplete) {
-    const key = `${opts.site} (previous run)`;
+    const key = `${site} (previous run)`;
     if (!state.workflows[key]) state.workflows[key] = flatIncomplete;
   }
 
   // Pick up sessions that were recorded but never tracked (e.g., old teach
   // runs or manual `imprint record` invocations).
-  const orphan = discoverOrphanSession(opts.site, state);
+  const orphan = discoverOrphanSession(site, state);
   if (orphan) {
     const key = `session from ${friendlySessionTimestamp(orphan.sessionPath)}`;
     if (!state.workflows[key]) state.workflows[key] = orphan;
   }
 
-  const completedWorkflows = discoverCompletedWorkflows(opts.site);
+  const completedWorkflows = discoverCompletedWorkflows(site);
   const completedSet = new Set(completedWorkflows);
   const incompleteWorkflows = Object.entries(state.workflows).filter(
     ([name]) => !completedSet.has(name),
@@ -271,7 +328,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
 
   if (hasExisting && !opts.noInteractive) {
-    const choice = await promptResumeChoice(opts.site, completedWorkflows, incompleteWorkflows);
+    const choice = await promptResumeChoice(site, completedWorkflows, incompleteWorkflows);
     if (p.isCancel(choice)) {
       p.outro('Cancelled.');
       process.exit(0);
@@ -288,23 +345,23 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         );
       }
       startFrom = nextStep(ws.completedSteps);
-      sessionPath = pathResolve('examples', opts.site, ws.sessionPath);
-      redactedPath = ws.redactedPath ? pathResolve('examples', opts.site, ws.redactedPath) : null;
+      sessionPath = pathResolve('examples', site, ws.sessionPath);
+      redactedPath = ws.redactedPath ? pathResolve('examples', site, ws.redactedPath) : null;
     } else if (choice.action === 'redo') {
       workflowKey = choice.workflowKey;
       startFrom = choice.fromStep;
       const ws = state.workflows[workflowKey];
       if (ws) {
-        sessionPath = pathResolve('examples', opts.site, ws.sessionPath);
-        redactedPath = ws.redactedPath ? pathResolve('examples', opts.site, ws.redactedPath) : null;
+        sessionPath = pathResolve('examples', site, ws.sessionPath);
+        redactedPath = ws.redactedPath ? pathResolve('examples', site, ws.redactedPath) : null;
       }
       if (!sessionPath && startFrom !== 'record') {
         // Completed workflow with no state — find the latest session.
-        const orphan = discoverOrphanSession(opts.site, state);
+        const orphan = discoverOrphanSession(site, state);
         if (orphan) {
-          sessionPath = pathResolve('examples', opts.site, orphan.sessionPath);
+          sessionPath = pathResolve('examples', site, orphan.sessionPath);
           redactedPath = orphan.redactedPath
-            ? pathResolve('examples', opts.site, orphan.redactedPath)
+            ? pathResolve('examples', site, orphan.redactedPath)
             : null;
         }
       }
@@ -329,20 +386,22 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   // ── 1. Record ──────────────────────────────────────────────────────
   if (startIdx <= STEPS.indexOf('record')) {
+    const startUrl = await resolveStartUrl(opts);
+
     spinner.start('Recording...');
     spinner.stop('Ready to record.');
     console.log('');
 
     const recordResult = await record({
-      site: opts.site,
-      url: opts.url,
+      site: site,
+      url: startUrl,
       persistProfile: opts.persistProfile,
       signal: opts.signal,
     });
     sessionPath = recordResult.sessionPath;
 
-    checkpoint(opts.site, state, workflowKey, {
-      sessionPath: toRelative(opts.site, sessionPath),
+    checkpoint(site, state, workflowKey, {
+      sessionPath: toRelative(site, sessionPath),
       completedSteps: ['record'],
       startedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -374,8 +433,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       `Redacted ${stats.totalRedactions} value(s) across ${stats.requestsRedacted} request(s) and ${stats.cookiesRedacted} cookie(s).`,
     );
 
-    updateCheckpoint(opts.site, state, workflowKey, 'redact', {
-      redactedPath: toRelative(opts.site, redactedPath),
+    updateCheckpoint(site, state, workflowKey, 'redact', {
+      redactedPath: toRelative(site, redactedPath),
     });
   }
 
@@ -413,11 +472,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     });
 
     const toolName = result.workflow.toolName;
-    workflowDir = pathResolve('examples', opts.site, toolName);
+    workflowDir = pathResolve('examples', site, toolName);
     mkdirSync(workflowDir, { recursive: true });
 
     // Move agent-written artifacts into the workflow subdirectory.
-    const siteDir = pathResolve('examples', opts.site);
+    const siteDir = pathResolve('examples', site);
     for (const artifact of ['workflow.json', 'parser.ts', 'parser.test.ts']) {
       const src = pathJoin(siteDir, artifact);
       if (!existsSync(src)) continue;
@@ -445,10 +504,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       if (prior) state.workflows[workflowKey] = prior;
     }
 
-    updateCheckpoint(opts.site, state, workflowKey, 'generate');
+    updateCheckpoint(site, state, workflowKey, 'generate');
   } else {
     // Resuming after generate — workflowKey IS the toolName.
-    workflowDir = pathResolve('examples', opts.site, workflowKey);
+    workflowDir = pathResolve('examples', site, workflowKey);
     const workflowPath = pathJoin(workflowDir, 'workflow.json');
     const workflow = loadJsonFile(
       workflowPath,
@@ -475,7 +534,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       `playbook.yaml → ${result.playbook.steps.length} step(s), ${result.playbook.parameters.length} param(s)`,
     );
 
-    updateCheckpoint(opts.site, state, workflowKey, 'compile-playbook');
+    updateCheckpoint(site, state, workflowKey, 'compile-playbook');
   } else {
     const playbookPath = pathJoin(workflowDir, 'playbook.yaml');
     const { parsePlaybook } = await import('./playbook-parser.ts');
@@ -496,7 +555,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     emitOutPath = emitResult.outPath;
     spinner.stop(`${emitOutPath} generated.`);
 
-    updateCheckpoint(opts.site, state, workflowKey, 'emit');
+    updateCheckpoint(site, state, workflowKey, 'emit');
   } else {
     emitOutPath = pathJoin(workflowDir, 'index.ts');
   }
@@ -517,7 +576,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         console.log(`[${plat}]`);
         console.log(
           generatePasteSnippet({
-            site: opts.site,
+            site: site,
             workflow: genResult.workflow,
             platform: plat,
             imprintCommand,
@@ -527,7 +586,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       }
     } else {
       await interactivePlatformSetup({
-        site: opts.site,
+        site: site,
         workflowDir,
         workflow: genResult.workflow,
         playbook: pbResult.playbook,
@@ -536,7 +595,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   // Mark all steps complete (keep the entry for future redo).
-  updateCheckpoint(opts.site, state, workflowKey, 'register');
+  updateCheckpoint(site, state, workflowKey, 'register');
 
   p.outro('Done! Your agent is ready.');
 
