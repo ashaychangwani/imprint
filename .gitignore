@@ -45,8 +45,10 @@ coverage/
 .claude/worktrees/
 .claude/settings.local.json
 
-# Compile agent conversation logs
+# Compile agent conversation logs + claude-cli orchestration sentinels
 examples/**/.compile-log.json
+examples/**/.compile-done.json
+examples/**/.compile-give-up.json
 
 # tsc --generateTrace output (local debug artifacts)
 trace/

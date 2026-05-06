@@ -821,6 +821,31 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
+    // Hidden verb: spawned by claude-cli-compile.ts via --mcp-config. Not in
+    // VERB_HELP, not advertised. Double-underscore prefix marks it as internal.
+    case '__mcp-compile-server': {
+      const { values } = parseArgs({
+        args: argv.slice(1),
+        options: {
+          'session-path': { type: 'string' },
+          'example-dir': { type: 'string' },
+        },
+        allowPositionals: false,
+      });
+      if (!values['session-path'] || !values['example-dir']) {
+        console.error(
+          'error: __mcp-compile-server requires --session-path <path> and --example-dir <path>',
+        );
+        return 2;
+      }
+      const { runCompileMcpServer } = await import('./imprint/mcp-compile-server.ts');
+      await runCompileMcpServer({
+        sessionPath: values['session-path'],
+        exampleDir: values['example-dir'],
+      });
+      return 0;
+    }
+
     default: {
       const suggestion = closestVerb(verb);
       const tail = suggestion ? `did you mean \`imprint ${suggestion}\`?` : 'run `imprint --help`';

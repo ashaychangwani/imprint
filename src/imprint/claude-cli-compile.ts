@@ -1,0 +1,461 @@
+/**
+ * compile-agent driver for claude-cli.
+ *
+ * claude-cli doesn't implement messageWithTools (its CLI surface only does
+ * single-turn text completion), so we can't drive it turn-by-turn the way
+ * runAgentLoop drives anthropic-api / vertex. Instead we shell out to
+ * `claude -p` with imprint's compile tools registered as a stdio MCP server
+ * and let claude-cli's own internal agent loop drive the work.
+ *
+ * Key design points:
+ *
+ * - **Subscription auth**: we deliberately do NOT pass `--bare`. Without bare
+ *   mode claude-cli reads OAuth from the keychain, so a Pro/Max subscriber
+ *   spends subscription tokens, not API credit.
+ *
+ * - **Tool dispatch happens in the MCP server**, not here. See
+ *   mcp-compile-server.ts. The `done` tool there runs externalVerification
+ *   inline; on failure it returns the failure list as the tool_result and the
+ *   model keeps iterating in the same conversation. On success it writes a
+ *   sentinel file we poll for.
+ *
+ * - **Progress reporting**: stream-json events from claude-cli are translated
+ *   into CompileAgentProgress events for the existing onProgress callback,
+ *   so the spinner UX in teach.ts is unchanged.
+ */
+
+import { type ChildProcess, spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join as pathJoin } from 'node:path';
+import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
+import { createLog } from './log.ts';
+import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
+import type { Session } from './types.ts';
+
+const log = createLog('compile-claude-cli');
+
+const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
+const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
+const MCP_SERVER_NAME = 'imprint-compile';
+const MAX_VERIFICATION_CYCLES = 5;
+
+interface CompileViaClaudeCliOptions {
+  session: Session;
+  absoluteExampleDir: string;
+  sessionPath: string;
+  systemPromptPath: string;
+  deadlineMs: number;
+  startTime: number;
+  onProgress?: (p: CompileAgentProgress) => void;
+}
+
+interface StreamJsonEvent {
+  type: string;
+  subtype?: string;
+  session_id?: string;
+  // assistant/user message envelope
+  message?: {
+    content?: Array<
+      | { type: 'text'; text: string }
+      | { type: 'tool_use'; name: string; input?: unknown }
+      | { type: 'tool_result'; tool_use_id: string; content: unknown; is_error?: boolean }
+    >;
+    usage?: { input_tokens?: number; output_tokens?: number };
+    stop_reason?: string;
+  };
+  // result envelope (terminal event)
+  result?: string;
+  is_error?: boolean;
+  duration_ms?: number;
+  num_turns?: number;
+  total_cost_usd?: number;
+  usage?: { input_tokens?: number; output_tokens?: number };
+  // partial-message stream events
+  event?: { delta?: { type?: string; text?: string } };
+}
+
+export async function compileViaClaudeCli(
+  opts: CompileViaClaudeCliOptions,
+): Promise<CompileAgentResult> {
+  // Ensure example dir exists and clear any prior sentinels — a stale
+  // sentinel from a previous run would short-circuit our success detection.
+  mkdirSync(opts.absoluteExampleDir, { recursive: true });
+  for (const name of [COMPILE_SENTINELS.done, COMPILE_SENTINELS.giveUp]) {
+    const p = pathJoin(opts.absoluteExampleDir, name);
+    if (existsSync(p)) {
+      try {
+        writeFileSync(p, ''); // truncate; we read sentinel content later, but we want to detect *new* writes
+      } catch {
+        // best effort
+      }
+    }
+  }
+
+  // Build the inline MCP config. The MCP server is the same imprint binary
+  // re-invoked with the hidden __mcp-compile-server verb. Use the bun runner
+  // the parent was launched with so the child runs in the same TS toolchain.
+  const bunPath = process.execPath;
+  const sessionPathAbs = opts.sessionPath.startsWith('/')
+    ? opts.sessionPath
+    : pathJoin(REPO_ROOT, opts.sessionPath);
+  const mcpConfig = {
+    mcpServers: {
+      [MCP_SERVER_NAME]: {
+        command: bunPath,
+        args: [
+          'run',
+          CLI_PATH,
+          '__mcp-compile-server',
+          '--session-path',
+          sessionPathAbs,
+          '--example-dir',
+          opts.absoluteExampleDir,
+        ],
+      },
+    },
+  };
+
+  const initialPrompt = `A new compile task is starting.
+
+Session path: ${sessionPathAbs}
+Example directory: ${opts.absoluteExampleDir}
+You will write artifacts into the example directory.
+
+Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
+
+  const args = [
+    '--print',
+    '--output-format',
+    'stream-json',
+    '--verbose',
+    '--strict-mcp-config',
+    '--mcp-config',
+    JSON.stringify(mcpConfig),
+    '--system-prompt-file',
+    opts.systemPromptPath,
+    // Disable the built-in tool set so claude only uses our MCP tools.
+    '--tools',
+    '',
+    // Pre-approve every tool from our MCP server so no permission prompt
+    // fires in non-interactive print mode.
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__read_session_summary`,
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__read_request`,
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__read_response_body`,
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__search_response_body`,
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__read_file`,
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__write_file`,
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__run_bash`,
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__run_tests`,
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__done`,
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__give_up`,
+    // Bound the run. softTurnCap=100 in the in-process loop × up to 5
+    // verification cycles = 500 hard ceiling there. Verification is now
+    // in-tool so we pick a single bound that comfortably exceeds typical runs
+    // (~5-15 turns per the system prompt) plus retry budget.
+    '--max-turns',
+    '200',
+    '--permission-mode',
+    'bypassPermissions',
+    '--no-session-persistence',
+    '--disable-slash-commands',
+    '--model',
+    'claude-opus-4-7',
+    initialPrompt,
+  ];
+
+  log(`spawning claude (max-turns=200, mcp-server=${MCP_SERVER_NAME})`);
+
+  let child: ChildProcess;
+  try {
+    child = spawn('claude', args, {
+      cwd: REPO_ROOT,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    return finalErrorResult(opts, `failed to spawn claude-cli: ${errMsg(err)}`);
+  }
+
+  const result = await driveStreamJson(child, opts);
+  return result;
+}
+
+async function driveStreamJson(
+  child: ChildProcess,
+  opts: CompileViaClaudeCliOptions,
+): Promise<CompileAgentResult> {
+  const conversationLog: unknown[] = [];
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let turn = 0;
+  let lastErrorEvent: StreamJsonEvent | null = null;
+  let stderrBuf = '';
+
+  const budgetMs = Math.max(0, opts.deadlineMs - Date.now());
+  const fireProgress = (phase: 'thinking' | 'tool', toolName?: string): void => {
+    opts.onProgress?.({
+      turn,
+      phase,
+      toolName,
+      elapsedMs: Date.now() - opts.startTime,
+      budgetMs,
+      inputTokens,
+      outputTokens,
+      verificationCycle: 1,
+      maxVerificationCycles: MAX_VERIFICATION_CYCLES,
+    });
+  };
+
+  // Wall-clock guard: if we hit the deadline, kill the child.
+  const deadlineTimer = setTimeout(
+    () => {
+      log('wall-clock deadline exceeded, terminating claude');
+      try {
+        child.kill('SIGTERM');
+        // SIGKILL fallback after 5s grace
+        setTimeout(() => {
+          if (!child.killed) child.kill('SIGKILL');
+        }, 5000);
+      } catch {
+        // already gone
+      }
+    },
+    Math.max(0, opts.deadlineMs - Date.now()),
+  );
+
+  // Stdout: newline-delimited stream-json events.
+  let stdoutBuf = '';
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdoutBuf += chunk.toString('utf8');
+    while (true) {
+      const nl = stdoutBuf.indexOf('\n');
+      if (nl < 0) break;
+      const line = stdoutBuf.slice(0, nl).trim();
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      if (!line) continue;
+
+      let evt: StreamJsonEvent;
+      try {
+        evt = JSON.parse(line);
+      } catch (err) {
+        log(`unparseable stream-json line: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+
+      conversationLog.push(evt);
+
+      // Token accounting from any event that carries usage.
+      if (evt.usage) {
+        inputTokens += evt.usage.input_tokens ?? 0;
+        outputTokens += evt.usage.output_tokens ?? 0;
+      }
+      if (evt.message?.usage) {
+        inputTokens += evt.message.usage.input_tokens ?? 0;
+        outputTokens += evt.message.usage.output_tokens ?? 0;
+      }
+
+      if (evt.type === 'system' && evt.subtype === 'init') {
+        log(`session_id=${evt.session_id ?? '(none)'}`);
+        continue;
+      }
+
+      if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
+        turn++;
+        fireProgress('thinking');
+        for (const block of evt.message.content) {
+          if (block && (block as { type?: string }).type === 'tool_use') {
+            const fullName = (block as { name?: string }).name ?? '(unknown)';
+            // Strip mcp__<server>__ prefix for human-readable progress.
+            const short = fullName.replace(`mcp__${MCP_SERVER_NAME}__`, '');
+            fireProgress('tool', short);
+          }
+        }
+        continue;
+      }
+
+      if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
+        // Tool result envelope. Nothing to surface here — onProgress already
+        // fired when we saw the matching tool_use.
+        continue;
+      }
+
+      if (evt.type === 'result') {
+        // Terminal event from claude-cli. Capture any final usage and break.
+        if (evt.is_error) {
+          lastErrorEvent = evt;
+        }
+        continue;
+      }
+
+      if (evt.type === 'system' && evt.subtype === 'api_retry') {
+        log(`api_retry: ${(evt as { error?: string }).error ?? '(unknown)'}`);
+      }
+    }
+  });
+
+  child.stderr?.on('data', (chunk: Buffer) => {
+    const s = chunk.toString('utf8');
+    stderrBuf += s;
+    // Forward to our debug log only — don't pollute the user's console.
+    log(`[claude stderr] ${s.trim()}`);
+  });
+
+  // Wait for the child to exit on its own. Sentinel detection happens after.
+  const exitCode: number = await new Promise((resolve) => {
+    child.once('exit', (code) => resolve(code ?? -1));
+    child.once('error', () => resolve(-1));
+  });
+  clearTimeout(deadlineTimer);
+
+  // Drain any remaining buffered output.
+  if (stdoutBuf.trim()) {
+    log(`unflushed stdout tail (${stdoutBuf.length} bytes) discarded`);
+  }
+
+  // Persist conversation log for post-mortem.
+  const conversationLogPath = pathJoin(opts.absoluteExampleDir, '.compile-log.json');
+  try {
+    writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
+  } catch (err) {
+    log(`failed to persist conversation log: ${errMsg(err)}`);
+  }
+
+  // Inspect sentinels to determine outcome.
+  const doneSentinel = pathJoin(opts.absoluteExampleDir, COMPILE_SENTINELS.done);
+  const giveUpSentinel = pathJoin(opts.absoluteExampleDir, COMPILE_SENTINELS.giveUp);
+  const workflowPath = pathJoin(opts.absoluteExampleDir, 'workflow.json');
+  const parserPath = pathJoin(opts.absoluteExampleDir, 'parser.ts');
+  const parserTestPath = pathJoin(opts.absoluteExampleDir, 'parser.test.ts');
+
+  const baseResult: Pick<
+    CompileAgentResult,
+    | 'workflowPath'
+    | 'parserPath'
+    | 'parserTestPath'
+    | 'conversationLogPath'
+    | 'turns'
+    | 'durationMs'
+    | 'inputTokens'
+    | 'outputTokens'
+  > = {
+    workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
+    parserPath: existsSync(parserPath) ? parserPath : undefined,
+    parserTestPath: existsSync(parserTestPath) ? parserTestPath : undefined,
+    conversationLogPath,
+    turns: turn,
+    durationMs: Date.now() - opts.startTime,
+    inputTokens,
+    outputTokens,
+  };
+
+  // Wall-clock deadline exceeded?
+  if (Date.now() > opts.deadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {
+    return {
+      success: false,
+      outcome: 'timeout',
+      message: `claude-cli exceeded the ${Math.round((opts.deadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
+      ...baseResult,
+    };
+  }
+
+  if (existsSync(doneSentinel)) {
+    let payload: {
+      summary?: string;
+      verification?: string;
+      cycles?: number;
+      failures?: string[];
+    } = {};
+    try {
+      const raw = readFileSync(doneSentinel, 'utf8').trim();
+      if (raw) payload = JSON.parse(raw);
+    } catch (err) {
+      log(`failed to parse done sentinel: ${errMsg(err)}`);
+    }
+    if (payload.verification === 'passed') {
+      return {
+        success: true,
+        outcome: 'done',
+        message: payload.summary ?? 'Task completed',
+        ...baseResult,
+      };
+    }
+    return {
+      success: false,
+      outcome: 'error',
+      message: `Verification failed after ${payload.cycles ?? '?'} cycles. Final failures:\n${(payload.failures ?? []).join('\n')}`,
+      ...baseResult,
+    };
+  }
+
+  if (existsSync(giveUpSentinel)) {
+    let payload: { reason?: string; what_was_tried?: string } = {};
+    try {
+      const raw = readFileSync(giveUpSentinel, 'utf8').trim();
+      if (raw) payload = JSON.parse(raw);
+    } catch (err) {
+      log(`failed to parse give_up sentinel: ${errMsg(err)}`);
+    }
+    return {
+      success: false,
+      outcome: 'give_up',
+      message: `Agent gave up: ${payload.reason ?? 'unknown reason'}\n${payload.what_was_tried ?? ''}`,
+      ...baseResult,
+    };
+  }
+
+  // No sentinel and clean exit — claude likely hit max-turns or stopped
+  // without ever calling done/give_up.
+  if (exitCode === 0) {
+    return {
+      success: false,
+      outcome: 'soft_cap',
+      message:
+        'claude-cli exited without calling done() or give_up(). It may have hit --max-turns or stopped early.',
+      ...baseResult,
+    };
+  }
+
+  // Any other exit → error.
+  const errorTail =
+    (lastErrorEvent as StreamJsonEvent | null)?.result ?? stderrBuf.trim().slice(-500);
+  return {
+    success: false,
+    outcome: 'error',
+    message: `claude-cli exited with code ${exitCode}${errorTail ? `\n${errorTail}` : ''}`,
+    ...baseResult,
+  };
+}
+
+function finalErrorResult(opts: CompileViaClaudeCliOptions, message: string): CompileAgentResult {
+  mkdirSync(opts.absoluteExampleDir, { recursive: true });
+  const conversationLogPath = pathJoin(opts.absoluteExampleDir, '.compile-log.json');
+  try {
+    writeFileSync(conversationLogPath, JSON.stringify({ error: message }, null, 2), 'utf8');
+  } catch {
+    // best effort
+  }
+  return {
+    success: false,
+    outcome: 'error',
+    message,
+    conversationLogPath,
+    turns: 0,
+    durationMs: Date.now() - opts.startTime,
+    inputTokens: 0,
+    outputTokens: 0,
+  };
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
