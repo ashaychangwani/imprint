@@ -50,3 +50,4 @@ examples/**/.compile-log.json
 
 # tsc --generateTrace output (local debug artifacts)
 trace/
+.gstack/
