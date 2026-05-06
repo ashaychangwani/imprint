@@ -9,34 +9,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { extract, type SeatUpgradeResult } from './parser.ts';
 
-const SESSION_PATH = join(
-  import.meta.dir,
-  'sessions',
-  '2026-05-06T07-20-10-599Z.redacted.json',
-);
+// Captured response body, committed alongside this test. The full session
+// lives under sessions/ which is gitignored (auth tokens / PII risk) — tests
+// must reference a self-contained fixture so CI works on a fresh checkout.
+const FIXTURE_PATH = join(import.meta.dir, 'seatmap-response.fixture.json');
 
-interface CapturedRequest {
-  url: string;
-  method: string;
-  response?: { body?: string };
-}
-
-function loadSeatmapResponse(): unknown {
-  const session = JSON.parse(readFileSync(SESSION_PATH, 'utf8')) as {
-    requests: CapturedRequest[];
-  };
-  const seatmapReq = session.requests.find(
-    (r) =>
-      r.method === 'POST' &&
-      r.url.includes('/api/seat-management/v1/seatmaps/selections'),
-  );
-  if (!seatmapReq?.response?.body) {
-    throw new Error('seatmap response body not present in session');
-  }
-  return JSON.parse(seatmapReq.response.body);
-}
-
-const RAW = loadSeatmapResponse();
+const RAW: unknown = JSON.parse(readFileSync(FIXTURE_PATH, 'utf8'));
 const RESULT: SeatUpgradeResult = extract(RAW);
 
 describe('Southwest seat upgrade parser', () => {

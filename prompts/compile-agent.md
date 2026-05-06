@@ -61,7 +61,7 @@ Follow these steps to compile the session:
    - Return a named-field object, not the raw input — the goal is to make the data usable by an AI agent without further parsing
 
 9. **Write parser.test.ts.** Create a `bun:test` suite:
-   - Import the captured response body (you can write it to a fixture file, or inline it as a const)
+   - Import the captured response body. **The recorded session lives under `sessions/` which is gitignored** (auth tokens / PII risk), so you MUST NOT read from `sessions/...redacted.json` at test time — that file does not exist on CI and the test will fail with ENOENT. Instead, persist the response body alongside the test as a committed fixture: `write_file` a `<thing>-response.fixture.json` next to `parser.test.ts` containing the bare response body, then `readFileSync(join(import.meta.dir, '<thing>-response.fixture.json'), 'utf8')` in the test. (Inlining as a string const is also acceptable for small responses, but a sibling fixture file scales better and keeps the test source readable.)
    - Import `extract` from `./parser.ts`
    - Call `extract(response)` and assert on the result
    - Assertions must reference real values from the narration: `expect(result.flights.length).toBeGreaterThan(0)`, `expect(result.flights.some(f => f.origin === 'SFO')).toBe(true)`, `expect(result.flights[0].price).toBeGreaterThan(0)`
