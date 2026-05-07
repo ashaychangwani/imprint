@@ -27,6 +27,13 @@ interface RunPlaybookOptions {
   trace?: boolean;
   /** Inject a Playwright Page for tests. */
   pageOverride?: Page;
+  /** Site key — used to look up persisted cookies in the credential store
+   *  and inject them into the browser context before navigation. Required
+   *  for authenticated playbooks. Callers (backend-ladder, the `playbook`
+   *  CLI verb) should pass it explicitly so this works regardless of
+   *  whether the skill lives under `examples/`, `~/.hermes/skills/`,
+   *  `~/.openclaw/skills/`, or anywhere else. */
+  site?: string;
 }
 
 const log = createLog('playbook');
@@ -89,38 +96,25 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     page = await context.newPage();
 
     // Inject credentials.cookies into the browser so the playbook can navigate
-    // an authenticated flow (e.g., my-trips → reservation → seat map). The
-    // site is inferred from the playbook's parent folder.
-    try {
-      const playbookPath = typeof opts.playbook === 'string' ? opts.playbook : null;
-      if (playbookPath) {
-        const { dirname, basename } = await import('node:path');
-        // examples/<site>/<workflow>/playbook.yaml → site = parent.parent name
-        const workflowDir = dirname(playbookPath);
-        const siteDir = dirname(workflowDir);
-        const sitesParent = basename(dirname(siteDir));
-        const site = sitesParent === 'examples' ? basename(siteDir) : null;
-        if (site) {
-          const { loadSiteCredentials } = await import('./credential-store.ts');
-          const view = await loadSiteCredentials(site);
-          if (view.cookies.length > 0) {
-            const playwrightCookies = view.cookies
-              .map((c) => ({
-                name: c.name,
-                value: c.value,
-                domain: c.domain,
-                path: c.path,
-              }))
-              .filter((c) => c.name && c.value);
-            if (playwrightCookies.length > 0) {
-              await context.addCookies(playwrightCookies);
-              log(`injected ${playwrightCookies.length} cookies for site ${site}`);
-            }
-          }
+    // an authenticated flow (e.g., my-trips → reservation → seat map). Prefer
+    // the explicit opts.site (works under any layout: examples/, ~/.hermes/skills/,
+    // ~/.openclaw/skills/, …). Fall back to path inference only when the caller
+    // hasn't supplied one and the playbook lives at examples/<site>/<workflow>/.
+    const site = opts.site ?? inferSiteFromPath(opts.playbook);
+    if (site) {
+      try {
+        const { loadSiteCredentials } = await import('./credential-store.ts');
+        const view = await loadSiteCredentials(site);
+        const playwrightCookies = view.cookies
+          .map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path }))
+          .filter((c) => c.name && c.value);
+        if (playwrightCookies.length > 0) {
+          await context.addCookies(playwrightCookies);
+          log(`injected ${playwrightCookies.length} cookies for site ${site}`);
         }
+      } catch (err) {
+        log(`failed to inject cookies: ${errMsg(err)} (proceeding without)`);
       }
-    } catch (err) {
-      log(`failed to inject cookies: ${errMsg(err)} (proceeding without)`);
     }
   }
 
@@ -451,4 +445,16 @@ function cssEscape(s: string): string {
 }
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** Backwards-compat fallback for callers that don't pass opts.site explicitly.
+ *  Only fires for the in-repo `examples/<site>/<workflow>/playbook.yaml` layout. */
+function inferSiteFromPath(playbookInput: string | Playbook): string | null {
+  if (typeof playbookInput !== 'string') return null;
+  const parts = playbookInput.split('/');
+  const examplesIdx = parts.lastIndexOf('examples');
+  if (examplesIdx >= 0 && examplesIdx < parts.length - 2) {
+    return parts[examplesIdx + 1] ?? null;
+  }
+  return null;
 }

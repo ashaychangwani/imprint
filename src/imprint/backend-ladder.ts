@@ -87,6 +87,7 @@ export async function runWithLadder(
           result = await runPlaybook({
             playbook: playbookPath(examplesDir, tool.site, tool.dir),
             params,
+            site: tool.site,
           });
           break;
       }

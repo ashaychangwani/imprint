@@ -1,10 +1,39 @@
 #!/usr/bin/env bash
-# Pre-commit hook: scan staged changes for leaked secrets via gitleaks.
-# Install gitleaks: brew install gitleaks
+# Pre-commit secret scanner.
+#
+# Runs gitleaks against the staged diff. Custom rules + allowlist live in
+# .gitleaks.toml — that file is the single source of truth for what counts
+# as a leaked credential in this repo.
+#
+# Fail-closed: if gitleaks is not installed we BLOCK the commit and tell
+# the user how to install it. A silent skip is what allowed real Southwest
+# credentials to land in test fixtures earlier in this project. Bypass
+# intentionally requires `--no-verify`, which the team has agreed not to
+# use without explicit user approval per CLAUDE.md.
+
+set -uo pipefail
+
+red() { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 
 if ! command -v gitleaks &>/dev/null; then
-  echo "⚠  gitleaks not installed — skipping secret scan (brew install gitleaks)"
-  exit 0
+  red "✖ pre-commit: gitleaks is not installed."
+  red "   This repo is public — committing without a secret scan is unsafe."
+  red "   Install: brew install gitleaks  (or https://github.com/gitleaks/gitleaks#installing)"
+  red "   After install, re-run your commit."
+  exit 1
 fi
 
-gitleaks protect --staged --verbose
+# `protect --staged` reads the index, so it catches the leak BEFORE it
+# lands in a commit object. `--redact` keeps the actual secret out of the
+# terminal output (and any captured CI logs) — gitleaks prints the rule
+# and file:line so the developer can fix it without re-publishing it.
+if ! gitleaks protect --staged --redact --verbose; then
+  red "✖ pre-commit: gitleaks flagged staged content. Resolve above and re-stage."
+  red "   This repo is PUBLIC. Treat any flagged value as compromised:"
+  red "     1. Remove from the diff."
+  red "     2. Rotate the credential at the upstream service."
+  red "     3. Re-stage and commit."
+  exit 1
+fi
+
+exit 0

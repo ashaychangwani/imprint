@@ -6,7 +6,12 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { type CredentialStore, executeWorkflow, substituteString } from '../src/imprint/runtime.ts';
+import {
+  type CredentialStore,
+  executeWorkflow,
+  splitSetCookieHeader,
+  substituteString,
+} from '../src/imprint/runtime.ts';
 import type { Workflow } from '../src/imprint/types.ts';
 
 const STORE: CredentialStore = {
@@ -272,9 +277,9 @@ describe('executeWorkflow', () => {
   });
 
   it('URL-encodes credential values inside form-urlencoded request bodies', async () => {
-    // Regression: a password like "REDACTED-PASSWORD" must reach the wire as
-    // REDACTED-PASSWORD, not raw "@" — otherwise the form pair structure
-    // can break (or, worse, the server rejects the unrequested encoding).
+    // Regression: a password containing "@" or "&" must reach the wire as
+    // %40 / %26, not raw — otherwise the form pair structure breaks
+    // (or, worse, the server rejects the unrequested encoding).
     const formWorkflow: Workflow = {
       toolName: 'login_test',
       intent: { description: 'login' },
@@ -312,5 +317,38 @@ describe('executeWorkflow', () => {
     });
 
     expect(seen.body).toBe('username=alice&password=p%40ss%20%26%20word%3D1');
+  });
+});
+
+describe('splitSetCookieHeader', () => {
+  it('returns the single cookie unchanged when only one is present', () => {
+    expect(splitSetCookieHeader('sid=abc123; Path=/; HttpOnly')).toEqual([
+      'sid=abc123; Path=/; HttpOnly',
+    ]);
+  });
+
+  it('splits two cookies joined with `, `', () => {
+    const joined = 'sid=abc; Path=/, theme=dark; Path=/';
+    expect(splitSetCookieHeader(joined)).toEqual(['sid=abc; Path=/', 'theme=dark; Path=/']);
+  });
+
+  it('does NOT split inside an Expires date weekday-comma', () => {
+    // Real-world case: `Set-Cookie: a=1; Expires=Wed, 30 Dec 2026 12:00:00 GMT, b=2; Path=/`.
+    // The naive `split(',')` would produce 3 fragments and lose the cookie.
+    const joined = 'a=1; Expires=Wed, 30 Dec 2026 12:00:00 GMT, b=2; Path=/';
+    expect(splitSetCookieHeader(joined)).toEqual([
+      'a=1; Expires=Wed, 30 Dec 2026 12:00:00 GMT',
+      'b=2; Path=/',
+    ]);
+  });
+
+  it('handles three cookies with mixed attributes', () => {
+    const joined =
+      'sid=abc; Path=/; Expires=Wed, 30 Dec 2026 12:00:00 GMT, csrf=xyz; Path=/, theme=dark';
+    expect(splitSetCookieHeader(joined)).toEqual([
+      'sid=abc; Path=/; Expires=Wed, 30 Dec 2026 12:00:00 GMT',
+      'csrf=xyz; Path=/',
+      'theme=dark',
+    ]);
   });
 });

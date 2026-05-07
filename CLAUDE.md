@@ -52,6 +52,16 @@ Changelog config lives in `cliff.toml`. Preview unreleased changelog: `bun run c
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for commit conventions and release process.
 
+## Test data hygiene
+
+This is a **public** repo. Real credentials, session tokens, cookie values, personal data, and recordings that contain any of the above MUST NEVER be checked in — not in `examples/`, not in `test/`, not in fixture JSON, not in commit messages, not in screenshots.
+
+- Test fixtures must be **constructed manually** with synthetic values (`fixture-user`, `fixture-pass-9472`, `bob@example.com`, `hunter2`, etc.). Do NOT copy a real recording's body and rename one field — adjacent fields (cookies, IP, geo, account IDs) leak too.
+- Do NOT pin tests to absolute paths under any user's home directory (e.g., `/Users/<name>/...`). Tests must run on a clean clone.
+- A real recording you collected for end-to-end verification stays on your laptop only. The contents of `~/.config/imprint/`, the `imprint teach` output for any account you actually log into, and `*.imprintbundle` files are all sensitive — keep them out of the repo and out of PR comments.
+- The pre-commit hook (`.githooks/pre-commit`) runs `gitleaks` and a tight regex pass. It is **fail-closed**: if gitleaks isn't installed it blocks the commit and tells you how to install it. Do not bypass with `--no-verify`. Install: `brew install gitleaks` (or see `https://github.com/gitleaks/gitleaks#installing`). Enable hooks once per clone: `git config core.hooksPath .githooks`.
+- If you discover a leak that already shipped to a remote: stop, tell the user, and rotate the credential. Force-pushing a rewrite over remote history doesn't undo a public exposure.
+
 ## Key risks (still open)
 
 1. **Platform risk**: Anthropic / OpenAI could ship native MCP learning as a first-class feature.

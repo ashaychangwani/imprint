@@ -59,8 +59,8 @@ describe('credential-bundle export/import', () => {
   });
 
   it('round-trips secrets through export → decrypt → import', async () => {
-    await backend.setSecret('southwest-seats', 'username', 'ashaychangwani');
-    await backend.setSecret('southwest-seats', 'password', 'REDACTED-PASSWORD');
+    await backend.setSecret('southwest-seats', 'username', 'fixture-user');
+    await backend.setSecret('southwest-seats', 'password', 'fixture-pass-9472');
     await backend.setCookies('southwest-seats', [
       { name: 'sid', value: 'abc', domain: 'southwest.com', path: '/' },
     ]);
@@ -82,8 +82,8 @@ describe('credential-bundle export/import', () => {
       passphrase: 'correct-horse-battery-staple',
     });
     expect(plain.secrets).toEqual({
-      username: 'ashaychangwani',
-      password: 'REDACTED-PASSWORD',
+      username: 'fixture-user',
+      password: 'fixture-pass-9472',
     });
     expect(plain.cookies).toHaveLength(1);
 
@@ -95,8 +95,8 @@ describe('credential-bundle export/import', () => {
       passphrase: 'correct-horse-battery-staple',
     });
     expect(result.imported.sort()).toEqual(['password', 'username']);
-    expect(await target.getSecret('southwest-seats', 'username')).toBe('ashaychangwani');
-    expect(await target.getSecret('southwest-seats', 'password')).toBe('REDACTED-PASSWORD');
+    expect(await target.getSecret('southwest-seats', 'username')).toBe('fixture-user');
+    expect(await target.getSecret('southwest-seats', 'password')).toBe('fixture-pass-9472');
     expect(await target.getCookies('southwest-seats')).toHaveLength(1);
   }, 30_000); // argon2 derivation is intentionally slow; allow time
 

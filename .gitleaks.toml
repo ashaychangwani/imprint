@@ -2,7 +2,71 @@
 useDefault = true
 
 [allowlist]
+description = "Files we never want scanned (lockfiles, vendored, fixture markers)."
 paths = [
-  "bun\\.lock",
-  "node_modules",
+  '''bun\.lock$''',
+  '''package-lock\.json$''',
+  '''node_modules/''',
 ]
+# Synthetic fixture markers. Anything matching these is whitelisted by content
+# regardless of which rule fired. Real test passwords/usernames must use one of
+# these prefixes per CLAUDE.md "Test data hygiene".
+regexes = [
+  '''fixture-''',
+  '''synthetic-''',
+  '''hunter2''',
+  '''hunter3''',
+  '''bob@example\.com''',
+  '''alice@example\.com''',
+  '''\$\{credential\.''',
+  '''REDACTED''',
+  '''placeholder''',
+]
+
+# --- Custom rules. The default ruleset doesn't catch everything we care
+# about (it's mostly aimed at API tokens). The rules below close the gaps.
+
+[[rules]]
+id = "imprint-form-credential-pair"
+description = "form-encoded username + literal-looking password adjacent on one line."
+# secretGroup=1 extracts the password value (not the field name). That value
+# then runs through the top-level allowlist regex set, which whitelists
+# fixture-/synthetic-/hunter2/${credential.…} placeholders.
+regex = '''(?i)(?:username|email|login|account)=[^&\s"'`]{2,}&password=([^&\s"'`]{6,})'''
+secretGroup = 1
+tags = ["credential", "form"]
+[rules.allowlist]
+regexes = [
+  '''^\$\{credential\.''',
+  '''^\$\{[A-Za-z]''',  # any other ${expr} — JS template / fixture interpolation
+  '''^fixture''',  # fixture-foo / fixture%40foo / fixture@foo
+  '''^synthetic''',
+  '''^hunter[23]$''',
+  # The runtime form-body URL-encoding test uses a deliberately exotic value.
+  '''^p%40ss%20%26%20word%3D1$''',
+]
+
+[[rules]]
+id = "imprint-json-credential-pair"
+description = "JSON object with both username/email and password fields populated."
+regex = '''(?i)"(?:username|email|login)"\s*:\s*"[^"]{2,}"\s*,\s*"password"\s*:\s*"([^"]{6,})"'''
+secretGroup = 1
+tags = ["credential", "json"]
+[rules.allowlist]
+regexes = [
+  '''^\$\{credential\.''',
+  '''^fixture-''',
+  '''^synthetic-''',
+  '''^hunter2$''',
+  '''^hunter3$''',
+]
+
+[[rules]]
+id = "imprint-imprintbundle"
+description = "Encrypted credential bundles must never be checked in (even encrypted) — they pin a person/account."
+path = '''\.imprintbundle$'''
+
+[[rules]]
+id = "imprint-config-secrets-file"
+description = "The plaintext config dir under ~/.config/imprint must never appear in a tracked path."
+path = '''(^|/)\.config/imprint/(secrets|credentials)/'''

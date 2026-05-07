@@ -176,7 +176,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         setCookieList = headers.getSetCookie();
       } else {
         const sc = resp.headers.get('set-cookie');
-        if (sc) setCookieList = [sc];
+        if (sc) setCookieList = splitSetCookieHeader(sc);
       }
       for (const sc of setCookieList) {
         const cookie = parseSetCookie(sc, subbed.url);
@@ -372,7 +372,7 @@ function encodePart(
 
   if (context === 'form-body') {
     // Each substituted value sits between `&` and `=` separators; URL-encode
-    // so a password like `REDACTED-PASSWORD` doesn't corrupt the body shape.
+    // so a value containing `@` / `&` / `=` doesn't corrupt the body shape.
     return encodeURIComponent(s);
   }
   if (context === 'json-body') {
@@ -519,6 +519,15 @@ export async function checkSiteCredentialsReady(site: string): Promise<Credentia
     })),
     message: buildMissingCredentialMessage(store, firstMissing.name),
   };
+}
+
+/** Split a concatenated Set-Cookie header (the "fetch joins multi-Set-Cookie
+ *  headers with `, `" case) into individual cookie strings. The naive split
+ *  on `,` is wrong because Expires=… contains `Wed, 30 Dec 2026 …`. Split
+ *  only on a comma that is followed by what looks like a new cookie name
+ *  (`token=`); date weekdays don't have `=` after them, so they survive. */
+export function splitSetCookieHeader(joined: string): string[] {
+  return joined.split(/,\s*(?=[A-Za-z0-9!#$%&'*+\-.^_`|~]+=)/);
 }
 
 /** Minimal Set-Cookie parser. Pulls name=value plus Domain/Path attrs and

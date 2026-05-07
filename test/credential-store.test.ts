@@ -67,10 +67,10 @@ describe('credential-store backend overrides', () => {
     const backend = await getCredentialBackend();
     expect(backend).toBe(fake);
 
-    await backend.setSecret('southwest-seats', 'username', 'ashaychangwani');
+    await backend.setSecret('southwest-seats', 'username', 'fixture-user');
     await backend.setSecret('southwest-seats', 'password', 'hunter2');
 
-    expect(await backend.getSecret('southwest-seats', 'username')).toBe('ashaychangwani');
+    expect(await backend.getSecret('southwest-seats', 'username')).toBe('fixture-user');
     expect(await backend.listSecrets('southwest-seats')).toEqual(['username', 'password']);
 
     await backend.deleteSecret('southwest-seats', 'password');

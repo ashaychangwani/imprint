@@ -775,6 +775,7 @@ async function main(argv: string[]): Promise<number> {
         params,
         headed: values.headed,
         trace: values.trace,
+        site,
       });
       if (result.ok) {
         console.log('[imprint] OK');
