@@ -197,13 +197,20 @@ class EncryptedFileBackend implements CredentialBackend {
     this.passphraseProvider = opts.passphraseProvider;
   }
 
-  private async ensureKeyAndData(): Promise<void> {
+  private async ensureKeyAndData(opts?: { forWrite?: boolean }): Promise<void> {
     if (this.cachedKey && this.cachedData) return;
     const sodium = this.sodium;
 
     if (!existsSync(this.filePath)) {
-      // First use — derive a key from a fresh passphrase, write an empty
-      // encrypted shape.
+      // No store yet. For a READ (forWrite !== true), short-circuit with an
+      // empty in-memory shape — there cannot be any credentials to return,
+      // and prompting for a passphrase here would hang non-interactive
+      // callers (CI, MCP server startup, cron). The store is materialised
+      // on first WRITE, when we have a real value to protect.
+      if (!opts?.forWrite) {
+        this.cachedData = { sites: {} };
+        return;
+      }
       const passphrase = await this.passphraseProvider();
       const salt = sodium.randombytes_buf(16);
       this.cachedKey = deriveKey(passphrase, salt);
@@ -286,13 +293,13 @@ class EncryptedFileBackend implements CredentialBackend {
   }
 
   async setSecret(site: string, name: string, value: string): Promise<void> {
-    await this.ensureKeyAndData();
+    await this.ensureKeyAndData({ forWrite: true });
     this.siteData(site).secrets[name] = value;
     this.persist();
   }
 
   async deleteSecret(site: string, name: string): Promise<void> {
-    await this.ensureKeyAndData();
+    await this.ensureKeyAndData({ forWrite: true });
     const bucket = this.cachedData?.sites[site];
     if (bucket && name in bucket.secrets) {
       delete bucket.secrets[name];
@@ -312,7 +319,7 @@ class EncryptedFileBackend implements CredentialBackend {
   }
 
   async setCookies(site: string, cookies: CookieRecord[]): Promise<void> {
-    await this.ensureKeyAndData();
+    await this.ensureKeyAndData({ forWrite: true });
     this.siteData(site).cookies = cookies;
     this.persist();
   }
