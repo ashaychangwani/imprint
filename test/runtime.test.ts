@@ -270,4 +270,47 @@ describe('executeWorkflow', () => {
     });
     expect(seen.cookie).toBe('session=abc123');
   });
+
+  it('URL-encodes credential values inside form-urlencoded request bodies', async () => {
+    // Regression: a password like "REDACTED-PASSWORD" must reach the wire as
+    // REDACTED-PASSWORD, not raw "@" — otherwise the form pair structure
+    // can break (or, worse, the server rejects the unrequested encoding).
+    const formWorkflow: Workflow = {
+      toolName: 'login_test',
+      intent: { description: 'login' },
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://example.com/api/login',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'username=${credential.username}&password=${credential.password}',
+        },
+      ],
+      site: 'test',
+    };
+    const seen: { body: string | null } = { body: null };
+    const fetchMock = (async (_url: string, init?: RequestInit) => {
+      seen.body = (init?.body as string | null) ?? null;
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const creds: CredentialStore = {
+      site: 'test',
+      cookies: [],
+      values: { username: 'alice', password: 'p@ss & word=1' },
+    };
+
+    await executeWorkflow({
+      workflow: formWorkflow,
+      params: {},
+      credentials: creds,
+      fetchImpl: fetchMock,
+    });
+
+    expect(seen.body).toBe('username=alice&password=p%40ss%20%26%20word%3D1');
+  });
 });

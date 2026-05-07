@@ -87,6 +87,41 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     }
     context = await browser.newContext();
     page = await context.newPage();
+
+    // Inject credentials.cookies into the browser so the playbook can navigate
+    // an authenticated flow (e.g., my-trips → reservation → seat map). The
+    // site is inferred from the playbook's parent folder.
+    try {
+      const playbookPath = typeof opts.playbook === 'string' ? opts.playbook : null;
+      if (playbookPath) {
+        const { dirname, basename } = await import('node:path');
+        // examples/<site>/<workflow>/playbook.yaml → site = parent.parent name
+        const workflowDir = dirname(playbookPath);
+        const siteDir = dirname(workflowDir);
+        const sitesParent = basename(dirname(siteDir));
+        const site = sitesParent === 'examples' ? basename(siteDir) : null;
+        if (site) {
+          const { loadSiteCredentials } = await import('./credential-store.ts');
+          const view = await loadSiteCredentials(site);
+          if (view.cookies.length > 0) {
+            const playwrightCookies = view.cookies
+              .map((c) => ({
+                name: c.name,
+                value: c.value,
+                domain: c.domain,
+                path: c.path,
+              }))
+              .filter((c) => c.name && c.value);
+            if (playwrightCookies.length > 0) {
+              await context.addCookies(playwrightCookies);
+              log(`injected ${playwrightCookies.length} cookies for site ${site}`);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      log(`failed to inject cookies: ${errMsg(err)} (proceeding without)`);
+    }
   }
 
   // Read body text inside the response handler — Playwright/CDP GCs
@@ -381,6 +416,12 @@ async function extractResult(
       parsed = JSON.parse(last.body);
     } catch {
       throw new Error(`Result XHR body was not JSON (${last.url}): ${last.body.slice(0, 200)}`);
+    }
+    // `*` returns the full parsed JSON unchanged — useful when the consumer
+    // (parser.ts, MCP caller) wants the rich object graph rather than just
+    // numeric leaves.
+    if (result.extract === '*') {
+      return { [result.return_as]: parsed, source_url: last.url };
     }
     return { [result.return_as]: extractAt(parsed, result.extract), source_url: last.url };
   }

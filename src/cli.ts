@@ -33,6 +33,7 @@ OTHER
   assemble <session.jsonl> Recover session.json from a partial JSONL.
   check <session>          Sanity-check a captured session.
   login <site>             Persist cookies for <site> from a session.
+  credential <subcmd>      Manage stored credentials (list/get/set/delete/export/import/migrate).
 
 GLOBAL
   --help, -h               Show this help.
@@ -179,6 +180,20 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--from-session <path>', description: 'Source session.json (required in v0.1).' },
     ],
     example: 'imprint login discoverandgo --from-session examples/discoverandgo/sessions/<ts>.json',
+  },
+  credential: {
+    summary:
+      'Manage local credential storage. Subcommands: list, get, set, delete, export, import, migrate.',
+    usage: [
+      'imprint credential list [<site>]',
+      'imprint credential get <site> <name> --reveal',
+      'imprint credential set <site> <name>',
+      'imprint credential delete <site> <name>',
+      'imprint credential export <site> [--out <path>]',
+      'imprint credential import <site> <bundle-path>',
+      'imprint credential migrate',
+    ],
+    example: 'imprint credential set southwest-seats password',
   },
   'probe-backends': {
     summary: 'Try each backend once and cache the working order to backends.json.',
@@ -580,11 +595,11 @@ async function main(argv: string[]): Promise<number> {
         return 2;
       }
       const { login } = await import('./imprint/login.ts');
-      const result = login({
+      const result = await login({
         site,
         fromSession: values['from-session'],
       });
-      console.log(`[imprint] credentials → ${result.outPath}`);
+      console.log(`[imprint] credentials → backend: ${result.backend}`);
       console.log(
         `[imprint] ${result.cookieCount} cookie${result.cookieCount === 1 ? '' : 's'} stored`,
       );
@@ -833,6 +848,11 @@ async function main(argv: string[]): Promise<number> {
         process.removeListener('SIGINT', onSigint);
       }
       return 0;
+    }
+
+    case 'credential': {
+      const { runCredentialCommand } = await import('./imprint/cli-credential.ts');
+      return await runCredentialCommand(argv.slice(1));
     }
 
     // Hidden verb: spawned by claude-cli-compile.ts via --mcp-config. Not in

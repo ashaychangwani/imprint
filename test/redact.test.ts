@@ -189,4 +189,70 @@ describe('redactSession', () => {
     expect(session.url).toBe('https://example.com/');
     expect(session.requests.length).toBe(1);
   });
+
+  it('rewrites credential values to ${credential.X} placeholders when given replacements', () => {
+    const { session, stats } = redactSession(baseSession, {
+      replacements: [
+        {
+          requestSeq: 0,
+          location: { kind: 'body-form', key: 'password' },
+          originalValue: 'hunter2',
+          placeholder: '${credential.password}',
+        },
+        {
+          requestSeq: 0,
+          location: { kind: 'body-form', key: 'user' },
+          originalValue: 'alice',
+          placeholder: '${credential.username}',
+        },
+      ],
+    });
+
+    const req = session.requests[0];
+    expect(req).toBeDefined();
+    if (!req) return;
+    expect(req.body).toContain('password=${credential.password}');
+    expect(req.body).toContain('user=${credential.username}');
+    expect(req.body).not.toContain('hunter2');
+    expect(req.body).not.toContain('alice');
+    expect(stats.placeholdersInjected).toBeGreaterThanOrEqual(2);
+  });
+
+  it('placeholders for json bodies are addressed by dot-path', () => {
+    const session: Session = {
+      ...baseSession,
+      requests: [
+        {
+          seq: 0,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/login',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ login: { username: 'alice', password: 'hunter2' } }),
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const { session: out } = redactSession(session, {
+      replacements: [
+        {
+          requestSeq: 0,
+          location: { kind: 'body-json', path: ['login', 'username'] },
+          originalValue: 'alice',
+          placeholder: '${credential.username}',
+        },
+        {
+          requestSeq: 0,
+          location: { kind: 'body-json', path: ['login', 'password'] },
+          originalValue: 'hunter2',
+          placeholder: '${credential.password}',
+        },
+      ],
+    });
+    const body = out.requests[0]?.body ?? '';
+    expect(body).toContain('${credential.username}');
+    expect(body).toContain('${credential.password}');
+    expect(body).not.toContain('alice');
+    expect(body).not.toContain('hunter2');
+  });
 });

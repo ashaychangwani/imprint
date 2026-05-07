@@ -33,7 +33,11 @@ You will receive a JSON object with this shape:
 
 The narration is in the user's own words and is your most reliable signal of intent. Use the timestamps to correlate narration → events → requests.
 
-Sensitive fields (passwords, tokens, auth headers, cookies) have been redacted to `[REDACTED:N]` markers. The N is the original byte length. The presence of these markers tells you "this field was a credential/token in the original capture" — you should ALWAYS treat such fields as parameterized auth that the runtime will inject from the user's credential store, NEVER hardcode the redacted values.
+Sensitive fields fall into two categories in the input you receive:
+
+1. **Already-templated credentials** — login form values like username/email + password are rewritten to `${credential.NAME}` placeholders BEFORE you see the session. When you see a request body like `username=${credential.username}&password=${credential.password}`, those placeholders MUST be preserved verbatim in your generated workflow.json. The runtime substitutes them from a per-site credential manager (OS keychain) at call time. Do NOT replace these with parameters or the redacted-byte form.
+
+2. **Generic redactions** — other secrets (cookies, auth headers, response tokens) have been replaced with `[REDACTED:N]` markers (N = original byte length). The presence of these tells you "this field was a credential/token in the original capture" — you should treat such fields as parameterized auth that the runtime will inject from the user's credential store. Reference them as `${credential.NAME}` (pick a snake_case name like `csrf_token`, `patron_id`). NEVER hardcode the redacted values.
 
 ## Output
 
@@ -81,7 +85,11 @@ You output a single JSON object matching this schema, and ONLY that JSON (no pro
 
 4. **Detect chained requests.** If request N+1 uses a value that came from request N's response (e.g., a `reservationID` returned by `makeReservation` that's then sent to `cancelReservation`), use the `extract` field on request N to name the value, and `${response[N].name}` in request N+1.
 
-5. **Drop login requests UNLESS they are explicitly part of the workflow's intent.** Imprint has a separate `imprint login` flow that handles auth and persists cookies. Generated workflows REPLAY using stored cookies; they don't re-login on every call. Only include the login request if the user's intent is "test login" or similar.
+5. **Login request handling.** Examine the captured login request:
+   - **KEEP the login request** when the request body uses `${credential.username}` / `${credential.password}` placeholders (the redaction step has already templated them in for you). The runtime will replay the login each call, get a fresh session, and chain it into subsequent requests via `extract`. This is the right pattern for sites where cookies expire quickly or auth tokens rotate per session.
+   - **DROP the login request** only when (a) there's no login POST in the capture (the user was already logged in via prior cookies), or (b) the user's stated intent has nothing to do with auth (e.g., a public search). In those cases the runtime relies on persisted cookies from `imprint login`.
+   - When in doubt — INCLUDE the login. The runtime tolerates "login already valid" outcomes gracefully; what it can't tolerate is workflows that assume cookies and find them expired.
+   - When you keep a login request, use `extract` to pull any returned auth tokens (`id_token`, `access_token`, etc.) so subsequent requests can reference them via `${response[0].id_token}`.
 
 6. **Drop requests to third-party origins** (analytics, fonts, maps tiles, translation widgets) unless the user's intent explicitly references them.
 
@@ -111,7 +119,52 @@ You output a single JSON object matching this schema, and ONLY that JSON (no pro
 
 11. **Use a domain-aware default for parameters that have a clear repeated value across the capture.** If the user always selected "2 adult passes" you can set `default: 2`. If a date varied, no default.
 
-## Example
+## Example with login
+
+Suppose the user narrated: "log in to southwest and show me the seat map for my upcoming flight to LAS"
+
+The capture contains:
+- a `POST /api/security/v4/security/token` with body `username=${credential.username}&password=${credential.password}&scope=openid&...` returning `{"id_token": "...", "swa_token": "...", "customers.userInformation.accountNumber": "12345"}`
+- a `GET /api/customers/account/upcoming-trips` returning `{"trips": [{"confirmation": "ABC123"}, ...]}`
+- a `GET /api/extensions/v1/seat-map?confirmation=ABC123&firstName=Ashay&lastName=Changwani` returning a seat map
+
+You would output:
+
+```json
+{
+  "toolName": "get_southwest_seat_map",
+  "intent": {
+    "description": "Log in to Southwest, fetch the user's upcoming flights, and return the seat map for a specific confirmation number.",
+    "userSaid": "log in to southwest and show me the seat map for my upcoming flight to LAS"
+  },
+  "parameters": [
+    { "name": "confirmation_number", "type": "string", "description": "Southwest confirmation/PNR (6 alphanumeric chars)." },
+    { "name": "first_name", "type": "string", "description": "Passenger's first name (matches the booking)." },
+    { "name": "last_name", "type": "string", "description": "Passenger's last name (matches the booking)." }
+  ],
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.southwest.com/api/security/v4/security/token",
+      "headers": { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+      "body": "username=${credential.username}&password=${credential.password}&scope=openid&response_type=id_token+swa_token&client_id=...",
+      "extract": { "id_token": "id_token", "swa_token": "swa_token" }
+    },
+    {
+      "method": "GET",
+      "url": "https://www.southwest.com/api/extensions/v1/seat-map?confirmation=${param.confirmation_number}&firstName=${param.first_name}&lastName=${param.last_name}",
+      "headers": { "Accept": "application/json", "Authorization": "Bearer ${response[0].id_token}" }
+    }
+  ],
+  "site": "southwest-seats"
+}
+```
+
+Notice: `${credential.username}` and `${credential.password}` are emitted verbatim into the login body. The login response's `id_token` is `extract`-ed and chained into the seat-map request's `Authorization` header.
+
+If the same recording also exercised an "upcoming trips list" view, that would typically be a SEPARATE workflow (`list_upcoming_trips`) the user records in another teach run — Claude can call list-then-loop to get all seat maps for upcoming flights.
+
+## Example without login
 
 Suppose the user narrated: "i'm searching for southwest seats on my BUR to LAS flight"
 
