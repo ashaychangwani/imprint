@@ -19,6 +19,7 @@ import {
 import { resolveLadder, runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
 import { loadBackendsCache } from './probe-backends.ts';
+import { checkSiteCredentialsReady } from './runtime.ts';
 import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import {
@@ -197,6 +198,34 @@ export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
     }
     if (t.playbookPath) {
       log('  playbook.yaml found (available as ladder fallback)');
+    }
+  }
+
+  // Pre-flight: warn loudly if any tool's site has a credentials manifest
+  // declaring secrets that aren't yet provisioned. We log instead of throw
+  // so the MCP server still comes up — the user might be intentionally
+  // running an unauthenticated subset of tools — but the warning gives them
+  // the exact commands to run before the first tool call fails.
+  const reportedSites = new Set<string>();
+  for (const t of tools) {
+    if (reportedSites.has(t.site)) continue;
+    reportedSites.add(t.site);
+    try {
+      const report = await checkSiteCredentialsReady(t.site);
+      if (!report.ok) {
+        // Two-line summary on the warning, then the full multi-line
+        // remediation block. The message is already formatted for humans.
+        log(
+          `  ⚠ site "${t.site}" is missing ${report.missing.length} credential(s) declared in credentials.manifest.json`,
+        );
+        for (const line of report.message.split('\n')) {
+          log(`    ${line}`);
+        }
+      }
+    } catch (err) {
+      log(
+        `  ⚠ credential pre-flight for "${t.site}" failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

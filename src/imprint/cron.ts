@@ -16,6 +16,7 @@ import { loadJsonFile } from './load-json.ts';
 import { createLog, isDebug } from './log.ts';
 import { evaluateNotifyWhen, notify } from './notify.ts';
 import { loadBackendsCache } from './probe-backends.ts';
+import { checkSiteCredentialsReady } from './runtime.ts';
 import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { type ResolvedTool, buildZodValidator, discoverTools } from './tool-loader.ts';
@@ -195,6 +196,16 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
   if (replayBackend === 'playbook' && !existsSync(playbookPath)) {
     throw new Error(
       `replayBackend="playbook" but ${playbookPath} doesn't exist. Run \`imprint compile-playbook\` first.`,
+    );
+  }
+
+  // Pre-flight: cron runs unattended, so a missing credential at runtime
+  // means a silent failure (or a noisy failure mid-tick). Fail loud at
+  // startup with the exact set/import commands the user needs.
+  const credCheck = await checkSiteCredentialsReady(opts.site);
+  if (!credCheck.ok) {
+    throw new Error(
+      `cron cannot start for "${opts.site}" — credentials are missing.\n\n${credCheck.message}`,
     );
   }
 

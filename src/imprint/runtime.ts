@@ -6,7 +6,7 @@
  */
 
 import { dirname, resolve as pathResolve } from 'node:path';
-import { loadSiteCredentials } from './credential-store.ts';
+import { loadSiteCredentials, readSiteManifest } from './credential-store.ts';
 import type { ToolResult, Workflow, WorkflowRequest } from './types.ts';
 
 export interface CredentialStore {
@@ -330,14 +330,7 @@ export function substituteString(
       if (kind === 'credential' && name) {
         const v = credentials.values[name];
         if (v === undefined) {
-          const available = Object.keys(credentials.values);
-          const hint =
-            available.length === 0
-              ? `→ no credentials stored for "${credentials.site}"; run \`imprint login ${credentials.site}\``
-              : `→ available credentials: ${available.join(', ')}\n→ if "${name}" is missing, the login session may be incomplete; re-run \`imprint login ${credentials.site}\``;
-          throw new Error(
-            `Workflow placeholder ${match} but credential "${name}" not in store\n${hint}`,
-          );
+          throw new Error(buildMissingCredentialMessage(credentials, name));
         }
         return encodePart(v, template, match, context);
       }
@@ -433,6 +426,99 @@ function domainMatches(cookieDomain: string, host: string): boolean {
   // Cookie domain may start with a leading dot. Strip it.
   const dom = cookieDomain.replace(/^\./, '');
   return host === dom || host.endsWith(`.${dom}`);
+}
+
+/** Build a clear, actionable error when a `${credential.NAME}` placeholder
+ *  can't be resolved. Reads the per-site manifest (if present) so the
+ *  message can list ALL missing credentials at once and explain the kinds
+ *  the user is being asked to provision. */
+function buildMissingCredentialMessage(store: CredentialStore, missingName: string): string {
+  const site = store.site;
+  const have = new Set(Object.keys(store.values));
+  // Pull the manifest so we can list every required credential, not just the
+  // one that happened to fire first.
+  let manifestEntries: Array<{ name: string; kind: string; description?: string }> = [];
+  try {
+    const m = readSiteManifest(site);
+    if (m && Array.isArray(m.secrets)) manifestEntries = m.secrets;
+  } catch {
+    /* no manifest — fall back to a simpler hint */
+  }
+
+  const missingFromManifest = manifestEntries.filter((e) => !have.has(e.name));
+  const missing =
+    missingFromManifest.length > 0
+      ? missingFromManifest.map((e) => e.name)
+      : have.has(missingName)
+        ? [missingName]
+        : [missingName];
+
+  const setCommands = missing.map((n) => `  imprint credential set ${site} ${n}`).join('\n');
+  const manifestNote =
+    missingFromManifest.length > 1
+      ? `\nAll ${missingFromManifest.length} credentials this skill needs are missing.`
+      : '';
+  const manifestKinds =
+    missingFromManifest.length > 0
+      ? `\nThe skill's credentials.manifest.json says it expects:\n${missingFromManifest
+          .map((e) => `  • ${e.name} [${e.kind}]${e.description ? ` — ${e.description}` : ''}`)
+          .join('\n')}`
+      : '';
+
+  return [
+    `Missing credential "${missingName}" for site "${site}". The MCP tool can't run until you provision it.${manifestNote}${manifestKinds}`,
+    '',
+    'To fix — pick ONE of:',
+    '',
+    '  (1) Set it on this machine (interactive, silent prompt):',
+    setCommands,
+    '',
+    '  (2) Import an encrypted bundle exported from a machine where this is already set up:',
+    `      (on the source machine)  imprint credential export ${site} --out ${site}.imprintbundle`,
+    `      (transfer the bundle file via any channel — it's passphrase-protected)`,
+    `      (on this machine)        imprint credential import ${site} ${site}.imprintbundle`,
+    '',
+    'See docs/credential-sharing.md for the full sharing workflow.',
+  ].join('\n');
+}
+
+/** Pre-flight result for one site's credential readiness. */
+interface CredentialReadinessReport {
+  site: string;
+  ok: boolean;
+  /** Entries the manifest says this site needs but that aren't in the store. */
+  missing: Array<{ name: string; kind: string; description?: string }>;
+  /** Human-friendly multi-line message; safe to log as-is. Empty when ok. */
+  message: string;
+}
+
+/** Pre-flight check: read the manifest for a site, compare to what's in the
+ *  credential store, and report what's missing. Used by `imprint mcp-server`
+ *  startup and `imprint cron` so users find out ahead of the first tool call
+ *  rather than mid-workflow. Returns `ok: true` if no manifest exists OR if
+ *  every manifested credential is present. */
+export async function checkSiteCredentialsReady(site: string): Promise<CredentialReadinessReport> {
+  const manifest = readSiteManifest(site);
+  if (!manifest || manifest.secrets.length === 0) {
+    return { site, ok: true, missing: [], message: '' };
+  }
+  const store = (await loadCredentialStore(site)) ?? { site, cookies: [], values: {} };
+  const have = new Set(Object.keys(store.values));
+  const missing = manifest.secrets.filter((s) => !have.has(s.name));
+  if (missing.length === 0) return { site, ok: true, missing: [], message: '' };
+
+  const firstMissing = missing[0];
+  if (!firstMissing) return { site, ok: true, missing: [], message: '' };
+  return {
+    site,
+    ok: false,
+    missing: missing.map((s) => ({
+      name: s.name,
+      kind: s.kind,
+      description: s.description,
+    })),
+    message: buildMissingCredentialMessage(store, firstMissing.name),
+  };
 }
 
 /** Minimal Set-Cookie parser. Pulls name=value plus Domain/Path attrs and

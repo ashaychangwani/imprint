@@ -142,6 +142,31 @@ Each site registers as its own MCP server (`imprint-southwest`, `imprint-discove
 
 <br>
 
+## Sharing skills across machines
+
+Teach on your laptop, ship the skill to a remote agent (OpenClaw, Hermes, a server-side cron host, ...). Skill folders committed to git contain **zero plaintext credentials** — only `${credential.NAME}` references and a `credentials.manifest.json` listing what's needed.
+
+For credentials, use the **encrypted bundle** flow when you can't (or don't want to) re-type passwords on the receiving machine:
+
+```bash
+# On the laptop where you taught the skill:
+imprint credential export southwest --out southwest.imprintbundle
+# → prompts for a passphrase. The bundle is libsodium-encrypted with an
+#   argon2id-derived key. Safe to send via Slack, email, scp, S3, etc.
+
+# On the OpenClaw machine (or any other receiver):
+imprint credential import southwest southwest.imprintbundle
+# → prompts for the same passphrase. Decrypts; secrets land in the OS keychain.
+```
+
+Pass the passphrase **out-of-band** (Signal, phone, password manager share — *not* the same channel as the bundle file).
+
+After import, the same `imprint mcp-server <site>` config you'd use locally works on the receiver — it resolves `${credential.X}` from that machine's keychain on every tool call. If anything's missing, `imprint mcp-server` and `imprint cron` log/fail with the exact `imprint credential set` and `imprint credential import` commands you need.
+
+See [Sharing Skills](docs/credential-sharing.md) for the full flow including interactive `imprint credential set` (when you can re-type), threat model, rotation, and OpenClaw / Hermes wiring details.
+
+<br>
+
 ## The backend ladder
 
 When an API call gets blocked, Imprint doesn't fail — it escalates:
@@ -179,6 +204,7 @@ imprint <command> --help    # per-command options
 |---|---|
 | **Pipeline** | `teach` · `record` · `redact` · `generate` · `compile-playbook` · `emit` |
 | **Runtime** | `cron` · `mcp-server` · `playbook` · `probe-backends` |
+| **Credentials** | `credential set` · `credential list` · `credential export` · `credential import` · `credential migrate` |
 | **Utilities** | `login` · `assemble` · `check` · `doctor` |
 
 `teach`, `generate`, and `compile-playbook` accept `--provider <name>` to override the auto-detected LLM (see [Install](#install) for the five valid names). `teach` and `generate` also take `--keep-test` to retain the agent-written `parser.test.ts` for debugging — it's deleted by default since it reads the gitignored redacted session via `$IMPRINT_SESSION_PATH` and isn't reproducible elsewhere.
@@ -189,6 +215,7 @@ imprint <command> --help    # per-command options
 
 - [Getting Started](docs/getting-started.md) — full walkthrough
 - [Integrations](docs/integrations.md) — per-platform setup
+- [Sharing Skills](docs/credential-sharing.md) — laptop ↔ OpenClaw / Hermes / remote-agent provisioning
 - [Architecture](docs/architecture.md) — data flow and module map
 - [Security](docs/security.md) — redaction, credential handling, what gets stored
 - [Troubleshooting](docs/troubleshooting.md) — common failures and fixes
