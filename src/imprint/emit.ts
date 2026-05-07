@@ -106,7 +106,7 @@ ${paramTypeFields}
 }
 
 export async function ${camelCase(workflow.toolName)}(
-  input: ${pascalCase(workflow.toolName)}Input,
+  ${workflow.parameters.length === 0 ? '_input' : 'input'}: ${pascalCase(workflow.toolName)}Input,
   opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));

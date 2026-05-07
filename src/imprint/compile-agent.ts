@@ -18,6 +18,7 @@ import {
 import { compileViaClaudeCli } from './claude-cli-compile.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { buildCompileTools, externalVerification } from './compile-tools.ts';
+import { type Replacement, extractCredentials } from './credential-extract.ts';
 import {
   type LLMOptions,
   type ProviderName,
@@ -62,6 +63,12 @@ interface CompileAgentOptions {
    *  on disk just confuses `bun test`). Pass true with `--keep-test` to
    *  inspect the agent's test output locally. */
   keepTest?: boolean;
+  /** Credential placeholders to inject before redaction. Provided by `imprint
+   *  teach` when the credential-extract pass found a login pair; for direct
+   *  `imprint generate` callers we run extraction inline (best-effort, no
+   *  prompts — values flow into the credential manager only when the user
+   *  goes through the teach flow). */
+  replacements?: Replacement[];
 }
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
@@ -79,14 +86,25 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
     'session',
   );
 
-  // 2. Auto-redact if not already redacted
+  // 2. Auto-redact if not already redacted (preserves any ${credential.X}
+  //    placeholders that teach.ts already injected). When replacements are
+  //    passed in via opts (the teach path), we honor them; otherwise we run
+  //    extraction inline so direct `imprint generate` callers also get
+  //    credential-aware redaction (values are NOT persisted to the keychain
+  //    on this path — that requires going through `imprint teach` or
+  //    `imprint credential set`).
   const looksRedacted = JSON.stringify(session).includes('[REDACTED:');
   if (!looksRedacted) {
-    const r = redactSession(session);
+    let replacements = opts.replacements;
+    if (!replacements) {
+      const auto = extractCredentials(session);
+      replacements = auto.replacements;
+    }
+    const r = redactSession(session, { replacements });
     session = r.session;
-    if (r.stats.totalRedactions > 0) {
+    if (r.stats.totalRedactions > 0 || r.stats.placeholdersInjected > 0) {
       log(
-        `redacted ${r.stats.totalRedactions} value(s) before sending to LLM (use \`imprint redact\` to scrub the file on disk too)`,
+        `redacted ${r.stats.totalRedactions} value(s) and injected ${r.stats.placeholdersInjected} credential placeholder(s) before sending to LLM`,
       );
     }
   }

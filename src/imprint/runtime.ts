@@ -5,12 +5,9 @@
  * files are thin wrappers around executeWorkflow().
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
-import envPaths from 'env-paths';
+import { dirname, resolve as pathResolve } from 'node:path';
+import { loadSiteCredentials, readSiteManifest } from './credential-store.ts';
 import type { ToolResult, Workflow, WorkflowRequest } from './types.ts';
-
-const PATHS = envPaths('imprint', { suffix: '' });
 
 export interface CredentialStore {
   site: string;
@@ -20,18 +17,14 @@ export interface CredentialStore {
   values: Record<string, string>;
 }
 
-/** Load credentials for a site from disk. Returns null if no login is recorded.
- *  Throws with a remediation hint if the file exists but is malformed. */
-export function loadCredentialStore(site: string): CredentialStore | null {
-  const path = pathJoin(PATHS.config, 'credentials', `${site}.json`);
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as CredentialStore;
-  } catch (err) {
-    throw new Error(
-      `Credential store at ${path} is corrupted: ${err instanceof Error ? err.message : String(err)}\n→ delete the file and re-run \`imprint login ${site}\` to regenerate.`,
-    );
-  }
+/** Load credentials for a site from the credential manager (OS keychain →
+ *  encrypted-file fallback → legacy JSON for backwards compat). Returns
+ *  null only if there's truly nothing recorded; a missing keychain entry
+ *  with no legacy file still yields an empty store. */
+export async function loadCredentialStore(site: string): Promise<CredentialStore | null> {
+  const view = await loadSiteCredentials(site);
+  if (Object.keys(view.values).length === 0 && view.cookies.length === 0) return null;
+  return { site: view.site, cookies: view.cookies, values: view.values };
 }
 
 interface ExecuteOptions {
@@ -65,7 +58,9 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   }
 
   const credentials =
-    opts.credentials ?? loadCredentialStore(opts.workflow.site) ?? emptyStore(opts.workflow.site);
+    opts.credentials ??
+    (await loadCredentialStore(opts.workflow.site)) ??
+    emptyStore(opts.workflow.site);
 
   // Validate required parameters are present.
   for (const p of opts.workflow.parameters) {
@@ -82,13 +77,26 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   // requests can reference ${response[N].path}.
   const responses: unknown[] = [];
 
+  // In-flight cookie jar — starts as a copy of the persisted cookies and gets
+  // updated from every Set-Cookie response header during the chain. Lets a
+  // login request "set" auth cookies that subsequent requests in the same
+  // workflow can use, mirroring browser behaviour. Not persisted back to the
+  // credential store at workflow end (that's `imprint login`'s job).
+  const inFlightCookies: Array<{ name: string; value: string; domain: string; path: string }> = [
+    ...credentials.cookies,
+  ];
+  const liveCredentials: CredentialStore = {
+    ...credentials,
+    cookies: inFlightCookies,
+  };
+
   for (let i = 0; i < opts.workflow.requests.length; i++) {
     const req = opts.workflow.requests[i];
     if (!req) continue;
 
-    const subbed = substituteRequest(req, opts.params, credentials, responses);
+    const subbed = substituteRequest(req, opts.params, liveCredentials, responses);
 
-    const cookieHeader = buildCookieHeader(credentials, subbed.url);
+    const cookieHeader = buildCookieHeader(liveCredentials, subbed.url);
     if (cookieHeader) subbed.headers.cookie = cookieHeader;
 
     const controller = new AbortController();
@@ -154,6 +162,34 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         error: 'BAD_RESPONSE',
         message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${text.slice(0, 500)}`,
       };
+    }
+
+    // Capture Set-Cookie response headers into the in-flight cookie jar so
+    // subsequent requests in the chain see the freshly-issued auth cookies.
+    // Works for fetch (single Set-Cookie header concatenated) and the rare
+    // Set-Cookie iterator on stealth-fetch responses.
+    try {
+      // biome-ignore lint/suspicious/noExplicitAny: getSetCookie() is ES2024
+      const headers: any = resp.headers;
+      let setCookieList: string[] = [];
+      if (typeof headers.getSetCookie === 'function') {
+        setCookieList = headers.getSetCookie();
+      } else {
+        const sc = resp.headers.get('set-cookie');
+        if (sc) setCookieList = splitSetCookieHeader(sc);
+      }
+      for (const sc of setCookieList) {
+        const cookie = parseSetCookie(sc, subbed.url);
+        if (!cookie) continue;
+        // Replace existing same-name cookie; otherwise append.
+        const idx = inFlightCookies.findIndex(
+          (c) => c.name === cookie.name && c.domain === cookie.domain,
+        );
+        if (idx >= 0) inFlightCookies[idx] = cookie;
+        else inFlightCookies.push(cookie);
+      }
+    } catch {
+      // Non-fatal; cookies stay as they were.
     }
 
     const text = await safeText(resp);
@@ -223,7 +259,13 @@ function substituteRequest(
     subbed.headers[k] = substituteString(v, params, credentials, responses);
   }
   if (req.body !== undefined) {
-    subbed.body = substituteString(req.body, params, credentials, responses);
+    const ct = (req.headers['content-type'] ?? req.headers['Content-Type'] ?? '').toLowerCase();
+    const ctx: SubstitutionContext = ct.includes('json')
+      ? 'json-body'
+      : ct.includes('urlencoded') || req.body.includes('=')
+        ? 'form-body'
+        : 'opaque-body';
+    subbed.body = substituteString(req.body, params, credentials, responses, ctx);
   }
   return subbed;
 }
@@ -231,11 +273,16 @@ function substituteRequest(
 const PLACEHOLDER_RE =
   /\$\{(param|credential|env|response)\.([^}]+)\}|\$\{response\[(\d+)\]\.([^}]+)\}/g;
 
+/** What kind of context the template represents; controls how substituted
+ *  values are escaped. */
+type SubstitutionContext = 'url' | 'form-body' | 'json-body' | 'opaque-body' | 'header';
+
 export function substituteString(
   template: string,
   params: Record<string, string | number | boolean>,
   credentials: CredentialStore,
   responses: unknown[],
+  context?: SubstitutionContext,
 ): string {
   return template.replace(
     PLACEHOLDER_RE,
@@ -256,7 +303,7 @@ export function substituteString(
           );
         }
         const v = jsonpath(target, path);
-        return encodePart(v, template, match);
+        return encodePart(v, template, match, context);
       }
       // ${env.X}
       if (kind === 'env' && name) {
@@ -278,21 +325,14 @@ export function substituteString(
               : `→ available params: ${available.join(', ')}`;
           throw new Error(`Workflow placeholder ${match} but no param "${name}" provided\n${hint}`);
         }
-        return encodePart(params[name], template, match);
+        return encodePart(params[name], template, match, context);
       }
       if (kind === 'credential' && name) {
         const v = credentials.values[name];
         if (v === undefined) {
-          const available = Object.keys(credentials.values);
-          const hint =
-            available.length === 0
-              ? `→ no credentials stored for "${credentials.site}"; run \`imprint login ${credentials.site}\``
-              : `→ available credentials: ${available.join(', ')}\n→ if "${name}" is missing, the login session may be incomplete; re-run \`imprint login ${credentials.site}\``;
-          throw new Error(
-            `Workflow placeholder ${match} but credential "${name}" not in store\n${hint}`,
-          );
+          throw new Error(buildMissingCredentialMessage(credentials, name));
         }
-        return encodePart(v, template, match);
+        return encodePart(v, template, match, context);
       }
       return match;
     },
@@ -317,16 +357,40 @@ function jsonpath(root: unknown, path: string): unknown {
 }
 
 /**
- * Decide whether a substituted value needs URL-encoding.
- *
- * Heuristic: if the placeholder appears inside what looks like a URL (the
- * template starts with http:// or https://), we URL-encode. If it appears
- * inside a header value or body, we don't (the caller is expected to format
- * the body appropriately for its content-type).
+ * Decide how a substituted value gets escaped before splicing into the
+ * template. Honors an explicit context hint when given (set by
+ * substituteRequest based on Content-Type); otherwise falls back to a
+ * URL-shaped heuristic for backwards compatibility.
  */
-function encodePart(value: unknown, template: string, match: string): string {
+function encodePart(
+  value: unknown,
+  template: string,
+  match: string,
+  context?: SubstitutionContext,
+): string {
   const s = value === undefined || value === null ? '' : String(value);
-  const isUrlContext = /^https?:\/\//.test(template);
+
+  if (context === 'form-body') {
+    // Each substituted value sits between `&` and `=` separators; URL-encode
+    // so a value containing `@` / `&` / `=` doesn't corrupt the body shape.
+    return encodeURIComponent(s);
+  }
+  if (context === 'json-body') {
+    // We're substituting INTO a string that will be parsed as JSON. The
+    // template treats `${credential.X}` as a literal string token, so
+    // escape characters that would terminate the surrounding JSON string.
+    return s
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r');
+  }
+  if (context === 'header' || context === 'opaque-body') {
+    return s;
+  }
+
+  // URL context (default).
+  const isUrlContext = context === 'url' || /^https?:\/\//.test(template);
   if (!isUrlContext) return s;
 
   // If the placeholder sits in the URL path, encode strictly. If it's in the
@@ -362,4 +426,137 @@ function domainMatches(cookieDomain: string, host: string): boolean {
   // Cookie domain may start with a leading dot. Strip it.
   const dom = cookieDomain.replace(/^\./, '');
   return host === dom || host.endsWith(`.${dom}`);
+}
+
+/** Build a clear, actionable error when a `${credential.NAME}` placeholder
+ *  can't be resolved. Reads the per-site manifest (if present) so the
+ *  message can list ALL missing credentials at once and explain the kinds
+ *  the user is being asked to provision. */
+function buildMissingCredentialMessage(store: CredentialStore, missingName: string): string {
+  const site = store.site;
+  const have = new Set(Object.keys(store.values));
+  // Pull the manifest so we can list every required credential, not just the
+  // one that happened to fire first.
+  let manifestEntries: Array<{ name: string; kind: string; description?: string }> = [];
+  try {
+    const m = readSiteManifest(site);
+    if (m && Array.isArray(m.secrets)) manifestEntries = m.secrets;
+  } catch {
+    /* no manifest — fall back to a simpler hint */
+  }
+
+  const missingFromManifest = manifestEntries.filter((e) => !have.has(e.name));
+  const missing =
+    missingFromManifest.length > 0
+      ? missingFromManifest.map((e) => e.name)
+      : have.has(missingName)
+        ? [missingName]
+        : [missingName];
+
+  const setCommands = missing.map((n) => `  imprint credential set ${site} ${n}`).join('\n');
+  const manifestNote =
+    missingFromManifest.length > 1
+      ? `\nAll ${missingFromManifest.length} credentials this skill needs are missing.`
+      : '';
+  const manifestKinds =
+    missingFromManifest.length > 0
+      ? `\nThe skill's credentials.manifest.json says it expects:\n${missingFromManifest
+          .map((e) => `  • ${e.name} [${e.kind}]${e.description ? ` — ${e.description}` : ''}`)
+          .join('\n')}`
+      : '';
+
+  return [
+    `Missing credential "${missingName}" for site "${site}". The MCP tool can't run until you provision it.${manifestNote}${manifestKinds}`,
+    '',
+    'To fix — pick ONE of:',
+    '',
+    '  (1) Set it on this machine (interactive, silent prompt):',
+    setCommands,
+    '',
+    '  (2) Import an encrypted bundle exported from a machine where this is already set up:',
+    `      (on the source machine)  imprint credential export ${site} --out ${site}.imprintbundle`,
+    `      (transfer the bundle file via any channel — it's passphrase-protected)`,
+    `      (on this machine)        imprint credential import ${site} ${site}.imprintbundle`,
+    '',
+    'See docs/credential-sharing.md for the full sharing workflow.',
+  ].join('\n');
+}
+
+/** Pre-flight result for one site's credential readiness. */
+interface CredentialReadinessReport {
+  site: string;
+  ok: boolean;
+  /** Entries the manifest says this site needs but that aren't in the store. */
+  missing: Array<{ name: string; kind: string; description?: string }>;
+  /** Human-friendly multi-line message; safe to log as-is. Empty when ok. */
+  message: string;
+}
+
+/** Pre-flight check: read the manifest for a site, compare to what's in the
+ *  credential store, and report what's missing. Used by `imprint mcp-server`
+ *  startup and `imprint cron` so users find out ahead of the first tool call
+ *  rather than mid-workflow. Returns `ok: true` if no manifest exists OR if
+ *  every manifested credential is present. */
+export async function checkSiteCredentialsReady(site: string): Promise<CredentialReadinessReport> {
+  const manifest = readSiteManifest(site);
+  if (!manifest || manifest.secrets.length === 0) {
+    return { site, ok: true, missing: [], message: '' };
+  }
+  const store = (await loadCredentialStore(site)) ?? { site, cookies: [], values: {} };
+  const have = new Set(Object.keys(store.values));
+  const missing = manifest.secrets.filter((s) => !have.has(s.name));
+  if (missing.length === 0) return { site, ok: true, missing: [], message: '' };
+
+  const firstMissing = missing[0];
+  if (!firstMissing) return { site, ok: true, missing: [], message: '' };
+  return {
+    site,
+    ok: false,
+    missing: missing.map((s) => ({
+      name: s.name,
+      kind: s.kind,
+      description: s.description,
+    })),
+    message: buildMissingCredentialMessage(store, firstMissing.name),
+  };
+}
+
+/** Split a concatenated Set-Cookie header (the "fetch joins multi-Set-Cookie
+ *  headers with `, `" case) into individual cookie strings. The naive split
+ *  on `,` is wrong because Expires=… contains `Wed, 30 Dec 2026 …`. Split
+ *  only on a comma that is followed by what looks like a new cookie name
+ *  (`token=`); date weekdays don't have `=` after them, so they survive. */
+export function splitSetCookieHeader(joined: string): string[] {
+  return joined.split(/,\s*(?=[A-Za-z0-9!#$%&'*+\-.^_`|~]+=)/);
+}
+
+/** Minimal Set-Cookie parser. Pulls name=value plus Domain/Path attrs and
+ *  ignores Expires/Max-Age/Secure/HttpOnly/SameSite — we don't need them
+ *  for in-flight forwarding (the jar is per-execution, not persistent).
+ *  When Domain isn't set we default to the request URL's hostname per RFC 6265. */
+function parseSetCookie(
+  setCookie: string,
+  requestUrl: string,
+): { name: string; value: string; domain: string; path: string } | null {
+  const parts = setCookie.split(';').map((s) => s.trim());
+  const first = parts[0] ?? '';
+  const eq = first.indexOf('=');
+  if (eq <= 0) return null;
+  const name = first.slice(0, eq);
+  const value = first.slice(eq + 1);
+  let domain = '';
+  let path = '/';
+  for (const p of parts.slice(1)) {
+    const lower = p.toLowerCase();
+    if (lower.startsWith('domain=')) domain = p.slice('domain='.length);
+    else if (lower.startsWith('path=')) path = p.slice('path='.length);
+  }
+  if (!domain) {
+    try {
+      domain = new URL(requestUrl).hostname;
+    } catch {
+      return null;
+    }
+  }
+  return { name, value, domain, path };
 }

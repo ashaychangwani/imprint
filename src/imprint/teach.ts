@@ -21,6 +21,12 @@ import { homedir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import * as p from '@clack/prompts';
 import { type CompileAgentProgress, compilePlaybook, generate } from './compile.ts';
+import {
+  type CredentialFinding,
+  type Replacement,
+  extractCredentials,
+} from './credential-extract.ts';
+import { getCredentialBackend, readSiteManifest, upsertManifestEntry } from './credential-store.ts';
 import { emit } from './emit.ts';
 import {
   type Platform,
@@ -418,7 +424,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   // ── 2. Redact ──────────────────────────────────────────────────────
   if (startIdx <= STEPS.indexOf('redact')) {
-    spinner.start('Redacting credentials...');
     const session = loadJsonFile(
       sessionPath,
       SessionSchema,
@@ -428,11 +433,34 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       },
       'session',
     );
-    const { session: scrubbed, stats } = redactSession(session);
+
+    // Extract credentials from the raw session BEFORE redaction so we can
+    // both stash the values in the credential manager AND swap them for
+    // ${credential.X} placeholders in the redacted artifact.
+    const { findings, replacements } = extractCredentials(session);
+    let confirmedReplacements: Replacement[] = [];
+    if (findings.length > 0) {
+      const result = await promptAndPersistCredentials({
+        site,
+        findings,
+        replacements,
+        noInteractive: opts.noInteractive ?? false,
+      });
+      confirmedReplacements = result.replacements;
+    }
+
+    spinner.start('Redacting credentials...');
+    const { session: scrubbed, stats } = redactSession(session, {
+      replacements: confirmedReplacements,
+    });
     redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
     writeFileSync(redactedPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
+    const placeholderNote =
+      stats.placeholdersInjected > 0
+        ? `, ${stats.placeholdersInjected} replaced with credential placeholders`
+        : '';
     spinner.stop(
-      `Redacted ${stats.totalRedactions} value(s) across ${stats.requestsRedacted} request(s) and ${stats.cookiesRedacted} cookie(s).`,
+      `Redacted ${stats.totalRedactions} value(s) across ${stats.requestsRedacted} request(s) and ${stats.cookiesRedacted} cookie(s)${placeholderNote}.`,
     );
 
     updateCheckpoint(site, state, workflowKey, 'redact', {
@@ -563,6 +591,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     emitOutPath = pathJoin(workflowDir, 'index.ts');
   }
 
+  // Write a sibling credentials manifest so a downstream agent that consumes
+  // this skill knows which credentials to ask for. Manifest contains names +
+  // descriptions only — no values.
+  exportSiteManifest(site, workflowDir);
+
   // ── 6. Platform integration ────────────────────────────────────────
   if (startIdx <= STEPS.indexOf('register')) {
     if (opts.noInteractive) {
@@ -610,6 +643,137 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     workflow: genResult.workflow,
     playbook: pbResult.playbook,
   };
+}
+
+// ─── Credential capture (interactive) ───────────────────────────────────────
+
+interface CredentialPromptResult {
+  replacements: Replacement[];
+}
+
+async function promptAndPersistCredentials(opts: {
+  site: string;
+  findings: CredentialFinding[];
+  replacements: Replacement[];
+  noInteractive: boolean;
+}): Promise<CredentialPromptResult> {
+  // De-duplicate findings by username+password value so a re-recorded session
+  // with the same login attempt across multiple seqs only prompts once.
+  const seen = new Set<string>();
+  const unique: CredentialFinding[] = [];
+  for (const f of opts.findings) {
+    const key = `${f.usernameValue}${f.passwordValue}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(f);
+  }
+  if (unique.length === 0) return { replacements: opts.replacements };
+
+  const summary = unique
+    .map(
+      (f, i) =>
+        `  ${i + 1}. ${f.requestLabel}\n     username: ${f.usernameValue}\n     password: ${'*'.repeat(Math.min(f.passwordValue.length, 16))}`,
+    )
+    .join('\n');
+  p.note(
+    [
+      `Detected ${unique.length} login form submission(s) in this recording.`,
+      'Imprint will store the credentials in your local credential manager (OS keychain when',
+      'available, libsodium-encrypted file otherwise) and rewrite their values to',
+      '${credential.username} / ${credential.password} placeholders before sending the',
+      'session to the LLM. The plaintext values never enter the workflow artifact.',
+      '',
+      summary,
+    ].join('\n'),
+    'Credential capture',
+  );
+
+  if (opts.noInteractive) {
+    // Persist silently in non-interactive mode — keeps automated runs working.
+    await persistFinding({ site: opts.site, finding: unique[0] as CredentialFinding });
+    return { replacements: opts.replacements };
+  }
+
+  const proceed = await p.confirm({
+    message: `Save credentials for "${opts.site}" to the credential manager?`,
+    initialValue: true,
+  });
+  if (p.isCancel(proceed) || !proceed) {
+    p.log.warn('Skipping credential save — workflow will not be able to log in.');
+    return { replacements: [] };
+  }
+
+  // For v1 we only support one set of credentials per site (flat
+  // username/password names). If multiple distinct logins were found,
+  // ask which one to persist.
+  let chosen: CredentialFinding | undefined = unique[0];
+  if (unique.length > 1) {
+    const pick = await p.select({
+      message: 'Which login should be stored?',
+      options: unique.map((f, i) => ({
+        value: String(i),
+        label: `${i + 1}. ${f.requestLabel} — ${f.usernameValue}`,
+      })),
+    });
+    if (p.isCancel(pick)) {
+      p.log.warn('Skipped.');
+      return { replacements: [] };
+    }
+    chosen = unique[Number.parseInt(pick as string, 10)];
+  }
+
+  if (!chosen) return { replacements: opts.replacements };
+
+  await persistFinding({ site: opts.site, finding: chosen });
+
+  return {
+    replacements: opts.replacements.filter(
+      (r) => r.originalValue === chosen?.usernameValue || r.originalValue === chosen?.passwordValue,
+    ),
+  };
+}
+
+/** Write `<workflowDir>/credentials.manifest.json` so consumers of the
+ *  shared skill know what credentials to provision. No values, just names. */
+function exportSiteManifest(site: string, workflowDir: string): void {
+  const m = readSiteManifest(site);
+  if (!m || m.secrets.length === 0) return;
+  const out = {
+    site: m.site,
+    secrets: m.secrets.map((s) => ({
+      name: s.name,
+      kind: s.kind,
+      description: s.description,
+    })),
+    note: 'Provision these on the consuming agent via `imprint credential set <site> <name>` or by importing an encrypted bundle (`imprint credential import`). Values never travel inside the skill.',
+  };
+  writeFileSync(
+    pathJoin(workflowDir, 'credentials.manifest.json'),
+    `${JSON.stringify(out, null, 2)}\n`,
+    'utf8',
+  );
+}
+
+async function persistFinding(opts: {
+  site: string;
+  finding: CredentialFinding;
+}): Promise<void> {
+  const backend = await getCredentialBackend();
+  await backend.setSecret(opts.site, opts.finding.usernameName, opts.finding.usernameValue);
+  await backend.setSecret(opts.site, opts.finding.passwordName, opts.finding.passwordValue);
+  upsertManifestEntry(opts.site, {
+    name: opts.finding.usernameName,
+    kind: 'username',
+    description: 'Login identifier (email or username)',
+  });
+  upsertManifestEntry(opts.site, {
+    name: opts.finding.passwordName,
+    kind: 'password',
+    description: 'Login password',
+  });
+  p.log.success(
+    `Stored credentials for "${opts.site}" — ${opts.finding.usernameName}, ${opts.finding.passwordName} (backend: ${backend.id})`,
+  );
 }
 
 // ─── Checkpoint helpers ─────────────────────────────────────────────────────

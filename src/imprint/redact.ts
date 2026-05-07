@@ -4,146 +4,29 @@
  * shape but never the secret. Best-effort — see docs/troubleshooting.md
  * for what it doesn't catch (response bodies, URL path segments, etc.)
  * and how to audit a redacted session.
+ *
+ * When `opts.replacements` is provided (e.g. by `imprint teach` after the
+ * credential-extract pass), the named values are rewritten to literal
+ * `${credential.NAME}` placeholders BEFORE the generic byte-length redaction
+ * runs. The LLM then sees the placeholders verbatim and emits them into
+ * workflow.json without translation.
  */
 
-import type { Session } from './types.ts';
-
-/** Case-insensitive key match. Values aren't pattern-matched — that's a
- *  separate high-false-positive problem we punt on. */
-const SENSITIVE_KEYS = [
-  // Credentials — login identifiers
-  'user',
-  'username',
-  'user_name',
-  'userid',
-  'user_id',
-  'login',
-  'loginid',
-  'login_id',
-  // Credentials — passwords & secrets
-  'pass',
-  'password',
-  'passwd',
-  'pwd',
-  'pin',
-  'secret',
-  'credential',
-  'credentials',
-  // Tokens & session identifiers
-  'token',
-  'auth',
-  'authcode',
-  'auth_code',
-  'apikey',
-  'api_key',
-  'apitoken',
-  'api_token',
-  'accesstoken',
-  'access_token',
-  'refreshtoken',
-  'refresh_token',
-  'idtoken',
-  'id_token',
-  'sessionid',
-  'session_id',
-  'sessiontoken',
-  'session_token',
-  'authorization',
-  'authentication',
-  'bearer',
-  // CSRF / XSRF
-  'csrf',
-  'csrf_token',
-  'csrftoken',
-  'xsrf',
-  'xsrf_token',
-  'xsrftoken',
-  // MFA / OTP
-  'otp',
-  'totp',
-  'mfa_code',
-  'mfacode',
-  'verification_code',
-  'verificationcode',
-  'oktaemail',
-  'okta_email',
-  // Device / browser fingerprinting
-  'fingerprint',
-  // Site-specific (Discover & Go uses these)
-  'patronpassword',
-  'patron_password',
-  'patronnumber',
-  'patron_number',
-  'cardnumber',
-  'card_number',
-  'librarycard',
-  'library_card',
-  // Stripe / payments
-  'cvc',
-  'cvv',
-  'cardnum',
-  'card_num',
-  'creditcard',
-  'credit_card',
-  'cc_number',
-  // PII — contact
-  'email',
-  'emailaddress',
-  'email_address',
-  'phone',
-  'phonenumber',
-  'phone_number',
-  'mobile',
-  'cell',
-  'sms',
-  'smsnumber',
-  'sms_number',
-  // PII — names
-  'firstname',
-  'first_name',
-  'lastname',
-  'last_name',
-  'fullname',
-  'full_name',
-  'nameoncard',
-  'name_on_card',
-  // PII — government / identity
-  'ssn',
-  'socialsecurity',
-  'social_security',
-  'dateofbirth',
-  'date_of_birth',
-  'dob',
-];
-
-/** Header names whose values get fully replaced. Case-insensitive. */
-const SENSITIVE_HEADERS = [
-  'authorization',
-  'cookie',
-  'set-cookie',
-  'x-auth-token',
-  'x-api-key',
-  'x-apikey',
-  'x-csrf-token',
-  'x-xsrf-token',
-  'x-session-token',
-  'proxy-authorization',
-];
-
-const SENSITIVE_KEY_SET = new Set(SENSITIVE_KEYS.map((k) => k.toLowerCase()));
-const SENSITIVE_HEADER_SET = new Set(SENSITIVE_HEADERS.map((h) => h.toLowerCase()));
+import type { Replacement } from './credential-extract.ts';
+import { isSensitiveHeader, isSensitiveKey } from './sensitive-keys.ts';
+import type { CapturedRequest, Session } from './types.ts';
 
 const REDACTED = (originalLength: number): string => `[REDACTED:${originalLength}]`;
 
-const isSensitiveKey = (key: string): boolean =>
-  SENSITIVE_KEY_SET.has(key.toLowerCase().replace(/[-_]/g, ''));
-
-const isSensitiveHeader = (header: string): boolean =>
-  SENSITIVE_HEADER_SET.has(header.toLowerCase());
-
-/** Redact all values of sensitive keys in a www-form-urlencoded body string. */
-export function redactFormBody(body: string): { redacted: string; redactionsCount: number } {
+/** Redact all values of sensitive keys in a www-form-urlencoded body string.
+ *  When `placeholderByKey` is given, sensitive keys whose names match get
+ *  rewritten to the placeholder string instead of `[REDACTED:N]`. */
+export function redactFormBody(
+  body: string,
+  placeholderByKey?: Map<string, string>,
+): { redacted: string; redactionsCount: number; placeholdersInjected: number } {
   let count = 0;
+  let placeholders = 0;
   const parts = body.split('&').map((pair) => {
     const eq = pair.indexOf('=');
     if (eq === -1) return pair;
@@ -155,74 +38,91 @@ export function redactFormBody(body: string): { redacted: string; redactionsCoun
     } catch {
       decodedKey = rawKey;
     }
+    if (placeholderByKey?.has(decodedKey)) {
+      placeholders++;
+      const placeholder = placeholderByKey.get(decodedKey) ?? '';
+      return `${rawKey}=${placeholder}`;
+    }
     if (isSensitiveKey(decodedKey)) {
       count++;
       return `${rawKey}=${REDACTED(rawVal.length)}`;
     }
     return pair;
   });
-  return { redacted: parts.join('&'), redactionsCount: count };
+  return { redacted: parts.join('&'), redactionsCount: count, placeholdersInjected: placeholders };
 }
 
-/** Redact sensitive keys inside a JSON-stringified body. Returns body unchanged on parse failure. */
-export function redactJsonBody(body: string): { redacted: string; redactionsCount: number } {
+/** Redact sensitive keys inside a JSON-stringified body. Returns body unchanged on parse failure.
+ *  When `placeholderByPath` is given (path → placeholder), values at those JSON paths get
+ *  rewritten to the placeholder string. */
+export function redactJsonBody(
+  body: string,
+  placeholderByPath?: Map<string, string>,
+): { redacted: string; redactionsCount: number; placeholdersInjected: number } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
   } catch {
-    return { redacted: body, redactionsCount: 0 };
+    return { redacted: body, redactionsCount: 0, placeholdersInjected: 0 };
   }
 
   let count = 0;
-  const visit = (node: unknown): unknown => {
-    if (Array.isArray(node)) return node.map(visit);
+  let placeholders = 0;
+  const visit = (node: unknown, pathSoFar: string[]): unknown => {
+    if (Array.isArray(node)) {
+      return node.map((v, i) => visit(v, [...pathSoFar, String(i)]));
+    }
     if (node && typeof node === 'object') {
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(node)) {
-        if (isSensitiveKey(k) && (typeof v === 'string' || typeof v === 'number')) {
+        const path = [...pathSoFar, k].join('.');
+        const placeholder = placeholderByPath?.get(path);
+        if (placeholder !== undefined && (typeof v === 'string' || typeof v === 'number')) {
+          placeholders++;
+          out[k] = placeholder;
+        } else if (isSensitiveKey(k) && (typeof v === 'string' || typeof v === 'number')) {
           count++;
           out[k] = REDACTED(String(v).length);
         } else if (typeof v === 'string' && v.length > 1 && (v[0] === '{' || v[0] === '[')) {
           // JSON-in-JSON: try to parse and redact the nested string.
           try {
             const inner = JSON.parse(v);
-            const visited = visit(inner);
+            const visited = visit(inner, [...pathSoFar, k]);
             out[k] = JSON.stringify(visited);
           } catch {
             out[k] = v;
           }
         } else {
-          out[k] = visit(v);
+          out[k] = visit(v, [...pathSoFar, k]);
         }
       }
       return out;
     }
     return node;
   };
-  const redacted = JSON.stringify(visit(parsed));
-  return { redacted, redactionsCount: count };
+  const redacted = JSON.stringify(visit(parsed, []));
+  return { redacted, redactionsCount: count, placeholdersInjected: placeholders };
 }
 
 /** Redact a request body of unknown content-type. Tries JSON first, falls back to form. */
 export function redactBody(
   body: string,
   contentType?: string,
-): { redacted: string; redactionsCount: number } {
+  formPlaceholders?: Map<string, string>,
+  jsonPlaceholders?: Map<string, string>,
+): { redacted: string; redactionsCount: number; placeholdersInjected: number } {
   const ct = (contentType ?? '').toLowerCase();
   if (ct.includes('urlencoded')) {
-    return redactFormBody(body);
+    return redactFormBody(body, formPlaceholders);
   }
   // Try JSON first — many APIs send JSON as text/plain or with no content-type.
-  const jsonR = redactJsonBody(body);
-  if (jsonR.redactionsCount > 0) return jsonR;
-  // JSON parsed but found nothing sensitive — check if it actually was JSON
-  // (successfully parsed) vs. random text that happened to not throw.
+  const jsonR = redactJsonBody(body, jsonPlaceholders);
+  if (jsonR.redactionsCount > 0 || jsonR.placeholdersInjected > 0) return jsonR;
   try {
     JSON.parse(body);
     return jsonR;
   } catch {
-    // Not valid JSON — try form-encoded as last resort.
-    return redactFormBody(body);
+    return redactFormBody(body, formPlaceholders);
   }
 }
 
@@ -273,6 +173,8 @@ interface RedactionStats {
   requestsRedacted: number;
   /** Number of cookies whose VALUES were replaced. */
   cookiesRedacted: number;
+  /** Values rewritten to a `${credential.X}` placeholder (extracted at teach time). */
+  placeholdersInjected: number;
   /** Detected sensitive items that you should be aware of (for the user-facing report). */
   warnings: string[];
 }
@@ -285,6 +187,12 @@ interface RedactOptions {
    * the page JS rather than a per-user secret.
    */
   keepHeaders?: string[];
+  /**
+   * Replacements built by `extractCredentials()` to rewrite specific values
+   * to `${credential.NAME}` placeholders before the LLM sees them. The
+   * placeholders survive into workflow.json verbatim.
+   */
+  replacements?: Replacement[];
 }
 
 /** Produce a scrubbed copy of a session safe to send to an LLM. */
@@ -296,11 +204,20 @@ export function redactSession(
     totalRedactions: 0,
     requestsRedacted: 0,
     cookiesRedacted: 0,
+    placeholdersInjected: 0,
     warnings: [],
   };
   const keepHeaders = new Set((opts.keepHeaders ?? []).map((h) => h.toLowerCase()));
 
-  const redactedRequests = session.requests.map((req) => {
+  // Group replacements by request seq.
+  const replacementsBySeq = new Map<number, Replacement[]>();
+  for (const r of opts.replacements ?? []) {
+    const arr = replacementsBySeq.get(r.requestSeq) ?? [];
+    arr.push(r);
+    replacementsBySeq.set(r.requestSeq, arr);
+  }
+
+  const redactedRequests = session.requests.map((req: CapturedRequest) => {
     let touched = 0;
 
     const urlR = redactUrl(req.url);
@@ -312,9 +229,20 @@ export function redactSession(
     let body = req.body;
     if (body) {
       const ct = req.headers['content-type'] ?? req.headers['Content-Type'];
-      const bodyR = redactBody(body, ct);
+      const reqReplacements = replacementsBySeq.get(req.seq) ?? [];
+      const formPlaceholders = new Map<string, string>();
+      const jsonPlaceholders = new Map<string, string>();
+      for (const r of reqReplacements) {
+        if (r.location.kind === 'body-form') {
+          formPlaceholders.set(r.location.key, r.placeholder);
+        } else if (r.location.kind === 'body-json') {
+          jsonPlaceholders.set(r.location.path.join('.'), r.placeholder);
+        }
+      }
+      const bodyR = redactBody(body, ct, formPlaceholders, jsonPlaceholders);
       body = bodyR.redacted;
       touched += bodyR.redactionsCount;
+      stats.placeholdersInjected += bodyR.placeholdersInjected;
     }
 
     let response = req.response;
@@ -356,6 +284,29 @@ export function redactSession(
     }),
   }));
 
+  // Scrub captured DOM events too. inject-listener already masks password
+  // VALUES at capture time, but other fields (username, email, search terms)
+  // come through plaintext. When we have explicit replacements (the teach
+  // flow), replace those values verbatim in event detail strings.
+  const valueToPlaceholder = new Map<string, string>();
+  for (const r of opts.replacements ?? []) {
+    valueToPlaceholder.set(r.originalValue, r.placeholder);
+  }
+  const redactedEvents = session.events.map((ev) => {
+    if (valueToPlaceholder.size === 0) return ev;
+    let detail = ev.detail;
+    for (const [val, placeholder] of valueToPlaceholder) {
+      if (val.length === 0) continue;
+      // Avoid replacing inside JSON-string-escaped values that have already
+      // been turned into the placeholder (idempotent).
+      detail = detail.split(val).join(placeholder);
+    }
+    if (detail !== ev.detail) {
+      stats.placeholdersInjected++;
+    }
+    return { ...ev, detail };
+  });
+
   // Flag site-specific patterns that survive.
   if (
     session.requests.some(
@@ -377,6 +328,7 @@ export function redactSession(
     session: {
       ...session,
       requests: redactedRequests,
+      events: redactedEvents,
       cookieSnapshots: redactedSnapshots,
     },
     stats,

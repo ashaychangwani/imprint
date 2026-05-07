@@ -1,58 +1,60 @@
 /** `imprint login` — extract cookies + per-site values from a captured
- *  session.json into the per-site credential store. */
+ *  session.json into the credential manager. */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join as pathJoin } from 'node:path';
-import envPaths from 'env-paths';
-import type { CredentialStore } from './runtime.ts';
+import { readFileSync } from 'node:fs';
+import { getCredentialBackend, upsertManifestEntry } from './credential-store.ts';
 import { type Session, SessionSchema } from './types.ts';
-
-const PATHS = envPaths('imprint', { suffix: '' });
 
 interface LoginOptions {
   site: string;
   /** Path to a session.json from which to extract credentials. */
   fromSession: string;
-  /** Override the persisted credential file location (tests). */
-  outPath?: string;
 }
 
 interface LoginResult {
-  outPath: string;
+  backend: 'keyring' | 'encrypted-file' | 'legacy-json';
   cookieCount: number;
   values: Record<string, string>;
   /** Pattern names that matched and contributed values. */
   matchedExtractors: string[];
 }
 
-export function login(opts: LoginOptions): LoginResult {
+export async function login(opts: LoginOptions): Promise<LoginResult> {
   const raw = JSON.parse(readFileSync(opts.fromSession, 'utf8'));
   const session: Session = SessionSchema.parse(raw);
 
   const cookies = collectCookies(session);
   const { values, matched } = extractKnownValues(session);
 
-  const outPath = opts.outPath ?? pathJoin(PATHS.config, 'credentials', `${opts.site}.json`);
-  mkdirSync(dirname(outPath), { recursive: true });
-
-  const store: CredentialStore = {
-    site: opts.site,
-    cookies,
-    values,
-  };
-  writeFileSync(outPath, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
+  const backend = await getCredentialBackend();
+  await backend.setCookies(opts.site, cookies);
+  for (const [name, value] of Object.entries(values)) {
+    await backend.setSecret(opts.site, name, value);
+    upsertManifestEntry(opts.site, {
+      name,
+      kind: 'opaque',
+      description: `Extracted via ${matched.join('+') || 'login'}`,
+    });
+  }
 
   return {
-    outPath,
+    backend: backend.id,
     cookieCount: cookies.length,
     values,
     matchedExtractors: matched,
   };
 }
 
+interface RawCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+}
+
 /** End snapshot captures everything set during the workflow (post-login
  *  cookies); fall back to start snapshot if absent. */
-function collectCookies(session: Session): CredentialStore['cookies'] {
+function collectCookies(session: Session): RawCookie[] {
   const snaps = session.cookieSnapshots ?? [];
   const end = snaps.find((s) => s.label === 'end');
   const start = snaps.find((s) => s.label === 'start');
@@ -93,6 +95,31 @@ const EXTRACTORS: Array<{
         if (body.patronID) out.patron_id = body.patronID;
         if (body.session) out.session_id = body.session;
         if (body.patronEmail) out.patron_email = body.patronEmail;
+        return Object.keys(out).length ? out : null;
+      } catch {
+        return null;
+      }
+    },
+  },
+  {
+    name: 'southwest:security_token',
+    // Southwest's POST /api/security/v4/security/token returns auth tokens
+    // and account info we want available to follow-up requests.
+    match: (session) => {
+      const loginReq = session.requests.find(
+        (r) =>
+          r.method === 'POST' &&
+          r.url.includes('/api/security/v4/security/token') &&
+          (r.body?.includes('username=') ?? false),
+      );
+      if (!loginReq?.response?.body) return null;
+      try {
+        const body = JSON.parse(loginReq.response.body) as Record<string, unknown>;
+        const out: Record<string, string> = {};
+        const accountNumber = body['customers.userInformation.accountNumber'];
+        const primaryEmail = body['customers.userInformation.primaryEmail'];
+        if (typeof accountNumber === 'string') out.account_number = accountNumber;
+        if (typeof primaryEmail === 'string') out.primary_email = primaryEmail;
         return Object.keys(out).length ? out : null;
       } catch {
         return null;

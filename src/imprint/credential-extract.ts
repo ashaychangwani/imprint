@@ -1,0 +1,281 @@
+/**
+ * Credential extraction over a recorded session.
+ *
+ * Detects login form submissions in raw HTTP request bodies (form-urlencoded
+ * or JSON) and pairs each password-like field with the most likely
+ * username/email field in the same body. Surfaces the values + their byte
+ * locations so the redaction pass can rewrite them to `${credential.NAME}`
+ * placeholders BEFORE the LLM sees the session.
+ *
+ * The DOM event stream is consulted as a confirmation signal — passwords are
+ * already client-side-masked there by inject-listener.ts, but the username
+ * value is visible and lets us confirm which form was the login form.
+ */
+
+import { isSensitiveCredentialKey } from './sensitive-keys.ts';
+import type { CapturedEvent, CapturedRequest, Session } from './types.ts';
+
+/** Field-name patterns we'll treat as the username/email partner of a
+ *  password field. Ordered by preference: emails first, then user-ish
+ *  identifiers. */
+const USERNAME_KEY_RE =
+  /^(user(?:name)?|email(?:address)?|login|account|patron(?:number|_number|id)?)$/i;
+
+/** Where, within a request, a redactable value lives. */
+export type ReplacementLocation =
+  | { kind: 'body-form'; key: string }
+  | { kind: 'body-json'; path: string[] };
+
+export interface Replacement {
+  /** Index into session.requests. */
+  requestSeq: number;
+  /** Where exactly in the request body. */
+  location: ReplacementLocation;
+  /** The exact substring we'll overwrite. */
+  originalValue: string;
+  /** What we'll replace it with — e.g. `${credential.username}`. */
+  placeholder: string;
+}
+
+export interface CredentialFinding {
+  kind: 'login-pair';
+  /** `username` for form-login pairs by default. Re-namable by the user. */
+  usernameName: string;
+  passwordName: string;
+  usernameValue: string;
+  passwordValue: string;
+  /** Where these values live (used by the redactor, also surfaced to the
+   *  user so they can verify the right form was detected). */
+  requestSeq: number;
+  /** Brief request label like `POST /api/security/v4/security/token`. */
+  requestLabel: string;
+  /** Whether the username appears in form-submit DOM events too (high signal). */
+  confirmedByDom: boolean;
+}
+
+interface ExtractionResult {
+  findings: CredentialFinding[];
+  replacements: Replacement[];
+}
+
+/** Top-level entry point. */
+export function extractCredentials(session: Session): ExtractionResult {
+  const findings: CredentialFinding[] = [];
+  const replacements: Replacement[] = [];
+  const usernamesInDom = collectFormSubmitUsernames(session.events);
+
+  for (const req of session.requests) {
+    if (!req.body) continue;
+    const ct = (req.headers['content-type'] ?? req.headers['Content-Type'] ?? '').toLowerCase();
+    const found = ct.includes('json')
+      ? findInJsonBody(req)
+      : ct.includes('urlencoded') || req.body.includes('=')
+        ? findInFormBody(req)
+        : null;
+    if (!found) continue;
+
+    const confirmedByDom = usernamesInDom.has(found.usernameValue);
+    findings.push({
+      kind: 'login-pair',
+      usernameName: 'username',
+      passwordName: 'password',
+      usernameValue: found.usernameValue,
+      passwordValue: found.passwordValue,
+      requestSeq: req.seq,
+      requestLabel: `${req.method} ${shortUrl(req.url)}`,
+      confirmedByDom,
+    });
+
+    replacements.push(
+      {
+        requestSeq: req.seq,
+        location: found.usernameLocation,
+        originalValue: found.usernameValue,
+        placeholder: '${credential.username}',
+      },
+      {
+        requestSeq: req.seq,
+        location: found.passwordLocation,
+        originalValue: found.passwordValue,
+        placeholder: '${credential.password}',
+      },
+    );
+  }
+
+  return { findings, replacements };
+}
+
+interface BodyFinding {
+  usernameValue: string;
+  passwordValue: string;
+  usernameLocation: ReplacementLocation;
+  passwordLocation: ReplacementLocation;
+}
+
+function findInFormBody(req: CapturedRequest): BodyFinding | null {
+  if (!req.body) return null;
+  const pairs = parseFormBody(req.body);
+  let usernameKey: string | null = null;
+  let usernameValue: string | null = null;
+  let passwordKey: string | null = null;
+  let passwordValue: string | null = null;
+
+  // First pass: find a sensitive (password-like) key.
+  for (const { key, value } of pairs) {
+    if (isSensitiveCredentialKey(key) && value.length > 0) {
+      passwordKey = key;
+      passwordValue = value;
+      break;
+    }
+  }
+  if (passwordKey === null || passwordValue === null) return null;
+
+  // Second pass: find a username-like key.
+  for (const { key, value } of pairs) {
+    if (USERNAME_KEY_RE.test(key) && value.length > 0) {
+      usernameKey = key;
+      usernameValue = value;
+      break;
+    }
+  }
+  if (usernameKey === null || usernameValue === null) return null;
+
+  return {
+    usernameValue,
+    passwordValue,
+    usernameLocation: { kind: 'body-form', key: usernameKey },
+    passwordLocation: { kind: 'body-form', key: passwordKey },
+  };
+}
+
+function findInJsonBody(req: CapturedRequest): BodyFinding | null {
+  if (!req.body) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(req.body);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const pwdHit = findFirstByPredicate(parsed, isSensitiveCredentialKey);
+  if (!pwdHit) return null;
+  if (typeof pwdHit.value !== 'string' || pwdHit.value.length === 0) return null;
+
+  // Look for a username-like key; prefer one in the same parent object.
+  const userHit = findFirstByPredicate(parsed, (k) => USERNAME_KEY_RE.test(k), pwdHit.parent);
+  if (!userHit || typeof userHit.value !== 'string' || userHit.value.length === 0) return null;
+
+  return {
+    usernameValue: userHit.value,
+    passwordValue: pwdHit.value,
+    usernameLocation: { kind: 'body-json', path: userHit.path },
+    passwordLocation: { kind: 'body-json', path: pwdHit.path },
+  };
+}
+
+interface JsonHit {
+  key: string;
+  value: unknown;
+  path: string[];
+  // Reference identity of the parent object — used to prefer same-parent matches.
+  // biome-ignore lint/suspicious/noExplicitAny: opaque parent ref
+  parent: any;
+}
+
+function findFirstByPredicate(
+  root: unknown,
+  predicate: (key: string) => boolean,
+  preferredParent?: unknown,
+): JsonHit | null {
+  // BFS. If `preferredParent` is set, we run twice: first restricted to
+  // children of that parent, then anywhere.
+  if (preferredParent) {
+    const r1 = bfsFindUnder(preferredParent, predicate);
+    if (r1) return r1;
+  }
+  return bfsFind(root, predicate);
+}
+
+function bfsFindUnder(parent: unknown, predicate: (key: string) => boolean): JsonHit | null {
+  if (!parent || typeof parent !== 'object') return null;
+  for (const [k, v] of Object.entries(parent)) {
+    if (predicate(k)) return { key: k, value: v, path: [k], parent };
+  }
+  return null;
+}
+
+function bfsFind(root: unknown, predicate: (key: string) => boolean): JsonHit | null {
+  const queue: Array<{ node: unknown; path: string[] }> = [{ node: root, path: [] }];
+  while (queue.length > 0) {
+    const item = queue.shift();
+    if (!item) break;
+    const { node, path } = item;
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) {
+        queue.push({ node: node[i], path: [...path, String(i)] });
+      }
+    } else if (node && typeof node === 'object') {
+      for (const [k, v] of Object.entries(node)) {
+        if (predicate(k)) return { key: k, value: v, path: [...path, k], parent: node };
+        queue.push({ node: v, path: [...path, k] });
+      }
+    }
+  }
+  return null;
+}
+
+function collectFormSubmitUsernames(events: CapturedEvent[]): Set<string> {
+  const out = new Set<string>();
+  for (const ev of events) {
+    if (ev.type !== 'submit') continue;
+    try {
+      const detail = JSON.parse(ev.detail) as {
+        fields?: Array<{ name?: string; type?: string; value?: string }>;
+      };
+      for (const f of detail.fields ?? []) {
+        if (f.name && f.value && f.type !== 'password' && USERNAME_KEY_RE.test(f.name)) {
+          out.add(f.value);
+        }
+      }
+    } catch {
+      // ignore malformed details
+    }
+  }
+  return out;
+}
+
+/** Parse `a=1&b=2` into pairs, URL-decoding both sides. Best-effort: bad
+ *  pairs get skipped. */
+export function parseFormBody(body: string): Array<{ key: string; value: string }> {
+  const out: Array<{ key: string; value: string }> = [];
+  for (const pair of body.split('&')) {
+    const eq = pair.indexOf('=');
+    if (eq === -1) continue;
+    const rawK = pair.slice(0, eq);
+    const rawV = pair.slice(eq + 1);
+    let k: string;
+    let v: string;
+    try {
+      k = decodeURIComponent(rawK);
+    } catch {
+      k = rawK;
+    }
+    try {
+      v = decodeURIComponent(rawV);
+    } catch {
+      v = rawV;
+    }
+    out.push({ key: k, value: v });
+  }
+  return out;
+}
+
+function shortUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.pathname}${u.search ? '?…' : ''}`.slice(0, 80);
+  } catch {
+    return url.slice(0, 80);
+  }
+}

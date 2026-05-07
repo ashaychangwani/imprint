@@ -41,10 +41,13 @@ Follow these steps to compile the session:
 
 4. **Read the load-bearing request.** Use `read_request` to get the full request including method, URL, headers, and request body (if POST/PUT).
 
-5. **Write workflow.json.** Template the request:
+5. **Write workflow.json.** Template the request(s):
    - Replace user-variable values with `${param.NAME}` placeholders (e.g., origin airport, date, passenger count)
    - Replace per-user credentials with `${credential.NAME}` (e.g., `patron_id`, `csrf_token`, `account_uuid`)
+   - **CRITICAL — Login chains.** If the input session contains a login request whose body has been pre-templated to `${credential.username}` / `${credential.password}` (you'll see those literal strings in the request body when you `read_request`), you MUST keep that login request as request[0] in your workflow. Do NOT drop it. Use `extract` to capture any returned auth tokens (`id_token`, `access_token`, `swa_token`, etc.) and reference them in subsequent requests via `${response[0].name}`. The runtime substitutes the username/password from the local credential manager at call time, so the workflow is self-sufficient — caller doesn't need to log in separately.
+   - **Distinguish credentials from session tokens.** `${credential.NAME}` is for STABLE per-user values that the user provides once (username, password, API token). For ephemeral per-call values (passenger tokens, ride-along session IDs, recordLocator-bound state) you MUST use `${response[N].path}` after `extract`-ing them from a prior login or list call — NEVER use `${credential.X}` for those. Test: would the user be able to type this value into an `imprint credential set` prompt? If no, it's a response value, not a credential.
    - Keep headers minimal — drop bot-detection headers (Akamai fingerprints, DataDome, PerimeterX), drop browser-internal headers, keep `Content-Type`, `Origin`, `Referer` when needed
+   - **`x-api-key` is normally NOT a credential.** It's an app-level identifier baked into the site's JavaScript — same for every visitor, not user-specific. Keep it as a literal string in the workflow. Only treat it as a credential if you can clearly see it varies per account (e.g., it appears in a `Set-Cookie` after login, or differs across sessions).
    - If the workflow chains multiple requests (request N+1 uses a value from request N's response), add an `extract` field to request N and reference it in request N+1 via `${response[N].name}`
    - Validate against `WorkflowSchema` by reading `src/imprint/types.ts` lines 118-129
 
@@ -204,6 +207,8 @@ Assertions must reference real values derived from the narration or response str
 4. **Do not write a parser that just returns the raw input.** The parser must transform — extract the fields the user cares about, discard irrelevant data.
 
 5. **Do not write workflow.json with hardcoded user-specific values.** Replace them with `${param.NAME}` or `${credential.NAME}` as appropriate.
+
+5a. **Do not drop the login request when its body uses `${credential.username}`/`${credential.password}` placeholders.** That's the signal that the workflow needs to log in fresh on each call. Keep it as request[0], `extract` the returned auth tokens, chain them into subsequent requests. The runtime substitutes the username/password from the credential manager at call time.
 
 6. **Do not include bot-detection headers in workflow.json.** Headers like Akamai fingerprints (random prefix + `-a`/`-b`/`-c`/`-d` suffixes), DataDome (`x-dd-*`), PerimeterX (`_px*`), and other opaque base64-ish strings are session-bound and go stale on replay. Drop them. The runtime will replay without them; if the API flags the request as bot-driven, the failure tells the operator to pivot.
 
