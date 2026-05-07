@@ -7,14 +7,29 @@
  */
 
 const SENSITIVE_KEYS = [
-  // Generic auth
+  // Credentials — login identifiers
+  'user',
+  'username',
+  'user_name',
+  'userid',
+  'user_id',
+  'login',
+  'loginid',
+  'login_id',
+  // Credentials — passwords & secrets
+  'pass',
   'password',
   'passwd',
   'pwd',
   'pin',
   'secret',
+  'credential',
+  'credentials',
+  // Tokens & session identifiers
   'token',
   'auth',
+  'authcode',
+  'auth_code',
   'apikey',
   'api_key',
   'apitoken',
@@ -29,15 +44,27 @@ const SENSITIVE_KEYS = [
   'session_id',
   'sessiontoken',
   'session_token',
+  'authorization',
+  'authentication',
+  'bearer',
+  // CSRF / XSRF
   'csrf',
   'csrf_token',
   'csrftoken',
   'xsrf',
   'xsrf_token',
   'xsrftoken',
-  'authorization',
-  'authentication',
-  'bearer',
+  // MFA / OTP
+  'otp',
+  'totp',
+  'mfa_code',
+  'mfacode',
+  'verification_code',
+  'verificationcode',
+  'oktaemail',
+  'okta_email',
+  // Device / browser fingerprinting
+  'fingerprint',
   // Site-specific (Discover & Go uses these)
   'patronpassword',
   'patron_password',
@@ -55,7 +82,28 @@ const SENSITIVE_KEYS = [
   'creditcard',
   'credit_card',
   'cc_number',
-  // Personal info worth redacting
+  // PII — contact
+  'email',
+  'emailaddress',
+  'email_address',
+  'phone',
+  'phonenumber',
+  'phone_number',
+  'mobile',
+  'cell',
+  'sms',
+  'smsnumber',
+  'sms_number',
+  // PII — names
+  'firstname',
+  'first_name',
+  'lastname',
+  'last_name',
+  'fullname',
+  'full_name',
+  'nameoncard',
+  'name_on_card',
+  // PII — government / identity
   'ssn',
   'socialsecurity',
   'social_security',

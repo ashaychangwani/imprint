@@ -83,6 +83,15 @@ export function redactJsonBody(
         } else if (isSensitiveKey(k) && (typeof v === 'string' || typeof v === 'number')) {
           count++;
           out[k] = REDACTED(String(v).length);
+        } else if (typeof v === 'string' && v.length > 1 && (v[0] === '{' || v[0] === '[')) {
+          // JSON-in-JSON: try to parse and redact the nested string.
+          try {
+            const inner = JSON.parse(v);
+            const visited = visit(inner, [...pathSoFar, k]);
+            out[k] = JSON.stringify(visited);
+          } catch {
+            out[k] = v;
+          }
         } else {
           out[k] = visit(v, [...pathSoFar, k]);
         }
@@ -103,14 +112,18 @@ export function redactBody(
   jsonPlaceholders?: Map<string, string>,
 ): { redacted: string; redactionsCount: number; placeholdersInjected: number } {
   const ct = (contentType ?? '').toLowerCase();
-  if (ct.includes('json')) {
-    return redactJsonBody(body, jsonPlaceholders);
-  }
-  if (ct.includes('urlencoded') || body.includes('=')) {
+  if (ct.includes('urlencoded')) {
     return redactFormBody(body, formPlaceholders);
   }
-  // Try JSON anyway as a last resort — many APIs send JSON without a content-type.
-  return redactJsonBody(body, jsonPlaceholders);
+  // Try JSON first — many APIs send JSON as text/plain or with no content-type.
+  const jsonR = redactJsonBody(body, jsonPlaceholders);
+  if (jsonR.redactionsCount > 0 || jsonR.placeholdersInjected > 0) return jsonR;
+  try {
+    JSON.parse(body);
+    return jsonR;
+  } catch {
+    return redactFormBody(body, formPlaceholders);
+  }
 }
 
 /** Redact sensitive query params from a URL string. */
@@ -236,13 +249,16 @@ export function redactSession(
     if (response) {
       const respHeadersR = redactHeaders(response.headers, keepHeaders);
       touched += respHeadersR.redactionsCount;
+      let respBody = response.body;
+      if (respBody) {
+        const respBodyR = redactBody(respBody, response.mimeType);
+        respBody = respBodyR.redacted;
+        touched += respBodyR.redactionsCount;
+      }
       response = {
         ...response,
         headers: respHeadersR.redacted,
-        // Response bodies may contain PII (user's name, library card, booking
-        // confirmation with personal details). Default policy: leave intact
-        // because the LLM needs to see them for codegen. Site-specific PII
-        // redaction is a per-site concern.
+        body: respBody,
       };
     }
 
