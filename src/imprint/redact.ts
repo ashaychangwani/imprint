@@ -11,14 +11,29 @@ import type { Session } from './types.ts';
 /** Case-insensitive key match. Values aren't pattern-matched — that's a
  *  separate high-false-positive problem we punt on. */
 const SENSITIVE_KEYS = [
-  // Generic auth
+  // Credentials — login identifiers
+  'user',
+  'username',
+  'user_name',
+  'userid',
+  'user_id',
+  'login',
+  'loginid',
+  'login_id',
+  // Credentials — passwords & secrets
+  'pass',
   'password',
   'passwd',
   'pwd',
   'pin',
   'secret',
+  'credential',
+  'credentials',
+  // Tokens & session identifiers
   'token',
   'auth',
+  'authcode',
+  'auth_code',
   'apikey',
   'api_key',
   'apitoken',
@@ -33,15 +48,27 @@ const SENSITIVE_KEYS = [
   'session_id',
   'sessiontoken',
   'session_token',
+  'authorization',
+  'authentication',
+  'bearer',
+  // CSRF / XSRF
   'csrf',
   'csrf_token',
   'csrftoken',
   'xsrf',
   'xsrf_token',
   'xsrftoken',
-  'authorization',
-  'authentication',
-  'bearer',
+  // MFA / OTP
+  'otp',
+  'totp',
+  'mfa_code',
+  'mfacode',
+  'verification_code',
+  'verificationcode',
+  'oktaemail',
+  'okta_email',
+  // Device / browser fingerprinting
+  'fingerprint',
   // Site-specific (Discover & Go uses these)
   'patronpassword',
   'patron_password',
@@ -59,7 +86,28 @@ const SENSITIVE_KEYS = [
   'creditcard',
   'credit_card',
   'cc_number',
-  // Personal info worth redacting
+  // PII — contact
+  'email',
+  'emailaddress',
+  'email_address',
+  'phone',
+  'phonenumber',
+  'phone_number',
+  'mobile',
+  'cell',
+  'sms',
+  'smsnumber',
+  'sms_number',
+  // PII — names
+  'firstname',
+  'first_name',
+  'lastname',
+  'last_name',
+  'fullname',
+  'full_name',
+  'nameoncard',
+  'name_on_card',
+  // PII — government / identity
   'ssn',
   'socialsecurity',
   'social_security',
@@ -134,6 +182,15 @@ export function redactJsonBody(body: string): { redacted: string; redactionsCoun
         if (isSensitiveKey(k) && (typeof v === 'string' || typeof v === 'number')) {
           count++;
           out[k] = REDACTED(String(v).length);
+        } else if (typeof v === 'string' && v.length > 1 && (v[0] === '{' || v[0] === '[')) {
+          // JSON-in-JSON: try to parse and redact the nested string.
+          try {
+            const inner = JSON.parse(v);
+            const visited = visit(inner);
+            out[k] = JSON.stringify(visited);
+          } catch {
+            out[k] = v;
+          }
         } else {
           out[k] = visit(v);
         }
@@ -152,17 +209,21 @@ export function redactBody(
   contentType?: string,
 ): { redacted: string; redactionsCount: number } {
   const ct = (contentType ?? '').toLowerCase();
-  if (ct.includes('json')) {
-    const r = redactJsonBody(body);
-    if (r.redactionsCount > 0) return r;
-    // JSON parse may have succeeded with no redactions — accept the round-trip.
-    return r;
-  }
-  if (ct.includes('urlencoded') || body.includes('=')) {
+  if (ct.includes('urlencoded')) {
     return redactFormBody(body);
   }
-  // Try JSON anyway as a last resort — many APIs send JSON without a content-type.
-  return redactJsonBody(body);
+  // Try JSON first — many APIs send JSON as text/plain or with no content-type.
+  const jsonR = redactJsonBody(body);
+  if (jsonR.redactionsCount > 0) return jsonR;
+  // JSON parsed but found nothing sensitive — check if it actually was JSON
+  // (successfully parsed) vs. random text that happened to not throw.
+  try {
+    JSON.parse(body);
+    return jsonR;
+  } catch {
+    // Not valid JSON — try form-encoded as last resort.
+    return redactFormBody(body);
+  }
 }
 
 /** Redact sensitive query params from a URL string. */
@@ -260,13 +321,16 @@ export function redactSession(
     if (response) {
       const respHeadersR = redactHeaders(response.headers, keepHeaders);
       touched += respHeadersR.redactionsCount;
+      let respBody = response.body;
+      if (respBody) {
+        const respBodyR = redactBody(respBody, response.mimeType);
+        respBody = respBodyR.redacted;
+        touched += respBodyR.redactionsCount;
+      }
       response = {
         ...response,
         headers: respHeadersR.redacted,
-        // Response bodies may contain PII (user's name, library card, booking
-        // confirmation with personal details). Default policy: leave intact
-        // because the LLM needs to see them for codegen. Site-specific PII
-        // redaction is a per-site concern.
+        body: respBody,
       };
     }
 
