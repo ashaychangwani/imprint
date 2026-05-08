@@ -178,7 +178,7 @@ const ConcreteBackendSchema = ReplayBackendSchema.exclude(['auto']);
 /** ReplayBackend without the 'auto' meta-value — what the ladder actually walks. */
 export type ConcreteBackend = Exclude<ReplayBackend, 'auto'>;
 
-/** Per-backend probe result. Written to examples/<site>/backends.json
+/** Per-backend probe result. Written to examples/<site>/<toolName>/backends.json
  *  by `imprint probe-backends`; cron + MCP read it at startup so they
  *  start with the cheapest known-working backend. */
 const BackendProbeResultSchema = z.discriminatedUnion('outcome', [

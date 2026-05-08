@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 function writeExample(name: string, source: string): void {
-  const dir = pathResolve(root, name);
+  const dir = pathResolve(root, name, name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(pathResolve(dir, 'index.ts'), source, 'utf8');
 }
@@ -87,12 +87,13 @@ describe('discoverTools', () => {
     const tool = out[0];
     if (!tool) throw new Error('expected one tool');
     expect(tool.site).toBe('good');
+    expect(tool.dir).toBe(pathResolve(root, 'good', 'good'));
     expect(tool.workflow.toolName).toBe('do_thing');
     expect(typeof tool.toolFn).toBe('function');
   });
 
   it('skips directories without an index.ts', async () => {
-    mkdirSync(pathResolve(root, 'no-index'), { recursive: true });
+    mkdirSync(pathResolve(root, 'no-index', 'missing-tool'), { recursive: true });
     writeExample('good', goodSource);
     const out = await discoverTools(root);
     expect(out.map((t) => t.site)).toEqual(['good']);

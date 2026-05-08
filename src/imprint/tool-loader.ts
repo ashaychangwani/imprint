@@ -1,4 +1,4 @@
-/** Discover + load generated tools from examples/<site>/index.ts. Used
+/** Discover + load generated tools from examples/<site>/<toolName>/index.ts. Used
  *  by mcp-server, cron, and probe-backends. */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
@@ -25,10 +25,8 @@ export interface ResolvedTool {
   toolFn: GeneratedToolFn;
 }
 
-/** Scan examples/, dynamically import each index.ts. Supports both
- *  flat layout (examples/<site>/index.ts) and multi-workflow layout
- *  (examples/<site>/<workflow>/index.ts). Per-entry errors go to
- *  stderr and the entry is skipped — discovery never throws. */
+/** Scan examples/, dynamically import each nested tool index.ts. Per-entry
+ *  errors go to stderr and the entry is skipped — discovery never throws. */
 export async function discoverTools(
   examplesDir: string,
   only?: string,
@@ -48,14 +46,7 @@ export async function discoverTools(
     }
     if (!isDir) continue;
 
-    // Flat layout: examples/<site>/index.ts
-    const flatModule = pathResolve(dir, 'index.ts');
-    if (existsSync(flatModule)) {
-      const tool = await tryLoadTool(flatModule, entry, logPrefix);
-      if (tool) out.push(tool);
-    }
-
-    // Multi-workflow layout: examples/<site>/<workflow>/index.ts
+    // Tool layout: examples/<site>/<toolName>/index.ts
     for (const sub of readdirSync(dir)) {
       const subDir = pathResolve(dir, sub);
       try {

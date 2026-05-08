@@ -3,9 +3,11 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { extract } from './parser';
 
-// Load the captured response fixture
 const fixtureResponse = readFileSync(
-  join(import.meta.dir, 'fixture_response.txt'),
+  join(
+    import.meta.dir,
+    '../../../test/fixtures/examples/google-flights/search_google_flights/fixture_response.txt',
+  ),
   'utf-8'
 );
 

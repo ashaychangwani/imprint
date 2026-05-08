@@ -30,7 +30,7 @@ The mcp-inspector UI lists `echo_test`. Calling it with `{"message": "hi"}` retu
 
 | File | What |
 |---|---|
-| `index.ts` | The complete tool — no `workflow.json`, no recording, no compile pipeline. Pure code. |
+| `echo_test/index.ts` | The complete tool — no `workflow.json`, no recording, no compile pipeline. Pure code. |
 
 ## Why this exists
 

@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { extract, parseEnvelope, type ExtractResult, type Hotel } from './parser.ts';
 
 const FIXTURE = readFileSync(
-  join(import.meta.dir, 'fixtures/response-287.txt'),
+  join(
+    import.meta.dir,
+    '../../../test/fixtures/examples/google-hotels/search_google_hotels/response-287.txt',
+  ),
   'utf8',
 );
 

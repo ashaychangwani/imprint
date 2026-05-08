@@ -1,8 +1,8 @@
-/** `imprint emit` — generate examples/<site>/index.ts: a thin wrapper
+/** `imprint emit` — generate examples/<site>/<toolName>/index.ts: a thin wrapper
  *  around runtime.executeWorkflow with the workflow JSON embedded inline. */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join as pathJoin, resolve as pathResolve, relative } from 'node:path';
+import { basename, dirname, join as pathJoin, resolve as pathResolve, relative } from 'node:path';
 import { loadJsonFile } from './load-json.ts';
 import { type Workflow, WorkflowSchema } from './types.ts';
 
@@ -35,7 +35,7 @@ export function emit(opts: EmitOptions): EmitResult {
     'workflow.json',
   );
 
-  const outDir = opts.outDir ?? pathResolve(dirname(opts.workflowPath));
+  const outDir = opts.outDir ?? defaultOutDir(opts.workflowPath, workflow);
 
   mkdirSync(outDir, { recursive: true });
   const outPath = pathJoin(outDir, 'index.ts');
@@ -46,7 +46,7 @@ export function emit(opts: EmitOptions): EmitResult {
     );
   }
 
-  // Generated files live in examples/<site>/, two levels deep from src/imprint/.
+  // Generated files live in examples/<site>/<toolName>/.
   const runtimeModule = pathResolve(import.meta.dir, 'runtime.ts');
   const importPath = relative(outDir, runtimeModule);
 
@@ -59,6 +59,12 @@ export function emit(opts: EmitOptions): EmitResult {
     toolName: workflow.toolName,
     parameters: workflow.parameters,
   };
+}
+
+function defaultOutDir(workflowPath: string, workflow: Workflow): string {
+  const workflowDir = pathResolve(dirname(workflowPath));
+  if (basename(workflowDir) === workflow.toolName) return workflowDir;
+  return pathJoin(workflowDir, workflow.toolName);
 }
 
 function renderModule(workflow: Workflow, runtimeImportPath: string): string {
@@ -88,7 +94,7 @@ function renderModule(workflow: Workflow, runtimeImportPath: string): string {
  * Site: ${workflow.site}
  * Intent: ${workflow.intent.description}
  *
- * To regenerate: imprint emit examples/${workflow.site}/workflow.json --force
+ * To regenerate: imprint emit examples/${workflow.site}/${workflow.toolName}/workflow.json --force
  */
 
 import { fileURLToPath } from 'node:url';

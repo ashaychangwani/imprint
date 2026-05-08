@@ -5,7 +5,7 @@
  * Site: southwest
  * Intent: Search for one-way Southwest Airlines flights between two airports on a given departure date, returning available flights and fares.
  *
- * To regenerate: imprint emit examples/southwest/workflow.json --force
+ * To regenerate: imprint emit examples/southwest/search_southwest_flights/workflow.json --force
  */
 
 import { fileURLToPath } from 'node:url';

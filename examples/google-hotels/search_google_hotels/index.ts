@@ -5,7 +5,7 @@
  * Site: google-hotels
  * Intent: Search Google Hotels for lodging in a destination over a given date range and party composition, returning the list of nearby hotels with star rating, guest rating, nightly + total prices, and Google identifiers.
  *
- * To regenerate: imprint emit examples/google-hotels/workflow.json --force
+ * To regenerate: imprint emit examples/google-hotels/search_google_hotels/workflow.json --force
  */
 
 import { fileURLToPath } from 'node:url';

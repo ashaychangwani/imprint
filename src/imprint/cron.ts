@@ -1,6 +1,6 @@
 /**
  * `imprint cron <site>` — polling daemon for a generated tool. Loads
- * examples/<site>/cron.json, schedules via node-cron, runs the tool
+ * examples/<site>/<toolName>/cron.json, schedules via node-cron, runs the tool
  * through the configured backend ladder per tick, and pushes via
  * notify.ts on failure (or on a notifyWhen predicate match).
  *
@@ -33,7 +33,7 @@ interface RunCronOptions {
   site: string;
   /** Override examples directory. Defaults to <cwd>/examples. */
   examplesDir?: string;
-  /** Override config path. Defaults to <examplesDir>/<site>/cron.json. */
+  /** Override config path. Defaults to <examplesDir>/<site>/<toolName>/cron.json. */
   configPath?: string;
   /** Run a single tick and exit. Mutually exclusive with runNow. */
   once?: boolean;
@@ -173,7 +173,7 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
   const tool = discovered[0];
   if (!tool) {
     throw new Error(
-      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
+      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/<toolName>/workflow.json\` first.`,
     );
   }
   const configPath = opts.configPath ?? pathResolve(tool.dir, 'cron.json');

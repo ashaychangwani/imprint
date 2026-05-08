@@ -109,7 +109,7 @@ Initial public release. Two-week sprint to ship the full pipeline + two working 
 - `imprint redact` — credential / PII scrub with `[REDACTED:N]` markers preserving shape for the LLM.
 - `imprint generate` — Vertex Anthropic compilation of session → `workflow.json`.
 - `imprint compile-playbook` — Vertex Anthropic compilation of session → `playbook.yaml` (DOM replay artifact, switched from markdown to YAML mid-sprint).
-- `imprint emit` — code generation of `examples/<site>/index.ts` from `workflow.json`.
+- `imprint emit` — code generation of `examples/<site>/<toolName>/index.ts` from `workflow.json`.
 - `imprint cron` — polling daemon with multi-provider notifications (Pushover + ntfy) and `notifyWhen: price_below` predicate.
 - `imprint mcp-server` — MCP server (stdio + Streamable HTTP) on the official `@modelcontextprotocol/sdk`.
 - `imprint playbook` — direct Playwright execution of a YAML playbook.

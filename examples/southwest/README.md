@@ -29,7 +29,7 @@ NTFY_URL=https://ntfy.sh/your-secret-topic imprint cron southwest --once
 ## What you should see
 
 ```
-[imprint cron] config: examples/southwest/cron.json
+[imprint cron] config: examples/southwest/search_southwest_flights/cron.json
 [imprint cron] backends.json: probed 2026-05-03T22:23Z, preferred order: stealth-fetch → playbook
 [imprint cron] tool: search_southwest_flights (5 param(s))
 [imprint cron] schedule: 0 9 * * *

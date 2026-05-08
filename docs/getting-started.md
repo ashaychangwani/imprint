@@ -63,13 +63,13 @@ imprint compile-playbook "${SESSION%.json}.redacted.json"
 #   → Outputs: examples/google-flights/{workflow.json, playbook.yaml}
 
 # 5. Emit the executable TS module
-imprint emit examples/google-flights/workflow.json
+imprint emit examples/google-flights/search_google_flights/workflow.json
 #   → Output: examples/google-flights/index.ts
 
 # 6. (Optional) Probe which backends work and cache the order.
 #    Safe to skip for plain APIs; useful for bot-protected sites.
 imprint probe-backends mysite
-#   → Output: examples/google-flights/backends.json
+#   → Output: examples/google-flights/search_google_flights/backends.json
 
 # 7. Test it
 imprint mcp-server google-flights    # stdio MCP server
