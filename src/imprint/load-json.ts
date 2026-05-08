@@ -7,7 +7,7 @@
  * the same three-branch error format.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import type { ZodTypeAny, z } from 'zod';
 
 interface LoadJsonRemediation {
@@ -30,6 +30,9 @@ export function loadJsonFile<S extends ZodTypeAny>(
 ): z.infer<S> {
   if (!existsSync(path)) {
     throw new Error(`${noun} not found: ${path}\n${remediation.notFound}`);
+  }
+  if (!statSync(path).isFile()) {
+    throw new Error(`${noun} is not a file: ${path}\n${remediation.notFound}`);
   }
   let raw: unknown;
   try {

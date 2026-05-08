@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
@@ -56,6 +56,16 @@ describe('loadJsonFile', () => {
       writeFileSync(path, '{not json');
       expect(() => loadJsonFile(path, SCHEMA, REMEDIATION, 'config')).toThrow(
         /is not valid JSON[\s\S]*stray commas/,
+      );
+    });
+  });
+
+  it('throws "not a file" when the path is a directory', () => {
+    withTemp((dir) => {
+      const path = pathJoin(dir, 'config.json');
+      mkdirSync(path);
+      expect(() => loadJsonFile(path, SCHEMA, REMEDIATION, 'config')).toThrow(
+        /config is not a file[\s\S]*create one/,
       );
     });
   });

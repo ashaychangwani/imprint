@@ -52,7 +52,7 @@ Changelog config lives in `cliff.toml`. Preview unreleased changelog: `bun run c
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for commit conventions and release process.
 
-When a user asks you to create a PR, you must babysit it until all PR checks are green. If any check fails, inspect the logs, fix the issue, push the update, and keep watching until the PR is green.
+When a user asks you to create a PR, commit changes, or push a branch, you must babysit the resulting CI until all relevant checks are green. If any check fails, inspect the logs, fix the issue, push the update, and keep watching until CI is green.
 
 ## Test data hygiene
 

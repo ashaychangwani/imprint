@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'bun:test';
+import { resolve as pathResolve } from 'node:path';
 import { VERB_HELP } from '../src/cli.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
-import { buildTeachProviderPickerOptions, promptForTeachProvider } from '../src/imprint/teach.ts';
+import {
+  buildTeachProviderPickerOptions,
+  buildTeachStateFromSession,
+  promptForTeachProvider,
+  resolveTeachStatePath,
+} from '../src/imprint/teach.ts';
 
 describe('teach verb', () => {
   it('has a VERB_HELP entry', () => {
@@ -66,5 +72,50 @@ describe('teach provider picker', () => {
     expect(provider).toBe('claude-cli');
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain('run codex login');
+  });
+});
+
+describe('teach session state helpers', () => {
+  it('treats blank stored session paths as missing', () => {
+    expect(resolveTeachStatePath('google-flights', '')).toBeNull();
+    expect(resolveTeachStatePath('google-flights', '   ')).toBeNull();
+    expect(resolveTeachStatePath('google-flights', undefined)).toBeNull();
+  });
+
+  it('resolves relative state paths under the site and preserves absolute paths', () => {
+    const relative = resolveTeachStatePath('google-flights', 'sessions/one.json');
+    expect(relative).toBe(pathResolve('examples', 'google-flights', 'sessions/one.json'));
+
+    const absolute = pathResolve('/tmp', 'session.json');
+    expect(resolveTeachStatePath('google-flights', absolute)).toBe(absolute);
+  });
+
+  it('builds --from-session checkpoint state with the real session path', () => {
+    const sessionPath = pathResolve(
+      'examples',
+      'google-flights',
+      'sessions',
+      '2026-05-08T09-24-14-916Z.json',
+    );
+    const redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
+    const state = buildTeachStateFromSession('google-flights', sessionPath, redactedPath);
+
+    expect(state.sessionPath).toBe('sessions/2026-05-08T09-24-14-916Z.json');
+    expect(state.redactedPath).toBe('sessions/2026-05-08T09-24-14-916Z.redacted.json');
+    expect(state.completedSteps).toEqual(['record', 'redact']);
+  });
+
+  it('builds --from-session checkpoint state before redaction has run', () => {
+    const sessionPath = pathResolve(
+      'examples',
+      'google-flights',
+      'sessions',
+      '2026-05-08T09-24-14-916Z.json',
+    );
+    const state = buildTeachStateFromSession('google-flights', sessionPath, null);
+
+    expect(state.sessionPath).toBe('sessions/2026-05-08T09-24-14-916Z.json');
+    expect(state.redactedPath).toBeUndefined();
+    expect(state.completedSteps).toEqual(['record']);
   });
 });
