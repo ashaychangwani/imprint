@@ -21,7 +21,7 @@
     "dev": "bun run src/cli.ts",
     "imprint": "bun run src/cli.ts",
     "doctor": "bun run src/cli.ts doctor",
-    "test": "bun test test/",
+    "test": "bun test",
     "lint": "biome check src test",
     "lint:fix": "biome check --write src test",
     "typecheck": "tsc --noEmit",
