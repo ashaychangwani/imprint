@@ -108,7 +108,7 @@ git clone https://github.com/ashaychangwani/imprint.git && cd imprint
 bun install && bun link
 ```
 
-Requires [Bun](https://bun.sh) >= 1.3. Imprint auto-detects an LLM provider from what's already on your system — first match wins:
+Requires [Bun](https://bun.sh) >= 1.3. Imprint detects LLM providers from what's already on your system:
 
 | Priority | Provider | Triggered by |
 |---|---|---|
@@ -122,7 +122,9 @@ Requires [Bun](https://bun.sh) >= 1.3. Imprint auto-detects an LLM provider from
 imprint doctor
 ```
 
-Shows which provider was picked. To force a specific one, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`.
+Shows which providers are detected. Interactive `imprint teach` prompts you to choose when multiple compatible compile providers are available, and also lists undetected providers as setup-help entries. Pick one of those help entries to see exactly which CLI or environment variable to add so it will be detected next time.
+
+To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. Non-interactive runs keep first-match auto-detection so scripts do not hang.
 
 <br>
 

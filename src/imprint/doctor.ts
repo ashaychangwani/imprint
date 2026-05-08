@@ -5,6 +5,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { findChromium } from './chromium.ts';
+import { getProviderStatuses } from './llm.ts';
 import { VERSION } from './version.ts';
 
 export interface CheckResult {
@@ -87,27 +88,24 @@ function checkPlaywrightChromium(): CheckResult {
 }
 
 function checkLLMProvider(): CheckResult {
-  const hasApiKey = !!process.env.ANTHROPIC_API_KEY;
-  const hasVertex = !!(process.env.ANTHROPIC_VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT);
-  const hasClaude = !!Bun.which('claude');
-  const hasCodex = !!Bun.which('codex');
-  const hasCursor = !!Bun.which('cursor');
+  const statuses = getProviderStatuses();
+  const detected = statuses.filter((s) => s.detected);
+  const teachCompatible = detected.filter((s) => s.availableForTeach);
 
-  if (hasClaude) {
-    return { name: 'LLM provider', ok: true, detail: 'Claude Code CLI (claude on PATH)' };
+  if (teachCompatible.length > 0) {
+    const names = detected
+      .map((s) => `${s.name}${s.availableForTeach ? '' : ' (not teach-compatible)'}`)
+      .join(', ');
+    return { name: 'LLM provider', ok: true, detail: `detected: ${names}` };
   }
-  if (hasCodex) {
-    return { name: 'LLM provider', ok: true, detail: 'Codex CLI (codex on PATH)' };
-  }
-  if (hasCursor) {
-    return { name: 'LLM provider', ok: true, detail: 'Cursor CLI (cursor on PATH)' };
-  }
-  if (hasApiKey) {
-    return { name: 'LLM provider', ok: true, detail: 'Anthropic API (ANTHROPIC_API_KEY set)' };
-  }
-  if (hasVertex) {
-    const id = process.env.ANTHROPIC_VERTEX_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT;
-    return { name: 'LLM provider', ok: true, detail: `Vertex AI (project: ${id})` };
+
+  if (detected.length > 0) {
+    return {
+      name: 'LLM provider',
+      ok: false,
+      detail: `detected: ${detected.map((s) => s.name).join(', ')}; none are compatible with teach compile`,
+      fix: 'install Claude Code / Codex CLI, or set ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID',
+    };
   }
 
   return {

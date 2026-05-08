@@ -6,7 +6,15 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { detectProvider, extractJsonObject, isValidProvider } from '../src/imprint/llm.ts';
+import {
+  detectProvider,
+  extractJsonObject,
+  getProviderStatuses,
+  isTeachCompatibleProvider,
+  isValidProvider,
+  normalizeCliAnalyzeOutput,
+  preferredAgentModel,
+} from '../src/imprint/llm.ts';
 
 describe('extractJsonObject', () => {
   it('returns the first balanced object as-is from a bare JSON response', () => {
@@ -47,6 +55,26 @@ describe('extractJsonObject', () => {
 
   it('returns null when braces never balance', () => {
     expect(extractJsonObject('{"unclosed":')).toBe(null);
+  });
+});
+
+describe('normalizeCliAnalyzeOutput', () => {
+  it('preserves YAML with parameter placeholders instead of extracting ${...}', () => {
+    const yaml = 'toolName: search_google_flights\nsteps:\n  - value: ${origin}\n';
+    expect(normalizeCliAnalyzeOutput(yaml, 'Output YAML matching this exact shape.')).toBe(yaml);
+  });
+
+  it('extracts a JSON object only when the prompt asks for one', () => {
+    expect(
+      normalizeCliAnalyzeOutput('Here is the result:\n{"ok":true}\n', 'Output only a JSON object.'),
+    ).toBe('{"ok":true}');
+  });
+
+  it('leaves JSON-array prompts untouched for the array parser', () => {
+    const text = 'Here is the result:\n[1,2,3]\n';
+    expect(
+      normalizeCliAnalyzeOutput(text, 'Output only a JSON array of request seq numbers.'),
+    ).toBe(text);
   });
 });
 
@@ -123,5 +151,86 @@ describe('detectProvider', () => {
       if (origProject === undefined) process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
       else process.env.ANTHROPIC_VERTEX_PROJECT_ID = origProject;
     }
+  });
+});
+
+describe('provider status metadata', () => {
+  function withProviderEnv<T>(opts: { which?: (cmd: string) => string | null }, fn: () => T): T {
+    const origWhich = Bun.which;
+    const origApiKey = process.env.ANTHROPIC_API_KEY;
+    const origVertex = process.env.ANTHROPIC_VERTEX_PROJECT_ID;
+    const origGoogleProject = process.env.GOOGLE_CLOUD_PROJECT;
+    const origCodexModel = process.env.CODEX_MODEL;
+    const origCodexAgentModel = process.env.CODEX_MODEL_AGENT;
+    try {
+      Bun.which = (opts.which ?? (() => null)) as typeof Bun.which;
+      process.env.ANTHROPIC_API_KEY = undefined;
+      process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
+      process.env.GOOGLE_CLOUD_PROJECT = undefined;
+      process.env.CODEX_MODEL = undefined;
+      process.env.CODEX_MODEL_AGENT = undefined;
+      return fn();
+    } finally {
+      Bun.which = origWhich;
+      if (origApiKey === undefined) process.env.ANTHROPIC_API_KEY = undefined;
+      else process.env.ANTHROPIC_API_KEY = origApiKey;
+      if (origVertex === undefined) process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
+      else process.env.ANTHROPIC_VERTEX_PROJECT_ID = origVertex;
+      if (origGoogleProject === undefined) process.env.GOOGLE_CLOUD_PROJECT = undefined;
+      else process.env.GOOGLE_CLOUD_PROJECT = origGoogleProject;
+      if (origCodexModel === undefined) process.env.CODEX_MODEL = undefined;
+      else process.env.CODEX_MODEL = origCodexModel;
+      if (origCodexAgentModel === undefined) process.env.CODEX_MODEL_AGENT = undefined;
+      else process.env.CODEX_MODEL_AGENT = origCodexAgentModel;
+    }
+  }
+
+  it('reports every detected provider instead of only the first', () => {
+    withProviderEnv(
+      {
+        which: (cmd) => {
+          if (cmd === 'claude') return '/bin/claude';
+          if (cmd === 'codex') return '/bin/codex';
+          if (cmd === 'cursor') return '/bin/cursor';
+          return null;
+        },
+      },
+      () => {
+        process.env.ANTHROPIC_API_KEY = 'sk-test';
+        process.env.ANTHROPIC_VERTEX_PROJECT_ID = 'test-project';
+        const statuses = getProviderStatuses();
+        expect(statuses.filter((s) => s.detected).map((s) => s.name)).toEqual([
+          'claude-cli',
+          'codex-cli',
+          'cursor-cli',
+          'anthropic-api',
+          'vertex',
+        ]);
+      },
+    );
+  });
+
+  it('includes setup hints for providers that were not detected', () => {
+    withProviderEnv({}, () => {
+      const statuses = getProviderStatuses();
+      expect(statuses.find((s) => s.name === 'codex-cli')?.setupHint).toContain('codex login');
+      expect(statuses.find((s) => s.name === 'anthropic-api')?.setupHint).toContain(
+        'ANTHROPIC_API_KEY',
+      );
+      expect(statuses.find((s) => s.name === 'vertex')?.setupHint).toContain(
+        'ANTHROPIC_VERTEX_PROJECT_ID',
+      );
+    });
+  });
+
+  it('marks codex-cli as teach-compatible but cursor-cli as not yet supported', () => {
+    expect(isTeachCompatibleProvider('codex-cli')).toBe(true);
+    expect(isTeachCompatibleProvider('cursor-cli')).toBe(false);
+  });
+
+  it('uses a current Codex model for agentic compile by default', () => {
+    withProviderEnv({}, () => {
+      expect(preferredAgentModel('codex-cli')).toBe('gpt-5.4');
+    });
   });
 });

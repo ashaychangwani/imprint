@@ -1,48 +1,3 @@
-/**
- * Parser for Google Flights GetShoppingResults JSPB response.
- *
- * The response is a JSPB (protobuf-style) nested array format.
- * Structure:
- *   )]}'\n\nSIZE\n[[\"wrb.fr\",null,\"INNER_JSON_STRING\"]...]
- *
- * The inner JSON string contains flight data at positions [2] and [3]:
- *   inner[2] = first group of flight options (typically nonstop/direct)
- *   inner[3] = second group of flight options (typically connecting)
- *
- * Each flight option is an array:
- *   [0] = flight details (25-element array)
- *   [1] = price info [[null, price_usd], booking_token]
- *
- * Flight details:
- *   [0] = airline IATA code (e.g. "ZG")
- *   [1] = [airline name] (e.g. ["ZIPAIR Tokyo"])
- *   [2] = segments array
- *   [3] = origin airport code (e.g. "SFO")
- *   [4] = departure date [year, month, day]
- *   [5] = departure time [hour, minute]
- *   [6] = destination airport code (e.g. "NRT")
- *   [7] = arrival date [year, month, day]
- *   [8] = arrival time [hour, minute]
- *   [9] = total duration in minutes
- *   [10] = number of stops
- *   [15] = codeshare/partner airlines array (if any)
- *
- * Segment details (each segment in [2]):
- *   [3] = origin airport code
- *   [4] = origin airport name
- *   [5] = destination airport name
- *   [6] = destination airport code
- *   [8] = departure time [hour, minute]
- *   [10] = arrival time [hour, minute]
- *   [11] = segment duration in minutes
- *   [13] = seat class (1=economy, 2=premium economy, 3=business, 4=first)
- *   [14] = seat pitch
- *   [17] = aircraft type
- *   [20] = departure date [year, month, day]
- *   [21] = arrival date [year, month, day]
- *   [22] = [airline_code, flight_number, null, airline_name]
- */
-
 interface Segment {
   origin: string;
   originName: string;
@@ -53,11 +8,10 @@ interface Segment {
   arrivalDate: string;
   arrivalTime: string;
   durationMinutes: number;
-  flightNumber: string;
   airlineCode: string;
   airlineName: string;
+  flightNumber: string;
   aircraft: string;
-  seatPitch: string;
   cabinClass: string;
 }
 
@@ -71,182 +25,165 @@ interface Flight {
   arrivalDate: string;
   arrivalTime: string;
   durationMinutes: number;
-  stops: number;
+  stopCount: number;
   priceUsd: number | null;
   bookingToken: string | null;
+  flightNumbers: string[];
   segments: Segment[];
-  codesharePartners: string[];
 }
 
-function formatDate(dateParts: number[] | null | undefined): string {
-  if (!dateParts || dateParts.length < 3) return '';
-  const [year, month, day] = dateParts;
+function formatDate(parts: unknown): string {
+  if (!Array.isArray(parts) || parts.length < 3) return '';
+  const [year, month, day] = parts as number[];
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function formatTime(timeParts: number[] | null | undefined): string {
-  if (!timeParts || timeParts.length === 0) return '';
-  const hour = timeParts[0] ?? 0;
-  const minute = timeParts[1] ?? 0;
+function formatTime(parts: unknown): string {
+  if (!Array.isArray(parts) || parts.length === 0) return '';
+  const [hour = 0, minute = 0] = parts as number[];
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
-function cabinClassLabel(code: number): string {
+function cabinClassLabel(code: unknown): string {
   switch (code) {
-    case 1: return 'economy';
-    case 2: return 'premium_economy';
-    case 3: return 'business';
-    case 4: return 'first';
-    default: return 'economy';
+    case 1:
+      return 'economy';
+    case 2:
+      return 'premium_economy';
+    case 3:
+      return 'business';
+    case 4:
+      return 'first';
+    default:
+      return 'unknown';
   }
 }
 
-function parseSegment(seg: any[]): Segment {
-  const flightInfo = seg[22] as any[] | null;
+function parseEnvelope(rawResponse: string): unknown[] | null {
+  const jsonLine = rawResponse
+    .split('\n')
+    .find((line) => line.startsWith('[[') || line.startsWith('[["'));
+
+  if (!jsonLine) return null;
+
+  let outer: unknown[];
+  try {
+    outer = JSON.parse(jsonLine) as unknown[];
+  } catch {
+    return null;
+  }
+
+  const innerString = (outer as unknown[][])?.[0]?.[2];
+  if (typeof innerString !== 'string') return null;
+
+  try {
+    return JSON.parse(innerString) as unknown[];
+  } catch {
+    return null;
+  }
+}
+
+function parseSegment(rawSegment: unknown): Segment | null {
+  if (!Array.isArray(rawSegment)) return null;
+
+  const flightInfo = rawSegment[22];
   return {
-    origin: seg[3] ?? '',
-    originName: seg[4] ?? '',
-    destination: seg[6] ?? '',
-    destinationName: seg[5] ?? '',
-    departureDate: formatDate(seg[20]),
-    departureTime: formatTime(seg[8]),
-    arrivalDate: formatDate(seg[21]),
-    arrivalTime: formatTime(seg[10]),
-    durationMinutes: seg[11] ?? 0,
-    flightNumber: flightInfo ? `${flightInfo[0]}${flightInfo[1]}` : '',
-    airlineCode: flightInfo?.[0] ?? '',
-    airlineName: flightInfo?.[3] ?? '',
-    aircraft: seg[17] ?? '',
-    seatPitch: seg[14] ?? '',
-    cabinClass: cabinClassLabel(seg[13] ?? 1),
+    origin: typeof rawSegment[3] === 'string' ? rawSegment[3] : '',
+    originName: typeof rawSegment[4] === 'string' ? rawSegment[4] : '',
+    destination: typeof rawSegment[6] === 'string' ? rawSegment[6] : '',
+    destinationName: typeof rawSegment[5] === 'string' ? rawSegment[5] : '',
+    departureDate: formatDate(rawSegment[20]),
+    departureTime: formatTime(rawSegment[8]),
+    arrivalDate: formatDate(rawSegment[21]),
+    arrivalTime: formatTime(rawSegment[10]),
+    durationMinutes: typeof rawSegment[11] === 'number' ? rawSegment[11] : 0,
+    airlineCode:
+      Array.isArray(flightInfo) && typeof flightInfo[0] === 'string' ? flightInfo[0] : '',
+    airlineName:
+      Array.isArray(flightInfo) && typeof flightInfo[3] === 'string' ? flightInfo[3] : '',
+    flightNumber:
+      Array.isArray(flightInfo) &&
+      typeof flightInfo[0] === 'string' &&
+      typeof flightInfo[1] === 'string'
+        ? `${flightInfo[0]}${flightInfo[1]}`
+        : '',
+    aircraft: typeof rawSegment[17] === 'string' ? rawSegment[17] : '',
+    cabinClass: cabinClassLabel(rawSegment[13]),
   };
 }
 
-function parseFlightOption(option: any[]): Flight | null {
-  if (!Array.isArray(option) || option.length < 2) return null;
+function parseFlight(rawOption: unknown): Flight | null {
+  if (!Array.isArray(rawOption) || rawOption.length < 2) return null;
 
-  const details = option[0] as any[];
-  const priceInfo = option[1] as any[];
+  const details = rawOption[0];
+  const priceInfo = rawOption[1];
+  if (!Array.isArray(details) || !Array.isArray(details[2])) return null;
 
-  if (!Array.isArray(details) || typeof details[0] !== 'string') return null;
+  const segments = details[2]
+    .map((segment) => parseSegment(segment))
+    .filter((segment): segment is Segment => segment !== null);
 
-  const airlineCode = details[0] as string;
-  const airlineNameArr = details[1] as string[];
-  const airlineName = Array.isArray(airlineNameArr) ? (airlineNameArr[0] ?? '') : '';
-  const segments = (details[2] as any[][]).map(parseSegment);
-  const origin = details[3] as string;
-  const depDate = formatDate(details[4]);
-  const depTime = formatTime(details[5]);
-  const dest = details[6] as string;
-  const arrDate = formatDate(details[7]);
-  const arrTime = formatTime(details[8]);
-  const durationMinutes = details[9] as number;
-  const stops = (details[10] as number) - 1; // stops = segments - 1
-  const codesharePartners = Array.isArray(details[15]) ? (details[15] as string[]) : [];
-
-  let priceUsd: number | null = null;
-  let bookingToken: string | null = null;
-  if (Array.isArray(priceInfo)) {
-    const priceArr = priceInfo[0] as any[];
-    if (Array.isArray(priceArr) && priceArr[1] != null) {
-      priceUsd = priceArr[1] as number;
-    }
-    bookingToken = priceInfo[1] as string ?? null;
-  }
+  const firstPrice = Array.isArray(priceInfo) && Array.isArray(priceInfo[0]) ? priceInfo[0] : null;
+  const priceUsd = firstPrice && typeof firstPrice[1] === 'number' ? firstPrice[1] : null;
+  const bookingToken = Array.isArray(priceInfo) && typeof priceInfo[1] === 'string' ? priceInfo[1] : null;
 
   return {
-    airlineCode,
-    airlineName,
-    origin,
-    destination: dest,
-    departureDate: depDate,
-    departureTime: depTime,
-    arrivalDate: arrDate,
-    arrivalTime: arrTime,
-    durationMinutes,
-    stops,
+    airlineCode: typeof details[0] === 'string' ? details[0] : '',
+    airlineName:
+      Array.isArray(details[1]) && typeof details[1][0] === 'string' ? details[1][0] : '',
+    origin: typeof details[3] === 'string' ? details[3] : '',
+    destination: typeof details[6] === 'string' ? details[6] : '',
+    departureDate: formatDate(details[4]),
+    departureTime: formatTime(details[5]),
+    arrivalDate: formatDate(details[7]),
+    arrivalTime: formatTime(details[8]),
+    durationMinutes: typeof details[9] === 'number' ? details[9] : 0,
+    stopCount: Math.max(segments.length - 1, 0),
     priceUsd,
     bookingToken,
+    flightNumbers: segments.map((segment) => segment.flightNumber).filter(Boolean),
     segments,
-    codesharePartners,
   };
 }
 
-function extractFlightsFromSection(section: any): Flight[] {
-  if (!Array.isArray(section) || !Array.isArray(section[0])) return [];
-  const flightOptions = section[0] as any[][];
-  const flights: Flight[] = [];
-  for (const option of flightOptions) {
-    const flight = parseFlightOption(option);
-    if (flight) flights.push(flight);
-  }
-  return flights;
+function isFlightSection(section: unknown): section is [unknown[], ...unknown[]] {
+  return (
+    Array.isArray(section) &&
+    Array.isArray(section[0]) &&
+    section[0].length > 0 &&
+    Array.isArray(section[0][0]) &&
+    Array.isArray(section[0][0][0])
+  );
 }
 
 export function extract(rawResponse: unknown): unknown {
   if (typeof rawResponse !== 'string') {
-    // Already parsed — shouldn't happen for this endpoint but handle gracefully
-    return { flights: [], error: 'Expected string response' };
+    return { flights: [], totalCount: 0, error: 'Expected raw response string.' };
   }
 
-  // Strip JSPB prefix: )]}'\n\nSIZE\n[...]
-  const lines = rawResponse.split('\n');
-  // Find the line that starts with '[' (the JSON array)
-  let jsonLine = '';
-  for (const line of lines) {
-    if (line.startsWith('[[') || line.startsWith('[["')) {
-      jsonLine = line;
-      break;
+  const envelope = parseEnvelope(rawResponse);
+  if (!envelope) {
+    return { flights: [], totalCount: 0, error: 'Unable to parse Google Flights response.' };
+  }
+
+  const flights: Flight[] = [];
+  for (const section of envelope) {
+    if (!isFlightSection(section)) continue;
+    for (const rawOption of section[0]) {
+      const flight = parseFlight(rawOption);
+      if (flight) flights.push(flight);
     }
   }
 
-  if (!jsonLine) {
-    return { flights: [], error: 'Could not find JSON data in response' };
-  }
-
-  let outerJson: any[];
-  try {
-    outerJson = JSON.parse(jsonLine);
-  } catch {
-    return { flights: [], error: 'Failed to parse outer JSON' };
-  }
-
-  // outerJson[0][2] is the inner JSPB string
-  const innerStr = outerJson?.[0]?.[2];
-  if (typeof innerStr !== 'string') {
-    return { flights: [], error: 'Could not find inner JSPB string' };
-  }
-
-  let inner: any[];
-  try {
-    inner = JSON.parse(innerStr);
-  } catch {
-    return { flights: [], error: 'Failed to parse inner JSPB JSON' };
-  }
-
-  // Extract flights from sections [2] and [3]
-  const allFlights: Flight[] = [];
-
-  // Section [2]: typically nonstop/direct flights
-  if (inner[2]) {
-    allFlights.push(...extractFlightsFromSection(inner[2]));
-  }
-
-  // Section [3]: typically connecting flights
-  if (inner[3]) {
-    allFlights.push(...extractFlightsFromSection(inner[3]));
-  }
-
-  // Sort by price ascending
-  allFlights.sort((a, b) => {
-    if (a.priceUsd === null && b.priceUsd === null) return 0;
-    if (a.priceUsd === null) return 1;
-    if (b.priceUsd === null) return -1;
+  flights.sort((a, b) => {
+    if (a.priceUsd == null && b.priceUsd == null) return 0;
+    if (a.priceUsd == null) return 1;
+    if (b.priceUsd == null) return -1;
     return a.priceUsd - b.priceUsd;
   });
 
   return {
-    flights: allFlights,
-    totalCount: allFlights.length,
+    flights,
+    totalCount: flights.length,
   };
 }

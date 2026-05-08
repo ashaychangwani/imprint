@@ -35,7 +35,13 @@ import {
   generatePasteSnippet,
   generateSkillMd,
 } from './integrations.ts';
-import { type ProviderName, detectProvider } from './llm.ts';
+import {
+  type ProviderName,
+  type ProviderStatus,
+  detectProvider,
+  getProviderStatuses,
+  isTeachCompatibleProvider,
+} from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
@@ -287,6 +293,108 @@ async function resolveStartUrl(opts: TeachOptions): Promise<string | undefined> 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+interface TeachProviderPickerOption {
+  value: string;
+  label: string;
+  hint?: string;
+}
+
+interface TeachProviderPickerIO {
+  select: (opts: {
+    message: string;
+    options: TeachProviderPickerOption[];
+  }) => Promise<string | symbol>;
+  note: (message: string, title?: string) => void;
+  isCancel: (value: unknown) => boolean;
+}
+
+function assertTeachProvider(name: ProviderName): void {
+  if (isTeachCompatibleProvider(name)) return;
+  const status = getProviderStatuses().find((s) => s.name === name);
+  throw new Error(
+    [
+      `provider "${name}" is not supported for \`imprint teach\` compile yet.`,
+      status?.reason ? `detected status: ${status.reason}` : undefined,
+      '→ use one of: claude-cli, codex-cli, anthropic-api, vertex',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  );
+}
+
+async function resolveTeachProvider(opts: TeachOptions): Promise<ProviderName> {
+  if (opts.provider) {
+    assertTeachProvider(opts.provider);
+    return opts.provider;
+  }
+
+  if (opts.noInteractive) {
+    const provider = detectProvider();
+    assertTeachProvider(provider);
+    return provider;
+  }
+
+  const statuses = getProviderStatuses();
+  const detectedCompatible = statuses.filter((s) => s.detected && s.availableForTeach);
+  const onlyCompatible = detectedCompatible[0];
+  if (detectedCompatible.length === 1 && onlyCompatible) return onlyCompatible.name;
+  return await promptForTeachProvider(statuses);
+}
+
+export function buildTeachProviderPickerOptions(
+  statuses: ProviderStatus[],
+): TeachProviderPickerOption[] {
+  return statuses.map((status) => {
+    if (status.detected && status.availableForTeach) {
+      return {
+        value: `use:${status.name}`,
+        label: `${status.name} (detected)`,
+        hint: status.reason,
+      };
+    }
+    if (status.detected) {
+      return {
+        value: `setup:${status.name}`,
+        label: `${status.name} (detected, not available for teach)`,
+        hint: status.reason,
+      };
+    }
+    return {
+      value: `setup:${status.name}`,
+      label: `${status.name} (not detected, setup help)`,
+      hint: status.reason,
+    };
+  });
+}
+
+export async function promptForTeachProvider(
+  statuses: ProviderStatus[],
+  io: TeachProviderPickerIO = {
+    select: (opts) => p.select({ message: opts.message, options: opts.options }),
+    note: (message, title) => p.note(message, title),
+    isCancel: p.isCancel,
+  },
+): Promise<ProviderName> {
+  while (true) {
+    const choice = await io.select({
+      message: 'Which LLM provider should compile this workflow?',
+      options: buildTeachProviderPickerOptions(statuses),
+    });
+    if (io.isCancel(choice)) {
+      p.outro('Cancelled.');
+      process.exit(0);
+    }
+
+    const [action, rawName] = String(choice).split(':') as ['use' | 'setup', ProviderName];
+    const status = statuses.find((s) => s.name === rawName);
+    if (action === 'use' && status?.availableForTeach) return rawName;
+
+    if (status) {
+      io.note([status.reason, '', status.setupHint].join('\n'), `${status.name} setup`);
+    }
+  }
+}
+
 // ─── Main teach function ────────────────────────────────────────────────────
 
 export async function teach(opts: TeachOptions): Promise<TeachResult> {
@@ -385,7 +493,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   const startIdx = STEPS.indexOf(startFrom);
   const spinner = p.spinner();
-  const providerName = opts.provider ?? detectProvider();
+  const providerName = await resolveTeachProvider(opts);
 
   // Temp key for state tracking before we know the toolName.
   if (!workflowKey) {

@@ -52,6 +52,8 @@ Changelog config lives in `cliff.toml`. Preview unreleased changelog: `bun run c
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for commit conventions and release process.
 
+When a user asks you to create a PR, you must babysit it until all PR checks are green. If any check fails, inspect the logs, fix the issue, push the update, and keep watching until the PR is green.
+
 ## Test data hygiene
 
 This is a **public** repo. Real credentials, session tokens, cookie values, personal data, and recordings that contain any of the above MUST NEVER be checked in — not in `examples/`, not in `test/`, not in fixture JSON, not in commit messages, not in screenshots.

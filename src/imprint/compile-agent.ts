@@ -16,6 +16,7 @@ import {
   runAgentLoop,
 } from './agent.ts';
 import { compileViaClaudeCli } from './claude-cli-compile.ts';
+import { compileViaCodexCli } from './codex-cli-compile.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { buildCompileTools, externalVerification } from './compile-tools.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
@@ -144,10 +145,9 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
   const deadlineMs = Date.now() + (opts.maxDurationMs ?? 30 * 60 * 1000);
 
   // 8. Instantiate provider (or use injected one for testing).
-  //    claude-cli takes a different path: it doesn't implement messageWithTools,
-  //    so we shell out to `claude -p` with the same toolset registered as a
-  //    stdio MCP server. The user's subscription auth (OAuth in keychain)
-  //    drives the agent loop end-to-end.
+  //    CLI providers take a different path: they don't implement Anthropic
+  //    messageWithTools, so we shell out with the same toolset registered as a
+  //    stdio MCP server. The user's CLI auth drives the agent loop end-to-end.
   let provider: ToolUseProvider;
   if (opts.llmProvider) {
     provider = opts.llmProvider;
@@ -165,11 +165,23 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         keepTest: opts.keepTest,
       });
     }
+    if (resolvedProvider.name === 'codex-cli') {
+      return await compileViaCodexCli({
+        session,
+        absoluteExampleDir,
+        sessionPath: opts.sessionPath,
+        systemPromptPath,
+        deadlineMs,
+        onProgress: opts.onProgress,
+        startTime,
+        keepTest: opts.keepTest,
+      });
+    }
     if (!isToolUseProvider(resolvedProvider)) {
       throw new Error(
         [
           `provider "${resolvedProvider.name}" does not support tool use, which the compile-agent requires.`,
-          '→ use one of: claude-cli, anthropic-api, vertex (install Claude Code CLI, or set ANTHROPIC_API_KEY / ANTHROPIC_VERTEX_PROJECT_ID)',
+          '→ use one of: claude-cli, codex-cli, anthropic-api, vertex (install a supported CLI, or set ANTHROPIC_API_KEY / ANTHROPIC_VERTEX_PROJECT_ID)',
         ].join('\n'),
       );
     }
