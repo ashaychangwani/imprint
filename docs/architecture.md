@@ -30,7 +30,7 @@ Both are auto-discovered by the cron daemon and the MCP server, which dispatch t
        imprint emit                                 │
               │                                     │
               ▼                                     │
-   examples/<site>/index.ts                         │
+   examples/<site>/<toolName>/index.ts              │
               │                                     │
               ▼                                     ▼
    ┌─────────────────────────────────────────────────────────┐
@@ -57,9 +57,9 @@ src/imprint/
 ├── llm.ts               Vertex Anthropic wrapper + JSON extractor
 ├── playbook-parser.ts   YAML → Playbook (Zod-validated)
 │
-├── emit.ts              workflow.json → examples/<site>/index.ts
+├── emit.ts              workflow.json → examples/<site>/<toolName>/index.ts
 ├── runtime.ts           executeWorkflow — substitutions + chain + classification
-├── tool-loader.ts       Discover examples/<site>/index.ts modules
+├── tool-loader.ts       Discover examples/<site>/<toolName>/index.ts modules
 │
 ├── backend-ladder.ts    runWithLadder + resolveLadder
 ├── stealth-fetch.ts     Headless Chromium → mint sensor tokens → native fetch
@@ -89,7 +89,7 @@ src/imprint/
 | `stealth-fetch` | ~12s bootstrap (one-time) + ~1s | Akamai, Cloudflare, DataDome (token tier) |
 | `playbook` | ~9.4s | Universal — also handles form-fills, autocompletes, multi-page |
 
-`auto` mode walks the ladder. The probe-backends cache (`examples/<site>/backends.json`) reorders the ladder so cron + MCP start with the cheapest known-working backend.
+`auto` mode walks the ladder. The probe-backends cache (`examples/<site>/<toolName>/backends.json`) reorders the ladder so cron + MCP start with the cheapest known-working backend.
 
 ## File taxonomy per example
 

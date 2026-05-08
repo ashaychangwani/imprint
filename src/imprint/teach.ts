@@ -134,19 +134,12 @@ function nextStep(completed: Step[]): Step {
 }
 
 /** Scan examples/<site>/ for completed workflows. A workflow is "complete"
- *  only when it has both workflow.json AND index.ts (emit ran successfully).
- *  Checks both flat layout (site root) and new subdirectory layout. */
+ *  only when its tool directory has index.ts (emit ran successfully). */
 function discoverCompletedWorkflows(site: string): string[] {
   const siteDir = pathResolve('examples', site);
   if (!existsSync(siteDir)) return [];
   const names: string[] = [];
 
-  // Old flat layout: both workflow.json AND index.ts at the site root.
-  if (existsSync(pathJoin(siteDir, 'workflow.json')) && existsSync(pathJoin(siteDir, 'index.ts'))) {
-    names.push(site);
-  }
-
-  // New layout: subdirectories with index.ts (implies workflow.json too).
   for (const entry of readdirSync(siteDir)) {
     if (entry === 'sessions' || entry.startsWith('.')) continue;
     const dir = pathResolve(siteDir, entry);
@@ -160,39 +153,6 @@ function discoverCompletedWorkflows(site: string): string[] {
     }
   }
   return names;
-}
-
-/** Scan for partially-completed workflows at the site root (flat layout)
- *  that aren't tracked by state. E.g., a crashed teach left workflow.json
- *  but never made it to emit. Returns a WorkflowState or null. */
-function discoverFlatIncomplete(site: string): WorkflowState | null {
-  const siteDir = pathResolve('examples', site);
-  const hasWorkflow = existsSync(pathJoin(siteDir, 'workflow.json'));
-  const hasIndex = existsSync(pathJoin(siteDir, 'index.ts'));
-  if (!hasWorkflow || hasIndex) return null;
-
-  // workflow.json exists but index.ts doesn't → stopped after generate.
-  // Find which session produced it (latest redacted session).
-  const sessDir = pathJoin(siteDir, 'sessions');
-  if (!existsSync(sessDir)) return null;
-  const sessions = readdirSync(sessDir)
-    .filter((f) => f.endsWith('.redacted.json'))
-    .sort()
-    .reverse();
-  const latest = sessions[0];
-  if (!latest) return null;
-
-  const sessionFile = latest.replace('.redacted.json', '.json');
-  const completedSteps: Step[] = ['record', 'redact', 'generate'];
-  if (existsSync(pathJoin(siteDir, 'playbook.yaml'))) completedSteps.push('compile-playbook');
-
-  return {
-    sessionPath: `sessions/${sessionFile}`,
-    redactedPath: `sessions/${latest}`,
-    completedSteps,
-    startedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
 }
 
 /** Find the latest session in examples/<site>/sessions/ that has no
@@ -303,14 +263,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     const newKey = `session from ${friendlySessionTimestamp(ws.sessionPath)}`;
     delete state.workflows[key];
     state.workflows[newKey] = ws;
-  }
-
-  // Pick up a partially-completed flat-layout workflow (workflow.json exists
-  // at site root but no index.ts — crashed between generate and emit).
-  const flatIncomplete = discoverFlatIncomplete(site);
-  if (flatIncomplete) {
-    const key = `${site} (previous run)`;
-    if (!state.workflows[key]) state.workflows[key] = flatIncomplete;
   }
 
   // Pick up sessions that were recorded but never tracked (e.g., old teach

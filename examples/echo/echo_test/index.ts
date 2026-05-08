@@ -1,4 +1,4 @@
-import type { ToolResult, Workflow } from '../../src/imprint/types.ts';
+import type { ToolResult, Workflow } from '../../../src/imprint/types.ts';
 
 /**
  * Echo workflow — a network-free fixture for MCP smoke tests. Exercises the

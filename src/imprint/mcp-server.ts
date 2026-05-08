@@ -184,7 +184,7 @@ export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
   });
   if (tools.length === 0) {
     throw new Error(
-      `No generated tool found for site "${opts.site}"\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/<site>/workflow.json\` to codegen a tool.\n→ or test with the bundled fixture: \`imprint mcp-server echo\`.`,
+      `No generated tool found for site "${opts.site}"\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/<site>/<toolName>/workflow.json\` to codegen a tool.\n→ or test with the bundled fixture: \`imprint mcp-server echo\`.`,
     );
   }
 

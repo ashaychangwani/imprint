@@ -20,12 +20,12 @@ CAPTURE
 COMPILE
   generate <session>       Session → workflow.json (API replay).
   compile-playbook <sess>  Session → playbook.yaml (DOM replay).
-  emit <workflow.json>     workflow.json → examples/<site>/index.ts.
+  emit <workflow.json>     workflow.json → examples/<site>/<toolName>/index.ts.
   probe-backends <site>    Try each backend once, cache the working order.
 
 RUN
   mcp-server <site>        Serve one site's tool as MCP (stdio default).
-  cron <site>              Polling daemon for examples/<site>/cron.json.
+  cron <site>              Polling daemon for examples/<site>/<toolName>/cron.json.
   playbook <site>          Run a playbook directly (debugging).
 
 OTHER
@@ -218,7 +218,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   cron: {
     summary:
-      'Polling daemon for cron.json (flat layout: examples/<site>/cron.json, new layout: examples/<site>/<workflow>/cron.json).',
+      'Polling daemon for cron.json next to a generated tool at examples/<site>/<toolName>/cron.json.',
     usage: ['imprint cron <site> [--once | --run-now] [--config <path>] [--quiet]'],
     flags: [
       { name: '--once', description: 'Run a single tick and exit (for OS schedulers).' },
@@ -571,7 +571,7 @@ async function main(argv: string[]): Promise<number> {
         `[imprint] tool: ${result.toolName} (${result.parameters.length} parameter${result.parameters.length === 1 ? '' : 's'})`,
       );
       // Surface what to do next so users don't have to alt-tab to docs.
-      const site = result.outPath.split('/').slice(-2, -1)[0] ?? '<site>';
+      const site = result.outPath.split('/').slice(-3, -2)[0] ?? '<site>';
       console.log('');
       console.log('next steps:');
       console.log(`  imprint probe-backends ${site}    # cache the working backend order`);
@@ -765,7 +765,7 @@ async function main(argv: string[]): Promise<number> {
         const tool = tools[0];
         playbookPath = tool
           ? pathResolve(tool.dir, 'playbook.yaml')
-          : pathResolve(process.cwd(), 'examples', site, 'playbook.yaml');
+          : pathResolve(process.cwd(), 'examples', site, '<toolName>', 'playbook.yaml');
       }
       const params = tryParseParamKV(values.param);
       if (params === null) return 2;

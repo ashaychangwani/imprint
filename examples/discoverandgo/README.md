@@ -24,7 +24,7 @@ imprint cron discoverandgo --once
 ## What you should see
 
 ```
-[imprint cron] config: examples/discoverandgo/cron.json
+[imprint cron] config: examples/discoverandgo/book_discoverandgo_museum_pass/cron.json
 [imprint cron] tool: book_discoverandgo_museum_pass (3 param(s))
 [imprint cron] schedule: 0 0 * * *
 [imprint cron] replayBackend: fetch

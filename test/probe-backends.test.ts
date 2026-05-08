@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 function writeCache(site: string, cache: unknown): string {
-  const dir = pathResolve(root, site);
+  const dir = pathResolve(root, site, site);
   mkdirSync(dir, { recursive: true });
   const path = pathResolve(dir, 'backends.json');
   writeFileSync(path, JSON.stringify(cache, null, 2));
@@ -96,16 +96,16 @@ describe('loadBackendsCache', () => {
       },
     };
     writeCache('alpha', cache);
-    const loaded = loadBackendsCache('alpha', root);
+    const loaded = loadBackendsCache('alpha', root, pathResolve(root, 'alpha', 'alpha'));
     expect(loaded).not.toBeNull();
     expect(loaded?.preferredOrder).toEqual(['stealth-fetch', 'playbook']);
   });
 
   it('returns null + warns on malformed JSON without throwing', () => {
-    const dir = pathResolve(root, 'broken');
+    const dir = pathResolve(root, 'broken', 'broken');
     mkdirSync(dir, { recursive: true });
     writeFileSync(pathResolve(dir, 'backends.json'), '{this is not json');
-    expect(loadBackendsCache('broken', root)).toBeNull();
+    expect(loadBackendsCache('broken', root, dir)).toBeNull();
   });
 
   it('returns null on schema-invalid cache without throwing', () => {
@@ -115,6 +115,8 @@ describe('loadBackendsCache', () => {
       preferredOrder: [], // invalid: empty
       results: {},
     });
-    expect(loadBackendsCache('schema-bad', root)).toBeNull();
+    expect(
+      loadBackendsCache('schema-bad', root, pathResolve(root, 'schema-bad', 'schema-bad')),
+    ).toBeNull();
   });
 });

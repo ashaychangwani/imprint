@@ -50,7 +50,7 @@ afterEach(() => {
  * `network` without rewriting fixtures.
  */
 function writeFakeExample(site: string, params: Array<{ name: string; type: string }>): void {
-  const dir = pathResolve(root, site);
+  const dir = pathResolve(root, site, site);
   mkdirSync(dir, { recursive: true });
   const fnName = site
     .split('_')
@@ -105,7 +105,8 @@ export async function ${fnName}(input, opts) {
 }
 
 function writeConfig(site: string, body: object): string {
-  const path = pathResolve(root, site, 'cron.json');
+  const path = pathResolve(root, site, site, 'cron.json');
+  mkdirSync(pathResolve(root, site, site), { recursive: true });
   writeFileSync(path, JSON.stringify(body, null, 2), 'utf8');
   return path;
 }

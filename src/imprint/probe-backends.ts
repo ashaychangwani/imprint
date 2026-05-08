@@ -1,6 +1,6 @@
 /**
  * `imprint probe-backends <site>` — try each backend once and write the
- * ranked working order to examples/<site>/backends.json. cron + MCP
+ * ranked working order to examples/<site>/<toolName>/backends.json. cron + MCP
  * read it at startup so they skip futile rungs every tick for sites
  * where one backend is known-blocked.
  */
@@ -25,7 +25,7 @@ interface ProbeBackendsOptions {
   examplesDir?: string;
   /** Override params instead of reading cron.json / workflow defaults. */
   paramOverrides?: Record<string, string | number | boolean>;
-  /** Where to write backends.json. Defaults to <examplesDir>/<site>/backends.json. */
+  /** Where to write backends.json. Defaults to <examplesDir>/<site>/<toolName>/backends.json. */
   outPath?: string;
 }
 
@@ -42,7 +42,7 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
   const tool = discovered[0];
   if (!tool) {
     throw new Error(
-      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/workflow.json\` first.`,
+      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/<toolName>/workflow.json\` first.`,
     );
   }
   const outPath = opts.outPath ?? pathResolve(tool.dir, 'backends.json');
@@ -134,12 +134,11 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
  *  falls back to the default ladder; a stale cache must never break cron. */
 export function loadBackendsCache(
   site: string,
-  examplesDir: string,
+  _examplesDir: string,
   toolDir?: string,
 ): BackendsCache | null {
-  const path = toolDir
-    ? pathResolve(toolDir, 'backends.json')
-    : pathResolve(examplesDir, site, 'backends.json');
+  if (!toolDir) return null;
+  const path = pathResolve(toolDir, 'backends.json');
   if (!existsSync(path)) return null;
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8'));

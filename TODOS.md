@@ -116,7 +116,7 @@ Claude Desktop wire-up is documented in the README.
 
 **Resolution:** Three replay backends in increasing cost: `fetch` (~200ms, plain Node fetch) → `stealth-fetch` (~12s bootstrap + ~1s/call, Playwright-minted Akamai sensor tokens used by native fetch — derived from PR #1) → `playbook` (~9.4s/call, full Playwright + stealth + DOM walk). `replayBackend: "auto"` walks them in order, escalating only on FORBIDDEN.
 
-`imprint probe-backends <site>` runs the ladder once at record time and writes `examples/<site>/backends.json` with the ranked order. cron + MCP read this and skip futile rungs every tick — without the probe, an "auto" Southwest tick wastes ~200ms on the fetch attempt that always 403s. Runtime ladder remains the fallback if the cached preferred backend stops working between probes.
+`imprint probe-backends <site>` runs the ladder once at record time and writes `examples/<site>/<toolName>/backends.json` with the ranked order. cron + MCP read this and skip futile rungs every tick — without the probe, an "auto" Southwest tick wastes ~200ms on the fetch attempt that always 403s. Runtime ladder remains the fallback if the cached preferred backend stops working between probes.
 
 Verified end-to-end against Southwest: probe identifies `stealth-fetch → playbook` as preferred; cron tick now logs `trying stealth-fetch…` directly (no fetch attempt); returns real fare data in ~10s.
 
