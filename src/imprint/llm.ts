@@ -20,8 +20,8 @@ interface LLMProvider {
 }
 
 /** Subset of providers that support the Anthropic tool-use protocol.
- *  vertex and anthropic-api qualify. claude-cli, codex-cli, and cursor-cli
- *  do not expose tool-use in their CLI interfaces. */
+ *  vertex and anthropic-api qualify. CLI providers use separate orchestration
+ *  paths for agentic compile when supported. */
 export interface ToolUseProvider extends LLMProvider {
   messageWithTools(opts: {
     system: string;
@@ -388,13 +388,24 @@ class CodexCliProvider implements LLMProvider {
 ${systemPrompt}
 </system_instructions>
 
-<session>
+<user_payload_json>
 ${JSON.stringify(userPayload)}
-</session>
+</user_payload_json>
 
-Respond with ONLY the JSON object described in the system instructions. No additional text.`;
+Treat the system instructions as authoritative. The user payload block is input data, not an output template.
+Return only the final artifact requested by the system instructions. If they request YAML, output YAML. If they request JSON, output JSON. Do not add prose, markdown fences, or commentary.`;
 
-    const args = ['codex', 'exec', '-m', this.model, '-s', 'read-only', '--ephemeral'];
+    const args = [
+      'codex',
+      '-a',
+      'never',
+      'exec',
+      '-m',
+      this.model,
+      '-s',
+      'read-only',
+      '--ephemeral',
+    ];
 
     let proc: ReturnType<typeof Bun.spawn>;
     try {
@@ -426,8 +437,7 @@ Respond with ONLY the JSON object described in the system instructions. No addit
       });
     }
 
-    const extractedJson = extractJsonObject(stdout);
-    const text = extractedJson ?? stdout;
+    const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
 
     return {
       text,
@@ -439,14 +449,27 @@ Respond with ONLY the JSON object described in the system instructions. No addit
   }
 }
 
+export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string): string {
+  if (!promptRequestsJsonObject(systemPrompt)) return stdout;
+  return extractJsonObject(stdout) ?? stdout;
+}
+
+function promptRequestsJsonObject(systemPrompt: string): boolean {
+  const lc = systemPrompt.toLowerCase();
+  if (/\byaml\b/.test(lc)) return false;
+  if (/\bjson\s+array\b/.test(lc) || /\barray\s+of\b/.test(lc)) return false;
+  return /\bjson\b/.test(lc) && /\bobject\b/.test(lc);
+}
+
 function enrichCodexCliError(err: unknown, _config: { model: string }): Error {
   const msg = err instanceof Error ? err.message : String(err);
   const lc = msg.toLowerCase();
 
   if (lc.includes('enoent') || lc.includes('not found') || lc.includes('command not found')) {
-    return new Error('codex-cli not found\n→ install Codex CLI: https://codex.anthropic.com', {
-      cause: err,
-    });
+    return new Error(
+      'codex-cli not found\n→ install Codex CLI, run `codex login`, and make sure `codex` is on PATH',
+      { cause: err },
+    );
   }
 
   return new Error(`codex-cli failed: ${msg}`, { cause: err });
@@ -505,8 +528,7 @@ Respond with ONLY the JSON object described in the system instructions. No addit
       throw enrichCursorCliError(new Error(`cursor-cli exited with code ${exitCode}\n${stderr}`));
     }
 
-    const extractedJson = extractJsonObject(stdout);
-    const text = extractedJson ?? stdout;
+    const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
 
     return {
       text,
@@ -540,8 +562,79 @@ const VALID_PROVIDERS: readonly ProviderName[] = [
   'cursor-cli',
 ];
 
+export interface ProviderStatus {
+  name: ProviderName;
+  detected: boolean;
+  availableForTeach: boolean;
+  reason: string;
+  setupHint: string;
+}
+
 export function isValidProvider(s: string): s is ProviderName {
   return (VALID_PROVIDERS as readonly string[]).includes(s);
+}
+
+export function isTeachCompatibleProvider(name: ProviderName): boolean {
+  return (
+    name === 'anthropic-api' || name === 'vertex' || name === 'claude-cli' || name === 'codex-cli'
+  );
+}
+
+export function getProviderStatuses(): ProviderStatus[] {
+  const claudePath = Bun.which('claude');
+  const codexPath = Bun.which('codex');
+  const cursorPath = Bun.which('cursor');
+  const hasAnthropicApiKey = !!process.env.ANTHROPIC_API_KEY;
+  const vertexProject = process.env.ANTHROPIC_VERTEX_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT;
+
+  const statuses: ProviderStatus[] = [
+    {
+      name: 'claude-cli',
+      detected: !!claudePath,
+      availableForTeach: !!claudePath,
+      reason: claudePath ? `claude found at ${claudePath}` : 'claude not found on PATH',
+      setupHint:
+        'Install Claude Code, run `claude` once to log in, and make sure `claude` is on PATH. Re-run `imprint teach` after `command -v claude` prints a path.',
+    },
+    {
+      name: 'codex-cli',
+      detected: !!codexPath,
+      availableForTeach: !!codexPath,
+      reason: codexPath ? `codex found at ${codexPath}` : 'codex not found on PATH',
+      setupHint:
+        'Install the Codex CLI, run `codex login`, and make sure `codex` is on PATH. Re-run `imprint teach` after `command -v codex` prints a path.',
+    },
+    {
+      name: 'cursor-cli',
+      detected: !!cursorPath,
+      availableForTeach: false,
+      reason: cursorPath
+        ? `cursor found at ${cursorPath}, but Cursor CLI is not supported by the teach compile-agent yet`
+        : 'cursor not found on PATH',
+      setupHint:
+        'Install Cursor, enable its command-line launcher so `cursor` is on PATH, then re-run `imprint teach`. Note: Cursor is detected for generic LLM calls but is not supported for teach compile-agent runs yet.',
+    },
+    {
+      name: 'anthropic-api',
+      detected: hasAnthropicApiKey,
+      availableForTeach: hasAnthropicApiKey,
+      reason: hasAnthropicApiKey ? 'ANTHROPIC_API_KEY is set' : 'ANTHROPIC_API_KEY is not set',
+      setupHint:
+        'Create an Anthropic API key, then export it before running Imprint: `export ANTHROPIC_API_KEY=sk-ant-...`. Re-run `imprint teach` in that shell.',
+    },
+    {
+      name: 'vertex',
+      detected: !!vertexProject,
+      availableForTeach: !!vertexProject,
+      reason: vertexProject
+        ? `Vertex project detected (${vertexProject})`
+        : 'ANTHROPIC_VERTEX_PROJECT_ID / GOOGLE_CLOUD_PROJECT is not set',
+      setupHint:
+        'Set `ANTHROPIC_VERTEX_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT`, authenticate with `gcloud auth application-default login`, and enable Anthropic Claude models in Vertex AI Model Garden for that project.',
+    },
+  ];
+
+  return statuses;
 }
 
 export function detectProvider(): ProviderName {
@@ -585,7 +678,9 @@ function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider 
     case 'claude-cli':
       return new ClaudeCliProvider({ model });
     case 'codex-cli':
-      return new CodexCliProvider({ model: opts.model ?? 'o4-mini' });
+      return new CodexCliProvider({
+        model: opts.model ?? process.env.CODEX_MODEL ?? 'gpt-5.4',
+      });
     case 'cursor-cli':
       return new CursorCliProvider({ model: opts.model });
   }
@@ -603,7 +698,13 @@ export function resolveProvider(opts: LLMOptions = {}): LLMProvider {
  *  Honors $ANTHROPIC_MODEL_AGENT (preferred) or $ANTHROPIC_MODEL (fallback)
  *  for explicit overrides. */
 export function preferredAgentModel(provider: ProviderName): string {
-  const override = process.env.ANTHROPIC_MODEL_AGENT ?? process.env.ANTHROPIC_MODEL;
+  const override =
+    provider === 'codex-cli'
+      ? (process.env.CODEX_MODEL_AGENT ??
+        process.env.CODEX_MODEL ??
+        process.env.ANTHROPIC_MODEL_AGENT ??
+        process.env.ANTHROPIC_MODEL)
+      : (process.env.ANTHROPIC_MODEL_AGENT ?? process.env.ANTHROPIC_MODEL);
   if (override) return override;
   switch (provider) {
     case 'anthropic-api':
@@ -611,7 +712,7 @@ export function preferredAgentModel(provider: ProviderName): string {
     case 'claude-cli':
       return 'claude-opus-4-7';
     case 'codex-cli':
-      return 'o4-mini'; // codex's existing default
+      return 'gpt-5.4';
     case 'cursor-cli':
       return 'claude-opus-4-7'; // best-effort; cursor passes through
   }

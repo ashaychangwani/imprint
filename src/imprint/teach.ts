@@ -18,7 +18,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { join as pathJoin, resolve as pathResolve } from 'node:path';
+import { isAbsolute as pathIsAbsolute, join as pathJoin, resolve as pathResolve } from 'node:path';
 import * as p from '@clack/prompts';
 import { type CompileAgentProgress, compilePlaybook, generate } from './compile.ts';
 import {
@@ -35,7 +35,13 @@ import {
   generatePasteSnippet,
   generateSkillMd,
 } from './integrations.ts';
-import { type ProviderName, detectProvider } from './llm.ts';
+import {
+  type ProviderName,
+  type ProviderStatus,
+  detectProvider,
+  getProviderStatuses,
+  isTeachCompatibleProvider,
+} from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
@@ -80,6 +86,31 @@ interface TeachResult {
   indexPath: string;
   workflow: Workflow;
   playbook: Playbook;
+}
+
+export function resolveTeachStatePath(
+  site: string,
+  storedPath: string | null | undefined,
+): string | null {
+  const value = storedPath?.trim();
+  if (!value) return null;
+  return pathIsAbsolute(value) ? value : pathResolve('examples', site, value);
+}
+
+export function buildTeachStateFromSession(
+  site: string,
+  sessionPath: string,
+  redactedPath: string | null,
+): WorkflowState {
+  const now = new Date().toISOString();
+  const ws: WorkflowState = {
+    sessionPath: toRelative(site, sessionPath),
+    completedSteps: redactedPath ? ['record', 'redact'] : ['record'],
+    startedAt: now,
+    updatedAt: now,
+  };
+  if (redactedPath) ws.redactedPath = toRelative(site, redactedPath);
+  return ws;
 }
 
 // ─── State management ───────────────────────────────────────────────────────
@@ -191,6 +222,32 @@ function discoverOrphanSession(site: string, state: TeachState): WorkflowState |
   return null;
 }
 
+function isExistingFile(path: string | null | undefined): path is string {
+  if (!path) return false;
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function requireSessionFile(
+  path: string | null,
+  opts: { site: string; workflowKey: string; startFrom: Step; kind: 'raw' | 'redacted' },
+): string {
+  if (isExistingFile(path)) return path;
+
+  const noun = opts.kind === 'raw' ? 'original session JSON' : 'redacted session JSON';
+  const redoStep = opts.kind === 'raw' ? 'record' : 'redact';
+  throw new Error(
+    [
+      `Cannot redo "${opts.workflowKey}" from ${opts.startFrom}: the ${noun} is missing.`,
+      `→ rerun with: imprint teach ${opts.site} --from-session <session.json>`,
+      `→ or choose "Redo" from ${redoStep} to rebuild it.`,
+    ].join('\n'),
+  );
+}
+
 // ─── Interactive prompts for missing CLI args ───────────────────────────────
 
 function validateSiteName(value: string | undefined): string | undefined {
@@ -247,6 +304,108 @@ async function resolveStartUrl(opts: TeachOptions): Promise<string | undefined> 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+interface TeachProviderPickerOption {
+  value: string;
+  label: string;
+  hint?: string;
+}
+
+interface TeachProviderPickerIO {
+  select: (opts: {
+    message: string;
+    options: TeachProviderPickerOption[];
+  }) => Promise<string | symbol>;
+  note: (message: string, title?: string) => void;
+  isCancel: (value: unknown) => boolean;
+}
+
+function assertTeachProvider(name: ProviderName): void {
+  if (isTeachCompatibleProvider(name)) return;
+  const status = getProviderStatuses().find((s) => s.name === name);
+  throw new Error(
+    [
+      `provider "${name}" is not supported for \`imprint teach\` compile yet.`,
+      status?.reason ? `detected status: ${status.reason}` : undefined,
+      '→ use one of: claude-cli, codex-cli, anthropic-api, vertex',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  );
+}
+
+async function resolveTeachProvider(opts: TeachOptions): Promise<ProviderName> {
+  if (opts.provider) {
+    assertTeachProvider(opts.provider);
+    return opts.provider;
+  }
+
+  if (opts.noInteractive) {
+    const provider = detectProvider();
+    assertTeachProvider(provider);
+    return provider;
+  }
+
+  const statuses = getProviderStatuses();
+  const detectedCompatible = statuses.filter((s) => s.detected && s.availableForTeach);
+  const onlyCompatible = detectedCompatible[0];
+  if (detectedCompatible.length === 1 && onlyCompatible) return onlyCompatible.name;
+  return await promptForTeachProvider(statuses);
+}
+
+export function buildTeachProviderPickerOptions(
+  statuses: ProviderStatus[],
+): TeachProviderPickerOption[] {
+  return statuses.map((status) => {
+    if (status.detected && status.availableForTeach) {
+      return {
+        value: `use:${status.name}`,
+        label: `${status.name} (detected)`,
+        hint: status.reason,
+      };
+    }
+    if (status.detected) {
+      return {
+        value: `setup:${status.name}`,
+        label: `${status.name} (detected, not available for teach)`,
+        hint: status.reason,
+      };
+    }
+    return {
+      value: `setup:${status.name}`,
+      label: `${status.name} (not detected, setup help)`,
+      hint: status.reason,
+    };
+  });
+}
+
+export async function promptForTeachProvider(
+  statuses: ProviderStatus[],
+  io: TeachProviderPickerIO = {
+    select: (opts) => p.select({ message: opts.message, options: opts.options }),
+    note: (message, title) => p.note(message, title),
+    isCancel: p.isCancel,
+  },
+): Promise<ProviderName> {
+  while (true) {
+    const choice = await io.select({
+      message: 'Which LLM provider should compile this workflow?',
+      options: buildTeachProviderPickerOptions(statuses),
+    });
+    if (io.isCancel(choice)) {
+      p.outro('Cancelled.');
+      process.exit(0);
+    }
+
+    const [action, rawName] = String(choice).split(':') as ['use' | 'setup', ProviderName];
+    const status = statuses.find((s) => s.name === rawName);
+    if (action === 'use' && status?.availableForTeach) return rawName;
+
+    if (status) {
+      io.note([status.reason, '', status.setupHint].join('\n'), `${status.name} setup`);
+    }
+  }
+}
+
 // ─── Main teach function ────────────────────────────────────────────────────
 
 export async function teach(opts: TeachOptions): Promise<TeachResult> {
@@ -284,6 +443,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   let workflowKey: string | null = null;
   let sessionPath: string | null = opts.fromSession ?? null;
   let redactedPath: string | null = null;
+  let usingFromSession = false;
 
   const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
 
@@ -305,15 +465,15 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         );
       }
       startFrom = nextStep(ws.completedSteps);
-      sessionPath = pathResolve('examples', site, ws.sessionPath);
-      redactedPath = ws.redactedPath ? pathResolve('examples', site, ws.redactedPath) : null;
+      sessionPath = resolveTeachStatePath(site, ws.sessionPath);
+      redactedPath = resolveTeachStatePath(site, ws.redactedPath);
     } else if (choice.action === 'redo') {
       workflowKey = choice.workflowKey;
       startFrom = choice.fromStep;
       const ws = state.workflows[workflowKey];
       if (ws) {
-        sessionPath = pathResolve('examples', site, ws.sessionPath);
-        redactedPath = ws.redactedPath ? pathResolve('examples', site, ws.redactedPath) : null;
+        sessionPath = resolveTeachStatePath(site, ws.sessionPath);
+        redactedPath = resolveTeachStatePath(site, ws.redactedPath);
       }
       if (!sessionPath && startFrom !== 'record') {
         // Completed workflow with no state — find the latest session.
@@ -327,21 +487,56 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       }
     }
   } else if (opts.fromSession) {
-    startFrom = existsSync(opts.fromSession.replace(/\.json$/, '.redacted.json'))
-      ? 'generate'
-      : 'redact';
-    sessionPath = pathResolve(opts.fromSession);
     const candidateRedacted = opts.fromSession.replace(/\.json$/, '.redacted.json');
-    if (existsSync(candidateRedacted)) redactedPath = pathResolve(candidateRedacted);
+    startFrom = isExistingFile(candidateRedacted) ? 'generate' : 'redact';
+    sessionPath = pathResolve(opts.fromSession);
+    if (isExistingFile(candidateRedacted)) redactedPath = pathResolve(candidateRedacted);
+    usingFromSession = true;
   }
 
   const startIdx = STEPS.indexOf(startFrom);
   const spinner = p.spinner();
-  const providerName = opts.provider ?? detectProvider();
+  let providerName: ProviderName | null = null;
+  const getProviderName = async (): Promise<ProviderName> => {
+    providerName ??= await resolveTeachProvider(opts);
+    return providerName;
+  };
 
   // Temp key for state tracking before we know the toolName.
   if (!workflowKey) {
     workflowKey = `_pending_${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  }
+
+  if (startFrom === 'redact') {
+    sessionPath = requireSessionFile(sessionPath, {
+      site,
+      workflowKey,
+      startFrom,
+      kind: 'raw',
+    });
+  } else if (startFrom === 'generate' || startFrom === 'compile-playbook') {
+    if (!redactedPath && sessionPath) {
+      redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
+    }
+    redactedPath = requireSessionFile(redactedPath, {
+      site,
+      workflowKey,
+      startFrom,
+      kind: 'redacted',
+    });
+  }
+
+  if (usingFromSession && sessionPath) {
+    checkpoint(
+      site,
+      state,
+      workflowKey,
+      buildTeachStateFromSession(site, sessionPath, redactedPath),
+    );
+  }
+
+  if (startIdx <= STEPS.indexOf('compile-playbook')) {
+    await getProviderName();
   }
 
   // ── 1. Record ──────────────────────────────────────────────────────
@@ -368,14 +563,15 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     });
   }
 
-  if (!sessionPath) {
-    throw new Error(
-      'No session path — cannot continue. Re-run with --from-session or start fresh.',
-    );
-  }
-
   // ── 2. Redact ──────────────────────────────────────────────────────
   if (startIdx <= STEPS.indexOf('redact')) {
+    sessionPath = requireSessionFile(sessionPath, {
+      site,
+      workflowKey,
+      startFrom,
+      kind: 'raw',
+    });
+
     const session = loadJsonFile(
       sessionPath,
       SessionSchema,
@@ -421,7 +617,16 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   if (!redactedPath) {
-    redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
+    redactedPath = sessionPath ? sessionPath.replace(/\.json$/, '.redacted.json') : null;
+  }
+
+  if (startIdx <= STEPS.indexOf('compile-playbook')) {
+    redactedPath = requireSessionFile(redactedPath, {
+      site,
+      workflowKey,
+      startFrom,
+      kind: 'redacted',
+    });
   }
 
   // ── 3. Generate workflow (agentic — long-running) ──────────────────
@@ -429,6 +634,13 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   let genResult: { workflow: Workflow; workflowPath: string };
 
   if (startIdx <= STEPS.indexOf('generate')) {
+    const compileSessionPath = requireSessionFile(redactedPath, {
+      site,
+      workflowKey,
+      startFrom,
+      kind: 'redacted',
+    });
+    const providerName = await getProviderName();
     const { resolveCompileAgentModel } = await import('./compile-agent.ts');
     const compileModel = resolveCompileAgentModel(providerName);
     p.note(
@@ -446,7 +658,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     // compileAgent writes workflow.json (+ parser.ts etc.) to examples/<site>/.
     // We move them into the toolName subdirectory after we know the name.
     const result = await generate({
-      sessionPath: redactedPath,
+      sessionPath: compileSessionPath,
       llmConfig: { provider: providerName, model: compileModel },
       keepTest: opts.keepTest,
       onProgress: (progress) => {
@@ -505,10 +717,17 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   let pbResult: { playbook: Playbook; playbookPath: string };
 
   if (startIdx <= STEPS.indexOf('compile-playbook')) {
+    const compileSessionPath = requireSessionFile(redactedPath, {
+      site,
+      workflowKey,
+      startFrom,
+      kind: 'redacted',
+    });
+    const providerName = await getProviderName();
     spinner.start('Compiling DOM playbook...');
     const playbookOutPath = pathJoin(workflowDir, 'playbook.yaml');
     const result = await compilePlaybook({
-      sessionPath: redactedPath,
+      sessionPath: compileSessionPath,
       outPath: playbookOutPath,
       llmConfig: { provider: providerName },
     });
@@ -588,7 +807,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   p.outro('Done! Your agent is ready.');
 
   return {
-    sessionPath: sessionPath as string,
+    sessionPath: sessionPath ?? '',
     workflowPath: genResult.workflowPath,
     playbookPath: pbResult.playbookPath,
     indexPath: emitOutPath,
