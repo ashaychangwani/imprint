@@ -129,12 +129,12 @@ describe('Google Flights parser', () => {
     const result = extract(fixtureResponse) as any;
     // All flights in this response have at least 1 segment
     for (const flight of result.flights) {
-      expect(flight.stops).toBeGreaterThanOrEqual(0);
+      expect(flight.stopCount).toBeGreaterThanOrEqual(0);
     }
     // Asiana Airlines goes via ICN (1 stop)
     const asiana = result.flights.find((f: any) => f.airlineCode === 'OZ');
     if (asiana) {
-      expect(asiana.stops).toBeGreaterThan(0);
+      expect(asiana.stopCount).toBeGreaterThan(0);
     }
   });
 });
