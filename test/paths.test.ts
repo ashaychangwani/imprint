@@ -1,0 +1,57 @@
+import { describe, expect, it } from 'bun:test';
+import { resolve as pathResolve } from 'node:path';
+import {
+  defaultSessionJsonlPath,
+  localSessionsDir,
+  localSiteDir,
+  relativeToLocalSite,
+  resolveLocalSitePath,
+} from '../src/imprint/paths.ts';
+
+describe('local imprint paths', () => {
+  const originalImprintHome = process.env.IMPRINT_HOME;
+
+  function withImprintHome<T>(path: string, fn: () => T): T {
+    process.env.IMPRINT_HOME = path;
+    try {
+      return fn();
+    } finally {
+      if (originalImprintHome === undefined) Reflect.deleteProperty(process.env, 'IMPRINT_HOME');
+      else process.env.IMPRINT_HOME = originalImprintHome;
+    }
+  }
+
+  it('stores default recordings under the local imprint home', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(localSiteDir('southwest')).toBe(pathResolve('/tmp', 'imprint-home', 'southwest'));
+      expect(localSessionsDir('southwest')).toBe(
+        pathResolve('/tmp', 'imprint-home', 'southwest', 'sessions'),
+      );
+      expect(defaultSessionJsonlPath('southwest', '2026-05-08T09-24-14-916Z')).toBe(
+        pathResolve(
+          '/tmp',
+          'imprint-home',
+          'southwest',
+          'sessions',
+          '2026-05-08T09-24-14-916Z.jsonl',
+        ),
+      );
+    });
+  });
+
+  it('resolves relative paths inside the local site directory', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(resolveLocalSitePath('demo', 'sessions/one.json')).toBe(
+        pathResolve('/tmp', 'imprint-home', 'demo', 'sessions', 'one.json'),
+      );
+    });
+  });
+
+  it('can store local paths relative to the site directory', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      const sessionPath = pathResolve('/tmp', 'imprint-home', 'demo', 'sessions', 'one.json');
+      expect(relativeToLocalSite('demo', sessionPath)).toBe('sessions/one.json');
+      expect(relativeToLocalSite('demo', pathResolve('/tmp', 'other', 'one.json'))).toBeNull();
+    });
+  });
+});

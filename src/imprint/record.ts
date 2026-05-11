@@ -13,6 +13,7 @@ import envPaths from 'env-paths';
 import { launchChromium } from './chromium.ts';
 import { IMPRINT_SENTINEL, INJECTED_LISTENER_SOURCE } from './inject-listener.ts';
 import { isDebug } from './log.ts';
+import { defaultSessionJsonlPath } from './paths.ts';
 import { createSessionWriter } from './session-writer.ts';
 import type { CapturedEvent, CapturedRequest, CookieSnapshot } from './types.ts';
 import { VERSION } from './version.ts';
@@ -24,7 +25,7 @@ interface RecordOptions {
   site: string;
   /** Starting URL. If omitted, opens about:blank — user navigates manually. */
   url?: string;
-  /** Output path for session.jsonl. Defaults to examples/<site>/sessions/<timestamp>.jsonl */
+  /** Output path for session.jsonl. Defaults to ~/.imprint/<site>/sessions/<timestamp>.jsonl */
   outPath?: string;
   /** Persist a stable profile at $IMPRINT_DATA/profiles/<site> so cookies + login
    *  survive between captures. Useful for re-recording an authed site. Default false. */
@@ -58,7 +59,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
 
   const outPath = opts.outPath
     ? pathResolve(opts.outPath)
-    : pathResolve(`examples/${opts.site}/sessions/${sessionTs}.jsonl`);
+    : defaultSessionJsonlPath(opts.site, sessionTs);
 
   mkdirSync(pathJoin(outPath, '..'), { recursive: true });
 

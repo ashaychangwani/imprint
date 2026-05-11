@@ -53,7 +53,8 @@ The compiler is good but not infallible. Verify what the user actually did vs wh
 ```bash
 python3 -c "
 import json
-s = json.load(open('examples/<site>/sessions/<ts>.json'))
+import os
+s = json.load(open(os.path.expanduser('~/.imprint/<site>/sessions/<ts>.json')))
 for e in s['events']:
   if e['type'] in ('click', 'input', 'change', 'submit'):
     d = json.loads(e['detail'])

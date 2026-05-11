@@ -102,12 +102,12 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   assemble: {
     summary: 'Reconstruct session.json from a partial session.jsonl.',
     usage: ['imprint assemble <session.jsonl>'],
-    example: 'imprint assemble examples/mysite/sessions/2026-05-03T22-00-00Z.jsonl',
+    example: 'imprint assemble ~/.imprint/mysite/sessions/2026-05-03T22-00-00Z.jsonl',
   },
   check: {
     summary: 'Sanity-check a captured session for completeness.',
     usage: ['imprint check <session.json | session.jsonl>'],
-    example: 'imprint check examples/acmecorp/sessions/2026-05-03T22-00-00Z.json',
+    example: 'imprint check ~/.imprint/acmecorp/sessions/2026-05-03T22-00-00Z.json',
   },
   redact: {
     summary: 'Scrub credentials + PII; write <session>.redacted.json.',
@@ -119,7 +119,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
           'Keep this header un-redacted (repeatable). Use when a non-credential header has a "secret" name.',
       },
     ],
-    example: 'imprint redact examples/acmecorp/sessions/<ts>.json',
+    example: 'imprint redact ~/.imprint/acmecorp/sessions/<ts>.json',
   },
   generate: {
     summary: 'LLM-compile a session into workflow.json (API replay artifact).',
@@ -143,7 +143,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
           'Retain the agent-generated parser.test.ts after compile (debug). Default deletes it; the test reads the gitignored redacted session via $IMPRINT_SESSION_PATH and is not portable.',
       },
     ],
-    example: 'imprint generate examples/acmecorp/sessions/<ts>.redacted.json',
+    example: 'imprint generate ~/.imprint/acmecorp/sessions/<ts>.redacted.json',
   },
   'compile-playbook': {
     summary: 'LLM-compile a session into playbook.yaml (DOM replay artifact).',
@@ -162,7 +162,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
           'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
       },
     ],
-    example: 'imprint compile-playbook examples/acmecorp/sessions/<ts>.redacted.json',
+    example: 'imprint compile-playbook ~/.imprint/acmecorp/sessions/<ts>.redacted.json',
   },
   emit: {
     summary: 'Generate the executable TS module from workflow.json.',
@@ -179,7 +179,8 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     flags: [
       { name: '--from-session <path>', description: 'Source session.json (required in v0.1).' },
     ],
-    example: 'imprint login discoverandgo --from-session examples/discoverandgo/sessions/<ts>.json',
+    example:
+      'imprint login discoverandgo --from-session ~/.imprint/discoverandgo/sessions/<ts>.json',
   },
   credential: {
     summary:

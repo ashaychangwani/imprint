@@ -43,6 +43,12 @@ import {
   isTeachCompatibleProvider,
 } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
+import {
+  localSessionsDir,
+  localSiteDir,
+  relativeToLocalSite,
+  resolveLocalSitePath,
+} from './paths.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { redactSession } from './redact.ts';
@@ -94,7 +100,15 @@ export function resolveTeachStatePath(
 ): string | null {
   const value = storedPath?.trim();
   if (!value) return null;
-  return pathIsAbsolute(value) ? value : pathResolve('examples', site, value);
+  if (pathIsAbsolute(value)) return value;
+
+  const localPath = resolveLocalSitePath(site, value);
+  if (existsSync(localPath)) return localPath;
+
+  const legacyPath = pathResolve('examples', site, value);
+  if (existsSync(legacyPath)) return legacyPath;
+
+  return localPath;
 }
 
 export function buildTeachStateFromSession(
@@ -116,14 +130,19 @@ export function buildTeachStateFromSession(
 // ─── State management ───────────────────────────────────────────────────────
 
 function statePath(site: string): string {
+  return pathJoin(localSiteDir(site), '.teach-state.json');
+}
+
+function legacyStatePath(site: string): string {
   return pathResolve('examples', site, '.teach-state.json');
 }
 
 function loadTeachState(site: string): TeachState {
   const path = statePath(site);
-  if (!existsSync(path)) return { workflows: {} };
+  const loadPath = existsSync(path) ? path : legacyStatePath(site);
+  if (!existsSync(loadPath)) return { workflows: {} };
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as TeachState;
+    return JSON.parse(readFileSync(loadPath, 'utf8')) as TeachState;
   } catch {
     return { workflows: {} };
   }
@@ -186,24 +205,28 @@ function discoverCompletedWorkflows(site: string): string[] {
   return names;
 }
 
-/** Find the latest session in examples/<site>/sessions/ that has no
- *  matching state entry. Returns an incomplete WorkflowState or null. */
+/** Find the latest session that has no matching state entry.
+ *  New recordings live under ~/.imprint/<site>/sessions/. We also scan the
+ *  old examples/<site>/sessions/ path so interrupted pre-migration runs can
+ *  still be resumed. */
 function discoverOrphanSession(site: string, state: TeachState): WorkflowState | null {
-  const sessDir = pathResolve('examples', site, 'sessions');
-  if (!existsSync(sessDir)) return null;
-
   const trackedPaths = new Set(Object.values(state.workflows).map((ws) => ws.sessionPath));
 
-  const sessions = readdirSync(sessDir)
-    .filter((f) => f.endsWith('.json') && !f.endsWith('.redacted.json'))
-    .sort()
-    .reverse();
+  const candidates: Array<{ absPath: string; file: string }> = [];
+  for (const sessDir of [localSessionsDir(site), pathResolve('examples', site, 'sessions')]) {
+    if (!existsSync(sessDir)) continue;
+    const sessions = readdirSync(sessDir).filter(
+      (f) => f.endsWith('.json') && !f.endsWith('.redacted.json'),
+    );
+    for (const file of sessions) candidates.push({ absPath: pathJoin(sessDir, file), file });
+  }
 
-  for (const file of sessions) {
-    const relPath = `sessions/${file}`;
-    if (trackedPaths.has(relPath)) continue;
+  candidates.sort((a, b) => b.file.localeCompare(a.file));
 
-    const absPath = pathJoin(sessDir, file);
+  for (const { absPath } of candidates) {
+    const relPath = toRelative(site, absPath);
+    if (trackedPaths.has(relPath) || trackedPaths.has(absPath)) continue;
+
     const redactedPath = absPath.replace(/\.json$/, '.redacted.json');
     const hasRedacted = existsSync(redactedPath);
     const completedSteps: Step[] = ['record'];
@@ -211,9 +234,7 @@ function discoverOrphanSession(site: string, state: TeachState): WorkflowState |
 
     return {
       sessionPath: relPath,
-      redactedPath: hasRedacted
-        ? `sessions/${file.replace(/\.json$/, '.redacted.json')}`
-        : undefined,
+      redactedPath: hasRedacted ? toRelative(site, redactedPath) : undefined,
       completedSteps,
       startedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -479,10 +500,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         // Completed workflow with no state — find the latest session.
         const orphan = discoverOrphanSession(site, state);
         if (orphan) {
-          sessionPath = pathResolve('examples', site, orphan.sessionPath);
-          redactedPath = orphan.redactedPath
-            ? pathResolve('examples', site, orphan.redactedPath)
-            : null;
+          sessionPath = resolveTeachStatePath(site, orphan.sessionPath);
+          redactedPath = resolveTeachStatePath(site, orphan.redactedPath);
         }
       }
     }
@@ -984,6 +1003,9 @@ function friendlySessionTimestamp(sessionPath: string): string {
 }
 
 function toRelative(site: string, absPath: string): string {
+  const localRelative = relativeToLocalSite(site, absPath);
+  if (localRelative) return localRelative;
+
   const siteDir = pathResolve('examples', site);
   if (absPath.startsWith(siteDir)) {
     return absPath.slice(siteDir.length + 1);

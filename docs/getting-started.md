@@ -41,21 +41,21 @@ imprint doctor
 
 Pick a site you want to automate. Internal admin panels, dashboards, and authed tools all work — anything you can drive in a browser.
 
-Pick a short, descriptive label for `<site>` — it becomes the directory name under `examples/`. Examples: `google-flights`, `southwest`, `company-dashboard`.
+Pick a short, descriptive label for `<site>` — it becomes the directory name for generated tools under `examples/` and private recordings under `~/.imprint/`. Examples: `google-flights`, `southwest`, `company-dashboard`.
 
 ```bash
 # 1. Record yourself doing the thing once
 imprint record google-flights --url https://flights.google.com
 #   → Chromium opens. Drive the workflow end-to-end. Narrate what
 #     you're doing in the terminal. Press /done (or Ctrl+C) when finished.
-#   → Output: examples/google-flights/sessions/<timestamp>.{jsonl,json}
+#   → Output: ~/.imprint/google-flights/sessions/<timestamp>.{jsonl,json}
 
 # 2. Pick the session you just recorded
-SESSION=$(ls examples/google-flights/sessions/*.json | grep -v redacted | tail -1)
+SESSION=$(ls ~/.imprint/google-flights/sessions/*.json | grep -v redacted | tail -1)
 
 # 3. Scrub credentials and PII before sending to the LLM
 imprint redact "$SESSION"
-#   → Output: examples/google-flights/sessions/<timestamp>.redacted.json
+#   → Output: ~/.imprint/google-flights/sessions/<timestamp>.redacted.json
 
 # 4. LLM-compile two artifacts (workflow.json + playbook.yaml)
 imprint generate "${SESSION%.json}.redacted.json"

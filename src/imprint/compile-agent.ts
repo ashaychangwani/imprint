@@ -135,7 +135,7 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
   // 6. Build the initial user message
   const initialUserMessage = `A new compile task is starting.
 
-Session path: ${pathJoin(REPO_ROOT, opts.sessionPath)}
+Session path: ${sessionPathAbs}
 Example directory: ${absoluteExampleDir}
 You will write artifacts into the example directory.
 

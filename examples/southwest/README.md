@@ -48,8 +48,8 @@ Real Southwest data, real $108.40 lowest WGA fare. Bootstrap is one-time per pro
 
 | File | What |
 |---|---|
-| `sessions/<ts>.{jsonl,json}` | Raw recording (gitignored — may contain cookies) |
-| `sessions/<ts>.redacted.json` | Scrubbed for LLM analysis |
+| `~/.imprint/southwest/sessions/<ts>.{jsonl,json}` | Raw recording (local only — may contain cookies) |
+| `~/.imprint/southwest/sessions/<ts>.redacted.json` | Scrubbed for LLM analysis |
 | `workflow.json` | API workflow used by stealth-fetch backend |
 | `index.ts` | Generated tool function (`opts.fetchImpl` is what stealth-fetch injects into) |
 | `playbook.yaml` | DOM playbook fallback — single navigate to the URL-prefilled search + XHR result extraction |

@@ -63,7 +63,7 @@ The site has bot detection. Three escalating fixes:
 
 3. **Compile a playbook fallback:**
    ```bash
-   imprint compile-playbook examples/<site>/sessions/<ts>.redacted.json
+   imprint compile-playbook ~/.imprint/<site>/sessions/<ts>.redacted.json
    ```
    With a `playbook.yaml` present, the `auto` ladder escalates to a real DOM walk when fetch + stealth-fetch both fail.
 
@@ -74,7 +74,7 @@ Cookies have aged out.
 **Fix:**
 ```bash
 imprint record <site> --persist-profile    # record while logged in
-imprint login <site> --from-session examples/<site>/sessions/<ts>.json
+imprint login <site> --from-session ~/.imprint/<site>/sessions/<ts>.json
 ```
 
 This rebuilds `~/.config/imprint/credentials/<site>.json`.

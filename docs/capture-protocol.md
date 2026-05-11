@@ -21,7 +21,7 @@ What `--persist-profile` does: stores the Chrome profile at `~/Library/Applicati
 ## What the terminal will show
 
 ```
-[imprint] recording → examples/discoverandgo/sessions/2026-04-30T01-23-45-678Z.jsonl
+[imprint] recording → $HOME/.imprint/discoverandgo/sessions/2026-04-30T01-23-45-678Z.jsonl
 [imprint] using persistent profile at /Users/.../profiles/discoverandgo
 [imprint] launching chromium...
 [imprint] chromium up on CDP port 54321
@@ -77,13 +77,13 @@ You don't have to commit to one or the other when you record. Generate both; the
 ## After the recording — verify it worked
 
 ```bash
-imprint check examples/discoverandgo/sessions/<timestamp>.json
+imprint check ~/.imprint/discoverandgo/sessions/<timestamp>.json
 ```
 
 You should see something like:
 
 ```
-[imprint] check examples/discoverandgo/sessions/2026-04-30T01-23-45-678Z.json
+[imprint] check $HOME/.imprint/discoverandgo/sessions/2026-04-30T01-23-45-678Z.json
 
   site:        discoverandgo
   duration:    142.3s
@@ -109,7 +109,7 @@ If `imprint check` reports warnings, **don't move on yet** — re-record or tell
 
 **Recorder crashes mid-session, no `session.json` written:**
 ```bash
-imprint assemble examples/discoverandgo/sessions/<timestamp>.jsonl
+imprint assemble ~/.imprint/discoverandgo/sessions/<timestamp>.jsonl
 # reconstructs the .json from the streamed JSONL
 ```
 
@@ -130,14 +130,14 @@ The recording will succeed (you're using a real browser), but **replay may fail*
 **The redactor scrubbed `X-API-Key` (or another header) you know is public:**
 Re-run with `--keep-header`:
 ```bash
-imprint redact examples/<site>/sessions/<ts>.json --keep-header x-api-key
+imprint redact ~/.imprint/<site>/sessions/<ts>.json --keep-header x-api-key
 ```
 You can pass `--keep-header` multiple times. Use this when the redacted value is an app-level identifier embedded in the site's JavaScript (every visitor sees the same value), not a per-user secret. The default is to redact `X-API-Key` because some sites do use it as a per-user credential — you opt out per-site.
 
 ## Where the file lands
 
-`examples/discoverandgo/sessions/<timestamp>.{jsonl,json}`
+`~/.imprint/discoverandgo/sessions/<timestamp>.{jsonl,json}`
 
-The `.jsonl` is the raw streaming log (line-per-event). The `.json` is the assembled session. Both are git-ignored by default — they may contain auth tokens. Don't commit them.
+The `.jsonl` is the raw streaming log (line-per-event). The `.json` is the assembled session. Both stay outside the repo by default — they may contain auth tokens. Don't share them unless you have audited and redacted them.
 
 When you're done capturing, tell me the filename and I'll start the day-3 LLM intent-detection work using your real session as the iteration target.

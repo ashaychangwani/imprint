@@ -11,7 +11,7 @@ import { resolve as pathResolve } from 'node:path';
  *  unconditionally). */
 export function availableSitesHint(examplesDir: string, badSite: string): string {
   if (!existsSync(examplesDir)) {
-    return "→ examples/ doesn't exist — run `imprint record <site>` to create one.";
+    return "→ examples/ doesn't exist — run `imprint teach <site>` or `imprint emit <workflow.json>` to create a generated tool.";
   }
   const sites = readdirSync(examplesDir).filter((d) => {
     try {
@@ -21,7 +21,7 @@ export function availableSitesHint(examplesDir: string, badSite: string): string
     }
   });
   if (sites.length === 0) {
-    return '→ examples/ is empty — run `imprint record <site>` to create one.';
+    return '→ examples/ is empty — run `imprint teach <site>` or `imprint emit <workflow.json>` to create a generated tool.';
   }
   return `→ available sites: ${sites.join(', ')} (you asked for "${badSite}").`;
 }
