@@ -441,8 +441,12 @@ async function main(argv: string[]): Promise<number> {
       const outPath = sessionPath.replace(/\.json$/, '.redacted.json');
       writeFileSync(outPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
       console.log(`[imprint] redacted → ${outPath}`);
+      const freeformNote =
+        stats.freeformRedactions > 0
+          ? ` (${stats.freeformRedactions} free-form finding${stats.freeformRedactions === 1 ? '' : 's'})`
+          : '';
       console.log(
-        `[imprint] ${stats.totalRedactions} value${stats.totalRedactions === 1 ? '' : 's'} replaced across ${stats.requestsRedacted} request${stats.requestsRedacted === 1 ? '' : 's'} and ${stats.cookiesRedacted} cookie${stats.cookiesRedacted === 1 ? '' : 's'}`,
+        `[imprint] ${stats.totalRedactions} value${stats.totalRedactions === 1 ? '' : 's'} replaced across ${stats.requestsRedacted} request${stats.requestsRedacted === 1 ? '' : 's'} and ${stats.cookiesRedacted} cookie${stats.cookiesRedacted === 1 ? '' : 's'}${freeformNote}`,
       );
       if (keepHeaders.length > 0) {
         console.log(`[imprint] kept (not redacted): ${keepHeaders.join(', ')}`);

@@ -607,8 +607,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       stats.placeholdersInjected > 0
         ? `, ${stats.placeholdersInjected} replaced with credential placeholders`
         : '';
+    const freeformNote =
+      stats.freeformRedactions > 0 ? `, ${stats.freeformRedactions} free-form finding(s)` : '';
     spinner.stop(
-      `Redacted ${stats.totalRedactions} value(s) across ${stats.requestsRedacted} request(s) and ${stats.cookiesRedacted} cookie(s)${placeholderNote}.`,
+      `Redacted ${stats.totalRedactions} value(s) across ${stats.requestsRedacted} request(s) and ${stats.cookiesRedacted} cookie(s)${placeholderNote}${freeformNote}.`,
     );
 
     updateCheckpoint(site, state, workflowKey, 'redact', {

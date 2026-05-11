@@ -13,6 +13,13 @@ import {
 } from '../src/imprint/redact.ts';
 import type { Session } from '../src/imprint/types.ts';
 
+const syntheticJwt = (): string =>
+  [
+    'eyJhbGciOiJIUzI1NiJ9',
+    'eyJzdWIiOiIxMjM0NTY3ODkwIn0',
+    'dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
+  ].join('.');
+
 describe('redactFormBody', () => {
   it('redacts patronPassword (Discover & Go style)', () => {
     const body = 'dataType=json&method=Login&patronNumber=01336048586561&patronPassword=1070';
@@ -63,6 +70,20 @@ describe('redactJsonBody', () => {
     expect(r.redacted).toBe(body);
     expect(r.redactionsCount).toBe(0);
   });
+
+  it('redacts free-form PII in string leaves without corrupting JSON', () => {
+    const body = JSON.stringify({
+      note: 'Email alice@example.com or call 555-123-4567',
+      nested: { safe: 'version v1.2.3' },
+    });
+    const r = redactJsonBody(body);
+    expect(r.freeformRedactions).toBeGreaterThanOrEqual(2);
+
+    const parsed = JSON.parse(r.redacted);
+    expect(parsed.note).not.toContain('alice@example.com');
+    expect(parsed.note).not.toContain('555-123-4567');
+    expect(parsed.nested.safe).toBe('version v1.2.3');
+  });
 });
 
 describe('redactUrl', () => {
@@ -80,6 +101,16 @@ describe('redactUrl', () => {
     const r = redactUrl(url);
     expect(r.redacted).toBe(url);
     expect(r.redactionsCount).toBe(0);
+  });
+
+  it('redacts token-looking URL path segments while preserving origin and query', () => {
+    const token = syntheticJwt();
+    const r = redactUrl(`https://api.example.com/reset/${token}/done?color=blue`);
+
+    expect(r.freeformRedactions).toBe(1);
+    expect(r.redacted.startsWith('https://api.example.com/reset/')).toBe(true);
+    expect(r.redacted).toContain('/done?color=blue');
+    expect(r.redacted).not.toContain(token);
   });
 });
 
@@ -122,6 +153,45 @@ describe('redactBody (router)', () => {
   it('falls back to form parsing when content-type is missing but body looks form-encoded', () => {
     const r = redactBody('password=secret&name=alice');
     expect(r.redactionsCount).toBe(1);
+  });
+
+  it('redacts free-form PII and secrets in text bodies', () => {
+    const jwt = syntheticJwt();
+    const apiKeyLine = ['api_key: ', '1234567890abcdefghij.'].join('');
+    const body = [
+      'Contact alice@example.com or 555-123-4567.',
+      'SSN 123-45-6789 card 4111 1111 1111 1111.',
+      `Authorization: Bearer ${jwt}.`,
+      apiKeyLine,
+      'DATABASE_URL=postgres://user:pass@localhost:5432/app.',
+    ].join(' ');
+    const r = redactBody(body, 'text/plain');
+
+    expect(r.freeformRedactions).toBeGreaterThanOrEqual(7);
+    expect(r.redacted).not.toContain('alice@example.com');
+    expect(r.redacted).not.toContain('555-123-4567');
+    expect(r.redacted).not.toContain('123-45-6789');
+    expect(r.redacted).not.toContain('4111 1111 1111 1111');
+    expect(r.redacted).not.toContain(jwt);
+    expect(r.redacted).not.toContain('1234567890abcdefghij');
+    expect(r.redacted).not.toContain('user:pass');
+  });
+
+  it('does not redact common non-secret identifiers', () => {
+    const uuid = '123e4567-e89b-12d3-a456-426614174000';
+    const commit = 'a1b2c3d4e5f6789012345678901234567890abcd';
+    const body = [
+      'version v1.2.3',
+      'request req-12345',
+      `uuid ${uuid}`,
+      `commit ${commit}`,
+      'zip 94107',
+      'normal url https://example.com/api/v1/users',
+    ].join(' ');
+    const r = redactBody(body, 'text/plain');
+
+    expect(r.freeformRedactions).toBe(0);
+    expect(r.redacted).toBe(body);
   });
 });
 
@@ -254,5 +324,71 @@ describe('redactSession', () => {
     expect(body).toContain('${credential.password}');
     expect(body).not.toContain('alice');
     expect(body).not.toContain('hunter2');
+  });
+
+  it('redacts captured WebSocket payload previews', () => {
+    const session: Session = {
+      ...baseSession,
+      requests: [],
+      events: [
+        {
+          seq: 1,
+          timestamp: 150,
+          type: 'ws-received',
+          detail: JSON.stringify({
+            url: 'wss://example.com/socket',
+            opcode: 1,
+            payloadDataPreview: 'support email alice@example.com',
+          }),
+        },
+      ],
+      cookieSnapshots: [],
+    };
+    const { session: out, stats } = redactSession(session);
+
+    expect(stats.freeformRedactions).toBe(1);
+    expect(out.events[0]?.detail).not.toContain('alice@example.com');
+  });
+
+  it('keeps credential placeholders ahead of generic free-form redaction', () => {
+    const session: Session = {
+      ...baseSession,
+      requests: [
+        {
+          seq: 0,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/login',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            login: { username: 'alice@example.com', password: 'hunter2' },
+          }),
+          resourceType: 'XHR',
+        },
+      ],
+      cookieSnapshots: [],
+    };
+    const { session: out } = redactSession(session, {
+      replacements: [
+        {
+          requestSeq: 0,
+          location: { kind: 'body-json', path: ['login', 'username'] },
+          originalValue: 'alice@example.com',
+          placeholder: '${credential.username}',
+        },
+        {
+          requestSeq: 0,
+          location: { kind: 'body-json', path: ['login', 'password'] },
+          originalValue: 'hunter2',
+          placeholder: '${credential.password}',
+        },
+      ],
+    });
+
+    const body = out.requests[0]?.body ?? '';
+    expect(body).toContain('${credential.username}');
+    expect(body).toContain('${credential.password}');
+    expect(body).not.toContain('alice@example.com');
+    expect(body).not.toContain('[REDACTED]');
   });
 });

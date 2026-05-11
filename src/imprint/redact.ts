@@ -13,10 +13,18 @@
  */
 
 import type { Replacement } from './credential-extract.ts';
+import { hasFreeformRedactionHint, redactFreeformText } from './freeform-redact.ts';
 import { isSensitiveHeader, isSensitiveKey } from './sensitive-keys.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
 const REDACTED = (originalLength: number): string => `[REDACTED:${originalLength}]`;
+
+interface BodyRedaction {
+  redacted: string;
+  redactionsCount: number;
+  placeholdersInjected: number;
+  freeformRedactions: number;
+}
 
 /** Redact all values of sensitive keys in a www-form-urlencoded body string.
  *  When `placeholderByKey` is given, sensitive keys whose names match get
@@ -24,7 +32,7 @@ const REDACTED = (originalLength: number): string => `[REDACTED:${originalLength
 export function redactFormBody(
   body: string,
   placeholderByKey?: Map<string, string>,
-): { redacted: string; redactionsCount: number; placeholdersInjected: number } {
+): BodyRedaction {
   let count = 0;
   let placeholders = 0;
   const parts = body.split('&').map((pair) => {
@@ -49,7 +57,12 @@ export function redactFormBody(
     }
     return pair;
   });
-  return { redacted: parts.join('&'), redactionsCount: count, placeholdersInjected: placeholders };
+  return {
+    redacted: parts.join('&'),
+    redactionsCount: count,
+    placeholdersInjected: placeholders,
+    freeformRedactions: 0,
+  };
 }
 
 /** Redact sensitive keys inside a JSON-stringified body. Returns body unchanged on parse failure.
@@ -58,16 +71,18 @@ export function redactFormBody(
 export function redactJsonBody(
   body: string,
   placeholderByPath?: Map<string, string>,
-): { redacted: string; redactionsCount: number; placeholdersInjected: number } {
+  freeform = true,
+): BodyRedaction {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
   } catch {
-    return { redacted: body, redactionsCount: 0, placeholdersInjected: 0 };
+    return { redacted: body, redactionsCount: 0, placeholdersInjected: 0, freeformRedactions: 0 };
   }
 
   let count = 0;
   let placeholders = 0;
+  let freeformCount = 0;
   const visit = (node: unknown, pathSoFar: string[]): unknown => {
     if (Array.isArray(node)) {
       return node.map((v, i) => visit(v, [...pathSoFar, String(i)]));
@@ -90,8 +105,14 @@ export function redactJsonBody(
             const visited = visit(inner, [...pathSoFar, k]);
             out[k] = JSON.stringify(visited);
           } catch {
-            out[k] = v;
+            const r = freeform ? redactFreeformText(v) : { redacted: v, redactionsCount: 0 };
+            freeformCount += r.redactionsCount;
+            out[k] = r.redacted;
           }
+        } else if (typeof v === 'string' && freeform) {
+          const r = redactFreeformText(v);
+          freeformCount += r.redactionsCount;
+          out[k] = r.redacted;
         } else {
           out[k] = visit(v, [...pathSoFar, k]);
         }
@@ -101,7 +122,12 @@ export function redactJsonBody(
     return node;
   };
   const redacted = JSON.stringify(visit(parsed, []));
-  return { redacted, redactionsCount: count, placeholdersInjected: placeholders };
+  return {
+    redacted,
+    redactionsCount: count,
+    placeholdersInjected: placeholders,
+    freeformRedactions: freeformCount,
+  };
 }
 
 /** Redact a request body of unknown content-type. Tries JSON first, falls back to form. */
@@ -110,31 +136,46 @@ export function redactBody(
   contentType?: string,
   formPlaceholders?: Map<string, string>,
   jsonPlaceholders?: Map<string, string>,
-): { redacted: string; redactionsCount: number; placeholdersInjected: number } {
+  freeform = true,
+): BodyRedaction {
   const ct = (contentType ?? '').toLowerCase();
   if (ct.includes('urlencoded')) {
     return redactFormBody(body, formPlaceholders);
   }
   // Try JSON first — many APIs send JSON as text/plain or with no content-type.
-  const jsonR = redactJsonBody(body, jsonPlaceholders);
-  if (jsonR.redactionsCount > 0 || jsonR.placeholdersInjected > 0) return jsonR;
+  const jsonR = redactJsonBody(body, jsonPlaceholders, freeform);
+  if (jsonR.redactionsCount > 0 || jsonR.placeholdersInjected > 0 || jsonR.freeformRedactions > 0) {
+    return jsonR;
+  }
   try {
     JSON.parse(body);
     return jsonR;
   } catch {
-    return redactFormBody(body, formPlaceholders);
+    const formR = redactFormBody(body, formPlaceholders);
+    if (formR.redactionsCount > 0 || formR.placeholdersInjected > 0 || !freeform) return formR;
+    const freeformR = redactFreeformText(body);
+    return {
+      redacted: freeformR.redacted,
+      redactionsCount: 0,
+      placeholdersInjected: 0,
+      freeformRedactions: freeformR.redactionsCount,
+    };
   }
 }
 
 /** Redact sensitive query params from a URL string. */
-export function redactUrl(url: string): { redacted: string; redactionsCount: number } {
+export function redactUrl(
+  url: string,
+  freeform = true,
+): { redacted: string; redactionsCount: number; freeformRedactions: number } {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return { redacted: url, redactionsCount: 0 };
+    return { redacted: url, redactionsCount: 0, freeformRedactions: 0 };
   }
   let count = 0;
+  let freeformCount = 0;
   for (const key of Array.from(parsed.searchParams.keys())) {
     if (isSensitiveKey(key)) {
       const val = parsed.searchParams.get(key) ?? '';
@@ -142,7 +183,26 @@ export function redactUrl(url: string): { redacted: string; redactionsCount: num
       count++;
     }
   }
-  return { redacted: parsed.toString(), redactionsCount: count };
+  if (freeform && parsed.pathname.length > 1 && hasFreeformRedactionHint(parsed.pathname)) {
+    const segments = parsed.pathname.split('/').map((segment) => {
+      if (segment.length === 0) return segment;
+      let decoded = segment;
+      try {
+        decoded = decodeURIComponent(segment);
+      } catch {
+        // Keep the raw segment if it is not valid percent-encoding.
+      }
+      const r = redactFreeformText(decoded);
+      freeformCount += r.redactionsCount;
+      return r.redacted;
+    });
+    parsed.pathname = segments.join('/');
+  }
+  return {
+    redacted: parsed.toString(),
+    redactionsCount: count + freeformCount,
+    freeformRedactions: freeformCount,
+  };
 }
 
 /** Redact sensitive headers in-place style (returns a new object). */
@@ -175,6 +235,8 @@ interface RedactionStats {
   cookiesRedacted: number;
   /** Values rewritten to a `${credential.X}` placeholder (extracted at teach time). */
   placeholdersInjected: number;
+  /** Free-form PII/secrets found by the supplemental regex redactor. */
+  freeformRedactions: number;
   /** Detected sensitive items that you should be aware of (for the user-facing report). */
   warnings: string[];
 }
@@ -193,6 +255,8 @@ interface RedactOptions {
    * placeholders survive into workflow.json verbatim.
    */
   replacements?: Replacement[];
+  /** Internal escape hatch for benchmarks/tests that compare structured-only redaction. */
+  freeform?: boolean;
 }
 
 /** Produce a scrubbed copy of a session safe to send to an LLM. */
@@ -205,9 +269,11 @@ export function redactSession(
     requestsRedacted: 0,
     cookiesRedacted: 0,
     placeholdersInjected: 0,
+    freeformRedactions: 0,
     warnings: [],
   };
   const keepHeaders = new Set((opts.keepHeaders ?? []).map((h) => h.toLowerCase()));
+  const useFreeform = opts.freeform ?? true;
 
   // Group replacements by request seq.
   const replacementsBySeq = new Map<number, Replacement[]>();
@@ -220,8 +286,9 @@ export function redactSession(
   const redactedRequests = session.requests.map((req: CapturedRequest) => {
     let touched = 0;
 
-    const urlR = redactUrl(req.url);
+    const urlR = redactUrl(req.url, useFreeform);
     touched += urlR.redactionsCount;
+    stats.freeformRedactions += urlR.freeformRedactions;
 
     const headersR = redactHeaders(req.headers, keepHeaders);
     touched += headersR.redactionsCount;
@@ -239,10 +306,11 @@ export function redactSession(
           jsonPlaceholders.set(r.location.path.join('.'), r.placeholder);
         }
       }
-      const bodyR = redactBody(body, ct, formPlaceholders, jsonPlaceholders);
+      const bodyR = redactBody(body, ct, formPlaceholders, jsonPlaceholders, useFreeform);
       body = bodyR.redacted;
-      touched += bodyR.redactionsCount;
+      touched += bodyR.redactionsCount + bodyR.freeformRedactions;
       stats.placeholdersInjected += bodyR.placeholdersInjected;
+      stats.freeformRedactions += bodyR.freeformRedactions;
     }
 
     let response = req.response;
@@ -251,9 +319,16 @@ export function redactSession(
       touched += respHeadersR.redactionsCount;
       let respBody = response.body;
       if (respBody) {
-        const respBodyR = redactBody(respBody, response.mimeType);
+        const respBodyR = redactBody(
+          respBody,
+          response.mimeType,
+          undefined,
+          undefined,
+          useFreeform,
+        );
         respBody = respBodyR.redacted;
-        touched += respBodyR.redactionsCount;
+        touched += respBodyR.redactionsCount + respBodyR.freeformRedactions;
+        stats.freeformRedactions += respBodyR.freeformRedactions;
       }
       response = {
         ...response,
@@ -293,7 +368,6 @@ export function redactSession(
     valueToPlaceholder.set(r.originalValue, r.placeholder);
   }
   const redactedEvents = session.events.map((ev) => {
-    if (valueToPlaceholder.size === 0) return ev;
     let detail = ev.detail;
     for (const [val, placeholder] of valueToPlaceholder) {
       if (val.length === 0) continue;
@@ -303,6 +377,14 @@ export function redactSession(
     }
     if (detail !== ev.detail) {
       stats.placeholdersInjected++;
+    }
+    if (useFreeform) {
+      const freeformR = redactFreeformText(detail);
+      if (freeformR.redactionsCount > 0) {
+        detail = freeformR.redacted;
+        stats.freeformRedactions += freeformR.redactionsCount;
+        stats.totalRedactions += freeformR.redactionsCount;
+      }
     }
     return { ...ev, detail };
   });
