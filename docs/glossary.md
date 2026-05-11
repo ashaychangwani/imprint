@@ -4,7 +4,7 @@ Names you'll see in code, docs, and CLI output.
 
 | Term | What it is |
 |---|---|
-| **Session** | A captured browser run: every network request + every DOM event + the user's narration. On disk: `examples/<site>/sessions/<ts>.{jsonl,json}`. |
+| **Session** | A captured browser run: every network request + every DOM event + the user's narration. On disk: `~/.imprint/<site>/sessions/<ts>.{jsonl,json}`. |
 | **Workflow** | The API-replay artifact compiled from a session. A chain of `WorkflowRequest` records with `${param}` / `${response[N]}` substitutions. On disk: `workflow.json`. |
 | **Playbook** | The DOM-replay artifact compiled from a session. A list of typed steps (`navigate`, `click`, `type`, `submit`, `press`, `wait`) with locator-priority arrays. On disk: `playbook.yaml`. |
 | **Tool** | The user-facing object: a `runWorkflow(input)`-style function exposed as MCP, scheduled by cron, or invoked directly. The generated `examples/<site>/<toolName>/index.ts` exports one. |

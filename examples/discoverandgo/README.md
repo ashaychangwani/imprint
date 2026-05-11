@@ -15,7 +15,7 @@
 imprint record discoverandgo --persist-profile --url https://sandiego.discoverandgo.net
 # (drive a real reservation; narrate; /done when finished)
 
-imprint login discoverandgo --from-session examples/discoverandgo/sessions/<ts>.json
+imprint login discoverandgo --from-session ~/.imprint/discoverandgo/sessions/<ts>.json
 
 # Then any time you want to book:
 imprint cron discoverandgo --once

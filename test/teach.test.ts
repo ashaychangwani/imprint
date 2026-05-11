@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { resolve as pathResolve } from 'node:path';
 import { VERB_HELP } from '../src/cli.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
+import { localSiteDir } from '../src/imprint/paths.ts';
 import {
   buildTeachProviderPickerOptions,
   buildTeachStateFromSession,
@@ -76,46 +77,64 @@ describe('teach provider picker', () => {
 });
 
 describe('teach session state helpers', () => {
+  const originalImprintHome = process.env.IMPRINT_HOME;
+
+  function withImprintHome<T>(path: string, fn: () => T): T {
+    process.env.IMPRINT_HOME = path;
+    try {
+      return fn();
+    } finally {
+      if (originalImprintHome === undefined) Reflect.deleteProperty(process.env, 'IMPRINT_HOME');
+      else process.env.IMPRINT_HOME = originalImprintHome;
+    }
+  }
+
   it('treats blank stored session paths as missing', () => {
     expect(resolveTeachStatePath('google-flights', '')).toBeNull();
     expect(resolveTeachStatePath('google-flights', '   ')).toBeNull();
     expect(resolveTeachStatePath('google-flights', undefined)).toBeNull();
   });
 
-  it('resolves relative state paths under the site and preserves absolute paths', () => {
-    const relative = resolveTeachStatePath('google-flights', 'sessions/one.json');
-    expect(relative).toBe(pathResolve('examples', 'google-flights', 'sessions/one.json'));
+  it('resolves relative state paths under ~/.imprint and preserves absolute paths', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      const relative = resolveTeachStatePath('google-flights', 'sessions/one.json');
+      expect(relative).toBe(
+        pathResolve('/tmp', 'imprint-home', 'google-flights', 'sessions/one.json'),
+      );
+    });
 
     const absolute = pathResolve('/tmp', 'session.json');
     expect(resolveTeachStatePath('google-flights', absolute)).toBe(absolute);
   });
 
   it('builds --from-session checkpoint state with the real session path', () => {
-    const sessionPath = pathResolve(
-      'examples',
-      'google-flights',
-      'sessions',
-      '2026-05-08T09-24-14-916Z.json',
-    );
-    const redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
-    const state = buildTeachStateFromSession('google-flights', sessionPath, redactedPath);
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      const sessionPath = pathResolve(
+        localSiteDir('google-flights'),
+        'sessions',
+        '2026-05-08T09-24-14-916Z.json',
+      );
+      const redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
+      const state = buildTeachStateFromSession('google-flights', sessionPath, redactedPath);
 
-    expect(state.sessionPath).toBe('sessions/2026-05-08T09-24-14-916Z.json');
-    expect(state.redactedPath).toBe('sessions/2026-05-08T09-24-14-916Z.redacted.json');
-    expect(state.completedSteps).toEqual(['record', 'redact']);
+      expect(state.sessionPath).toBe('sessions/2026-05-08T09-24-14-916Z.json');
+      expect(state.redactedPath).toBe('sessions/2026-05-08T09-24-14-916Z.redacted.json');
+      expect(state.completedSteps).toEqual(['record', 'redact']);
+    });
   });
 
   it('builds --from-session checkpoint state before redaction has run', () => {
-    const sessionPath = pathResolve(
-      'examples',
-      'google-flights',
-      'sessions',
-      '2026-05-08T09-24-14-916Z.json',
-    );
-    const state = buildTeachStateFromSession('google-flights', sessionPath, null);
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      const sessionPath = pathResolve(
+        localSiteDir('google-flights'),
+        'sessions',
+        '2026-05-08T09-24-14-916Z.json',
+      );
+      const state = buildTeachStateFromSession('google-flights', sessionPath, null);
 
-    expect(state.sessionPath).toBe('sessions/2026-05-08T09-24-14-916Z.json');
-    expect(state.redactedPath).toBeUndefined();
-    expect(state.completedSteps).toEqual(['record']);
+      expect(state.sessionPath).toBe('sessions/2026-05-08T09-24-14-916Z.json');
+      expect(state.redactedPath).toBeUndefined();
+      expect(state.completedSteps).toEqual(['record']);
+    });
   });
 });

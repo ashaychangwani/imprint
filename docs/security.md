@@ -8,8 +8,8 @@ Recording produces:
 
 | File | Contains | Where |
 |---|---|---|
-| `<ts>.jsonl` | Full request bodies, response bodies, headers (incl. `Authorization`, `Cookie`, `Set-Cookie`), cookie snapshots | `examples/<site>/sessions/` |
-| `<ts>.json` | Same, assembled | `examples/<site>/sessions/` |
+| `<ts>.jsonl` | Full request bodies, response bodies, headers (incl. `Authorization`, `Cookie`, `Set-Cookie`), cookie snapshots | `~/.imprint/<site>/sessions/` |
+| `<ts>.json` | Same, assembled | `~/.imprint/<site>/sessions/` |
 
 Sessions are **not** redacted by default. The raw recording exists for `imprint generate` to consume; redaction is a separate step.
 
@@ -21,8 +21,8 @@ Always run `imprint redact` before:
 - Committing one to git.
 
 ```bash
-imprint redact examples/<site>/sessions/<ts>.json
-# → examples/<site>/sessions/<ts>.redacted.json
+imprint redact ~/.imprint/<site>/sessions/<ts>.json
+# → ~/.imprint/<site>/sessions/<ts>.redacted.json
 ```
 
 What gets scrubbed: values of any field whose name matches the [SENSITIVE_KEYS](../src/imprint/redact.ts) list (passwords, tokens, API keys, session IDs, CSRF tokens, common patron-ID patterns, etc.) — replaced with `[REDACTED:N]` markers (N = original length, so the LLM still sees shape).

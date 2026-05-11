@@ -102,7 +102,7 @@ examples/<site>/<toolName>/
 ├── cron.json                   schedule + params + replayBackend + notifyWhen
 └── backends.json               output of `imprint probe-backends`
 
-examples/<site>/sessions/       (gitignored — auth tokens / PII)
+~/.imprint/<site>/sessions/      (local only — auth tokens / PII)
 ├── <ts>.jsonl                  raw streaming capture
 ├── <ts>.json                   assembled session
 └── <ts>.redacted.json          after `imprint redact`

@@ -24,14 +24,14 @@ describe('availableSitesHint', () => {
   it("says examples/ doesn't exist when the dir is missing", () => {
     const result = availableSitesHint('/nope/missing-dir', 'whatever');
     expect(result).toMatch(/examples\/ doesn't exist/);
-    expect(result).toMatch(/imprint record/);
+    expect(result).toMatch(/imprint teach/);
   });
 
   it('says examples/ is empty when the dir has no children', () => {
     withTemp((dir) => {
       const result = availableSitesHint(dir, 'whatever');
       expect(result).toMatch(/examples\/ is empty/);
-      expect(result).toMatch(/imprint record/);
+      expect(result).toMatch(/imprint teach/);
     });
   });
 

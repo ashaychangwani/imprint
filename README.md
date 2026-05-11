@@ -59,6 +59,8 @@ imprint teach mysite \
 
 A browser opens. You drive the workflow and narrate what you're doing. Imprint records every network request and DOM interaction.
 
+Raw recordings are stored locally under `~/.imprint/<site>/sessions/` by default, outside the repo. Generated tools still live under `examples/<site>/<toolName>/` so they can be reviewed and shared without private capture data.
+
 </td>
 <td width="33%">
 
