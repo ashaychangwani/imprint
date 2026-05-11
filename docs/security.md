@@ -25,16 +25,18 @@ imprint redact ~/.imprint/<site>/sessions/<ts>.json
 # → ~/.imprint/<site>/sessions/<ts>.redacted.json
 ```
 
-What gets scrubbed: values of any field whose name matches the [SENSITIVE_KEYS](../src/imprint/redact.ts) list (passwords, tokens, API keys, session IDs, CSRF tokens, common patron-ID patterns, etc.) — replaced with `[REDACTED:N]` markers (N = original length, so the LLM still sees shape).
+What gets scrubbed:
+- Values of any field whose name matches the [SENSITIVE_KEYS](../src/imprint/redact.ts) list (passwords, tokens, API keys, session IDs, CSRF tokens, common patron-ID patterns, etc.) — replaced with `[REDACTED:N]` markers (N = original length, so the LLM still sees shape).
+- Common free-form PII and secrets in text-like response bodies, JSON string values, URL path segments, and captured DOM / WebSocket event details. This supplemental scan catches emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, webhook URLs, package-registry tokens, and common secret assignments.
 
 ## What redaction doesn't catch
 
 This is a best-effort tool — we deliberately undersell it. It will NOT catch:
 
-- **Credentials in arbitrary response bodies** (HTML pages, free-form JSON without obvious key names).
 - **Custom field names** a site invents that don't match the `SENSITIVE_KEYS` patterns.
-- **Credentials encoded in URL path segments** (vs. query strings).
-- **Anything in WebSocket frames** (captured but not redacted in v0.1).
+- **Contextual or site-specific secrets** that do not match either the structured key list or the supplemental free-form patterns.
+- **Non-standard encodings** (compressed bodies, encrypted blobs, unusual base64 packing, or values split across fields).
+- **WebSocket frame content beyond the captured preview**.
 
 If you're using Imprint on a site with unusual auth, **audit the redacted session manually** before generating against it.
 

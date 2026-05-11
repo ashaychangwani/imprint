@@ -71,7 +71,7 @@ Imprint generates two replay artifacts:
 - **`workflow.json`** — API-level replay (fast)
 - **`playbook.yaml`** — DOM-level fallback (universal)
 
-Credentials and PII are redacted automatically.
+Credentials and PII are redacted automatically: known-sensitive fields keep their `[REDACTED:N]` shape markers, credential values become `${credential.NAME}` placeholders, and a supplemental free-form scan catches common emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, and webhook URLs before LLM compile.
 
 </td>
 <td width="34%">

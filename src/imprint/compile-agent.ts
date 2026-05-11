@@ -104,8 +104,12 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
     const r = redactSession(session, { replacements });
     session = r.session;
     if (r.stats.totalRedactions > 0 || r.stats.placeholdersInjected > 0) {
+      const freeformNote =
+        r.stats.freeformRedactions > 0
+          ? ` (${r.stats.freeformRedactions} free-form finding(s))`
+          : '';
       log(
-        `redacted ${r.stats.totalRedactions} value(s) and injected ${r.stats.placeholdersInjected} credential placeholder(s) before sending to LLM`,
+        `redacted ${r.stats.totalRedactions} value(s)${freeformNote} and injected ${r.stats.placeholdersInjected} credential placeholder(s) before sending to LLM`,
       );
     }
   }

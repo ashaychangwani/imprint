@@ -29,6 +29,7 @@
     "deadcode": "bun run knip && bun run circular",
     "circular": "madge --circular --extensions ts src/",
     "check": "bun run typecheck && bun run lint && bun run test && bun run deadcode",
+    "bench:redact": "bun run scripts/redact-benchmark.ts",
     "changelog": "bunx git-cliff --config cliff.toml --unreleased --strip header",
     "prepare": "git config core.hooksPath .githooks",
     "postinstall": "bunx playwright install chromium"
@@ -47,6 +48,7 @@
     "playwright": "^1.49.0",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "redactum": "^1.1.0",
     "yaml": "^2.8.4",
     "zod": "^3.24.0"
   },

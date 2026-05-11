@@ -290,7 +290,11 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
     const r = redactSession(session);
     session = r.session;
     if (r.stats.totalRedactions > 0) {
-      log(`redacted ${r.stats.totalRedactions} value(s) before sending to LLM`);
+      const freeformNote =
+        r.stats.freeformRedactions > 0
+          ? ` (${r.stats.freeformRedactions} free-form finding(s))`
+          : '';
+      log(`redacted ${r.stats.totalRedactions} value(s)${freeformNote} before sending to LLM`);
     }
   }
 
