@@ -28,7 +28,7 @@ const session: Session = {
       timestamp: 200,
       method: 'GET',
       url: 'https://api.example.com/search?q=test',
-      headers: {},
+      headers: { 'x-csrf-token': 'fixture-token' },
       resourceType: 'XHR',
       response: { status: 200, headers: {}, body: '{"items":[{"name":"Test"}]}' },
     },

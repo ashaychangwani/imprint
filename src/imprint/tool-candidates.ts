@@ -233,11 +233,16 @@ function isCandidateRequest(request: CapturedRequest, startRoot: string | null):
 }
 
 function likelyLoginOrAuth(request: CapturedRequest): boolean {
-  const haystack =
-    `${request.method} ${request.url} ${JSON.stringify(request.headers)} ${request.body ?? ''}`.toLowerCase();
-  if (/\$\{credential\.[^}]+\}/.test(haystack)) return true;
-  return /login|signin|sign-in|authenticate|authentication|oauth|session|token|csrf|password/.test(
-    haystack,
+  const url = safeUrl(request.url);
+  const endpointText =
+    `${request.method} ${url ? `${url.pathname} ${url.search}` : request.url} ${request.body ?? ''}`.toLowerCase();
+  const headerText = JSON.stringify(request.headers ?? {}).toLowerCase();
+  if (/\$\{credential\.[^}]+\}/.test(`${endpointText} ${headerText}`)) return true;
+
+  // Data requests often carry CSRF headers. Treat endpoint/body semantics as the
+  // signal so normal authenticated API calls do not get mislabeled as auth setup.
+  return /login|signin|sign-in|authenticate|authentication|oauth|session|password|csrf|token/.test(
+    endpointText,
   );
 }
 
