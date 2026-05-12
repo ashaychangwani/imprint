@@ -1,0 +1,28 @@
+# Bun / dependencies
+node_modules/
+bun.lockb
+
+# Vite output
+dist/
+.vite/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment / local overrides
+.env
+.env.*
+!.env.example
+
+# Local handoff artifacts
+MEMORY.md
+PR.md
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
