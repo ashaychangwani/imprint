@@ -6,12 +6,16 @@ import {
   resolve as pathResolve,
 } from 'node:path';
 
-function imprintHomeDir(): string {
+export function imprintHomeDir(): string {
   return pathResolve(process.env.IMPRINT_HOME ?? pathJoin(homedir(), '.imprint'));
 }
 
 export function localSiteDir(site: string): string {
   return pathJoin(imprintHomeDir(), site);
+}
+
+export function localToolDir(site: string, toolName: string): string {
+  return pathJoin(localSiteDir(site), toolName);
 }
 
 export function localSessionsDir(site: string): string {

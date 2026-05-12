@@ -37,13 +37,21 @@ export function detectImprintCommand(): ImprintCommand {
 export function generatePasteSnippet(opts: {
   site: string;
   workflow: Workflow;
+  workflows?: Workflow[];
   platform: Platform;
   imprintCommand: ImprintCommand;
 }): string {
-  const { site, workflow, platform, imprintCommand: ic } = opts;
+  const { site, workflow, workflows, platform, imprintCommand: ic } = opts;
   const toolName = `imprint-${site}`;
-  const descLower = workflow.intent.description.toLowerCase();
-  const paramList = formatParams(workflow.parameters);
+  const workflowList = workflows && workflows.length > 0 ? workflows : [workflow];
+  const descLower =
+    workflowList.length === 1
+      ? workflow.intent.description.toLowerCase()
+      : `${workflowList.length} tools: ${workflowList.map((w) => w.toolName).join(', ')}`;
+  const paramList =
+    workflowList.length === 1
+      ? formatParams(workflow.parameters)
+      : workflowList.map((w) => `${w.toolName}: ${formatParams(w.parameters)}`).join('; ');
   const shellCmd = [ic.command, ...ic.args, 'mcp-server', site].join(' ');
   const mcpArgs = [...ic.args, 'mcp-server', site];
   const argsStr = `[${mcpArgs.map((a) => `"${a}"`).join(', ')}]`;

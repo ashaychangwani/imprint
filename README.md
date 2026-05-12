@@ -59,7 +59,7 @@ imprint teach mysite \
 
 A browser opens. You drive the workflow and narrate what you're doing. Imprint records every network request and DOM interaction.
 
-Raw recordings are stored locally under `~/.imprint/<site>/sessions/` by default, outside the repo. Generated tools still live under `examples/<site>/<toolName>/` so they can be reviewed and shared without private capture data.
+Raw recordings and generated tools are stored locally under `~/.imprint/<site>/` by default, outside the repo. The tracked `examples/` tree remains as source fixtures and demos.
 
 </td>
 <td width="33%">
@@ -187,13 +187,17 @@ Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the l
 
 ## Examples
 
+The checked-in examples are fixtures. Runtime discovery reads `IMPRINT_HOME`
+(`~/.imprint` by default), so run them with `IMPRINT_HOME=examples` or copy a
+tool directory into your local Imprint home.
+
 | Example | What it demonstrates | Run it |
 |---|---|---|
-| [**southwest**](examples/southwest) | Live fare watcher, defeats Akamai bot detection, price-drop notifications | `imprint cron southwest --once` |
-| [**google-flights**](examples/google-flights) | Real-time flight search across all carriers, parses Google's raw protobuf response | `imprint mcp-server google-flights` |
-| [**google-hotels**](examples/google-hotels) | Hotel search with star rating, guest scores, nightly + total prices | `imprint mcp-server google-hotels` |
-| [**discoverandgo**](examples/discoverandgo) | Authenticated booking via per-site credential store | `imprint cron discoverandgo --once` |
-| [**echo**](examples/echo) | MCP smoke-test fixture (no network, no LLM) | `imprint mcp-server echo` |
+| [**southwest**](examples/southwest) | Live fare watcher, defeats Akamai bot detection, price-drop notifications | `IMPRINT_HOME=examples imprint cron southwest --once` |
+| [**google-flights**](examples/google-flights) | Real-time flight search across all carriers, parses Google's raw protobuf response | `IMPRINT_HOME=examples imprint mcp-server google-flights` |
+| [**google-hotels**](examples/google-hotels) | Hotel search with star rating, guest scores, nightly + total prices | `IMPRINT_HOME=examples imprint mcp-server google-hotels` |
+| [**discoverandgo**](examples/discoverandgo) | Authenticated booking via per-site credential store | `IMPRINT_HOME=examples imprint cron discoverandgo --once` |
+| [**echo**](examples/echo) | MCP smoke-test fixture (no network, no LLM) | `IMPRINT_HOME=examples imprint mcp-server echo` |
 
 <br>
 

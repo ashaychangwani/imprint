@@ -20,12 +20,12 @@ CAPTURE
 COMPILE
   generate <session>       Session → workflow.json (API replay).
   compile-playbook <sess>  Session → playbook.yaml (DOM replay).
-  emit <workflow.json>     workflow.json → examples/<site>/<toolName>/index.ts.
+  emit <workflow.json>     workflow.json → ~/.imprint/<site>/<toolName>/index.ts.
   probe-backends <site>    Try each backend once, cache the working order.
 
 RUN
-  mcp-server <site>        Serve one site's tool as MCP (stdio default).
-  cron <site>              Polling daemon for examples/<site>/<toolName>/cron.json.
+  mcp-server <site>        Serve one site's tools as MCP (stdio default).
+  cron <site>              Polling daemon for ~/.imprint/<site>/<toolName>/cron.json.
   playbook <site>          Run a playbook directly (debugging).
 
 OTHER
@@ -68,7 +68,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--provider <name>] [--keep-test]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--provider <name>] [--keep-test]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
@@ -79,7 +79,13 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
       {
         name: '--no-interactive',
-        description: 'Run the full pipeline without prompts; print all integration snippets.',
+        description:
+          'Run without prompts; compile the primary detected tool and print integration snippets.',
+      },
+      {
+        name: '--all-tools',
+        description:
+          'With --no-interactive, compile every detected candidate tool instead of only the primary.',
       },
       {
         name: '--provider <name>',
@@ -171,7 +177,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--out-dir <dir>', description: 'Override the output directory.' },
       { name: '--force', description: 'Overwrite an existing index.ts.' },
     ],
-    example: 'imprint emit examples/acmecorp/my-workflow/workflow.json',
+    example: 'imprint emit ~/.imprint/acmecorp/my-workflow/workflow.json',
   },
   login: {
     summary: 'Persist auth cookies for <site> from a captured session.',
@@ -219,7 +225,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   cron: {
     summary:
-      'Polling daemon for cron.json next to a generated tool at examples/<site>/<toolName>/cron.json.',
+      'Polling daemon for cron.json next to a generated tool at ~/.imprint/<site>/<toolName>/cron.json.',
     usage: ['imprint cron <site> [--once | --run-now] [--config <path>] [--quiet]'],
     flags: [
       { name: '--once', description: 'Run a single tick and exit (for OS schedulers).' },
@@ -234,7 +240,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     example: 'imprint cron southwest --once --quiet',
   },
   'mcp-server': {
-    summary: "Serve one site's generated tool as MCP (stdio default).",
+    summary: "Serve one site's generated tools as MCP (stdio default).",
     usage: ['imprint mcp-server <site> [--http] [--port <num>]'],
     flags: [
       { name: '--http', description: 'Use Streamable HTTP transport instead of stdio.' },
@@ -277,7 +283,7 @@ function requirePositional(argv: string[], verb: string, label: string): string 
   }
   if (v.startsWith('-')) {
     console.error(
-      `error: \`imprint ${verb}\` requires a <site> name before any flags.\n  <site> is a label you choose — it names the output folder under examples/.\n\n  example: imprint ${verb} google-flights --url https://flights.google.com\n→ run \`imprint ${verb} --help\` for usage.`,
+      `error: \`imprint ${verb}\` requires a <site> name before any flags.\n  <site> is a label you choose — it names the output folder under ~/.imprint/.\n\n  example: imprint ${verb} google-flights --url https://flights.google.com\n→ run \`imprint ${verb} --help\` for usage.`,
     );
     return null;
   }
@@ -760,7 +766,8 @@ async function main(argv: string[]): Promise<number> {
         playbookPath = pathResolve(values.path);
       } else {
         const { discoverTools } = await import('./imprint/tool-loader.ts');
-        const tools = await discoverTools(pathResolve(process.cwd(), 'examples'), site);
+        const { imprintHomeDir, localToolDir } = await import('./imprint/paths.ts');
+        const tools = await discoverTools(imprintHomeDir(), site);
         if (tools.length > 1) {
           console.error(
             `error: site "${site}" has ${tools.length} workflows — specify which with --path:\n${tools.map((t) => `  --path ${pathResolve(t.dir, 'playbook.yaml')}`).join('\n')}`,
@@ -770,7 +777,7 @@ async function main(argv: string[]): Promise<number> {
         const tool = tools[0];
         playbookPath = tool
           ? pathResolve(tool.dir, 'playbook.yaml')
-          : pathResolve(process.cwd(), 'examples', site, '<toolName>', 'playbook.yaml');
+          : pathResolve(localToolDir(site, '<toolName>'), 'playbook.yaml');
       }
       const params = tryParseParamKV(values.param);
       if (params === null) return 2;
@@ -798,7 +805,7 @@ async function main(argv: string[]): Promise<number> {
         // Looks like a flag — can't tell from a missing site, so error out
         // with the explanation regardless of interactive mode.
         console.error(
-          'error: `imprint teach` requires a <site> name before any flags.\n  <site> is a label you choose — it names the output folder under examples/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
+          'error: `imprint teach` requires a <site> name before any flags.\n  <site> is a label you choose — it names the output folder under ~/.imprint/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
         );
         return 2;
       }
@@ -811,6 +818,7 @@ async function main(argv: string[]): Promise<number> {
           'from-session': { type: 'string' },
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
+          'all-tools': { type: 'boolean' },
           provider: { type: 'string' },
           'keep-test': { type: 'boolean' },
         },
@@ -819,7 +827,7 @@ async function main(argv: string[]): Promise<number> {
 
       if (!site && values['no-interactive']) {
         console.error(
-          'error: `imprint teach` requires a <site> argument in --no-interactive mode.\n  <site> is a label you choose — it names the output folder under examples/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
+          'error: `imprint teach` requires a <site> argument in --no-interactive mode.\n  <site> is a label you choose — it names the output folder under ~/.imprint/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
         );
         return 2;
       }
@@ -849,6 +857,7 @@ async function main(argv: string[]): Promise<number> {
           noInteractive: values['no-interactive'],
           provider: values.provider as ProviderName | undefined,
           keepTest: values['keep-test'],
+          allTools: values['all-tools'],
         });
       } finally {
         process.removeListener('SIGINT', onSigint);
@@ -868,20 +877,35 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(1),
         options: {
           'session-path': { type: 'string' },
+          'tool-dir': { type: 'string' },
           'example-dir': { type: 'string' },
+          'candidate-json': { type: 'string' },
+          'shared-context-json': { type: 'string' },
         },
         allowPositionals: false,
       });
-      if (!values['session-path'] || !values['example-dir']) {
+      const toolDir = values['tool-dir'] ?? values['example-dir'];
+      if (!values['session-path'] || !toolDir) {
         console.error(
-          'error: __mcp-compile-server requires --session-path <path> and --example-dir <path>',
+          'error: __mcp-compile-server requires --session-path <path> and --tool-dir <path>',
         );
         return 2;
       }
       const { runCompileMcpServer } = await import('./imprint/mcp-compile-server.ts');
+      const { ToolCandidateSchema, SharedCompileContextSchema } = await import(
+        './imprint/tool-candidates.ts'
+      );
+      const candidate = values['candidate-json']
+        ? ToolCandidateSchema.parse(JSON.parse(values['candidate-json']))
+        : undefined;
+      const sharedContext = values['shared-context-json']
+        ? SharedCompileContextSchema.parse(JSON.parse(values['shared-context-json']))
+        : undefined;
       await runCompileMcpServer({
         sessionPath: values['session-path'],
-        exampleDir: values['example-dir'],
+        toolDir,
+        candidate,
+        sharedContext,
       });
       return 0;
     }

@@ -14,6 +14,7 @@ import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-t
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
+import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-codex-cli');
@@ -25,13 +26,15 @@ const MAX_VERIFICATION_CYCLES = 5;
 
 interface CompileViaCodexCliOptions {
   session: Session;
-  absoluteExampleDir: string;
+  absoluteToolDir: string;
   sessionPath: string;
   systemPromptPath: string;
   deadlineMs: number;
   startTime: number;
   onProgress?: (p: CompileAgentProgress) => void;
   keepTest?: boolean;
+  candidate?: ToolCandidate;
+  sharedContext?: SharedCompileContext;
 }
 
 interface CodexJsonEvent {
@@ -60,9 +63,9 @@ interface CodexJsonEvent {
 export async function compileViaCodexCli(
   opts: CompileViaCodexCliOptions,
 ): Promise<CompileAgentResult> {
-  mkdirSync(opts.absoluteExampleDir, { recursive: true });
+  mkdirSync(opts.absoluteToolDir, { recursive: true });
   for (const name of [COMPILE_SENTINELS.done, COMPILE_SENTINELS.giveUp]) {
-    const p = pathJoin(opts.absoluteExampleDir, name);
+    const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
       try {
         unlinkSync(p);
@@ -82,8 +85,10 @@ export async function compileViaCodexCli(
     '__mcp-compile-server',
     '--session-path',
     sessionPathAbs,
-    '--example-dir',
-    opts.absoluteExampleDir,
+    '--tool-dir',
+    opts.absoluteToolDir,
+    ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
+    ...(opts.sharedContext ? ['--shared-context-json', JSON.stringify(opts.sharedContext)] : []),
   ];
 
   let systemPrompt: string;
@@ -100,8 +105,9 @@ ${systemPrompt}
 A new compile task is starting.
 
 Session path: ${sessionPathAbs}
-Example directory: ${opts.absoluteExampleDir}
-You will write artifacts into the example directory.
+Tool directory: ${opts.absoluteToolDir}
+You will write artifacts into the tool directory.
+${formatCandidateContext(opts.candidate, opts.sharedContext)}
 
 Use the imprint-compile MCP tools to inspect the session, write artifacts, run tests, and call done(). Begin by calling read_session_summary, then proceed per the system instructions.`;
 
@@ -185,8 +191,8 @@ async function driveJsonl(
     });
   };
 
-  const doneSentinel = pathJoin(opts.absoluteExampleDir, COMPILE_SENTINELS.done);
-  const giveUpSentinel = pathJoin(opts.absoluteExampleDir, COMPILE_SENTINELS.giveUp);
+  const doneSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.done);
+  const giveUpSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.giveUp);
 
   const sentinelTimer = setInterval(() => {
     if (!existsSync(doneSentinel) && !existsSync(giveUpSentinel)) return;
@@ -278,16 +284,16 @@ async function driveJsonl(
     log(`unflushed stdout tail (${stdoutBuf.length} bytes) discarded`);
   }
 
-  const conversationLogPath = pathJoin(opts.absoluteExampleDir, '.compile-log.json');
+  const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
   try {
     writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
   } catch (err) {
     log(`failed to persist conversation log: ${errMsg(err)}`);
   }
 
-  const workflowPath = pathJoin(opts.absoluteExampleDir, 'workflow.json');
-  const parserPath = pathJoin(opts.absoluteExampleDir, 'parser.ts');
-  const parserTestPath = pathJoin(opts.absoluteExampleDir, 'parser.test.ts');
+  const workflowPath = pathJoin(opts.absoluteToolDir, 'workflow.json');
+  const parserPath = pathJoin(opts.absoluteToolDir, 'parser.ts');
+  const parserTestPath = pathJoin(opts.absoluteToolDir, 'parser.test.ts');
 
   const verifiedOk =
     existsSync(doneSentinel) &&
@@ -409,8 +415,8 @@ function codexToolName(item: NonNullable<CodexJsonEvent['item']>): string | unde
 }
 
 function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): CompileAgentResult {
-  mkdirSync(opts.absoluteExampleDir, { recursive: true });
-  const conversationLogPath = pathJoin(opts.absoluteExampleDir, '.compile-log.json');
+  mkdirSync(opts.absoluteToolDir, { recursive: true });
+  const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
   try {
     writeFileSync(conversationLogPath, JSON.stringify({ error: message }, null, 2), 'utf8');
   } catch {
@@ -426,6 +432,21 @@ function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): Com
     inputTokens: 0,
     outputTokens: 0,
   };
+}
+
+function formatCandidateContext(
+  candidate: ToolCandidate | undefined,
+  sharedContext: SharedCompileContext | undefined,
+): string {
+  if (!candidate && !sharedContext) return '';
+  return `
+Selected candidate context:
+${candidate ? JSON.stringify(candidate, null, 2) : '(none)'}
+
+Shared compile context:
+${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
+
+Compile only the selected candidate. Do not create tools for other actions in the recording.`;
 }
 
 function errMsg(err: unknown): string {

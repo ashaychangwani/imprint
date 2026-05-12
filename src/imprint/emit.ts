@@ -1,4 +1,4 @@
-/** `imprint emit` — generate examples/<site>/<toolName>/index.ts: a thin wrapper
+/** `imprint emit` — generate <assetRoot>/<site>/<toolName>/index.ts: a thin wrapper
  *  around runtime.executeWorkflow with the workflow JSON embedded inline. */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -46,7 +46,7 @@ export function emit(opts: EmitOptions): EmitResult {
     );
   }
 
-  // Generated files live in examples/<site>/<toolName>/.
+  // Generated files live in <IMPRINT_HOME>/<site>/<toolName>/ by default.
   const runtimeModule = pathResolve(import.meta.dir, 'runtime.ts');
   const importPath = relative(outDir, runtimeModule);
 
@@ -94,7 +94,7 @@ function renderModule(workflow: Workflow, runtimeImportPath: string): string {
  * Site: ${workflow.site}
  * Intent: ${workflow.intent.description}
  *
- * To regenerate: imprint emit examples/${workflow.site}/${workflow.toolName}/workflow.json --force
+ * To regenerate: imprint emit ~/.imprint/${workflow.site}/${workflow.toolName}/workflow.json --force
  */
 
 import { fileURLToPath } from 'node:url';

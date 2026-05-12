@@ -1,6 +1,6 @@
 /**
  * `imprint cron <site>` — polling daemon for a generated tool. Loads
- * examples/<site>/<toolName>/cron.json, schedules via node-cron, runs the tool
+ * <IMPRINT_HOME>/<site>/<toolName>/cron.json, schedules via node-cron, runs the tool
  * through the configured backend ladder per tick, and pushes via
  * notify.ts on failure (or on a notifyWhen predicate match).
  *
@@ -15,6 +15,7 @@ import { resolveLadder, runWithLadder } from './backend-ladder.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog, isDebug } from './log.ts';
 import { evaluateNotifyWhen, notify } from './notify.ts';
+import { imprintHomeDir } from './paths.ts';
 import { loadBackendsCache } from './probe-backends.ts';
 import { checkSiteCredentialsReady } from './runtime.ts';
 import { availableSitesHint } from './sites.ts';
@@ -29,11 +30,10 @@ import {
 } from './types.ts';
 
 interface RunCronOptions {
-  /** Example directory under examples/, e.g. "discoverandgo". */
   site: string;
-  /** Override examples directory. Defaults to <cwd>/examples. */
-  examplesDir?: string;
-  /** Override config path. Defaults to <examplesDir>/<site>/<toolName>/cron.json. */
+  /** Override generated asset root. Defaults to IMPRINT_HOME (~/.imprint). */
+  assetRoot?: string;
+  /** Override config path. Defaults to <assetRoot>/<site>/<toolName>/cron.json. */
   configPath?: string;
   /** Run a single tick and exit. Mutually exclusive with runNow. */
   once?: boolean;
@@ -72,7 +72,7 @@ async function runOnce(
   notifyFetchImpl: typeof fetch | undefined,
   notifyWhen: NotifyWhen | undefined,
   ladder: ConcreteBackend[],
-  examplesDir: string,
+  assetRoot: string,
   stealthCache: Map<string, StealthFetch>,
 ): Promise<ToolResult> {
   const startedAt = new Date();
@@ -85,7 +85,7 @@ async function runOnce(
     ladder,
     tool,
     params,
-    examplesDir,
+    assetRoot,
     stealthCache,
   );
 
@@ -174,19 +174,19 @@ export async function runCron(opts: RunCronOptions): Promise<void> {
 }
 
 async function runCronImpl(opts: RunCronOptions): Promise<void> {
-  const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
+  const assetRoot = opts.assetRoot ?? imprintHomeDir();
   // Discover tool first so we know the workflow directory.
-  const discovered = await discoverTools(examplesDir, opts.site, '[imprint cron]');
+  const discovered = await discoverTools(assetRoot, opts.site, '[imprint cron]');
   const tool = discovered[0];
   if (!tool) {
     throw new Error(
-      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/<toolName>/workflow.json\` first.`,
+      `No generated tool found for site "${opts.site}".\n${availableSitesHint(assetRoot, opts.site)}\n→ run \`imprint teach ${opts.site}\` or \`imprint emit ~/.imprint/${opts.site}/<toolName>/workflow.json\` first.`,
     );
   }
   const configPath = opts.configPath ?? pathResolve(tool.dir, 'cron.json');
   if (!existsSync(configPath)) {
     throw new Error(
-      `cron.json not found at ${configPath}\n${availableSitesHint(examplesDir, opts.site)}\n→ create one with: {"schedule":"0 9 * * *","params":{},"replayBackend":"auto"}\n→ see docs/getting-started.md for full schema.`,
+      `cron.json not found at ${configPath}\n${availableSitesHint(assetRoot, opts.site)}\n→ create one with: {"schedule":"0 9 * * *","params":{},"replayBackend":"auto"}\n→ see docs/getting-started.md for full schema.`,
     );
   }
   const config = loadCronConfig(configPath);
@@ -218,7 +218,7 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
 
   // Probe cache reorders the 'auto' ladder to start with the empirically
   // cheapest known-working backend.
-  const cached = loadBackendsCache(opts.site, examplesDir, tool.dir);
+  const cached = loadBackendsCache(opts.site, assetRoot, tool.dir);
   if (cached) {
     log(
       `backends.json: probed ${cached.probedAt}, preferred order: ${cached.preferredOrder.join(' → ')}`,
@@ -261,7 +261,7 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
     opts.notifyFetchImpl,
     config.notifyWhen,
     ladder,
-    examplesDir,
+    assetRoot,
     stealthCache,
   ] as const;
 

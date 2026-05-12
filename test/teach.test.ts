@@ -22,6 +22,7 @@ describe('teach verb', () => {
     expect(flags).toContain('--url <url>');
     expect(flags).toContain('--persist-profile');
     expect(flags).toContain('--no-interactive');
+    expect(flags).toContain('--all-tools');
   });
 });
 

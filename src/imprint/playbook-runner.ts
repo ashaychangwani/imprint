@@ -1,9 +1,15 @@
 /** Execute a parsed Playbook against a real Chromium via Playwright. */
 
 import { existsSync, readFileSync } from 'node:fs';
+import {
+  isAbsolute as pathIsAbsolute,
+  relative as pathRelative,
+  resolve as pathResolve,
+} from 'node:path';
 import type { Browser, BrowserContext, Locator as PWLocator, Page } from 'playwright';
 import { extractAt } from './json-path.ts';
 import { createLog } from './log.ts';
+import { imprintHomeDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { substituteString } from './runtime.ts';
 import type {
@@ -31,7 +37,7 @@ interface RunPlaybookOptions {
    *  and inject them into the browser context before navigation. Required
    *  for authenticated playbooks. Callers (backend-ladder, the `playbook`
    *  CLI verb) should pass it explicitly so this works regardless of
-   *  whether the skill lives under `examples/`, `~/.hermes/skills/`,
+   *  whether the skill lives under `~/.imprint/`, `~/.hermes/skills/`,
    *  `~/.openclaw/skills/`, or anywhere else. */
   site?: string;
 }
@@ -97,9 +103,8 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
 
     // Inject credentials.cookies into the browser so the playbook can navigate
     // an authenticated flow (e.g., my-trips → reservation → seat map). Prefer
-    // the explicit opts.site (works under any layout: examples/, ~/.hermes/skills/,
-    // ~/.openclaw/skills/, …). Fall back to path inference only when the caller
-    // hasn't supplied one and the playbook lives at examples/<site>/<workflow>/.
+    // the explicit opts.site. Fall back to path inference only when the caller
+    // hasn't supplied one and the playbook lives under IMPRINT_HOME.
     const site = opts.site ?? inferSiteFromPath(opts.playbook);
     if (site) {
       try {
@@ -447,14 +452,14 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Backwards-compat fallback for callers that don't pass opts.site explicitly.
- *  Only fires for the in-repo `examples/<site>/<workflow>/playbook.yaml` layout. */
+/** Fallback for callers that don't pass opts.site explicitly.
+ *  Only fires for the `<IMPRINT_HOME>/<site>/<tool>/playbook.yaml` layout. */
 function inferSiteFromPath(playbookInput: string | Playbook): string | null {
   if (typeof playbookInput !== 'string') return null;
-  const parts = playbookInput.split('/');
-  const examplesIdx = parts.lastIndexOf('examples');
-  if (examplesIdx >= 0 && examplesIdx < parts.length - 2) {
-    return parts[examplesIdx + 1] ?? null;
-  }
-  return null;
+  const root = imprintHomeDir();
+  const target = pathResolve(playbookInput);
+  const relative = pathRelative(root, target);
+  if (relative.startsWith('..') || pathIsAbsolute(relative)) return null;
+  const [site] = relative.split('/');
+  return site || null;
 }

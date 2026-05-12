@@ -7,15 +7,17 @@
  * factored into a CompileTask config.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonArray, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
+import { localToolDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { redactSession } from './redact.ts';
+import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   type Playbook,
   type Session,
@@ -39,6 +41,10 @@ interface CompileOptions {
   /** If true, send the FULL session to the LLM (don't shrink). Useful for
    *  debugging when shrinking might be over-aggressive. Default false. */
   noShrink?: boolean;
+  /** Candidate-specific compile scope for multi-tool teach. */
+  candidate?: ToolCandidate;
+  /** Shared auth/helper guidance generated once for a multi-tool teach run. */
+  sharedContext?: SharedCompileContext;
 }
 
 // ─── generate (workflow.json) ────────────────────────────────────────────────
@@ -50,6 +56,8 @@ interface GenerateOptions extends CompileOptions {
   onProgress?: (p: CompileAgentProgress) => void;
   /** Retain parser.test.ts after successful verification. */
   keepTest?: boolean;
+  /** Directory where workflow.json/parser.ts/parser.test.ts are written. */
+  outDir?: string;
 }
 
 interface GenerateResult {
@@ -65,12 +73,16 @@ interface GenerateResult {
 }
 
 export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
+  const outDir = opts.outDir ?? (opts.outPath ? dirname(opts.outPath) : undefined);
   const result = await compileAgent({
     sessionPath: opts.sessionPath,
     maxDurationMs: opts.maxDurationMs,
     llmConfig: opts.llmConfig,
     onProgress: opts.onProgress,
     keepTest: opts.keepTest,
+    outDir,
+    candidate: opts.candidate,
+    sharedContext: opts.sharedContext,
   });
 
   if (!result.success) {
@@ -98,16 +110,43 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
     },
     'workflow',
   );
+  let workflowPath = opts.outPath ?? result.workflowPath;
+  if (!opts.outDir && !opts.outPath) {
+    workflowPath = relocateGeneratedWorkflow(result.workflowPath, workflow);
+  }
+  if (opts.outPath && opts.outPath !== result.workflowPath) {
+    writeFileSync(opts.outPath, `${JSON.stringify(workflow, null, 2)}\n`, 'utf8');
+  }
 
   return {
     workflow,
-    workflowPath: result.workflowPath,
+    workflowPath,
     requestsSent: 0, // legacy field — no longer meaningful for agentic compile
     requestsOriginal: 0, // legacy field
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
     durationMs: result.durationMs,
   };
+}
+
+function relocateGeneratedWorkflow(workflowPath: string, workflow: Workflow): string {
+  const sourceDir = dirname(workflowPath);
+  const finalDir = localToolDir(workflow.site, workflow.toolName);
+  if (sourceDir === finalDir) return workflowPath;
+  mkdirSync(finalDir, { recursive: true });
+  for (const artifact of [
+    'workflow.json',
+    'parser.ts',
+    'parser.test.ts',
+    '.compile-log.json',
+    '.compile-done.json',
+    '.compile-give-up.json',
+  ]) {
+    const source = pathJoin(sourceDir, artifact);
+    if (!existsSync(source)) continue;
+    renameSync(source, pathJoin(finalDir, artifact));
+  }
+  return pathJoin(finalDir, 'workflow.json');
 }
 
 /**
@@ -332,6 +371,8 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
   const slimmed = {
     site: session.site,
     url: session.url,
+    candidate: opts.candidate,
+    sharedContext: opts.sharedContext,
     narration: session.narration,
     events: session.events,
     requests: xhrs,
@@ -344,7 +385,11 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
       `Prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
     );
   }
-  const systemPrompt = readFileSync(promptPath, 'utf8');
+  const systemPrompt = `${readFileSync(promptPath, 'utf8')}${
+    opts.candidate
+      ? `\n\nCandidate scope:\nCompile only this candidate: ${JSON.stringify(opts.candidate, null, 2)}\nShared context: ${JSON.stringify(opts.sharedContext ?? {}, null, 2)}\nThe playbook toolName and parameters must match the selected candidate/workflow, not any other action in the recording.\n`
+      : ''
+  }`;
 
   const llm = resolveProvider(opts.llmConfig ?? {});
   const result = await llm.analyze(systemPrompt, slimmed);

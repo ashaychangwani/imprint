@@ -60,7 +60,7 @@ export async function runWithLadder(
   ladder: ConcreteBackend[],
   tool: ResolvedTool,
   params: Record<string, string | number | boolean>,
-  examplesDir: string,
+  assetRoot: string,
   stealthCache: Map<string, StealthFetch>,
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
@@ -72,7 +72,7 @@ export async function runWithLadder(
   let lastResult: ToolResult | null = null;
 
   for (const backend of effectiveLadder) {
-    if (backend === 'playbook' && !existsSync(playbookPath(examplesDir, tool.site, tool.dir))) {
+    if (backend === 'playbook' && !existsSync(playbookPath(assetRoot, tool.site, tool.dir))) {
       attempts.push({
         backend,
         outcome: 'unavailable',
@@ -101,7 +101,7 @@ export async function runWithLadder(
         }
         case 'playbook':
           result = await runPlaybook({
-            playbook: playbookPath(examplesDir, tool.site, tool.dir),
+            playbook: playbookPath(assetRoot, tool.site, tool.dir),
             params,
             site: tool.site,
           });
@@ -548,7 +548,7 @@ function pickBaseUrl(tool: ResolvedTool): string {
   );
 }
 
-function playbookPath(examplesDir: string, site: string, toolDir?: string): string {
+function playbookPath(assetRoot: string, site: string, toolDir?: string): string {
   if (toolDir) return pathResolve(toolDir, 'playbook.yaml');
-  return pathResolve(examplesDir, site, 'playbook.yaml');
+  return pathResolve(assetRoot, site, 'playbook.yaml');
 }

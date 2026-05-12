@@ -2,8 +2,10 @@ import { describe, expect, it } from 'bun:test';
 import { resolve as pathResolve } from 'node:path';
 import {
   defaultSessionJsonlPath,
+  imprintHomeDir,
   localSessionsDir,
   localSiteDir,
+  localToolDir,
   relativeToLocalSite,
   resolveLocalSitePath,
 } from '../src/imprint/paths.ts';
@@ -23,7 +25,11 @@ describe('local imprint paths', () => {
 
   it('stores default recordings under the local imprint home', () => {
     withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(imprintHomeDir()).toBe(pathResolve('/tmp', 'imprint-home'));
       expect(localSiteDir('southwest')).toBe(pathResolve('/tmp', 'imprint-home', 'southwest'));
+      expect(localToolDir('southwest', 'search_flights')).toBe(
+        pathResolve('/tmp', 'imprint-home', 'southwest', 'search_flights'),
+      );
       expect(localSessionsDir('southwest')).toBe(
         pathResolve('/tmp', 'imprint-home', 'southwest', 'sessions'),
       );

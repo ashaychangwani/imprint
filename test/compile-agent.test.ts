@@ -14,7 +14,7 @@ import type { Session } from '../src/imprint/types.ts';
 
 interface TestSetup {
   sessionPath: string;
-  exampleDir: string;
+  toolDir: string;
   tmpDir: string;
 }
 
@@ -56,26 +56,15 @@ function createTestSession(): TestSetup {
 
   writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
 
-  // Example dir is determined by the agent code: REPO_ROOT/examples/<site>
-  // In our test we're using a temporary session, but the agent code still
-  // resolves to REPO_ROOT/examples/<site>. We need to intercept that.
-  // Actually, looking at compile-agent.ts line 96, it uses:
-  //   const absoluteExampleDir = pathJoin(REPO_ROOT, 'examples', session.site);
-  // We can't easily override REPO_ROOT. Instead, we'll use the real structure
-  // and clean up after. Let's put the session in a real examples/ subdirectory.
+  const toolDir = pathJoin(tmpDir, 'testsite', 'test_tool');
 
-  // Better: let's keep the session in tmpDir, and accept that exampleDir will be
-  // REPO_ROOT/examples/testsite. We'll clean that up after the test.
-  const repoRoot = pathJoin(import.meta.dir, '..');
-  const exampleDir = pathJoin(repoRoot, 'examples', 'testsite');
-
-  return { sessionPath, exampleDir, tmpDir };
+  return { sessionPath, toolDir, tmpDir };
 }
 
 function cleanup(setup: TestSetup) {
   rmSync(setup.tmpDir, { recursive: true, force: true });
-  if (existsSync(setup.exampleDir)) {
-    rmSync(setup.exampleDir, { recursive: true, force: true });
+  if (existsSync(setup.toolDir)) {
+    rmSync(setup.toolDir, { recursive: true, force: true });
   }
 }
 
@@ -89,18 +78,18 @@ describe('compileAgent — external verification checks', () => {
   it('verification: workflow.json must exist', async () => {
     const setup = createTestSession();
 
-    // Create the example directory
+    // Create the tool directory
     const { mkdirSync } = await import('node:fs');
-    mkdirSync(setup.exampleDir, { recursive: true });
+    mkdirSync(setup.toolDir, { recursive: true });
 
     // Write parser.ts and parser.test.ts but NOT workflow.json
     writeFileSync(
-      pathJoin(setup.exampleDir, 'parser.ts'),
+      pathJoin(setup.toolDir, 'parser.ts'),
       'export function extract(data: any) { return { items: data.items }; }',
       'utf8',
     );
     writeFileSync(
-      pathJoin(setup.exampleDir, 'parser.test.ts'),
+      pathJoin(setup.toolDir, 'parser.test.ts'),
       `import { expect, it } from 'bun:test';
 import { extract } from './parser.ts';
 it('test1', () => { expect(extract({ items: [1] }).items.length).toBe(1); });
@@ -117,8 +106,8 @@ it('test3', () => { expect(extract({ items: [] }).items).toEqual([]); });`,
     // 3. Testing via a live LLM call (not a unit test)
 
     // For now, we'll verify the file structure checks work.
-    expect(existsSync(pathJoin(setup.exampleDir, 'workflow.json'))).toBe(false);
-    expect(existsSync(pathJoin(setup.exampleDir, 'parser.ts'))).toBe(true);
+    expect(existsSync(pathJoin(setup.toolDir, 'workflow.json'))).toBe(false);
+    expect(existsSync(pathJoin(setup.toolDir, 'parser.ts'))).toBe(true);
 
     cleanup(setup);
   });
@@ -127,10 +116,10 @@ it('test3', () => { expect(extract({ items: [] }).items).toEqual([]); });`,
     const setup = createTestSession();
 
     const { mkdirSync } = await import('node:fs');
-    mkdirSync(setup.exampleDir, { recursive: true });
+    mkdirSync(setup.toolDir, { recursive: true });
 
     writeFileSync(
-      pathJoin(setup.exampleDir, 'parser.test.ts'),
+      pathJoin(setup.toolDir, 'parser.test.ts'),
       `import { expect, it } from 'bun:test';
 it('trivial', () => {
   expect(true).toBe(true);
@@ -138,7 +127,7 @@ it('trivial', () => {
       'utf8',
     );
 
-    const content = readFileSync(pathJoin(setup.exampleDir, 'parser.test.ts'), 'utf8');
+    const content = readFileSync(pathJoin(setup.toolDir, 'parser.test.ts'), 'utf8');
     const expectCount = (content.match(/expect\s*\(/g) || []).length;
     expect(expectCount).toBe(1); // would fail verification (need >= 3)
 
@@ -149,7 +138,7 @@ it('trivial', () => {
     const setup = createTestSession();
 
     const { mkdirSync } = await import('node:fs');
-    mkdirSync(setup.exampleDir, { recursive: true });
+    mkdirSync(setup.toolDir, { recursive: true });
 
     const trivialTest = `import { expect, it } from 'bun:test';
 it('test', () => {
@@ -158,9 +147,9 @@ it('test', () => {
   expect(true).toBe(true);
 });`;
 
-    writeFileSync(pathJoin(setup.exampleDir, 'parser.test.ts'), trivialTest, 'utf8');
+    writeFileSync(pathJoin(setup.toolDir, 'parser.test.ts'), trivialTest, 'utf8');
 
-    const content = readFileSync(pathJoin(setup.exampleDir, 'parser.test.ts'), 'utf8');
+    const content = readFileSync(pathJoin(setup.toolDir, 'parser.test.ts'), 'utf8');
     const hasTrivial = /expect\s*\(\s*true\s*\)\.toBe\s*\(\s*true\s*\)/.test(content);
     expect(hasTrivial).toBe(true); // would fail verification
 
@@ -171,17 +160,17 @@ it('test', () => {
     const setup = createTestSession();
 
     const { mkdirSync } = await import('node:fs');
-    mkdirSync(setup.exampleDir, { recursive: true });
+    mkdirSync(setup.toolDir, { recursive: true });
 
     writeFileSync(
-      pathJoin(setup.exampleDir, 'parser.ts'),
+      pathJoin(setup.toolDir, 'parser.ts'),
       'export function wrongName(data: any) { return data; }',
       'utf8',
     );
 
     // Dynamic import to check
     try {
-      const mod = await import(`file://${pathJoin(setup.exampleDir, 'parser.ts')}?t=${Date.now()}`);
+      const mod = await import(`file://${pathJoin(setup.toolDir, 'parser.ts')}?t=${Date.now()}`);
       expect(typeof mod.extract).toBe('function'); // would fail
     } catch {
       // Import failed or extract not exported
@@ -195,15 +184,15 @@ it('test', () => {
     const setup = createTestSession();
 
     const { mkdirSync } = await import('node:fs');
-    mkdirSync(setup.exampleDir, { recursive: true });
+    mkdirSync(setup.toolDir, { recursive: true });
 
     writeFileSync(
-      pathJoin(setup.exampleDir, 'parser.ts'),
+      pathJoin(setup.toolDir, 'parser.ts'),
       'export function extract(data: any) { return { items: data.items }; }',
       'utf8',
     );
     writeFileSync(
-      pathJoin(setup.exampleDir, 'parser.test.ts'),
+      pathJoin(setup.toolDir, 'parser.test.ts'),
       `import { expect, it } from 'bun:test';
 import { extract } from './parser.ts';
 it('should fail', () => {
@@ -216,7 +205,7 @@ it('should fail', () => {
 
     // Run bun test
     const proc = Bun.spawn(['bun', 'test', 'parser.test.ts'], {
-      cwd: setup.exampleDir,
+      cwd: setup.toolDir,
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -230,15 +219,15 @@ it('should fail', () => {
     const setup = createTestSession();
 
     const { mkdirSync } = await import('node:fs');
-    mkdirSync(setup.exampleDir, { recursive: true });
+    mkdirSync(setup.toolDir, { recursive: true });
 
     writeFileSync(
-      pathJoin(setup.exampleDir, 'workflow.json'),
+      pathJoin(setup.toolDir, 'workflow.json'),
       JSON.stringify({ invalid: 'schema' }),
       'utf8',
     );
 
-    const content = readFileSync(pathJoin(setup.exampleDir, 'workflow.json'), 'utf8');
+    const content = readFileSync(pathJoin(setup.toolDir, 'workflow.json'), 'utf8');
     let isValid = false;
     try {
       const parsed = JSON.parse(content);
@@ -257,7 +246,7 @@ it('should fail', () => {
     const setup = createTestSession();
 
     const { mkdirSync } = await import('node:fs');
-    mkdirSync(setup.exampleDir, { recursive: true });
+    mkdirSync(setup.toolDir, { recursive: true });
 
     const validWorkflow = {
       toolName: 'test_tool',
@@ -274,17 +263,17 @@ it('should fail', () => {
     };
 
     writeFileSync(
-      pathJoin(setup.exampleDir, 'workflow.json'),
+      pathJoin(setup.toolDir, 'workflow.json'),
       JSON.stringify(validWorkflow, null, 2),
       'utf8',
     );
     writeFileSync(
-      pathJoin(setup.exampleDir, 'parser.ts'),
+      pathJoin(setup.toolDir, 'parser.ts'),
       'export function extract(data) { return { items: data.items || [] }; }',
       'utf8',
     );
     writeFileSync(
-      pathJoin(setup.exampleDir, 'parser.test.ts'),
+      pathJoin(setup.toolDir, 'parser.test.ts'),
       `import { expect, it } from 'bun:test';
 import { extract } from './parser.ts';
 it('extracts empty items', () => {
@@ -302,7 +291,7 @@ it('extracts multiple items', () => {
 
     // Run bun test to verify it passes
     const proc = Bun.spawn(['bun', 'test', 'parser.test.ts'], {
-      cwd: setup.exampleDir,
+      cwd: setup.toolDir,
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -311,13 +300,13 @@ it('extracts multiple items', () => {
 
     // Verify workflow.json parses
     const workflowContent = JSON.parse(
-      readFileSync(pathJoin(setup.exampleDir, 'workflow.json'), 'utf8'),
+      readFileSync(pathJoin(setup.toolDir, 'workflow.json'), 'utf8'),
     );
     expect(workflowContent.toolName).toBe('test_tool');
 
     // Verify parser.ts exports extract
     const cacheBust = Date.now();
-    const fileUrl = `file://${pathJoin(setup.exampleDir, 'parser.ts')}?t=${cacheBust}`;
+    const fileUrl = `file://${pathJoin(setup.toolDir, 'parser.ts')}?t=${cacheBust}`;
     try {
       const mod = await import(fileUrl);
       expect(typeof mod.extract).toBe('function');
@@ -337,7 +326,7 @@ it('extracts multiple items', () => {
 
     // We'd need to run the actual agent to create the log.
     // Verify the expected path convention.
-    const expectedLogPath = pathJoin(setup.exampleDir, '.compile-log.json');
+    const expectedLogPath = pathJoin(setup.toolDir, '.compile-log.json');
     expect(expectedLogPath).toContain('.compile-log.json');
 
     cleanup(setup);

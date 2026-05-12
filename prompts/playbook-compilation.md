@@ -10,6 +10,8 @@ You will receive a JSON object with this shape:
 {
   "site": "string",
   "url": "string (starting URL)",
+  "candidate": { "toolName": "optional selected tool scope", "...": "..." },
+  "sharedContext": { "loginRequestSeqs": [1], "...": "optional shared auth/helper guidance" },
   "narration": [
     { "timestamp": ms, "text": "what the user said they were doing" }
   ],
@@ -28,6 +30,8 @@ You will receive a JSON object with this shape:
 ```
 
 Most events are noise — focus changes, hover, accidental clicks the user reverted. The narration is your highest-signal input: timestamps tell you which events the user actually meant.
+
+If `candidate` is present, compile only that candidate. Ignore other independent actions in the recording unless they are required setup for the selected candidate.
 
 ## Output
 

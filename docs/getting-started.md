@@ -41,7 +41,7 @@ imprint doctor
 
 Pick a site you want to automate. Internal admin panels, dashboards, and authed tools all work — anything you can drive in a browser.
 
-Pick a short, descriptive label for `<site>` — it becomes the directory name for generated tools under `examples/` and private recordings under `~/.imprint/`. Examples: `google-flights`, `southwest`, `company-dashboard`.
+Pick a short, descriptive label for `<site>` — it becomes the directory name for generated tools and private recordings under `~/.imprint/` (or `IMPRINT_HOME`). Examples: `google-flights`, `southwest`, `company-dashboard`.
 
 ```bash
 # 1. Record yourself doing the thing once
@@ -59,17 +59,17 @@ imprint redact "$SESSION"
 
 # 4. LLM-compile two artifacts (workflow.json + playbook.yaml)
 imprint generate "${SESSION%.json}.redacted.json"
-imprint compile-playbook "${SESSION%.json}.redacted.json"
-#   → Outputs: examples/google-flights/{workflow.json, playbook.yaml}
+#   → Output: ~/.imprint/google-flights/<toolName>/workflow.json
+imprint compile-playbook "${SESSION%.json}.redacted.json" --out ~/.imprint/google-flights/<toolName>/playbook.yaml
 
 # 5. Emit the executable TS module
-imprint emit examples/google-flights/search_google_flights/workflow.json
-#   → Output: examples/google-flights/index.ts
+imprint emit ~/.imprint/google-flights/search_google_flights/workflow.json
+#   → Output: ~/.imprint/google-flights/search_google_flights/index.ts
 
 # 6. (Optional) Probe which backends work and cache the order.
 #    Safe to skip for plain APIs; useful for bot-protected sites.
 imprint probe-backends mysite
-#   → Output: examples/google-flights/search_google_flights/backends.json
+#   → Output: ~/.imprint/google-flights/search_google_flights/backends.json
 
 # 7. Test it
 imprint mcp-server google-flights    # stdio MCP server

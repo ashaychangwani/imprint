@@ -21,16 +21,16 @@ function withTemp<T>(fn: (dir: string) => T): T {
 }
 
 describe('availableSitesHint', () => {
-  it("says examples/ doesn't exist when the dir is missing", () => {
+  it("says the generated asset root doesn't exist when the dir is missing", () => {
     const result = availableSitesHint('/nope/missing-dir', 'whatever');
-    expect(result).toMatch(/examples\/ doesn't exist/);
+    expect(result).toMatch(/generated asset root doesn't exist/);
     expect(result).toMatch(/imprint teach/);
   });
 
-  it('says examples/ is empty when the dir has no children', () => {
+  it('says the generated asset root is empty when the dir has no children', () => {
     withTemp((dir) => {
       const result = availableSitesHint(dir, 'whatever');
-      expect(result).toMatch(/examples\/ is empty/);
+      expect(result).toMatch(/generated asset root is empty/);
       expect(result).toMatch(/imprint teach/);
     });
   });

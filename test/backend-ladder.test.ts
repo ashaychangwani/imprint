@@ -341,7 +341,7 @@ describe('runWithLadder — auto escalation', () => {
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    // examplesDir/alpha/playbook.yaml does NOT exist
+    // assetRoot/alpha/playbook.yaml does NOT exist
     const r = await runWithLadder(
       ['fetch', 'stealth-fetch', 'playbook'],
       tool,

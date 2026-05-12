@@ -1,6 +1,6 @@
 /**
  * `imprint probe-backends <site>` — try each backend once and write the
- * ranked working order to examples/<site>/<toolName>/backends.json. cron + MCP
+ * ranked working order to <IMPRINT_HOME>/<site>/<toolName>/backends.json. cron + MCP
  * read it at startup so they skip futile rungs every tick for sites
  * where one backend is known-blocked.
  */
@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import { runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
+import { imprintHomeDir } from './paths.ts';
 import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { type ResolvedTool, discoverTools } from './tool-loader.ts';
@@ -24,10 +25,11 @@ import { VERSION } from './version.ts';
 
 interface ProbeBackendsOptions {
   site: string;
-  examplesDir?: string;
+  /** Override generated asset root. Defaults to IMPRINT_HOME (~/.imprint). */
+  assetRoot?: string;
   /** Override params instead of reading cron.json / workflow defaults. */
   paramOverrides?: Record<string, string | number | boolean>;
-  /** Where to write backends.json. Defaults to <examplesDir>/<site>/<toolName>/backends.json. */
+  /** Where to write backends.json. Defaults to <assetRoot>/<site>/<toolName>/backends.json. */
   outPath?: string;
 }
 
@@ -39,12 +41,12 @@ interface ProbeBackendsResult {
 const log = createLog('probe');
 
 export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBackendsResult> {
-  const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
-  const discovered = await discoverTools(examplesDir, opts.site, '[imprint probe]');
+  const assetRoot = opts.assetRoot ?? imprintHomeDir();
+  const discovered = await discoverTools(assetRoot, opts.site, '[imprint probe]');
   const tool = discovered[0];
   if (!tool) {
     throw new Error(
-      `No generated tool found for site "${opts.site}".\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/${opts.site}/<toolName>/workflow.json\` first.`,
+      `No generated tool found for site "${opts.site}".\n${availableSitesHint(assetRoot, opts.site)}\n→ run \`imprint teach ${opts.site}\` or \`imprint emit ~/.imprint/${opts.site}/<toolName>/workflow.json\` first.`,
     );
   }
   const outPath = opts.outPath ?? pathResolve(tool.dir, 'backends.json');
@@ -70,7 +72,7 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
       [backend],
       tool,
       params,
-      examplesDir,
+      assetRoot,
       stealthCache,
     );
     const durationMs = Date.now() - t0;
@@ -166,7 +168,7 @@ function capabilityHash(workflow: ResolvedTool['workflow']): string {
  *  falls back to the default ladder; a stale cache must never break cron. */
 export function loadBackendsCache(
   site: string,
-  _examplesDir: string,
+  _assetRoot: string,
   toolDir?: string,
 ): BackendsCache | null {
   if (!toolDir) return null;

@@ -31,6 +31,7 @@ import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-t
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
+import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-claude-cli');
@@ -42,7 +43,7 @@ const MAX_VERIFICATION_CYCLES = 5;
 
 interface CompileViaClaudeCliOptions {
   session: Session;
-  absoluteExampleDir: string;
+  absoluteToolDir: string;
   sessionPath: string;
   systemPromptPath: string;
   deadlineMs: number;
@@ -51,6 +52,8 @@ interface CompileViaClaudeCliOptions {
   /** Retain parser.test.ts after successful verification. Mirrors the
    *  in-process loop's `keepTest`. */
   keepTest?: boolean;
+  candidate?: ToolCandidate;
+  sharedContext?: SharedCompileContext;
 }
 
 interface StreamJsonEvent {
@@ -81,11 +84,11 @@ interface StreamJsonEvent {
 export async function compileViaClaudeCli(
   opts: CompileViaClaudeCliOptions,
 ): Promise<CompileAgentResult> {
-  // Ensure example dir exists and clear any prior sentinels — a stale
+  // Ensure tool dir exists and clear any prior sentinels — a stale
   // sentinel from a previous run would short-circuit our success detection.
-  mkdirSync(opts.absoluteExampleDir, { recursive: true });
+  mkdirSync(opts.absoluteToolDir, { recursive: true });
   for (const name of [COMPILE_SENTINELS.done, COMPILE_SENTINELS.giveUp]) {
-    const p = pathJoin(opts.absoluteExampleDir, name);
+    const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
       try {
         unlinkSync(p); // remove, not truncate — existsSync() is what gates success/give-up detection later
@@ -112,8 +115,12 @@ export async function compileViaClaudeCli(
           '__mcp-compile-server',
           '--session-path',
           sessionPathAbs,
-          '--example-dir',
-          opts.absoluteExampleDir,
+          '--tool-dir',
+          opts.absoluteToolDir,
+          ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
+          ...(opts.sharedContext
+            ? ['--shared-context-json', JSON.stringify(opts.sharedContext)]
+            : []),
         ],
       },
     },
@@ -122,8 +129,9 @@ export async function compileViaClaudeCli(
   const initialPrompt = `A new compile task is starting.
 
 Session path: ${sessionPathAbs}
-Example directory: ${opts.absoluteExampleDir}
-You will write artifacts into the example directory.
+Tool directory: ${opts.absoluteToolDir}
+You will write artifacts into the tool directory.
+${formatCandidateContext(opts.candidate, opts.sharedContext)}
 
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
 
@@ -327,7 +335,7 @@ async function driveStreamJson(
   }
 
   // Persist conversation log for post-mortem.
-  const conversationLogPath = pathJoin(opts.absoluteExampleDir, '.compile-log.json');
+  const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
   try {
     writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
   } catch (err) {
@@ -335,11 +343,11 @@ async function driveStreamJson(
   }
 
   // Inspect sentinels to determine outcome.
-  const doneSentinel = pathJoin(opts.absoluteExampleDir, COMPILE_SENTINELS.done);
-  const giveUpSentinel = pathJoin(opts.absoluteExampleDir, COMPILE_SENTINELS.giveUp);
-  const workflowPath = pathJoin(opts.absoluteExampleDir, 'workflow.json');
-  const parserPath = pathJoin(opts.absoluteExampleDir, 'parser.ts');
-  const parserTestPath = pathJoin(opts.absoluteExampleDir, 'parser.test.ts');
+  const doneSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.done);
+  const giveUpSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.giveUp);
+  const workflowPath = pathJoin(opts.absoluteToolDir, 'workflow.json');
+  const parserPath = pathJoin(opts.absoluteToolDir, 'parser.ts');
+  const parserTestPath = pathJoin(opts.absoluteToolDir, 'parser.test.ts');
 
   // Determine success up-front so we can clean up the ephemeral parser.test.ts
   // before constructing baseResult (which captures parserTestPath via existsSync).
@@ -461,8 +469,8 @@ async function driveStreamJson(
 }
 
 function finalErrorResult(opts: CompileViaClaudeCliOptions, message: string): CompileAgentResult {
-  mkdirSync(opts.absoluteExampleDir, { recursive: true });
-  const conversationLogPath = pathJoin(opts.absoluteExampleDir, '.compile-log.json');
+  mkdirSync(opts.absoluteToolDir, { recursive: true });
+  const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
   try {
     writeFileSync(conversationLogPath, JSON.stringify({ error: message }, null, 2), 'utf8');
   } catch {
@@ -478,6 +486,21 @@ function finalErrorResult(opts: CompileViaClaudeCliOptions, message: string): Co
     inputTokens: 0,
     outputTokens: 0,
   };
+}
+
+function formatCandidateContext(
+  candidate: ToolCandidate | undefined,
+  sharedContext: SharedCompileContext | undefined,
+): string {
+  if (!candidate && !sharedContext) return '';
+  return `
+Selected candidate context:
+${candidate ? JSON.stringify(candidate, null, 2) : '(none)'}
+
+Shared compile context:
+${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
+
+Compile only the selected candidate. Do not create tools for other actions in the recording.`;
 }
 
 function errMsg(err: unknown): string {

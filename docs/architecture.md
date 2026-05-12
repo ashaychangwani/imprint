@@ -30,7 +30,7 @@ Both are auto-discovered by the cron daemon and the MCP server, which dispatch t
        imprint emit                                 │
               │                                     │
               ▼                                     │
-   examples/<site>/<toolName>/index.ts              │
+   ~/.imprint/<site>/<toolName>/index.ts            │
               │                                     │
               ▼                                     ▼
    ┌─────────────────────────────────────────────────────────┐
@@ -57,9 +57,9 @@ src/imprint/
 ├── llm.ts               Vertex Anthropic wrapper + JSON extractor
 ├── playbook-parser.ts   YAML → Playbook (Zod-validated)
 │
-├── emit.ts              workflow.json → examples/<site>/<toolName>/index.ts
+├── emit.ts              workflow.json → ~/.imprint/<site>/<toolName>/index.ts
 ├── runtime.ts           executeWorkflow — substitutions + chain + classification
-├── tool-loader.ts       Discover examples/<site>/<toolName>/index.ts modules
+├── tool-loader.ts       Discover ~/.imprint/<site>/<toolName>/index.ts modules
 │
 ├── backend-ladder.ts    runWithLadder + resolveLadder
 ├── stealth-fetch.ts     Headless Chromium → mint sensor tokens → native fetch
@@ -89,16 +89,16 @@ src/imprint/
 | `stealth-fetch` | ~12s bootstrap (one-time) + ~1s | Akamai, Cloudflare, DataDome (token tier) |
 | `playbook` | ~9.4s | Universal — also handles form-fills, autocompletes, multi-page |
 
-`auto` mode walks the ladder. The probe-backends cache (`examples/<site>/<toolName>/backends.json`) reorders the ladder so cron + MCP start with the cheapest known-working backend.
+`auto` mode walks the ladder. The probe-backends cache (`~/.imprint/<site>/<toolName>/backends.json`) reorders the ladder so cron + MCP start with the cheapest known-working backend.
 
-## File taxonomy per example
+## File taxonomy
 
 ```
-examples/<site>/<toolName>/
-├── workflow.json               output of `imprint generate`     (committed)
-├── parser.ts                   API-response → structured output (committed)
-├── playbook.yaml               output of `imprint compile-playbook` (committed)
-├── index.ts                    output of `imprint emit` (consumed by cron + MCP) (committed)
+~/.imprint/<site>/<toolName>/
+├── workflow.json               output of `imprint generate`
+├── parser.ts                   API-response → structured output
+├── playbook.yaml               output of `imprint compile-playbook`
+├── index.ts                    output of `imprint emit` (consumed by cron + MCP)
 ├── cron.json                   schedule + params + replayBackend + notifyWhen
 └── backends.json               output of `imprint probe-backends`
 
@@ -107,6 +107,8 @@ examples/<site>/<toolName>/
 ├── <ts>.json                   assembled session
 └── <ts>.redacted.json          after `imprint redact`
 ```
+
+The tracked `examples/` directory remains as source fixtures and demos, but runtime discovery and generated assets live under `IMPRINT_HOME` (`~/.imprint` by default).
 
 **Ephemeral artifacts** the compile-agent writes during a run but does not persist:
 

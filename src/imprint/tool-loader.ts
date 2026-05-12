@@ -1,4 +1,4 @@
-/** Discover + load generated tools from examples/<site>/<toolName>/index.ts. Used
+/** Discover + load generated tools from <assetRoot>/<site>/<toolName>/index.ts. Used
  *  by mcp-server, cron, and probe-backends. */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
@@ -17,7 +17,7 @@ interface GeneratedModule {
 }
 
 export interface ResolvedTool {
-  /** Directory name under examples/, e.g. "discoverandgo". */
+  /** Directory name under the asset root, e.g. "discoverandgo". */
   site: string;
   /** Absolute path to the directory containing workflow.json, playbook.yaml, etc. */
   dir: string;
@@ -25,19 +25,19 @@ export interface ResolvedTool {
   toolFn: GeneratedToolFn;
 }
 
-/** Scan examples/, dynamically import each nested tool index.ts. Per-entry
+/** Scan the generated asset root, dynamically import each nested tool index.ts. Per-entry
  *  errors go to stderr and the entry is skipped — discovery never throws. */
 export async function discoverTools(
-  examplesDir: string,
+  assetRoot: string,
   only?: string,
   logPrefix = '[imprint]',
 ): Promise<ResolvedTool[]> {
-  if (!existsSync(examplesDir)) return [];
-  const entries = readdirSync(examplesDir);
+  if (!existsSync(assetRoot)) return [];
+  const entries = readdirSync(assetRoot);
   const out: ResolvedTool[] = [];
   for (const entry of entries) {
     if (only && entry !== only) continue;
-    const dir = pathResolve(examplesDir, entry);
+    const dir = pathResolve(assetRoot, entry);
     let isDir = false;
     try {
       isDir = statSync(dir).isDirectory();
@@ -46,7 +46,7 @@ export async function discoverTools(
     }
     if (!isDir) continue;
 
-    // Tool layout: examples/<site>/<toolName>/index.ts
+    // Tool layout: <assetRoot>/<site>/<toolName>/index.ts
     for (const sub of readdirSync(dir)) {
       const subDir = pathResolve(dir, sub);
       try {

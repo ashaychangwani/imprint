@@ -129,7 +129,7 @@ describe('runCron({ once: true })', () => {
   it('invokes the tool once with the configured params on the ok path', async () => {
     writeFakeExample('echo_once', [{ name: 'msg', type: 'string' }]);
     writeConfig('echo_once', { schedule: '* * * * *', params: { msg: 'hi' } });
-    await runCron({ site: 'echo_once', examplesDir: root, once: true });
+    await runCron({ site: 'echo_once', assetRoot: root, once: true });
     // The fake tool stashes its input on globalThis for verification.
     expect((globalThis as Record<string, unknown>).__IMPRINT_TEST_LAST_INPUT).toEqual({
       msg: 'hi',
@@ -142,13 +142,13 @@ describe('runCron({ once: true })', () => {
 
     // 1. From an unset baseline, quiet:true should not leak.
     expect(process.env.IMPRINT_QUIET).toBeUndefined();
-    await runCron({ site: 'quiet_test', examplesDir: root, once: true, quiet: true });
+    await runCron({ site: 'quiet_test', assetRoot: root, once: true, quiet: true });
     expect(process.env.IMPRINT_QUIET).toBeUndefined();
 
     // 2. From a pre-existing value, quiet:true should restore it.
     process.env.IMPRINT_QUIET = 'preset-value';
     try {
-      await runCron({ site: 'quiet_test', examplesDir: root, once: true, quiet: true });
+      await runCron({ site: 'quiet_test', assetRoot: root, once: true, quiet: true });
       expect(process.env.IMPRINT_QUIET).toBe('preset-value');
     } finally {
       // biome-ignore lint/performance/noDelete: env restoration needs real deletion
@@ -156,7 +156,7 @@ describe('runCron({ once: true })', () => {
     }
 
     // 3. quiet:false (or omitted) should never touch the env at all.
-    await runCron({ site: 'quiet_test', examplesDir: root, once: true });
+    await runCron({ site: 'quiet_test', assetRoot: root, once: true });
     expect(process.env.IMPRINT_QUIET).toBeUndefined();
   });
 
@@ -165,7 +165,7 @@ describe('runCron({ once: true })', () => {
     writeConfig('throws_test', { schedule: 'NOT VALID CRON', params: {} });
     expect(process.env.IMPRINT_QUIET).toBeUndefined();
     await expect(
-      runCron({ site: 'throws_test', examplesDir: root, once: true, quiet: true }),
+      runCron({ site: 'throws_test', assetRoot: root, once: true, quiet: true }),
     ).rejects.toThrow();
     expect(process.env.IMPRINT_QUIET).toBeUndefined();
   });
@@ -173,7 +173,7 @@ describe('runCron({ once: true })', () => {
   it('rejects an invalid cron expression before scheduling', async () => {
     writeFakeExample('bad_sched', []);
     writeConfig('bad_sched', { schedule: 'not a cron expression', params: {} });
-    await expect(runCron({ site: 'bad_sched', examplesDir: root, once: true })).rejects.toThrow(
+    await expect(runCron({ site: 'bad_sched', assetRoot: root, once: true })).rejects.toThrow(
       /Invalid cron expression/,
     );
   });
@@ -181,14 +181,14 @@ describe('runCron({ once: true })', () => {
   it('rejects when params do not match the workflow contract', async () => {
     writeFakeExample('typed', [{ name: 'count', type: 'number' }]);
     writeConfig('typed', { schedule: '* * * * *', params: { count: 'not-a-number' } });
-    await expect(runCron({ site: 'typed', examplesDir: root, once: true })).rejects.toThrow(
+    await expect(runCron({ site: 'typed', assetRoot: root, once: true })).rejects.toThrow(
       /params invalid/,
     );
   });
 
   it('throws when cron.json is missing', async () => {
     writeFakeExample('no_config', []);
-    await expect(runCron({ site: 'no_config', examplesDir: root, once: true })).rejects.toThrow(
+    await expect(runCron({ site: 'no_config', assetRoot: root, once: true })).rejects.toThrow(
       /cron\.json not found/,
     );
   });
@@ -201,7 +201,7 @@ describe('runCron({ once: true })', () => {
       JSON.stringify({ schedule: '* * * * *', params: {} }),
       'utf8',
     );
-    await expect(runCron({ site: 'orphan', examplesDir: root, once: true })).rejects.toThrow(
+    await expect(runCron({ site: 'orphan', assetRoot: root, once: true })).rejects.toThrow(
       /No generated tool found/,
     );
   });
@@ -210,7 +210,7 @@ describe('runCron({ once: true })', () => {
     writeFakeExample('combo', []);
     writeConfig('combo', { schedule: '* * * * *', params: {} });
     await expect(
-      runCron({ site: 'combo', examplesDir: root, once: true, runNow: true }),
+      runCron({ site: 'combo', assetRoot: root, once: true, runNow: true }),
     ).rejects.toThrow(/cannot combine --once with --run-now/);
   });
 
@@ -219,7 +219,7 @@ describe('runCron({ once: true })', () => {
     writeConfig('thrower', { schedule: '* * * * *', params: {} });
     process.env.IMPRINT_TEST_RESULT = 'throw';
     // Should not reject — runOnce surfaces the throw as an UNKNOWN ToolResult.
-    await runCron({ site: 'thrower', examplesDir: root, once: true });
+    await runCron({ site: 'thrower', assetRoot: root, once: true });
   });
 });
 
@@ -235,7 +235,7 @@ describe('Pushover hook', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'no_push',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -255,7 +255,7 @@ describe('Pushover hook', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'with_push',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -280,7 +280,7 @@ describe('Pushover hook', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'success_push',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -313,7 +313,7 @@ describe('ntfy hook', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'with_ntfy',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -344,7 +344,7 @@ describe('ntfy hook', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'ntfy_auth',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -368,7 +368,7 @@ describe('ntfy hook', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'both_providers',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -389,7 +389,7 @@ describe('ntfy hook', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'no_ntfy',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -414,7 +414,7 @@ describe('notifyWhen (push-on-success predicate)', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'fares_match',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -442,7 +442,7 @@ describe('notifyWhen (push-on-success predicate)', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'fares_nomatch',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -465,7 +465,7 @@ describe('notifyWhen (push-on-success predicate)', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'fail_with_when',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -499,7 +499,7 @@ describe('notifyWhen (push-on-success predicate)', () => {
     }) as unknown as typeof fetch;
     await runCron({
       site: 'bad_path',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });
@@ -516,7 +516,7 @@ describe('replayBackend', () => {
       params: {},
       replayBackend: 'playbook',
     });
-    await expect(runCron({ site: 'no_playbook', examplesDir: root, once: true })).rejects.toThrow(
+    await expect(runCron({ site: 'no_playbook', assetRoot: root, once: true })).rejects.toThrow(
       /playbook\.yaml.*doesn't exist/,
     );
   });
@@ -525,7 +525,7 @@ describe('replayBackend', () => {
     writeFakeExample('plain_fetch', []);
     writeConfig('plain_fetch', { schedule: '* * * * *', params: {} });
     // No notifyWhen → no push expected even on success. Just verify no throw.
-    await runCron({ site: 'plain_fetch', examplesDir: root, once: true });
+    await runCron({ site: 'plain_fetch', assetRoot: root, once: true });
   });
 
   it('replayBackend=auto without a playbook behaves like fetch', async () => {
@@ -546,7 +546,7 @@ describe('replayBackend', () => {
     process.env.PUSHOVER_USER = 'user';
     await runCron({
       site: 'auto_no_playbook',
-      examplesDir: root,
+      assetRoot: root,
       once: true,
       notifyFetchImpl: fakeNotifyFetch,
     });

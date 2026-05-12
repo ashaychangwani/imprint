@@ -121,7 +121,7 @@ Common causes:
 
 2. **Restart required.** Claude Desktop reads config only at startup.
 
-3. **No examples/<site>/<toolName>/index.ts.** Imprint discovers tools by scanning nested tool directories under `examples/`. If you haven't run `imprint emit`, there's nothing to expose.
+3. **No `~/.imprint/<site>/<toolName>/index.ts`.** Imprint discovers tools by scanning nested tool directories under `IMPRINT_HOME` (`~/.imprint` by default). If you haven't run `imprint teach` or `imprint emit`, there's nothing to expose.
 
 4. **Vertex env not set.** MCP server starts fine without it, but tool calls fail. Set `ANTHROPIC_VERTEX_PROJECT_ID`.
 
@@ -149,9 +149,9 @@ Headed mode opens a visible Chromium so you can watch it run.
 
 The generated workflow expects a `param.X`, but you didn't pass it. The error message lists which params *were* passed (or, if none, the exact `--param X=<value>` to add).
 
-For `imprint cron`, the params live in `examples/<site>/<toolName>/cron.json` under the `params` key. For `imprint mcp-server`, the agent passes them in the tool call.
+For `imprint cron`, the params live in `~/.imprint/<site>/<toolName>/cron.json` under the `params` key. For `imprint mcp-server`, the agent passes them in the tool call.
 
-If the param name in the workflow looks wrong (e.g. `q` instead of `query`), edit `examples/<site>/<toolName>/workflow.json`'s `parameters` array — the runtime substitutes by name.
+If the param name in the workflow looks wrong (e.g. `q` instead of `query`), edit `~/.imprint/<site>/<toolName>/workflow.json`'s `parameters` array — the runtime substitutes by name.
 
 ## "Invalid cron expression in cron.json"
 

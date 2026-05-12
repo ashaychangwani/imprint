@@ -7,7 +7,7 @@ Names you'll see in code, docs, and CLI output.
 | **Session** | A captured browser run: every network request + every DOM event + the user's narration. On disk: `~/.imprint/<site>/sessions/<ts>.{jsonl,json}`. |
 | **Workflow** | The API-replay artifact compiled from a session. A chain of `WorkflowRequest` records with `${param}` / `${response[N]}` substitutions. On disk: `workflow.json`. |
 | **Playbook** | The DOM-replay artifact compiled from a session. A list of typed steps (`navigate`, `click`, `type`, `submit`, `press`, `wait`) with locator-priority arrays. On disk: `playbook.yaml`. |
-| **Tool** | The user-facing object: a `runWorkflow(input)`-style function exposed as MCP, scheduled by cron, or invoked directly. The generated `examples/<site>/<toolName>/index.ts` exports one. |
+| **Tool** | The user-facing object: a `runWorkflow(input)`-style function exposed as MCP, scheduled by cron, or invoked directly. The generated `~/.imprint/<site>/<toolName>/index.ts` exports one. |
 | **Generated module** | The TypeScript file emitted by `imprint emit` — a thin wrapper over `runtime.executeWorkflow` with the workflow inlined. Self-contained, committable. |
 | **Backend** | A replay strategy. Three exist: `fetch`, `stealth-fetch`, `playbook`. |
 | **Backend ladder** | An ordered list of backends `runWithLadder` walks; first non-FORBIDDEN result wins. `auto` is a meta-value that expands to the cached preferred order or the default. |
