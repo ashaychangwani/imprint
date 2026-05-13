@@ -17,7 +17,7 @@ git clone https://github.com/ashaychangwani/imprint.git
 cd imprint
 bun install
 bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
-bunx playwright install chromium  # for stealth-fetch + playbook backends
+bunx playwright install chromium  # for fetch-bootstrap, stealth-fetch, and playbook backends
 ```
 
 If `imprint --help` says "command not found" after `bun link`, your `~/.bun/bin` isn't on `PATH`. Either add it (Bun's installer normally does this) or skip `bun link` and call everything via `bun src/cli.ts <verb>`.
@@ -60,15 +60,15 @@ imprint redact "$SESSION"
 # 4. LLM-compile two artifacts (workflow.json + playbook.yaml)
 imprint generate "${SESSION%.json}.redacted.json"
 imprint compile-playbook "${SESSION%.json}.redacted.json"
-#   → Outputs: examples/google-flights/{workflow.json, playbook.yaml}
+#   → Outputs: examples/google-flights/search_google_flights/{workflow.json, playbook.yaml}
 
 # 5. Emit the executable TS module
 imprint emit examples/google-flights/search_google_flights/workflow.json
-#   → Output: examples/google-flights/index.ts
+#   → Output: examples/google-flights/search_google_flights/index.ts
 
 # 6. (Optional) Probe which backends work and cache the order.
-#    Safe to skip for plain APIs; useful for bot-protected sites.
-imprint probe-backends mysite
+#    Safe to skip for plain APIs; useful for stateful or bot-protected sites.
+imprint probe-backends google-flights
 #   → Output: examples/google-flights/search_google_flights/backends.json
 
 # 7. Test it
@@ -76,6 +76,8 @@ imprint mcp-server google-flights    # stdio MCP server
 ```
 
 You now have an MCP tool any agent can call.
+
+Stateful workflows still run through the same generated tool. If a request sets a cookie or response value that a later request needs, the workflow compiler emits named captures and `${state.NAME}` placeholders. Plain HTTP producers stay on the fast `fetch` path; browser bootstrap is used only when the workflow declares that Chromium is needed to mint the state.
 
 ## Connect to your AI tool
 
