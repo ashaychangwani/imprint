@@ -12,7 +12,7 @@ For high-stakes recordings (a real booking flow you can't easily redo), follow t
 ## Run the capture
 
 ```bash
-cd /Users/achangwani/Desktop/repos/imprint
+cd /path/to/imprint
 imprint record discoverandgo --url https://www.discoverandgo.net --persist-profile
 ```
 
@@ -64,15 +64,16 @@ A Chromium window opens with the D&G homepage. Drive it normally:
 | Clicks, inputs, form submits — with element tag, id, text, aria-label, selector, value | Injected JS listener → `Runtime.consoleAPICalled` | Playbook (`click`/`type`/`submit` steps with locator priority) |
 | WebSocket frames (if any) | CDP `Network.webSocketFrameSent/Received` | (v0.2 codegen) |
 | Cookies at start AND end | CDP `Network.getAllCookies` | `imprint login` credential store |
+| localStorage/sessionStorage snapshots | Page evaluation at relevant origins | State captures + durable storage credentials |
 | Your narration | Terminal stdin loop | LLM intent identification (both compilers) |
 
 Password fields are auto-redacted before being captured. Other input values are captured verbatim (truncated to 200 chars per value).
 
 **One recording, two artifacts.** The same session.json compiles to both:
-- `imprint generate` → `workflow.json` → `imprint emit` → `index.ts` (API replay path)
+- `imprint generate` → `workflow.json` → `imprint emit` → `index.ts` (API replay path, including named state captures)
 - `imprint compile-playbook` → `playbook.yaml` (DOM replay path)
 
-You don't have to commit to one or the other when you record. Generate both; the cron / MCP layer picks which to use per `replayBackend` config (`fetch` / `playbook` / `auto`).
+You don't have to commit to one or the other when you record. Generate both; the cron / MCP layer picks which to use per `replayBackend` config (`fetch` / `fetch-bootstrap` / `stealth-fetch` / `playbook` / `auto`).
 
 ## After the recording — verify it worked
 
@@ -125,7 +126,7 @@ Don't try to restart the recorder mid-booking. Finish what you started. The code
 Solve it manually inside the Chromium window. The recorder doesn't care. Solving captchas is part of the workflow we want to capture (so the LLM knows to expect it).
 
 **The site uses bot-detection (Akamai, DataDome, Cloudflare, PerimeterX, etc.):**
-The recording will succeed (you're using a real browser), but **replay may fail** because those systems generate per-session opaque tokens that go stale within minutes. Imprint's intent-detection prompt is taught to drop the common patterns (Akamai's `EE30zvQLWf-a/b/c/d/f/z`-style headers, `dd-*`, `cf-*`, etc.) so the generated workflow doesn't try to replay them. If replay still fails with 403 / 429 / a CAPTCHA page in the response body, the site is fingerprinting beyond headers (TLS, timing) and Imprint can't help — pivot to a less-protected alternative.
+The recording will succeed because you are using a real browser. Replay may need more than plain fetch because those systems generate per-session opaque tokens that go stale within minutes. The compiler should avoid hard-coding common bot headers and instead use `fetch-bootstrap` or `stealth-fetch` when browser-minted state is required. If replay still fails with 403 / 429 / a CAPTCHA page in the response body, probe the backends and inspect whether the workflow needs a bootstrap capture, stealth tokens, or full playbook replay.
 
 **The redactor scrubbed `X-API-Key` (or another header) you know is public:**
 Re-run with `--keep-header`:

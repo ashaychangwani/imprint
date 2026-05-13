@@ -8,7 +8,7 @@ Recording produces:
 
 | File | Contains | Where |
 |---|---|---|
-| `<ts>.jsonl` | Full request bodies, response bodies, headers (incl. `Authorization`, `Cookie`, `Set-Cookie`), cookie snapshots | `~/.imprint/<site>/sessions/` |
+| `<ts>.jsonl` | Full request bodies, response bodies, headers (incl. `Authorization`, `Cookie`, `Set-Cookie`), cookie snapshots, storage snapshots | `~/.imprint/<site>/sessions/` |
 | `<ts>.json` | Same, assembled | `~/.imprint/<site>/sessions/` |
 
 Sessions are **not** redacted by default. The raw recording exists for `imprint generate` to consume; redaction is a separate step.
@@ -26,8 +26,11 @@ imprint redact ~/.imprint/<site>/sessions/<ts>.json
 ```
 
 What gets scrubbed:
-- Values of any field whose name matches the [SENSITIVE_KEYS](../src/imprint/redact.ts) list (passwords, tokens, API keys, session IDs, CSRF tokens, common patron-ID patterns, etc.) — replaced with `[REDACTED:N]` markers (N = original length, so the LLM still sees shape).
-- Common free-form PII and secrets in text-like response bodies, JSON string values, URL path segments, and captured DOM / WebSocket event details. This supplemental scan catches emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, webhook URLs, package-registry tokens, and common secret assignments.
+- Values of any field whose name matches the [SENSITIVE_KEYS](../src/imprint/redact.ts) list (passwords, tokens, API keys, session IDs, CSRF tokens, common patron-ID patterns, etc.) — replaced with redaction markers. New redacted artifacts use equality-preserving markers such as `[REDACTED:v3:id=7:len=24]`; old `[REDACTED:N]` markers remain accepted but do not preserve equality hints.
+- Cookie and `Set-Cookie` values are redacted structure-aware: cookie names and safe attributes remain visible, while values become equality markers. This lets the compiler see that an earlier response cookie became a later request header without exposing the cookie value.
+- Common free-form PII and secrets in text-like response bodies, JSON string values, URL path segments, captured storage, and captured DOM / WebSocket event details. This supplemental scan catches emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, webhook URLs, package-registry tokens, and common secret assignments.
+
+Equality marker IDs are scoped to one redacted artifact. They contain no hash of the original secret, are not stable across redaction runs, and are never valid runtime placeholders. Generated workflows should reference semantic capture names such as `${state.csrf}`, never marker IDs.
 
 ## What redaction doesn't catch
 
@@ -42,14 +45,14 @@ If you're using Imprint on a site with unusual auth, **audit the redacted sessio
 
 ## Credential storage
 
-`imprint login` writes per-site credentials to `~/.config/imprint/credentials/<site>.json` (or the OS equivalent — Imprint uses [`env-paths`](https://www.npmjs.com/package/env-paths)). Permissions are whatever your umask defaults to; on a multi-user box, restrict the directory:
+`imprint login` writes per-site credentials through the credential backend. On desktops this uses the OS keychain when available; on headless machines it falls back to a libsodium-encrypted file under the OS-specific config directory. Earlier plaintext JSON stores remain readable for migration only.
 
 ```bash
-chmod 700 ~/.config/imprint
-chmod 600 ~/.config/imprint/credentials/*.json
+imprint credential list <site>
+imprint credential migrate
 ```
 
-Credentials never leave your machine. The LLM compile step works on redacted sessions only.
+Stored credentials can include named secrets, cookies, and declared durable storage keys. Credentials never leave your machine unless you explicitly export an encrypted `.imprintbundle`. The LLM compile step works on redacted sessions only.
 
 ## Vertex AI / LLM data flow
 
@@ -76,6 +79,6 @@ The TS module emitted by `imprint emit` is the executable artifact your MCP / cr
 - The full `workflow.json` inlined as a constant (so the file is committable and self-contained).
 - A thin wrapper around `runtime.executeWorkflow`.
 
-It does NOT contain credentials — those are loaded from the credential store at runtime. Generated files can be committed to a private repo without exposing secrets, *provided* the workflow.json was generated from a redacted session (which it always is — `generate` enforces this).
+It does NOT contain credential values, cookie values, storage values, or redaction marker maps — those are loaded from the credential store or captured at runtime. Generated files can be committed to a private repo without exposing secrets, *provided* the workflow.json was generated from a redacted session (which it always is — `generate` enforces this).
 
 If you committed a non-redacted workflow.json by mistake: rotate the cookies / tokens visible in it, then re-run `redact` + `generate` from a fresh recording.
