@@ -16,9 +16,9 @@ import { setSpanAttributes, traced } from './tracing.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
-const BODY_LIMIT = 1200;
-const RESPONSE_PREVIEW_LIMIT = 2000;
-const HEADER_LIMIT = 1200;
+const BODY_LIMIT = 800;
+const RESPONSE_PREVIEW_LIMIT = 500;
+const HEADER_LIMIT = 600;
 const log = createLog('candidates');
 
 function normalizeCandidateParamType(value: unknown): unknown {
@@ -236,51 +236,62 @@ export function buildSharedCompileContext(
   };
 }
 
+interface CandidateRequestPayload {
+  seq: number;
+  timestamp: number;
+  method: string;
+  url: string;
+  resourceType: string;
+  status?: number;
+  mimeType?: string;
+  headers: string;
+  body?: string;
+  bodyLength?: number;
+  responsePreview?: string;
+  responseBodyLength?: number;
+  credentialPlaceholders: string[];
+  likelyLoginOrAuth: boolean;
+  repeatCount?: number;
+  repeatedSeqs?: number[];
+  lastTimestamp?: number;
+}
+
 interface ToolCandidatePayload {
   site: string;
   url: string;
   narration: Array<{ seq: number; timestamp: number; text: string }>;
   events: Array<{ seq: number; timestamp: number; type: string; detail: string }>;
-  requests: Array<{
-    seq: number;
-    timestamp: number;
-    method: string;
-    url: string;
-    resourceType: string;
-    status?: number;
-    mimeType?: string;
-    headers: string;
-    body?: string;
-    responsePreview?: string;
-    credentialPlaceholders: string[];
-    likelyLoginOrAuth: boolean;
-  }>;
+  requests: CandidateRequestPayload[];
 }
 
 export function buildToolCandidatePayload(session: Session): ToolCandidatePayload {
   const startUrl = safeUrl(session.url);
   const startRoot = startUrl ? registrableDomain(startUrl.hostname) : null;
-  const requests = session.requests
-    .filter((request) => isCandidateRequest(request, startRoot))
-    .map((request) => {
-      const body = truncate(request.body, BODY_LIMIT);
-      const responsePreview = truncate(request.response?.body, RESPONSE_PREVIEW_LIMIT);
-      const placeholderText = `${request.url}\n${JSON.stringify(request.headers)}\n${request.body ?? ''}`;
-      return {
-        seq: request.seq,
-        timestamp: request.timestamp,
-        method: request.method,
-        url: request.url,
-        resourceType: request.resourceType,
-        status: request.response?.status,
-        mimeType: request.response?.mimeType,
-        headers: truncate(JSON.stringify(request.headers), HEADER_LIMIT) ?? '{}',
-        body,
-        responsePreview,
-        credentialPlaceholders: credentialPlaceholders(placeholderText),
-        likelyLoginOrAuth: likelyLoginOrAuth(request),
-      };
-    });
+  const requests = compactCandidateRequests(
+    session.requests
+      .filter((request) => isCandidateRequest(request, startRoot))
+      .map((request) => {
+        const body = truncate(request.body, BODY_LIMIT);
+        const responsePreview = truncate(request.response?.body, RESPONSE_PREVIEW_LIMIT);
+        const placeholderText = `${request.url}\n${JSON.stringify(request.headers)}\n${request.body ?? ''}`;
+        return {
+          seq: request.seq,
+          timestamp: request.timestamp,
+          method: request.method,
+          url: request.url,
+          resourceType: request.resourceType,
+          status: request.response?.status,
+          mimeType: request.response?.mimeType,
+          headers: truncate(JSON.stringify(request.headers), HEADER_LIMIT) ?? '{}',
+          body,
+          bodyLength: request.body?.length,
+          responsePreview,
+          responseBodyLength: request.response?.body?.length,
+          credentialPlaceholders: credentialPlaceholders(placeholderText),
+          likelyLoginOrAuth: likelyLoginOrAuth(request),
+        };
+      }),
+  );
 
   return {
     site: session.site,
@@ -298,6 +309,42 @@ export function buildToolCandidatePayload(session: Session): ToolCandidatePayloa
     })),
     requests,
   };
+}
+
+function compactCandidateRequests(requests: CandidateRequestPayload[]): CandidateRequestPayload[] {
+  const out: CandidateRequestPayload[] = [];
+  const seen = new Map<string, CandidateRequestPayload>();
+
+  for (const request of requests) {
+    const key = candidateRequestGroupKey(request);
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, request);
+      out.push(request);
+      continue;
+    }
+
+    existing.repeatCount = (existing.repeatCount ?? 1) + 1;
+    existing.repeatedSeqs = [...(existing.repeatedSeqs ?? [existing.seq]), request.seq];
+    existing.lastTimestamp = request.timestamp;
+  }
+
+  return out;
+}
+
+function candidateRequestGroupKey(request: CandidateRequestPayload): string {
+  return JSON.stringify([
+    request.method,
+    request.url,
+    request.body,
+    request.bodyLength,
+    request.status,
+    request.mimeType,
+    request.responsePreview,
+    request.responseBodyLength,
+    request.credentialPlaceholders,
+    request.likelyLoginOrAuth,
+  ]);
 }
 
 function isCandidateRequest(request: CapturedRequest, startRoot: string | null): boolean {

@@ -54,6 +54,28 @@ describe('tool candidate payload', () => {
     expect(payload.requests[0]?.likelyLoginOrAuth).toBe(true);
     expect(payload.requests[1]?.likelyLoginOrAuth).toBe(false);
   });
+
+  it('compacts identical repeated requests before sending candidate context', () => {
+    const duplicateSession: Session = {
+      ...session,
+      requests: [
+        ...session.requests,
+        {
+          ...(session.requests[1] as Session['requests'][number]),
+          seq: 4,
+          timestamp: 250,
+        },
+      ],
+    };
+
+    const payload = buildToolCandidatePayload(duplicateSession);
+    const repeated = payload.requests.find((r) => r.seq === 2);
+
+    expect(payload.requests.map((r) => r.seq)).toEqual([1, 2]);
+    expect(repeated?.repeatCount).toBe(2);
+    expect(repeated?.repeatedSeqs).toEqual([2, 4]);
+    expect(repeated?.lastTimestamp).toBe(250);
+  });
 });
 
 describe('tool candidate validation', () => {

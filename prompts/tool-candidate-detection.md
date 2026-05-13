@@ -47,6 +47,9 @@ Rules:
 7. Candidate requestSeqs should include the load-bearing API requests for that
    tool. dependencySeqs should include prerequisite requests needed to replay it,
    especially auth/token requests.
+   Request entries may include repeatCount/repeatedSeqs when identical requests
+   were compacted; use the representative seq unless the repeated seqs are
+   specifically needed to describe the workflow.
 8. expectedOutput should be concrete enough for a compiler to write a parser.
 9. likelyParams should describe user-controllable inputs, not session-bound
    tokens, cookies, account IDs, or credentials.

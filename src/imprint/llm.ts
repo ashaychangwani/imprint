@@ -431,17 +431,7 @@ Return only the final artifact requested by the system instructions. If they req
       async () => {
         const t0 = Date.now();
 
-        const args = [
-          'codex',
-          '-a',
-          'never',
-          'exec',
-          '-m',
-          this.model,
-          '-s',
-          'read-only',
-          '--ephemeral',
-        ];
+        const args = codexAnalyzeArgs(this.model);
 
         let proc: ReturnType<typeof Bun.spawn>;
         try {
@@ -490,6 +480,23 @@ Return only the final artifact requested by the system instructions. If they req
       },
     );
   }
+}
+
+export function codexAnalyzeArgs(model: string): string[] {
+  return [
+    'codex',
+    '-a',
+    'never',
+    'exec',
+    '-m',
+    model,
+    '-s',
+    'read-only',
+    '--ephemeral',
+    '--ignore-user-config',
+    '--ignore-rules',
+    '--skip-git-repo-check',
+  ];
 }
 
 export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string): string {

@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  codexAnalyzeArgs,
   collectCliProcessOutput,
   detectProvider,
   extractJsonObject,
@@ -107,6 +108,18 @@ describe('collectCliProcessOutput', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('ok');
     expect(result.stderr.length).toBe(2048 * 1024);
+  });
+});
+
+describe('codexAnalyzeArgs', () => {
+  it('isolates generic Codex JSON calls from user MCP config and repo rules', () => {
+    const args = codexAnalyzeArgs('gpt-test');
+
+    expect(args).toContain('--ignore-user-config');
+    expect(args).toContain('--ignore-rules');
+    expect(args).toContain('--skip-git-repo-check');
+    expect(args).toContain('--ephemeral');
+    expect(args.slice(args.indexOf('-m'), args.indexOf('-m') + 2)).toEqual(['-m', 'gpt-test']);
   });
 });
 
