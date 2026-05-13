@@ -16,7 +16,18 @@ import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
-import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
+import {
+  endTraceSpan,
+  llmSpanAttributes,
+  resolveTraceTokenCount,
+  setSpanAttributes,
+  startTraceSpan,
+  traceJsonInputOutputAttributes,
+  traceLlmIoEnabled,
+  traceLlmMessages,
+  traceToolIoEnabled,
+  traced,
+} from './tracing.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-codex-cli');
@@ -46,11 +57,20 @@ interface CodexJsonEvent {
     id?: string;
     type?: string;
     text?: string;
+    content?: unknown;
     name?: string;
     tool_name?: string;
     tool?: string;
     server?: string;
     command?: string[];
+    arguments?: unknown;
+    args?: unknown;
+    input?: unknown;
+    result?: unknown;
+    output?: unknown;
+    error?: unknown;
+    status?: string;
+    is_error?: boolean;
   };
   usage?: {
     input_tokens?: number;
@@ -143,6 +163,30 @@ ${formatCandidateContext(opts.candidate, opts.sharedContext)}
 
 Use the imprint-compile MCP tools to inspect the session, write artifacts, run tests, and call done(). Begin by calling read_session_summary, then proceed per the system instructions.`;
 
+  const model = preferredAgentModel('codex-cli');
+  const initialTokenCount = resolveTraceTokenCount(null, initialPrompt);
+  const captureLlmIo = traceLlmIoEnabled();
+  setSpanAttributes(traceSpan, {
+    ...llmSpanAttributes({
+      provider: 'codex-cli',
+      model,
+      inputTokens: initialTokenCount.tokens,
+      tokenCountsEstimated: true,
+      inputTokenSource: initialTokenCount.source,
+      inputMessages: captureLlmIo
+        ? traceLlmMessages([{ role: 'user', content: initialPrompt }])
+        : undefined,
+      inputValue: captureLlmIo ? initialPrompt : undefined,
+      invocationParameters: {
+        command: 'codex exec',
+        json: true,
+        sandbox: 'workspace-write',
+        tool_timeout_sec: 300,
+      },
+    }),
+    'imprint.compile.initial_prompt_chars': initialPrompt.length,
+  });
+
   const args = [
     '-a',
     'never',
@@ -157,7 +201,7 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     '-s',
     'workspace-write',
     '-m',
-    preferredAgentModel('codex-cli'),
+    model,
     '-c',
     `mcp_servers.${MCP_SERVER_NAME}.command=${JSON.stringify(bunPath)}`,
     '-c',
@@ -195,7 +239,30 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     return finalErrorResult(opts, `failed to send prompt to codex-cli: ${errMsg(err)}`);
   }
 
-  return await driveJsonl(child, opts, traceSpan);
+  const result = await driveJsonl(child, opts, traceSpan);
+  const hasActualUsage = result.inputTokens > 0 || result.outputTokens > 0;
+  const inputTokenCount = resolveTraceTokenCount(
+    hasActualUsage ? result.inputTokens : null,
+    initialPrompt,
+  );
+  const outputTokenCount = resolveTraceTokenCount(
+    hasActualUsage ? result.outputTokens : null,
+    result.message,
+  );
+  setSpanAttributes(traceSpan, {
+    ...llmSpanAttributes({
+      provider: 'codex-cli',
+      model,
+      inputTokens: inputTokenCount.tokens,
+      outputTokens: outputTokenCount.tokens,
+      tokenCountsEstimated:
+        inputTokenCount.source === 'estimated' || outputTokenCount.source === 'estimated',
+      inputTokenSource: inputTokenCount.source,
+      outputTokenSource: outputTokenCount.source,
+    }),
+    'imprint.compile.message': result.message,
+  });
+  return result;
 }
 
 async function driveJsonl(
@@ -209,6 +276,7 @@ async function driveJsonl(
   let turn = 0;
   let lastErrorMessage = '';
   let stderrBuf = '';
+  let agentMessageCount = 0;
   const toolSpans = new Map<string, Span>();
 
   const budgetMs = Math.max(0, opts.deadlineMs - Date.now());
@@ -286,6 +354,23 @@ async function driveJsonl(
       }
 
       if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
+        const agentMessage = codexAgentMessageText(evt.item);
+        if (agentMessage && evt.type === 'item.completed') {
+          agentMessageCount++;
+          setSpanAttributes(traceSpan, {
+            'imprint.codex.agent_messages': agentMessageCount,
+            'imprint.codex.last_agent_message_chars': agentMessage.length,
+            ...(traceLlmIoEnabled()
+              ? llmSpanAttributes({
+                  provider: 'codex-cli',
+                  model: preferredAgentModel('codex-cli'),
+                  outputMessages: traceLlmMessages([{ role: 'assistant', content: agentMessage }]),
+                  outputValue: agentMessage,
+                })
+              : {}),
+          });
+          continue;
+        }
         const toolName = codexToolName(evt.item);
         if (toolName) {
           traceCodexToolEvent(toolSpans, evt.type, evt.item, toolName);
@@ -447,14 +532,6 @@ async function driveJsonl(
   };
 }
 
-function codexToolName(item: NonNullable<CodexJsonEvent['item']>): string | undefined {
-  const type = item.type ?? '';
-  if (type === 'agent_message') return undefined;
-  const name = item.name ?? item.tool_name ?? item.tool;
-  if (!name) return undefined;
-  return name.replace(`mcp__${MCP_SERVER_NAME}__`, '');
-}
-
 function traceCodexToolEvent(
   spans: Map<string, Span>,
   eventType: string,
@@ -462,16 +539,27 @@ function traceCodexToolEvent(
   toolName: string,
 ): void {
   const id = item.id ?? `${toolName}:${spans.size}`;
+  const captureIo = traceToolIoEnabled();
   if (eventType === 'item.started') {
     const span = startTraceSpan(`mcp.${toolName}`, 'TOOL', {
       'mcp.server': item.server ?? MCP_SERVER_NAME,
       'mcp.tool_name': toolName,
       'codex.item_id': id,
       'codex.item_type': item.type,
+      ...(captureIo && codexToolInput(item) !== undefined
+        ? traceJsonInputOutputAttributes('input', codexToolInput(item), `mcp.${toolName}.input`)
+        : {}),
     });
     if (span) spans.set(id, span);
     return;
   }
+  const completionAttributes = {
+    'codex.item_status': item.status,
+    ...(captureIo && codexToolOutput(item) !== undefined
+      ? traceJsonInputOutputAttributes('output', codexToolOutput(item), `mcp.${toolName}.output`)
+      : {}),
+  };
+  const toolError = codexToolError(item);
   const span = spans.get(id);
   if (!span) {
     const completedSpan = startTraceSpan(`mcp.${toolName}`, 'TOOL', {
@@ -480,12 +568,74 @@ function traceCodexToolEvent(
       'codex.item_id': id,
       'codex.item_type': item.type,
       'codex.event': 'completed_without_start',
+      ...completionAttributes,
     });
-    endTraceSpan(completedSpan);
+    endTraceSpan(completedSpan, toolError);
     return;
   }
-  endTraceSpan(span);
+  setSpanAttributes(span, completionAttributes);
+  endTraceSpan(span, toolError);
   spans.delete(id);
+}
+
+function codexAgentMessageText(item: NonNullable<CodexJsonEvent['item']>): string | undefined {
+  if (item.type !== 'agent_message') return undefined;
+  if (typeof item.text === 'string') return item.text;
+  if (typeof item.content === 'string') return item.content;
+  if (Array.isArray(item.content)) {
+    const text = item.content
+      .map((block) => {
+        if (typeof block === 'string') return block;
+        if (isRecord(block) && typeof block.text === 'string') return block.text;
+        return '';
+      })
+      .filter(Boolean)
+      .join('');
+    return text || undefined;
+  }
+  return undefined;
+}
+
+function codexToolName(item: NonNullable<CodexJsonEvent['item']>): string | undefined {
+  const type = item.type ?? '';
+  if (type === 'agent_message') return undefined;
+  const name = item.name ?? item.tool_name ?? item.tool;
+  if (!name) return undefined;
+  return name.replace(`mcp__${MCP_SERVER_NAME}__`, '');
+}
+
+function codexToolInput(item: NonNullable<CodexJsonEvent['item']>): unknown {
+  return (
+    item.arguments ??
+    item.args ??
+    item.input ??
+    (item.command ? { command: item.command } : undefined)
+  );
+}
+
+function codexToolOutput(item: NonNullable<CodexJsonEvent['item']>): unknown {
+  return (
+    item.result ??
+    item.output ??
+    item.content ??
+    item.error ??
+    (item.status ? { status: item.status } : undefined)
+  );
+}
+
+function codexToolError(item: NonNullable<CodexJsonEvent['item']>): Error | undefined {
+  if (!item.is_error && item.status !== 'error' && item.status !== 'failed') return undefined;
+  const message =
+    item.error === undefined
+      ? `${codexToolName(item) ?? 'tool'} failed`
+      : typeof item.error === 'string'
+        ? item.error
+        : JSON.stringify(item.error);
+  return new Error(message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): CompileAgentResult {
