@@ -59,7 +59,7 @@ imprint teach mysite \
 
 A browser opens. You drive the workflow and narrate what you're doing. Imprint records every network request and DOM interaction.
 
-Raw recordings and generated tools are stored locally under `~/.imprint/<site>/` by default, outside the repo. The tracked `examples/` tree remains as source fixtures and demos.
+Raw recordings are stored locally under `~/.imprint/<site>/sessions/`, and each generated tool lives under `~/.imprint/<site>/<toolName>/` by default, outside the repo. The tracked `examples/` tree remains as source fixtures and demos.
 
 </td>
 <td width="33%">
@@ -70,6 +70,8 @@ Imprint generates two replay artifacts:
 
 - **`workflow.json`** — API-level replay (fast)
 - **`playbook.yaml`** — DOM-level fallback (universal)
+
+Both artifacts are written into the generated tool directory (`~/.imprint/<site>/<toolName>/`). `compile-playbook` uses that nested location by default so cron and MCP discovery can see the fallback without a custom `--out`.
 
 Credentials and PII are redacted automatically: known-sensitive fields keep their `[REDACTED:N]` shape markers, credential values become `${credential.NAME}` placeholders, and a supplemental free-form scan catches common emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, and webhook URLs before LLM compile.
 
@@ -127,6 +129,28 @@ imprint doctor
 Shows which providers are detected. Interactive `imprint teach` prompts you to choose when multiple compatible compile providers are available, and also lists undetected providers as setup-help entries. Pick one of those help entries to see exactly which CLI or environment variable to add so it will be detected next time.
 
 To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. Non-interactive runs keep first-match auto-detection so scripts do not hang.
+
+<br>
+
+## Local compile tracing
+
+Slow or suspicious compiles can be inspected in a local [Phoenix](https://arize.com/docs/phoenix/self-hosting/deployment-options/terminal) trace UI.
+
+```bash
+# one-time install with uv
+uv tool install arize-phoenix
+phoenix serve
+
+# in another terminal
+IMPRINT_TRACE=1 \
+IMPRINT_TRACE_BATCH=false \
+IMPRINT_TRACE_LLM_IO=1 \
+IMPRINT_TRACE_TOOL_IO=1 \
+PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
+imprint teach namecheap-domains --from-session ~/.imprint/namecheap-domains/sessions/<ts>.json --provider codex-cli
+```
+
+Tracing records compile stages, agent tool calls, estimated token counts, and optional prompt/response bodies. Set `IMPRINT_TRACE_IO_MAX_CHARS` to raise or lower captured payload size. Set `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` to add estimated cost attributes.
 
 <br>
 

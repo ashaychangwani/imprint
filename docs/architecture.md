@@ -54,7 +54,10 @@ src/imprint/
 ├── compile.ts           One LLM compiler, two configs:
 │                          - generate (Workflow)
 │                          - compilePlaybook (Playbook)
-├── llm.ts               Vertex Anthropic wrapper + JSON extractor
+├── compile-tools.ts     Compile-agent read/write/test tools + state hints
+├── request-context.ts   Shared request metadata compaction for LLM context
+├── llm.ts               Provider wrappers + JSON extraction + trace spans
+├── tracing.ts           OpenInference/Phoenix tracing helpers
 ├── playbook-parser.ts   YAML → Playbook (Zod-validated)
 │
 ├── emit.ts              workflow.json → ~/.imprint/<site>/<toolName>/index.ts
@@ -109,6 +112,12 @@ src/imprint/
 ```
 
 The tracked `examples/` directory remains as source fixtures and demos, but runtime discovery and generated assets live under `IMPRINT_HOME` (`~/.imprint` by default).
+
+## Compile context and tracing
+
+LLM-facing overview payloads are intentionally compact. Candidate detection, request triage, and compile-agent `read_session_summary` all collapse repeated identical request metadata into one representative row with `repeatCount`, `repeatedSeqs`, and `lastTimestamp`. Candidate-selected requests and auth/setup dependencies stay as separate rows so a tool-specific request cannot disappear inside a shared representative. Full request and response bodies are still available through the explicit compile-agent tools (`read_request`, `read_response_body`, `search_response_body`).
+
+Set `IMPRINT_TRACE=1` with `PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006` to emit OpenInference spans to a local Phoenix server. Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise; cost attributes are added when `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` are set.
 
 **Ephemeral artifacts** the compile-agent writes during a run but does not persist:
 

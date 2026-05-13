@@ -8,7 +8,7 @@ The fastest path is `imprint teach`, which runs the full pipeline interactively 
 
 - [Bun](https://bun.sh) ≥ 1.3
 - Google Chrome (any modern build)
-- A Google Cloud project with Vertex AI Anthropic models enabled (for the LLM compile step)
+- A compile provider: Claude CLI, Codex CLI, Cursor CLI, Anthropic API, or a Google Cloud project with Vertex AI Anthropic models enabled
 
 ## Install
 
@@ -22,7 +22,7 @@ bunx playwright install chromium  # for stealth-fetch + playbook backends
 
 If `imprint --help` says "command not found" after `bun link`, your `~/.bun/bin` isn't on `PATH`. Either add it (Bun's installer normally does this) or skip `bun link` and call everything via `bun src/cli.ts <verb>`.
 
-Set your Vertex project once:
+If you use Vertex, set your project once:
 
 ```bash
 export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
@@ -60,7 +60,8 @@ imprint redact "$SESSION"
 # 4. LLM-compile two artifacts (workflow.json + playbook.yaml)
 imprint generate "${SESSION%.json}.redacted.json"
 #   → Output: ~/.imprint/google-flights/<toolName>/workflow.json
-imprint compile-playbook "${SESSION%.json}.redacted.json" --out ~/.imprint/google-flights/<toolName>/playbook.yaml
+imprint compile-playbook "${SESSION%.json}.redacted.json"
+#   → Output: ~/.imprint/google-flights/<toolName>/playbook.yaml
 
 # 5. Emit the executable TS module
 imprint emit ~/.imprint/google-flights/search_google_flights/workflow.json
@@ -76,6 +77,24 @@ imprint mcp-server google-flights    # stdio MCP server
 ```
 
 You now have an MCP tool any agent can call.
+
+## Inspect slow compiles
+
+For local trace visibility, run Phoenix and enable Imprint tracing:
+
+```bash
+uv tool install arize-phoenix
+phoenix serve
+
+IMPRINT_TRACE=1 \
+IMPRINT_TRACE_BATCH=false \
+IMPRINT_TRACE_LLM_IO=1 \
+IMPRINT_TRACE_TOOL_IO=1 \
+PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
+imprint teach google-flights --from-session "$SESSION" --provider codex-cli
+```
+
+`IMPRINT_TRACE_LLM_IO=1` captures prompts/responses; `IMPRINT_TRACE_TOOL_IO=1` captures compile-agent tool arguments and results. Raise `IMPRINT_TRACE_IO_MAX_CHARS` when you need longer payloads in Phoenix.
 
 ## Connect to your AI tool
 

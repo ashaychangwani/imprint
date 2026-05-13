@@ -113,6 +113,24 @@ The Vertex Anthropic call returned text instead of JSON. This happens occasional
 
 **Fix:** re-run `imprint generate`. If it persists, try `--no-shrink` or split the recording into smaller workflows.
 
+## "Compile is slow or looks stuck"
+
+Recent compilers compact repeated request metadata before candidate detection, request triage, and compile-agent summaries, while keeping full request/response bodies available through explicit read tools. If a compile still looks slow, turn on local Phoenix tracing and inspect which stage or tool call is spending time:
+
+```bash
+uv tool install arize-phoenix
+phoenix serve
+
+IMPRINT_TRACE=1 \
+IMPRINT_TRACE_BATCH=false \
+IMPRINT_TRACE_LLM_IO=1 \
+IMPRINT_TRACE_TOOL_IO=1 \
+PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
+imprint teach <site> --from-session ~/.imprint/<site>/sessions/<ts>.json --provider codex-cli
+```
+
+If Phoenix is open at `http://localhost:6006` but empty, check that `PHOENIX_COLLECTOR_ENDPOINT` points at that URL and use `IMPRINT_TRACE_BATCH=false` for immediate local export. `IMPRINT_TRACE_LLM_IO=1` records prompts/responses; `IMPRINT_TRACE_TOOL_IO=1` records compile-agent tool arguments/results; `IMPRINT_TRACE_IO_MAX_CHARS=200000` raises the per-payload capture cap when the default is too small.
+
 ## "MCP tools panel is empty in Claude Desktop"
 
 Common causes:

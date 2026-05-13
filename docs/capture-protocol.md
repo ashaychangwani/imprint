@@ -125,7 +125,7 @@ Don't try to restart the recorder mid-booking. Finish what you started. The code
 Solve it manually inside the Chromium window. The recorder doesn't care. Solving captchas is part of the workflow we want to capture (so the LLM knows to expect it).
 
 **The site uses bot-detection (Akamai, DataDome, Cloudflare, PerimeterX, etc.):**
-The recording will succeed (you're using a real browser), but **replay may fail** because those systems generate per-session opaque tokens that go stale within minutes. Imprint's intent-detection prompt is taught to drop the common patterns (Akamai's `EE30zvQLWf-a/b/c/d/f/z`-style headers, `dd-*`, `cf-*`, etc.) so the generated workflow doesn't try to replay them. If replay still fails with 403 / 429 / a CAPTCHA page in the response body, the site is fingerprinting beyond headers (TLS, timing) and Imprint can't help — pivot to a less-protected alternative.
+The recording will succeed (you're using a real browser), but **replay may fail** because those systems generate per-session opaque tokens that go stale within minutes. Imprint's compiler prompts are taught to drop common bot-token patterns (Akamai's `EE30zvQLWf-a/b/c/d/f/z`-style headers, `dd-*`, `cf-*`, etc.) so the generated workflow doesn't try to replay them. If replay still fails with 403 / 429 / a CAPTCHA page in the response body, use `stealth-fetch` or the DOM playbook fallback before deciding the site needs a stronger backend.
 
 **The redactor scrubbed `X-API-Key` (or another header) you know is public:**
 Re-run with `--keep-header`:
@@ -140,4 +140,4 @@ You can pass `--keep-header` multiple times. Use this when the redacted value is
 
 The `.jsonl` is the raw streaming log (line-per-event). The `.json` is the assembled session. Both stay outside the repo by default — they may contain auth tokens. Don't share them unless you have audited and redacted them.
 
-When you're done capturing, tell me the filename and I'll start the day-3 LLM intent-detection work using your real session as the iteration target.
+When you're done capturing, pass the session to `imprint teach --from-session <path>` or run the manual `redact` → `generate` → `compile-playbook` → `emit` pipeline.
