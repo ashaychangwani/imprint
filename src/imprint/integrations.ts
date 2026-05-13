@@ -50,7 +50,7 @@ export function generatePasteSnippet(opts: {
 
   switch (platform) {
     case 'claude-code':
-      return `Add the ${toolName} tool: run \`claude mcp add --scope user ${toolName} -- ${shellCmd}\` to register ${descLower}. Parameters: ${paramList}. The backend ladder handles bot detection automatically (fetch → stealth-fetch → playbook).`;
+      return `Add the ${toolName} tool: run \`claude mcp add --scope user ${toolName} -- ${shellCmd}\` to register ${descLower}. Parameters: ${paramList}. The backend ladder handles browser/API state and bot detection automatically (fetch → gated fetch-bootstrap → stealth-fetch → playbook).`;
 
     case 'codex':
       return `Add the ${toolName} tool: run \`codex mcp add ${toolName} -- ${shellCmd}\` to register ${descLower}. Parameters: ${paramList}.`;
@@ -198,7 +198,7 @@ ${playbookYaml.trim()}
   // Backend ladder explanation.
   const backendBlock = `## Backend Ladder
 
-The MCP server automatically escalates: fetch (~200ms) → stealth-fetch (~12s) → playbook (~9s).
+The MCP server automatically escalates from fetch API replay to gated fetch-bootstrap when browser-minted state is declared, then stealth-fetch for bot-defense state, then playbook for full DOM replay.
 Bot detection is handled transparently.`;
 
   // Scheduling block (optional).

@@ -5,6 +5,7 @@
  * where one backend is known-blocked.
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import { runWithLadder } from './backend-ladder.ts';
@@ -49,13 +50,15 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
 
   const params = resolveParams(tool, opts.paramOverrides);
 
-  log(`probing fetch / stealth-fetch / playbook for ${tool.workflow.toolName}…`);
+  log(`probing fetch / fetch-bootstrap / stealth-fetch / playbook for ${tool.workflow.toolName}…`);
   log(`  params: ${JSON.stringify(params)}`);
 
   // Try every backend (single-rung ladders) — operators want the full
   // matrix, not just the first that worked.
   const stealthCache = new Map<string, StealthFetch>();
-  const allBackends: ConcreteBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
+  const allBackends: ConcreteBackend[] = workflowNeedsBootstrap(tool.workflow)
+    ? ['fetch', 'fetch-bootstrap', 'stealth-fetch', 'playbook']
+    : ['fetch', 'stealth-fetch', 'playbook'];
   const results: BackendsCache['results'] = {};
   const working: ConcreteBackend[] = [];
 
@@ -119,6 +122,9 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
   const cache: BackendsCache = {
     probedAt: new Date().toISOString(),
     imprintVersion: VERSION,
+    schemaVersion: 2,
+    workflowHash: workflowHash(tool.workflow),
+    capabilityHash: capabilityHash(tool.workflow),
     preferredOrder: working,
     results,
   };
@@ -128,6 +134,29 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
   log(`wrote ${outPath} — preferred: ${working.join(' → ')}`);
 
   return { cache, outPath };
+}
+
+function workflowNeedsBootstrap(workflow: ResolvedTool['workflow']): boolean {
+  if (workflow.bootstrap) return true;
+  return workflow.requests.some((r) =>
+    (r.captures ?? []).some(
+      (c) => c.capability === 'browser_bootstrap' || c.capability === 'stealth_bootstrap',
+    ),
+  );
+}
+
+function workflowHash(workflow: ResolvedTool['workflow']): string {
+  return createHash('sha256').update(JSON.stringify(workflow)).digest('hex');
+}
+
+function capabilityHash(workflow: ResolvedTool['workflow']): string {
+  const caps = {
+    bootstrap: Boolean(workflow.bootstrap),
+    captures: workflow.requests.flatMap((r) =>
+      (r.captures ?? []).map((c) => `${c.source}:${c.name}:${c.capability}`),
+    ),
+  };
+  return createHash('sha256').update(JSON.stringify(caps)).digest('hex');
 }
 
 /** Read backends.json. Returns null on missing/malformed — runtime
@@ -142,13 +171,32 @@ export function loadBackendsCache(
   if (!existsSync(path)) return null;
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8'));
-    return BackendsCacheSchema.parse(raw);
+    const parsed = BackendsCacheSchema.parse(raw);
+    if (parsed.schemaVersion && parsed.schemaVersion >= 2 && parsed.workflowHash) {
+      const workflowPath = pathResolve(toolDir, 'workflow.json');
+      if (existsSync(workflowPath)) {
+        const currentHash = workflowHashSync(readFileSync(workflowPath, 'utf8'));
+        if (currentHash !== parsed.workflowHash) {
+          process.stderr.write(
+            `[imprint] backends.json at ${path} is stale for current workflow — ignoring (run \`imprint probe-backends ${site}\` to regenerate)\n`,
+          );
+          return null;
+        }
+      }
+    }
+    return parsed;
   } catch (err) {
     process.stderr.write(
       `[imprint] backends.json at ${path} failed to parse — ignoring (run \`imprint probe-backends ${site}\` to regenerate): ${err instanceof Error ? err.message : String(err)}\n`,
     );
     return null;
   }
+}
+
+function workflowHashSync(workflowJson: string): string {
+  return createHash('sha256')
+    .update(JSON.stringify(JSON.parse(workflowJson)))
+    .digest('hex');
 }
 
 /** Param priority: caller overrides → cron.json → workflow defaults. */

@@ -7,9 +7,10 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join as pathJoin } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join as pathJoin, relative as pathRelative } from 'node:path';
 import type { AgentTool } from './agent.ts';
+import { splitSetCookieHeader } from './cookie-jar.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type CapturedRequest, type Session, WorkflowSchema } from './types.ts';
 
@@ -58,6 +59,7 @@ function buildReadSessionSummaryTool(session: Session): AgentTool {
         url: session.url,
         narration: session.narration.map((n) => ({ timestamp: n.timestamp, text: n.text })),
         requestCount: session.requests.length,
+        stateHints: buildStateHints(session),
         loadBearingRequests: loadBearing.map((r) => ({
           seq: r.seq,
           method: r.method,
@@ -70,6 +72,83 @@ function buildReadSessionSummaryTool(session: Session): AgentTool {
       return { result: JSON.stringify(summary, null, 2) };
     },
   };
+}
+
+function buildStateHints(session: Session): Array<Record<string, unknown>> {
+  const hints: Array<Record<string, unknown>> = [];
+  const cookieMarkers = new Map<string, { requestSeq: number; cookie: string }>();
+  const storageMarkers = new Map<string, { origin: string; kind: string; key: string }>();
+
+  for (const snap of session.storageSnapshots ?? []) {
+    for (const [key, value] of Object.entries(snap.localStorage ?? {})) {
+      if (isEqualityMarker(value)) {
+        storageMarkers.set(value, { origin: snap.origin, kind: 'localStorage', key });
+      }
+    }
+    for (const [key, value] of Object.entries(snap.sessionStorage ?? {})) {
+      if (isEqualityMarker(value)) {
+        storageMarkers.set(value, { origin: snap.origin, kind: 'sessionStorage', key });
+      }
+    }
+  }
+
+  for (const req of session.requests) {
+    const setCookie = Object.entries(req.response?.headers ?? {}).find(
+      ([name]) => name.toLowerCase() === 'set-cookie',
+    )?.[1];
+    if (setCookie) {
+      for (const cookie of splitSetCookieHeader(setCookie)) {
+        const first = cookie.split(';', 1)[0] ?? '';
+        const eq = first.indexOf('=');
+        if (eq <= 0) continue;
+        const name = first.slice(0, eq);
+        const marker = first.slice(eq + 1);
+        if (isEqualityMarker(marker))
+          cookieMarkers.set(marker, { requestSeq: req.seq, cookie: name });
+      }
+    }
+
+    for (const [field, value] of requestValues(req)) {
+      for (const marker of equalityMarkers(value)) {
+        const cookie = cookieMarkers.get(marker);
+        if (cookie && cookie.requestSeq < req.seq) {
+          hints.push({
+            type: 'request_field_equals_earlier_set_cookie',
+            producerSeq: cookie.requestSeq,
+            consumerSeq: req.seq,
+            cookie: cookie.cookie,
+            requestField: field,
+          });
+        }
+        const storage = storageMarkers.get(marker);
+        if (storage) {
+          hints.push({
+            type: 'request_field_equals_storage_key',
+            consumerSeq: req.seq,
+            requestField: field,
+            ...storage,
+          });
+        }
+      }
+    }
+  }
+
+  return hints;
+}
+
+function requestValues(req: CapturedRequest): Array<[string, string]> {
+  const values: Array<[string, string]> = [['url', req.url]];
+  for (const [name, value] of Object.entries(req.headers)) values.push([`header:${name}`, value]);
+  if (req.body) values.push(['body', req.body]);
+  return values;
+}
+
+function equalityMarkers(value: string): string[] {
+  return value.match(/\[REDACTED:v3:id=\d+:len=\d+\]/g) ?? [];
+}
+
+function isEqualityMarker(value: string): boolean {
+  return /^\[REDACTED:v3:id=\d+:len=\d+\]$/.test(value);
 }
 
 function identifyLoadBearingRequests(session: Session): CapturedRequest[] {
@@ -452,6 +531,53 @@ async function runCommand(
   });
 }
 
+async function runGeneratedArtifactTypecheck(
+  exampleDir: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
+  const configPath = pathJoin(exampleDir, '.imprint-typecheck.tsconfig.json');
+  const rootTsconfig = pathJoin(REPO_ROOT, 'tsconfig.json');
+  const extendsPath = normalizeTsconfigPath(pathRelative(exampleDir, rootTsconfig));
+
+  writeFileSync(
+    configPath,
+    JSON.stringify(
+      {
+        extends: extendsPath,
+        include: ['*.ts'],
+        exclude: [],
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+
+  try {
+    const result = await runCommand(
+      'bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json',
+      exampleDir,
+      120000,
+    );
+    return JSON.parse(result.result) as {
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+      timedOut: boolean;
+    };
+  } finally {
+    try {
+      unlinkSync(configPath);
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
+}
+
+function normalizeTsconfigPath(value: string): string {
+  const normalized = value.replace(/\\/g, '/');
+  return normalized.startsWith('.') ? normalized : `./${normalized}`;
+}
+
 // ─── Tool: run_tests ─────────────────────────────────────────────────────────
 
 function buildRunTestsTool(exampleDir: string, sessionPath: string): AgentTool {
@@ -584,6 +710,15 @@ export async function externalVerification(
     if (output.exitCode !== 0) {
       failures.push(
         `bun test parser.test.ts exited ${output.exitCode}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,
+      );
+    }
+  }
+
+  if (existsSync(parserPath) || existsSync(parserTestPath)) {
+    const output = await runGeneratedArtifactTypecheck(exampleDir);
+    if (output.exitCode !== 0 || output.timedOut) {
+      failures.push(
+        `generated TypeScript artifacts failed typecheck (bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json) exited ${output.exitCode}${output.timedOut ? ' after timing out' : ''}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,
       );
     }
   }

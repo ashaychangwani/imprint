@@ -64,6 +64,7 @@ const HAPPY_SESSION: Session = {
     { takenAt: 'a', timestamp: 0, label: 'start', cookies: [] },
     { takenAt: 'b', timestamp: 9000, label: 'end', cookies: [] },
   ],
+  storageSnapshots: [],
 };
 
 describe('checkSession', () => {

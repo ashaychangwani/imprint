@@ -27,7 +27,7 @@ import {
   buildZodValidator,
   discoverTools,
 } from './tool-loader.ts';
-import type { ConcreteBackend, WorkflowParameter } from './types.ts';
+import type { ConcreteBackend, ToolResult, WorkflowParameter } from './types.ts';
 import { VERSION } from './version.ts';
 
 interface RunMcpServerOptions {
@@ -93,7 +93,7 @@ function buildServer(
     {
       capabilities: { tools: {} },
       instructions:
-        'Imprint runs deterministic workflows captured from real browser sessions. Each tool routes through fetch → stealth-fetch → playbook automatically — the cheap path is tried first; bot-protected sites escalate to slower paths. Error codes: AUTH_EXPIRED (401, run `imprint login <site>`); FORBIDDEN (403, all backends in the ladder failed — site needs a paid stealth provider or is fundamentally unscrapable); RATE_LIMITED (429, back off); BAD_RESPONSE (other 4xx/5xx); NETWORK (fetch failed); UNKNOWN (everything else).',
+        'Imprint runs deterministic workflows captured from real browser sessions. Tools prefer fetch API replay, may use gated fetch-bootstrap only for declared browser-minted state, then stealth-fetch for bot-defense state, and playbook only for full DOM interaction. Error codes: AUTH_EXPIRED (401, run `imprint login <site>`); STATE_MISSING (required cookie/state was unavailable or ambiguous); FORBIDDEN (403); RATE_LIMITED (429, back off); BAD_RESPONSE (other 4xx/5xx); NETWORK (fetch failed); UNKNOWN (everything else).',
     },
   );
 
@@ -149,9 +149,7 @@ function buildServer(
         stealthCache,
       );
       if (!result.ok) {
-        const text = result.remediation
-          ? `[${result.error}] ${result.message}\n  → ${result.remediation}`
-          : `[${result.error}] ${result.message}`;
+        const text = formatToolError(result);
         return {
           isError: true,
           content: [{ type: 'text', text: `${text}\n(backend: ${usedBackend})` }],
@@ -167,6 +165,19 @@ function buildServer(
   });
 
   return server;
+}
+
+function formatToolError(result: Extract<ToolResult, { ok: false }>): string {
+  const lines = [`[${result.error}] ${result.message}`];
+  if (result.error === 'STATE_MISSING' && result.missing?.length) {
+    for (const item of result.missing) {
+      lines.push(
+        `  - ${item.name}: ${item.failure} (${item.capability})${item.message ? ` — ${item.message}` : ''}`,
+      );
+    }
+  }
+  if (result.remediation) lines.push(`  → ${result.remediation}`);
+  return lines.join('\n');
 }
 
 export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {

@@ -276,6 +276,142 @@ describe('executeWorkflow', () => {
     expect(seen.cookie).toBe('session=abc123');
   });
 
+  it('captures a cookie from request A and projects it into request B without Chromium', async () => {
+    const workflow: Workflow = {
+      ...baseWorkflow,
+      toolName: 'cookie_capture',
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/bootstrap',
+          headers: {},
+          captures: [
+            {
+              name: 'csrf',
+              source: 'cookie',
+              cookie: 'XSRF-TOKEN',
+              path: '/',
+              required: true,
+              capability: 'ordinary_http',
+              allowHttpOnlyProjection: false,
+            },
+          ],
+        },
+        {
+          method: 'POST',
+          url: 'https://api.example.com/search',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': '${state.csrf}',
+          },
+          body: '{"csrf":"${state.csrf}"}',
+        },
+      ],
+    };
+    const calls: Array<{ url: string; headers: Record<string, string>; body?: string }> = [];
+    const fetchMock = (async (url: string, init?: RequestInit) => {
+      calls.push({
+        url,
+        headers: (init?.headers as Record<string, string>) ?? {},
+        body: init?.body as string | undefined,
+      });
+      if (url.endsWith('/bootstrap')) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'set-cookie': 'XSRF-TOKEN=csrf123; Path=/; SameSite=Lax',
+          },
+        });
+      }
+      return new Response(JSON.stringify({ done: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await executeWorkflow({
+      workflow,
+      params: {},
+      credentials: STORE,
+      fetchImpl: fetchMock,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.headers['X-CSRF-Token']).toBe('csrf123');
+    expect(calls[1]?.body).toBe('{"csrf":"csrf123"}');
+  });
+
+  it('returns STATE_MISSING for ambiguous direct cookie placeholders', async () => {
+    const workflow: Workflow = {
+      ...baseWorkflow,
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/app/search',
+          headers: { 'X-Session': '${cookie.sid}' },
+        },
+      ],
+    };
+    const result = await executeWorkflow({
+      workflow,
+      params: {},
+      credentials: {
+        site: 'test',
+        values: {},
+        cookies: [
+          { name: 'sid', value: 'root', domain: 'api.example.com', path: '/', hostOnly: true },
+          { name: 'sid', value: 'app', domain: 'api.example.com', path: '/app', hostOnly: true },
+        ],
+      },
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('STATE_MISSING');
+    expect(result.missing?.[0]?.failure).toBe('ambiguous_cookie');
+  });
+
+  it('preflights missing state before an earlier unsafe request can run', async () => {
+    const workflow: Workflow = {
+      ...baseWorkflow,
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          effect: 'unsafe',
+          url: 'https://api.example.com/charge',
+          headers: {},
+        },
+        {
+          method: 'POST',
+          url: 'https://api.example.com/use',
+          headers: { 'X-CSRF-Token': '${state.csrf}' },
+        },
+      ],
+    };
+    let fetchCount = 0;
+    const result = await executeWorkflow({
+      workflow,
+      params: {},
+      credentials: STORE,
+      fetchImpl: (async () => {
+        fetchCount++;
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }) as unknown as typeof fetch,
+    });
+
+    expect(fetchCount).toBe(0);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('STATE_MISSING');
+    expect(result.message).toMatch(/unsafe request/);
+  });
+
   it('URL-encodes credential values inside form-urlencoded request bodies', async () => {
     // Regression: a password containing "@" or "&" must reach the wire as
     // %40 / %26, not raw — otherwise the form pair structure breaks

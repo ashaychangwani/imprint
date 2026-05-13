@@ -97,7 +97,7 @@ describe('resolveLadder', () => {
     ]);
   });
 
-  it.each(['fetch', 'stealth-fetch', 'playbook'] as const)(
+  it.each(['fetch', 'fetch-bootstrap', 'stealth-fetch', 'playbook'] as const)(
     'returns single-rung ladder for explicit %s',
     (backend) => {
       expect(resolveLadder(backend)).toEqual([backend]);
@@ -187,6 +187,74 @@ describe('runWithLadder — auto escalation', () => {
     expect(behavior.calls.stealth).toBe(0);
     expect(r.attempts).toHaveLength(1);
     expect(r.attempts[0]).toMatchObject({ backend: 'fetch', outcome: 'failed' });
+  });
+
+  it('escalates STATE_MISSING only when the next backend can satisfy it', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: {
+        ok: false,
+        error: 'STATE_MISSING',
+        message: 'missing bot state',
+        missing: [
+          {
+            name: 'sensor',
+            source: 'state',
+            capability: 'stealth_bootstrap',
+            required: true,
+            failure: 'producer_unavailable',
+            message: 'sensor missing',
+          },
+        ],
+      },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('alpha', behavior);
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
+
+    expect(r.result.ok).toBe(true);
+    expect(r.usedBackend).toBe('stealth-fetch');
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(1);
+  });
+
+  it('does not escalate STATE_MISSING when the next backend cannot satisfy it', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: {
+        ok: false,
+        error: 'STATE_MISSING',
+        message: 'missing credential',
+        missing: [
+          {
+            name: 'patron',
+            source: 'credential',
+            capability: 'credential_required',
+            required: true,
+            failure: 'credential_missing',
+            message: 'credential missing',
+          },
+        ],
+      },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('alpha', behavior);
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
+
+    expect(r.usedBackend).toBe('fetch');
+    expect(r.result.ok).toBe(false);
+    expect(behavior.calls.stealth).toBe(0);
   });
 
   it('returns the last FORBIDDEN when every rung escalates', async () => {

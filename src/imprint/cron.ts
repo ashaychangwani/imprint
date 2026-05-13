@@ -130,6 +130,13 @@ async function runOnce(
     process.stderr.write(
       `[imprint cron]   FAILED [${result.error}] via ${usedBackend} in ${elapsed}ms: ${result.message}\n`,
     );
+    if (result.error === 'STATE_MISSING' && result.missing?.length) {
+      for (const item of result.missing) {
+        process.stderr.write(
+          `[imprint cron]   - ${item.name}: ${item.failure} (${item.capability})${item.message ? ` — ${item.message}` : ''}\n`,
+        );
+      }
+    }
     if (result.remediation) {
       process.stderr.write(`[imprint cron]   → ${result.remediation}\n`);
     }
@@ -218,11 +225,15 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
     );
   }
 
-  // Validate params against the API workflow only when fetch/stealth-fetch
+  // Validate params against the API workflow only when API replay
   // is in the ladder; playbook has its own param schema with different names.
   const ladder = resolveLadder(replayBackend, cached?.preferredOrder);
   let params: Record<string, string | number | boolean>;
-  if (ladder.includes('fetch') || ladder.includes('stealth-fetch')) {
+  if (
+    ladder.includes('fetch') ||
+    ladder.includes('fetch-bootstrap') ||
+    ladder.includes('stealth-fetch')
+  ) {
     const validator = buildZodValidator(tool.workflow.parameters);
     const parsed = validator.safeParse(config.params);
     if (!parsed.success) {

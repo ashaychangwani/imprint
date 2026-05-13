@@ -2,7 +2,12 @@
  *  session.json into the credential manager. */
 
 import { readFileSync } from 'node:fs';
-import { getCredentialBackend, upsertManifestEntry } from './credential-store.ts';
+import {
+  type StorageRecord,
+  getCredentialBackend,
+  setManifestStorageKeys,
+  upsertManifestEntry,
+} from './credential-store.ts';
 import { type Session, SessionSchema } from './types.ts';
 
 interface LoginOptions {
@@ -14,6 +19,7 @@ interface LoginOptions {
 interface LoginResult {
   backend: 'keyring' | 'encrypted-file' | 'legacy-json';
   cookieCount: number;
+  storageCount: number;
   values: Record<string, string>;
   /** Pattern names that matched and contributed values. */
   matchedExtractors: string[];
@@ -24,10 +30,18 @@ export async function login(opts: LoginOptions): Promise<LoginResult> {
   const session: Session = SessionSchema.parse(raw);
 
   const cookies = collectCookies(session);
+  const storage = collectStorage(session);
   const { values, matched } = extractKnownValues(session);
 
   const backend = await getCredentialBackend();
   await backend.setCookies(opts.site, cookies);
+  if (backend.setStorage) {
+    await backend.setStorage(opts.site, storage);
+    setManifestStorageKeys(
+      opts.site,
+      storage.map((s) => ({ origin: s.origin, kind: s.kind, key: s.key })),
+    );
+  }
   for (const [name, value] of Object.entries(values)) {
     await backend.setSecret(opts.site, name, value);
     upsertManifestEntry(opts.site, {
@@ -40,32 +54,39 @@ export async function login(opts: LoginOptions): Promise<LoginResult> {
   return {
     backend: backend.id,
     cookieCount: cookies.length,
+    storageCount: storage.length,
     values,
     matchedExtractors: matched,
   };
 }
 
-interface RawCookie {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-}
-
 /** End snapshot captures everything set during the workflow (post-login
  *  cookies); fall back to start snapshot if absent. */
-function collectCookies(session: Session): RawCookie[] {
+function collectCookies(session: Session) {
   const snaps = session.cookieSnapshots ?? [];
   const end = snaps.find((s) => s.label === 'end');
   const start = snaps.find((s) => s.label === 'start');
   const chosen = end ?? start;
   if (!chosen) return [];
-  return chosen.cookies.map((c) => ({
-    name: c.name,
-    value: c.value,
-    domain: c.domain,
-    path: c.path,
-  }));
+  return chosen.cookies.map((c) => ({ ...c }));
+}
+
+function collectStorage(session: Session): StorageRecord[] {
+  const snaps = session.storageSnapshots ?? [];
+  const end = snaps.filter((s) => s.label === 'end');
+  const chosen = end.length > 0 ? end : snaps.filter((s) => s.label === 'start');
+  const byKey = new Map<string, StorageRecord>();
+  for (const snap of chosen) {
+    for (const [key, value] of Object.entries(snap.localStorage ?? {})) {
+      byKey.set(`${snap.origin}\0localStorage\0${key}`, {
+        origin: snap.origin,
+        kind: 'localStorage',
+        key,
+        value,
+      });
+    }
+  }
+  return Array.from(byKey.values());
 }
 
 /** Per-site extractors pull named values out of recognized auth shapes;

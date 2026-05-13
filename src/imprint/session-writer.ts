@@ -9,6 +9,7 @@ import {
   type Narration,
   type Session,
   SessionSchema,
+  type StorageSnapshot,
 } from './types.ts';
 
 type Record =
@@ -16,7 +17,8 @@ type Record =
   | { kind: 'event'; data: CapturedEvent }
   | { kind: 'narration'; data: Narration }
   | { kind: 'request-body'; data: { seq: number; body: string } }
-  | { kind: 'cookies'; data: CookieSnapshot };
+  | { kind: 'cookies'; data: CookieSnapshot }
+  | { kind: 'storage'; data: StorageSnapshot };
 
 interface SessionWriter {
   request(req: CapturedRequest): void;
@@ -25,6 +27,7 @@ interface SessionWriter {
   event(ev: CapturedEvent): void;
   narration(n: Narration): void;
   cookies(snapshot: CookieSnapshot): void;
+  storage(snapshot: StorageSnapshot): void;
   /** Flush + close the JSONL stream and write the assembled Session object. */
   close(): Promise<{ jsonlPath: string; sessionPath: string }>;
 }
@@ -56,6 +59,7 @@ export function createSessionWriter(jsonlPath: string, meta: SessionMeta): Sessi
     event: (data) => writeLine({ kind: 'event', data }),
     narration: (data) => writeLine({ kind: 'narration', data }),
     cookies: (data) => writeLine({ kind: 'cookies', data }),
+    storage: (data) => writeLine({ kind: 'storage', data }),
     async close() {
       if (closed) return { jsonlPath, sessionPath: jsonlPath.replace(/\.jsonl$/, '.json') };
       closed = true;
@@ -82,6 +86,7 @@ export function assembleFromJsonl(jsonlPath: string): Session {
   const events: CapturedEvent[] = [];
   const narration: Narration[] = [];
   const cookieSnapshots: CookieSnapshot[] = [];
+  const storageSnapshots: StorageSnapshot[] = [];
 
   for (const line of lines) {
     const rec = JSON.parse(line) as
@@ -90,7 +95,8 @@ export function assembleFromJsonl(jsonlPath: string): Session {
       | { kind: 'request-body'; data: { seq: number; body: string } }
       | { kind: 'event'; data: CapturedEvent }
       | { kind: 'narration'; data: Narration }
-      | { kind: 'cookies'; data: CookieSnapshot };
+      | { kind: 'cookies'; data: CookieSnapshot }
+      | { kind: 'storage'; data: StorageSnapshot };
 
     switch (rec.kind) {
       case 'meta':
@@ -115,6 +121,9 @@ export function assembleFromJsonl(jsonlPath: string): Session {
       case 'cookies':
         cookieSnapshots.push(rec.data);
         break;
+      case 'storage':
+        storageSnapshots.push(rec.data);
+        break;
     }
   }
 
@@ -133,6 +142,7 @@ export function assembleFromJsonl(jsonlPath: string): Session {
     events,
     narration,
     cookieSnapshots,
+    storageSnapshots,
   };
 
   return SessionSchema.parse(session); // fail loud if malformed

@@ -125,7 +125,7 @@ describe('redactHeaders', () => {
     const r = redactHeaders(headers);
     expect(r.redactionsCount).toBe(3);
     expect(r.redacted.Authorization).toMatch(/^\[REDACTED:\d+\]$/);
-    expect(r.redacted.Cookie).toMatch(/^\[REDACTED:\d+\]$/);
+    expect(r.redacted.Cookie).toBe('session=[REDACTED:3]; csrf=[REDACTED:3]');
     expect(r.redacted['X-API-Key']).toMatch(/^\[REDACTED:\d+\]$/);
     expect(r.redacted['Content-Type']).toBe('application/json');
   });
@@ -229,6 +229,7 @@ describe('redactSession', () => {
         ],
       },
     ],
+    storageSnapshots: [],
   };
 
   it('scrubs request bodies, headers, and cookies', () => {
@@ -242,13 +243,13 @@ describe('redactSession', () => {
     if (!req) return;
     expect(req.body).not.toContain('hunter2');
     expect(req.body).not.toContain('user=alice'); // user is now sensitive
-    expect(req.headers.Cookie).toMatch(/^\[REDACTED:\d+\]$/);
-    expect(req.response?.headers['Set-Cookie']).toMatch(/^\[REDACTED:\d+\]$/);
+    expect(req.headers.Cookie).toMatch(/^session=\[REDACTED:v3:id=\d+:len=3\]$/);
+    expect(req.response?.headers['Set-Cookie']).toMatch(/^session=\[REDACTED:v3:id=\d+:len=8\]$/);
 
     const snap = session.cookieSnapshots[0];
     expect(snap).toBeDefined();
     if (!snap) return;
-    expect(snap.cookies[0]?.value).toMatch(/^\[REDACTED:\d+\]$/);
+    expect(snap.cookies[0]?.value).toMatch(/^\[REDACTED:v3:id=\d+:len=16\]$/);
     expect(snap.cookies[0]?.name).toBe('session'); // names kept
     expect(snap.cookies[0]?.domain).toBe('.example.com');
   });
