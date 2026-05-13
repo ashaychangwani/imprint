@@ -10,11 +10,13 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
+import type { Span } from '@opentelemetry/api';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
+import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-codex-cli');
@@ -62,6 +64,36 @@ interface CodexJsonEvent {
 
 export async function compileViaCodexCli(
   opts: CompileViaCodexCliOptions,
+): Promise<CompileAgentResult> {
+  return await traced(
+    'compile.codex_cli_agent',
+    'AGENT',
+    {
+      'imprint.site': opts.session.site,
+      'imprint.tool_name': opts.candidate?.toolName,
+      'imprint.session_path': opts.sessionPath,
+      'imprint.tool_dir': opts.absoluteToolDir,
+      'imprint.model': preferredAgentModel('codex-cli'),
+    },
+    async (span) => {
+      const result = await compileViaCodexCliImpl(opts, span);
+      setSpanAttributes(span, {
+        'imprint.compile.outcome': result.outcome,
+        'imprint.compile.success': result.success,
+        'imprint.compile.turns': result.turns,
+        'imprint.compile.duration_ms': result.durationMs,
+        'imprint.compile.input_tokens': result.inputTokens,
+        'imprint.compile.output_tokens': result.outputTokens,
+        'imprint.compile.conversation_log': result.conversationLogPath,
+      });
+      return result;
+    },
+  );
+}
+
+async function compileViaCodexCliImpl(
+  opts: CompileViaCodexCliOptions,
+  traceSpan?: Span,
 ): Promise<CompileAgentResult> {
   mkdirSync(opts.absoluteToolDir, { recursive: true });
   for (const name of [COMPILE_SENTINELS.done, COMPILE_SENTINELS.giveUp]) {
@@ -162,12 +194,13 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     return finalErrorResult(opts, `failed to send prompt to codex-cli: ${errMsg(err)}`);
   }
 
-  return await driveJsonl(child, opts);
+  return await driveJsonl(child, opts, traceSpan);
 }
 
 async function driveJsonl(
   child: ChildProcess,
   opts: CompileViaCodexCliOptions,
+  traceSpan?: Span,
 ): Promise<CompileAgentResult> {
   const conversationLog: unknown[] = [];
   let inputTokens = 0;
@@ -175,6 +208,7 @@ async function driveJsonl(
   let turn = 0;
   let lastErrorMessage = '';
   let stderrBuf = '';
+  const toolSpans = new Map<string, Span>();
 
   const budgetMs = Math.max(0, opts.deadlineMs - Date.now());
   const fireProgress = (phase: 'thinking' | 'tool', toolName?: string): void => {
@@ -240,6 +274,7 @@ async function driveJsonl(
 
       if (evt.type === 'thread.started') {
         log(`thread_id=${evt.thread_id ?? '(none)'}`);
+        setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
         continue;
       }
 
@@ -251,7 +286,10 @@ async function driveJsonl(
 
       if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
         const toolName = codexToolName(evt.item);
-        if (toolName) fireProgress('tool', toolName);
+        if (toolName) {
+          traceCodexToolEvent(toolSpans, evt.type, evt.item, toolName);
+          fireProgress('tool', toolName);
+        }
         continue;
       }
 
@@ -279,6 +317,8 @@ async function driveJsonl(
   });
   clearInterval(sentinelTimer);
   clearTimeout(deadlineTimer);
+  for (const span of toolSpans.values()) endTraceSpan(span);
+  toolSpans.clear();
 
   if (stdoutBuf.trim()) {
     log(`unflushed stdout tail (${stdoutBuf.length} bytes) discarded`);
@@ -412,6 +452,39 @@ function codexToolName(item: NonNullable<CodexJsonEvent['item']>): string | unde
   const name = item.name ?? item.tool_name ?? item.tool;
   if (!name) return undefined;
   return name.replace(`mcp__${MCP_SERVER_NAME}__`, '');
+}
+
+function traceCodexToolEvent(
+  spans: Map<string, Span>,
+  eventType: string,
+  item: NonNullable<CodexJsonEvent['item']>,
+  toolName: string,
+): void {
+  const id = item.id ?? `${toolName}:${spans.size}`;
+  if (eventType === 'item.started') {
+    const span = startTraceSpan(`mcp.${toolName}`, 'TOOL', {
+      'mcp.server': item.server ?? MCP_SERVER_NAME,
+      'mcp.tool_name': toolName,
+      'codex.item_id': id,
+      'codex.item_type': item.type,
+    });
+    if (span) spans.set(id, span);
+    return;
+  }
+  const span = spans.get(id);
+  if (!span) {
+    const completedSpan = startTraceSpan(`mcp.${toolName}`, 'TOOL', {
+      'mcp.server': item.server ?? MCP_SERVER_NAME,
+      'mcp.tool_name': toolName,
+      'codex.item_id': id,
+      'codex.item_type': item.type,
+      'codex.event': 'completed_without_start',
+    });
+    endTraceSpan(completedSpan);
+    return;
+  }
+  endTraceSpan(span);
+  spans.delete(id);
 }
 
 function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): CompileAgentResult {

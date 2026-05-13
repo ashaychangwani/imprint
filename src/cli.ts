@@ -5,6 +5,7 @@ import { basename, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { ProviderName } from './imprint/llm.ts';
 import { isDebug } from './imprint/log.ts';
+import { shutdownTracing, traced } from './imprint/tracing.ts';
 import { VERSION } from './imprint/version.ts';
 
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
@@ -862,17 +863,30 @@ async function main(argv: string[]): Promise<number> {
 
       try {
         const { teach } = await import('./imprint/teach.ts');
-        await teach({
-          site,
-          url: values.url,
-          fromSession: values['from-session'],
-          persistProfile: values['persist-profile'],
-          signal: ctrl.signal,
-          noInteractive: values['no-interactive'],
-          provider: values.provider as ProviderName | undefined,
-          keepTest: values['keep-test'],
-          allTools: values['all-tools'],
-        });
+        await traced(
+          'cli.teach',
+          'AGENT',
+          {
+            'imprint.site': site,
+            'imprint.url': values.url,
+            'imprint.from_session': values['from-session'],
+            'imprint.provider': values.provider ?? 'auto',
+            'imprint.all_tools': values['all-tools'] ?? false,
+            'imprint.no_interactive': values['no-interactive'] ?? false,
+          },
+          () =>
+            teach({
+              site,
+              url: values.url,
+              fromSession: values['from-session'],
+              persistProfile: values['persist-profile'],
+              signal: ctrl.signal,
+              noInteractive: values['no-interactive'],
+              provider: values.provider as ProviderName | undefined,
+              keepTest: values['keep-test'],
+              allTools: values['all-tools'],
+            }),
+        );
       } finally {
         process.removeListener('SIGINT', onSigint);
       }
@@ -972,12 +986,16 @@ function levenshtein(a: string, b: string): number {
 // (e.g. for VERB_HELP from tests) must not trigger the CLI dispatch.
 if (import.meta.main) {
   main(process.argv.slice(2))
-    .then((code) => process.exit(code))
-    .catch((err) => {
+    .then(async (code) => {
+      await shutdownTracing();
+      process.exit(code);
+    })
+    .catch(async (err) => {
       console.error('imprint: fatal:', err instanceof Error ? err.message : String(err));
       if (isDebug()) {
         console.error(err);
       }
+      await shutdownTracing();
       process.exit(1);
     });
 }

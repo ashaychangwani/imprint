@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  collectCliProcessOutput,
   detectProvider,
   extractJsonObject,
   getProviderStatuses,
@@ -75,6 +76,37 @@ describe('normalizeCliAnalyzeOutput', () => {
     expect(
       normalizeCliAnalyzeOutput(text, 'Output only a JSON array of request seq numbers.'),
     ).toBe(text);
+  });
+});
+
+describe('collectCliProcessOutput', () => {
+  it('drains stdout and stderr concurrently so verbose CLI stderr cannot deadlock', async () => {
+    const proc = Bun.spawn(
+      [
+        'bun',
+        '-e',
+        "const chunk = 'x'.repeat(1024); for (let i = 0; i < 2048; i++) process.stderr.write(chunk); process.stdout.write('ok');",
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+    if (
+      typeof proc.stdout === 'number' ||
+      typeof proc.stderr === 'number' ||
+      !proc.stdout ||
+      !proc.stderr
+    ) {
+      throw new Error('test process did not expose streams');
+    }
+
+    const result = await collectCliProcessOutput({
+      stdout: proc.stdout,
+      stderr: proc.stderr,
+      exited: proc.exited,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('ok');
+    expect(result.stderr.length).toBe(2048 * 1024);
   });
 });
 

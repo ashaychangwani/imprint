@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
+import { setSpanAttributes, traced } from './tracing.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
@@ -92,43 +93,66 @@ export async function detectToolCandidates(
   session: Session,
   llmConfig?: LLMOptions,
 ): Promise<DetectToolCandidatesResult> {
-  const promptPath = pathJoin(PROMPTS_DIR, 'tool-candidate-detection.md');
-  if (!existsSync(promptPath)) {
-    throw new Error(
-      `Candidate detection prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
-    );
-  }
-  const systemPrompt = readFileSync(promptPath, 'utf8');
-  const payload = buildToolCandidatePayload(session);
+  return await traced(
+    'teach.detect_tool_candidates',
+    'AGENT',
+    {
+      'imprint.site': session.site,
+      'imprint.session_url': session.url,
+      'imprint.provider': llmConfig?.provider ?? 'auto',
+    },
+    async (span) => {
+      const promptPath = pathJoin(PROMPTS_DIR, 'tool-candidate-detection.md');
+      if (!existsSync(promptPath)) {
+        throw new Error(
+          `Candidate detection prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
+        );
+      }
+      const systemPrompt = readFileSync(promptPath, 'utf8');
+      const payload = buildToolCandidatePayload(session);
 
-  log(
-    `detecting candidate tools from ${payload.events.length} event(s), ${payload.requests.length} request(s)…`,
+      setSpanAttributes(span, {
+        'imprint.events_considered': payload.events.length,
+        'imprint.requests_considered': payload.requests.length,
+      });
+
+      log(
+        `detecting candidate tools from ${payload.events.length} event(s), ${payload.requests.length} request(s)…`,
+      );
+      const llm = resolveProvider(llmConfig ?? {});
+      const result = await llm.analyze(systemPrompt, payload);
+      const objectText = extractJsonObject(result.text);
+      if (!objectText) {
+        throw new Error(
+          `Candidate detector did not return a JSON object.\nRaw response:\n${result.text.slice(0, 1000)}`,
+        );
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(objectText);
+      } catch (err) {
+        throw new Error(
+          `Candidate detector response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${objectText.slice(0, 1000)}`,
+        );
+      }
+
+      const detection = validateToolCandidateDetection(parsed);
+      setSpanAttributes(span, {
+        'imprint.candidate_count': detection.candidates.length,
+        'imprint.primary_tool_name': detection.candidates.find((c) => c.primary)?.toolName,
+        'imprint.detect.duration_ms': result.durationMs,
+        'imprint.detect.input_tokens': result.inputTokens,
+        'imprint.detect.output_tokens': result.outputTokens,
+      });
+      return {
+        ...detection,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        durationMs: result.durationMs,
+      };
+    },
   );
-  const llm = resolveProvider(llmConfig ?? {});
-  const result = await llm.analyze(systemPrompt, payload);
-  const objectText = extractJsonObject(result.text);
-  if (!objectText) {
-    throw new Error(
-      `Candidate detector did not return a JSON object.\nRaw response:\n${result.text.slice(0, 1000)}`,
-    );
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(objectText);
-  } catch (err) {
-    throw new Error(
-      `Candidate detector response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${objectText.slice(0, 1000)}`,
-    );
-  }
-
-  const detection = validateToolCandidateDetection(parsed);
-  return {
-    ...detection,
-    inputTokens: result.inputTokens,
-    outputTokens: result.outputTokens,
-    durationMs: result.durationMs,
-  };
 }
 
 export function validateToolCandidateDetection(input: unknown): ToolCandidateDetection {
