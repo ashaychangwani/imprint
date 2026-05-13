@@ -1,6 +1,6 @@
 /**
- * Walk a list of backends in order, escalating on FORBIDDEN; any
- * non-FORBIDDEN error returns immediately. fetch-bootstrap is a gated
+ * Walk a list of backends in order, escalating on FORBIDDEN and satisfiable
+ * STATE_MISSING; other errors return immediately. fetch-bootstrap is a gated
  * API-replay adapter, not a default DOM fallback rung: auto only reaches it
  * for workflows that declare bootstrap/captures or STATE_MISSING says browser
  * bootstrap can satisfy the missing state.
@@ -306,8 +306,26 @@ async function runFetchBootstrap(
 
     const html = await page.content();
     for (const capture of tool.workflow.bootstrap.captures ?? []) {
-      const value = await evaluateBootstrapCapture(capture, page, html);
-      if (value !== undefined && value !== null && value !== '') initialState[capture.name] = value;
+      let value: unknown;
+      try {
+        value = await evaluateBootstrapCapture(capture, page, html);
+      } catch (err) {
+        if (capture.required === false) continue;
+        return bootstrapCaptureMissingResult(
+          capture,
+          `Bootstrap capture "${capture.name}" (${capture.source}) failed: ${err instanceof Error ? err.message : String(err)}`,
+          'producer_ran_value_absent',
+        );
+      }
+      if (value !== undefined && value !== null && value !== '') {
+        initialState[capture.name] = value;
+      } else if (capture.required !== false && capture.source !== 'cookie') {
+        return bootstrapCaptureMissingResult(
+          capture,
+          `Required bootstrap capture "${capture.name}" (${capture.source}) did not produce a value.`,
+          'producer_ran_value_absent',
+        );
+      }
     }
 
     const cookies = await context.cookies();
@@ -339,12 +357,28 @@ async function runFetchBootstrap(
         allowHttpOnlyProjection: capture.allowHttpOnlyProjection,
       });
       if (lookup.ok) initialState[capture.name] = lookup.cookie.value;
+      else if (capture.required !== false) {
+        return bootstrapCaptureMissingResult(
+          capture,
+          lookup.reason === 'ambiguous'
+            ? `Bootstrap cookie capture "${capture.name}" is ambiguous; add url/domain/path constraints.`
+            : lookup.reason === 'httponly'
+              ? `Bootstrap cookie capture "${capture.name}" targets HttpOnly cookie "${capture.cookie}" without allowHttpOnlyProjection.`
+              : `Bootstrap cookie capture "${capture.name}" did not find cookie "${capture.cookie}".`,
+          lookup.reason === 'ambiguous' ? 'ambiguous_cookie' : 'producer_ran_value_absent',
+        );
+      }
     }
     return await tool.toolFn(params, {
       credentials: bootstrappedCredentials,
       initialState,
     });
   } catch (err) {
+    const stateMissing = bootstrapFailureStateMissingResult(
+      tool.workflow,
+      `fetch-bootstrap could not produce required bootstrap state: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    if (stateMissing) return stateMissing;
     return {
       ok: false,
       error: 'NETWORK',
@@ -353,6 +387,66 @@ async function runFetchBootstrap(
   } finally {
     await browser?.close().catch(() => {});
   }
+}
+
+function bootstrapFailureStateMissingResult(
+  workflow: Workflow,
+  message: string,
+): ToolResult | null {
+  const captures = (workflow.bootstrap?.captures ?? []).filter(
+    (capture) => capture.required !== false,
+  );
+  if (captures.length === 0) return null;
+  return {
+    ok: false,
+    error: 'STATE_MISSING',
+    message,
+    missing: captures.map((capture) =>
+      bootstrapMissingItem(capture, message, 'producer_unavailable'),
+    ),
+    remediation: remediationForBootstrapCapabilities(captures.map((capture) => capture.capability)),
+  };
+}
+
+function bootstrapCaptureMissingResult(
+  capture: BootstrapCapture,
+  message: string,
+  failure: StateMissingItem['failure'],
+): ToolResult {
+  return {
+    ok: false,
+    error: 'STATE_MISSING',
+    message,
+    missing: [bootstrapMissingItem(capture, message, failure)],
+    remediation: remediationForBootstrapCapabilities([capture.capability]),
+  };
+}
+
+function bootstrapMissingItem(
+  capture: BootstrapCapture,
+  message: string,
+  failure: StateMissingItem['failure'],
+): StateMissingItem {
+  return {
+    name: capture.name,
+    source: bootstrapCaptureSource(capture),
+    capability: capture.capability,
+    required: true,
+    failure,
+    message,
+  };
+}
+
+function bootstrapCaptureSource(capture: BootstrapCapture): StateMissingItem['source'] {
+  if (capture.source === 'cookie') return 'cookie';
+  if (capture.source === 'local_storage' || capture.source === 'session_storage') return 'storage';
+  return 'state';
+}
+
+function remediationForBootstrapCapabilities(capabilities: StateCapability[]): string {
+  return capabilities.includes('stealth_bootstrap')
+    ? 'Run through stealth-fetch so Imprint can mint bot-defense/browser state before API replay.'
+    : 'Run through fetch-bootstrap, or update workflow.bootstrap so Imprint can mint browser state before API replay.';
 }
 
 async function evaluateBootstrapCapture(

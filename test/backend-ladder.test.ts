@@ -257,6 +257,60 @@ describe('runWithLadder — auto escalation', () => {
     expect(behavior.calls.stealth).toBe(0);
   });
 
+  it('escalates fetch-bootstrap capture failures to stealth-fetch for stealth-mintable state', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: {
+        ok: false,
+        error: 'STATE_MISSING',
+        message: 'missing sensor state',
+        missing: [
+          {
+            name: 'sensor',
+            source: 'state',
+            capability: 'stealth_bootstrap',
+            required: true,
+            failure: 'producer_unavailable',
+            message: 'sensor missing',
+          },
+        ],
+      },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('alpha', behavior);
+    tool.workflow.bootstrap = {
+      url: 'about:blank',
+      captures: [
+        {
+          name: 'sensor',
+          source: 'dom_text',
+          selector: '#missing-sensor',
+          timeoutMs: 1,
+          capability: 'stealth_bootstrap',
+          required: true,
+        },
+      ],
+    };
+
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
+
+    expect(r.result.ok).toBe(true);
+    expect(r.usedBackend).toBe('stealth-fetch');
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(1);
+    expect(r.attempts.map((attempt) => [attempt.backend, attempt.outcome])).toEqual([
+      ['fetch', 'escalate'],
+      ['fetch-bootstrap', 'escalate'],
+      ['stealth-fetch', 'ok'],
+    ]);
+  });
+
   it('returns the last FORBIDDEN when every rung escalates', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: { ok: false, error: 'FORBIDDEN', message: 'fetch blocked' },
