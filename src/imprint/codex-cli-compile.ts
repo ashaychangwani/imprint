@@ -149,6 +149,7 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     'exec',
     '--json',
     '--ephemeral',
+    '--ignore-user-config',
     '--ignore-rules',
     '--skip-git-repo-check',
     '-C',
@@ -288,7 +289,7 @@ async function driveJsonl(
         const toolName = codexToolName(evt.item);
         if (toolName) {
           traceCodexToolEvent(toolSpans, evt.type, evt.item, toolName);
-          fireProgress('tool', toolName);
+          fireProgress(evt.type === 'item.started' ? 'tool' : 'thinking', toolName);
         }
         continue;
       }

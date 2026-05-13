@@ -32,8 +32,12 @@ function ensureTracingInitialized(): void {
     projectName: process.env.IMPRINT_TRACE_PROJECT ?? 'imprint',
     url: process.env.PHOENIX_COLLECTOR_ENDPOINT ?? process.env.PHOENIX_HOST,
     apiKey: process.env.PHOENIX_API_KEY,
-    batch: isTruthy(process.env.IMPRINT_TRACE_BATCH),
+    batch: traceBatchEnabled(process.env.IMPRINT_TRACE_BATCH),
   });
+}
+
+export function traceBatchEnabled(value: string | undefined): boolean {
+  return value === undefined ? true : isTruthy(value);
 }
 
 export async function shutdownTracing(): Promise<void> {
