@@ -21,6 +21,29 @@ describe('RuntimeCookieJar', () => {
     expect(jar.getCookieHeader('https://sub.example.com/app/next')).toBeNull();
   });
 
+  it('preserves browser session cookies with expires=-1 but drops real expired cookies', () => {
+    const jar = new RuntimeCookieJar([
+      {
+        name: 'session',
+        value: 'kept',
+        domain: 'example.com',
+        path: '/',
+        hostOnly: true,
+        expires: -1,
+      },
+      {
+        name: 'expired',
+        value: 'dropped',
+        domain: 'example.com',
+        path: '/',
+        hostOnly: true,
+        expires: 1,
+      },
+    ]);
+
+    expect(jar.getCookieHeader('https://example.com/account')).toBe('session=kept');
+  });
+
   it('fails scalar lookup when more than one matching cookie name applies', () => {
     const jar = new RuntimeCookieJar([
       { name: 'sid', value: 'root', domain: 'example.com', path: '/', hostOnly: true },

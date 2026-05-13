@@ -18,6 +18,7 @@ import {
   BackendsCacheSchema,
   type ConcreteBackend,
   CronConfigSchema,
+  WorkflowSchema,
 } from './types.ts';
 import { VERSION } from './version.ts';
 
@@ -146,7 +147,9 @@ function workflowNeedsBootstrap(workflow: ResolvedTool['workflow']): boolean {
 }
 
 function workflowHash(workflow: ResolvedTool['workflow']): string {
-  return createHash('sha256').update(JSON.stringify(workflow)).digest('hex');
+  return createHash('sha256')
+    .update(JSON.stringify(WorkflowSchema.parse(workflow)))
+    .digest('hex');
 }
 
 function capabilityHash(workflow: ResolvedTool['workflow']): string {
@@ -195,7 +198,7 @@ export function loadBackendsCache(
 
 function workflowHashSync(workflowJson: string): string {
   return createHash('sha256')
-    .update(JSON.stringify(JSON.parse(workflowJson)))
+    .update(JSON.stringify(WorkflowSchema.parse(JSON.parse(workflowJson))))
     .digest('hex');
 }
 

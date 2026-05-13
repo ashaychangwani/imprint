@@ -200,8 +200,10 @@ function parseSetCookie(setCookie: string, requestUrl: string): RuntimeCookie | 
 }
 
 function normalizeCookie(cookie: RuntimeCookie): RuntimeCookie {
+  const expires = cookie.expires === -1 ? undefined : cookie.expires;
   return {
     ...cookie,
+    expires,
     domain: normalizeDomain(cookie.domain),
     path: cookie.path || '/',
     hostOnly: cookie.hostOnly ?? !cookie.domain.startsWith('.'),
