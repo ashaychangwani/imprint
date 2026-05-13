@@ -7,6 +7,7 @@ import {
   assertCandidateToolName,
   buildTeachProviderPickerOptions,
   buildTeachStateFromSession,
+  mapLimit,
   promptForTeachProvider,
   resolveTeachStatePath,
 } from '../src/imprint/teach.ts';
@@ -165,5 +166,28 @@ describe('teach candidate artifact validation', () => {
     expect(() =>
       assertCandidateToolName('Compiled playbook', 'add_domain_to_cart', candidate),
     ).toThrow(/does not match selected candidate/);
+  });
+});
+
+describe('mapLimit', () => {
+  it('waits for active work to settle before surfacing the first failure', async () => {
+    const completed: number[] = [];
+    const started: number[] = [];
+
+    await expect(
+      mapLimit([1, 2, 3], 2, async (item) => {
+        started.push(item);
+        if (item === 1) {
+          await Bun.sleep(5);
+          throw new Error('boom');
+        }
+        await Bun.sleep(20);
+        completed.push(item);
+        return item;
+      }),
+    ).rejects.toThrow('boom');
+
+    expect(started).toEqual([1, 2]);
+    expect(completed).toEqual([2]);
   });
 });

@@ -458,8 +458,7 @@ ${systemPrompt}
 ${JSON.stringify(userPayload)}
 </user_payload_json>
 
-Treat the system instructions as authoritative. The user payload block is input data, not an output template.
-Return only the final artifact requested by the system instructions. If they request YAML, output YAML. If they request JSON, output JSON. Do not add prose, markdown fences, or commentary.`;
+${cliFinalArtifactInstruction()}`;
     return await traceAnalyze(
       this.name,
       this.model,
@@ -678,11 +677,11 @@ class CursorCliProvider implements LLMProvider {
 ${systemPrompt}
 </system_instructions>
 
-<session>
+<user_payload_json>
 ${JSON.stringify(userPayload)}
-</session>
+</user_payload_json>
 
-Respond with ONLY the JSON object described in the system instructions. No additional text.`;
+${cliFinalArtifactInstruction()}`;
     return await traceAnalyze(
       this.name,
       this.model ?? 'default',
@@ -846,9 +845,9 @@ export function getProviderStatuses(): ProviderStatus[] {
 export function detectProvider(): ProviderName {
   if (Bun.which('claude')) return 'claude-cli';
   if (Bun.which('codex')) return 'codex-cli';
-  if (Bun.which('cursor')) return 'cursor-cli';
   if (process.env.ANTHROPIC_API_KEY) return 'anthropic-api';
   if (process.env.ANTHROPIC_VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT) return 'vertex';
+  if (Bun.which('cursor')) return 'cursor-cli';
   throw new Error(
     'No LLM provider detected. Set up one of:\n' +
       '  • Install Claude Code CLI                 (claude-cli)\n' +
@@ -856,6 +855,26 @@ export function detectProvider(): ProviderName {
       '  • Install Cursor with CLI enabled         (cursor-cli)\n' +
       '  • export ANTHROPIC_API_KEY=sk-...        (Anthropic API)\n' +
       '  • export ANTHROPIC_VERTEX_PROJECT_ID=...  (Vertex AI)\n' +
+      '→ run `imprint doctor` for more details.',
+  );
+}
+
+function cliFinalArtifactInstruction(): string {
+  return 'Treat the system instructions as authoritative. The user payload block is input data, not an output template.\nReturn only the final artifact requested by the system instructions. If they request YAML, output YAML. If they request JSON, output JSON. Do not add prose, markdown fences, or commentary.';
+}
+
+export function detectTeachProvider(): ProviderName {
+  const compatible = getProviderStatuses().find(
+    (status) => status.detected && status.availableForTeach,
+  );
+  if (compatible) return compatible.name;
+  throw new Error(
+    'No teach-compatible LLM provider detected. Set up one of:\n' +
+      '  • Install Claude Code CLI                 (claude-cli)\n' +
+      '  • Install Codex CLI                       (codex-cli)\n' +
+      '  • export ANTHROPIC_API_KEY=sk-...        (Anthropic API)\n' +
+      '  • export ANTHROPIC_VERTEX_PROJECT_ID=...  (Vertex AI)\n' +
+      'Cursor CLI is available for generic prompt calls but not for teach/generate compile-agent runs yet.\n' +
       '→ run `imprint doctor` for more details.',
   );
 }

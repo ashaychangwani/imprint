@@ -18,13 +18,13 @@ const pipeline = [
   {
     step: '01',
     title: 'Teach once',
-    body: 'Open Chromium, drive a real workflow, and narrate the intent while Imprint captures requests, DOM moves, and session shape.',
+    body: 'Open Chromium, drive a real workflow, and narrate the intent while Imprint captures requests, DOM moves, cookies, storage, and session shape.',
     artifact: '~/.imprint/<site>/sessions/*.json',
   },
   {
     step: '02',
-    title: 'Compile twice',
-    body: 'Generate a fast API workflow plus a DOM playbook fallback in one tool directory. Repeated request context is compacted before the LLM sees it.',
+    title: 'Compile state',
+    body: 'Generate a state-aware API workflow plus a DOM playbook fallback in one tool directory. Repeated request context is compacted before the LLM sees it.',
     artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
   },
   {
@@ -38,16 +38,17 @@ const pipeline = [
 const comparisons = [
   ['Runtime control', 'Deterministic replay', 'LLM chooses every click'],
   ['Token cost', 'Zero at runtime', 'Scales with every page'],
-  ['Bot defense', 'Real Chromium + stealth-fetch', 'Automation fingerprint risk'],
+  ['State handling', 'Named captures + per-run cookie jar', 'Rediscover hidden tokens live'],
+  ['Bot defense', 'Gated fetch-bootstrap + stealth-fetch', 'Automation fingerprint risk'],
   ['Failure mode', 'Backend ladder fallback', 'Retry the same brittle path'],
-  ['Typical result', '200ms–9s', '30s+ exploration loop'],
+  ['Typical result', '200ms fetch, browser only when needed', '30s+ exploration loop'],
 ];
 
 const examples = [
   { name: 'southwest', use: 'Live fare watcher', detail: 'Akamai-resistant flight search with price-drop notifications.' },
   { name: 'google-flights', use: 'Carrier search', detail: 'Parses raw flight-search payloads into structured results.' },
   { name: 'google-hotels', use: 'Hotel search', detail: 'Nightly totals, guest scores, stars, and filters from real-time results.' },
-  { name: 'discoverandgo', use: 'Authed booking', detail: 'Museum-pass flow using the per-site credential store.' },
+  { name: 'discoverandgo', use: 'Authed booking', detail: 'Museum-pass flow using the per-site credential store and replay state.' },
 ];
 
 function LogoMark() {
@@ -77,11 +78,13 @@ $ ${product.teach}
 
 recording Chromium session...             00:42
 redacting credentials + PII...             done
-compiling API workflow...                  workflow.json
+compiling state-aware API workflow...      workflow.json
 compiling DOM playbook fallback...         <tool>/playbook.yaml
+state hints found...                       cookie → header
 emitting MCP tool...                       search_southwest_flights
 
 $ bun run imprint cron southwest --once
+auto ladder...                             gated browser fallback
 stealth-fetch bootstrapping Chromium...    13.4s
 stealth-fetch request complete              1.2s
 
@@ -372,14 +375,14 @@ export default function App() {
             <div className="hero-copy">
               <span className="eyebrow"><span className="pulse" aria-hidden="true"></span> Postman for AI agents · open source CLI</span>
               <h1 id="hero-title">Don’t do anything twice.</h1>
-              <p className="lead">Teach Imprint one real browser session and it turns that recording into a deterministic MCP tool: a fast API workflow, a DOM playbook fallback, and an agent-callable TypeScript module.</p>
+              <p className="lead">Teach Imprint one real browser session and it turns that recording into a deterministic MCP tool: a state-aware API workflow, a DOM playbook fallback, and an agent-callable TypeScript module.</p>
               <div className="hero-actions">
                 <a className="btn btn-primary" href="#install">Start with Bun</a>
                 <a className="btn btn-secondary" href={product.githubUrl}>View source on GitHub</a>
               </div>
               <div className="hero-meta" aria-label="Project highlights">
                 <div className="meta-tile"><strong>v0.1</strong><span>Shipped with working browser automation demos</span></div>
-                <div className="meta-tile"><strong>2 artifacts</strong><span>workflow.json plus playbook.yaml per generated tool</span></div>
+                <div className="meta-tile"><strong>4 modes</strong><span>fetch, fetch-bootstrap, stealth-fetch, and playbook</span></div>
                 <div className="meta-tile"><strong>Traceable</strong><span>Phoenix spans for slow or expensive compiles</span></div>
               </div>
             </div>
@@ -396,7 +399,7 @@ export default function App() {
                 <p className="problem-copy">Browser-use and Computer Use are powerful, but they spend runtime tokens deciding clicks, scanning pages, and recovering from variance. Imprint moves that intelligence to compile time: record a known-good path once, then replay it with deterministic machinery.</p>
                 <div className="belief-grid">
                   <div className="belief"><b>Recordings are source</b><span>The human-demonstrated session becomes the executable contract.</span></div>
-                  <div className="belief"><b>Fallback is built in</b><span>API replay, stealth-fetch, and DOM playbooks form a backend ladder.</span></div>
+                  <div className="belief"><b>Fallback is built in</b><span>API replay, browser bootstrap, stealth-fetch, and DOM playbooks form a backend ladder.</span></div>
                 </div>
               </div>
             </div>
@@ -419,12 +422,12 @@ export default function App() {
             <div className="proof-copy">
               <span className="kicker">Product proof</span>
               <h2 id="proof-title">Two replays are better than one brittle script.</h2>
-              <p>Every taught workflow compiles into both a network-level workflow and a DOM-level playbook under the generated tool directory. When a plain API request works, Imprint stays fast. When bot protection or page churn gets involved, it escalates instead of failing blind.</p>
+              <p>Every taught workflow compiles into both a network-level workflow and a DOM-level playbook under the generated tool directory. When HTTP can mint cookies or CSRF state, Imprint stays on fetch. When Chromium is needed only to initialize state, fetch-bootstrap harvests it and returns to API replay.</p>
             </div>
             <div className="artifact-stack" aria-label="Generated artifacts">
-              <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay for low-latency tasks and cron jobs.</p></article>
+              <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay with named state captures for low-latency tasks and cron jobs.</p></article>
               <article className="artifact"><small>Fallback path</small><h3>playbook.yaml</h3><p>DOM-level steps for sites that move logic into the browser.</p></article>
-              <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and platform-specific wiring.</p></article>
+              <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and a local runtime wrapper you can re-emit per machine.</p></article>
             </div>
           </section>
 
@@ -439,9 +442,10 @@ export default function App() {
             <div className="comparison-grid">
               <aside className="backend-card" aria-label="Backend ladder speeds">
                 <h3>The backend ladder</h3>
-                <p className="problem-copy">Start with the fastest replay that works. Escalate only when the site forces it.</p>
+                <p className="problem-copy">Start with the fastest replay that works. Escalate only when the workflow or site forces it.</p>
                 <div className="ladder">
                   <div className="ladder-row"><b>fetch</b><span>~200ms</span></div>
+                  <div className="ladder-row"><b>fetch-bootstrap</b><span>browser state mint</span></div>
                   <div className="ladder-row"><b>stealth-fetch</b><span>~12s first · ~1s warm</span></div>
                   <div className="ladder-row"><b>playbook</b><span>~9s universal fallback</span></div>
                 </div>
@@ -498,11 +502,11 @@ export default function App() {
               <article className="security-card">
                 <span className="kicker">Security posture</span>
                 <h2 id="security-title">Made for real sessions, not toy demos.</h2>
-                <p>Imprint records sensitive browser traffic, so the product treats redaction and credentials as first-class workflow steps rather than README footnotes.</p>
+                <p>Imprint records sensitive browser traffic, so the product treats redaction, credentials, cookies, and storage as first-class workflow steps rather than README footnotes.</p>
               </article>
               <div className="checks">
-                <div className="check"><i>✓</i><div><b>Redaction before compile</b><span><code>generate</code> and <code>compile-playbook</code> auto-redact sessions before sending payloads to an LLM.</span></div></div>
-                <div className="check"><i>✓</i><div><b>Credentials stay local</b><span>Generated tools reference per-site credentials at runtime instead of committing plaintext secrets.</span></div></div>
+                <div className="check"><i>✓</i><div><b>Redaction before compile</b><span><code>generate</code> and <code>compile-playbook</code> auto-redact sessions; equality markers preserve state relationships without exposing raw values.</span></div></div>
+                <div className="check"><i>✓</i><div><b>Credentials stay local</b><span>Generated tools initialize per-run cookie/state jars from the local credential backend instead of committing plaintext secrets.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Traceable compiles</b><span><code>IMPRINT_TRACE=1</code> streams OpenInference spans, token estimates, and optional LLM/tool I/O into local Phoenix.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Auditable artifacts</b><span>Workflow, playbook, cron config, backend order, and generated module are files you can inspect, test, and version.</span></div></div>
               </div>
@@ -514,7 +518,7 @@ export default function App() {
               <div>
                 <span className="kicker">Install</span>
                 <h2 id="install-title">Teach your first agent tool in minutes.</h2>
-                <p>Bring Bun 1.3+, Chrome, and a compile provider already available on your machine. Imprint detects Claude CLI, Codex CLI, Cursor CLI, Anthropic API, or Vertex.</p>
+                <p>Bring Bun 1.3+, Chrome, and a compile-agent provider already available on your machine. Imprint detects Claude CLI, Codex CLI, Anthropic API, or Vertex; Cursor CLI is available for playbook compilation.</p>
                 <div className="hero-actions">
                   <a className="btn btn-primary" href={product.githubUrl}>Clone the repo</a>
                   <a className="btn btn-secondary" href="https://github.com/ashaychangwani/imprint/blob/main/docs/getting-started.md">Read getting started</a>

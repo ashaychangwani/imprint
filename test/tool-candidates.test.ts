@@ -56,6 +56,103 @@ describe('tool candidate payload', () => {
     expect(payload.requests[1]?.likelyLoginOrAuth).toBe(false);
   });
 
+  it('keeps cross-domain auth setup requests while dropping unrelated third parties', () => {
+    const crossDomainAuthSession: Session = {
+      ...session,
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://auth.example-idp.com/oauth/token',
+          headers: { 'content-type': 'application/json' },
+          body: '{"username":"${credential.username}","password":"${credential.password}"}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{"token":"abc"}' },
+        },
+        {
+          seq: 2,
+          timestamp: 200,
+          method: 'GET',
+          url: 'https://api.example.com/search?q=test',
+          headers: {},
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: '{"items":[]}' },
+        },
+        {
+          seq: 3,
+          timestamp: 300,
+          method: 'GET',
+          url: 'https://analytics.other.com/pixel',
+          headers: {},
+          resourceType: 'XHR',
+        },
+      ],
+    };
+
+    const payload = buildToolCandidatePayload(crossDomainAuthSession);
+
+    expect(payload.requests.map((r) => r.seq)).toEqual([1, 2]);
+    expect(payload.requests[0]?.likelyLoginOrAuth).toBe(true);
+  });
+
+  it('uses navigation or document URLs for scoping when session.url is about:blank', () => {
+    const blankSession: Session = {
+      ...session,
+      url: 'about:blank',
+      events: [
+        {
+          seq: 20,
+          timestamp: 50,
+          type: 'navigation',
+          detail: 'https://www.example.com/start',
+        },
+      ],
+      requests: [
+        {
+          seq: 1,
+          timestamp: 75,
+          method: 'GET',
+          url: 'https://www.example.com/start',
+          headers: {},
+          resourceType: 'Document',
+        },
+        {
+          seq: 2,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://api.example.com/search?q=test',
+          headers: {},
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: '{"items":[]}' },
+        },
+        {
+          seq: 3,
+          timestamp: 150,
+          method: 'GET',
+          url: 'https://analytics.other.com/pixel',
+          headers: {},
+          resourceType: 'XHR',
+        },
+        {
+          seq: 4,
+          timestamp: 200,
+          method: 'POST',
+          url: 'https://auth.other-idp.com/oauth/token',
+          headers: { 'content-type': 'application/json' },
+          body: '{"username":"${credential.username}","password":"${credential.password}"}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{"token":"abc"}' },
+        },
+      ],
+    };
+
+    const payload = buildToolCandidatePayload(blankSession);
+
+    expect(payload.requests.map((r) => r.seq)).toEqual([2, 4]);
+    expect(payload.requests[1]?.likelyLoginOrAuth).toBe(true);
+  });
+
   it('compacts identical repeated requests before sending candidate context', () => {
     const duplicateSession: Session = {
       ...session,

@@ -49,10 +49,14 @@ afterEach(() => {
  * IMPRINT_TEST_RESULT env var. Lets each test choose `ok` / `auth` /
  * `network` without rewriting fixtures.
  */
-function writeFakeExample(site: string, params: Array<{ name: string; type: string }>): void {
-  const dir = pathResolve(root, site, site);
+function writeFakeExample(
+  site: string,
+  params: Array<{ name: string; type: string }>,
+  toolName = site,
+): void {
+  const dir = pathResolve(root, site, toolName);
   mkdirSync(dir, { recursive: true });
-  const fnName = site
+  const fnName = toolName
     .split('_')
     .map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1)))
     .join('');
@@ -61,10 +65,10 @@ function writeFakeExample(site: string, params: Array<{ name: string; type: stri
     pathResolve(dir, 'index.ts'),
     `
 export const WORKFLOW = {
-  toolName: '${site}',
+  toolName: '${toolName}',
   intent: { description: 'test fixture' },
   parameters: ${paramSchema},
-  requests: [{ method: 'GET', url: 'https://example.com/api/${site}', headers: {} }],
+  requests: [{ method: 'GET', url: 'https://example.com/api/${toolName}', headers: {} }],
   site: '${site}',
 };
 
@@ -85,6 +89,7 @@ function makeResult(mode, input) {
 
 export async function ${fnName}(input, opts) {
   globalThis.__IMPRINT_TEST_LAST_INPUT = input;
+  globalThis.__IMPRINT_TEST_LAST_TOOL = '${toolName}';
   // Track call count for SEQUENCE mode and to mark which backend ran
   // (when fetchImpl is injected, that's the stealth-fetch backend).
   globalThis.__IMPRINT_TEST_CALL_COUNT = (globalThis.__IMPRINT_TEST_CALL_COUNT ?? 0) + 1;
@@ -104,9 +109,9 @@ export async function ${fnName}(input, opts) {
   );
 }
 
-function writeConfig(site: string, body: object): string {
-  const path = pathResolve(root, site, site, 'cron.json');
-  mkdirSync(pathResolve(root, site, site), { recursive: true });
+function writeConfig(site: string, body: object, toolName = site): string {
+  const path = pathResolve(root, site, toolName, 'cron.json');
+  mkdirSync(pathResolve(root, site, toolName), { recursive: true });
   writeFileSync(path, JSON.stringify(body, null, 2), 'utf8');
   return path;
 }
@@ -115,6 +120,7 @@ describe('CronConfigSchema', () => {
   it('accepts minimal config and defaults params to {}', () => {
     const r = CronConfigSchema.parse({ schedule: '* * * * *' });
     expect(r.params).toEqual({});
+    expect(r.replayBackend).toBe('auto');
   });
 
   it.each([
@@ -191,6 +197,29 @@ describe('runCron({ once: true })', () => {
     await expect(runCron({ site: 'no_config', assetRoot: root, once: true })).rejects.toThrow(
       /cron\.json not found/,
     );
+  });
+
+  it('requires a selected tool when a site has multiple generated tools', async () => {
+    writeFakeExample('multi', [], 'first_tool');
+    writeFakeExample('multi', [], 'second_tool');
+
+    await expect(runCron({ site: 'multi', assetRoot: root, once: true })).rejects.toThrow(
+      /choose one for cron/,
+    );
+  });
+
+  it('infers the selected tool from --config for multi-tool sites', async () => {
+    writeFakeExample('multi_config', [], 'first_tool');
+    writeFakeExample('multi_config', [], 'second_tool');
+    const configPath = writeConfig(
+      'multi_config',
+      { schedule: '* * * * *', params: {} },
+      'second_tool',
+    );
+
+    await runCron({ site: 'multi_config', assetRoot: root, once: true, configPath });
+
+    expect((globalThis as Record<string, unknown>).__IMPRINT_TEST_LAST_TOOL).toBe('second_tool');
   });
 
   it('throws when no generated tool exists for the site', async () => {
@@ -521,11 +550,36 @@ describe('replayBackend', () => {
     );
   });
 
-  it('runs the API path when replayBackend=fetch (default) and no playbook exists', async () => {
+  it('runs the API path when replayBackend=fetch and no playbook exists', async () => {
     writeFakeExample('plain_fetch', []);
-    writeConfig('plain_fetch', { schedule: '* * * * *', params: {} });
+    writeConfig('plain_fetch', { schedule: '* * * * *', params: {}, replayBackend: 'fetch' });
     // No notifyWhen → no push expected even on success. Just verify no throw.
     await runCron({ site: 'plain_fetch', assetRoot: root, once: true });
+  });
+
+  it('uses the probe cache when replayBackend is omitted', async () => {
+    writeFakeExample('cache_auto', []);
+    writeConfig('cache_auto', { schedule: '* * * * *', params: {} });
+    writeFileSync(
+      pathResolve(root, 'cache_auto', 'cache_auto', 'backends.json'),
+      JSON.stringify(
+        {
+          probedAt: '2026-05-13T00:00:00.000Z',
+          imprintVersion: '0.1.0',
+          preferredOrder: ['stealth-fetch'],
+          results: {
+            'stealth-fetch': { outcome: 'ok', durationMs: 1 },
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    await runCron({ site: 'cache_auto', assetRoot: root, once: true });
+
+    expect((globalThis as Record<string, unknown>).__IMPRINT_TEST_FETCH_IMPL_CALLS).toBe(1);
   });
 
   it('replayBackend=auto without a playbook behaves like fetch', async () => {

@@ -196,12 +196,14 @@ Add to `~/.openclaw/openclaw.json` under the `mcp.servers` key:
 
 - Frontmatter with name, description, and version
 - MCP integration instructions
-- Workflow JSON (API replay artifact)
-- Playbook YAML (DOM replay fallback)
-- Parameter table
+- Workflow JSON for each selected tool (API replay artifact)
+- Playbook YAML for each selected tool (DOM replay fallback)
+- Parameter tables for each selected tool
 - Backend ladder explanation
 
 The SKILL.md is written to `./imprint-mysite/SKILL.md` (ready for `openclaw skill install ./imprint-mysite`).
+
+When sharing a generated skill folder across machines, install Imprint on the receiving machine and rerun `imprint emit <workflow.json> --force` for each workflow. The workflow/playbook files are portable, but the generated `index.ts` wrapper imports the local Imprint runtime path from the machine that emitted it.
 
 ### Publishing to ClawHub
 
@@ -234,6 +236,8 @@ Restart Hermes for the changes to take effect.
 Similar to OpenClaw, Hermes reads SKILL.md files from `~/.hermes/skills/`. `imprint teach` offers to export a SKILL.md after generating the tool.
 
 If `~/.hermes/` exists, the SKILL.md is written directly to `~/.hermes/skills/imprint-mysite/SKILL.md`. Otherwise it's written to `./imprint-mysite/SKILL.md`.
+
+For remote Hermes hosts, install Imprint on that host and rerun `imprint emit <workflow.json> --force` after copying the skill folder so generated wrappers use the host's local runtime path.
 
 ### Cron mapping
 

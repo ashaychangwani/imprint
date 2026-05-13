@@ -189,7 +189,7 @@ describe('runWithLadder — auto escalation', () => {
     expect(r.attempts[0]).toMatchObject({ backend: 'fetch', outcome: 'failed' });
   });
 
-  it('escalates STATE_MISSING only when the next backend can satisfy it', async () => {
+  it('does not escalate STATE_MISSING to stealth-fetch because it cannot fill state placeholders', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: {
         ok: false,
@@ -218,10 +218,10 @@ describe('runWithLadder — auto escalation', () => {
       makeStealthCache(tool),
     );
 
-    expect(r.result.ok).toBe(true);
-    expect(r.usedBackend).toBe('stealth-fetch');
+    expect(r.result.ok).toBe(false);
+    expect(r.usedBackend).toBe('fetch');
     expect(behavior.calls.fetch).toBe(1);
-    expect(behavior.calls.stealth).toBe(1);
+    expect(behavior.calls.stealth).toBe(0);
   });
 
   it('does not escalate STATE_MISSING when the next backend cannot satisfy it', async () => {
@@ -257,7 +257,7 @@ describe('runWithLadder — auto escalation', () => {
     expect(behavior.calls.stealth).toBe(0);
   });
 
-  it('escalates fetch-bootstrap capture failures to stealth-fetch for stealth-mintable state', async () => {
+  it('does not claim stealth-fetch can satisfy missing state captures by itself', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: {
         ok: false,
@@ -300,14 +300,13 @@ describe('runWithLadder — auto escalation', () => {
       makeStealthCache(tool),
     );
 
-    expect(r.result.ok).toBe(true);
-    expect(r.usedBackend).toBe('stealth-fetch');
+    expect(r.result.ok).toBe(false);
+    expect(r.usedBackend).toBe('fetch-bootstrap');
     expect(behavior.calls.fetch).toBe(1);
-    expect(behavior.calls.stealth).toBe(1);
+    expect(behavior.calls.stealth).toBe(0);
     expect(r.attempts.map((attempt) => [attempt.backend, attempt.outcome])).toEqual([
       ['fetch', 'escalate'],
-      ['fetch-bootstrap', 'escalate'],
-      ['stealth-fetch', 'ok'],
+      ['fetch-bootstrap', 'failed'],
     ]);
   });
 
@@ -394,6 +393,57 @@ result:
     if (!playbookAttempt) throw new Error('expected 3rd attempt');
     expect(playbookAttempt.backend).toBe('playbook');
     expect(['ok', 'failed', 'escalate']).toContain(playbookAttempt.outcome);
+  });
+
+  it('skips stealth-fetch and reaches playbook for state missing that only DOM replay can bypass', async () => {
+    const siteDir = pathResolve(root, 'stateful', 'search_stateful');
+    mkdirSync(siteDir, { recursive: true });
+    writeFileSync(
+      pathResolve(siteDir, 'playbook.yaml'),
+      `toolName: tool_stateful
+summary: x
+parameters: []
+steps:
+  - action: navigate
+    url: about:blank
+result:
+  source: xhr
+  url_pattern: never
+  extract: x
+  return_as: r
+`,
+    );
+    const behavior: FakeToolBehavior = {
+      fetchResult: {
+        ok: false,
+        error: 'STATE_MISSING',
+        message: 'missing bot state',
+        missing: [
+          {
+            name: 'sensor',
+            source: 'state',
+            capability: 'stealth_bootstrap',
+            required: true,
+            failure: 'producer_unavailable',
+            message: 'sensor missing',
+          },
+        ],
+      },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('stateful', behavior, siteDir);
+
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch', 'playbook'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
+
+    expect(behavior.calls.stealth).toBe(0);
+    expect(r.attempts.map((attempt) => attempt.backend)).toEqual(['fetch', 'playbook']);
   });
 });
 

@@ -63,12 +63,17 @@ describe('trace I/O controls', () => {
     process.env.IMPRINT_TRACE_LLM_IO = '1';
 
     expect(traceLlmIoEnabled()).toBe(true);
+    expect(traceToolIoEnabled()).toBe(false);
+
+    process.env.IMPRINT_TRACE_TOOL_IO = '1';
+
     expect(traceToolIoEnabled()).toBe(true);
   });
 
   it('uses a bounded default trace payload size', () => {
     expect(traceIoMaxChars(undefined)).toBe(50_000);
     expect(traceIoMaxChars('0')).toBe(0);
+    expect(traceIoMaxChars('-1')).toBe(50_000);
     expect(traceIoMaxChars('not-a-number')).toBe(50_000);
   });
 
@@ -82,6 +87,17 @@ describe('trace I/O controls', () => {
     expect(attrs['imprint.trace.input.chars']).toBe(6);
     expect(attrs['imprint.trace.input.truncated']).toBe(true);
     expect(attrs['imprint.trace.input.max_chars']).toBe(4);
+  });
+
+  it('captures no payload body when the trace char limit is zero', () => {
+    process.env.IMPRINT_TRACE_IO_MAX_CHARS = '0';
+
+    const attrs = traceInputOutputAttributes('output', 'abcdef');
+
+    expect(attrs['output.value']).toBe('...[truncated 6 chars]');
+    expect(attrs['imprint.trace.output.chars']).toBe(6);
+    expect(attrs['imprint.trace.output.truncated']).toBe(true);
+    expect(attrs['imprint.trace.output.max_chars']).toBe(0);
   });
 });
 

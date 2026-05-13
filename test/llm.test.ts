@@ -10,6 +10,7 @@ import {
   codexAnalyzeArgs,
   collectCliProcessOutput,
   detectProvider,
+  detectTeachProvider,
   extractJsonObject,
   getProviderStatuses,
   isTeachCompatibleProvider,
@@ -195,6 +196,46 @@ describe('detectProvider', () => {
       else process.env.ANTHROPIC_API_KEY = origKey;
       if (origProject === undefined) process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
       else process.env.ANTHROPIC_VERTEX_PROJECT_ID = origProject;
+    }
+  });
+
+  it('prefers env providers over cursor-cli for generic provider auto-detection', () => {
+    const origWhich = Bun.which;
+    const origKey = process.env.ANTHROPIC_API_KEY;
+    try {
+      Bun.which = ((cmd: string) => (cmd === 'cursor' ? '/bin/cursor' : null)) as typeof Bun.which;
+      process.env.ANTHROPIC_API_KEY = 'sk-test';
+
+      expect(detectProvider()).toBe('anthropic-api');
+      expect(detectTeachProvider()).toBe('anthropic-api');
+    } finally {
+      Bun.which = origWhich;
+      if (origKey === undefined) process.env.ANTHROPIC_API_KEY = undefined;
+      else process.env.ANTHROPIC_API_KEY = origKey;
+    }
+  });
+
+  it('falls back to cursor-cli when no compile-agent provider is detected', () => {
+    const origWhich = Bun.which;
+    const origKey = process.env.ANTHROPIC_API_KEY;
+    const origProject = process.env.ANTHROPIC_VERTEX_PROJECT_ID;
+    const origGoogleProject = process.env.GOOGLE_CLOUD_PROJECT;
+    try {
+      Bun.which = ((cmd: string) => (cmd === 'cursor' ? '/bin/cursor' : null)) as typeof Bun.which;
+      process.env.ANTHROPIC_API_KEY = undefined;
+      process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
+      process.env.GOOGLE_CLOUD_PROJECT = undefined;
+
+      expect(detectProvider()).toBe('cursor-cli');
+      expect(() => detectTeachProvider()).toThrow(/No teach-compatible/);
+    } finally {
+      Bun.which = origWhich;
+      if (origKey === undefined) process.env.ANTHROPIC_API_KEY = undefined;
+      else process.env.ANTHROPIC_API_KEY = origKey;
+      if (origProject === undefined) process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
+      else process.env.ANTHROPIC_VERTEX_PROJECT_ID = origProject;
+      if (origGoogleProject === undefined) process.env.GOOGLE_CLOUD_PROJECT = undefined;
+      else process.env.GOOGLE_CLOUD_PROJECT = origGoogleProject;
     }
   });
 });

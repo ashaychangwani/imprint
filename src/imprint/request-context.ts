@@ -4,6 +4,8 @@
  * read tools; these helpers only shrink overview payloads.
  */
 
+import { createHash } from 'node:crypto';
+
 interface CompactRequestContext {
   seq: number;
   timestamp: number;
@@ -54,4 +56,9 @@ export function compactRequestContexts<T extends CompactRequestContext>(
 
 function stableRequestContextKey(parts: unknown): string {
   return typeof parts === 'string' ? parts : JSON.stringify(parts);
+}
+
+export function requestContextDigest(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return createHash('sha256').update(value).digest('hex');
 }

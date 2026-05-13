@@ -14,6 +14,7 @@ import { imprintHomeDir } from './paths.ts';
 import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { type ResolvedTool, discoverTools } from './tool-loader.ts';
+import { selectGeneratedTool } from './tool-selection.ts';
 import {
   type BackendsCache,
   BackendsCacheSchema,
@@ -31,6 +32,8 @@ interface ProbeBackendsOptions {
   paramOverrides?: Record<string, string | number | boolean>;
   /** Where to write backends.json. Defaults to <assetRoot>/<site>/<toolName>/backends.json. */
   outPath?: string;
+  /** Select a specific generated tool when a site has more than one. */
+  toolName?: string;
 }
 
 interface ProbeBackendsResult {
@@ -43,7 +46,14 @@ const log = createLog('probe');
 export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBackendsResult> {
   const assetRoot = opts.assetRoot ?? imprintHomeDir();
   const discovered = await discoverTools(assetRoot, opts.site, '[imprint probe]');
-  const tool = discovered[0];
+  const tool = selectGeneratedTool({
+    site: opts.site,
+    tools: discovered,
+    purpose: 'probe',
+    toolName: opts.toolName,
+    pathHint: opts.outPath,
+    pathHintLabel: '--out',
+  });
   if (!tool) {
     throw new Error(
       `No generated tool found for site "${opts.site}".\n${availableSitesHint(assetRoot, opts.site)}\n→ run \`imprint teach ${opts.site}\` or \`imprint emit ~/.imprint/${opts.site}/<toolName>/workflow.json\` first.`,

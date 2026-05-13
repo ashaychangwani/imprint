@@ -145,16 +145,25 @@ export function buildRegistrationCommand(opts: {
 export function generateSkillMd(opts: {
   site: string;
   workflow: Workflow;
+  workflows?: Workflow[];
   playbook?: Playbook;
+  playbooks?: Playbook[];
   cronConfig?: CronConfig;
   platform: 'openclaw' | 'hermes';
 }): string {
-  const { site, workflow, playbook, cronConfig, platform } = opts;
+  const { site, workflow, workflows, playbook, playbooks, cronConfig, platform } = opts;
+  const workflowList = workflows && workflows.length > 0 ? workflows : [workflow];
+  const playbookList = playbooks && playbooks.length > 0 ? playbooks : playbook ? [playbook] : [];
+  const primaryWorkflow = workflowList[0] ?? workflow;
   const toolName = `imprint-${site}`;
+  const description =
+    workflowList.length === 1
+      ? primaryWorkflow.intent.description
+      : `${workflowList.length} Imprint tools for ${site}: ${workflowList.map((w) => w.toolName).join(', ')}`;
 
   const frontmatter = `---
 name: ${toolName}
-description: ${workflow.intent.description}
+description: ${description}
 version: 1.0.0
 metadata:
   ${platform}:
@@ -163,43 +172,88 @@ metadata:
 ---`;
 
   const contextBlock =
-    workflow.intent.userSaid !== undefined
-      ? `\nRecording context: ${workflow.intent.userSaid}\n`
+    workflowList.length === 1 && primaryWorkflow.intent.userSaid !== undefined
+      ? `\nRecording context: ${primaryWorkflow.intent.userSaid}\n`
       : '';
 
   // Generate platform-specific config snippet.
   const imprintCommand = detectImprintCommand();
-  const configSnippet = generatePasteSnippet({ site, workflow, platform, imprintCommand });
+  const configSnippet = generatePasteSnippet({
+    site,
+    workflow: primaryWorkflow,
+    workflows: workflowList,
+    platform,
+    imprintCommand,
+  });
 
   // Workflow JSON block.
-  const workflowJson = JSON.stringify(workflow, null, 2);
-  const workflowBlock = `## Workflow (API replay)
+  const workflowBlock =
+    workflowList.length === 1
+      ? `## Workflow (API replay)
 
 \`\`\`json
-${workflowJson}
-\`\`\``;
+${JSON.stringify(primaryWorkflow, null, 2)}
+\`\`\``
+      : `## Workflows (API replay)
+
+${workflowList
+  .map(
+    (w) => `### ${w.toolName}
+
+\`\`\`json
+${JSON.stringify(w, null, 2)}
+\`\`\``,
+  )
+  .join('\n\n')}`;
 
   // Playbook YAML block (optional).
   let playbookBlock = '';
-  if (playbook !== undefined) {
-    const playbookYaml = yamlStringify(playbook, { lineWidth: 0 });
+  if (playbookList.length === 1 && playbookList[0] !== undefined) {
+    const playbookYaml = yamlStringify(playbookList[0], { lineWidth: 0 });
     playbookBlock = `\n## Playbook (DOM replay fallback)
 
 \`\`\`yaml
 ${playbookYaml.trim()}
 \`\`\``;
+  } else if (playbookList.length > 1) {
+    playbookBlock = `\n## Playbooks (DOM replay fallbacks)
+
+${playbookList
+  .map(
+    (p) => `### ${p.toolName}
+
+\`\`\`yaml
+${yamlStringify(p, { lineWidth: 0 }).trim()}
+\`\`\``,
+  )
+  .join('\n\n')}`;
   }
 
   // Parameter table.
   let paramTableBlock = '## Parameters\n\n';
-  if (workflow.parameters.length === 0) {
+  if (workflowList.length === 1 && primaryWorkflow.parameters.length === 0) {
     paramTableBlock += 'None.\n';
-  } else {
+  } else if (workflowList.length === 1) {
     paramTableBlock += '| Name | Type | Default | Description |\n';
     paramTableBlock += '|------|------|---------|-------------|\n';
-    for (const p of workflow.parameters) {
+    for (const p of primaryWorkflow.parameters) {
       const defaultVal = p.default !== undefined ? JSON.stringify(p.default) : 'required';
       paramTableBlock += `| ${p.name} | ${p.type} | ${defaultVal} | ${p.description} |\n`;
+    }
+  } else {
+    for (const w of workflowList) {
+      paramTableBlock += `### ${w.toolName}\n\n`;
+      if (w.parameters.length === 0) {
+        paramTableBlock += 'None.\n\n';
+        continue;
+      }
+      paramTableBlock += '| Name | Type | Default | Description |\n';
+      paramTableBlock += '|------|------|---------|-------------|\n';
+      for (const p of w.parameters) {
+        const defaultVal = p.default !== undefined ? JSON.stringify(p.default) : 'required';
+        paramTableBlock += `| ${p.name} | ${p.type} | ${defaultVal} | ${p.description} |\n`;
+      }
+      paramTableBlock += '\n';
     }
   }
 
@@ -224,7 +278,7 @@ Imprint cron schedule: \`${cronConfig.schedule}\``;
 
 # ${toolName}
 
-${workflow.intent.description}${contextBlock}
+${description}${contextBlock}
 
 ## MCP Integration
 

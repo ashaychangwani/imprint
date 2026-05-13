@@ -18,6 +18,7 @@ v0.1 shipped. Working demos: `examples/southwest` (live, defeats Akamai via stea
 - **Playbook debugging**: [docs/playbook-debugging.md](docs/playbook-debugging.md)
 - **Notification setup**: [docs/notifications.md](docs/notifications.md)
 - **Security model + redaction guarantees**: [docs/security.md](docs/security.md)
+- **Website**: [web/](web/) — standalone Vite/React landing page deployed with Vercel using `web` as project root
 
 ## Project layout
 
@@ -32,9 +33,21 @@ prompts/
 ├── request-triage.md       # compile-playbook request filtering prompt
 ├── playbook-compilation.md # compile-playbook (playbook.yaml) system prompt
 docs/                       # human-facing documentation
+web/                        # standalone Vite/React landing page; run web commands from web/
 test/                       # bun test, ~130 tests
 scripts/                    # smoke tests + one-off dev helpers
 ```
+
+## User-facing change rule
+
+Whenever you change user-facing implementation behavior, update every matching user-facing surface in the same branch:
+
+- `README.md` for the top-level product promise and quickstart.
+- Relevant files under `docs/` for architecture, setup, security, troubleshooting, examples, or operator guidance.
+- `web/src/App.jsx` and, when visual system guidance changes, `web/DESIGN.md` for the landing page.
+- Generated/help text or prompts when the behavior changes what users or compile agents see.
+
+After website changes, run `bun install` only from `web/` if dependencies are missing, then run `bun run build` from `web/` and visually inspect the page at mobile and desktop widths. Keep root package installs separate from `web/`.
 
 ## CI/CD & releases
 
@@ -71,5 +84,5 @@ This is a **public** repo. Real credentials, session tokens, cookie values, pers
 
 1. **Platform risk**: Anthropic / OpenAI could ship native MCP learning as a first-class feature.
 2. **Lesson rot**: automations break as websites change. Mitigation: ladder fallback (DOM playbook still works when API moves).
-3. **Auth handling**: httpOnly cookies, token expiry, CSRF — the hardest technical problem. Partially solved via per-site credential store + `imprint login`.
+3. **Auth handling**: httpOnly cookies, token expiry, CSRF — still hard, but now handled through per-site credential storage, state-aware captures, `fetch-bootstrap`, and `imprint login` where possible.
 4. **Distribution**: needs to be discoverable. v0.1 is CLI-first; future v0.2 may add a Chrome extension UX.

@@ -21,6 +21,7 @@ import { checkSiteCredentialsReady } from './runtime.ts';
 import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
 import { type ResolvedTool, buildZodValidator, discoverTools } from './tool-loader.ts';
+import { selectGeneratedTool } from './tool-selection.ts';
 import {
   type ConcreteBackend,
   type CronConfig,
@@ -35,6 +36,8 @@ interface RunCronOptions {
   assetRoot?: string;
   /** Override config path. Defaults to <assetRoot>/<site>/<toolName>/cron.json. */
   configPath?: string;
+  /** Select a specific generated tool when a site has more than one. */
+  toolName?: string;
   /** Run a single tick and exit. Mutually exclusive with runNow. */
   once?: boolean;
   /** Run immediately on startup AND continue scheduling. */
@@ -177,7 +180,14 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
   const assetRoot = opts.assetRoot ?? imprintHomeDir();
   // Discover tool first so we know the workflow directory.
   const discovered = await discoverTools(assetRoot, opts.site, '[imprint cron]');
-  const tool = discovered[0];
+  const tool = selectGeneratedTool({
+    site: opts.site,
+    tools: discovered,
+    purpose: 'cron',
+    toolName: opts.toolName,
+    pathHint: opts.configPath,
+    pathHintLabel: '--config',
+  });
   if (!tool) {
     throw new Error(
       `No generated tool found for site "${opts.site}".\n${availableSitesHint(assetRoot, opts.site)}\n→ run \`imprint teach ${opts.site}\` or \`imprint emit ~/.imprint/${opts.site}/<toolName>/workflow.json\` first.`,
@@ -198,7 +208,7 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
     );
   }
 
-  const replayBackend = config.replayBackend ?? 'fetch';
+  const replayBackend = config.replayBackend ?? 'auto';
   const playbookPath = pathResolve(tool.dir, 'playbook.yaml');
   if (replayBackend === 'playbook' && !existsSync(playbookPath)) {
     throw new Error(

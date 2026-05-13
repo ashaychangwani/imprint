@@ -92,7 +92,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--provider <name>',
         description:
-          'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
+          'Compile-agent provider: anthropic-api, vertex, claude-cli, codex-cli (auto-detected if omitted).',
       },
       {
         name: '--keep-test',
@@ -143,7 +143,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--provider <name>',
         description:
-          'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
+          'Compile-agent provider: anthropic-api, vertex, claude-cli, codex-cli (auto-detected if omitted).',
       },
       {
         name: '--keep-test',
@@ -206,12 +206,13 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   'probe-backends': {
     summary: 'Try each backend once and cache the working order to backends.json.',
-    usage: ['imprint probe-backends <site> [--out <path>] [--param k=v]…'],
+    usage: ['imprint probe-backends <site> [--tool <toolName>] [--out <path>] [--param k=v]…'],
     flags: [
+      { name: '--tool <toolName>', description: 'Select a generated tool for multi-tool sites.' },
       { name: '--out <path>', description: 'Override backends.json output path.' },
       { name: '--param k=v', description: 'Override a workflow parameter (repeatable).' },
     ],
-    example: 'imprint probe-backends southwest',
+    example: 'imprint probe-backends southwest --tool search_flights',
   },
   playbook: {
     summary: 'Run a playbook against a real Chromium (debugging).',
@@ -228,8 +229,11 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   cron: {
     summary:
       'Polling daemon for cron.json next to a generated tool at ~/.imprint/<site>/<toolName>/cron.json.',
-    usage: ['imprint cron <site> [--once | --run-now] [--config <path>] [--quiet]'],
+    usage: [
+      'imprint cron <site> [--tool <toolName>] [--once | --run-now] [--config <path>] [--quiet]',
+    ],
     flags: [
+      { name: '--tool <toolName>', description: 'Select a generated tool for multi-tool sites.' },
       { name: '--once', description: 'Run a single tick and exit (for OS schedulers).' },
       { name: '--run-now', description: 'Run once immediately, then continue scheduling.' },
       { name: '--config <path>', description: 'Override the cron.json path.' },
@@ -239,7 +243,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
           'Suppress logs on successful runs (errors still surface). For OS schedulers that mail on stderr.',
       },
     ],
-    example: 'imprint cron southwest --once --quiet',
+    example: 'imprint cron southwest --tool search_flights --once --quiet',
   },
   'mcp-server': {
     summary: "Serve one site's generated tools as MCP (stdio default).",
@@ -494,10 +498,16 @@ async function main(argv: string[]): Promise<number> {
       });
 
       if (values.provider) {
-        const { isValidProvider } = await import('./imprint/llm.ts');
+        const { isTeachCompatibleProvider, isValidProvider } = await import('./imprint/llm.ts');
         if (!isValidProvider(values.provider)) {
           console.error(
             `error: unknown provider '${values.provider}' — valid: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli`,
+          );
+          return 2;
+        }
+        if (!isTeachCompatibleProvider(values.provider)) {
+          console.error(
+            `error: provider '${values.provider}' is not supported for generate — use anthropic-api, vertex, claude-cli, or codex-cli`,
           );
           return 2;
         }
@@ -523,13 +533,13 @@ async function main(argv: string[]): Promise<number> {
       }
 
       const { generate } = await import('./imprint/compile.ts');
-      const { detectProvider } = await import('./imprint/llm.ts');
+      const { detectTeachProvider } = await import('./imprint/llm.ts');
       const { resolveCompileAgentModel } = await import('./imprint/compile-agent.ts');
       const { describeAgentActivity, formatElapsed } = await import('./imprint/progress.ts');
 
       // Resolve provider + model NOW so we can tell the user before silence
       // sets in (the agent loop typically runs 3-5 min with no other output).
-      const providerName = (values.provider as ProviderName | undefined) ?? detectProvider();
+      const providerName = (values.provider as ProviderName | undefined) ?? detectTeachProvider();
       const compileModel = resolveCompileAgentModel(providerName);
       console.error('');
       console.error(`[imprint compile] provider: ${providerName}    model: ${compileModel}`);
@@ -597,9 +607,13 @@ async function main(argv: string[]): Promise<number> {
       const site = result.outPath.split('/').slice(-3, -2)[0] ?? '<site>';
       console.log('');
       console.log('next steps:');
-      console.log(`  imprint probe-backends ${site}    # cache the working backend order`);
+      console.log(
+        `  imprint probe-backends ${site} --tool ${result.toolName}    # cache the working backend order`,
+      );
       console.log(`  imprint mcp-server ${site}        # expose this site's tool as MCP`);
-      console.log(`  imprint cron ${site} --once       # one-shot test (after creating cron.json)`);
+      console.log(
+        `  imprint cron ${site} --tool ${result.toolName} --once       # one-shot test (after creating cron.json)`,
+      );
       return 0;
     }
 
@@ -666,6 +680,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           config: { type: 'string' },
+          tool: { type: 'string' },
           once: { type: 'boolean' },
           'run-now': { type: 'boolean' },
           quiet: { type: 'boolean' },
@@ -676,6 +691,7 @@ async function main(argv: string[]): Promise<number> {
       await runCron({
         site,
         configPath: values.config,
+        toolName: values.tool,
         once: values.once,
         runNow: values['run-now'],
         // --quiet suppresses successful-run logs so OS schedulers
@@ -693,6 +709,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           out: { type: 'string' },
+          tool: { type: 'string' },
           param: { type: 'string', multiple: true },
         },
         allowPositionals: false,
@@ -703,6 +720,7 @@ async function main(argv: string[]): Promise<number> {
       const result = await probeBackends({
         site,
         outPath: values.out,
+        toolName: values.tool,
         paramOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
       });
       console.log(`[imprint] probed → ${result.outPath}`);

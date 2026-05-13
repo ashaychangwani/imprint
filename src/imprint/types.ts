@@ -349,7 +349,7 @@ export const CronConfigSchema = z.object({
   schedule: z.string(),
   params: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
   notifyWhen: NotifyWhenSchema.optional(),
-  replayBackend: ReplayBackendSchema.optional().default('fetch'),
+  replayBackend: ReplayBackendSchema.optional().default('auto'),
 });
 export type CronConfig = z.infer<typeof CronConfigSchema>;
 

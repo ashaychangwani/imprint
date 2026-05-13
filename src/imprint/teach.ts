@@ -38,7 +38,7 @@ import {
 import {
   type ProviderName,
   type ProviderStatus,
-  detectProvider,
+  detectTeachProvider,
   getProviderStatuses,
   isTeachCompatibleProvider,
 } from './llm.ts';
@@ -166,14 +166,34 @@ function statePath(site: string): string {
   return pathJoin(localSiteDir(site), '.teach-state.json');
 }
 
+function legacyStatePath(site: string): string {
+  return pathResolve('examples', site, '.teach-state.json');
+}
+
 function loadTeachState(site: string): TeachState {
   const path = statePath(site);
-  if (!existsSync(path)) return { workflows: {} };
+  const isLegacy = !existsSync(path) && existsSync(legacyStatePath(site));
+  const loadPath = isLegacy ? legacyStatePath(site) : path;
+  if (!existsSync(loadPath)) return { workflows: {} };
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as TeachState;
+    const state = JSON.parse(readFileSync(loadPath, 'utf8')) as TeachState;
+    return isLegacy ? normalizeLegacyTeachState(site, state) : state;
   } catch {
     return { workflows: {} };
   }
+}
+
+function normalizeLegacyTeachState(site: string, state: TeachState): TeachState {
+  const legacyRoot = pathResolve('examples', site);
+  for (const ws of Object.values(state.workflows)) {
+    if (ws.sessionPath && !pathIsAbsolute(ws.sessionPath)) {
+      ws.sessionPath = pathResolve(legacyRoot, ws.sessionPath);
+    }
+    if (ws.redactedPath && !pathIsAbsolute(ws.redactedPath)) {
+      ws.redactedPath = pathResolve(legacyRoot, ws.redactedPath);
+    }
+  }
+  return state;
 }
 
 function saveTeachState(site: string, state: TeachState): void {
@@ -239,8 +259,8 @@ function discoverOrphanSession(site: string, state: TeachState): WorkflowState |
   const trackedPaths = new Set(Object.values(state.workflows).map((ws) => ws.sessionPath));
 
   const candidates: Array<{ absPath: string; file: string }> = [];
-  const sessDir = localSessionsDir(site);
-  if (existsSync(sessDir)) {
+  for (const sessDir of [localSessionsDir(site), pathResolve('examples', site, 'sessions')]) {
+    if (!existsSync(sessDir)) continue;
     const sessions = readdirSync(sessDir).filter(
       (f) => f.endsWith('.json') && !f.endsWith('.redacted.json'),
     );
@@ -387,7 +407,7 @@ async function resolveTeachProvider(opts: TeachOptions): Promise<ProviderName> {
   }
 
   if (opts.noInteractive) {
-    const provider = detectProvider();
+    const provider = detectTeachProvider();
     assertTeachProvider(provider);
     return provider;
   }
@@ -494,7 +514,13 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
 
-  if (hasExisting && !opts.noInteractive) {
+  if (opts.fromSession) {
+    const candidateRedacted = opts.fromSession.replace(/\.json$/, '.redacted.json');
+    startFrom = isExistingFile(candidateRedacted) ? 'detect-candidates' : 'redact';
+    sessionPath = pathResolve(opts.fromSession);
+    if (isExistingFile(candidateRedacted)) redactedPath = pathResolve(candidateRedacted);
+    usingFromSession = true;
+  } else if (hasExisting && !opts.noInteractive) {
     const choice = await promptResumeChoice(site, completedWorkflows, incompleteWorkflows);
     if (p.isCancel(choice)) {
       p.outro('Cancelled.');
@@ -531,12 +557,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         }
       }
     }
-  } else if (opts.fromSession) {
-    const candidateRedacted = opts.fromSession.replace(/\.json$/, '.redacted.json');
-    startFrom = isExistingFile(candidateRedacted) ? 'detect-candidates' : 'redact';
-    sessionPath = pathResolve(opts.fromSession);
-    if (isExistingFile(candidateRedacted)) redactedPath = pathResolve(candidateRedacted);
-    usingFromSession = true;
   }
 
   const startIdx = STEPS.indexOf(startFrom);
@@ -819,6 +839,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         workflow: primaryResult.workflow,
         workflows: results.map((r) => r.workflow),
         playbook: primaryResult.playbook,
+        playbooks: results.map((r) => r.playbook),
       });
     }
   }
@@ -1038,7 +1059,7 @@ async function compileSelectedCandidate(opts: {
     emitOutPath = pathJoin(workflowDir, 'index.ts');
   }
 
-  exportSiteManifest(site, workflowDir);
+  exportSiteManifest(site, workflowDir, genResult.workflow, pbResult.playbook);
 
   return {
     workflowPath: genResult.workflowPath,
@@ -1049,22 +1070,28 @@ async function compileSelectedCandidate(opts: {
   };
 }
 
-async function mapLimit<T, R>(
+export async function mapLimit<T, R>(
   items: T[],
   concurrency: number,
   fn: (item: T) => Promise<R>,
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
+  let firstError: unknown;
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
+    while (next < items.length && firstError === undefined) {
       const index = next++;
       const item = items[index];
       if (item === undefined) continue;
-      results[index] = await fn(item);
+      try {
+        results[index] = await fn(item);
+      } catch (err) {
+        firstError ??= err;
+      }
     }
   });
-  await Promise.all(workers);
+  await Promise.allSettled(workers);
+  if (firstError !== undefined) throw firstError;
   return results;
 }
 
@@ -1157,18 +1184,30 @@ async function promptAndPersistCredentials(opts: {
 }
 
 /** Write `<workflowDir>/credentials.manifest.json` so consumers of the
- *  shared skill know what credentials to provision. No values, just names. */
-function exportSiteManifest(site: string, workflowDir: string): void {
+ *  generated tool know what credentials to provision. No values, just names. */
+function exportSiteManifest(
+  site: string,
+  workflowDir: string,
+  workflow: Workflow,
+  playbook: Playbook,
+): void {
   const m = readSiteManifest(site);
   if (!m || (m.secrets.length === 0 && (m.storage?.length ?? 0) === 0)) return;
+  const requiredSecrets = referencedCredentialNames(workflow, playbook);
+  const requiredStorageKeys = referencedStorageKeys(workflow, playbook);
+  const secrets = m.secrets.filter((s) => requiredSecrets.has(s.name));
+  const storage = (m.storage ?? []).filter((s) =>
+    requiredStorageKeys.has(`${s.origin}\n${s.kind}\n${s.key}`),
+  );
+  if (secrets.length === 0 && storage.length === 0) return;
   const out = {
     site: m.site,
-    secrets: m.secrets.map((s) => ({
+    secrets: secrets.map((s) => ({
       name: s.name,
       kind: s.kind,
       description: s.description,
     })),
-    storage: (m.storage ?? []).map((s) => ({
+    storage: storage.map((s) => ({
       origin: s.origin,
       kind: s.kind,
       key: s.key,
@@ -1180,6 +1219,27 @@ function exportSiteManifest(site: string, workflowDir: string): void {
     `${JSON.stringify(out, null, 2)}\n`,
     'utf8',
   );
+}
+
+function referencedCredentialNames(workflow: Workflow, playbook: Playbook): Set<string> {
+  const names = new Set<string>();
+  const text = `${JSON.stringify(workflow)}\n${JSON.stringify(playbook)}`;
+  for (const match of text.matchAll(/\$\{credential\.([^}]+)\}/g)) {
+    if (match[1]) names.add(match[1]);
+  }
+  return names;
+}
+
+function referencedStorageKeys(workflow: Workflow, _playbook: Playbook): Set<string> {
+  const refs = new Set<string>();
+  for (const capture of workflow.bootstrap?.captures ?? []) {
+    if (capture.source === 'local_storage') {
+      refs.add(`${capture.origin}\nlocalStorage\n${capture.key}`);
+    } else if (capture.source === 'session_storage') {
+      refs.add(`${capture.origin}\nsessionStorage\n${capture.key}`);
+    }
+  }
+  return refs;
 }
 
 async function persistFinding(opts: {
@@ -1348,8 +1408,9 @@ async function interactivePlatformSetup(opts: {
   workflow: Workflow;
   workflows?: Workflow[];
   playbook: Playbook;
+  playbooks?: Playbook[];
 }): Promise<void> {
-  const { site, workflowDir, workflow, workflows, playbook } = opts;
+  const { site, workflowDir, workflow, workflows, playbook, playbooks } = opts;
   const imprintCommand = detectImprintCommand();
 
   const platformChoice = await p.select({
@@ -1451,7 +1512,15 @@ async function interactivePlatformSetup(opts: {
   }
 
   if (platform === 'openclaw' || platform === 'hermes') {
-    await offerSkillExport({ site, workflowDir, workflow, playbook, platform });
+    await offerSkillExport({
+      site,
+      workflowDir,
+      workflow,
+      workflows,
+      playbook,
+      playbooks,
+      platform,
+    });
   }
 }
 
@@ -1459,10 +1528,12 @@ async function offerSkillExport(opts: {
   site: string;
   workflowDir: string;
   workflow: Workflow;
+  workflows?: Workflow[];
   playbook: Playbook;
+  playbooks?: Playbook[];
   platform: 'openclaw' | 'hermes';
 }): Promise<void> {
-  const { site, workflowDir, workflow, playbook, platform } = opts;
+  const { site, workflowDir, workflow, workflows, playbook, playbooks, platform } = opts;
 
   const cronPath = pathResolve(workflowDir, 'cron.json');
   let cronConfig: CronConfig | undefined;
@@ -1481,7 +1552,15 @@ async function offerSkillExport(opts: {
 
   if (p.isCancel(exportConfirm) || !exportConfirm) return;
 
-  const skillContent = generateSkillMd({ site, workflow, playbook, cronConfig, platform });
+  const skillContent = generateSkillMd({
+    site,
+    workflow,
+    workflows,
+    playbook,
+    playbooks,
+    cronConfig,
+    platform,
+  });
 
   let outDir: string;
   if (platform === 'hermes') {

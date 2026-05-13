@@ -12,7 +12,7 @@ import { dirname, join as pathJoin, relative as pathRelative } from 'node:path';
 import type { AgentTool } from './agent.ts';
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
-import { compactRequestContexts } from './request-context.ts';
+import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type CapturedRequest, type Session, WorkflowSchema } from './types.ts';
 
@@ -61,15 +61,15 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
       required: [],
     },
     handler: async () => {
-      const loadBearing = identifyLoadBearingRequests(session);
       const selectedRequestSeqs = new Set(context.candidate?.requestSeqs ?? []);
       const dependencySeqs = new Set([
         ...(context.candidate?.dependencySeqs ?? []),
         ...(context.sharedContext?.loginRequestSeqs ?? []),
       ]);
       const preserveSeqs = new Set([...selectedRequestSeqs, ...dependencySeqs]);
+      const summaryRequests = identifySummaryRequests(session, preserveSeqs);
       const loadBearingRequests = compactRequestContexts(
-        loadBearing.map((r) => ({
+        summaryRequests.map((r) => ({
           seq: r.seq,
           timestamp: r.timestamp,
           selectedForCandidate: selectedRequestSeqs.has(r.seq),
@@ -79,6 +79,7 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
           status: r.response?.status,
           mimeType: r.response?.mimeType,
           bodySize: r.response?.body?.length,
+          responseBodyDigest: requestContextDigest(r.response?.body),
         })),
         compileSummaryRequestGroupKey,
         { preserveSeqs },
@@ -195,13 +196,21 @@ interface CompileSummaryRequestContext {
   status?: number;
   mimeType?: string;
   bodySize?: number;
+  responseBodyDigest?: string;
   repeatCount?: number;
   repeatedSeqs?: number[];
   lastTimestamp?: number;
 }
 
 function compileSummaryRequestGroupKey(request: CompileSummaryRequestContext): unknown[] {
-  return [request.method, request.url, request.status, request.mimeType, request.bodySize];
+  return [
+    request.method,
+    request.url,
+    request.status,
+    request.mimeType,
+    request.bodySize,
+    request.responseBodyDigest,
+  ];
 }
 
 function identifyLoadBearingRequests(session: Session): CapturedRequest[] {
@@ -217,6 +226,15 @@ function identifyLoadBearingRequests(session: Session): CapturedRequest[] {
     if (!r.response.body) return false;
     return true;
   });
+}
+
+function identifySummaryRequests(session: Session, preserveSeqs: Set<number>): CapturedRequest[] {
+  const bySeq = new Map<number, CapturedRequest>();
+  for (const request of identifyLoadBearingRequests(session)) bySeq.set(request.seq, request);
+  for (const request of session.requests) {
+    if (preserveSeqs.has(request.seq)) bySeq.set(request.seq, request);
+  }
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
 }
 
 function safeUrl(s: string): URL | null {

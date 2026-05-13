@@ -59,7 +59,7 @@ imprint teach mysite \
 
 A browser opens. You drive the workflow and narrate what you're doing. Imprint records every network request and DOM interaction.
 
-Raw recordings are stored locally under `~/.imprint/<site>/sessions/`, and each generated tool lives under `~/.imprint/<site>/<toolName>/` by default, outside the repo. The tracked `examples/` tree remains as source fixtures and demos.
+Raw recordings are stored locally under `~/.imprint/<site>/sessions/`, and each generated tool lives under `~/.imprint/<site>/<toolName>/` by default, outside the repo. The generated `index.ts` wrapper points at the local Imprint runtime, so rerun `imprint emit <workflow.json> --force` after moving a tool folder to another machine. The tracked `examples/` tree remains as source fixtures and demos.
 
 </td>
 <td width="33%">
@@ -68,12 +68,12 @@ Raw recordings are stored locally under `~/.imprint/<site>/sessions/`, and each 
 
 Imprint generates two replay artifacts:
 
-- **`workflow.json`** — API-level replay (fast)
+- **`workflow.json`** — API-level replay (fast, now with named state captures)
 - **`playbook.yaml`** — DOM-level fallback (universal)
 
 Both artifacts are written into the generated tool directory (`~/.imprint/<site>/<toolName>/`). `compile-playbook` uses that nested location by default so cron and MCP discovery can see the fallback without a custom `--out`.
 
-Credentials and PII are redacted automatically: known-sensitive fields keep their `[REDACTED:N]` shape markers, credential values become `${credential.NAME}` placeholders, and a supplemental free-form scan catches common emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, and webhook URLs before LLM compile.
+Credentials and PII are redacted automatically: credential values become `${credential.NAME}` placeholders, sensitive values become redaction markers that preserve equality within the artifact, and a supplemental free-form scan catches common emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, and webhook URLs before LLM compile.
 
 </td>
 <td width="34%">
@@ -118,9 +118,9 @@ Requires [Bun](https://bun.sh) >= 1.3. Imprint detects LLM providers from what's
 |---|---|---|
 | 1 | `claude-cli` | `claude` on PATH (Claude Code subscription) |
 | 2 | `codex-cli` | `codex` on PATH (Codex subscription) |
-| 3 | `cursor-cli` | `cursor` on PATH (Cursor subscription) |
-| 4 | `anthropic-api` | `ANTHROPIC_API_KEY` env var |
-| 5 | `vertex` | `ANTHROPIC_VERTEX_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT` env var |
+| 3 | `anthropic-api` | `ANTHROPIC_API_KEY` env var |
+| 4 | `vertex` | `ANTHROPIC_VERTEX_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT` env var |
+| 5 | `cursor-cli` | `cursor` on PATH (generic prompt/playbook compile only; not `teach`/`generate`) |
 
 ```bash
 imprint doctor
@@ -128,7 +128,7 @@ imprint doctor
 
 Shows which providers are detected. Interactive `imprint teach` prompts you to choose when multiple compatible compile providers are available, and also lists undetected providers as setup-help entries. Pick one of those help entries to see exactly which CLI or environment variable to add so it will be detected next time.
 
-To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. Non-interactive runs keep first-match auto-detection so scripts do not hang.
+To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. `teach` and `generate` require a compile-agent provider (`claude-cli`, `codex-cli`, `anthropic-api`, or `vertex`); `compile-playbook` can also use `cursor-cli`.
 
 <br>
 
@@ -172,7 +172,7 @@ Each site registers as its own MCP server (`imprint-southwest`, `imprint-discove
 
 ## Sharing skills across machines
 
-Teach on your laptop, ship the skill to a remote agent (OpenClaw, Hermes, a server-side cron host, ...). Skill folders committed to git contain **zero plaintext credentials** — only `${credential.NAME}` references and a `credentials.manifest.json` listing what's needed.
+Teach on your laptop, ship the skill to a remote agent (OpenClaw, Hermes, a server-side cron host, ...). Skill folders committed to git contain **zero plaintext credentials** — only placeholders like `${credential.NAME}` / `${state.NAME}` and a `credentials.manifest.json` listing the secrets or durable storage keys the receiver must provision.
 
 For credentials, use the **encrypted bundle** flow when you can't (or don't want to) re-type passwords on the receiving machine:
 
@@ -189,7 +189,7 @@ imprint credential import southwest southwest.imprintbundle
 
 Pass the passphrase **out-of-band** (Signal, phone, password manager share — *not* the same channel as the bundle file).
 
-After import, the same `imprint mcp-server <site>` config you'd use locally works on the receiver — it resolves `${credential.X}` from that machine's keychain on every tool call. If anything's missing, `imprint mcp-server` and `imprint cron` log/fail with the exact `imprint credential set` and `imprint credential import` commands you need.
+After import, the same `imprint mcp-server <site>` config you'd use locally works on the receiver — it resolves credentials from that machine's credential backend and initializes a fresh cookie/state jar for every tool call. If anything's missing, `imprint mcp-server` and `imprint cron` log/fail with the exact `imprint credential set`, `imprint login`, or `imprint credential import` commands you need.
 
 See [Sharing Skills](docs/credential-sharing.md) for the full flow including interactive `imprint credential set` (when you can re-type), threat model, rotation, and OpenClaw / Hermes wiring details.
 
@@ -197,15 +197,18 @@ See [Sharing Skills](docs/credential-sharing.md) for the full flow including int
 
 ## The backend ladder
 
-When an API call gets blocked, Imprint doesn't fail — it escalates:
+When an API call gets blocked or needs browser-minted state, Imprint doesn't jump straight to DOM replay. It escalates through the cheapest mode that can satisfy the workflow:
 
 | | Speed | Handles |
 |---|---|---|
-| **fetch** | ~200ms | Plain APIs, no bot protection |
-| **stealth-fetch** | ~12s first call, ~1s after | Akamai, Cloudflare, DataDome |
+| **fetch** | ~200ms | Plain APIs, persisted cookies, in-flight HTTP captures |
+| **fetch-bootstrap** | browser bootstrap + API replay | Pages that only need Chromium to mint cookies, CSRF, storage, or DOM-derived state |
+| **stealth-fetch** | ~12s first call, ~1s after | Akamai, Cloudflare, DataDome, bot-defense state |
 | **playbook** | ~9s | Anything — full DOM replay as fallback |
 
-Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder always has somewhere to go. If the API changes, the DOM playbook still works. If the page redesigns, re-record in two minutes.
+`fetch-bootstrap` is not a default rung for every workflow. `auto` inserts it only when the workflow declares bootstrap metadata, a capture requires browser/stealth bootstrap, or `fetch` returns structured `STATE_MISSING` that a browser bootstrap can satisfy. Every recording still compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder has a DOM fallback when API replay cannot work.
+
+State-aware workflows use named captures and `${state.NAME}` placeholders. For example, request A can set a CSRF cookie, request B can project it into a header, and the whole run stays on plain `fetch` without launching Chromium.
 
 <br>
 
@@ -239,7 +242,7 @@ imprint <command> --help    # per-command options
 | **Credentials** | `credential set` · `credential list` · `credential export` · `credential import` · `credential migrate` |
 | **Utilities** | `login` · `assemble` · `check` · `doctor` |
 
-`teach`, `generate`, and `compile-playbook` accept `--provider <name>` to override the auto-detected LLM (see [Install](#install) for the five valid names). `teach` and `generate` also take `--keep-test` to retain the agent-written `parser.test.ts` for debugging — it's deleted by default since it reads the gitignored redacted session via `$IMPRINT_SESSION_PATH` and isn't reproducible elsewhere.
+`teach`, `generate`, and `compile-playbook` accept `--provider <name>` to override the auto-detected LLM (see [Install](#install) for valid names and compile-agent support). `teach` and `generate` also take `--keep-test` to retain the agent-written `parser.test.ts` for debugging — it's deleted by default since it reads the gitignored redacted session via `$IMPRINT_SESSION_PATH` and isn't reproducible elsewhere. For multi-tool sites, use `imprint cron <site> --tool <toolName>` and `imprint probe-backends <site> --tool <toolName>` unless `--config` or `--out` points inside the target tool directory.
 
 <br>
 

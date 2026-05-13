@@ -8,7 +8,7 @@ The fastest path is `imprint teach`, which runs the full pipeline interactively 
 
 - [Bun](https://bun.sh) ≥ 1.3
 - Google Chrome (any modern build)
-- A compile provider: Claude CLI, Codex CLI, Cursor CLI, Anthropic API, or a Google Cloud project with Vertex AI Anthropic models enabled
+- A compile-agent provider for `teach`/`generate`: Claude CLI, Codex CLI, Anthropic API, or a Google Cloud project with Vertex AI Anthropic models enabled. Cursor CLI is supported for generic prompt/playbook compilation, not the agentic API workflow compiler yet.
 
 ## Install
 
@@ -17,7 +17,7 @@ git clone https://github.com/ashaychangwani/imprint.git
 cd imprint
 bun install
 bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
-bunx playwright install chromium  # for stealth-fetch + playbook backends
+bunx playwright install chromium  # for fetch-bootstrap, stealth-fetch, and playbook backends
 ```
 
 If `imprint --help` says "command not found" after `bun link`, your `~/.bun/bin` isn't on `PATH`. Either add it (Bun's installer normally does this) or skip `bun link` and call everything via `bun src/cli.ts <verb>`.
@@ -68,8 +68,8 @@ imprint emit ~/.imprint/google-flights/search_google_flights/workflow.json
 #   → Output: ~/.imprint/google-flights/search_google_flights/index.ts
 
 # 6. (Optional) Probe which backends work and cache the order.
-#    Safe to skip for plain APIs; useful for bot-protected sites.
-imprint probe-backends mysite
+#    Safe to skip for plain APIs; useful for stateful or bot-protected sites.
+imprint probe-backends google-flights --tool search_google_flights
 #   → Output: ~/.imprint/google-flights/search_google_flights/backends.json
 
 # 7. Test it
@@ -77,6 +77,8 @@ imprint mcp-server google-flights    # stdio MCP server
 ```
 
 You now have an MCP tool any agent can call.
+
+Stateful workflows still run through the same generated tool. If a request sets a cookie or response value that a later request needs, the workflow compiler emits named captures and `${state.NAME}` placeholders. Plain HTTP producers stay on the fast `fetch` path; browser bootstrap is used only when the workflow declares that Chromium is needed to mint the state.
 
 ## Inspect slow compiles
 

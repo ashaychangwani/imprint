@@ -10,8 +10,14 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { resolve as pathResolve } from 'node:path';
-import { defaultCompilePlaybookPath, shrinkSession } from '../src/imprint/compile.ts';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pathJoin, resolve as pathResolve } from 'node:path';
+import {
+  defaultCompilePlaybookPath,
+  resolveDefaultCompilePlaybookPath,
+  shrinkSession,
+} from '../src/imprint/compile.ts';
 import type { Session } from '../src/imprint/types.ts';
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -191,6 +197,23 @@ describe('compilePlaybook defaults', () => {
         pathResolve('/tmp', 'imprint-home', 'namecheap-domains', 'search_domains', 'playbook.yaml'),
       );
     });
+  });
+
+  it('rejects a playbook toolName that would miss the existing generated workflow dir', () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-playbook-default-'));
+    try {
+      withImprintHome(root, () => {
+        const workflowDir = pathResolve(root, 'google-flights', 'search_google_flights');
+        mkdirSync(workflowDir, { recursive: true });
+        writeFileSync(pathResolve(workflowDir, 'workflow.json'), '{}', 'utf8');
+
+        expect(() => resolveDefaultCompilePlaybookPath('google-flights', 'search_flights')).toThrow(
+          /does not match the generated workflow "search_google_flights"/,
+        );
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

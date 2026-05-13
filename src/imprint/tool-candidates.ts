@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
-import { compactRequestContexts } from './request-context.ts';
+import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
@@ -247,8 +247,10 @@ interface CandidateRequestPayload {
   mimeType?: string;
   headers: string;
   body?: string;
+  bodyDigest?: string;
   bodyLength?: number;
   responsePreview?: string;
+  responseBodyDigest?: string;
   responseBodyLength?: number;
   credentialPlaceholders: string[];
   likelyLoginOrAuth: boolean;
@@ -266,8 +268,7 @@ interface ToolCandidatePayload {
 }
 
 export function buildToolCandidatePayload(session: Session): ToolCandidatePayload {
-  const startUrl = safeUrl(session.url);
-  const startRoot = startUrl ? registrableDomain(startUrl.hostname) : null;
+  const startRoot = candidateStartRoot(session);
   const requests = compactRequestContexts(
     session.requests
       .filter((request) => isCandidateRequest(request, startRoot))
@@ -285,8 +286,10 @@ export function buildToolCandidatePayload(session: Session): ToolCandidatePayloa
           mimeType: request.response?.mimeType,
           headers: truncate(JSON.stringify(request.headers), HEADER_LIMIT) ?? '{}',
           body,
+          bodyDigest: requestContextDigest(request.body),
           bodyLength: request.body?.length,
           responsePreview,
+          responseBodyDigest: requestContextDigest(request.response?.body),
           responseBodyLength: request.response?.body?.length,
           credentialPlaceholders: credentialPlaceholders(placeholderText),
           likelyLoginOrAuth: likelyLoginOrAuth(request),
@@ -313,15 +316,36 @@ export function buildToolCandidatePayload(session: Session): ToolCandidatePayloa
   };
 }
 
+function candidateStartRoot(session: Session): string | null {
+  for (const value of [
+    session.url,
+    ...session.events.filter((event) => event.type === 'navigation').map((event) => event.detail),
+    ...session.requests
+      .filter((request) => request.resourceType === 'Document')
+      .map((request) => request.url),
+  ]) {
+    const root = rootFromHttpUrl(value);
+    if (root) return root;
+  }
+  return null;
+}
+
+function rootFromHttpUrl(value: string): string | null {
+  const url = safeUrl(value);
+  if (!url || !url.hostname) return null;
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  return registrableDomain(url.hostname) || null;
+}
+
 function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
   return [
     request.method,
     request.url,
-    request.body,
+    request.bodyDigest,
     request.bodyLength,
     request.status,
     request.mimeType,
-    request.responsePreview,
+    request.responseBodyDigest,
     request.responseBodyLength,
     request.credentialPlaceholders,
     request.likelyLoginOrAuth,
@@ -332,7 +356,9 @@ function isCandidateRequest(request: CapturedRequest, startRoot: string | null):
   if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
   const url = safeUrl(request.url);
   if (!url) return false;
-  if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) return false;
+  if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) {
+    return likelyLoginOrAuth(request);
+  }
   return true;
 }
 

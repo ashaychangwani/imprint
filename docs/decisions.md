@@ -22,9 +22,11 @@ A running log of the load-bearing calls made for Imprint. Each entry: the decisi
 
 ## D4 — Backend ladder with auto-escalation
 
-**Decided.** `fetch → stealth-fetch → playbook`. Walks in order; escalates only on FORBIDDEN. The principle: as long as some backend would have worked, the call succeeds. Eliminate "Imprint can't help here" as a failure mode.
+**Decided.** `fetch → conditional fetch-bootstrap → stealth-fetch → playbook`. Walks in order; escalates on `FORBIDDEN` and on structured `STATE_MISSING` only when the next backend can satisfy every required missing item. The principle: as long as some backend would have worked, the call succeeds, but missing credentials or unsupported workflow gaps should fail with actionable errors instead of blindly launching a browser.
 
 **Alternative:** One backend per site, configured manually. Cleaner mental model, worse UX — every Akamai migration becomes a config edit.
+
+`fetch-bootstrap` is deliberately conditional rather than a permanent rung. It only runs when the workflow declares bootstrap metadata/captures or when `fetch` discovers state that browser bootstrap can mint. Plain API workflows keep the fast path.
 
 ## D5 — Stealth-fetch as middle rung (not as the only mode)
 
@@ -32,9 +34,15 @@ A running log of the load-bearing calls made for Imprint. Each entry: the decisi
 
 **Alternative:** Always full Playwright. ~9s every call. Stealth-fetch is the cost-per-call sweet spot for sites whose APIs are token-validated rather than payload-validated.
 
+## D5a — Browser bootstrap for state minting, not DOM replay
+
+**Decided.** If a page exists only to mint cookies, CSRF tokens, local/session storage values, or DOM-exposed nonces, use `fetch-bootstrap`: launch Chromium briefly, harvest state, close it, and execute API replay through the normal runtime. Reserve `playbook` for workflows where UI behavior itself is load-bearing.
+
+**Alternative:** Escalate from `fetch` directly to full DOM replay whenever state is missing. That works, but it loses the main performance win for stateful APIs.
+
 ## D6 — Probe backends at record time, cache the working order
 
-**Decided.** `imprint probe-backends <site>` runs each backend once and writes `backends.json`. cron / MCP read it at startup so they don't burn a fetch attempt every tick on known-blocked sites.
+**Decided.** `imprint probe-backends <site> --tool <toolName>` runs each applicable backend once and writes `backends.json`. cron / MCP read it at startup so they don't burn a fetch attempt every tick on known-blocked sites. v2 probe caches include canonical workflow and capability hashes; stale caches are ignored. Single-tool sites can omit `--tool`; multi-tool sites must select explicitly or point `--out` inside the target tool directory.
 
 **Alternative:** Probe at runtime on every cron tick. Wastes ~200ms per tick + log noise on bot-protected sites.
 
@@ -92,3 +100,9 @@ All three are part of CI. Adding new dead exports / unused symbols / circular de
 This shows up everywhere: `requirePositional` → "→ run \`imprint <verb> --help\`"; `loadJsonFile` → multi-line "noun not found / not JSON / schema mismatch + remediation"; `availableSitesHint` → "→ available sites: a, b, c"; LLM errors → "→ run \`gcloud auth application-default login\`"; etc.
 
 **Alternative:** Terse errors that defer to docs. Forces users to grep docs for every error, which most won't do — they'll just give up.
+
+## D15 — Named state captures over direct secret replay
+
+**Decided.** The compiler should prefer named captures plus `${state.NAME}` for ephemeral values. Direct `${cookie["NAME"]}` lookup remains an expert escape hatch, but named captures can pin URL/domain/path constraints and avoid ambiguity.
+
+**Alternative:** Let generated workflows rely on `${cookie.NAME}` and raw response aliases everywhere. That is shorter, but it breaks on duplicate cookie names, misses storage-derived state, and makes redacted equality hints harder for the compiler to use safely.

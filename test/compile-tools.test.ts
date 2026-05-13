@@ -160,6 +160,58 @@ describe('compile tools request compaction', () => {
       sharedDependency: true,
     });
   });
+
+  it('includes preserved candidate dependencies even when they are outside load-bearing filters', async () => {
+    const session: Session = {
+      site: 'demo',
+      startedAt: '2026-05-12T00:00:00.000Z',
+      url: 'https://www.example.com/start',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://auth.example-idp.com/login',
+          headers: {},
+          resourceType: 'Document',
+          response: { status: 302, headers: {}, mimeType: 'text/html', body: '' },
+        },
+        makeSummaryRequest(2, 200),
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    const readSummary = buildCompileTools(session, '/tmp/tool', '/tmp/session.json', {
+      candidate: {
+        toolName: 'search_items',
+        description: 'Search items',
+        rationale: 'primary intent',
+        confidence: 0.9,
+        primary: true,
+        requestSeqs: [2],
+        eventSeqs: [],
+        expectedOutput: 'items',
+        likelyParams: [],
+        dependencySeqs: [1],
+      },
+    }).find((tool) => tool.name === 'read_session_summary');
+    if (!readSummary) throw new Error('read_session_summary tool missing');
+
+    const result = await readSummary.handler({});
+    const summary = JSON.parse(result.result);
+
+    expect(summary.loadBearingRequests.map((request: { seq: number }) => request.seq)).toEqual([
+      1, 2,
+    ]);
+    expect(summary.loadBearingRequests[0]).toMatchObject({
+      seq: 1,
+      sharedDependency: true,
+    });
+  });
 });
 
 describe('externalVerification', () => {

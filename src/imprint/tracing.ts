@@ -52,14 +52,19 @@ export function traceLlmIoEnabled(): boolean {
 }
 
 export function traceToolIoEnabled(): boolean {
-  return isTruthy(process.env.IMPRINT_TRACE_TOOL_IO) || traceLlmIoEnabled();
+  return (
+    isTruthy(process.env.IMPRINT_TRACE_TOOL_IO) ||
+    isTruthy(process.env.IMPRINT_TRACE_IO) ||
+    isTruthy(process.env.IMPRINT_TRACE_FULL)
+  );
 }
 
 export function traceIoMaxChars(value = process.env.IMPRINT_TRACE_IO_MAX_CHARS): number {
   if (value === undefined || value === '') return DEFAULT_TRACE_IO_MAX_CHARS;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return DEFAULT_TRACE_IO_MAX_CHARS;
-  return Math.trunc(parsed);
+  const truncated = Math.trunc(parsed);
+  return truncated < 0 ? DEFAULT_TRACE_IO_MAX_CHARS : truncated;
 }
 
 export function estimateTokensFromText(text: string): number {
@@ -316,12 +321,20 @@ function captureTraceText(text: string): {
   maxChars: number | null;
 } {
   const maxChars = traceIoMaxChars();
-  if (maxChars <= 0 || text.length <= maxChars) {
+  if (text.length <= maxChars) {
     return {
       text,
       originalChars: text.length,
       truncated: false,
-      maxChars: maxChars <= 0 ? null : maxChars,
+      maxChars,
+    };
+  }
+  if (maxChars === 0) {
+    return {
+      text: `...[truncated ${text.length} chars]`,
+      originalChars: text.length,
+      truncated: true,
+      maxChars,
     };
   }
   return {

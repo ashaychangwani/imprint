@@ -7,17 +7,25 @@
  * factored into a CompileTask config.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonArray, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
-import { localToolDir } from './paths.ts';
+import { localSiteDir, localToolDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { redactSession } from './redact.ts';
-import { compactRequestContexts } from './request-context.ts';
+import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
 import {
@@ -258,15 +266,28 @@ interface TriageRequestContext {
   mimeType?: string;
   headers: string;
   body?: string;
+  bodyDigest?: string;
   bodyLength?: number;
+  responseBodyDigest?: string;
   responseBodyLength?: number;
   repeatCount?: number;
   repeatedSeqs?: number[];
   lastTimestamp?: number;
 }
 
-async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise<TriageResult> {
-  const candidates = session.requests.filter((r) => TRIAGE_RESOURCE_TYPES.has(r.resourceType));
+async function triageRequests(
+  session: Session,
+  llmConfig?: LLMOptions,
+  context: Pick<CompileOptions, 'candidate' | 'sharedContext'> = {},
+): Promise<TriageResult> {
+  const preserveSeqs = new Set([
+    ...(context.candidate?.requestSeqs ?? []),
+    ...(context.candidate?.dependencySeqs ?? []),
+    ...(context.sharedContext?.loginRequestSeqs ?? []),
+  ]);
+  const candidates = session.requests.filter(
+    (r) => TRIAGE_RESOURCE_TYPES.has(r.resourceType) || preserveSeqs.has(r.seq),
+  );
   const traceSpan = startTraceSpan('compile.triage_requests', 'RETRIEVER', {
     'imprint.site': session.site,
     'imprint.requests_total': session.requests.length,
@@ -286,10 +307,13 @@ async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise
         mimeType: r.response?.mimeType,
         headers: truncateHeaders(r.headers),
         body: truncate(r.body, TRIAGE_BODY_LIMIT),
+        bodyDigest: requestContextDigest(r.body),
         bodyLength: r.body?.length,
+        responseBodyDigest: requestContextDigest(r.response?.body),
         responseBodyLength: r.response?.body?.length,
       })),
       triageRequestGroupKey,
+      { preserveSeqs },
     );
 
     const triagePayload = {
@@ -335,7 +359,7 @@ async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise
       );
     }
 
-    const selectedSet = new Set(seqs as number[]);
+    const selectedSet = new Set([...(seqs as number[]), ...preserveSeqs]);
     const triaged: Session = {
       ...session,
       requests: session.requests.filter((r) => selectedSet.has(r.seq)),
@@ -345,7 +369,7 @@ async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise
 
     const triageResult = {
       session: triaged,
-      selectedSeqs: seqs as number[],
+      selectedSeqs: [...selectedSet],
       consideredCount: candidates.length,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
@@ -374,8 +398,9 @@ function triageRequestGroupKey(request: TriageRequestContext): unknown[] {
     request.status,
     request.mimeType,
     request.headers,
-    request.body,
+    request.bodyDigest,
     request.bodyLength,
+    request.responseBodyDigest,
     request.responseBodyLength,
   ];
 }
@@ -400,6 +425,45 @@ const RESPONSE_BODY_LIMIT = 4000;
 
 export function defaultCompilePlaybookPath(site: string, toolName: string): string {
   return pathJoin(localToolDir(site, toolName), 'playbook.yaml');
+}
+
+export function resolveDefaultCompilePlaybookPath(site: string, playbookToolName: string): string {
+  const toolNames = existingWorkflowToolNames(site);
+  if (toolNames.length === 0 || toolNames.includes(playbookToolName)) {
+    return defaultCompilePlaybookPath(site, playbookToolName);
+  }
+  if (toolNames.length === 1) {
+    const toolName = toolNames[0] ?? playbookToolName;
+    throw new Error(
+      [
+        `compiled playbook toolName "${playbookToolName}" does not match the generated workflow "${toolName}" for site "${site}".`,
+        `→ rerun compile-playbook with --out ${defaultCompilePlaybookPath(site, toolName)}`,
+      ].join('\n'),
+    );
+  }
+  throw new Error(
+    [
+      `compiled playbook toolName "${playbookToolName}" does not match any generated workflow for site "${site}".`,
+      `Generated workflows: ${toolNames.join(', ')}`,
+      `→ rerun compile-playbook with --out ~/.imprint/${site}/<toolName>/playbook.yaml`,
+    ].join('\n'),
+  );
+}
+
+function existingWorkflowToolNames(site: string): string[] {
+  const siteDir = localSiteDir(site);
+  if (!existsSync(siteDir)) return [];
+  const out: string[] = [];
+  for (const entry of readdirSync(siteDir)) {
+    const dir = pathJoin(siteDir, entry);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (existsSync(pathJoin(dir, 'workflow.json'))) out.push(entry);
+  }
+  return out.sort();
 }
 
 export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlaybookResult> {
@@ -461,7 +525,10 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
     durationMs: 0,
   };
   if (!opts.noShrink) {
-    const triage = await triageRequests(session, opts.llmConfig);
+    const triage = await triageRequests(session, opts.llmConfig, {
+      candidate: opts.candidate,
+      sharedContext: opts.sharedContext,
+    });
     session = triage.session;
     triageTokens = {
       input: triage.inputTokens,
@@ -472,8 +539,13 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
 
   // 4. Build slim payload from triaged requests (with response bodies).
   const xhrs = session.requests
-    .filter((r) => r.resourceType === 'XHR' || r.resourceType === 'Fetch')
+    .filter(
+      (r) =>
+        r.resourceType === 'XHR' || r.resourceType === 'Fetch' || r.resourceType === 'Document',
+    )
     .map((r) => ({
+      seq: r.seq,
+      timestamp: r.timestamp,
       method: r.method,
       url: r.url,
       resourceType: r.resourceType,
@@ -520,7 +592,14 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
     );
   }
 
-  const outPath = opts.outPath ?? defaultCompilePlaybookPath(session.site, playbook.toolName);
+  if (opts.candidate && playbook.toolName !== opts.candidate.toolName) {
+    throw new Error(
+      `Compiled playbook toolName "${playbook.toolName}" does not match selected candidate "${opts.candidate.toolName}".`,
+    );
+  }
+
+  const outPath =
+    opts.outPath ?? resolveDefaultCompilePlaybookPath(session.site, playbook.toolName);
   mkdirSync(dirname(outPath), { recursive: true });
   // Preserve the LLM's exact YAML rather than round-tripping through
   // YAML.stringify (which would lose comments + reorder keys).

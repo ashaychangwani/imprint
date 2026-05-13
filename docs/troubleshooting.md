@@ -51,21 +51,33 @@ Same as above — ensure Playwright's Chromium is installed.
 
 ## "FORBIDDEN" / 403 from a real site
 
-The site has bot detection. Three escalating fixes:
+The site is blocking API replay or needs browser-minted state. Three escalating fixes:
 
-1. **Set `replayBackend: "auto"`** in `cron.json` (or `imprint cron --once` will use it). The ladder will try `stealth-fetch` next, which mints sensor tokens via a brief Playwright bootstrap.
+1. **Set `replayBackend: "auto"`** in `cron.json` (or `imprint cron --once` will use it). The ladder can try `fetch-bootstrap` for browser-minted state and `stealth-fetch` for bot-defense tokens before falling back to DOM replay.
 
 2. **Probe and cache the working backend:**
    ```bash
-   imprint probe-backends <site>
+   imprint probe-backends <site> --tool <toolName>
    ```
-   This writes `backends.json`; cron + MCP read it at startup.
+   This writes `backends.json`; cron + MCP read it at startup. On a single-tool site, `--tool` is optional; on multi-tool sites, `--out ~/.imprint/<site>/<toolName>/backends.json` also selects the target.
 
 3. **Compile a playbook fallback:**
    ```bash
    imprint compile-playbook ~/.imprint/<site>/sessions/<ts>.redacted.json
    ```
-   With a `playbook.yaml` present, the `auto` ladder escalates to a real DOM walk when fetch + stealth-fetch both fail.
+   With a `playbook.yaml` present, the `auto` ladder escalates to a real DOM walk when API replay modes cannot satisfy the workflow.
+
+## "STATE_MISSING"
+
+The workflow referenced a required `${state.NAME}` or cookie value that was not available yet. The error includes a `capability` that determines the fix:
+
+- `ordinary_http` — an earlier safe/idempotent HTTP request was expected to produce the value. Check `requests[].captures`, request order, and whether the producer request still sets the cookie/header/body field.
+- `browser_bootstrap` — add or fix `workflow.bootstrap`; `fetch-bootstrap` should be able to mint this state before API replay.
+- `stealth_bootstrap` — use `replayBackend: "auto"` and inspect the `fetch-bootstrap`/playbook fallback result. `stealth-fetch` handles bot-defense request headers/cookies, but it does not fill `${state.NAME}` placeholders by itself.
+- `credential_required` — provision secrets/cookies/storage with `imprint login`, `imprint credential set`, or `imprint credential import`.
+- `unsupported` — the workflow references state no backend knows how to produce; regenerate or edit `workflow.json`.
+
+For direct cookie placeholders like `${cookie["sid"]}`, ambiguity is terminal. Prefer a named cookie capture with URL/domain/path constraints, then reference it as `${state.sid}`.
 
 ## "AUTH_EXPIRED" / 401
 
@@ -77,7 +89,7 @@ imprint record <site> --persist-profile    # record while logged in
 imprint login <site> --from-session ~/.imprint/<site>/sessions/<ts>.json
 ```
 
-This rebuilds `~/.config/imprint/credentials/<site>.json`.
+This refreshes the site's credential backend entry. Modern credential backends store cookies, named secrets, and declared durable storage values in the OS keychain when available, with an encrypted fallback for headless systems. The legacy JSON path is still read for migration, but new credentials should be managed with `imprint login` and `imprint credential *`.
 
 ## "RATE_LIMITED" / 429
 

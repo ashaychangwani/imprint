@@ -340,6 +340,36 @@ describe('generateSkillMd', () => {
     expect(md).toContain('url: https://test.com');
   });
 
+  it('documents every selected workflow in multi-tool SKILL.md exports', () => {
+    const secondaryWorkflow: Workflow = {
+      ...FIXTURE_WORKFLOW,
+      toolName: 'list_test_bookings',
+      intent: { description: 'List test bookings' },
+      parameters: [],
+    };
+    const secondaryPlaybook = {
+      ...FIXTURE_PLAYBOOK,
+      toolName: 'list_test_bookings',
+      summary: 'List test bookings.',
+      parameters: [],
+    };
+
+    const md = generateSkillMd({
+      site: 'testsite',
+      workflow: FIXTURE_WORKFLOW,
+      workflows: [FIXTURE_WORKFLOW, secondaryWorkflow],
+      playbook: FIXTURE_PLAYBOOK,
+      playbooks: [FIXTURE_PLAYBOOK, secondaryPlaybook],
+      platform: 'openclaw',
+    });
+
+    expect(md).toContain('2 Imprint tools for testsite');
+    expect(md).toContain('## Workflows (API replay)');
+    expect(md).toContain('### search_test_flights');
+    expect(md).toContain('### list_test_bookings');
+    expect(md).toContain('## Playbooks (DOM replay fallbacks)');
+  });
+
   it('omits playbook section when not provided', () => {
     const md = generateSkillMd({
       site: 'testsite',
