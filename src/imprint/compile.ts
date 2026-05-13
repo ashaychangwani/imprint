@@ -601,8 +601,6 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
   const outPath =
     opts.outPath ?? resolveDefaultCompilePlaybookPath(session.site, playbook.toolName);
   mkdirSync(dirname(outPath), { recursive: true });
-  // Preserve the LLM's exact YAML rather than round-tripping through
-  // YAML.stringify (which would lose comments + reorder keys).
   writeFileSync(outPath, `${stripCodeFences(result.text).trim()}\n`);
 
   return {

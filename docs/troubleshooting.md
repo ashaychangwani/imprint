@@ -73,7 +73,7 @@ The workflow referenced a required `${state.NAME}` or cookie value that was not 
 
 - `ordinary_http` — an earlier safe/idempotent HTTP request was expected to produce the value. Check `requests[].captures`, request order, and whether the producer request still sets the cookie/header/body field.
 - `browser_bootstrap` — add or fix `workflow.bootstrap`; `fetch-bootstrap` should be able to mint this state before API replay.
-- `stealth_bootstrap` — use `replayBackend: "auto"` and inspect the `fetch-bootstrap`/playbook fallback result. `stealth-fetch` handles bot-defense request headers/cookies, but it does not fill `${state.NAME}` placeholders by itself.
+- `stealth_bootstrap` — `stealth-fetch` supplies bot-defense cookies/headers to API replay but does not fill `${state.NAME}` placeholders by itself. Use `replayBackend: "auto"` so the ladder escalates to `fetch-bootstrap` (if the workflow has bootstrap metadata) or the `playbook` fallback. If neither resolves the missing state, regenerate the workflow from a recording that includes the state-producing interaction.
 - `credential_required` — provision secrets/cookies/storage with `imprint login`, `imprint credential set`, or `imprint credential import`.
 - `unsupported` — the workflow references state no backend knows how to produce; regenerate or edit `workflow.json`.
 

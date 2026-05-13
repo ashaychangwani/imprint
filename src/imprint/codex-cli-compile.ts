@@ -9,7 +9,7 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join as pathJoin } from 'node:path';
+import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
 import type { Span } from '@opentelemetry/api';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
@@ -128,7 +128,7 @@ async function compileViaCodexCliImpl(
   }
 
   const bunPath = process.execPath;
-  const sessionPathAbs = opts.sessionPath.startsWith('/')
+  const sessionPathAbs = pathIsAbsolute(opts.sessionPath)
     ? opts.sessionPath
     : pathJoin(REPO_ROOT, opts.sessionPath);
   const mcpArgs = [
@@ -460,15 +460,6 @@ async function driveJsonl(
     outputTokens,
   };
 
-  if (Date.now() > opts.deadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {
-    return {
-      success: false,
-      outcome: 'timeout',
-      message: `codex-cli exceeded the ${Math.round((opts.deadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
-      ...baseResult,
-    };
-  }
-
   if (existsSync(doneSentinel)) {
     let payload: {
       summary?: string;
@@ -510,6 +501,15 @@ async function driveJsonl(
       success: false,
       outcome: 'give_up',
       message: `Agent gave up: ${payload.reason ?? 'unknown reason'}\n${payload.what_was_tried ?? ''}`,
+      ...baseResult,
+    };
+  }
+
+  if (Date.now() > opts.deadlineMs) {
+    return {
+      success: false,
+      outcome: 'timeout',
+      message: `codex-cli exceeded the ${Math.round((opts.deadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
       ...baseResult,
     };
   }

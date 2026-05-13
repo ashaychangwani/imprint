@@ -214,9 +214,7 @@ State-aware workflows use named captures and `${state.NAME}` placeholders. For e
 
 ## Examples
 
-The checked-in examples are fixtures. Runtime discovery reads `IMPRINT_HOME`
-(`~/.imprint` by default), so run them with `IMPRINT_HOME=examples` or copy a
-tool directory into your local Imprint home.
+The checked-in `examples/` directory contains committed fixtures and demos. Generated tools from `imprint teach` go into `~/.imprint/<site>/<toolName>/` by default (configurable via `IMPRINT_HOME`). Runtime discovery (cron, MCP, probe-backends) reads `IMPRINT_HOME`, so to run the checked-in examples, point it at the repo's `examples/` directory:
 
 | Example | What it demonstrates | Run it |
 |---|---|---|

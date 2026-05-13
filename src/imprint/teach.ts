@@ -18,7 +18,12 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute as pathIsAbsolute, join as pathJoin, resolve as pathResolve } from 'node:path';
+import {
+  basename as pathBasename,
+  isAbsolute as pathIsAbsolute,
+  join as pathJoin,
+  resolve as pathResolve,
+} from 'node:path';
 import * as p from '@clack/prompts';
 import { type CompileAgentProgress, compilePlaybook, generate } from './compile.ts';
 import {
@@ -721,10 +726,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     const selected = await selectTeachCandidates(detection, opts);
     const sharedContext = buildCandidateSharedCompileContext(detection, selected);
 
-    if (workflowKey.startsWith('_pending_')) {
-      delete state.workflows[workflowKey];
-      saveTeachState(site, state);
-    }
+    const pendingKey = workflowKey.startsWith('_pending_') ? workflowKey : null;
 
     const rawSessionPath = requireSessionFile(sessionPath, {
       site,
@@ -747,6 +749,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         sharedContext,
       };
     });
+
+    if (pendingKey && state.workflows[pendingKey]) {
+      delete state.workflows[pendingKey];
+      saveTeachState(site, state);
+    }
   } else {
     const ws = state.workflows[workflowKey];
     plans = [
@@ -1296,14 +1303,14 @@ function updateCheckpoint(
 
 function friendlySessionTimestamp(sessionPath: string): string {
   const m = sessionPath.match(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})/);
-  if (!m) return 'unknown';
+  if (!m) return pathBasename(sessionPath);
   return `${m[1]} ${m[2]}:${m[3]}`;
 }
 
 function toRelative(site: string, absPath: string): string {
   const localRelative = relativeToLocalSite(site, absPath);
   if (localRelative) return localRelative;
-  return absPath;
+  return `_external_/${pathBasename(absPath)}`;
 }
 
 // ─── Resume TUI ─────────────────────────────────────────────────────────────

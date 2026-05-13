@@ -28,12 +28,32 @@ function isTracingEnabled(): boolean {
   );
 }
 
+function validateTracingUrl(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      process.stderr.write(
+        `[imprint] warning: ignoring tracing endpoint with unsupported protocol: ${raw}\n`,
+      );
+      return undefined;
+    }
+    return raw;
+  } catch {
+    process.stderr.write(`[imprint] warning: ignoring invalid tracing endpoint URL: ${raw}\n`);
+    return undefined;
+  }
+}
+
 function ensureTracingInitialized(): void {
   if (attemptedInit || !isTracingEnabled()) return;
   attemptedInit = true;
+  const url = validateTracingUrl(
+    process.env.PHOENIX_COLLECTOR_ENDPOINT ?? process.env.PHOENIX_HOST,
+  );
   provider = register({
     projectName: process.env.IMPRINT_TRACE_PROJECT ?? 'imprint',
-    url: process.env.PHOENIX_COLLECTOR_ENDPOINT ?? process.env.PHOENIX_HOST,
+    url,
     apiKey: process.env.PHOENIX_API_KEY,
     batch: traceBatchEnabled(process.env.IMPRINT_TRACE_BATCH),
   });
@@ -62,9 +82,13 @@ export function traceToolIoEnabled(): boolean {
 export function traceIoMaxChars(value = process.env.IMPRINT_TRACE_IO_MAX_CHARS): number {
   if (value === undefined || value === '') return DEFAULT_TRACE_IO_MAX_CHARS;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return DEFAULT_TRACE_IO_MAX_CHARS;
-  const truncated = Math.trunc(parsed);
-  return truncated < 0 ? DEFAULT_TRACE_IO_MAX_CHARS : truncated;
+  if (!Number.isFinite(parsed) || Math.trunc(parsed) < 0) {
+    process.stderr.write(
+      `[imprint] warning: IMPRINT_TRACE_IO_MAX_CHARS="${value}" is not a valid non-negative integer, using default ${DEFAULT_TRACE_IO_MAX_CHARS}\n`,
+    );
+    return DEFAULT_TRACE_IO_MAX_CHARS;
+  }
+  return Math.trunc(parsed);
 }
 
 export function estimateTokensFromText(text: string): number {

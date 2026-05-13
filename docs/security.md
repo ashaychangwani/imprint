@@ -11,7 +11,7 @@ Recording produces:
 | `<ts>.jsonl` | Full request bodies, response bodies, headers (incl. `Authorization`, `Cookie`, `Set-Cookie`), cookie snapshots, storage snapshots | `~/.imprint/<site>/sessions/` |
 | `<ts>.json` | Same, assembled | `~/.imprint/<site>/sessions/` |
 
-Sessions are **not** redacted on disk by default. `imprint generate` and `imprint compile-playbook` auto-redact before LLM calls; `imprint redact` writes a reviewable redacted artifact you can audit or share.
+Sessions are **not** redacted on disk by default. `imprint generate` and `imprint compile-playbook` auto-redact in memory before LLM calls — if the session does not already contain `[REDACTED:` markers, the pipeline runs the full redaction pass and logs the count. If auto-redaction produces zero redactions on a session that contains auth-like requests, treat it as suspicious and run `imprint redact` manually to audit. `imprint redact` writes a reviewable redacted artifact you can audit or share.
 
 ## Redaction pipeline
 

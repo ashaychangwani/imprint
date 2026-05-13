@@ -34,6 +34,7 @@ export function compactRequestContexts<T extends CompactRequestContext>(
 
   for (const request of requests) {
     if (preserveSeqs.has(request.seq)) {
+      request.repeatCount = request.repeatCount ?? 1;
       out.push(request);
       continue;
     }
@@ -41,6 +42,7 @@ export function compactRequestContexts<T extends CompactRequestContext>(
     const key = stableRequestContextKey(groupKey(request));
     const existing = seen.get(key);
     if (!existing) {
+      request.repeatCount = request.repeatCount ?? 1;
       seen.set(key, request);
       out.push(request);
       continue;

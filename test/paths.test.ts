@@ -60,4 +60,20 @@ describe('local imprint paths', () => {
       expect(relativeToLocalSite('demo', pathResolve('/tmp', 'other', 'one.json'))).toBeNull();
     });
   });
+
+  it('rejects path traversal in site names', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(() => localSiteDir('../../etc')).toThrow(/Invalid site name/);
+      expect(() => localSiteDir('foo/bar')).toThrow(/Invalid site name/);
+      expect(() => localSiteDir('foo\\bar')).toThrow(/Invalid site name/);
+      expect(() => localSiteDir('..')).toThrow(/Invalid site name/);
+    });
+  });
+
+  it('rejects path traversal in tool names', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(() => localToolDir('southwest', '../escape')).toThrow(/Invalid tool name/);
+      expect(() => localToolDir('southwest', 'a/b')).toThrow(/Invalid tool name/);
+    });
+  });
 });

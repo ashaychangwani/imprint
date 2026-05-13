@@ -111,7 +111,7 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
 
 function buildStateHints(session: Session): Array<Record<string, unknown>> {
   const hints: Array<Record<string, unknown>> = [];
-  const cookieMarkers = new Map<string, { requestSeq: number; cookie: string }>();
+  const cookieMarkers = new Map<string, Array<{ requestSeq: number; cookie: string }>>();
   const storageMarkers = new Map<string, { origin: string; kind: string; key: string }>();
 
   for (const snap of session.storageSnapshots ?? []) {
@@ -138,22 +138,29 @@ function buildStateHints(session: Session): Array<Record<string, unknown>> {
         if (eq <= 0) continue;
         const name = first.slice(0, eq);
         const marker = first.slice(eq + 1);
-        if (isEqualityMarker(marker))
-          cookieMarkers.set(marker, { requestSeq: req.seq, cookie: name });
+        if (isEqualityMarker(marker)) {
+          const existing = cookieMarkers.get(marker) ?? [];
+          existing.push({ requestSeq: req.seq, cookie: name });
+          cookieMarkers.set(marker, existing);
+        }
       }
     }
 
     for (const [field, value] of requestValues(req)) {
       for (const marker of equalityMarkers(value)) {
-        const cookie = cookieMarkers.get(marker);
-        if (cookie && cookie.requestSeq < req.seq) {
-          hints.push({
-            type: 'request_field_equals_earlier_set_cookie',
-            producerSeq: cookie.requestSeq,
-            consumerSeq: req.seq,
-            cookie: cookie.cookie,
-            requestField: field,
-          });
+        const cookies = cookieMarkers.get(marker);
+        if (cookies) {
+          for (const cookie of cookies) {
+            if (cookie.requestSeq < req.seq) {
+              hints.push({
+                type: 'request_field_equals_earlier_set_cookie',
+                producerSeq: cookie.requestSeq,
+                consumerSeq: req.seq,
+                cookie: cookie.cookie,
+                requestField: field,
+              });
+            }
+          }
         }
         const storage = storageMarkers.get(marker);
         if (storage) {
@@ -761,9 +768,13 @@ export async function externalVerification(
 
     const trivialPatterns = [
       /expect\s*\(\s*true\s*\)\.toBe\s*\(\s*true\s*\)/,
+      /expect\s*\(\s*false\s*\)\.toBe\s*\(\s*false\s*\)/,
       /expect\s*\(\s*1\s*\)\.toBe\s*\(\s*1\s*\)/,
+      /expect\s*\(\s*0\s*\)\.toBe\s*\(\s*0\s*\)/,
       /expect\s*\(\s*null\s*\)\.toBeNull/,
       /expect\s*\(\s*undefined\s*\)\.toBeUndefined/,
+      /expect\s*\(\s*"[^"]*"\s*\)\.toBe\s*\(\s*"[^"]*"\s*\)/,
+      /expect\s*\(\s*'[^']*'\s*\)\.toBe\s*\(\s*'[^']*'\s*\)/,
     ];
     for (const pattern of trivialPatterns) {
       if (pattern.test(src)) {
