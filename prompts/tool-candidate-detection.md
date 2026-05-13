@@ -50,4 +50,7 @@ Rules:
 8. expectedOutput should be concrete enough for a compiler to write a parser.
 9. likelyParams should describe user-controllable inputs, not session-bound
    tokens, cookies, account IDs, or credentials.
-10. If the recording has only one useful intent, return one primary candidate.
+10. likelyParams.type must be exactly one of "string", "number", or "boolean".
+    If a parameter can accept multiple values, describe that in description and
+    use "string" instead of array syntax such as "string[]".
+11. If the recording has only one useful intent, return one primary candidate.

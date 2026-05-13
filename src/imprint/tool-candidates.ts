@@ -21,9 +21,68 @@ const RESPONSE_PREVIEW_LIMIT = 2000;
 const HEADER_LIMIT = 1200;
 const log = createLog('candidates');
 
+function normalizeCandidateParamType(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+  if (normalized.length === 0) {
+    return undefined;
+  }
+
+  if (
+    normalized === 'string' ||
+    normalized === 'str' ||
+    normalized === 'text' ||
+    normalized === 'array' ||
+    normalized === 'list' ||
+    normalized === 'string[]' ||
+    normalized === 'array<string>' ||
+    normalized === 'stringarray' ||
+    normalized === 'stringlist'
+  ) {
+    return 'string';
+  }
+
+  if (
+    normalized === 'number' ||
+    normalized === 'integer' ||
+    normalized === 'int' ||
+    normalized === 'float' ||
+    normalized === 'numeric' ||
+    normalized === 'number[]' ||
+    normalized === 'array<number>' ||
+    normalized === 'numberarray' ||
+    normalized === 'numberlist'
+  ) {
+    return 'number';
+  }
+
+  if (
+    normalized === 'boolean' ||
+    normalized === 'bool' ||
+    normalized === 'boolean[]' ||
+    normalized === 'bool[]' ||
+    normalized === 'array<boolean>' ||
+    normalized === 'booleanarray' ||
+    normalized === 'booleanlist'
+  ) {
+    return 'boolean';
+  }
+
+  return undefined;
+}
+
 const CandidateParamSchema = z.object({
   name: z.string(),
-  type: z.enum(['string', 'number', 'boolean']).optional(),
+  type: z.preprocess(
+    normalizeCandidateParamType,
+    z.enum(['string', 'number', 'boolean']).optional(),
+  ),
   description: z.string().optional(),
 });
 

@@ -124,4 +124,54 @@ describe('tool candidate validation', () => {
     expect(shared.loginRequestSeqs).toEqual([1]);
     expect(shared.credentialNames).toEqual(['username']);
   });
+
+  it('normalizes array-like likely param type hints to compiler primitives', () => {
+    const detection = validateToolCandidateDetection({
+      sharedContext: {},
+      candidates: [
+        {
+          toolName: 'search_domain_extensions',
+          description: 'Search domain extensions',
+          rationale: 'primary intent',
+          confidence: 0.9,
+          primary: true,
+          requestSeqs: [2],
+          likelyParams: [
+            {
+              name: 'extensions',
+              type: 'string[]',
+              description: 'Domain extensions to include in the search',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(detection.candidates[0]?.likelyParams[0]?.type).toBe('string');
+  });
+
+  it('drops unsupported likely param type hints without rejecting candidates', () => {
+    const detection = validateToolCandidateDetection({
+      sharedContext: {},
+      candidates: [
+        {
+          toolName: 'search_domain_extensions',
+          description: 'Search domain extensions',
+          rationale: 'primary intent',
+          confidence: 0.9,
+          primary: true,
+          requestSeqs: [2],
+          likelyParams: [
+            {
+              name: 'filters',
+              type: 'object',
+              description: 'Additional search filters',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(detection.candidates[0]?.likelyParams[0]?.type).toBeUndefined();
+  });
 });
