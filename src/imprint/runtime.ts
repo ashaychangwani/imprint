@@ -6,15 +6,32 @@
  */
 
 import { dirname, resolve as pathResolve } from 'node:path';
-import { loadSiteCredentials, readSiteManifest } from './credential-store.ts';
-import type { ToolResult, Workflow, WorkflowRequest } from './types.ts';
+import {
+  type CookieLookupConstraints,
+  type RuntimeCookie,
+  RuntimeCookieJar,
+  extractSetCookieHeaders,
+} from './cookie-jar.ts';
+import { type StorageRecord, loadSiteCredentials, readSiteManifest } from './credential-store.ts';
+import type {
+  RequestCapture,
+  StateCapability,
+  StateMissingItem,
+  ToolResult,
+  Workflow,
+  WorkflowRequest,
+} from './types.ts';
+
+export { splitSetCookieHeader } from './cookie-jar.ts';
 
 export interface CredentialStore {
   site: string;
   /** Persisted via `imprint login`; sent on every same-domain request. */
-  cookies: Array<{ name: string; value: string; domain: string; path: string }>;
+  cookies: RuntimeCookie[];
   /** ${credential.X} substitutions (patron_id, csrf_token, etc). */
   values: Record<string, string>;
+  /** Durable browser storage captured by `imprint login`; V1 seeds localStorage only. */
+  storage?: StorageRecord[];
 }
 
 /** Load credentials for a site from the credential manager (OS keychain →
@@ -23,8 +40,14 @@ export interface CredentialStore {
  *  with no legacy file still yields an empty store. */
 export async function loadCredentialStore(site: string): Promise<CredentialStore | null> {
   const view = await loadSiteCredentials(site);
-  if (Object.keys(view.values).length === 0 && view.cookies.length === 0) return null;
-  return { site: view.site, cookies: view.cookies, values: view.values };
+  if (
+    Object.keys(view.values).length === 0 &&
+    view.cookies.length === 0 &&
+    view.storage.length === 0
+  ) {
+    return null;
+  }
+  return { site: view.site, cookies: view.cookies, values: view.values, storage: view.storage };
 }
 
 interface ExecuteOptions {
@@ -38,6 +61,13 @@ interface ExecuteOptions {
   requestTimeoutMs?: number;
   /** Absolute path of workflow.json — required for parserModule resolution. */
   workflowPath?: string;
+  /** Initial ${state.X} values harvested by fetch-bootstrap. */
+  initialState?: Record<string, unknown>;
+}
+
+interface ResponseSlot {
+  raw: unknown;
+  aliases: Record<string, unknown>;
 }
 
 export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promise<ToolResult<T>> {
@@ -73,31 +103,36 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     }
   }
 
-  // Each request's parsed JSON response (when JSON) is appended here so later
-  // requests can reference ${response[N].path}.
-  const responses: unknown[] = [];
+  // rawResponses feeds parser modules and the final return shape. responseSlots
+  // keeps legacy request.extract aliases without replacing raw parser input.
+  const responseSlots: ResponseSlot[] = [];
+  const state: Record<string, unknown> = { ...(opts.initialState ?? {}) };
 
-  // In-flight cookie jar — starts as a copy of the persisted cookies and gets
-  // updated from every Set-Cookie response header during the chain. Lets a
-  // login request "set" auth cookies that subsequent requests in the same
-  // workflow can use, mirroring browser behaviour. Not persisted back to the
-  // credential store at workflow end (that's `imprint login`'s job).
-  const inFlightCookies: Array<{ name: string; value: string; domain: string; path: string }> = [
-    ...credentials.cookies,
-  ];
-  const liveCredentials: CredentialStore = {
-    ...credentials,
-    cookies: inFlightCookies,
-  };
+  // Per-execution mutable jar. Never shared across MCP/cron calls.
+  const cookieJar = new RuntimeCookieJar(credentials.cookies);
+  const liveCredentials: CredentialStore = { ...credentials, cookies: cookieJar.toJSON() };
+  const stateCapabilities = collectStateCapabilities(opts.workflow);
+  const dependencyPreflight = preflightStateDependencies(opts.workflow, state, stateCapabilities);
+  if (!dependencyPreflight.ok) return dependencyPreflight.result;
 
   for (let i = 0; i < opts.workflow.requests.length; i++) {
     const req = opts.workflow.requests[i];
     if (!req) continue;
 
-    const subbed = substituteRequest(req, opts.params, liveCredentials, responses);
+    const subbedResult = substituteRequest(req, {
+      params: opts.params,
+      credentials: liveCredentials,
+      responseSlots,
+      state,
+      cookieJar,
+      stateCapabilities,
+      requestUrlTemplate: req.url,
+    });
+    if (!subbedResult.ok) return subbedResult.result;
+    const subbed = subbedResult.value;
 
-    const cookieHeader = buildCookieHeader(liveCredentials, subbed.url);
-    if (cookieHeader) subbed.headers.cookie = cookieHeader;
+    const cookieHeader = cookieJar.getCookieHeader(subbed.url);
+    if (cookieHeader && !hasHeader(subbed.headers, 'cookie')) subbed.headers.cookie = cookieHeader;
 
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
@@ -164,30 +199,12 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       };
     }
 
-    // Capture Set-Cookie response headers into the in-flight cookie jar so
-    // subsequent requests in the chain see the freshly-issued auth cookies.
-    // Works for fetch (single Set-Cookie header concatenated) and the rare
-    // Set-Cookie iterator on stealth-fetch responses.
+    // Capture Set-Cookie response headers into the in-flight cookie jar before
+    // evaluating captures. Set-Cookie is not exposed as a normal header capture.
     try {
-      // biome-ignore lint/suspicious/noExplicitAny: getSetCookie() is ES2024
-      const headers: any = resp.headers;
-      let setCookieList: string[] = [];
-      if (typeof headers.getSetCookie === 'function') {
-        setCookieList = headers.getSetCookie();
-      } else {
-        const sc = resp.headers.get('set-cookie');
-        if (sc) setCookieList = splitSetCookieHeader(sc);
-      }
-      for (const sc of setCookieList) {
-        const cookie = parseSetCookie(sc, subbed.url);
-        if (!cookie) continue;
-        // Replace existing same-name cookie; otherwise append.
-        const idx = inFlightCookies.findIndex(
-          (c) => c.name === cookie.name && c.domain === cookie.domain,
-        );
-        if (idx >= 0) inFlightCookies[idx] = cookie;
-        else inFlightCookies.push(cookie);
-      }
+      for (const sc of extractSetCookieHeaders(resp.headers))
+        cookieJar.setCookieFromHeader(sc, subbed.url);
+      liveCredentials.cookies = cookieJar.toJSON();
     } catch {
       // Non-fatal; cookies stay as they were.
     }
@@ -201,11 +218,22 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         // leave as text
       }
     }
-    responses.push(parsed);
+    const aliases = evaluateLegacyExtract(req, parsed);
+    responseSlots.push({ raw: parsed, aliases });
+
+    const captureResult = evaluateRequestCaptures(req.captures ?? [], {
+      parsed,
+      text,
+      headers: resp.headers,
+      requestUrl: subbed.url,
+      cookieJar,
+    });
+    if (!captureResult.ok) return captureResult.result;
+    Object.assign(state, captureResult.value);
   }
 
   // Apply parser if present
-  let finalData = responses.at(-1) ?? null;
+  let finalData = responseSlots.at(-1)?.raw ?? null;
   if (opts.workflow.parserModule && opts.workflowPath) {
     try {
       const parserModulePath = pathResolve(dirname(opts.workflowPath), opts.workflow.parserModule);
@@ -234,7 +262,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 }
 
 function emptyStore(site: string): CredentialStore {
-  return { site, cookies: [], values: {} };
+  return { site, cookies: [], values: {}, storage: [] };
 }
 
 interface SubstitutedRequest {
@@ -244,19 +272,32 @@ interface SubstitutedRequest {
   body?: string;
 }
 
+type RuntimeErrorResult = Extract<ToolResult, { ok: false }>;
+type RuntimeResult<T> = { ok: true; value: T } | { ok: false; result: RuntimeErrorResult };
+
+interface SubstituteRuntime {
+  params: Record<string, string | number | boolean>;
+  credentials: CredentialStore;
+  responseSlots: ResponseSlot[];
+  state: Record<string, unknown>;
+  cookieJar: RuntimeCookieJar;
+  stateCapabilities: Map<string, StateCapability>;
+  requestUrlTemplate: string;
+}
+
 function substituteRequest(
   req: WorkflowRequest,
-  params: Record<string, string | number | boolean>,
-  credentials: CredentialStore,
-  responses: unknown[],
-): SubstitutedRequest {
-  const subbed: SubstitutedRequest = {
-    method: req.method,
-    url: substituteString(req.url, params, credentials, responses),
-    headers: {},
-  };
+  runtime: SubstituteRuntime,
+): RuntimeResult<SubstitutedRequest> {
+  const urlResult = substituteStringInternal(req.url, runtime, undefined);
+  if (!urlResult.ok) return urlResult;
+  const subbed: SubstitutedRequest = { method: req.method, url: urlResult.value, headers: {} };
+
+  const requestRuntime = { ...runtime, requestUrlTemplate: subbed.url };
   for (const [k, v] of Object.entries(req.headers)) {
-    subbed.headers[k] = substituteString(v, params, credentials, responses);
+    const headerResult = substituteStringInternal(v, requestRuntime, 'header');
+    if (!headerResult.ok) return headerResult;
+    subbed.headers[k] = headerResult.value;
   }
   if (req.body !== undefined) {
     const ct = (req.headers['content-type'] ?? req.headers['Content-Type'] ?? '').toLowerCase();
@@ -265,13 +306,14 @@ function substituteRequest(
       : ct.includes('urlencoded') || req.body.includes('=')
         ? 'form-body'
         : 'opaque-body';
-    subbed.body = substituteString(req.body, params, credentials, responses, ctx);
+    const bodyResult = substituteStringInternal(req.body, requestRuntime, ctx);
+    if (!bodyResult.ok) return bodyResult;
+    subbed.body = bodyResult.value;
   }
-  return subbed;
+  return { ok: true, value: subbed };
 }
 
-const PLACEHOLDER_RE =
-  /\$\{(param|credential|env|response)\.([^}]+)\}|\$\{response\[(\d+)\]\.([^}]+)\}/g;
+const PLACEHOLDER_RE = /\$\{([^}]+)\}/g;
 
 /** What kind of context the template represents; controls how substituted
  *  values are escaped. */
@@ -284,59 +326,165 @@ export function substituteString(
   responses: unknown[],
   context?: SubstitutionContext,
 ): string {
-  return template.replace(
-    PLACEHOLDER_RE,
-    (
-      match,
-      kind: string | undefined,
-      name: string | undefined,
-      idx: string | undefined,
-      path: string | undefined,
-    ) => {
-      // ${response[N].JSON_PATH}
-      if (idx !== undefined && path !== undefined) {
-        const i = Number.parseInt(idx, 10);
-        const target = responses[i];
-        if (target === undefined) {
-          throw new Error(
-            `Workflow refers to ${match} but only ${responses.length} responses recorded so far`,
-          );
-        }
-        const v = jsonpath(target, path);
-        return encodePart(v, template, match, context);
-      }
-      // ${env.X}
-      if (kind === 'env' && name) {
-        const v = process.env[name];
-        if (v === undefined) {
-          throw new Error(
-            `Workflow placeholder ${match} but environment variable "${name}" is not set`,
-          );
-        }
-        return encodePart(v, template, match);
-      }
-      // ${param.X} / ${credential.X}
-      if (kind === 'param' && name) {
-        if (!(name in params)) {
-          const available = Object.keys(params);
-          const hint =
-            available.length === 0
-              ? `→ no params were passed; the tool needs --param ${name}=<value>`
-              : `→ available params: ${available.join(', ')}`;
-          throw new Error(`Workflow placeholder ${match} but no param "${name}" provided\n${hint}`);
-        }
-        return encodePart(params[name], template, match, context);
-      }
-      if (kind === 'credential' && name) {
-        const v = credentials.values[name];
-        if (v === undefined) {
-          throw new Error(buildMissingCredentialMessage(credentials, name));
-        }
-        return encodePart(v, template, match, context);
-      }
+  const runtime: SubstituteRuntime = {
+    params,
+    credentials,
+    responseSlots: responses.map((raw) => ({ raw, aliases: {} })),
+    state: {},
+    cookieJar: new RuntimeCookieJar(credentials.cookies),
+    stateCapabilities: new Map(),
+    requestUrlTemplate: template,
+  };
+  const result = substituteStringInternal(template, runtime, context);
+  if (!result.ok) throw new Error(result.result.message);
+  return result.value;
+}
+
+function substituteStringInternal(
+  template: string,
+  runtime: SubstituteRuntime,
+  context?: SubstitutionContext,
+): RuntimeResult<string> {
+  let missing: RuntimeErrorResult | null = null;
+  const out = template.replace(PLACEHOLDER_RE, (match, expr: string) => {
+    const resolved = resolvePlaceholder(match, expr, template, runtime, context);
+    if (!resolved.ok) {
+      missing = resolved.result;
       return match;
-    },
-  );
+    }
+    return resolved.value;
+  });
+  return missing ? { ok: false, result: missing } : { ok: true, value: out };
+}
+
+function resolvePlaceholder(
+  match: string,
+  expr: string,
+  template: string,
+  runtime: SubstituteRuntime,
+  context?: SubstitutionContext,
+): RuntimeResult<string> {
+  const parsed = parsePlaceholderExpression(expr);
+  if (!parsed) return { ok: true, value: match };
+
+  if (parsed.kind === 'response') {
+    const slot = runtime.responseSlots[parsed.index];
+    if (!slot) {
+      return missingState({
+        name: match,
+        source: 'response',
+        capability: 'ordinary_http',
+        failure: 'producer_unavailable',
+        message: `Workflow refers to ${match} but only ${runtime.responseSlots.length} responses exist so far`,
+      });
+    }
+    const v =
+      parsed.path in slot.aliases ? slot.aliases[parsed.path] : jsonpath(slot.raw, parsed.path);
+    return { ok: true, value: encodePart(v, template, match, context) };
+  }
+
+  if (parsed.kind === 'env') {
+    const v = process.env[parsed.name];
+    if (v === undefined) {
+      return missingState({
+        name: parsed.name,
+        source: 'workflow',
+        capability: 'unsupported',
+        failure: 'unsupported_workflow',
+        message: `Workflow placeholder ${match} but environment variable "${parsed.name}" is not set`,
+      });
+    }
+    return { ok: true, value: encodePart(v, template, match, context) };
+  }
+
+  if (parsed.kind === 'param') {
+    if (!(parsed.name in runtime.params)) {
+      const available = Object.keys(runtime.params);
+      const hint =
+        available.length === 0
+          ? `no params were passed; the tool needs --param ${parsed.name}=<value>`
+          : `available params: ${available.join(', ')}`;
+      return missingState({
+        name: parsed.name,
+        source: 'workflow',
+        capability: 'unsupported',
+        failure: 'unsupported_workflow',
+        message: `Workflow placeholder ${match} but no param "${parsed.name}" provided (${hint})`,
+      });
+    }
+    return { ok: true, value: encodePart(runtime.params[parsed.name], template, match, context) };
+  }
+
+  if (parsed.kind === 'credential') {
+    const v = runtime.credentials.values[parsed.name];
+    if (v === undefined) {
+      return missingState({
+        name: parsed.name,
+        source: 'credential',
+        capability: 'credential_required',
+        failure: 'credential_missing',
+        message: buildMissingCredentialMessage(runtime.credentials, parsed.name),
+      });
+    }
+    return { ok: true, value: encodePart(v, template, match, context) };
+  }
+
+  if (parsed.kind === 'state') {
+    if (!(parsed.name in runtime.state)) {
+      const capability = runtime.stateCapabilities.get(parsed.name) ?? 'unsupported';
+      return missingState({
+        name: parsed.name,
+        source: 'state',
+        capability,
+        failure: 'producer_unavailable',
+        message: `Workflow placeholder ${match} but state "${parsed.name}" has not been captured yet`,
+      });
+    }
+    return { ok: true, value: encodePart(runtime.state[parsed.name], template, match, context) };
+  }
+
+  const lookup = runtime.cookieJar.lookup(parsed.name, runtime.requestUrlTemplate);
+  if (!lookup.ok) {
+    return missingState({
+      name: parsed.name,
+      source: 'cookie',
+      capability: 'ordinary_http',
+      failure: lookup.reason === 'ambiguous' ? 'ambiguous_cookie' : 'producer_ran_value_absent',
+      message:
+        lookup.reason === 'ambiguous'
+          ? `Cookie placeholder ${match} is ambiguous for ${runtime.requestUrlTemplate}; use a named capture with url/domain/path constraints.`
+          : lookup.reason === 'httponly'
+            ? `Cookie placeholder ${match} refers to an HttpOnly cookie; use a named capture with allowHttpOnlyProjection only if intentional.`
+            : `Cookie placeholder ${match} could not find cookie "${parsed.name}" for ${runtime.requestUrlTemplate}`,
+    });
+  }
+  return { ok: true, value: encodePart(lookup.cookie.value, template, match, context) };
+}
+
+type ParsedPlaceholder =
+  | { kind: 'param' | 'credential' | 'env' | 'state' | 'cookie'; name: string }
+  | { kind: 'response'; index: number; path: string };
+
+function parsePlaceholderExpression(expr: string): ParsedPlaceholder | null {
+  const response = expr.match(/^response\[(\d+)\]\.(.+)$/);
+  if (response?.[1] && response[2]) {
+    return { kind: 'response', index: Number.parseInt(response[1], 10), path: response[2] };
+  }
+
+  const bracket = expr.match(/^(state|cookie)\["([^"]+)"\]$/);
+  if (bracket?.[1] && bracket[2]) {
+    return { kind: bracket[1] as 'state' | 'cookie', name: bracket[2] };
+  }
+
+  const dotted = expr.match(/^(param|credential|env|state|cookie)\.([A-Za-z0-9_.-]+)$/);
+  if (dotted?.[1] && dotted[2]) {
+    return {
+      kind: dotted[1] as 'param' | 'credential' | 'env' | 'state' | 'cookie',
+      name: dotted[2],
+    };
+  }
+
+  return null;
 }
 
 /** Lookup a dotted JSON path inside a parsed value. Supports nested objects + numeric array indices. */
@@ -354,6 +502,229 @@ function jsonpath(root: unknown, path: string): unknown {
     }
   }
   return cur;
+}
+
+function evaluateLegacyExtract(req: WorkflowRequest, parsed: unknown): Record<string, unknown> {
+  const aliases: Record<string, unknown> = {};
+  for (const [name, path] of Object.entries(req.extract ?? {})) {
+    aliases[name] = jsonpath(parsed, path);
+  }
+  return aliases;
+}
+
+function collectStateCapabilities(workflow: Workflow): Map<string, StateCapability> {
+  const out = new Map<string, StateCapability>();
+  for (const c of workflow.bootstrap?.captures ?? []) out.set(c.name, c.capability);
+  for (const req of workflow.requests) {
+    for (const c of req.captures ?? []) out.set(c.name, c.capability);
+  }
+  return out;
+}
+
+function preflightStateDependencies(
+  workflow: Workflow,
+  initialState: Record<string, unknown>,
+  stateCapabilities: Map<string, StateCapability>,
+): RuntimeResult<void> {
+  if (!workflowHasStateFeatures(workflow)) return { ok: true, value: undefined };
+
+  const producers = new Map<string, number>();
+  for (const c of workflow.bootstrap?.captures ?? []) producers.set(c.name, -1);
+  workflow.requests.forEach((req, idx) => {
+    for (const c of req.captures ?? []) producers.set(c.name, idx);
+  });
+
+  for (let i = 0; i < workflow.requests.length; i++) {
+    const req = workflow.requests[i];
+    if (!req) continue;
+    const missingBeforeRequest = collectStatePlaceholders(req).filter((name) => {
+      if (name in initialState) return false;
+      const producer = producers.get(name);
+      return producer === undefined || producer >= i;
+    });
+    if (missingBeforeRequest.length === 0) continue;
+    const hasPriorUnsafe = workflow.requests.slice(0, i).some((r) => requestEffect(r) === 'unsafe');
+    if (!hasPriorUnsafe) continue;
+
+    const name = missingBeforeRequest[0];
+    if (!name) continue;
+    const capability = stateCapabilities.get(name) ?? 'unsupported';
+    return missingState({
+      name,
+      source: 'state',
+      capability,
+      failure: producers.has(name) ? 'producer_unavailable' : 'unsupported_workflow',
+      message: `Workflow needs state "${name}" before request ${i + 1}, but an earlier unsafe request would run before that state can be produced.`,
+    });
+  }
+
+  return { ok: true, value: undefined };
+}
+
+function workflowHasStateFeatures(workflow: Workflow): boolean {
+  return Boolean(
+    workflow.bootstrap || workflow.requests.some((r) => r.effect || (r.captures?.length ?? 0) > 0),
+  );
+}
+
+function requestEffect(req: WorkflowRequest): 'safe' | 'idempotent' | 'unsafe' {
+  if (req.effect) return req.effect;
+  const method = req.method.toUpperCase();
+  return method === 'GET' || method === 'HEAD' ? 'safe' : 'unsafe';
+}
+
+function collectStatePlaceholders(req: WorkflowRequest): string[] {
+  const templates = [req.url, ...Object.values(req.headers), req.body ?? ''];
+  const names = new Set<string>();
+  for (const template of templates) {
+    for (const match of template.matchAll(PLACEHOLDER_RE)) {
+      const expr = match[1];
+      if (!expr) continue;
+      const parsed = parsePlaceholderExpression(expr);
+      if (parsed?.kind === 'state') names.add(parsed.name);
+    }
+  }
+  return Array.from(names);
+}
+
+function evaluateRequestCaptures(
+  captures: RequestCapture[],
+  ctx: {
+    parsed: unknown;
+    text: string;
+    headers: Headers;
+    requestUrl: string;
+    cookieJar: RuntimeCookieJar;
+  },
+): RuntimeResult<Record<string, unknown>> {
+  const values: Record<string, unknown> = {};
+  for (const capture of captures) {
+    let value: unknown;
+    switch (capture.source) {
+      case 'json':
+        value = jsonpath(ctx.parsed, capture.path);
+        break;
+      case 'response_header':
+        value = captureHeader(ctx.headers, capture.header, capture.mode);
+        break;
+      case 'text_regex': {
+        const re = new RegExp(capture.pattern);
+        const match = ctx.text.match(re);
+        value = match?.[capture.group ?? 1];
+        break;
+      }
+      case 'cookie': {
+        const constraints: CookieLookupConstraints = {
+          url: capture.url,
+          domain: capture.domain,
+          path: capture.path,
+          sameSite: capture.sameSite,
+          allowHttpOnlyProjection: capture.allowHttpOnlyProjection,
+        };
+        const lookup = ctx.cookieJar.lookup(
+          capture.cookie,
+          capture.url ?? ctx.requestUrl,
+          constraints,
+        );
+        if (!lookup.ok) {
+          if (capture.required === false) break;
+          return missingState({
+            name: capture.name,
+            source: 'cookie',
+            capability: capture.capability,
+            failure:
+              lookup.reason === 'ambiguous' ? 'ambiguous_cookie' : 'producer_ran_value_absent',
+            message:
+              lookup.reason === 'ambiguous'
+                ? `Cookie capture "${capture.name}" is ambiguous; add url/domain/path constraints.`
+                : lookup.reason === 'httponly'
+                  ? `Cookie capture "${capture.name}" targets HttpOnly cookie "${capture.cookie}" without allowHttpOnlyProjection.`
+                  : `Cookie capture "${capture.name}" did not find cookie "${capture.cookie}".`,
+          });
+        }
+        value = lookup.cookie.value;
+        break;
+      }
+    }
+
+    if (value === undefined || value === null || value === '') {
+      if (capture.required === false) continue;
+      return missingState({
+        name: capture.name,
+        source: capture.source === 'cookie' ? 'cookie' : 'response',
+        capability: capture.capability,
+        failure: 'producer_ran_value_absent',
+        message: `Required capture "${capture.name}" (${capture.source}) did not produce a value.`,
+      });
+    }
+    values[capture.name] = value;
+  }
+  return { ok: true, value: values };
+}
+
+function captureHeader(
+  headers: Headers,
+  name: string,
+  mode: 'first' | 'last' | 'all' = 'last',
+): string | string[] | undefined {
+  if (name.toLowerCase() === 'set-cookie') return undefined;
+  const value = headers.get(name);
+  if (value === null) return undefined;
+  const values = value
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  if (mode === 'all') return values.length ? values : [value];
+  if (mode === 'first') return values[0] ?? value;
+  return values.at(-1) ?? value;
+}
+
+function missingState(input: {
+  name: string;
+  source: StateMissingItem['source'];
+  capability: StateCapability;
+  failure: StateMissingItem['failure'];
+  message: string;
+}): RuntimeResult<never> {
+  return {
+    ok: false,
+    result: {
+      ok: false,
+      error: 'STATE_MISSING',
+      message: input.message,
+      missing: [
+        {
+          name: input.name,
+          source: input.source,
+          capability: input.capability,
+          required: true,
+          failure: input.failure,
+          message: input.message,
+        },
+      ],
+      remediation: remediationForCapability(input.capability),
+    },
+  };
+}
+
+function remediationForCapability(capability: StateCapability): string {
+  switch (capability) {
+    case 'browser_bootstrap':
+      return 'Run through fetch-bootstrap, or add workflow.bootstrap so Imprint can mint browser state before API replay.';
+    case 'stealth_bootstrap':
+      return 'Run through stealth-fetch so Imprint can mint bot-defense/browser state before API replay.';
+    case 'credential_required':
+      return 'Provision credentials with `imprint credential set` or rerun `imprint login`.';
+    case 'ordinary_http':
+      return 'Check request captures and ordering; an earlier HTTP request was expected to produce this state.';
+    case 'unsupported':
+      return 'Regenerate or edit workflow.json; the workflow references state that no backend can produce.';
+  }
+}
+
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const lower = name.toLowerCase();
+  return Object.keys(headers).some((k) => k.toLowerCase() === lower);
 }
 
 /**
@@ -407,25 +778,6 @@ async function safeText(resp: Response): Promise<string> {
   } catch {
     return '';
   }
-}
-
-function buildCookieHeader(store: CredentialStore, url: string): string | null {
-  if (!store.cookies.length) return null;
-  let host: string;
-  try {
-    host = new URL(url).hostname;
-  } catch {
-    return null;
-  }
-  const matching = store.cookies.filter((c) => domainMatches(c.domain, host));
-  if (!matching.length) return null;
-  return matching.map((c) => `${c.name}=${c.value}`).join('; ');
-}
-
-function domainMatches(cookieDomain: string, host: string): boolean {
-  // Cookie domain may start with a leading dot. Strip it.
-  const dom = cookieDomain.replace(/^\./, '');
-  return host === dom || host.endsWith(`.${dom}`);
 }
 
 /** Build a clear, actionable error when a `${credential.NAME}` placeholder
@@ -502,7 +854,7 @@ export async function checkSiteCredentialsReady(site: string): Promise<Credentia
   if (!manifest || manifest.secrets.length === 0) {
     return { site, ok: true, missing: [], message: '' };
   }
-  const store = (await loadCredentialStore(site)) ?? { site, cookies: [], values: {} };
+  const store = (await loadCredentialStore(site)) ?? { site, cookies: [], values: {}, storage: [] };
   const have = new Set(Object.keys(store.values));
   const missing = manifest.secrets.filter((s) => !have.has(s.name));
   if (missing.length === 0) return { site, ok: true, missing: [], message: '' };
@@ -519,44 +871,4 @@ export async function checkSiteCredentialsReady(site: string): Promise<Credentia
     })),
     message: buildMissingCredentialMessage(store, firstMissing.name),
   };
-}
-
-/** Split a concatenated Set-Cookie header (the "fetch joins multi-Set-Cookie
- *  headers with `, `" case) into individual cookie strings. The naive split
- *  on `,` is wrong because Expires=… contains `Wed, 30 Dec 2026 …`. Split
- *  only on a comma that is followed by what looks like a new cookie name
- *  (`token=`); date weekdays don't have `=` after them, so they survive. */
-export function splitSetCookieHeader(joined: string): string[] {
-  return joined.split(/,\s*(?=[A-Za-z0-9!#$%&'*+\-.^_`|~]+=)/);
-}
-
-/** Minimal Set-Cookie parser. Pulls name=value plus Domain/Path attrs and
- *  ignores Expires/Max-Age/Secure/HttpOnly/SameSite — we don't need them
- *  for in-flight forwarding (the jar is per-execution, not persistent).
- *  When Domain isn't set we default to the request URL's hostname per RFC 6265. */
-function parseSetCookie(
-  setCookie: string,
-  requestUrl: string,
-): { name: string; value: string; domain: string; path: string } | null {
-  const parts = setCookie.split(';').map((s) => s.trim());
-  const first = parts[0] ?? '';
-  const eq = first.indexOf('=');
-  if (eq <= 0) return null;
-  const name = first.slice(0, eq);
-  const value = first.slice(eq + 1);
-  let domain = '';
-  let path = '/';
-  for (const p of parts.slice(1)) {
-    const lower = p.toLowerCase();
-    if (lower.startsWith('domain=')) domain = p.slice('domain='.length);
-    else if (lower.startsWith('path=')) path = p.slice('path='.length);
-  }
-  if (!domain) {
-    try {
-      domain = new URL(requestUrl).hostname;
-    } catch {
-      return null;
-    }
-  }
-  return { name, value, domain, path };
 }

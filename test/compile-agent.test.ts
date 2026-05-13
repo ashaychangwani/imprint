@@ -51,6 +51,7 @@ function createTestSession(): TestSetup {
     events: [],
     narration: [{ seq: 0, timestamp: 50, text: 'searched for test' }],
     cookieSnapshots: [],
+    storageSnapshots: [],
   };
 
   writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');

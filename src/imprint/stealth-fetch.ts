@@ -182,6 +182,7 @@ export function createStealthFetch(
     while (true) {
       const t = tokens;
       if (!t) throw new Error('No tokens (bootstrap failed?)');
+      const { headers: initHeaders, cookieHeader } = splitCookieHeader(init?.headers ?? {});
       const result = await underlyingFetchFn(
         fullUrl,
         {
@@ -190,11 +191,14 @@ export function createStealthFetch(
             'User-Agent': opts.userAgent,
             Accept: 'application/json, text/javascript, */*; q=0.01',
             'Content-Type': 'application/json',
-            Cookie: t.cookies.map((c) => `${c.name}=${c.value}`).join('; '),
+            Cookie: mergeCookieHeader(
+              t.cookies.map((c) => `${c.name}=${c.value}`).join('; '),
+              cookieHeader,
+            ),
             Origin: new URL(fullUrl).origin,
             Referer: opts.baseUrl,
             ...t.sensorHeaders,
-            ...(init?.headers ?? {}),
+            ...initHeaders,
           },
           body: init?.body,
         },
@@ -282,6 +286,38 @@ export function createStealthFetch(
     // the future architecture grows real cleanup work.
     async close(): Promise<void> {},
   };
+}
+
+function splitCookieHeader(headers: Record<string, string>): {
+  headers: Record<string, string>;
+  cookieHeader: string | undefined;
+} {
+  const next: Record<string, string> = {};
+  let cookieHeader: string | undefined;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === 'cookie') {
+      cookieHeader = value;
+    } else {
+      next[key] = value;
+    }
+  }
+  return { headers: next, cookieHeader };
+}
+
+function mergeCookieHeader(browserCookie: string, runtimeCookie: string | undefined): string {
+  const merged = new Map<string, string>();
+  for (const header of [browserCookie, runtimeCookie ?? '']) {
+    for (const part of header.split(';')) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq <= 0) continue;
+      merged.set(trimmed.slice(0, eq), trimmed.slice(eq + 1));
+    }
+  }
+  return Array.from(merged.entries())
+    .map(([name, value]) => `${name}=${value}`)
+    .join('; ');
 }
 
 /**

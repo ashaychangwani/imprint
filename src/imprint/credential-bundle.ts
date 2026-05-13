@@ -16,7 +16,7 @@
  *   "cipher": { "alg": "xsalsa20poly1305", "nonceB64": "...", "ctB64": "..." }
  * }
  * ```
- * Plaintext (after decrypt) = `{ secrets: Record<string,string>, cookies: CookieRecord[], manifest: ManifestEntry[] }`.
+ * Plaintext (after decrypt) = `{ secrets: Record<string,string>, cookies: CookieRecord[], storage?: StorageRecord[], manifest: ManifestEntry[] }`.
  */
 
 import { argon2id } from '@noble/hashes/argon2.js';
@@ -24,6 +24,7 @@ import {
   type CookieRecord,
   type CredentialBackend,
   type ManifestEntry,
+  type StorageRecord,
   readSiteManifest,
   writeSiteManifest,
 } from './credential-store.ts';
@@ -31,6 +32,7 @@ import {
 interface BundlePlaintext {
   secrets: Record<string, string>;
   cookies: CookieRecord[];
+  storage?: StorageRecord[];
   manifest: ManifestEntry[];
 }
 
@@ -93,9 +95,10 @@ export async function exportBundle(opts: {
     if (v !== null) secrets[n] = v;
   }
   const cookies = await opts.backend.getCookies(opts.site);
+  const storage = (await opts.backend.getStorage?.(opts.site)) ?? [];
   const manifest = readSiteManifest(opts.site)?.secrets ?? [];
 
-  const plaintext: BundlePlaintext = { secrets, cookies, manifest };
+  const plaintext: BundlePlaintext = { secrets, cookies, storage, manifest };
   const text = new TextEncoder().encode(JSON.stringify(plaintext));
 
   const salt = sodium.randombytes_buf(16);
@@ -152,7 +155,7 @@ export async function importBundle(opts: {
   passphrase: string;
   /** When true, abort if any secret already exists for this site. Default false (overwrite). */
   failOnConflict?: boolean;
-}): Promise<{ imported: string[]; cookieCount: number }> {
+}): Promise<{ imported: string[]; cookieCount: number; storageCount: number }> {
   const data = await decryptBundle({ envelope: opts.envelope, passphrase: opts.passphrase });
   const site = opts.envelope.site;
 
@@ -176,6 +179,10 @@ export async function importBundle(opts: {
     await opts.backend.setCookies(site, data.cookies);
   }
 
+  if (data.storage && data.storage.length > 0 && opts.backend.setStorage) {
+    await opts.backend.setStorage(site, data.storage);
+  }
+
   if (data.manifest.length > 0) {
     writeSiteManifest({
       site,
@@ -184,5 +191,5 @@ export async function importBundle(opts: {
     });
   }
 
-  return { imported, cookieCount: data.cookies.length };
+  return { imported, cookieCount: data.cookies.length, storageCount: data.storage?.length ?? 0 };
 }

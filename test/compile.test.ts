@@ -23,6 +23,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     events: [],
     narration: [],
     cookieSnapshots: [],
+    storageSnapshots: [],
     ...overrides,
   };
 }

@@ -47,6 +47,7 @@ interface SiteManifest {
   site: string;
   secrets: ManifestEntry[];
   cookies?: Array<{ name: string; value?: never }>; // value is never persisted in the manifest
+  storage?: Array<{ origin: string; kind: StorageRecord['kind']; key: string; value?: never }>;
   updatedAt: string;
 }
 
@@ -55,6 +56,19 @@ export interface CookieRecord {
   value: string;
   domain: string;
   path: string;
+  expires?: number;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: string;
+  hostOnly?: boolean;
+  creationIndex?: number;
+}
+
+export interface StorageRecord {
+  origin: string;
+  kind: 'localStorage' | 'sessionStorage';
+  key: string;
+  value: string;
 }
 
 /** Backend abstraction. Implementations may be sync or async; we always
@@ -69,6 +83,8 @@ export interface CredentialBackend {
    *  produces a fresh cookie set as one unit. */
   getCookies(site: string): Promise<CookieRecord[]>;
   setCookies(site: string, cookies: CookieRecord[]): Promise<void>;
+  getStorage?(site: string): Promise<StorageRecord[]>;
+  setStorage?(site: string, storage: StorageRecord[]): Promise<void>;
   /** Best-effort listing of every site this backend has data for. Used by
    *  `imprint credential list` (no <site> argument) and migration. */
   listSites(): Promise<string[]>;
@@ -96,6 +112,10 @@ class KeyringBackend implements CredentialBackend {
 
   private cookieAccount(site: string): string {
     return `${site}::__cookies__`;
+  }
+
+  private storageAccount(site: string): string {
+    return `${site}::__storage__`;
   }
 
   async getSecret(site: string, name: string): Promise<string | null> {
@@ -128,9 +148,10 @@ class KeyringBackend implements CredentialBackend {
     const all = this.findCredentials(SERVICE_NAME) as Array<{ account: string }>;
     const prefix = `${site}::`;
     const cookieAcct = this.cookieAccount(site);
+    const storageAcct = this.storageAccount(site);
     return all
       .map((c) => c.account)
-      .filter((acct) => acct.startsWith(prefix) && acct !== cookieAcct)
+      .filter((acct) => acct.startsWith(prefix) && acct !== cookieAcct && acct !== storageAcct)
       .map((acct) => acct.slice(prefix.length));
   }
 
@@ -158,6 +179,30 @@ class KeyringBackend implements CredentialBackend {
     entry.setPassword(JSON.stringify(cookies));
   }
 
+  async getStorage(site: string): Promise<StorageRecord[]> {
+    const entry = new this.Entry(SERVICE_NAME, this.storageAccount(site));
+    try {
+      const v = entry.getPassword();
+      if (typeof v !== 'string' || v.length === 0) return [];
+      return JSON.parse(v) as StorageRecord[];
+    } catch {
+      return [];
+    }
+  }
+
+  async setStorage(site: string, storage: StorageRecord[]): Promise<void> {
+    const entry = new this.Entry(SERVICE_NAME, this.storageAccount(site));
+    if (storage.length === 0) {
+      try {
+        entry.deletePassword();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    entry.setPassword(JSON.stringify(storage));
+  }
+
   async listSites(): Promise<string[]> {
     const all = this.findCredentials(SERVICE_NAME) as Array<{ account: string }>;
     const sites = new Set<string>();
@@ -173,7 +218,10 @@ class KeyringBackend implements CredentialBackend {
 
 interface EncryptedFileShape {
   /** Map of site → { secrets: { name → value }, cookies: CookieRecord[] }. */
-  sites: Record<string, { secrets: Record<string, string>; cookies: CookieRecord[] }>;
+  sites: Record<
+    string,
+    { secrets: Record<string, string>; cookies: CookieRecord[]; storage?: StorageRecord[] }
+  >;
 }
 
 class EncryptedFileBackend implements CredentialBackend {
@@ -276,11 +324,12 @@ class EncryptedFileBackend implements CredentialBackend {
   private siteData(site: string): {
     secrets: Record<string, string>;
     cookies: CookieRecord[];
+    storage?: StorageRecord[];
   } {
     if (!this.cachedData) throw new Error('cachedData not initialized');
     let bucket = this.cachedData.sites[site];
     if (!bucket) {
-      bucket = { secrets: {}, cookies: [] };
+      bucket = { secrets: {}, cookies: [], storage: [] };
       this.cachedData.sites[site] = bucket;
     }
     return bucket;
@@ -321,6 +370,17 @@ class EncryptedFileBackend implements CredentialBackend {
   async setCookies(site: string, cookies: CookieRecord[]): Promise<void> {
     await this.ensureKeyAndData({ forWrite: true });
     this.siteData(site).cookies = cookies;
+    this.persist();
+  }
+
+  async getStorage(site: string): Promise<StorageRecord[]> {
+    await this.ensureKeyAndData();
+    return this.cachedData?.sites[site]?.storage ?? [];
+  }
+
+  async setStorage(site: string, storage: StorageRecord[]): Promise<void> {
+    await this.ensureKeyAndData({ forWrite: true });
+    this.siteData(site).storage = storage;
     this.persist();
   }
 
@@ -409,6 +469,8 @@ export function upsertManifestEntry(
             description: entry.description,
             recordedAt,
           }),
+        cookies: existing.cookies,
+        storage: existing.storage,
         updatedAt: new Date().toISOString(),
       }
     : {
@@ -433,12 +495,35 @@ export function removeManifestEntry(site: string, name: string): SiteManifest | 
   const next: SiteManifest = {
     site,
     secrets: existing.secrets.filter((s) => s.name !== name),
+    cookies: existing.cookies,
+    storage: existing.storage,
     updatedAt: new Date().toISOString(),
   };
   if (next.secrets.length === 0) {
     deleteSiteManifest(site);
     return null;
   }
+  writeSiteManifest(next);
+  return next;
+}
+
+export function setManifestStorageKeys(
+  site: string,
+  storage: Array<{ origin: string; kind: StorageRecord['kind']; key: string }>,
+): SiteManifest {
+  const existing = readSiteManifest(site);
+  const next: SiteManifest = existing
+    ? {
+        ...existing,
+        storage: storage.map((s) => ({ origin: s.origin, kind: s.kind, key: s.key })),
+        updatedAt: new Date().toISOString(),
+      }
+    : {
+        site,
+        secrets: [],
+        storage: storage.map((s) => ({ origin: s.origin, kind: s.kind, key: s.key })),
+        updatedAt: new Date().toISOString(),
+      };
   writeSiteManifest(next);
   return next;
 }
@@ -595,6 +680,7 @@ interface SiteCredentialView {
   site: string;
   cookies: CookieRecord[];
   values: Record<string, string>;
+  storage: StorageRecord[];
 }
 
 /** Loads everything we know about a site, falling back through the backends.
@@ -608,13 +694,14 @@ export async function loadSiteCredentials(site: string): Promise<SiteCredentialV
     if (v !== null) values[n] = v;
   }
   const cookies = await backend.getCookies(site);
+  const storage = (await backend.getStorage?.(site)) ?? [];
 
   // Fall through to legacy if the backend has nothing.
-  if (Object.keys(values).length === 0 && cookies.length === 0) {
+  if (Object.keys(values).length === 0 && cookies.length === 0 && storage.length === 0) {
     const legacy = readLegacyStore(site);
     if (legacy) {
-      return { site, cookies: legacy.cookies, values: legacy.values };
+      return { site, cookies: legacy.cookies, values: legacy.values, storage: [] };
     }
   }
-  return { site, cookies, values };
+  return { site, cookies, values, storage };
 }

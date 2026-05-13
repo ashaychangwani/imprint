@@ -8,11 +8,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import { loadBackendsCache } from '../src/imprint/probe-backends.ts';
-import { type BackendsCache, BackendsCacheSchema } from '../src/imprint/types.ts';
+import { type BackendsCache, BackendsCacheSchema, WorkflowSchema } from '../src/imprint/types.ts';
 
 let root: string;
 
@@ -118,5 +119,68 @@ describe('loadBackendsCache', () => {
     expect(
       loadBackendsCache('schema-bad', root, pathResolve(root, 'schema-bad', 'schema-bad')),
     ).toBeNull();
+  });
+
+  it('ignores schema v2 caches whose workflow hash is stale', () => {
+    const dir = pathResolve(root, 'stale', 'stale');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      pathResolve(dir, 'workflow.json'),
+      JSON.stringify({
+        toolName: 'tool',
+        intent: { description: 'x' },
+        parameters: [],
+        requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+        site: 'stale',
+      }),
+    );
+    const cache: BackendsCache = {
+      probedAt: '2026-05-03T22:00:00.000Z',
+      imprintVersion: '0.1.0',
+      schemaVersion: 2,
+      workflowHash: createHash('sha256')
+        .update(JSON.stringify({ old: true }))
+        .digest('hex'),
+      capabilityHash: 'capability',
+      preferredOrder: ['fetch'],
+      results: { fetch: { outcome: 'ok', durationMs: 20 } },
+    };
+    writeFileSync(pathResolve(dir, 'backends.json'), JSON.stringify(cache, null, 2));
+
+    expect(loadBackendsCache('stale', root, dir)).toBeNull();
+  });
+
+  it('accepts fresh v2 caches when workflow.json omits schema-defaulted capture fields', () => {
+    const dir = pathResolve(root, 'defaults', 'defaults');
+    mkdirSync(dir, { recursive: true });
+    const rawWorkflow = {
+      toolName: 'tool',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/a',
+          headers: { 'x-csrf': '${state.csrf}' },
+          captures: [{ name: 'csrf', source: 'cookie', cookie: 'XSRF-TOKEN' }],
+        },
+      ],
+      site: 'defaults',
+    };
+    writeFileSync(pathResolve(dir, 'workflow.json'), JSON.stringify(rawWorkflow));
+    const cache: BackendsCache = {
+      probedAt: '2026-05-03T22:00:00.000Z',
+      imprintVersion: '0.1.0',
+      schemaVersion: 2,
+      workflowHash: createHash('sha256')
+        .update(JSON.stringify(WorkflowSchema.parse(rawWorkflow)))
+        .digest('hex'),
+      capabilityHash: 'capability',
+      preferredOrder: ['fetch'],
+      results: { fetch: { outcome: 'ok', durationMs: 20 } },
+    };
+    writeFileSync(pathResolve(dir, 'backends.json'), JSON.stringify(cache, null, 2));
+
+    expect(loadBackendsCache('defaults', root, dir)?.preferredOrder).toEqual(['fetch']);
   });
 });

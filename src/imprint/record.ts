@@ -15,7 +15,7 @@ import { IMPRINT_SENTINEL, INJECTED_LISTENER_SOURCE } from './inject-listener.ts
 import { isDebug } from './log.ts';
 import { defaultSessionJsonlPath } from './paths.ts';
 import { createSessionWriter } from './session-writer.ts';
-import type { CapturedEvent, CapturedRequest, CookieSnapshot } from './types.ts';
+import type { CapturedEvent, CapturedRequest, CookieSnapshot, StorageSnapshot } from './types.ts';
 import { VERSION } from './version.ts';
 
 const PATHS = envPaths('imprint', { suffix: '' });
@@ -326,6 +326,52 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
   };
   await snapshotCookies('start');
 
+  const snapshotStorage = async (label: StorageSnapshot['label']): Promise<void> => {
+    try {
+      const result = await Runtime.evaluate({
+        expression: `(() => {
+          const local = {};
+          const session = {};
+          try {
+            for (let i = 0; i < localStorage.length; i++) {
+              const k = localStorage.key(i);
+              if (k) local[k] = localStorage.getItem(k) ?? '';
+            }
+          } catch {}
+          try {
+            for (let i = 0; i < sessionStorage.length; i++) {
+              const k = sessionStorage.key(i);
+              if (k) session[k] = sessionStorage.getItem(k) ?? '';
+            }
+          } catch {}
+          return { origin: location.origin, localStorage: local, sessionStorage: session };
+        })()`,
+        returnByValue: true,
+      });
+      const value = result.result.value as
+        | {
+            origin?: string;
+            localStorage?: Record<string, string>;
+            sessionStorage?: Record<string, string>;
+          }
+        | undefined;
+      if (!value?.origin || value.origin === 'null') return;
+      writer.storage({
+        takenAt: new Date().toISOString(),
+        timestamp: elapsed(),
+        label,
+        origin: value.origin,
+        localStorage: value.localStorage ?? {},
+        sessionStorage: value.sessionStorage ?? {},
+      });
+    } catch (err) {
+      if (isDebug()) {
+        console.error(`[debug] storage snapshot ${label} failed: ${String(err)}`);
+      }
+    }
+  };
+  await snapshotStorage('start');
+
   // ── Narration loop ────────────────────────────────────────────────────────
   let narrationOpen = !opts.noNarration;
   let rl: ReturnType<typeof createInterface> | null = null;
@@ -392,6 +438,7 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
     // Final cookie snapshot before CDP teardown — confirmation pages
     // sometimes set fresh session cookies the replay needs.
     await snapshotCookies('end');
+    await snapshotStorage('end');
 
     try {
       await client.close();

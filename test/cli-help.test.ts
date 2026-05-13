@@ -22,7 +22,7 @@ const dispatcherVerbs = (() => {
     match = re.exec(CLI_SOURCE);
   }
   // Filter out the backend-ladder cases (they live in a different switch).
-  for (const x of ['fetch', 'stealth-fetch', 'playbook', 'auto']) set.delete(x);
+  for (const x of ['fetch', 'fetch-bootstrap', 'stealth-fetch', 'playbook', 'auto']) set.delete(x);
   // 'playbook' IS a real CLI verb too — re-add it (the filter was over-broad).
   set.add('playbook');
   return set;

@@ -113,7 +113,7 @@ ${paramTypeFields}
 
 export async function ${camelCase(workflow.toolName)}(
   ${workflow.parameters.length === 0 ? '_input' : 'input'}: ${pascalCase(workflow.toolName)}Input,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
@@ -125,6 +125,7 @@ ${defaultsBlock && requiredCopies ? requiredCopies : ''}
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });
 }

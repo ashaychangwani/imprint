@@ -68,10 +68,22 @@ const CookieSnapshotSchema = z.object({
       httpOnly: z.boolean().optional(),
       secure: z.boolean().optional(),
       sameSite: z.string().optional(),
+      hostOnly: z.boolean().optional(),
+      creationIndex: z.number().optional(),
     }),
   ),
 });
 export type CookieSnapshot = z.infer<typeof CookieSnapshotSchema>;
+
+const StorageSnapshotSchema = z.object({
+  takenAt: z.string(),
+  timestamp: z.number(),
+  label: z.enum(['start', 'end', 'manual']),
+  origin: z.string(),
+  localStorage: z.record(z.string()).default({}),
+  sessionStorage: z.record(z.string()).default({}),
+});
+export type StorageSnapshot = z.infer<typeof StorageSnapshotSchema>;
 
 const NarrationSchema = z.object({
   seq: z.number().int().nonnegative(),
@@ -89,6 +101,7 @@ export const SessionSchema = z.object({
   events: z.array(CapturedEventSchema),
   narration: z.array(NarrationSchema),
   cookieSnapshots: z.array(CookieSnapshotSchema).default([]),
+  storageSnapshots: z.array(StorageSnapshotSchema).default([]),
 });
 export type Session = z.infer<typeof SessionSchema>;
 
@@ -103,6 +116,81 @@ const WorkflowParameterSchema = z.object({
 });
 export type WorkflowParameter = z.infer<typeof WorkflowParameterSchema>;
 
+const StateCapabilitySchema = z.enum([
+  'ordinary_http',
+  'browser_bootstrap',
+  'stealth_bootstrap',
+  'credential_required',
+  'unsupported',
+]);
+export type StateCapability = z.infer<typeof StateCapabilitySchema>;
+
+const CaptureCommonSchema = z.object({
+  name: z.string(),
+  required: z.boolean().optional().default(true),
+  capability: StateCapabilitySchema.optional().default('ordinary_http'),
+});
+
+const CookieCaptureSchema = CaptureCommonSchema.extend({
+  source: z.literal('cookie'),
+  cookie: z.string(),
+  url: z.string().optional(),
+  domain: z.string().optional(),
+  path: z.string().optional(),
+  sameSite: z.string().optional(),
+  allowHttpOnlyProjection: z.boolean().optional().default(false),
+});
+
+const RequestCaptureSchema = z.discriminatedUnion('source', [
+  CaptureCommonSchema.extend({
+    source: z.literal('json'),
+    path: z.string(),
+  }),
+  CaptureCommonSchema.extend({
+    source: z.literal('response_header'),
+    header: z.string(),
+    mode: z.enum(['first', 'last', 'all']).optional().default('last'),
+  }),
+  CaptureCommonSchema.extend({
+    source: z.literal('text_regex'),
+    pattern: z.string(),
+    group: z.number().int().nonnegative().optional().default(1),
+  }),
+  CookieCaptureSchema,
+]);
+export type RequestCapture = z.infer<typeof RequestCaptureSchema>;
+
+const BootstrapCaptureSchema = z.discriminatedUnion('source', [
+  CookieCaptureSchema,
+  CaptureCommonSchema.extend({
+    source: z.literal('local_storage'),
+    origin: z.string(),
+    key: z.string(),
+  }),
+  CaptureCommonSchema.extend({
+    source: z.literal('session_storage'),
+    origin: z.string(),
+    key: z.string(),
+  }),
+  CaptureCommonSchema.extend({
+    source: z.literal('html_regex'),
+    pattern: z.string(),
+    group: z.number().int().nonnegative().optional().default(1),
+  }),
+  CaptureCommonSchema.extend({
+    source: z.literal('dom_attribute'),
+    selector: z.string(),
+    attribute: z.string(),
+    timeoutMs: z.number().int().positive().optional(),
+  }),
+  CaptureCommonSchema.extend({
+    source: z.literal('dom_text'),
+    selector: z.string(),
+    timeoutMs: z.number().int().positive().optional(),
+  }),
+]);
+export type BootstrapCapture = z.infer<typeof BootstrapCaptureSchema>;
+
 const WorkflowRequestSchema = z.object({
   method: z.string(),
   /** Template; ${param.X} substitutes a parameter, ${response[N].path} an
@@ -112,6 +200,8 @@ const WorkflowRequestSchema = z.object({
   body: z.string().optional(),
   /** Names → jsonpath expressions; later requests reference via ${response[N].name}. */
   extract: z.record(z.string()).optional(),
+  captures: z.array(RequestCaptureSchema).optional(),
+  effect: z.enum(['safe', 'idempotent', 'unsafe']).optional(),
 });
 export type WorkflowRequest = z.infer<typeof WorkflowRequestSchema>;
 
@@ -125,6 +215,15 @@ export const WorkflowSchema = z.object({
   parameters: z.array(WorkflowParameterSchema),
   requests: z.array(WorkflowRequestSchema),
   site: z.string(),
+  bootstrap: z
+    .object({
+      url: z.string(),
+      waitUntil: z.enum(['domcontentloaded', 'load', 'networkidle']).optional(),
+      waitMs: z.number().int().nonnegative().optional(),
+      timeoutMs: z.number().int().positive().optional(),
+      captures: z.array(BootstrapCaptureSchema).optional(),
+    })
+    .optional(),
   /** Path to a sibling parser module (relative to the workflow.json file)
    *  exporting `extract(rawResponse): unknown`. Applied by the runtime
    *  to transform the raw API response into structured agent output. */
@@ -133,6 +232,22 @@ export const WorkflowSchema = z.object({
 export type Workflow = z.infer<typeof WorkflowSchema>;
 
 // ─── Generated tool runtime contract ─────────────────────────────────────────
+
+export type StateMissingFailure =
+  | 'producer_unavailable'
+  | 'producer_ran_value_absent'
+  | 'ambiguous_cookie'
+  | 'credential_missing'
+  | 'unsupported_workflow';
+
+export interface StateMissingItem {
+  name: string;
+  source: 'credential' | 'cookie' | 'state' | 'storage' | 'response' | 'workflow';
+  capability: StateCapability;
+  required: boolean;
+  failure: StateMissingFailure;
+  message: string;
+}
 
 /** Discriminated union returned by every generated tool. */
 export type ToolResult<T = unknown> =
@@ -145,9 +260,11 @@ export type ToolResult<T = unknown> =
         | 'NETWORK' // fetch threw / timed out
         | 'RATE_LIMITED' // 429
         | 'BAD_RESPONSE' // other 4xx/5xx
+        | 'STATE_MISSING' // required cookie/state could not be produced
         | 'UNKNOWN';
       message: string;
       remediation?: string;
+      missing?: StateMissingItem[];
     };
 
 // ─── Cron config (input to `imprint cron`) ───────────────────────────────────
@@ -168,10 +285,17 @@ const NotifyWhenSchema = z.discriminatedUnion('type', [
 ]);
 export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
 
-/** fetch (cheap, breaks on Akamai) → stealth-fetch (mint tokens, ~1s) →
- *  playbook (full DOM walk, ~9s, universal). 'auto' walks the ladder,
- *  escalating only on FORBIDDEN. */
-const ReplayBackendSchema = z.enum(['fetch', 'stealth-fetch', 'playbook', 'auto']);
+/** fetch (plain API replay) → gated fetch-bootstrap (browser state init +
+ *  API replay) → stealth-fetch (bot-defense state + API replay) → playbook
+ *  (full DOM walk). 'auto' only inserts fetch-bootstrap for declared or
+ *  satisfiable browser-minted state. */
+const ReplayBackendSchema = z.enum([
+  'fetch',
+  'fetch-bootstrap',
+  'stealth-fetch',
+  'playbook',
+  'auto',
+]);
 export type ReplayBackend = z.infer<typeof ReplayBackendSchema>;
 
 const ConcreteBackendSchema = ReplayBackendSchema.exclude(['auto']);
@@ -211,6 +335,9 @@ export const BackendsCacheSchema = z.object({
   probedAt: z.string(),
   /** Schema-bump invalidator. */
   imprintVersion: z.string(),
+  workflowHash: z.string().optional(),
+  schemaVersion: z.number().optional(),
+  capabilityHash: z.string().optional(),
   /** Ladder for runtime — preferredOrder[0] cheapest, rest fall back on
    *  FORBIDDEN. Excludes 'auto'. */
   preferredOrder: z.array(ConcreteBackendSchema).min(1),

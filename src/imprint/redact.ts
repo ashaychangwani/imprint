@@ -12,12 +12,32 @@
  * workflow.json without translation.
  */
 
+import { splitSetCookieHeader } from './cookie-jar.ts';
 import type { Replacement } from './credential-extract.ts';
 import { hasFreeformRedactionHint, redactFreeformText } from './freeform-redact.ts';
 import { isSensitiveHeader, isSensitiveKey } from './sensitive-keys.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
 const REDACTED = (originalLength: number): string => `[REDACTED:${originalLength}]`;
+
+interface RedactionMarkerContext {
+  ids: Map<string, number>;
+  nextId: number;
+}
+
+function createMarkerContext(): RedactionMarkerContext {
+  return { ids: new Map(), nextId: 1 };
+}
+
+function markerFor(value: string, ctx?: RedactionMarkerContext): string {
+  if (!ctx) return REDACTED(value.length);
+  let id = ctx.ids.get(value);
+  if (id === undefined) {
+    id = ctx.nextId++;
+    ctx.ids.set(value, id);
+  }
+  return `[REDACTED:v3:id=${id}:len=${value.length}]`;
+}
 
 interface BodyRedaction {
   redacted: string;
@@ -32,6 +52,7 @@ interface BodyRedaction {
 export function redactFormBody(
   body: string,
   placeholderByKey?: Map<string, string>,
+  markerContext?: RedactionMarkerContext,
 ): BodyRedaction {
   let count = 0;
   let placeholders = 0;
@@ -53,7 +74,7 @@ export function redactFormBody(
     }
     if (isSensitiveKey(decodedKey)) {
       count++;
-      return `${rawKey}=${REDACTED(rawVal.length)}`;
+      return `${rawKey}=${markerFor(rawVal, markerContext)}`;
     }
     return pair;
   });
@@ -72,6 +93,7 @@ export function redactJsonBody(
   body: string,
   placeholderByPath?: Map<string, string>,
   freeform = true,
+  markerContext?: RedactionMarkerContext,
 ): BodyRedaction {
   let parsed: unknown;
   try {
@@ -97,7 +119,7 @@ export function redactJsonBody(
           out[k] = placeholder;
         } else if (isSensitiveKey(k) && (typeof v === 'string' || typeof v === 'number')) {
           count++;
-          out[k] = REDACTED(String(v).length);
+          out[k] = markerFor(String(v), markerContext);
         } else if (typeof v === 'string' && v.length > 1 && (v[0] === '{' || v[0] === '[')) {
           // JSON-in-JSON: try to parse and redact the nested string.
           try {
@@ -137,13 +159,14 @@ export function redactBody(
   formPlaceholders?: Map<string, string>,
   jsonPlaceholders?: Map<string, string>,
   freeform = true,
+  markerContext?: RedactionMarkerContext,
 ): BodyRedaction {
   const ct = (contentType ?? '').toLowerCase();
   if (ct.includes('urlencoded')) {
-    return redactFormBody(body, formPlaceholders);
+    return redactFormBody(body, formPlaceholders, markerContext);
   }
   // Try JSON first — many APIs send JSON as text/plain or with no content-type.
-  const jsonR = redactJsonBody(body, jsonPlaceholders, freeform);
+  const jsonR = redactJsonBody(body, jsonPlaceholders, freeform, markerContext);
   if (jsonR.redactionsCount > 0 || jsonR.placeholdersInjected > 0 || jsonR.freeformRedactions > 0) {
     return jsonR;
   }
@@ -151,7 +174,7 @@ export function redactBody(
     JSON.parse(body);
     return jsonR;
   } catch {
-    const formR = redactFormBody(body, formPlaceholders);
+    const formR = redactFormBody(body, formPlaceholders, markerContext);
     if (formR.redactionsCount > 0 || formR.placeholdersInjected > 0 || !freeform) return formR;
     const freeformR = redactFreeformText(body);
     return {
@@ -167,6 +190,7 @@ export function redactBody(
 export function redactUrl(
   url: string,
   freeform = true,
+  markerContext?: RedactionMarkerContext,
 ): { redacted: string; redactionsCount: number; freeformRedactions: number } {
   let parsed: URL;
   try {
@@ -179,7 +203,7 @@ export function redactUrl(
   for (const key of Array.from(parsed.searchParams.keys())) {
     if (isSensitiveKey(key)) {
       const val = parsed.searchParams.get(key) ?? '';
-      parsed.searchParams.set(key, REDACTED(val.length));
+      parsed.searchParams.set(key, markerFor(val, markerContext));
       count++;
     }
   }
@@ -209,6 +233,7 @@ export function redactUrl(
 export function redactHeaders(
   headers: Record<string, string>,
   keepHeaders: ReadonlySet<string> = new Set(),
+  markerContext?: RedactionMarkerContext,
 ): {
   redacted: Record<string, string>;
   redactionsCount: number;
@@ -217,13 +242,41 @@ export function redactHeaders(
   let count = 0;
   for (const [k, v] of Object.entries(headers)) {
     if (isSensitiveHeader(k) && !keepHeaders.has(k.toLowerCase())) {
-      out[k] = REDACTED(v.length);
+      const lower = k.toLowerCase();
+      if (lower === 'cookie') out[k] = redactCookieHeaderValue(v, markerContext);
+      else if (lower === 'set-cookie') out[k] = redactSetCookieHeaderValue(v, markerContext);
+      else out[k] = markerFor(v, markerContext);
       count++;
     } else {
       out[k] = v;
     }
   }
   return { redacted: out, redactionsCount: count };
+}
+
+function redactCookieHeaderValue(value: string, markerContext?: RedactionMarkerContext): string {
+  return value
+    .split(';')
+    .map((part) => {
+      const trimmed = part.trim();
+      const eq = trimmed.indexOf('=');
+      if (eq <= 0) return trimmed;
+      return `${trimmed.slice(0, eq)}=${markerFor(trimmed.slice(eq + 1), markerContext)}`;
+    })
+    .join('; ');
+}
+
+function redactSetCookieHeaderValue(value: string, markerContext?: RedactionMarkerContext): string {
+  return splitSetCookieHeader(value)
+    .map((cookie) => {
+      const parts = cookie.split(';').map((p) => p.trim());
+      const first = parts[0] ?? '';
+      const eq = first.indexOf('=');
+      if (eq <= 0) return cookie;
+      const redactedFirst = `${first.slice(0, eq)}=${markerFor(first.slice(eq + 1), markerContext)}`;
+      return [redactedFirst, ...parts.slice(1)].join('; ');
+    })
+    .join(', ');
 }
 
 interface RedactionStats {
@@ -274,6 +327,7 @@ export function redactSession(
   };
   const keepHeaders = new Set((opts.keepHeaders ?? []).map((h) => h.toLowerCase()));
   const useFreeform = opts.freeform ?? true;
+  const markerContext = createMarkerContext();
 
   // Group replacements by request seq.
   const replacementsBySeq = new Map<number, Replacement[]>();
@@ -286,11 +340,11 @@ export function redactSession(
   const redactedRequests = session.requests.map((req: CapturedRequest) => {
     let touched = 0;
 
-    const urlR = redactUrl(req.url, useFreeform);
+    const urlR = redactUrl(req.url, useFreeform, markerContext);
     touched += urlR.redactionsCount;
     stats.freeformRedactions += urlR.freeformRedactions;
 
-    const headersR = redactHeaders(req.headers, keepHeaders);
+    const headersR = redactHeaders(req.headers, keepHeaders, markerContext);
     touched += headersR.redactionsCount;
 
     let body = req.body;
@@ -306,7 +360,14 @@ export function redactSession(
           jsonPlaceholders.set(r.location.path.join('.'), r.placeholder);
         }
       }
-      const bodyR = redactBody(body, ct, formPlaceholders, jsonPlaceholders, useFreeform);
+      const bodyR = redactBody(
+        body,
+        ct,
+        formPlaceholders,
+        jsonPlaceholders,
+        useFreeform,
+        markerContext,
+      );
       body = bodyR.redacted;
       touched += bodyR.redactionsCount + bodyR.freeformRedactions;
       stats.placeholdersInjected += bodyR.placeholdersInjected;
@@ -315,7 +376,7 @@ export function redactSession(
 
     let response = req.response;
     if (response) {
-      const respHeadersR = redactHeaders(response.headers, keepHeaders);
+      const respHeadersR = redactHeaders(response.headers, keepHeaders, markerContext);
       touched += respHeadersR.redactionsCount;
       let respBody = response.body;
       if (respBody) {
@@ -325,6 +386,7 @@ export function redactSession(
           undefined,
           undefined,
           useFreeform,
+          markerContext,
         );
         respBody = respBodyR.redacted;
         touched += respBodyR.redactionsCount + respBodyR.freeformRedactions;
@@ -355,8 +417,14 @@ export function redactSession(
     ...snap,
     cookies: snap.cookies.map((c) => {
       stats.cookiesRedacted++;
-      return { ...c, value: REDACTED(c.value.length) };
+      return { ...c, value: markerFor(c.value, markerContext) };
     }),
+  }));
+
+  const redactedStorageSnapshots = (session.storageSnapshots ?? []).map((snap) => ({
+    ...snap,
+    localStorage: redactStorageRecord(snap.localStorage, markerContext),
+    sessionStorage: redactStorageRecord(snap.sessionStorage, markerContext),
   }));
 
   // Scrub captured DOM events too. inject-listener already masks password
@@ -412,7 +480,19 @@ export function redactSession(
       requests: redactedRequests,
       events: redactedEvents,
       cookieSnapshots: redactedSnapshots,
+      storageSnapshots: redactedStorageSnapshots,
     },
     stats,
   };
+}
+
+function redactStorageRecord(
+  values: Record<string, string> | undefined,
+  markerContext: RedactionMarkerContext,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(values ?? {})) {
+    out[k] = isSensitiveKey(k) || hasFreeformRedactionHint(v) ? markerFor(v, markerContext) : v;
+  }
+  return out;
 }

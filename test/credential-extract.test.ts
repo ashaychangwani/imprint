@@ -17,6 +17,7 @@ function emptySession(): Session {
     events: [],
     narration: [],
     cookieSnapshots: [],
+    storageSnapshots: [],
   };
 }
 
@@ -207,6 +208,7 @@ describe('extractCredentials — Southwest-shaped synthetic fixture', () => {
     events: [],
     narration: [],
     cookieSnapshots: [],
+    storageSnapshots: [],
   };
 
   it('extracts the synthetic Southwest-style login pair', () => {

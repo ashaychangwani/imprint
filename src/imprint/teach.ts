@@ -929,13 +929,18 @@ async function promptAndPersistCredentials(opts: {
  *  shared skill know what credentials to provision. No values, just names. */
 function exportSiteManifest(site: string, workflowDir: string): void {
   const m = readSiteManifest(site);
-  if (!m || m.secrets.length === 0) return;
+  if (!m || (m.secrets.length === 0 && (m.storage?.length ?? 0) === 0)) return;
   const out = {
     site: m.site,
     secrets: m.secrets.map((s) => ({
       name: s.name,
       kind: s.kind,
       description: s.description,
+    })),
+    storage: (m.storage ?? []).map((s) => ({
+      origin: s.origin,
+      kind: s.kind,
+      key: s.key,
     })),
     note: 'Provision these on the consuming agent via `imprint credential set <site> <name>` or by importing an encrypted bundle (`imprint credential import`). Values never travel inside the skill.',
   };

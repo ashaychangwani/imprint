@@ -343,7 +343,7 @@ async function cmdImport(argv: string[]): Promise<number> {
   }
 
   const backend = await getCredentialBackend();
-  let result: { imported: string[]; cookieCount: number };
+  let result: { imported: string[]; cookieCount: number; storageCount: number };
   try {
     result = await importBundle({
       backend,
@@ -356,7 +356,7 @@ async function cmdImport(argv: string[]): Promise<number> {
   }
 
   console.log(
-    `[imprint] imported ${result.imported.length} secret(s) (${result.imported.join(', ') || '–'}) and ${result.cookieCount} cookie(s) for "${site}"`,
+    `[imprint] imported ${result.imported.length} secret(s) (${result.imported.join(', ') || '–'}), ${result.cookieCount} cookie(s), and ${result.storageCount} storage value(s) for "${site}"`,
   );
   return 0;
 }
