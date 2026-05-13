@@ -44,6 +44,7 @@ const session: Session = {
   events: [{ seq: 10, timestamp: 150, type: 'click', detail: '{"text":"Search"}' }],
   narration: [{ seq: 11, timestamp: 140, text: 'searching for test items' }],
   cookieSnapshots: [],
+  storageSnapshots: [],
 };
 
 describe('tool candidate payload', () => {

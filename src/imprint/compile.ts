@@ -17,6 +17,7 @@ import { createLog } from './log.ts';
 import { localToolDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { redactSession } from './redact.ts';
+import { compactRequestContexts } from './request-context.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
 import {
@@ -35,7 +36,7 @@ const log = createLog('compile');
 interface CompileOptions {
   /** Path to session.json or session.redacted.json */
   sessionPath: string;
-  /** Where to write the artifact. Defaults to <sessionDir>/../<task.defaultOutFile> */
+  /** Where to write the artifact. Defaults to the generated tool directory. */
   outPath?: string;
   /** Override LLM config (region, model, project). */
   llmConfig?: LLMOptions;
@@ -247,6 +248,23 @@ interface TriageResult {
   durationMs: number;
 }
 
+interface TriageRequestContext {
+  seq: number;
+  timestamp: number;
+  method: string;
+  url: string;
+  resourceType: string;
+  status?: number;
+  mimeType?: string;
+  headers: string;
+  body?: string;
+  bodyLength?: number;
+  responseBodyLength?: number;
+  repeatCount?: number;
+  repeatedSeqs?: number[];
+  lastTimestamp?: number;
+}
+
 async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise<TriageResult> {
   const candidates = session.requests.filter((r) => TRIAGE_RESOURCE_TYPES.has(r.resourceType));
   const traceSpan = startTraceSpan('compile.triage_requests', 'RETRIEVER', {
@@ -257,16 +275,22 @@ async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise
   });
 
   try {
-    const metadata = candidates.map((r) => ({
-      seq: r.seq,
-      timestamp: r.timestamp,
-      method: r.method,
-      url: r.url,
-      resourceType: r.resourceType,
-      status: r.response?.status,
-      headers: truncateHeaders(r.headers),
-      body: truncate(r.body, TRIAGE_BODY_LIMIT),
-    }));
+    const metadata = compactRequestContexts(
+      candidates.map((r) => ({
+        seq: r.seq,
+        timestamp: r.timestamp,
+        method: r.method,
+        url: r.url,
+        resourceType: r.resourceType,
+        status: r.response?.status,
+        mimeType: r.response?.mimeType,
+        headers: truncateHeaders(r.headers),
+        body: truncate(r.body, TRIAGE_BODY_LIMIT),
+        bodyLength: r.body?.length,
+        responseBodyLength: r.response?.body?.length,
+      })),
+      triageRequestGroupKey,
+    );
 
     const triagePayload = {
       site: session.site,
@@ -283,7 +307,9 @@ async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise
     }
     const systemPrompt = readFileSync(promptPath, 'utf8');
 
-    log(`triaging ${candidates.length} requests (from ${session.requests.length} total)…`);
+    log(
+      `triaging ${metadata.length} compacted requests (from ${candidates.length} candidates / ${session.requests.length} total)…`,
+    );
     const llm = resolveProvider(llmConfig ?? {});
     const result = await llm.analyze(systemPrompt, triagePayload);
 
@@ -326,6 +352,7 @@ async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise
       durationMs: result.durationMs,
     };
     setSpanAttributes(traceSpan, {
+      'imprint.requests_compacted': metadata.length,
       'imprint.requests_selected': selectedSet.size,
       'imprint.triage.duration_ms': result.durationMs,
       'imprint.triage.input_tokens': result.inputTokens,
@@ -337,6 +364,20 @@ async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise
     endTraceSpan(traceSpan, err);
     throw err;
   }
+}
+
+function triageRequestGroupKey(request: TriageRequestContext): unknown[] {
+  return [
+    request.method,
+    request.url,
+    request.resourceType,
+    request.status,
+    request.mimeType,
+    request.headers,
+    request.body,
+    request.bodyLength,
+    request.responseBodyLength,
+  ];
 }
 
 function truncateHeaders(headers: Record<string, string>): string {
@@ -356,6 +397,10 @@ interface CompilePlaybookResult {
 }
 
 const RESPONSE_BODY_LIMIT = 4000;
+
+export function defaultCompilePlaybookPath(site: string, toolName: string): string {
+  return pathJoin(localToolDir(site, toolName), 'playbook.yaml');
+}
 
 export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlaybookResult> {
   return await traced(
@@ -475,7 +520,8 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
     );
   }
 
-  const outPath = opts.outPath ?? pathJoin(dirname(opts.sessionPath), '..', 'playbook.yaml');
+  const outPath = opts.outPath ?? defaultCompilePlaybookPath(session.site, playbook.toolName);
+  mkdirSync(dirname(outPath), { recursive: true });
   // Preserve the LLM's exact YAML rather than round-tripping through
   // YAML.stringify (which would lose comments + reorder keys).
   writeFileSync(outPath, `${stripCodeFences(result.text).trim()}\n`);

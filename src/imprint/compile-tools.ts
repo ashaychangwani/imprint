@@ -12,6 +12,7 @@ import { dirname, join as pathJoin, relative as pathRelative } from 'node:path';
 import type { AgentTool } from './agent.ts';
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
+import { compactRequestContexts } from './request-context.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type CapturedRequest, type Session, WorkflowSchema } from './types.ts';
 
@@ -66,6 +67,22 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
         ...(context.candidate?.dependencySeqs ?? []),
         ...(context.sharedContext?.loginRequestSeqs ?? []),
       ]);
+      const preserveSeqs = new Set([...selectedRequestSeqs, ...dependencySeqs]);
+      const loadBearingRequests = compactRequestContexts(
+        loadBearing.map((r) => ({
+          seq: r.seq,
+          timestamp: r.timestamp,
+          selectedForCandidate: selectedRequestSeqs.has(r.seq),
+          sharedDependency: dependencySeqs.has(r.seq),
+          method: r.method,
+          url: r.url,
+          status: r.response?.status,
+          mimeType: r.response?.mimeType,
+          bodySize: r.response?.body?.length,
+        })),
+        compileSummaryRequestGroupKey,
+        { preserveSeqs },
+      );
       const summary = {
         site: session.site,
         url: session.url,
@@ -84,16 +101,7 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
         narration: session.narration.map((n) => ({ timestamp: n.timestamp, text: n.text })),
         requestCount: session.requests.length,
         stateHints: buildStateHints(session),
-        loadBearingRequests: loadBearing.map((r) => ({
-          seq: r.seq,
-          selectedForCandidate: selectedRequestSeqs.has(r.seq),
-          sharedDependency: dependencySeqs.has(r.seq),
-          method: r.method,
-          url: r.url,
-          status: r.response?.status,
-          mimeType: r.response?.mimeType,
-          bodySize: r.response?.body?.length,
-        })),
+        loadBearingRequests,
       };
       return { result: JSON.stringify(summary, null, 2) };
     },
@@ -175,6 +183,25 @@ function equalityMarkers(value: string): string[] {
 
 function isEqualityMarker(value: string): boolean {
   return /^\[REDACTED:v3:id=\d+:len=\d+\]$/.test(value);
+}
+
+interface CompileSummaryRequestContext {
+  seq: number;
+  timestamp: number;
+  selectedForCandidate: boolean;
+  sharedDependency: boolean;
+  method: string;
+  url: string;
+  status?: number;
+  mimeType?: string;
+  bodySize?: number;
+  repeatCount?: number;
+  repeatedSeqs?: number[];
+  lastTimestamp?: number;
+}
+
+function compileSummaryRequestGroupKey(request: CompileSummaryRequestContext): unknown[] {
+  return [request.method, request.url, request.status, request.mimeType, request.bodySize];
 }
 
 function identifyLoadBearingRequests(session: Session): CapturedRequest[] {
@@ -747,7 +774,7 @@ export async function externalVerification(
   }
 
   if (existsSync(parserPath) || existsSync(parserTestPath)) {
-    const output = await runGeneratedArtifactTypecheck(exampleDir);
+    const output = await runGeneratedArtifactTypecheck(toolDir);
     if (output.exitCode !== 0 || output.timedOut) {
       failures.push(
         `generated TypeScript artifacts failed typecheck (bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json) exited ${output.exitCode}${output.timedOut ? ' after timing out' : ''}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,

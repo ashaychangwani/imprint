@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
+import { compactRequestContexts } from './request-context.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
@@ -267,7 +268,7 @@ interface ToolCandidatePayload {
 export function buildToolCandidatePayload(session: Session): ToolCandidatePayload {
   const startUrl = safeUrl(session.url);
   const startRoot = startUrl ? registrableDomain(startUrl.hostname) : null;
-  const requests = compactCandidateRequests(
+  const requests = compactRequestContexts(
     session.requests
       .filter((request) => isCandidateRequest(request, startRoot))
       .map((request) => {
@@ -291,6 +292,7 @@ export function buildToolCandidatePayload(session: Session): ToolCandidatePayloa
           likelyLoginOrAuth: likelyLoginOrAuth(request),
         };
       }),
+    candidateRequestGroupKey,
   );
 
   return {
@@ -311,29 +313,8 @@ export function buildToolCandidatePayload(session: Session): ToolCandidatePayloa
   };
 }
 
-function compactCandidateRequests(requests: CandidateRequestPayload[]): CandidateRequestPayload[] {
-  const out: CandidateRequestPayload[] = [];
-  const seen = new Map<string, CandidateRequestPayload>();
-
-  for (const request of requests) {
-    const key = candidateRequestGroupKey(request);
-    const existing = seen.get(key);
-    if (!existing) {
-      seen.set(key, request);
-      out.push(request);
-      continue;
-    }
-
-    existing.repeatCount = (existing.repeatCount ?? 1) + 1;
-    existing.repeatedSeqs = [...(existing.repeatedSeqs ?? [existing.seq]), request.seq];
-    existing.lastTimestamp = request.timestamp;
-  }
-
-  return out;
-}
-
-function candidateRequestGroupKey(request: CandidateRequestPayload): string {
-  return JSON.stringify([
+function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
+  return [
     request.method,
     request.url,
     request.body,
@@ -344,7 +325,7 @@ function candidateRequestGroupKey(request: CandidateRequestPayload): string {
     request.responseBodyLength,
     request.credentialPlaceholders,
     request.likelyLoginOrAuth,
-  ]);
+  ];
 }
 
 function isCandidateRequest(request: CapturedRequest, startRoot: string | null): boolean {
