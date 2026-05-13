@@ -141,4 +141,4 @@ You can pass `--keep-header` multiple times. Use this when the redacted value is
 
 The `.jsonl` is the raw streaming log (line-per-event). The `.json` is the assembled session. Both stay outside the repo by default — they may contain auth tokens. Don't share them unless you have audited and redacted them.
 
-When you're done capturing, tell me the filename and I'll start the day-3 LLM intent-detection work using your real session as the iteration target.
+When you're done capturing, pass the session to `imprint teach --from-session <path>` or run the manual `redact` → `generate` → `compile-playbook` → `emit` pipeline.

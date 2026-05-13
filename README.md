@@ -59,7 +59,7 @@ imprint teach mysite \
 
 A browser opens. You drive the workflow and narrate what you're doing. Imprint records every network request and DOM interaction.
 
-Raw recordings are stored locally under `~/.imprint/<site>/sessions/` by default, outside the repo. Generated tools still live under `examples/<site>/<toolName>/` so they can be reviewed and shared without private capture data.
+Raw recordings are stored locally under `~/.imprint/<site>/sessions/`, and each generated tool lives under `~/.imprint/<site>/<toolName>/` by default, outside the repo. The generated `index.ts` wrapper points at the local Imprint runtime, so rerun `imprint emit <workflow.json> --force` after moving a tool folder to another machine. The tracked `examples/` tree remains as source fixtures and demos.
 
 </td>
 <td width="33%">
@@ -70,6 +70,8 @@ Imprint generates two replay artifacts:
 
 - **`workflow.json`** — API-level replay (fast, now with named state captures)
 - **`playbook.yaml`** — DOM-level fallback (universal)
+
+Both artifacts are written into the generated tool directory (`~/.imprint/<site>/<toolName>/`). `compile-playbook` uses that nested location by default so cron and MCP discovery can see the fallback without a custom `--out`.
 
 Credentials and PII are redacted automatically: credential values become `${credential.NAME}` placeholders, sensitive values become redaction markers that preserve equality within the artifact, and a supplemental free-form scan catches common emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, and webhook URLs before LLM compile.
 
@@ -116,9 +118,9 @@ Requires [Bun](https://bun.sh) >= 1.3. Imprint detects LLM providers from what's
 |---|---|---|
 | 1 | `claude-cli` | `claude` on PATH (Claude Code subscription) |
 | 2 | `codex-cli` | `codex` on PATH (Codex subscription) |
-| 3 | `cursor-cli` | `cursor` on PATH (Cursor subscription) |
-| 4 | `anthropic-api` | `ANTHROPIC_API_KEY` env var |
-| 5 | `vertex` | `ANTHROPIC_VERTEX_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT` env var |
+| 3 | `anthropic-api` | `ANTHROPIC_API_KEY` env var |
+| 4 | `vertex` | `ANTHROPIC_VERTEX_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT` env var |
+| 5 | `cursor-cli` | `cursor` on PATH (generic prompt/playbook compile only; not `teach`/`generate`) |
 
 ```bash
 imprint doctor
@@ -126,7 +128,29 @@ imprint doctor
 
 Shows which providers are detected. Interactive `imprint teach` prompts you to choose when multiple compatible compile providers are available, and also lists undetected providers as setup-help entries. Pick one of those help entries to see exactly which CLI or environment variable to add so it will be detected next time.
 
-To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. Non-interactive runs keep first-match auto-detection so scripts do not hang.
+To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. `teach` and `generate` require a compile-agent provider (`claude-cli`, `codex-cli`, `anthropic-api`, or `vertex`); `compile-playbook` can also use `cursor-cli`.
+
+<br>
+
+## Local compile tracing
+
+Slow or suspicious compiles can be inspected in a local [Phoenix](https://arize.com/docs/phoenix/self-hosting/deployment-options/terminal) trace UI.
+
+```bash
+# one-time install with uv
+uv tool install arize-phoenix
+phoenix serve
+
+# in another terminal
+IMPRINT_TRACE=1 \
+IMPRINT_TRACE_BATCH=false \
+IMPRINT_TRACE_LLM_IO=1 \
+IMPRINT_TRACE_TOOL_IO=1 \
+PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
+imprint teach namecheap-domains --from-session ~/.imprint/namecheap-domains/sessions/<ts>.json --provider codex-cli
+```
+
+Tracing records compile stages, agent tool calls, estimated token counts, and optional prompt/response bodies. Set `IMPRINT_TRACE_IO_MAX_CHARS` to raise or lower captured payload size. Set `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` to add estimated cost attributes.
 
 <br>
 
@@ -190,13 +214,15 @@ State-aware workflows use named captures and `${state.NAME}` placeholders. For e
 
 ## Examples
 
+The checked-in `examples/` directory contains committed fixtures and demos. Generated tools from `imprint teach` go into `~/.imprint/<site>/<toolName>/` by default (configurable via `IMPRINT_HOME`). Runtime discovery (cron, MCP, probe-backends) reads `IMPRINT_HOME`, so to run the checked-in examples, point it at the repo's `examples/` directory:
+
 | Example | What it demonstrates | Run it |
 |---|---|---|
-| [**southwest**](examples/southwest) | Live fare watcher, defeats Akamai bot detection, price-drop notifications | `imprint cron southwest --once` |
-| [**google-flights**](examples/google-flights) | Real-time flight search across all carriers, parses Google's raw protobuf response | `imprint mcp-server google-flights` |
-| [**google-hotels**](examples/google-hotels) | Hotel search with star rating, guest scores, nightly + total prices | `imprint mcp-server google-hotels` |
-| [**discoverandgo**](examples/discoverandgo) | Authenticated booking via per-site credential store | `imprint cron discoverandgo --once` |
-| [**echo**](examples/echo) | MCP smoke-test fixture (no network, no LLM) | `imprint mcp-server echo` |
+| [**southwest**](examples/southwest) | Live fare watcher, defeats Akamai bot detection, price-drop notifications | `IMPRINT_HOME=examples imprint cron southwest --once` |
+| [**google-flights**](examples/google-flights) | Real-time flight search across all carriers, parses Google's raw protobuf response | `IMPRINT_HOME=examples imprint mcp-server google-flights` |
+| [**google-hotels**](examples/google-hotels) | Hotel search with star rating, guest scores, nightly + total prices | `IMPRINT_HOME=examples imprint mcp-server google-hotels` |
+| [**discoverandgo**](examples/discoverandgo) | Authenticated booking via per-site credential store | `IMPRINT_HOME=examples imprint cron discoverandgo --once` |
+| [**echo**](examples/echo) | MCP smoke-test fixture (no network, no LLM) | `IMPRINT_HOME=examples imprint mcp-server echo` |
 
 <br>
 
@@ -214,7 +240,7 @@ imprint <command> --help    # per-command options
 | **Credentials** | `credential set` · `credential list` · `credential export` · `credential import` · `credential migrate` |
 | **Utilities** | `login` · `assemble` · `check` · `doctor` |
 
-`teach`, `generate`, and `compile-playbook` accept `--provider <name>` to override the auto-detected LLM (see [Install](#install) for the five valid names). `teach` and `generate` also take `--keep-test` to retain the agent-written `parser.test.ts` for debugging — it's deleted by default since it reads the gitignored redacted session via `$IMPRINT_SESSION_PATH` and isn't reproducible elsewhere.
+`teach`, `generate`, and `compile-playbook` accept `--provider <name>` to override the auto-detected LLM (see [Install](#install) for valid names and compile-agent support). `teach` and `generate` also take `--keep-test` to retain the agent-written `parser.test.ts` for debugging — it's deleted by default since it reads the gitignored redacted session via `$IMPRINT_SESSION_PATH` and isn't reproducible elsewhere. For multi-tool sites, use `imprint cron <site> --tool <toolName>` and `imprint probe-backends <site> --tool <toolName>` unless `--config` or `--out` points inside the target tool directory.
 
 <br>
 

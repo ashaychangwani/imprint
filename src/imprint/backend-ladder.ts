@@ -60,7 +60,7 @@ export async function runWithLadder(
   ladder: ConcreteBackend[],
   tool: ResolvedTool,
   params: Record<string, string | number | boolean>,
-  examplesDir: string,
+  assetRoot: string,
   stealthCache: Map<string, StealthFetch>,
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
@@ -70,9 +70,13 @@ export async function runWithLadder(
   const effectiveLadder = effectiveAutoLadder(ladder, tool.workflow);
   const attempts: LadderResult['attempts'] = [];
   let lastResult: ToolResult | null = null;
+  let skipUntilBackend: ConcreteBackend | null = null;
 
   for (const backend of effectiveLadder) {
-    if (backend === 'playbook' && !existsSync(playbookPath(examplesDir, tool.site, tool.dir))) {
+    if (skipUntilBackend && backend !== skipUntilBackend) continue;
+    if (skipUntilBackend === backend) skipUntilBackend = null;
+
+    if (backend === 'playbook' && !existsSync(playbookPath(assetRoot, tool.site, tool.dir))) {
       attempts.push({
         backend,
         outcome: 'unavailable',
@@ -101,7 +105,7 @@ export async function runWithLadder(
         }
         case 'playbook':
           result = await runPlaybook({
-            playbook: playbookPath(examplesDir, tool.site, tool.dir),
+            playbook: playbookPath(assetRoot, tool.site, tool.dir),
             params,
             site: tool.site,
           });
@@ -132,8 +136,8 @@ export async function runWithLadder(
     }
 
     if (result.error === 'STATE_MISSING') {
-      const next = nextEscalationBackend(effectiveLadder, backend);
-      if (next && stateMissingSatisfiableBy(next, result.missing ?? [])) {
+      const next = nextStateMissingBackend(effectiveLadder, backend, result.missing ?? []);
+      if (next) {
         attempts.push({
           backend,
           outcome: 'escalate',
@@ -141,6 +145,7 @@ export async function runWithLadder(
           durationMs,
         });
         log(`${backend}: STATE_MISSING in ${durationMs}ms — escalating to ${next}`);
+        skipUntilBackend = next;
         continue;
       }
     }
@@ -198,14 +203,15 @@ function workflowNeedsBootstrap(workflow: Workflow): boolean {
   );
 }
 
-function nextEscalationBackend(
+function nextStateMissingBackend(
   ladder: ConcreteBackend[],
   backend: ConcreteBackend,
+  missing: StateMissingItem[],
 ): ConcreteBackend | null {
   const idx = ladder.indexOf(backend);
   if (idx < 0) return null;
   for (const next of ladder.slice(idx + 1)) {
-    if (next !== 'playbook') return next;
+    if (stateMissingSatisfiableBy(next, missing)) return next;
   }
   return null;
 }
@@ -220,7 +226,14 @@ function capabilitySatisfiedBy(backend: ConcreteBackend, capability: StateCapabi
   if (backend === 'fetch-bootstrap') {
     return capability === 'browser_bootstrap' || capability === 'stealth_bootstrap';
   }
-  if (backend === 'stealth-fetch') return capability === 'stealth_bootstrap';
+  if (backend === 'stealth-fetch') return false;
+  if (backend === 'playbook') {
+    return (
+      capability === 'ordinary_http' ||
+      capability === 'browser_bootstrap' ||
+      capability === 'stealth_bootstrap'
+    );
+  }
   return false;
 }
 
@@ -445,7 +458,7 @@ function bootstrapCaptureSource(capture: BootstrapCapture): StateMissingItem['so
 
 function remediationForBootstrapCapabilities(capabilities: StateCapability[]): string {
   return capabilities.includes('stealth_bootstrap')
-    ? 'Run through stealth-fetch so Imprint can mint bot-defense/browser state before API replay.'
+    ? 'Use replayBackend: "auto" so Imprint can try fetch-bootstrap and then the playbook fallback when API replay cannot mint bot-defense/browser state.'
     : 'Run through fetch-bootstrap, or update workflow.bootstrap so Imprint can mint browser state before API replay.';
 }
 
@@ -548,7 +561,7 @@ function pickBaseUrl(tool: ResolvedTool): string {
   );
 }
 
-function playbookPath(examplesDir: string, site: string, toolDir?: string): string {
+function playbookPath(assetRoot: string, site: string, toolDir?: string): string {
   if (toolDir) return pathResolve(toolDir, 'playbook.yaml');
-  return pathResolve(examplesDir, site, 'playbook.yaml');
+  return pathResolve(assetRoot, site, 'playbook.yaml');
 }

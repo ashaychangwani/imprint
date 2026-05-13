@@ -21,14 +21,22 @@ You receive a JSON object:
       "url": "string",
       "resourceType": "XHR|Fetch|Document",
       "status": int,
+      "mimeType": "string",
       "headers": "truncated request headers",
-      "body": "request payload (NOT the response body)"
+      "body": "request payload (NOT the response body)",
+      "bodyLength": int,
+      "responseBodyLength": int,
+      "repeatCount": int,
+      "repeatedSeqs": [int],
+      "lastTimestamp": ms
     }
   ]
 }
 ```
 
 The narration is the user's own description of what they did. Use it to understand the workflow's intent, then select the requests that serve that intent.
+
+Request entries may include `repeatCount`, `repeatedSeqs`, and `lastTimestamp` when identical requests were compacted. Select the representative `seq` unless a specific repeated seq is needed for an intentional multi-step workflow.
 
 ## What to include
 

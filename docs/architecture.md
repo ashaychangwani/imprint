@@ -30,7 +30,7 @@ Both are auto-discovered by the cron daemon and the MCP server, which dispatch t
        imprint emit                                 │
               │                                     │
               ▼                                     │
-   examples/<site>/<toolName>/index.ts              │
+   ~/.imprint/<site>/<toolName>/index.ts            │
               │                                     │
               ▼                                     ▼
    ┌─────────────────────────────────────────────────────────┐
@@ -55,13 +55,16 @@ src/imprint/
 ├── compile.ts           One LLM compiler, two configs:
 │                          - generate (Workflow)
 │                          - compilePlaybook (Playbook)
-├── llm.ts               Vertex Anthropic wrapper + JSON extractor
+├── compile-tools.ts     Compile-agent read/write/test tools + state hints
+├── request-context.ts   Shared request metadata compaction for LLM context
+├── llm.ts               Provider wrappers + JSON extraction + trace spans
+├── tracing.ts           OpenInference/Phoenix tracing helpers
 ├── playbook-parser.ts   YAML → Playbook (Zod-validated)
 │
-├── emit.ts              workflow.json → examples/<site>/<toolName>/index.ts
+├── emit.ts              workflow.json → ~/.imprint/<site>/<toolName>/index.ts
 ├── runtime.ts           executeWorkflow — substitutions + state captures + classification
 ├── cookie-jar.ts        Runtime cookie jar + Set-Cookie ingestion
-├── tool-loader.ts       Discover examples/<site>/<toolName>/index.ts modules
+├── tool-loader.ts       Discover ~/.imprint/<site>/<toolName>/index.ts modules
 │
 ├── backend-ladder.ts    runWithLadder + resolveLadder
 ├── stealth-fetch.ts     Headless Chromium → mint sensor tokens → native fetch
@@ -92,7 +95,7 @@ src/imprint/
 | `stealth-fetch` | ~12s bootstrap (one-time) + ~1s | Akamai, Cloudflare, DataDome (token tier) |
 | `playbook` | ~9.4s | Universal — also handles form-fills, autocompletes, multi-page |
 
-`auto` mode walks the ladder. `fetch-bootstrap` is gated: it is inserted only when `workflow.bootstrap` exists, when a capture declares `browser_bootstrap` / `stealth_bootstrap`, or when `fetch` returns a `STATE_MISSING` result that the browser backend can satisfy. The probe-backends cache (`examples/<site>/<toolName>/backends.json`) reorders the ladder so cron + MCP start with the cheapest known-working backend; v2 caches include canonical workflow and capability hashes so stale caches are ignored.
+`auto` mode walks the ladder. `fetch-bootstrap` is gated: it is inserted only when `workflow.bootstrap` exists, when a capture declares `browser_bootstrap` / `stealth_bootstrap`, or when `fetch` returns a `STATE_MISSING` result that the browser backend can satisfy. `stealth-fetch` supplies bot-defense cookies/headers to API replay; it does not fill `${state.NAME}` placeholders by itself. The probe-backends cache (`~/.imprint/<site>/<toolName>/backends.json`) reorders the ladder so cron + MCP start with the cheapest known-working backend; v2 caches include canonical workflow and capability hashes so stale caches are ignored. For multi-tool sites, `cron` and `probe-backends` require `--tool <toolName>` unless the provided `--config` / `--out` path is inside the target tool directory.
 
 ## State-aware API replay
 
@@ -148,14 +151,14 @@ Each execution gets an isolated mutable state object and `RuntimeCookieJar`. The
 
 The ladder escalates only when every required missing item is satisfiable by the next backend. It never blindly escalates missing credentials or unsupported workflow gaps to DOM replay.
 
-## File taxonomy per example
+## File taxonomy
 
 ```
-examples/<site>/<toolName>/
-├── workflow.json               output of `imprint generate`     (committed)
-├── parser.ts                   API-response → structured output (committed)
-├── playbook.yaml               output of `imprint compile-playbook` (committed)
-├── index.ts                    output of `imprint emit` (consumed by cron + MCP) (committed)
+~/.imprint/<site>/<toolName>/
+├── workflow.json               output of `imprint generate`
+├── parser.ts                   API-response → structured output
+├── playbook.yaml               output of `imprint compile-playbook`
+├── index.ts                    output of `imprint emit` (consumed by cron + MCP)
 ├── cron.json                   schedule + params + replayBackend + notifyWhen
 └── backends.json               output of `imprint probe-backends`
 
@@ -164,6 +167,14 @@ examples/<site>/<toolName>/
 ├── <ts>.json                   assembled session
 └── <ts>.redacted.json          after `imprint redact`
 ```
+
+The tracked `examples/` directory remains as source fixtures and demos, but runtime discovery and generated assets live under `IMPRINT_HOME` (`~/.imprint` by default).
+
+## Compile context and tracing
+
+LLM-facing overview payloads are intentionally compact. Candidate detection, request triage, and compile-agent `read_session_summary` all collapse repeated identical request metadata into one representative row with `repeatCount`, `repeatedSeqs`, and `lastTimestamp`. Candidate-selected requests and auth/setup dependencies stay as separate rows so a tool-specific request cannot disappear inside a shared representative. Full request and response bodies are still available through the explicit compile-agent tools (`read_request`, `read_response_body`, `search_response_body`).
+
+Set `IMPRINT_TRACE=1` with `PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006` to emit OpenInference spans to a local Phoenix server. Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise; cost attributes are added when `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` are set.
 
 **Ephemeral artifacts** the compile-agent writes during a run but does not persist:
 

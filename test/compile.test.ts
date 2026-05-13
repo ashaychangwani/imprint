@@ -10,7 +10,14 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { shrinkSession } from '../src/imprint/compile.ts';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pathJoin, resolve as pathResolve } from 'node:path';
+import {
+  defaultCompilePlaybookPath,
+  resolveDefaultCompilePlaybookPath,
+  shrinkSession,
+} from '../src/imprint/compile.ts';
 import type { Session } from '../src/imprint/types.ts';
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -168,6 +175,45 @@ describe('shrinkSession', () => {
     expect(r.events).toHaveLength(1);
     expect(r.narration).toHaveLength(1);
     expect(r.cookieSnapshots).toHaveLength(1);
+  });
+});
+
+describe('compilePlaybook defaults', () => {
+  const originalImprintHome = process.env.IMPRINT_HOME;
+
+  function withImprintHome<T>(path: string, fn: () => T): T {
+    process.env.IMPRINT_HOME = path;
+    try {
+      return fn();
+    } finally {
+      if (originalImprintHome === undefined) Reflect.deleteProperty(process.env, 'IMPRINT_HOME');
+      else process.env.IMPRINT_HOME = originalImprintHome;
+    }
+  }
+
+  it('writes playbook fallbacks under the generated tool directory by default', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(defaultCompilePlaybookPath('namecheap-domains', 'search_domains')).toBe(
+        pathResolve('/tmp', 'imprint-home', 'namecheap-domains', 'search_domains', 'playbook.yaml'),
+      );
+    });
+  });
+
+  it('rejects a playbook toolName that would miss the existing generated workflow dir', () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-playbook-default-'));
+    try {
+      withImprintHome(root, () => {
+        const workflowDir = pathResolve(root, 'google-flights', 'search_google_flights');
+        mkdirSync(workflowDir, { recursive: true });
+        writeFileSync(pathResolve(workflowDir, 'workflow.json'), '{}', 'utf8');
+
+        expect(() => resolveDefaultCompilePlaybookPath('google-flights', 'search_flights')).toThrow(
+          /does not match the generated workflow "search_google_flights"/,
+        );
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

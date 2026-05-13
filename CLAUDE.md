@@ -27,9 +27,10 @@ src/
 ├── cli.ts                  # 13 verbs (run `imprint --help`)
 ├── imprint/                # core modules — see docs/architecture.md for the map
 examples/
-├── <site>/{sessions, workflow.json, playbook.yaml, index.ts, cron.json, backends.json}
+├── <site>/<toolName>/{workflow.json, playbook.yaml, index.ts, cron.json, backends.json}
 prompts/
-├── intent-detection.md     # generate (workflow.json) system prompt
+├── compile-agent.md        # generate (workflow.json/parser.ts) system prompt
+├── request-triage.md       # compile-playbook request filtering prompt
 ├── playbook-compilation.md # compile-playbook (playbook.yaml) system prompt
 docs/                       # human-facing documentation
 web/                        # standalone Vite/React landing page; run web commands from web/
@@ -65,7 +66,9 @@ Changelog config lives in `cliff.toml`. Preview unreleased changelog: `bun run c
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for commit conventions and release process.
 
-When a user asks you to create a PR, commit changes, or push a branch, you must babysit the resulting CI until all relevant checks are green. If any check fails, inspect the logs, fix the issue, push the update, and keep watching until CI is green.
+When a user says to create a PR, commit changes, or push a branch, you must babysit the resulting PR until it is fully green. Watch all relevant checks to completion; if any check fails, inspect the logs, fix the issue, push the update, and keep watching until CI is green.
+
+When you change user-facing implementation behavior, update the user-facing collateral in the same change: `README.md`, relevant files under `docs/`, and the website under `web/`. If the behavior affects CLI output, workflow paths, setup commands, runtime behavior, tracing, or generated artifacts, treat it as user-facing.
 
 ## Test data hygiene
 

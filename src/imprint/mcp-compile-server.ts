@@ -28,6 +28,7 @@ import { buildCompileTools, externalVerification } from './compile-tools.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { redactSession } from './redact.ts';
+import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type Session, SessionSchema } from './types.ts';
 
 const log = createLog('mcp-compile');
@@ -35,11 +36,13 @@ const log = createLog('mcp-compile');
 interface RunCompileMcpServerOptions {
   /** Path to the recorded session JSON. */
   sessionPath: string;
-  /** Absolute path to the example directory where artifacts go. */
-  exampleDir: string;
+  /** Absolute path to the generated tool directory where artifacts go. */
+  toolDir: string;
   /** Hard cap on done() verification failures before we permanently fail.
    *  Mirrors compile-agent.ts MAX_VERIFICATION_CYCLES. */
   maxVerificationCycles?: number;
+  candidate?: ToolCandidate;
+  sharedContext?: SharedCompileContext;
 }
 
 const DONE_SENTINEL = '.compile-done.json';
@@ -65,7 +68,10 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
   }
 
   // Build the 8 read/write tools (same as the in-process loop).
-  const compileTools = buildCompileTools(session, opts.exampleDir, opts.sessionPath);
+  const compileTools = buildCompileTools(session, opts.toolDir, opts.sessionPath, {
+    candidate: opts.candidate,
+    sharedContext: opts.sharedContext,
+  });
 
   // The custom done/give_up tools live alongside in MCP space.
   const doneTool: Tool = {
@@ -130,9 +136,11 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     if (name === 'done') {
       const summary = (args as { summary?: string }).summary ?? 'Task completed';
       log(`done() called: ${summary}`);
-      const failures = await externalVerification(opts.exampleDir, session, opts.sessionPath);
+      const failures = await externalVerification(opts.toolDir, session, opts.sessionPath, {
+        expectedToolName: opts.candidate?.toolName,
+      });
       if (failures.length === 0) {
-        const sentinel = pathJoin(opts.exampleDir, DONE_SENTINEL);
+        const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
         writeFileSync(
           sentinel,
           JSON.stringify({ summary, verification: 'passed', timestamp: Date.now() }, null, 2),
@@ -152,7 +160,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
       verificationFailures++;
       log(`verification failed (cycle ${verificationFailures}/${maxVerificationCycles})`);
       if (verificationFailures >= maxVerificationCycles) {
-        const sentinel = pathJoin(opts.exampleDir, DONE_SENTINEL);
+        const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
         writeFileSync(
           sentinel,
           JSON.stringify(
@@ -195,7 +203,7 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
       const reason = (args as { reason?: string }).reason ?? 'unknown';
       const whatWasTried = (args as { what_was_tried?: string }).what_was_tried ?? '';
       log(`give_up() called: ${reason}`);
-      const sentinel = pathJoin(opts.exampleDir, GIVE_UP_SENTINEL);
+      const sentinel = pathJoin(opts.toolDir, GIVE_UP_SENTINEL);
       writeFileSync(
         sentinel,
         JSON.stringify({ reason, what_was_tried: whatWasTried, timestamp: Date.now() }, null, 2),

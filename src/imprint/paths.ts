@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import {
   isAbsolute as pathIsAbsolute,
@@ -6,12 +7,31 @@ import {
   resolve as pathResolve,
 } from 'node:path';
 
-function imprintHomeDir(): string {
-  return pathResolve(process.env.IMPRINT_HOME ?? pathJoin(homedir(), '.imprint'));
+export function imprintHomeDir(): string {
+  const raw = process.env.IMPRINT_HOME ?? pathJoin(homedir(), '.imprint');
+  const resolved = pathResolve(raw);
+  if (!pathIsAbsolute(resolved)) {
+    throw new Error(`IMPRINT_HOME must resolve to an absolute path, got: ${raw}`);
+  }
+  return resolved;
+}
+
+function validatePathSegment(label: string, value: string): void {
+  if (value.includes('..') || value.includes('/') || value.includes('\\')) {
+    throw new Error(
+      `Invalid ${label}: "${value}". Must not contain path separators or ".." sequences.`,
+    );
+  }
 }
 
 export function localSiteDir(site: string): string {
+  validatePathSegment('site name', site);
   return pathJoin(imprintHomeDir(), site);
+}
+
+export function localToolDir(site: string, toolName: string): string {
+  validatePathSegment('tool name', toolName);
+  return pathJoin(localSiteDir(site), toolName);
 }
 
 export function localSessionsDir(site: string): string {
@@ -27,8 +47,15 @@ export function resolveLocalSitePath(site: string, value: string): string {
 }
 
 export function relativeToLocalSite(site: string, absolutePath: string): string | null {
-  const root = pathResolve(localSiteDir(site));
-  const target = pathResolve(absolutePath);
+  let root: string;
+  let target: string;
+  try {
+    root = realpathSync(pathResolve(localSiteDir(site)));
+    target = realpathSync(pathResolve(absolutePath));
+  } catch {
+    root = pathResolve(localSiteDir(site));
+    target = pathResolve(absolutePath);
+  }
   const relative = pathRelative(root, target);
   if (relative === '' || (!relative.startsWith('..') && !pathIsAbsolute(relative))) {
     return relative;

@@ -7,7 +7,10 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  codexAnalyzeArgs,
+  collectCliProcessOutput,
   detectProvider,
+  detectTeachProvider,
   extractJsonObject,
   getProviderStatuses,
   isTeachCompatibleProvider,
@@ -75,6 +78,49 @@ describe('normalizeCliAnalyzeOutput', () => {
     expect(
       normalizeCliAnalyzeOutput(text, 'Output only a JSON array of request seq numbers.'),
     ).toBe(text);
+  });
+});
+
+describe('collectCliProcessOutput', () => {
+  it('drains stdout and stderr concurrently so verbose CLI stderr cannot deadlock', async () => {
+    const proc = Bun.spawn(
+      [
+        'bun',
+        '-e',
+        "const chunk = 'x'.repeat(1024); for (let i = 0; i < 2048; i++) process.stderr.write(chunk); process.stdout.write('ok');",
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+    if (
+      typeof proc.stdout === 'number' ||
+      typeof proc.stderr === 'number' ||
+      !proc.stdout ||
+      !proc.stderr
+    ) {
+      throw new Error('test process did not expose streams');
+    }
+
+    const result = await collectCliProcessOutput({
+      stdout: proc.stdout,
+      stderr: proc.stderr,
+      exited: proc.exited,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('ok');
+    expect(result.stderr.length).toBe(2048 * 1024);
+  });
+});
+
+describe('codexAnalyzeArgs', () => {
+  it('isolates generic Codex JSON calls from user MCP config and repo rules', () => {
+    const args = codexAnalyzeArgs('gpt-test');
+
+    expect(args).toContain('--ignore-user-config');
+    expect(args).toContain('--ignore-rules');
+    expect(args).toContain('--skip-git-repo-check');
+    expect(args).toContain('--ephemeral');
+    expect(args.slice(args.indexOf('-m'), args.indexOf('-m') + 2)).toEqual(['-m', 'gpt-test']);
   });
 });
 
@@ -150,6 +196,46 @@ describe('detectProvider', () => {
       else process.env.ANTHROPIC_API_KEY = origKey;
       if (origProject === undefined) process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
       else process.env.ANTHROPIC_VERTEX_PROJECT_ID = origProject;
+    }
+  });
+
+  it('prefers env providers over cursor-cli for generic provider auto-detection', () => {
+    const origWhich = Bun.which;
+    const origKey = process.env.ANTHROPIC_API_KEY;
+    try {
+      Bun.which = ((cmd: string) => (cmd === 'cursor' ? '/bin/cursor' : null)) as typeof Bun.which;
+      process.env.ANTHROPIC_API_KEY = 'sk-test';
+
+      expect(detectProvider()).toBe('anthropic-api');
+      expect(detectTeachProvider()).toBe('anthropic-api');
+    } finally {
+      Bun.which = origWhich;
+      if (origKey === undefined) process.env.ANTHROPIC_API_KEY = undefined;
+      else process.env.ANTHROPIC_API_KEY = origKey;
+    }
+  });
+
+  it('falls back to cursor-cli when no compile-agent provider is detected', () => {
+    const origWhich = Bun.which;
+    const origKey = process.env.ANTHROPIC_API_KEY;
+    const origProject = process.env.ANTHROPIC_VERTEX_PROJECT_ID;
+    const origGoogleProject = process.env.GOOGLE_CLOUD_PROJECT;
+    try {
+      Bun.which = ((cmd: string) => (cmd === 'cursor' ? '/bin/cursor' : null)) as typeof Bun.which;
+      process.env.ANTHROPIC_API_KEY = undefined;
+      process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
+      process.env.GOOGLE_CLOUD_PROJECT = undefined;
+
+      expect(detectProvider()).toBe('cursor-cli');
+      expect(() => detectTeachProvider()).toThrow(/No teach-compatible/);
+    } finally {
+      Bun.which = origWhich;
+      if (origKey === undefined) process.env.ANTHROPIC_API_KEY = undefined;
+      else process.env.ANTHROPIC_API_KEY = origKey;
+      if (origProject === undefined) process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
+      else process.env.ANTHROPIC_VERTEX_PROJECT_ID = origProject;
+      if (origGoogleProject === undefined) process.env.GOOGLE_CLOUD_PROJECT = undefined;
+      else process.env.GOOGLE_CLOUD_PROJECT = origGoogleProject;
     }
   });
 });

@@ -42,7 +42,7 @@ A running log of the load-bearing calls made for Imprint. Each entry: the decisi
 
 ## D6 — Probe backends at record time, cache the working order
 
-**Decided.** `imprint probe-backends <site>` runs each applicable backend once and writes `backends.json`. cron / MCP read it at startup so they don't burn a fetch attempt every tick on known-blocked sites. v2 probe caches include canonical workflow and capability hashes; stale caches are ignored.
+**Decided.** `imprint probe-backends <site> --tool <toolName>` runs each applicable backend once and writes `backends.json`. cron / MCP read it at startup so they don't burn a fetch attempt every tick on known-blocked sites. v2 probe caches include canonical workflow and capability hashes; stale caches are ignored. Single-tool sites can omit `--tool`; multi-tool sites must select explicitly or point `--out` inside the target tool directory.
 
 **Alternative:** Probe at runtime on every cron tick. Wastes ~200ms per tick + log noise on bot-protected sites.
 

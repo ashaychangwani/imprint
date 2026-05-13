@@ -9,11 +9,25 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join as pathJoin } from 'node:path';
+import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
+import type { Span } from '@opentelemetry/api';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
+import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
+import {
+  endTraceSpan,
+  llmSpanAttributes,
+  resolveTraceTokenCount,
+  setSpanAttributes,
+  startTraceSpan,
+  traceJsonInputOutputAttributes,
+  traceLlmIoEnabled,
+  traceLlmMessages,
+  traceToolIoEnabled,
+  traced,
+} from './tracing.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-codex-cli');
@@ -25,13 +39,15 @@ const MAX_VERIFICATION_CYCLES = 5;
 
 interface CompileViaCodexCliOptions {
   session: Session;
-  absoluteExampleDir: string;
+  absoluteToolDir: string;
   sessionPath: string;
   systemPromptPath: string;
   deadlineMs: number;
   startTime: number;
   onProgress?: (p: CompileAgentProgress) => void;
   keepTest?: boolean;
+  candidate?: ToolCandidate;
+  sharedContext?: SharedCompileContext;
 }
 
 interface CodexJsonEvent {
@@ -41,11 +57,20 @@ interface CodexJsonEvent {
     id?: string;
     type?: string;
     text?: string;
+    content?: unknown;
     name?: string;
     tool_name?: string;
     tool?: string;
     server?: string;
     command?: string[];
+    arguments?: unknown;
+    args?: unknown;
+    input?: unknown;
+    result?: unknown;
+    output?: unknown;
+    error?: unknown;
+    status?: string;
+    is_error?: boolean;
   };
   usage?: {
     input_tokens?: number;
@@ -60,9 +85,39 @@ interface CodexJsonEvent {
 export async function compileViaCodexCli(
   opts: CompileViaCodexCliOptions,
 ): Promise<CompileAgentResult> {
-  mkdirSync(opts.absoluteExampleDir, { recursive: true });
+  return await traced(
+    'compile.codex_cli_agent',
+    'AGENT',
+    {
+      'imprint.site': opts.session.site,
+      'imprint.tool_name': opts.candidate?.toolName,
+      'imprint.session_path': opts.sessionPath,
+      'imprint.tool_dir': opts.absoluteToolDir,
+      'imprint.model': preferredAgentModel('codex-cli'),
+    },
+    async (span) => {
+      const result = await compileViaCodexCliImpl(opts, span);
+      setSpanAttributes(span, {
+        'imprint.compile.outcome': result.outcome,
+        'imprint.compile.success': result.success,
+        'imprint.compile.turns': result.turns,
+        'imprint.compile.duration_ms': result.durationMs,
+        'imprint.compile.input_tokens': result.inputTokens,
+        'imprint.compile.output_tokens': result.outputTokens,
+        'imprint.compile.conversation_log': result.conversationLogPath,
+      });
+      return result;
+    },
+  );
+}
+
+async function compileViaCodexCliImpl(
+  opts: CompileViaCodexCliOptions,
+  traceSpan?: Span,
+): Promise<CompileAgentResult> {
+  mkdirSync(opts.absoluteToolDir, { recursive: true });
   for (const name of [COMPILE_SENTINELS.done, COMPILE_SENTINELS.giveUp]) {
-    const p = pathJoin(opts.absoluteExampleDir, name);
+    const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
       try {
         unlinkSync(p);
@@ -73,7 +128,7 @@ export async function compileViaCodexCli(
   }
 
   const bunPath = process.execPath;
-  const sessionPathAbs = opts.sessionPath.startsWith('/')
+  const sessionPathAbs = pathIsAbsolute(opts.sessionPath)
     ? opts.sessionPath
     : pathJoin(REPO_ROOT, opts.sessionPath);
   const mcpArgs = [
@@ -82,8 +137,10 @@ export async function compileViaCodexCli(
     '__mcp-compile-server',
     '--session-path',
     sessionPathAbs,
-    '--example-dir',
-    opts.absoluteExampleDir,
+    '--tool-dir',
+    opts.absoluteToolDir,
+    ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
+    ...(opts.sharedContext ? ['--shared-context-json', JSON.stringify(opts.sharedContext)] : []),
   ];
 
   let systemPrompt: string;
@@ -100,10 +157,35 @@ ${systemPrompt}
 A new compile task is starting.
 
 Session path: ${sessionPathAbs}
-Example directory: ${opts.absoluteExampleDir}
-You will write artifacts into the example directory.
+Tool directory: ${opts.absoluteToolDir}
+You will write artifacts into the tool directory.
+${formatCandidateContext(opts.candidate, opts.sharedContext)}
 
 Use the imprint-compile MCP tools to inspect the session, write artifacts, run tests, and call done(). Begin by calling read_session_summary, then proceed per the system instructions.`;
+
+  const model = preferredAgentModel('codex-cli');
+  const initialTokenCount = resolveTraceTokenCount(null, initialPrompt);
+  const captureLlmIo = traceLlmIoEnabled();
+  setSpanAttributes(traceSpan, {
+    ...llmSpanAttributes({
+      provider: 'codex-cli',
+      model,
+      inputTokens: initialTokenCount.tokens,
+      tokenCountsEstimated: true,
+      inputTokenSource: initialTokenCount.source,
+      inputMessages: captureLlmIo
+        ? traceLlmMessages([{ role: 'user', content: initialPrompt }])
+        : undefined,
+      inputValue: captureLlmIo ? initialPrompt : undefined,
+      invocationParameters: {
+        command: 'codex exec',
+        json: true,
+        sandbox: 'workspace-write',
+        tool_timeout_sec: 300,
+      },
+    }),
+    'imprint.compile.initial_prompt_chars': initialPrompt.length,
+  });
 
   const args = [
     '-a',
@@ -111,6 +193,7 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     'exec',
     '--json',
     '--ephemeral',
+    '--ignore-user-config',
     '--ignore-rules',
     '--skip-git-repo-check',
     '-C',
@@ -118,7 +201,7 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     '-s',
     'workspace-write',
     '-m',
-    preferredAgentModel('codex-cli'),
+    model,
     '-c',
     `mcp_servers.${MCP_SERVER_NAME}.command=${JSON.stringify(bunPath)}`,
     '-c',
@@ -156,12 +239,36 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     return finalErrorResult(opts, `failed to send prompt to codex-cli: ${errMsg(err)}`);
   }
 
-  return await driveJsonl(child, opts);
+  const result = await driveJsonl(child, opts, traceSpan);
+  const hasActualUsage = result.inputTokens > 0 || result.outputTokens > 0;
+  const inputTokenCount = resolveTraceTokenCount(
+    hasActualUsage ? result.inputTokens : null,
+    initialPrompt,
+  );
+  const outputTokenCount = resolveTraceTokenCount(
+    hasActualUsage ? result.outputTokens : null,
+    result.message,
+  );
+  setSpanAttributes(traceSpan, {
+    ...llmSpanAttributes({
+      provider: 'codex-cli',
+      model,
+      inputTokens: inputTokenCount.tokens,
+      outputTokens: outputTokenCount.tokens,
+      tokenCountsEstimated:
+        inputTokenCount.source === 'estimated' || outputTokenCount.source === 'estimated',
+      inputTokenSource: inputTokenCount.source,
+      outputTokenSource: outputTokenCount.source,
+    }),
+    'imprint.compile.message': result.message,
+  });
+  return result;
 }
 
 async function driveJsonl(
   child: ChildProcess,
   opts: CompileViaCodexCliOptions,
+  traceSpan?: Span,
 ): Promise<CompileAgentResult> {
   const conversationLog: unknown[] = [];
   let inputTokens = 0;
@@ -169,6 +276,8 @@ async function driveJsonl(
   let turn = 0;
   let lastErrorMessage = '';
   let stderrBuf = '';
+  let agentMessageCount = 0;
+  const toolSpans = new Map<string, Span>();
 
   const budgetMs = Math.max(0, opts.deadlineMs - Date.now());
   const fireProgress = (phase: 'thinking' | 'tool', toolName?: string): void => {
@@ -185,8 +294,8 @@ async function driveJsonl(
     });
   };
 
-  const doneSentinel = pathJoin(opts.absoluteExampleDir, COMPILE_SENTINELS.done);
-  const giveUpSentinel = pathJoin(opts.absoluteExampleDir, COMPILE_SENTINELS.giveUp);
+  const doneSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.done);
+  const giveUpSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.giveUp);
 
   const sentinelTimer = setInterval(() => {
     if (!existsSync(doneSentinel) && !existsSync(giveUpSentinel)) return;
@@ -234,6 +343,7 @@ async function driveJsonl(
 
       if (evt.type === 'thread.started') {
         log(`thread_id=${evt.thread_id ?? '(none)'}`);
+        setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
         continue;
       }
 
@@ -244,8 +354,28 @@ async function driveJsonl(
       }
 
       if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
+        const agentMessage = codexAgentMessageText(evt.item);
+        if (agentMessage && evt.type === 'item.completed') {
+          agentMessageCount++;
+          setSpanAttributes(traceSpan, {
+            'imprint.codex.agent_messages': agentMessageCount,
+            'imprint.codex.last_agent_message_chars': agentMessage.length,
+            ...(traceLlmIoEnabled()
+              ? llmSpanAttributes({
+                  provider: 'codex-cli',
+                  model: preferredAgentModel('codex-cli'),
+                  outputMessages: traceLlmMessages([{ role: 'assistant', content: agentMessage }]),
+                  outputValue: agentMessage,
+                })
+              : {}),
+          });
+          continue;
+        }
         const toolName = codexToolName(evt.item);
-        if (toolName) fireProgress('tool', toolName);
+        if (toolName) {
+          traceCodexToolEvent(toolSpans, evt.type, evt.item, toolName);
+          fireProgress(evt.type === 'item.started' ? 'tool' : 'thinking', toolName);
+        }
         continue;
       }
 
@@ -273,21 +403,23 @@ async function driveJsonl(
   });
   clearInterval(sentinelTimer);
   clearTimeout(deadlineTimer);
+  for (const span of toolSpans.values()) endTraceSpan(span);
+  toolSpans.clear();
 
   if (stdoutBuf.trim()) {
     log(`unflushed stdout tail (${stdoutBuf.length} bytes) discarded`);
   }
 
-  const conversationLogPath = pathJoin(opts.absoluteExampleDir, '.compile-log.json');
+  const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
   try {
     writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
   } catch (err) {
     log(`failed to persist conversation log: ${errMsg(err)}`);
   }
 
-  const workflowPath = pathJoin(opts.absoluteExampleDir, 'workflow.json');
-  const parserPath = pathJoin(opts.absoluteExampleDir, 'parser.ts');
-  const parserTestPath = pathJoin(opts.absoluteExampleDir, 'parser.test.ts');
+  const workflowPath = pathJoin(opts.absoluteToolDir, 'workflow.json');
+  const parserPath = pathJoin(opts.absoluteToolDir, 'parser.ts');
+  const parserTestPath = pathJoin(opts.absoluteToolDir, 'parser.test.ts');
 
   const verifiedOk =
     existsSync(doneSentinel) &&
@@ -327,15 +459,6 @@ async function driveJsonl(
     inputTokens,
     outputTokens,
   };
-
-  if (Date.now() > opts.deadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {
-    return {
-      success: false,
-      outcome: 'timeout',
-      message: `codex-cli exceeded the ${Math.round((opts.deadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
-      ...baseResult,
-    };
-  }
 
   if (existsSync(doneSentinel)) {
     let payload: {
@@ -382,6 +505,15 @@ async function driveJsonl(
     };
   }
 
+  if (Date.now() > opts.deadlineMs) {
+    return {
+      success: false,
+      outcome: 'timeout',
+      message: `codex-cli exceeded the ${Math.round((opts.deadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
+      ...baseResult,
+    };
+  }
+
   if (exitCode === 0) {
     return {
       success: false,
@@ -400,6 +532,70 @@ async function driveJsonl(
   };
 }
 
+function traceCodexToolEvent(
+  spans: Map<string, Span>,
+  eventType: string,
+  item: NonNullable<CodexJsonEvent['item']>,
+  toolName: string,
+): void {
+  const id = item.id ?? `${toolName}:${spans.size}`;
+  const captureIo = traceToolIoEnabled();
+  if (eventType === 'item.started') {
+    const span = startTraceSpan(`mcp.${toolName}`, 'TOOL', {
+      'mcp.server': item.server ?? MCP_SERVER_NAME,
+      'mcp.tool_name': toolName,
+      'codex.item_id': id,
+      'codex.item_type': item.type,
+      ...(captureIo && codexToolInput(item) !== undefined
+        ? traceJsonInputOutputAttributes('input', codexToolInput(item), `mcp.${toolName}.input`)
+        : {}),
+    });
+    if (span) spans.set(id, span);
+    return;
+  }
+  const completionAttributes = {
+    'codex.item_status': item.status,
+    ...(captureIo && codexToolOutput(item) !== undefined
+      ? traceJsonInputOutputAttributes('output', codexToolOutput(item), `mcp.${toolName}.output`)
+      : {}),
+  };
+  const toolError = codexToolError(item);
+  const span = spans.get(id);
+  if (!span) {
+    const completedSpan = startTraceSpan(`mcp.${toolName}`, 'TOOL', {
+      'mcp.server': item.server ?? MCP_SERVER_NAME,
+      'mcp.tool_name': toolName,
+      'codex.item_id': id,
+      'codex.item_type': item.type,
+      'codex.event': 'completed_without_start',
+      ...completionAttributes,
+    });
+    endTraceSpan(completedSpan, toolError);
+    return;
+  }
+  setSpanAttributes(span, completionAttributes);
+  endTraceSpan(span, toolError);
+  spans.delete(id);
+}
+
+function codexAgentMessageText(item: NonNullable<CodexJsonEvent['item']>): string | undefined {
+  if (item.type !== 'agent_message') return undefined;
+  if (typeof item.text === 'string') return item.text;
+  if (typeof item.content === 'string') return item.content;
+  if (Array.isArray(item.content)) {
+    const text = item.content
+      .map((block) => {
+        if (typeof block === 'string') return block;
+        if (isRecord(block) && typeof block.text === 'string') return block.text;
+        return '';
+      })
+      .filter(Boolean)
+      .join('');
+    return text || undefined;
+  }
+  return undefined;
+}
+
 function codexToolName(item: NonNullable<CodexJsonEvent['item']>): string | undefined {
   const type = item.type ?? '';
   if (type === 'agent_message') return undefined;
@@ -408,9 +604,43 @@ function codexToolName(item: NonNullable<CodexJsonEvent['item']>): string | unde
   return name.replace(`mcp__${MCP_SERVER_NAME}__`, '');
 }
 
+function codexToolInput(item: NonNullable<CodexJsonEvent['item']>): unknown {
+  return (
+    item.arguments ??
+    item.args ??
+    item.input ??
+    (item.command ? { command: item.command } : undefined)
+  );
+}
+
+function codexToolOutput(item: NonNullable<CodexJsonEvent['item']>): unknown {
+  return (
+    item.result ??
+    item.output ??
+    item.content ??
+    item.error ??
+    (item.status ? { status: item.status } : undefined)
+  );
+}
+
+function codexToolError(item: NonNullable<CodexJsonEvent['item']>): Error | undefined {
+  if (!item.is_error && item.status !== 'error' && item.status !== 'failed') return undefined;
+  const message =
+    item.error === undefined
+      ? `${codexToolName(item) ?? 'tool'} failed`
+      : typeof item.error === 'string'
+        ? item.error
+        : JSON.stringify(item.error);
+  return new Error(message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): CompileAgentResult {
-  mkdirSync(opts.absoluteExampleDir, { recursive: true });
-  const conversationLogPath = pathJoin(opts.absoluteExampleDir, '.compile-log.json');
+  mkdirSync(opts.absoluteToolDir, { recursive: true });
+  const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
   try {
     writeFileSync(conversationLogPath, JSON.stringify({ error: message }, null, 2), 'utf8');
   } catch {
@@ -426,6 +656,21 @@ function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): Com
     inputTokens: 0,
     outputTokens: 0,
   };
+}
+
+function formatCandidateContext(
+  candidate: ToolCandidate | undefined,
+  sharedContext: SharedCompileContext | undefined,
+): string {
+  if (!candidate && !sharedContext) return '';
+  return `
+Selected candidate context:
+${candidate ? JSON.stringify(candidate, null, 2) : '(none)'}
+
+Shared compile context:
+${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
+
+Compile only the selected candidate. Do not create tools for other actions in the recording.`;
 }
 
 function errMsg(err: unknown): string {

@@ -11,12 +11,12 @@ Recording produces:
 | `<ts>.jsonl` | Full request bodies, response bodies, headers (incl. `Authorization`, `Cookie`, `Set-Cookie`), cookie snapshots, storage snapshots | `~/.imprint/<site>/sessions/` |
 | `<ts>.json` | Same, assembled | `~/.imprint/<site>/sessions/` |
 
-Sessions are **not** redacted by default. The raw recording exists for `imprint generate` to consume; redaction is a separate step.
+Sessions are **not** redacted on disk by default. `imprint generate` and `imprint compile-playbook` auto-redact in memory before LLM calls — if the session does not already contain `[REDACTED:` markers, the pipeline runs the full redaction pass and logs the count. If auto-redaction produces zero redactions on a session that contains auth-like requests, treat it as suspicious and run `imprint redact` manually to audit. `imprint redact` writes a reviewable redacted artifact you can audit or share.
 
 ## Redaction pipeline
 
 Always run `imprint redact` before:
-- Sending a session to the LLM (`imprint generate`, `imprint compile-playbook` do this automatically — they refuse to send a non-redacted session).
+- Auditing what will be visible to the LLM. `imprint generate` and `imprint compile-playbook` auto-redact in memory if needed, but a redacted file is easier to inspect.
 - Sharing a session in a bug report or PR.
 - Committing one to git.
 
@@ -54,16 +54,18 @@ imprint credential migrate
 
 Stored credentials can include named secrets, cookies, and declared durable storage keys. Credentials never leave your machine unless you explicitly export an encrypted `.imprintbundle`. The LLM compile step works on redacted sessions only.
 
-## Vertex AI / LLM data flow
+## LLM data flow
 
-When you run `imprint generate` or `imprint compile-playbook`, the (auto-redacted) session is sent to your Google Cloud project's Vertex AI endpoint. Two things to know:
+When you run `imprint teach`, `imprint generate`, or `imprint compile-playbook`, the auto-redacted session is sent to the provider you selected or auto-detected:
 
-1. **Vertex Anthropic logging policy** is governed by your GCP project's data-handling settings. By default Vertex doesn't retain prompts/completions for model training, but verify in your project's Cloud Logging / Cloud Audit settings.
-2. **No third-party LLM gateway**. Imprint talks directly to Vertex (via `@anthropic-ai/vertex-sdk`); there's no intermediary collecting prompts.
+1. **CLI providers** (`claude-cli`, `codex-cli`, `cursor-cli` for playbook compile) send prompts through the locally installed CLI and that provider's account/session.
+2. **Anthropic API** sends directly to Anthropic using `ANTHROPIC_API_KEY`.
+3. **Vertex** sends to your Google Cloud project's Vertex AI endpoint; retention and audit behavior are governed by your GCP project settings.
 
-To audit what Imprint is about to send before it goes:
+To audit what Imprint sent during a compile, use local Phoenix tracing:
 ```bash
-imprint generate <session> --save-shrunken    # writes the LLM-bound payload to disk
+IMPRINT_TRACE=1 IMPRINT_TRACE_LLM_IO=1 PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
+  imprint generate <session> --provider codex-cli
 ```
 
 ## Reporting a vulnerability
@@ -76,9 +78,9 @@ For non-security bugs, the public issue tracker is fine.
 
 The TS module emitted by `imprint emit` is the executable artifact your MCP / cron will call. It contains:
 
-- The full `workflow.json` inlined as a constant (so the file is committable and self-contained).
-- A thin wrapper around `runtime.executeWorkflow`.
+- The full `workflow.json` inlined as a constant (so the file is committable).
+- A thin wrapper around the local Imprint `runtime.executeWorkflow`.
 
-It does NOT contain credential values, cookie values, storage values, or redaction marker maps — those are loaded from the credential store or captured at runtime. Generated files can be committed to a private repo without exposing secrets, *provided* the workflow.json was generated from a redacted session (which it always is — `generate` enforces this).
+It does NOT contain credential values, cookie values, storage values, or redaction marker maps — those are loaded from the credential store or captured at runtime. Generated files can be committed to a private repo without exposing secrets, *provided* the workflow.json was generated from a redacted session (which it always is — `generate` enforces this). If you move the generated folder to another machine, install Imprint there and rerun `imprint emit <workflow.json> --force` so `index.ts` points at that machine's runtime.
 
 If you committed a non-redacted workflow.json by mistake: rotate the cookies / tokens visible in it, then re-run `redact` + `generate` from a fresh recording.

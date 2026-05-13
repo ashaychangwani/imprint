@@ -24,8 +24,8 @@ const pipeline = [
   {
     step: '02',
     title: 'Compile state',
-    body: 'Generate a state-aware API workflow plus a DOM playbook fallback. Redacted equality hints help the compiler find cookie, header, and storage relationships.',
-    artifact: 'workflow.json + playbook.yaml',
+    body: 'Generate a state-aware API workflow plus a DOM playbook fallback in one tool directory. Repeated request context is compacted before the LLM sees it.',
+    artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
   },
   {
     step: '03',
@@ -79,7 +79,7 @@ $ ${product.teach}
 recording Chromium session...             00:42
 redacting credentials + PII...             done
 compiling state-aware API workflow...      workflow.json
-compiling DOM playbook fallback...         playbook.yaml
+compiling DOM playbook fallback...         <tool>/playbook.yaml
 state hints found...                       cookie → header
 emitting MCP tool...                       search_southwest_flights
 
@@ -383,7 +383,7 @@ export default function App() {
               <div className="hero-meta" aria-label="Project highlights">
                 <div className="meta-tile"><strong>v0.1</strong><span>Shipped with working browser automation demos</span></div>
                 <div className="meta-tile"><strong>4 modes</strong><span>fetch, fetch-bootstrap, stealth-fetch, and playbook</span></div>
-                <div className="meta-tile"><strong>MIT</strong><span>Hackable CLI for agent builders</span></div>
+                <div className="meta-tile"><strong>Traceable</strong><span>Phoenix spans for slow or expensive compiles</span></div>
               </div>
             </div>
             <TerminalCard />
@@ -422,12 +422,12 @@ export default function App() {
             <div className="proof-copy">
               <span className="kicker">Product proof</span>
               <h2 id="proof-title">Two replays are better than one brittle script.</h2>
-              <p>Every taught workflow compiles into both a network-level workflow and a DOM-level playbook. When HTTP can mint cookies or CSRF state, Imprint stays on fetch. When Chromium is needed only to initialize state, fetch-bootstrap harvests it and returns to API replay.</p>
+              <p>Every taught workflow compiles into both a network-level workflow and a DOM-level playbook under the generated tool directory. When HTTP can mint cookies or CSRF state, Imprint stays on fetch. When Chromium is needed only to initialize state, fetch-bootstrap harvests it and returns to API replay.</p>
             </div>
             <div className="artifact-stack" aria-label="Generated artifacts">
               <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay with named state captures for low-latency tasks and cron jobs.</p></article>
               <article className="artifact"><small>Fallback path</small><h3>playbook.yaml</h3><p>DOM-level steps for sites that move logic into the browser.</p></article>
-              <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and platform-specific wiring.</p></article>
+              <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and a local runtime wrapper you can re-emit per machine.</p></article>
             </div>
           </section>
 
@@ -505,8 +505,9 @@ export default function App() {
                 <p>Imprint records sensitive browser traffic, so the product treats redaction, credentials, cookies, and storage as first-class workflow steps rather than README footnotes.</p>
               </article>
               <div className="checks">
-                <div className="check"><i>✓</i><div><b>Redaction before compile</b><span><code>generate</code> and <code>compile-playbook</code> refuse non-redacted sessions; equality markers preserve state relationships without exposing raw values.</span></div></div>
+                <div className="check"><i>✓</i><div><b>Redaction before compile</b><span><code>generate</code> and <code>compile-playbook</code> auto-redact sessions; equality markers preserve state relationships without exposing raw values.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Credentials stay local</b><span>Generated tools initialize per-run cookie/state jars from the local credential backend instead of committing plaintext secrets.</span></div></div>
+                <div className="check"><i>✓</i><div><b>Traceable compiles</b><span><code>IMPRINT_TRACE=1</code> streams OpenInference spans, token estimates, and optional LLM/tool I/O into local Phoenix.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Auditable artifacts</b><span>Workflow, playbook, cron config, backend order, and generated module are files you can inspect, test, and version.</span></div></div>
               </div>
             </div>
@@ -517,7 +518,7 @@ export default function App() {
               <div>
                 <span className="kicker">Install</span>
                 <h2 id="install-title">Teach your first agent tool in minutes.</h2>
-                <p>Bring Bun 1.3+, Chrome, and a compile provider already available on your machine. Imprint detects Claude CLI, Codex CLI, Cursor CLI, Anthropic API, or Vertex.</p>
+                <p>Bring Bun 1.3+, Chrome, and a compile-agent provider already available on your machine. Imprint detects Claude CLI, Codex CLI, Anthropic API, or Vertex; Cursor CLI is available for playbook compilation.</p>
                 <div className="hero-actions">
                   <a className="btn btn-primary" href={product.githubUrl}>Clone the repo</a>
                   <a className="btn btn-secondary" href="https://github.com/ashaychangwani/imprint/blob/main/docs/getting-started.md">Read getting started</a>

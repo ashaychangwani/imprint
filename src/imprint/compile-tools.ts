@@ -12,6 +12,8 @@ import { dirname, join as pathJoin, relative as pathRelative } from 'node:path';
 import type { AgentTool } from './agent.ts';
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
+import { compactRequestContexts, requestContextDigest } from './request-context.ts';
+import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type CapturedRequest, type Session, WorkflowSchema } from './types.ts';
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
@@ -25,49 +27,82 @@ const SESSION_PATH_ENV = 'IMPRINT_SESSION_PATH';
 
 export function buildCompileTools(
   session: Session,
-  exampleDir: string,
+  toolDir: string,
   sessionPath: string,
+  context: CompileToolContext = {},
 ): AgentTool[] {
   return [
-    buildReadSessionSummaryTool(session),
+    buildReadSessionSummaryTool(session, context),
     buildReadRequestTool(session),
     buildReadResponseBodyTool(session),
     buildSearchResponseBodyTool(session),
-    buildWriteFileTool(exampleDir),
-    buildReadFileTool(exampleDir),
-    buildRunBashTool(exampleDir),
-    buildRunTestsTool(exampleDir, sessionPath),
+    buildWriteFileTool(toolDir),
+    buildReadFileTool(toolDir),
+    buildRunBashTool(toolDir),
+    buildRunTestsTool(toolDir, sessionPath),
   ];
+}
+
+interface CompileToolContext {
+  candidate?: ToolCandidate;
+  sharedContext?: SharedCompileContext;
 }
 
 // ─── Tool: read_session_summary ──────────────────────────────────────────────
 
-function buildReadSessionSummaryTool(session: Session): AgentTool {
+function buildReadSessionSummaryTool(session: Session, context: CompileToolContext): AgentTool {
   return {
     name: 'read_session_summary',
     description:
-      'Get a high-level summary of the session including narration and load-bearing requests.',
+      'Get a high-level summary of the session including narration, selected candidate scope, and load-bearing requests.',
     input_schema: {
       type: 'object',
       properties: {},
       required: [],
     },
     handler: async () => {
-      const loadBearing = identifyLoadBearingRequests(session);
-      const summary = {
-        site: session.site,
-        url: session.url,
-        narration: session.narration.map((n) => ({ timestamp: n.timestamp, text: n.text })),
-        requestCount: session.requests.length,
-        stateHints: buildStateHints(session),
-        loadBearingRequests: loadBearing.map((r) => ({
+      const selectedRequestSeqs = new Set(context.candidate?.requestSeqs ?? []);
+      const dependencySeqs = new Set([
+        ...(context.candidate?.dependencySeqs ?? []),
+        ...(context.sharedContext?.loginRequestSeqs ?? []),
+      ]);
+      const preserveSeqs = new Set([...selectedRequestSeqs, ...dependencySeqs]);
+      const summaryRequests = identifySummaryRequests(session, preserveSeqs);
+      const loadBearingRequests = compactRequestContexts(
+        summaryRequests.map((r) => ({
           seq: r.seq,
+          timestamp: r.timestamp,
+          selectedForCandidate: selectedRequestSeqs.has(r.seq),
+          sharedDependency: dependencySeqs.has(r.seq),
           method: r.method,
           url: r.url,
           status: r.response?.status,
           mimeType: r.response?.mimeType,
           bodySize: r.response?.body?.length,
+          responseBodyDigest: requestContextDigest(r.response?.body),
         })),
+        compileSummaryRequestGroupKey,
+        { preserveSeqs },
+      );
+      const summary = {
+        site: session.site,
+        url: session.url,
+        selectedCandidate: context.candidate
+          ? {
+              toolName: context.candidate.toolName,
+              description: context.candidate.description,
+              expectedOutput: context.candidate.expectedOutput,
+              requestSeqs: context.candidate.requestSeqs,
+              dependencySeqs: context.candidate.dependencySeqs,
+              eventSeqs: context.candidate.eventSeqs,
+              likelyParams: context.candidate.likelyParams,
+            }
+          : undefined,
+        sharedContext: context.sharedContext,
+        narration: session.narration.map((n) => ({ timestamp: n.timestamp, text: n.text })),
+        requestCount: session.requests.length,
+        stateHints: buildStateHints(session),
+        loadBearingRequests,
       };
       return { result: JSON.stringify(summary, null, 2) };
     },
@@ -76,7 +111,7 @@ function buildReadSessionSummaryTool(session: Session): AgentTool {
 
 function buildStateHints(session: Session): Array<Record<string, unknown>> {
   const hints: Array<Record<string, unknown>> = [];
-  const cookieMarkers = new Map<string, { requestSeq: number; cookie: string }>();
+  const cookieMarkers = new Map<string, Array<{ requestSeq: number; cookie: string }>>();
   const storageMarkers = new Map<string, { origin: string; kind: string; key: string }>();
 
   for (const snap of session.storageSnapshots ?? []) {
@@ -103,22 +138,29 @@ function buildStateHints(session: Session): Array<Record<string, unknown>> {
         if (eq <= 0) continue;
         const name = first.slice(0, eq);
         const marker = first.slice(eq + 1);
-        if (isEqualityMarker(marker))
-          cookieMarkers.set(marker, { requestSeq: req.seq, cookie: name });
+        if (isEqualityMarker(marker)) {
+          const existing = cookieMarkers.get(marker) ?? [];
+          existing.push({ requestSeq: req.seq, cookie: name });
+          cookieMarkers.set(marker, existing);
+        }
       }
     }
 
     for (const [field, value] of requestValues(req)) {
       for (const marker of equalityMarkers(value)) {
-        const cookie = cookieMarkers.get(marker);
-        if (cookie && cookie.requestSeq < req.seq) {
-          hints.push({
-            type: 'request_field_equals_earlier_set_cookie',
-            producerSeq: cookie.requestSeq,
-            consumerSeq: req.seq,
-            cookie: cookie.cookie,
-            requestField: field,
-          });
+        const cookies = cookieMarkers.get(marker);
+        if (cookies) {
+          for (const cookie of cookies) {
+            if (cookie.requestSeq < req.seq) {
+              hints.push({
+                type: 'request_field_equals_earlier_set_cookie',
+                producerSeq: cookie.requestSeq,
+                consumerSeq: req.seq,
+                cookie: cookie.cookie,
+                requestField: field,
+              });
+            }
+          }
         }
         const storage = storageMarkers.get(marker);
         if (storage) {
@@ -151,6 +193,33 @@ function isEqualityMarker(value: string): boolean {
   return /^\[REDACTED:v3:id=\d+:len=\d+\]$/.test(value);
 }
 
+interface CompileSummaryRequestContext {
+  seq: number;
+  timestamp: number;
+  selectedForCandidate: boolean;
+  sharedDependency: boolean;
+  method: string;
+  url: string;
+  status?: number;
+  mimeType?: string;
+  bodySize?: number;
+  responseBodyDigest?: string;
+  repeatCount?: number;
+  repeatedSeqs?: number[];
+  lastTimestamp?: number;
+}
+
+function compileSummaryRequestGroupKey(request: CompileSummaryRequestContext): unknown[] {
+  return [
+    request.method,
+    request.url,
+    request.status,
+    request.mimeType,
+    request.bodySize,
+    request.responseBodyDigest,
+  ];
+}
+
 function identifyLoadBearingRequests(session: Session): CapturedRequest[] {
   const startUrl = safeUrl(session.url);
   const startRoot = startUrl ? registrableDomain(startUrl.hostname) : null;
@@ -164,6 +233,15 @@ function identifyLoadBearingRequests(session: Session): CapturedRequest[] {
     if (!r.response.body) return false;
     return true;
   });
+}
+
+function identifySummaryRequests(session: Session, preserveSeqs: Set<number>): CapturedRequest[] {
+  const bySeq = new Map<number, CapturedRequest>();
+  for (const request of identifyLoadBearingRequests(session)) bySeq.set(request.seq, request);
+  for (const request of session.requests) {
+    if (preserveSeqs.has(request.seq)) bySeq.set(request.seq, request);
+  }
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
 }
 
 function safeUrl(s: string): URL | null {
@@ -344,15 +422,15 @@ function buildSearchResponseBodyTool(session: Session): AgentTool {
 
 // ─── Tool: write_file ────────────────────────────────────────────────────────
 
-function buildWriteFileTool(exampleDir: string): AgentTool {
+function buildWriteFileTool(toolDir: string): AgentTool {
   return {
     name: 'write_file',
     description:
-      'Write a file to the example directory. Allowed paths: workflow.json, parser.ts, parser.test.ts, notes/*.md',
+      'Write a file to the generated tool directory. Allowed paths: workflow.json, parser.ts, parser.test.ts, notes/*.md',
     input_schema: {
       type: 'object',
       properties: {
-        relativePath: { type: 'string', description: 'Relative path within the example directory' },
+        relativePath: { type: 'string', description: 'Relative path within the tool directory' },
         content: { type: 'string', description: 'File content to write' },
       },
       required: ['relativePath', 'content'],
@@ -376,7 +454,7 @@ function buildWriteFileTool(exampleDir: string): AgentTool {
         };
       }
 
-      const absolutePath = pathJoin(exampleDir, relativePath);
+      const absolutePath = pathJoin(toolDir, relativePath);
       mkdirSync(dirname(absolutePath), { recursive: true });
       writeFileSync(absolutePath, content, 'utf8');
 
@@ -392,10 +470,10 @@ function buildWriteFileTool(exampleDir: string): AgentTool {
 
 // ─── Tool: read_file ─────────────────────────────────────────────────────────
 
-function buildReadFileTool(exampleDir: string): AgentTool {
+function buildReadFileTool(toolDir: string): AgentTool {
   return {
     name: 'read_file',
-    description: 'Read a file from allowed roots: examples/<site>/, prompts/, src/imprint/.',
+    description: 'Read a file from allowed roots: the tool directory, prompts/, src/imprint/.',
     input_schema: {
       type: 'object',
       properties: {
@@ -412,7 +490,7 @@ function buildReadFileTool(exampleDir: string): AgentTool {
       }
 
       const allowedRoots = [
-        exampleDir,
+        toolDir,
         pathJoin(REPO_ROOT, 'prompts'),
         pathJoin(REPO_ROOT, 'src', 'imprint'),
         pathJoin(REPO_ROOT, 'test'),
@@ -421,7 +499,7 @@ function buildReadFileTool(exampleDir: string): AgentTool {
       const isAllowed = allowedRoots.some((root) => absolutePath.startsWith(root));
       if (!isAllowed) {
         return {
-          result: `path "${absolutePath}" not allowed — must be in examples/<site>/, prompts/, src/imprint/, or test/`,
+          result: `path "${absolutePath}" not allowed — must be in the tool directory, prompts/, src/imprint/, or test/`,
           isError: true,
         };
       }
@@ -448,10 +526,10 @@ function buildReadFileTool(exampleDir: string): AgentTool {
 
 // ─── Tool: run_bash ──────────────────────────────────────────────────────────
 
-function buildRunBashTool(exampleDir: string): AgentTool {
+function buildRunBashTool(toolDir: string): AgentTool {
   return {
     name: 'run_bash',
-    description: 'Run a shell command in the example directory with a timeout.',
+    description: 'Run a shell command in the generated tool directory with a timeout.',
     input_schema: {
       type: 'object',
       properties: {
@@ -472,7 +550,7 @@ function buildRunBashTool(exampleDir: string): AgentTool {
 
       const cappedTimeout = Math.min(timeoutSec, 300) * 1000;
 
-      return await runCommand(command, exampleDir, cappedTimeout);
+      return await runCommand(command, toolDir, cappedTimeout);
     },
   };
 }
@@ -580,7 +658,7 @@ function normalizeTsconfigPath(value: string): string {
 
 // ─── Tool: run_tests ─────────────────────────────────────────────────────────
 
-function buildRunTestsTool(exampleDir: string, sessionPath: string): AgentTool {
+function buildRunTestsTool(toolDir: string, sessionPath: string): AgentTool {
   return {
     name: 'run_tests',
     description: 'Run bun test parser.test.ts and parse the output for pass/fail counts.',
@@ -590,7 +668,7 @@ function buildRunTestsTool(exampleDir: string, sessionPath: string): AgentTool {
       required: [],
     },
     handler: async () => {
-      const testPath = pathJoin(exampleDir, 'parser.test.ts');
+      const testPath = pathJoin(toolDir, 'parser.test.ts');
       if (!existsSync(testPath)) {
         return {
           result: 'parser.test.ts does not exist — write it first',
@@ -598,7 +676,7 @@ function buildRunTestsTool(exampleDir: string, sessionPath: string): AgentTool {
         };
       }
 
-      const cmdResult = await runCommand('bun test parser.test.ts', exampleDir, 120000, {
+      const cmdResult = await runCommand('bun test parser.test.ts', toolDir, 120000, {
         [SESSION_PATH_ENV]: sessionPath,
       });
 
@@ -635,22 +713,28 @@ function buildRunTestsTool(exampleDir: string, sessionPath: string): AgentTool {
 // ─── External Verification ──────────────────────────────────────────────────
 
 export async function externalVerification(
-  exampleDir: string,
+  toolDir: string,
   session: Session,
   sessionPath: string,
+  opts: { expectedToolName?: string } = {},
 ): Promise<string[]> {
   const failures: string[] = [];
 
-  const workflowPath = pathJoin(exampleDir, 'workflow.json');
-  const parserPath = pathJoin(exampleDir, 'parser.ts');
-  const parserTestPath = pathJoin(exampleDir, 'parser.test.ts');
+  const workflowPath = pathJoin(toolDir, 'workflow.json');
+  const parserPath = pathJoin(toolDir, 'parser.ts');
+  const parserTestPath = pathJoin(toolDir, 'parser.test.ts');
 
   if (!existsSync(workflowPath)) {
     failures.push('workflow.json was not written');
   } else {
     try {
       const raw = JSON.parse(readFileSync(workflowPath, 'utf8'));
-      WorkflowSchema.parse(raw);
+      const workflow = WorkflowSchema.parse(raw);
+      if (opts.expectedToolName && workflow.toolName !== opts.expectedToolName) {
+        failures.push(
+          `workflow.toolName "${workflow.toolName}" does not match selected candidate "${opts.expectedToolName}"`,
+        );
+      }
     } catch (err) {
       failures.push(
         `workflow.json schema invalid: ${err instanceof Error ? err.message : String(err)}`,
@@ -684,9 +768,13 @@ export async function externalVerification(
 
     const trivialPatterns = [
       /expect\s*\(\s*true\s*\)\.toBe\s*\(\s*true\s*\)/,
+      /expect\s*\(\s*false\s*\)\.toBe\s*\(\s*false\s*\)/,
       /expect\s*\(\s*1\s*\)\.toBe\s*\(\s*1\s*\)/,
+      /expect\s*\(\s*0\s*\)\.toBe\s*\(\s*0\s*\)/,
       /expect\s*\(\s*null\s*\)\.toBeNull/,
       /expect\s*\(\s*undefined\s*\)\.toBeUndefined/,
+      /expect\s*\(\s*"[^"]*"\s*\)\.toBe\s*\(\s*"[^"]*"\s*\)/,
+      /expect\s*\(\s*'[^']*'\s*\)\.toBe\s*\(\s*'[^']*'\s*\)/,
     ];
     for (const pattern of trivialPatterns) {
       if (pattern.test(src)) {
@@ -699,7 +787,7 @@ export async function externalVerification(
   }
 
   if (existsSync(parserTestPath)) {
-    const result = await runCommand('bun test parser.test.ts', exampleDir, 120000, {
+    const result = await runCommand('bun test parser.test.ts', toolDir, 120000, {
       [SESSION_PATH_ENV]: sessionPath,
     });
     const output = JSON.parse(result.result) as {
@@ -715,7 +803,7 @@ export async function externalVerification(
   }
 
   if (existsSync(parserPath) || existsSync(parserTestPath)) {
-    const output = await runGeneratedArtifactTypecheck(exampleDir);
+    const output = await runGeneratedArtifactTypecheck(toolDir);
     if (output.exitCode !== 0 || output.timedOut) {
       failures.push(
         `generated TypeScript artifacts failed typecheck (bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json) exited ${output.exitCode}${output.timedOut ? ' after timing out' : ''}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,

@@ -302,7 +302,7 @@ const ConcreteBackendSchema = ReplayBackendSchema.exclude(['auto']);
 /** ReplayBackend without the 'auto' meta-value — what the ladder actually walks. */
 export type ConcreteBackend = Exclude<ReplayBackend, 'auto'>;
 
-/** Per-backend probe result. Written to examples/<site>/<toolName>/backends.json
+/** Per-backend probe result. Written to <IMPRINT_HOME>/<site>/<toolName>/backends.json
  *  by `imprint probe-backends`; cron + MCP read it at startup so they
  *  start with the cheapest known-working backend. */
 const BackendProbeResultSchema = z.discriminatedUnion('outcome', [
@@ -349,7 +349,7 @@ export const CronConfigSchema = z.object({
   schedule: z.string(),
   params: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
   notifyWhen: NotifyWhenSchema.optional(),
-  replayBackend: ReplayBackendSchema.optional().default('fetch'),
+  replayBackend: ReplayBackendSchema.optional().default('auto'),
 });
 export type CronConfig = z.infer<typeof CronConfigSchema>;
 

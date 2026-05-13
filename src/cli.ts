@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 /** CLI entry point. Run `imprint --help` for the verb list. */
 
+import { basename, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { ProviderName } from './imprint/llm.ts';
 import { isDebug } from './imprint/log.ts';
+import { shutdownTracing, traced } from './imprint/tracing.ts';
 import { VERSION } from './imprint/version.ts';
 
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
@@ -20,12 +22,12 @@ CAPTURE
 COMPILE
   generate <session>       Session → workflow.json (API replay).
   compile-playbook <sess>  Session → playbook.yaml (DOM replay).
-  emit <workflow.json>     workflow.json → examples/<site>/<toolName>/index.ts.
+  emit <workflow.json>     workflow.json → ~/.imprint/<site>/<toolName>/index.ts.
   probe-backends <site>    Try each backend once, cache the working order.
 
 RUN
-  mcp-server <site>        Serve one site's tool as MCP (stdio default).
-  cron <site>              Polling daemon for examples/<site>/<toolName>/cron.json.
+  mcp-server <site>        Serve one site's tools as MCP (stdio default).
+  cron <site>              Polling daemon for ~/.imprint/<site>/<toolName>/cron.json.
   playbook <site>          Run a playbook directly (debugging).
 
 OTHER
@@ -68,7 +70,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--provider <name>] [--keep-test]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--provider <name>] [--keep-test]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
@@ -79,12 +81,18 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
       {
         name: '--no-interactive',
-        description: 'Run the full pipeline without prompts; print all integration snippets.',
+        description:
+          'Run without prompts; compile the primary detected tool and print integration snippets.',
+      },
+      {
+        name: '--all-tools',
+        description:
+          'With --no-interactive, compile every detected candidate tool instead of only the primary.',
       },
       {
         name: '--provider <name>',
         description:
-          'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
+          'Compile-agent provider: anthropic-api, vertex, claude-cli, codex-cli (auto-detected if omitted).',
       },
       {
         name: '--keep-test',
@@ -135,7 +143,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--provider <name>',
         description:
-          'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
+          'Compile-agent provider: anthropic-api, vertex, claude-cli, codex-cli (auto-detected if omitted).',
       },
       {
         name: '--keep-test',
@@ -171,7 +179,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--out-dir <dir>', description: 'Override the output directory.' },
       { name: '--force', description: 'Overwrite an existing index.ts.' },
     ],
-    example: 'imprint emit examples/acmecorp/my-workflow/workflow.json',
+    example: 'imprint emit ~/.imprint/acmecorp/my-workflow/workflow.json',
   },
   login: {
     summary: 'Persist auth cookies for <site> from a captured session.',
@@ -198,12 +206,13 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   'probe-backends': {
     summary: 'Try each backend once and cache the working order to backends.json.',
-    usage: ['imprint probe-backends <site> [--out <path>] [--param k=v]…'],
+    usage: ['imprint probe-backends <site> [--tool <toolName>] [--out <path>] [--param k=v]…'],
     flags: [
+      { name: '--tool <toolName>', description: 'Select a generated tool for multi-tool sites.' },
       { name: '--out <path>', description: 'Override backends.json output path.' },
       { name: '--param k=v', description: 'Override a workflow parameter (repeatable).' },
     ],
-    example: 'imprint probe-backends southwest',
+    example: 'imprint probe-backends southwest --tool search_flights',
   },
   playbook: {
     summary: 'Run a playbook against a real Chromium (debugging).',
@@ -219,9 +228,12 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   cron: {
     summary:
-      'Polling daemon for cron.json next to a generated tool at examples/<site>/<toolName>/cron.json.',
-    usage: ['imprint cron <site> [--once | --run-now] [--config <path>] [--quiet]'],
+      'Polling daemon for cron.json next to a generated tool at ~/.imprint/<site>/<toolName>/cron.json.',
+    usage: [
+      'imprint cron <site> [--tool <toolName>] [--once | --run-now] [--config <path>] [--quiet]',
+    ],
     flags: [
+      { name: '--tool <toolName>', description: 'Select a generated tool for multi-tool sites.' },
       { name: '--once', description: 'Run a single tick and exit (for OS schedulers).' },
       { name: '--run-now', description: 'Run once immediately, then continue scheduling.' },
       { name: '--config <path>', description: 'Override the cron.json path.' },
@@ -231,10 +243,10 @@ export const VERB_HELP: Record<string, VerbHelp> = {
           'Suppress logs on successful runs (errors still surface). For OS schedulers that mail on stderr.',
       },
     ],
-    example: 'imprint cron southwest --once --quiet',
+    example: 'imprint cron southwest --tool search_flights --once --quiet',
   },
   'mcp-server': {
-    summary: "Serve one site's generated tool as MCP (stdio default).",
+    summary: "Serve one site's generated tools as MCP (stdio default).",
     usage: ['imprint mcp-server <site> [--http] [--port <num>]'],
     flags: [
       { name: '--http', description: 'Use Streamable HTTP transport instead of stdio.' },
@@ -277,7 +289,7 @@ function requirePositional(argv: string[], verb: string, label: string): string 
   }
   if (v.startsWith('-')) {
     console.error(
-      `error: \`imprint ${verb}\` requires a <site> name before any flags.\n  <site> is a label you choose — it names the output folder under examples/.\n\n  example: imprint ${verb} google-flights --url https://flights.google.com\n→ run \`imprint ${verb} --help\` for usage.`,
+      `error: \`imprint ${verb}\` requires a <site> name before any flags.\n  <site> is a label you choose — it names the output folder under ~/.imprint/.\n\n  example: imprint ${verb} google-flights --url https://flights.google.com\n→ run \`imprint ${verb} --help\` for usage.`,
     );
     return null;
   }
@@ -317,6 +329,16 @@ export function tryParseParamKV(
     else out[k] = v;
   }
   return out;
+}
+
+export function inferPlaybookSiteForSmokeCommand(playbookPath: string, toolName: string): string {
+  const parent = basename(dirname(playbookPath));
+  if (!parent) return '<site>';
+  if (parent === toolName) {
+    const grandparent = basename(dirname(dirname(playbookPath)));
+    return grandparent || '<site>';
+  }
+  return parent;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -476,10 +498,16 @@ async function main(argv: string[]): Promise<number> {
       });
 
       if (values.provider) {
-        const { isValidProvider } = await import('./imprint/llm.ts');
+        const { isTeachCompatibleProvider, isValidProvider } = await import('./imprint/llm.ts');
         if (!isValidProvider(values.provider)) {
           console.error(
             `error: unknown provider '${values.provider}' — valid: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli`,
+          );
+          return 2;
+        }
+        if (!isTeachCompatibleProvider(values.provider)) {
+          console.error(
+            `error: provider '${values.provider}' is not supported for generate — use anthropic-api, vertex, claude-cli, or codex-cli`,
           );
           return 2;
         }
@@ -505,13 +533,13 @@ async function main(argv: string[]): Promise<number> {
       }
 
       const { generate } = await import('./imprint/compile.ts');
-      const { detectProvider } = await import('./imprint/llm.ts');
+      const { detectTeachProvider } = await import('./imprint/llm.ts');
       const { resolveCompileAgentModel } = await import('./imprint/compile-agent.ts');
       const { describeAgentActivity, formatElapsed } = await import('./imprint/progress.ts');
 
       // Resolve provider + model NOW so we can tell the user before silence
       // sets in (the agent loop typically runs 3-5 min with no other output).
-      const providerName = (values.provider as ProviderName | undefined) ?? detectProvider();
+      const providerName = (values.provider as ProviderName | undefined) ?? detectTeachProvider();
       const compileModel = resolveCompileAgentModel(providerName);
       console.error('');
       console.error(`[imprint compile] provider: ${providerName}    model: ${compileModel}`);
@@ -579,9 +607,13 @@ async function main(argv: string[]): Promise<number> {
       const site = result.outPath.split('/').slice(-3, -2)[0] ?? '<site>';
       console.log('');
       console.log('next steps:');
-      console.log(`  imprint probe-backends ${site}    # cache the working backend order`);
+      console.log(
+        `  imprint probe-backends ${site} --tool ${result.toolName}    # cache the working backend order`,
+      );
       console.log(`  imprint mcp-server ${site}        # expose this site's tool as MCP`);
-      console.log(`  imprint cron ${site} --once       # one-shot test (after creating cron.json)`);
+      console.log(
+        `  imprint cron ${site} --tool ${result.toolName} --once       # one-shot test (after creating cron.json)`,
+      );
       return 0;
     }
 
@@ -648,6 +680,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           config: { type: 'string' },
+          tool: { type: 'string' },
           once: { type: 'boolean' },
           'run-now': { type: 'boolean' },
           quiet: { type: 'boolean' },
@@ -658,6 +691,7 @@ async function main(argv: string[]): Promise<number> {
       await runCron({
         site,
         configPath: values.config,
+        toolName: values.tool,
         once: values.once,
         runNow: values['run-now'],
         // --quiet suppresses successful-run logs so OS schedulers
@@ -675,6 +709,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           out: { type: 'string' },
+          tool: { type: 'string' },
           param: { type: 'string', multiple: true },
         },
         allowPositionals: false,
@@ -685,6 +720,7 @@ async function main(argv: string[]): Promise<number> {
       const result = await probeBackends({
         site,
         outPath: values.out,
+        toolName: values.tool,
         paramOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
       });
       console.log(`[imprint] probed → ${result.outPath}`);
@@ -732,7 +768,10 @@ async function main(argv: string[]): Promise<number> {
         `[imprint] tokens: ${result.inputTokens ?? 'N/A'} in, ${result.outputTokens ?? 'N/A'} out — ${(result.durationMs / 1000).toFixed(1)}s`,
       );
       // Suggest a smoke run; the playbook is most useful behind the cron ladder.
-      const playbookSite = result.playbookPath.split('/').slice(-2, -1)[0] ?? '<site>';
+      const playbookSite = inferPlaybookSiteForSmokeCommand(
+        result.playbookPath,
+        result.playbook.toolName,
+      );
       console.log('');
       console.log('next step:');
       console.log(
@@ -760,7 +799,8 @@ async function main(argv: string[]): Promise<number> {
         playbookPath = pathResolve(values.path);
       } else {
         const { discoverTools } = await import('./imprint/tool-loader.ts');
-        const tools = await discoverTools(pathResolve(process.cwd(), 'examples'), site);
+        const { imprintHomeDir, localToolDir } = await import('./imprint/paths.ts');
+        const tools = await discoverTools(imprintHomeDir(), site);
         if (tools.length > 1) {
           console.error(
             `error: site "${site}" has ${tools.length} workflows — specify which with --path:\n${tools.map((t) => `  --path ${pathResolve(t.dir, 'playbook.yaml')}`).join('\n')}`,
@@ -770,7 +810,7 @@ async function main(argv: string[]): Promise<number> {
         const tool = tools[0];
         playbookPath = tool
           ? pathResolve(tool.dir, 'playbook.yaml')
-          : pathResolve(process.cwd(), 'examples', site, '<toolName>', 'playbook.yaml');
+          : pathResolve(localToolDir(site, '<toolName>'), 'playbook.yaml');
       }
       const params = tryParseParamKV(values.param);
       if (params === null) return 2;
@@ -798,7 +838,7 @@ async function main(argv: string[]): Promise<number> {
         // Looks like a flag — can't tell from a missing site, so error out
         // with the explanation regardless of interactive mode.
         console.error(
-          'error: `imprint teach` requires a <site> name before any flags.\n  <site> is a label you choose — it names the output folder under examples/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
+          'error: `imprint teach` requires a <site> name before any flags.\n  <site> is a label you choose — it names the output folder under ~/.imprint/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
         );
         return 2;
       }
@@ -811,6 +851,7 @@ async function main(argv: string[]): Promise<number> {
           'from-session': { type: 'string' },
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
+          'all-tools': { type: 'boolean' },
           provider: { type: 'string' },
           'keep-test': { type: 'boolean' },
         },
@@ -819,7 +860,7 @@ async function main(argv: string[]): Promise<number> {
 
       if (!site && values['no-interactive']) {
         console.error(
-          'error: `imprint teach` requires a <site> argument in --no-interactive mode.\n  <site> is a label you choose — it names the output folder under examples/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
+          'error: `imprint teach` requires a <site> argument in --no-interactive mode.\n  <site> is a label you choose — it names the output folder under ~/.imprint/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
         );
         return 2;
       }
@@ -840,16 +881,30 @@ async function main(argv: string[]): Promise<number> {
 
       try {
         const { teach } = await import('./imprint/teach.ts');
-        await teach({
-          site,
-          url: values.url,
-          fromSession: values['from-session'],
-          persistProfile: values['persist-profile'],
-          signal: ctrl.signal,
-          noInteractive: values['no-interactive'],
-          provider: values.provider as ProviderName | undefined,
-          keepTest: values['keep-test'],
-        });
+        await traced(
+          'cli.teach',
+          'AGENT',
+          {
+            'imprint.site': site,
+            'imprint.url': values.url,
+            'imprint.from_session': values['from-session'],
+            'imprint.provider': values.provider ?? 'auto',
+            'imprint.all_tools': values['all-tools'] ?? false,
+            'imprint.no_interactive': values['no-interactive'] ?? false,
+          },
+          () =>
+            teach({
+              site,
+              url: values.url,
+              fromSession: values['from-session'],
+              persistProfile: values['persist-profile'],
+              signal: ctrl.signal,
+              noInteractive: values['no-interactive'],
+              provider: values.provider as ProviderName | undefined,
+              keepTest: values['keep-test'],
+              allTools: values['all-tools'],
+            }),
+        );
       } finally {
         process.removeListener('SIGINT', onSigint);
       }
@@ -868,20 +923,35 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(1),
         options: {
           'session-path': { type: 'string' },
+          'tool-dir': { type: 'string' },
           'example-dir': { type: 'string' },
+          'candidate-json': { type: 'string' },
+          'shared-context-json': { type: 'string' },
         },
         allowPositionals: false,
       });
-      if (!values['session-path'] || !values['example-dir']) {
+      const toolDir = values['tool-dir'] ?? values['example-dir'];
+      if (!values['session-path'] || !toolDir) {
         console.error(
-          'error: __mcp-compile-server requires --session-path <path> and --example-dir <path>',
+          'error: __mcp-compile-server requires --session-path <path> and --tool-dir <path>',
         );
         return 2;
       }
       const { runCompileMcpServer } = await import('./imprint/mcp-compile-server.ts');
+      const { ToolCandidateSchema, SharedCompileContextSchema } = await import(
+        './imprint/tool-candidates.ts'
+      );
+      const candidate = values['candidate-json']
+        ? ToolCandidateSchema.parse(JSON.parse(values['candidate-json']))
+        : undefined;
+      const sharedContext = values['shared-context-json']
+        ? SharedCompileContextSchema.parse(JSON.parse(values['shared-context-json']))
+        : undefined;
       await runCompileMcpServer({
         sessionPath: values['session-path'],
-        exampleDir: values['example-dir'],
+        toolDir,
+        candidate,
+        sharedContext,
       });
       return 0;
     }
@@ -934,12 +1004,16 @@ function levenshtein(a: string, b: string): number {
 // (e.g. for VERB_HELP from tests) must not trigger the CLI dispatch.
 if (import.meta.main) {
   main(process.argv.slice(2))
-    .then((code) => process.exit(code))
-    .catch((err) => {
+    .then(async (code) => {
+      await shutdownTracing();
+      process.exit(code);
+    })
+    .catch(async (err) => {
       console.error('imprint: fatal:', err instanceof Error ? err.message : String(err));
       if (isDebug()) {
         console.error(err);
       }
+      await shutdownTracing();
       process.exit(1);
     });
 }

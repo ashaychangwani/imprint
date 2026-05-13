@@ -2,8 +2,10 @@ import { describe, expect, it } from 'bun:test';
 import { resolve as pathResolve } from 'node:path';
 import {
   defaultSessionJsonlPath,
+  imprintHomeDir,
   localSessionsDir,
   localSiteDir,
+  localToolDir,
   relativeToLocalSite,
   resolveLocalSitePath,
 } from '../src/imprint/paths.ts';
@@ -23,7 +25,11 @@ describe('local imprint paths', () => {
 
   it('stores default recordings under the local imprint home', () => {
     withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(imprintHomeDir()).toBe(pathResolve('/tmp', 'imprint-home'));
       expect(localSiteDir('southwest')).toBe(pathResolve('/tmp', 'imprint-home', 'southwest'));
+      expect(localToolDir('southwest', 'search_flights')).toBe(
+        pathResolve('/tmp', 'imprint-home', 'southwest', 'search_flights'),
+      );
       expect(localSessionsDir('southwest')).toBe(
         pathResolve('/tmp', 'imprint-home', 'southwest', 'sessions'),
       );
@@ -52,6 +58,22 @@ describe('local imprint paths', () => {
       const sessionPath = pathResolve('/tmp', 'imprint-home', 'demo', 'sessions', 'one.json');
       expect(relativeToLocalSite('demo', sessionPath)).toBe('sessions/one.json');
       expect(relativeToLocalSite('demo', pathResolve('/tmp', 'other', 'one.json'))).toBeNull();
+    });
+  });
+
+  it('rejects path traversal in site names', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(() => localSiteDir('../../etc')).toThrow(/Invalid site name/);
+      expect(() => localSiteDir('foo/bar')).toThrow(/Invalid site name/);
+      expect(() => localSiteDir('foo\\bar')).toThrow(/Invalid site name/);
+      expect(() => localSiteDir('..')).toThrow(/Invalid site name/);
+    });
+  });
+
+  it('rejects path traversal in tool names', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(() => localToolDir('southwest', '../escape')).toThrow(/Invalid tool name/);
+      expect(() => localToolDir('southwest', 'a/b')).toThrow(/Invalid tool name/);
     });
   });
 });

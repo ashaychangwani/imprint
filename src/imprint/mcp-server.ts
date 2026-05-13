@@ -1,6 +1,6 @@
 /**
  * `imprint mcp-server` — exposes every generated tool under
- * examples/<site>/ as an MCP tool. Stdio + Streamable HTTP transports.
+ * <IMPRINT_HOME>/<site>/ as an MCP tool. Stdio + Streamable HTTP transports.
  * See docs/getting-started.md for Claude Desktop / mcp-inspector wire-up.
  */
 
@@ -18,6 +18,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { resolveLadder, runWithLadder } from './backend-ladder.ts';
 import { createLog } from './log.ts';
+import { imprintHomeDir } from './paths.ts';
 import { loadBackendsCache } from './probe-backends.ts';
 import { checkSiteCredentialsReady } from './runtime.ts';
 import { availableSitesHint } from './sites.ts';
@@ -33,8 +34,8 @@ import { VERSION } from './version.ts';
 interface RunMcpServerOptions {
   /** Site name. */
   site: string;
-  /** Override examples directory. Defaults to <cwd>/examples. */
-  examplesDir?: string;
+  /** Override generated asset root. Defaults to IMPRINT_HOME (~/.imprint). */
+  assetRoot?: string;
   /** Use Streamable HTTP transport instead of stdio. */
   http?: boolean;
   /** Port for HTTP transport (default 8765). */
@@ -86,7 +87,7 @@ function buildServer(
   name: string,
   version: string,
   tools: ResolvedTool[],
-  examplesDir: string,
+  assetRoot: string,
 ): Server {
   const server = new Server(
     { name, version },
@@ -145,7 +146,7 @@ function buildServer(
         ladder,
         tool,
         args,
-        examplesDir,
+        assetRoot,
         stealthCache,
       );
       if (!result.ok) {
@@ -181,11 +182,11 @@ function formatToolError(result: Extract<ToolResult, { ok: false }>): string {
 }
 
 export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
-  const examplesDir = opts.examplesDir ?? pathResolve(process.cwd(), 'examples');
-  const discovered = await discoverTools(examplesDir, opts.site, '[imprint mcp]');
+  const assetRoot = opts.assetRoot ?? imprintHomeDir();
+  const discovered = await discoverTools(assetRoot, opts.site, '[imprint mcp]');
   const tools: ResolvedTool[] = discovered.map((t) => {
     const playbookPath = pathResolve(t.dir, 'playbook.yaml');
-    const cache = loadBackendsCache(t.site, examplesDir, t.dir);
+    const cache = loadBackendsCache(t.site, assetRoot, t.dir);
     return {
       ...t,
       inputSchema: buildJsonSchema(t.workflow.parameters),
@@ -195,7 +196,7 @@ export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
   });
   if (tools.length === 0) {
     throw new Error(
-      `No generated tool found for site "${opts.site}"\n${availableSitesHint(examplesDir, opts.site)}\n→ run \`imprint emit examples/<site>/<toolName>/workflow.json\` to codegen a tool.\n→ or test with the bundled fixture: \`imprint mcp-server echo\`.`,
+      `No generated tool found for site "${opts.site}"\n${availableSitesHint(assetRoot, opts.site)}\n→ run \`imprint teach ${opts.site}\` or \`imprint emit ~/.imprint/<site>/<toolName>/workflow.json\` to codegen a tool.`,
     );
   }
 
@@ -243,9 +244,9 @@ export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
   if (opts.http) {
     const port = opts.port ?? 8765;
     const host = opts.host ?? '127.0.0.1';
-    await runHttp(name, version, tools, host, port, examplesDir);
+    await runHttp(name, version, tools, host, port, assetRoot);
   } else {
-    await runStdio(name, version, tools, examplesDir);
+    await runStdio(name, version, tools, assetRoot);
   }
 }
 
@@ -260,9 +261,9 @@ async function runStdio(
   name: string,
   version: string,
   tools: ResolvedTool[],
-  examplesDir: string,
+  assetRoot: string,
 ): Promise<void> {
-  const server = buildServer(name, version, tools, examplesDir);
+  const server = buildServer(name, version, tools, assetRoot);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log(`stdio transport ready (${tools.length} tool${tools.length === 1 ? '' : 's'})`);
@@ -293,9 +294,9 @@ async function runHttp(
   tools: ResolvedTool[],
   host: string,
   port: number,
-  examplesDir: string,
+  assetRoot: string,
 ): Promise<void> {
-  const server = buildServer(name, version, tools, examplesDir);
+  const server = buildServer(name, version, tools, assetRoot);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
   });

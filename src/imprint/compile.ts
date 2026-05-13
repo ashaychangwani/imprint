@@ -7,15 +7,27 @@
  * factored into a CompileTask config.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonArray, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
+import { localSiteDir, localToolDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { redactSession } from './redact.ts';
+import { compactRequestContexts, requestContextDigest } from './request-context.ts';
+import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
+import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
 import {
   type Playbook,
   type Session,
@@ -32,13 +44,17 @@ const log = createLog('compile');
 interface CompileOptions {
   /** Path to session.json or session.redacted.json */
   sessionPath: string;
-  /** Where to write the artifact. Defaults to <sessionDir>/../<task.defaultOutFile> */
+  /** Where to write the artifact. Defaults to the generated tool directory. */
   outPath?: string;
   /** Override LLM config (region, model, project). */
   llmConfig?: LLMOptions;
   /** If true, send the FULL session to the LLM (don't shrink). Useful for
    *  debugging when shrinking might be over-aggressive. Default false. */
   noShrink?: boolean;
+  /** Candidate-specific compile scope for multi-tool teach. */
+  candidate?: ToolCandidate;
+  /** Shared auth/helper guidance generated once for a multi-tool teach run. */
+  sharedContext?: SharedCompileContext;
 }
 
 // ─── generate (workflow.json) ────────────────────────────────────────────────
@@ -50,6 +66,8 @@ interface GenerateOptions extends CompileOptions {
   onProgress?: (p: CompileAgentProgress) => void;
   /** Retain parser.test.ts after successful verification. */
   keepTest?: boolean;
+  /** Directory where workflow.json/parser.ts/parser.test.ts are written. */
+  outDir?: string;
 }
 
 interface GenerateResult {
@@ -65,49 +83,107 @@ interface GenerateResult {
 }
 
 export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
-  const result = await compileAgent({
-    sessionPath: opts.sessionPath,
-    maxDurationMs: opts.maxDurationMs,
-    llmConfig: opts.llmConfig,
-    onProgress: opts.onProgress,
-    keepTest: opts.keepTest,
-  });
-
-  if (!result.success) {
-    throw new Error(
-      [
-        'compile agent did not produce a verified workflow.',
-        `outcome: ${result.outcome}`,
-        `message: ${result.message}`,
-        `turns: ${result.turns}, duration: ${(result.durationMs / 1000).toFixed(1)}s`,
-        `conversation log: ${result.conversationLogPath}`,
-      ].join('\n'),
-    );
-  }
-
-  // Load the agent-written workflow.json from disk and validate.
-  if (!result.workflowPath) {
-    throw new Error('compile agent reported success but no workflowPath');
-  }
-  const workflow = loadJsonFile(
-    result.workflowPath,
-    WorkflowSchema,
+  return await traced(
+    'compile.generate',
+    'AGENT',
     {
-      notFound: 'compile agent reported success but workflow.json missing',
-      badSchema: 'compile agent wrote an invalid workflow.json',
+      'imprint.session_path': opts.sessionPath,
+      'imprint.provider': opts.llmConfig?.provider ?? 'auto',
+      'imprint.tool_name': opts.candidate?.toolName,
+      'imprint.out_path': opts.outPath,
+      'imprint.out_dir': opts.outDir,
     },
-    'workflow',
-  );
+    async (span) => {
+      const outDir = opts.outDir ?? (opts.outPath ? dirname(opts.outPath) : undefined);
+      const result = await compileAgent({
+        sessionPath: opts.sessionPath,
+        maxDurationMs: opts.maxDurationMs,
+        llmConfig: opts.llmConfig,
+        onProgress: opts.onProgress,
+        keepTest: opts.keepTest,
+        outDir,
+        candidate: opts.candidate,
+        sharedContext: opts.sharedContext,
+      });
 
-  return {
-    workflow,
-    workflowPath: result.workflowPath,
-    requestsSent: 0, // legacy field — no longer meaningful for agentic compile
-    requestsOriginal: 0, // legacy field
-    inputTokens: result.inputTokens,
-    outputTokens: result.outputTokens,
-    durationMs: result.durationMs,
-  };
+      setSpanAttributes(span, {
+        'imprint.compile.outcome': result.outcome,
+        'imprint.compile.turns': result.turns,
+        'imprint.compile.duration_ms': result.durationMs,
+        'imprint.compile.input_tokens': result.inputTokens,
+        'imprint.compile.output_tokens': result.outputTokens,
+        'imprint.compile.conversation_log': result.conversationLogPath,
+      });
+
+      if (!result.success) {
+        throw new Error(
+          [
+            'compile agent did not produce a verified workflow.',
+            `outcome: ${result.outcome}`,
+            `message: ${result.message}`,
+            `turns: ${result.turns}, duration: ${(result.durationMs / 1000).toFixed(1)}s`,
+            `conversation log: ${result.conversationLogPath}`,
+          ].join('\n'),
+        );
+      }
+
+      // Load the agent-written workflow.json from disk and validate.
+      if (!result.workflowPath) {
+        throw new Error('compile agent reported success but no workflowPath');
+      }
+      const workflow = loadJsonFile(
+        result.workflowPath,
+        WorkflowSchema,
+        {
+          notFound: 'compile agent reported success but workflow.json missing',
+          badSchema: 'compile agent wrote an invalid workflow.json',
+        },
+        'workflow',
+      );
+      let workflowPath = opts.outPath ?? result.workflowPath;
+      if (!opts.outDir && !opts.outPath) {
+        workflowPath = relocateGeneratedWorkflow(result.workflowPath, workflow);
+      }
+      if (opts.outPath && opts.outPath !== result.workflowPath) {
+        writeFileSync(opts.outPath, `${JSON.stringify(workflow, null, 2)}\n`, 'utf8');
+      }
+
+      setSpanAttributes(span, {
+        'imprint.workflow_path': workflowPath,
+        'imprint.workflow_tool_name': workflow.toolName,
+      });
+
+      return {
+        workflow,
+        workflowPath,
+        requestsSent: 0, // legacy field — no longer meaningful for agentic compile
+        requestsOriginal: 0, // legacy field
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        durationMs: result.durationMs,
+      };
+    },
+  );
+}
+
+function relocateGeneratedWorkflow(workflowPath: string, workflow: Workflow): string {
+  const sourceDir = dirname(workflowPath);
+  const finalDir = localToolDir(workflow.site, workflow.toolName);
+  if (sourceDir === finalDir) return workflowPath;
+  mkdirSync(finalDir, { recursive: true });
+  for (const artifact of [
+    'workflow.json',
+    'parser.ts',
+    'parser.test.ts',
+    '.compile-log.json',
+    '.compile-done.json',
+    '.compile-give-up.json',
+  ]) {
+    const source = pathJoin(sourceDir, artifact);
+    if (!existsSync(source)) continue;
+    renameSync(source, pathJoin(finalDir, artifact));
+  }
+  return pathJoin(finalDir, 'workflow.json');
 }
 
 /**
@@ -180,77 +256,153 @@ interface TriageResult {
   durationMs: number;
 }
 
-async function triageRequests(session: Session, llmConfig?: LLMOptions): Promise<TriageResult> {
-  const candidates = session.requests.filter((r) => TRIAGE_RESOURCE_TYPES.has(r.resourceType));
+interface TriageRequestContext {
+  seq: number;
+  timestamp: number;
+  method: string;
+  url: string;
+  resourceType: string;
+  status?: number;
+  mimeType?: string;
+  headers: string;
+  body?: string;
+  bodyDigest?: string;
+  bodyLength?: number;
+  responseBodyDigest?: string;
+  responseBodyLength?: number;
+  repeatCount?: number;
+  repeatedSeqs?: number[];
+  lastTimestamp?: number;
+}
 
-  const metadata = candidates.map((r) => ({
-    seq: r.seq,
-    timestamp: r.timestamp,
-    method: r.method,
-    url: r.url,
-    resourceType: r.resourceType,
-    status: r.response?.status,
-    headers: truncateHeaders(r.headers),
-    body: truncate(r.body, TRIAGE_BODY_LIMIT),
-  }));
+async function triageRequests(
+  session: Session,
+  llmConfig?: LLMOptions,
+  context: Pick<CompileOptions, 'candidate' | 'sharedContext'> = {},
+): Promise<TriageResult> {
+  const preserveSeqs = new Set([
+    ...(context.candidate?.requestSeqs ?? []),
+    ...(context.candidate?.dependencySeqs ?? []),
+    ...(context.sharedContext?.loginRequestSeqs ?? []),
+  ]);
+  const candidates = session.requests.filter(
+    (r) => TRIAGE_RESOURCE_TYPES.has(r.resourceType) || preserveSeqs.has(r.seq),
+  );
+  const traceSpan = startTraceSpan('compile.triage_requests', 'RETRIEVER', {
+    'imprint.site': session.site,
+    'imprint.requests_total': session.requests.length,
+    'imprint.requests_considered': candidates.length,
+    'imprint.provider': llmConfig?.provider ?? 'auto',
+  });
 
-  const triagePayload = {
-    site: session.site,
-    url: session.url,
-    narration: session.narration,
-    requests: metadata,
-  };
-
-  const promptPath = pathJoin(PROMPTS_DIR, 'request-triage.md');
-  if (!existsSync(promptPath)) {
-    throw new Error(
-      `Triage prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
-    );
-  }
-  const systemPrompt = readFileSync(promptPath, 'utf8');
-
-  log(`triaging ${candidates.length} requests (from ${session.requests.length} total)…`);
-  const llm = resolveProvider(llmConfig ?? {});
-  const result = await llm.analyze(systemPrompt, triagePayload);
-
-  const arrayText = extractJsonArray(result.text);
-  if (!arrayText) {
-    throw new Error(
-      `Triage LLM did not return a JSON array.\nRaw response:\n${result.text.slice(0, 1000)}`,
-    );
-  }
-
-  let seqs: unknown;
   try {
-    seqs = JSON.parse(arrayText);
+    const metadata = compactRequestContexts(
+      candidates.map((r) => ({
+        seq: r.seq,
+        timestamp: r.timestamp,
+        method: r.method,
+        url: r.url,
+        resourceType: r.resourceType,
+        status: r.response?.status,
+        mimeType: r.response?.mimeType,
+        headers: truncateHeaders(r.headers),
+        body: truncate(r.body, TRIAGE_BODY_LIMIT),
+        bodyDigest: requestContextDigest(r.body),
+        bodyLength: r.body?.length,
+        responseBodyDigest: requestContextDigest(r.response?.body),
+        responseBodyLength: r.response?.body?.length,
+      })),
+      triageRequestGroupKey,
+      { preserveSeqs },
+    );
+
+    const triagePayload = {
+      site: session.site,
+      url: session.url,
+      narration: session.narration,
+      requests: metadata,
+    };
+
+    const promptPath = pathJoin(PROMPTS_DIR, 'request-triage.md');
+    if (!existsSync(promptPath)) {
+      throw new Error(
+        `Triage prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
+      );
+    }
+    const systemPrompt = readFileSync(promptPath, 'utf8');
+
+    log(
+      `triaging ${metadata.length} compacted requests (from ${candidates.length} candidates / ${session.requests.length} total)…`,
+    );
+    const llm = resolveProvider(llmConfig ?? {});
+    const result = await llm.analyze(systemPrompt, triagePayload);
+
+    const arrayText = extractJsonArray(result.text);
+    if (!arrayText) {
+      throw new Error(
+        `Triage LLM did not return a JSON array.\nRaw response:\n${result.text.slice(0, 1000)}`,
+      );
+    }
+
+    let seqs: unknown;
+    try {
+      seqs = JSON.parse(arrayText);
+    } catch (err) {
+      throw new Error(
+        `Triage response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${arrayText.slice(0, 500)}`,
+      );
+    }
+
+    if (!Array.isArray(seqs) || !seqs.every((s) => typeof s === 'number')) {
+      throw new Error(
+        `Triage response is not an array of numbers.\nParsed: ${JSON.stringify(seqs).slice(0, 500)}`,
+      );
+    }
+
+    const selectedSet = new Set([...(seqs as number[]), ...preserveSeqs]);
+    const triaged: Session = {
+      ...session,
+      requests: session.requests.filter((r) => selectedSet.has(r.seq)),
+    };
+
+    log(`triage selected ${selectedSet.size} requests out of ${candidates.length} candidates`);
+
+    const triageResult = {
+      session: triaged,
+      selectedSeqs: [...selectedSet],
+      consideredCount: candidates.length,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      durationMs: result.durationMs,
+    };
+    setSpanAttributes(traceSpan, {
+      'imprint.requests_compacted': metadata.length,
+      'imprint.requests_selected': selectedSet.size,
+      'imprint.triage.duration_ms': result.durationMs,
+      'imprint.triage.input_tokens': result.inputTokens,
+      'imprint.triage.output_tokens': result.outputTokens,
+    });
+    endTraceSpan(traceSpan);
+    return triageResult;
   } catch (err) {
-    throw new Error(
-      `Triage response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${arrayText.slice(0, 500)}`,
-    );
+    endTraceSpan(traceSpan, err);
+    throw err;
   }
+}
 
-  if (!Array.isArray(seqs) || !seqs.every((s) => typeof s === 'number')) {
-    throw new Error(
-      `Triage response is not an array of numbers.\nParsed: ${JSON.stringify(seqs).slice(0, 500)}`,
-    );
-  }
-
-  const selectedSet = new Set(seqs as number[]);
-  const triaged: Session = {
-    ...session,
-    requests: session.requests.filter((r) => selectedSet.has(r.seq)),
-  };
-
-  log(`triage selected ${selectedSet.size} requests out of ${candidates.length} candidates`);
-
-  return {
-    session: triaged,
-    selectedSeqs: seqs as number[],
-    consideredCount: candidates.length,
-    inputTokens: result.inputTokens,
-    outputTokens: result.outputTokens,
-    durationMs: result.durationMs,
-  };
+function triageRequestGroupKey(request: TriageRequestContext): unknown[] {
+  return [
+    request.method,
+    request.url,
+    request.resourceType,
+    request.status,
+    request.mimeType,
+    request.headers,
+    request.bodyDigest,
+    request.bodyLength,
+    request.responseBodyDigest,
+    request.responseBodyLength,
+  ];
 }
 
 function truncateHeaders(headers: Record<string, string>): string {
@@ -271,7 +423,75 @@ interface CompilePlaybookResult {
 
 const RESPONSE_BODY_LIMIT = 4000;
 
+export function defaultCompilePlaybookPath(site: string, toolName: string): string {
+  return pathJoin(localToolDir(site, toolName), 'playbook.yaml');
+}
+
+export function resolveDefaultCompilePlaybookPath(site: string, playbookToolName: string): string {
+  const toolNames = existingWorkflowToolNames(site);
+  if (toolNames.length === 0 || toolNames.includes(playbookToolName)) {
+    return defaultCompilePlaybookPath(site, playbookToolName);
+  }
+  if (toolNames.length === 1) {
+    const toolName = toolNames[0] ?? playbookToolName;
+    throw new Error(
+      [
+        `compiled playbook toolName "${playbookToolName}" does not match the generated workflow "${toolName}" for site "${site}".`,
+        `→ rerun compile-playbook with --out ${defaultCompilePlaybookPath(site, toolName)}`,
+      ].join('\n'),
+    );
+  }
+  throw new Error(
+    [
+      `compiled playbook toolName "${playbookToolName}" does not match any generated workflow for site "${site}".`,
+      `Generated workflows: ${toolNames.join(', ')}`,
+      `→ rerun compile-playbook with --out ~/.imprint/${site}/<toolName>/playbook.yaml`,
+    ].join('\n'),
+  );
+}
+
+function existingWorkflowToolNames(site: string): string[] {
+  const siteDir = localSiteDir(site);
+  if (!existsSync(siteDir)) return [];
+  const out: string[] = [];
+  for (const entry of readdirSync(siteDir)) {
+    const dir = pathJoin(siteDir, entry);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (existsSync(pathJoin(dir, 'workflow.json'))) out.push(entry);
+  }
+  return out.sort();
+}
+
 export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlaybookResult> {
+  return await traced(
+    'compile.playbook',
+    'CHAIN',
+    {
+      'imprint.session_path': opts.sessionPath,
+      'imprint.provider': opts.llmConfig?.provider ?? 'auto',
+      'imprint.tool_name': opts.candidate?.toolName,
+      'imprint.out_path': opts.outPath,
+      'imprint.no_shrink': opts.noShrink ?? false,
+    },
+    async (span) => {
+      const result = await compilePlaybookImpl(opts);
+      setSpanAttributes(span, {
+        'imprint.playbook_path': result.playbookPath,
+        'imprint.playbook_tool_name': result.playbook.toolName,
+        'imprint.playbook.duration_ms': result.durationMs,
+        'imprint.playbook.input_tokens': result.inputTokens,
+        'imprint.playbook.output_tokens': result.outputTokens,
+      });
+      return result;
+    },
+  );
+}
+
+async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlaybookResult> {
   // 1. Load session.
   let session: Session = loadJsonFile(
     opts.sessionPath,
@@ -305,7 +525,10 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
     durationMs: 0,
   };
   if (!opts.noShrink) {
-    const triage = await triageRequests(session, opts.llmConfig);
+    const triage = await triageRequests(session, opts.llmConfig, {
+      candidate: opts.candidate,
+      sharedContext: opts.sharedContext,
+    });
     session = triage.session;
     triageTokens = {
       input: triage.inputTokens,
@@ -316,8 +539,13 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
 
   // 4. Build slim payload from triaged requests (with response bodies).
   const xhrs = session.requests
-    .filter((r) => r.resourceType === 'XHR' || r.resourceType === 'Fetch')
+    .filter(
+      (r) =>
+        r.resourceType === 'XHR' || r.resourceType === 'Fetch' || r.resourceType === 'Document',
+    )
     .map((r) => ({
+      seq: r.seq,
+      timestamp: r.timestamp,
       method: r.method,
       url: r.url,
       resourceType: r.resourceType,
@@ -332,6 +560,8 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
   const slimmed = {
     site: session.site,
     url: session.url,
+    candidate: opts.candidate,
+    sharedContext: opts.sharedContext,
     narration: session.narration,
     events: session.events,
     requests: xhrs,
@@ -344,7 +574,11 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
       `Prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
     );
   }
-  const systemPrompt = readFileSync(promptPath, 'utf8');
+  const systemPrompt = `${readFileSync(promptPath, 'utf8')}${
+    opts.candidate
+      ? `\n\nCandidate scope:\nCompile only this candidate: ${JSON.stringify(opts.candidate, null, 2)}\nShared context: ${JSON.stringify(opts.sharedContext ?? {}, null, 2)}\nThe playbook toolName and parameters must match the selected candidate/workflow, not any other action in the recording.\n`
+      : ''
+  }`;
 
   const llm = resolveProvider(opts.llmConfig ?? {});
   const result = await llm.analyze(systemPrompt, slimmed);
@@ -358,9 +592,15 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
     );
   }
 
-  const outPath = opts.outPath ?? pathJoin(dirname(opts.sessionPath), '..', 'playbook.yaml');
-  // Preserve the LLM's exact YAML rather than round-tripping through
-  // YAML.stringify (which would lose comments + reorder keys).
+  if (opts.candidate && playbook.toolName !== opts.candidate.toolName) {
+    throw new Error(
+      `Compiled playbook toolName "${playbook.toolName}" does not match selected candidate "${opts.candidate.toolName}".`,
+    );
+  }
+
+  const outPath =
+    opts.outPath ?? resolveDefaultCompilePlaybookPath(session.site, playbook.toolName);
+  mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, `${stripCodeFences(result.text).trim()}\n`);
 
   return {

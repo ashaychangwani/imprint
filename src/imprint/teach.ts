@@ -18,7 +18,12 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute as pathIsAbsolute, join as pathJoin, resolve as pathResolve } from 'node:path';
+import {
+  basename as pathBasename,
+  isAbsolute as pathIsAbsolute,
+  join as pathJoin,
+  resolve as pathResolve,
+} from 'node:path';
 import * as p from '@clack/prompts';
 import { type CompileAgentProgress, compilePlaybook, generate } from './compile.ts';
 import {
@@ -38,7 +43,7 @@ import {
 import {
   type ProviderName,
   type ProviderStatus,
-  detectProvider,
+  detectTeachProvider,
   getProviderStatuses,
   isTeachCompatibleProvider,
 } from './llm.ts';
@@ -46,18 +51,34 @@ import { loadJsonFile } from './load-json.ts';
 import {
   localSessionsDir,
   localSiteDir,
+  localToolDir,
   relativeToLocalSite,
   resolveLocalSitePath,
 } from './paths.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { redactSession } from './redact.ts';
+import {
+  type SharedCompileContext,
+  type ToolCandidate,
+  buildSharedCompileContext as buildCandidateSharedCompileContext,
+  detectToolCandidates,
+  primaryToolCandidate,
+} from './tool-candidates.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
 import type { CronConfig, Playbook, Workflow } from './types.ts';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-const STEPS = ['record', 'redact', 'generate', 'compile-playbook', 'emit', 'register'] as const;
+const STEPS = [
+  'record',
+  'redact',
+  'detect-candidates',
+  'generate',
+  'compile-playbook',
+  'emit',
+  'register',
+] as const;
 type Step = (typeof STEPS)[number];
 
 interface WorkflowState {
@@ -67,6 +88,8 @@ interface WorkflowState {
   error?: string;
   startedAt: string;
   updatedAt: string;
+  candidate?: ToolCandidate;
+  sharedContext?: SharedCompileContext;
 }
 
 interface TeachState {
@@ -83,10 +106,21 @@ interface TeachOptions {
   fromSession?: string;
   /** Retain parser.test.ts after successful compile-agent verification. */
   keepTest?: boolean;
+  /** Non-interactive: compile every detected candidate instead of primary only. */
+  allTools?: boolean;
 }
 
 interface TeachResult {
   sessionPath: string;
+  workflowPath: string;
+  playbookPath: string;
+  indexPath: string;
+  workflow: Workflow;
+  playbook: Playbook;
+  tools: TeachToolResult[];
+}
+
+interface TeachToolResult {
   workflowPath: string;
   playbookPath: string;
   indexPath: string;
@@ -101,14 +135,7 @@ export function resolveTeachStatePath(
   const value = storedPath?.trim();
   if (!value) return null;
   if (pathIsAbsolute(value)) return value;
-
-  const localPath = resolveLocalSitePath(site, value);
-  if (existsSync(localPath)) return localPath;
-
-  const legacyPath = pathResolve('examples', site, value);
-  if (existsSync(legacyPath)) return legacyPath;
-
-  return localPath;
+  return resolveLocalSitePath(site, value);
 }
 
 export function buildTeachStateFromSession(
@@ -127,6 +154,17 @@ export function buildTeachStateFromSession(
   return ws;
 }
 
+export function assertCandidateToolName(
+  artifact: string,
+  actualToolName: string,
+  candidate?: ToolCandidate,
+): void {
+  if (!candidate || actualToolName === candidate.toolName) return;
+  throw new Error(
+    `${artifact} toolName "${actualToolName}" does not match selected candidate "${candidate.toolName}".`,
+  );
+}
+
 // ─── State management ───────────────────────────────────────────────────────
 
 function statePath(site: string): string {
@@ -139,13 +177,28 @@ function legacyStatePath(site: string): string {
 
 function loadTeachState(site: string): TeachState {
   const path = statePath(site);
-  const loadPath = existsSync(path) ? path : legacyStatePath(site);
+  const isLegacy = !existsSync(path) && existsSync(legacyStatePath(site));
+  const loadPath = isLegacy ? legacyStatePath(site) : path;
   if (!existsSync(loadPath)) return { workflows: {} };
   try {
-    return JSON.parse(readFileSync(loadPath, 'utf8')) as TeachState;
+    const state = JSON.parse(readFileSync(loadPath, 'utf8')) as TeachState;
+    return isLegacy ? normalizeLegacyTeachState(site, state) : state;
   } catch {
     return { workflows: {} };
   }
+}
+
+function normalizeLegacyTeachState(site: string, state: TeachState): TeachState {
+  const legacyRoot = pathResolve('examples', site);
+  for (const ws of Object.values(state.workflows)) {
+    if (ws.sessionPath && !pathIsAbsolute(ws.sessionPath)) {
+      ws.sessionPath = pathResolve(legacyRoot, ws.sessionPath);
+    }
+    if (ws.redactedPath && !pathIsAbsolute(ws.redactedPath)) {
+      ws.redactedPath = pathResolve(legacyRoot, ws.redactedPath);
+    }
+  }
+  return state;
 }
 
 function saveTeachState(site: string, state: TeachState): void {
@@ -183,15 +236,15 @@ function nextStep(completed: Step[]): Step {
   return STEPS[lastIdx + 1] as Step;
 }
 
-/** Scan examples/<site>/ for completed workflows. A workflow is "complete"
+/** Scan <IMPRINT_HOME>/<site>/ for completed workflows. A workflow is "complete"
  *  only when its tool directory has index.ts (emit ran successfully). */
 function discoverCompletedWorkflows(site: string): string[] {
-  const siteDir = pathResolve('examples', site);
+  const siteDir = localSiteDir(site);
   if (!existsSync(siteDir)) return [];
   const names: string[] = [];
 
   for (const entry of readdirSync(siteDir)) {
-    if (entry === 'sessions' || entry.startsWith('.')) continue;
+    if (entry === 'sessions' || entry === '_shared' || entry.startsWith('.')) continue;
     const dir = pathResolve(siteDir, entry);
     try {
       if (!statSync(dir).isDirectory()) continue;
@@ -206,9 +259,7 @@ function discoverCompletedWorkflows(site: string): string[] {
 }
 
 /** Find the latest session that has no matching state entry.
- *  New recordings live under ~/.imprint/<site>/sessions/. We also scan the
- *  old examples/<site>/sessions/ path so interrupted pre-migration runs can
- *  still be resumed. */
+ *  Recordings live under ~/.imprint/<site>/sessions/. */
 function discoverOrphanSession(site: string, state: TeachState): WorkflowState | null {
   const trackedPaths = new Set(Object.values(state.workflows).map((ws) => ws.sessionPath));
 
@@ -275,7 +326,7 @@ function validateSiteName(value: string | undefined): string | undefined {
   const v = (value ?? '').trim();
   if (!v) return 'Site name is required.';
   if (/[\s/\\]/.test(v))
-    return 'No spaces or slashes — site becomes a folder name under examples/.';
+    return 'No spaces or slashes — site becomes a folder name under ~/.imprint/.';
   return undefined;
 }
 
@@ -361,7 +412,7 @@ async function resolveTeachProvider(opts: TeachOptions): Promise<ProviderName> {
   }
 
   if (opts.noInteractive) {
-    const provider = detectProvider();
+    const provider = detectTeachProvider();
     assertTeachProvider(provider);
     return provider;
   }
@@ -468,7 +519,13 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
 
-  if (hasExisting && !opts.noInteractive) {
+  if (opts.fromSession) {
+    const candidateRedacted = opts.fromSession.replace(/\.json$/, '.redacted.json');
+    startFrom = isExistingFile(candidateRedacted) ? 'detect-candidates' : 'redact';
+    sessionPath = pathResolve(opts.fromSession);
+    if (isExistingFile(candidateRedacted)) redactedPath = pathResolve(candidateRedacted);
+    usingFromSession = true;
+  } else if (hasExisting && !opts.noInteractive) {
     const choice = await promptResumeChoice(site, completedWorkflows, incompleteWorkflows);
     if (p.isCancel(choice)) {
       p.outro('Cancelled.');
@@ -505,20 +562,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         }
       }
     }
-  } else if (opts.fromSession) {
-    const candidateRedacted = opts.fromSession.replace(/\.json$/, '.redacted.json');
-    startFrom = isExistingFile(candidateRedacted) ? 'generate' : 'redact';
-    sessionPath = pathResolve(opts.fromSession);
-    if (isExistingFile(candidateRedacted)) redactedPath = pathResolve(candidateRedacted);
-    usingFromSession = true;
   }
 
   const startIdx = STEPS.indexOf(startFrom);
   const spinner = p.spinner();
-  let providerName: ProviderName | null = null;
+  let resolvedProviderName: ProviderName | null = null;
   const getProviderName = async (): Promise<ProviderName> => {
-    providerName ??= await resolveTeachProvider(opts);
-    return providerName;
+    resolvedProviderName ??= await resolveTeachProvider(opts);
+    return resolvedProviderName;
   };
 
   // Temp key for state tracking before we know the toolName.
@@ -533,7 +584,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       startFrom,
       kind: 'raw',
     });
-  } else if (startFrom === 'generate' || startFrom === 'compile-playbook') {
+  } else if (
+    startFrom === 'detect-candidates' ||
+    startFrom === 'generate' ||
+    startFrom === 'compile-playbook'
+  ) {
     if (!redactedPath && sessionPath) {
       redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
     }
@@ -650,11 +705,9 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     });
   }
 
-  // ── 3. Generate workflow (agentic — long-running) ──────────────────
-  let workflowDir: string;
-  let genResult: { workflow: Workflow; workflowPath: string };
-
-  if (startIdx <= STEPS.indexOf('generate')) {
+  // ── 3. Detect and select tool candidates ───────────────────────────
+  let plans: CandidateCompilePlan[];
+  if (startIdx <= STEPS.indexOf('detect-candidates')) {
     const compileSessionPath = requireSessionFile(redactedPath, {
       site,
       workflowKey,
@@ -662,131 +715,104 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       kind: 'redacted',
     });
     const providerName = await getProviderName();
+    spinner.start('Detecting candidate tools...');
+    const detection = await detectTeachCandidates({
+      sessionPath: compileSessionPath,
+      providerName,
+    });
+    spinner.stop(
+      `Detected ${detection.candidates.length} candidate tool${detection.candidates.length === 1 ? '' : 's'}.`,
+    );
+    const selected = await selectTeachCandidates(detection, opts);
+    const sharedContext = buildCandidateSharedCompileContext(detection, selected);
+
+    const pendingKey = workflowKey.startsWith('_pending_') ? workflowKey : null;
+
+    const rawSessionPath = requireSessionFile(sessionPath, {
+      site,
+      workflowKey,
+      startFrom,
+      kind: 'raw',
+    });
+    const baseState = buildTeachStateFromSession(site, rawSessionPath, redactedPath);
+    plans = selected.map((candidate) => {
+      checkpoint(site, state, candidate.toolName, {
+        ...baseState,
+        completedSteps: ['record', 'redact', 'detect-candidates'],
+        candidate,
+        sharedContext,
+      });
+      return {
+        workflowKey: candidate.toolName,
+        startFrom: 'generate' as Step,
+        candidate,
+        sharedContext,
+      };
+    });
+
+    if (pendingKey && state.workflows[pendingKey]) {
+      delete state.workflows[pendingKey];
+      saveTeachState(site, state);
+    }
+  } else {
+    const ws = state.workflows[workflowKey];
+    plans = [
+      {
+        workflowKey,
+        startFrom,
+        candidate: ws?.candidate,
+        sharedContext: ws?.sharedContext,
+      },
+    ];
+  }
+
+  const needsCompileProvider = plans.some(
+    (plan) => STEPS.indexOf(plan.startFrom) <= STEPS.indexOf('compile-playbook'),
+  );
+  const compileProviderName = needsCompileProvider
+    ? await getProviderName()
+    : ('claude-cli' as ProviderName);
+  let compileModel = '';
+  if (needsCompileProvider) {
     const { resolveCompileAgentModel } = await import('./compile-agent.ts');
-    const compileModel = resolveCompileAgentModel(providerName);
+    compileModel = resolveCompileAgentModel(compileProviderName);
     p.note(
       [
-        `Provider: ${providerName}    Model: ${compileModel}`,
+        `Provider: ${compileProviderName}    Model: ${compileModel}`,
         '',
-        'An LLM agent will reverse-engineer the API response format.',
-        'Expect ~3-5 minutes and moderate to high token use, depending on',
+        plans.length === 1
+          ? 'An LLM agent will reverse-engineer the API response format.'
+          : `${plans.length} LLM compile agents will reverse-engineer selected tools with concurrency 2.`,
+        'Expect ~3-5 minutes per tool and moderate to high token use, depending on',
         'the complexity of the recording. You can interrupt with Ctrl-C.',
       ].join('\n'),
       'Compile step',
     );
-
-    spinner.start('Compiling...');
-    // compileAgent writes workflow.json (+ parser.ts etc.) to examples/<site>/.
-    // We move them into the toolName subdirectory after we know the name.
-    const result = await generate({
-      sessionPath: compileSessionPath,
-      llmConfig: { provider: providerName, model: compileModel },
-      keepTest: opts.keepTest,
-      onProgress: (progress) => {
-        spinner.message(formatCompileProgress(progress));
-      },
-    });
-
-    const toolName = result.workflow.toolName;
-    workflowDir = pathResolve('examples', site, toolName);
-    mkdirSync(workflowDir, { recursive: true });
-
-    // Move agent-written artifacts into the workflow subdirectory.
-    const siteDir = pathResolve('examples', site);
-    for (const artifact of ['workflow.json', 'parser.ts', 'parser.test.ts']) {
-      const src = pathJoin(siteDir, artifact);
-      if (!existsSync(src)) continue;
-      const dest = pathJoin(workflowDir, artifact);
-      try {
-        renameSync(src, dest);
-      } catch {
-        writeFileSync(dest, readFileSync(src, 'utf8'), 'utf8');
-        unlinkSync(src);
-      }
-    }
-
-    const finalWorkflowPath = pathJoin(workflowDir, 'workflow.json');
-    genResult = { workflow: result.workflow, workflowPath: finalWorkflowPath };
-
-    spinner.stop(
-      `workflow.json → ${toolName} (${result.workflow.requests.length} request(s), ${result.workflow.parameters.length} param(s))`,
-    );
-
-    // Rename state key from temp to toolName, carrying over prior state.
-    if (workflowKey !== toolName) {
-      const prior = state.workflows[workflowKey];
-      delete state.workflows[workflowKey];
-      workflowKey = toolName;
-      if (prior) state.workflows[workflowKey] = prior;
-    }
-
-    updateCheckpoint(site, state, workflowKey, 'generate');
-  } else {
-    // Resuming after generate — workflowKey IS the toolName.
-    workflowDir = pathResolve('examples', site, workflowKey);
-    const workflowPath = pathJoin(workflowDir, 'workflow.json');
-    const workflow = loadJsonFile(
-      workflowPath,
-      WorkflowSchema,
-      { notFound: `workflow.json not found at ${workflowPath}` },
-      'workflow.json',
-    );
-    genResult = { workflow, workflowPath };
   }
 
-  // ── 4. Compile playbook ────────────────────────────────────────────
-  let pbResult: { playbook: Playbook; playbookPath: string };
+  const compileSessionPath = requireSessionFile(redactedPath, {
+    site,
+    workflowKey: plans[0]?.workflowKey ?? workflowKey,
+    startFrom,
+    kind: 'redacted',
+  });
 
-  if (startIdx <= STEPS.indexOf('compile-playbook')) {
-    const compileSessionPath = requireSessionFile(redactedPath, {
-      site,
-      workflowKey,
-      startFrom,
-      kind: 'redacted',
-    });
-    const providerName = await getProviderName();
-    spinner.start('Compiling DOM playbook...');
-    const playbookOutPath = pathJoin(workflowDir, 'playbook.yaml');
-    const result = await compilePlaybook({
-      sessionPath: compileSessionPath,
-      outPath: playbookOutPath,
-      llmConfig: { provider: providerName },
-    });
-    pbResult = { playbook: result.playbook, playbookPath: result.playbookPath };
-    spinner.stop(
-      `playbook.yaml → ${result.playbook.steps.length} step(s), ${result.playbook.parameters.length} param(s)`,
-    );
+  const results = await compileCandidatePlans({
+    plans,
+    site,
+    state,
+    sessionPath: compileSessionPath,
+    providerName: compileProviderName,
+    compileModel,
+    keepTest: opts.keepTest,
+    spinner,
+  });
 
-    updateCheckpoint(site, state, workflowKey, 'compile-playbook');
-  } else {
-    const playbookPath = pathJoin(workflowDir, 'playbook.yaml');
-    const { parsePlaybook } = await import('./playbook-parser.ts');
-    const playbook = parsePlaybook(readFileSync(playbookPath, 'utf8'));
-    pbResult = { playbook, playbookPath };
+  if (results.length === 0) {
+    throw new Error('No selected tools were compiled.');
   }
 
-  // ── 5. Emit ────────────────────────────────────────────────────────
-  let emitOutPath: string;
-
-  if (startIdx <= STEPS.indexOf('emit')) {
-    spinner.start('Emitting tool...');
-    const emitResult = emit({
-      workflowPath: genResult.workflowPath,
-      outDir: workflowDir,
-      force: true,
-    });
-    emitOutPath = emitResult.outPath;
-    spinner.stop(`${emitOutPath} generated.`);
-
-    updateCheckpoint(site, state, workflowKey, 'emit');
-  } else {
-    emitOutPath = pathJoin(workflowDir, 'index.ts');
-  }
-
-  // Write a sibling credentials manifest so a downstream agent that consumes
-  // this skill knows which credentials to ask for. Manifest contains names +
-  // descriptions only — no values.
-  exportSiteManifest(site, workflowDir);
+  const primaryResult = results[0] as TeachToolResult;
 
   // ── 6. Platform integration ────────────────────────────────────────
   if (startIdx <= STEPS.indexOf('register')) {
@@ -804,8 +830,9 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         console.log(`[${plat}]`);
         console.log(
           generatePasteSnippet({
-            site: site,
-            workflow: genResult.workflow,
+            site,
+            workflow: primaryResult.workflow,
+            workflows: results.map((r) => r.workflow),
             platform: plat,
             imprintCommand,
           }),
@@ -814,27 +841,265 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       }
     } else {
       await interactivePlatformSetup({
-        site: site,
-        workflowDir,
-        workflow: genResult.workflow,
-        playbook: pbResult.playbook,
+        site,
+        workflowDir: pathResolve(primaryResult.workflowPath, '..'),
+        workflow: primaryResult.workflow,
+        workflows: results.map((r) => r.workflow),
+        playbook: primaryResult.playbook,
+        playbooks: results.map((r) => r.playbook),
       });
     }
   }
 
-  // Mark all steps complete (keep the entry for future redo).
-  updateCheckpoint(site, state, workflowKey, 'register');
+  for (const result of results) {
+    updateCheckpoint(site, state, result.workflow.toolName, 'register');
+  }
 
-  p.outro('Done! Your agent is ready.');
+  p.outro(
+    `Done! ${results.length} tool${results.length === 1 ? '' : 's'} ready: ${results.map((r) => r.workflow.toolName).join(', ')}`,
+  );
 
   return {
     sessionPath: sessionPath ?? '',
+    workflowPath: primaryResult.workflowPath,
+    playbookPath: primaryResult.playbookPath,
+    indexPath: primaryResult.indexPath,
+    workflow: primaryResult.workflow,
+    playbook: primaryResult.playbook,
+    tools: results,
+  };
+}
+
+// ─── Candidate detection + per-tool compile ────────────────────────────────
+
+interface CandidateCompilePlan {
+  workflowKey: string;
+  startFrom: Step;
+  candidate?: ToolCandidate;
+  sharedContext?: SharedCompileContext;
+}
+
+async function detectTeachCandidates(opts: {
+  sessionPath: string;
+  providerName: ProviderName;
+}): Promise<Awaited<ReturnType<typeof detectToolCandidates>>> {
+  const session = loadJsonFile(
+    opts.sessionPath,
+    SessionSchema,
+    {
+      notFound: 'Redacted session file not found before candidate detection.',
+      badSchema: 'Redacted session file is malformed.',
+    },
+    'session',
+  );
+  return await detectToolCandidates(session, { provider: opts.providerName });
+}
+
+async function selectTeachCandidates(
+  detection: Awaited<ReturnType<typeof detectToolCandidates>>,
+  opts: TeachOptions,
+): Promise<ToolCandidate[]> {
+  if (detection.candidates.length === 1) return [detection.candidates[0] as ToolCandidate];
+
+  if (opts.noInteractive) {
+    if (opts.allTools) return detection.candidates;
+    const primary = primaryToolCandidate(detection);
+    p.log.warn(
+      `Detected ${detection.candidates.length} candidate tools; --no-interactive compiles only primary "${primary.toolName}". Pass --all-tools to compile all.`,
+    );
+    return [primary];
+  }
+
+  const answer = await p.multiselect({
+    message: 'Which tools should Imprint compile from this recording?',
+    required: true,
+    initialValues: detection.candidates
+      .filter((candidate) => candidate.primary)
+      .map((c) => c.toolName),
+    options: detection.candidates.map((candidate) => ({
+      value: candidate.toolName,
+      label: `${candidate.toolName}${candidate.primary ? ' (primary)' : ''}`,
+      hint: `${Math.round(candidate.confidence * 100)}% — ${candidate.description}`,
+    })),
+  });
+  if (p.isCancel(answer)) {
+    p.outro('Cancelled.');
+    process.exit(0);
+  }
+
+  const selectedNames = new Set(answer as string[]);
+  const selected = detection.candidates.filter((candidate) =>
+    selectedNames.has(candidate.toolName),
+  );
+  if (selected.length === 0) {
+    throw new Error('At least one tool candidate must be selected.');
+  }
+  return selected;
+}
+
+async function compileCandidatePlans(opts: {
+  plans: CandidateCompilePlan[];
+  site: string;
+  state: TeachState;
+  sessionPath: string;
+  providerName: ProviderName;
+  compileModel: string;
+  keepTest?: boolean;
+  spinner: ReturnType<typeof p.spinner>;
+}): Promise<TeachToolResult[]> {
+  const concurrency = opts.plans.length === 1 ? 1 : 2;
+  return await mapLimit(opts.plans, concurrency, async (plan) => {
+    const displayName = plan.candidate?.toolName ?? plan.workflowKey;
+    let lastActivity = '';
+    const onProgress = (progress: CompileAgentProgress): void => {
+      const activity = formatCompileProgress(progress);
+      if (activity === lastActivity) return;
+      lastActivity = activity;
+      if (opts.plans.length === 1) {
+        opts.spinner.message(activity);
+      } else {
+        process.stderr.write(`[imprint teach] ${displayName}: ${activity}\n`);
+      }
+    };
+    if (opts.plans.length === 1) opts.spinner.start(`Compiling ${displayName}...`);
+    try {
+      const result = await compileSelectedCandidate({
+        ...opts,
+        plan,
+        onProgress,
+      });
+      if (opts.plans.length === 1) {
+        opts.spinner.stop(`${displayName} compiled.`);
+      } else {
+        p.log.success(`${displayName} compiled.`);
+      }
+      return result;
+    } catch (err) {
+      const ws = opts.state.workflows[plan.workflowKey];
+      if (ws) {
+        ws.error = err instanceof Error ? err.message : String(err);
+        ws.updatedAt = new Date().toISOString();
+        saveTeachState(opts.site, opts.state);
+      }
+      if (opts.plans.length === 1) {
+        opts.spinner.stop(`${displayName} failed.`);
+      }
+      throw err;
+    }
+  });
+}
+
+async function compileSelectedCandidate(opts: {
+  plan: CandidateCompilePlan;
+  site: string;
+  state: TeachState;
+  sessionPath: string;
+  providerName: ProviderName;
+  compileModel: string;
+  keepTest?: boolean;
+  onProgress: (progress: CompileAgentProgress) => void;
+}): Promise<TeachToolResult> {
+  const { plan, site, state } = opts;
+  const startIdx = STEPS.indexOf(plan.startFrom);
+  const toolName = plan.candidate?.toolName ?? plan.workflowKey;
+  const workflowDir = localToolDir(site, toolName);
+  mkdirSync(workflowDir, { recursive: true });
+
+  let genResult: { workflow: Workflow; workflowPath: string };
+  if (startIdx <= STEPS.indexOf('generate')) {
+    const result = await generate({
+      sessionPath: opts.sessionPath,
+      outDir: workflowDir,
+      llmConfig: { provider: opts.providerName, model: opts.compileModel },
+      keepTest: opts.keepTest,
+      candidate: plan.candidate,
+      sharedContext: plan.sharedContext,
+      onProgress: opts.onProgress,
+    });
+    assertCandidateToolName('Compiled workflow', result.workflow.toolName, plan.candidate);
+    genResult = { workflow: result.workflow, workflowPath: result.workflowPath };
+    updateCheckpoint(site, state, plan.workflowKey, 'generate', {
+      candidate: plan.candidate,
+      sharedContext: plan.sharedContext,
+    });
+  } else {
+    const workflowPath = pathJoin(workflowDir, 'workflow.json');
+    const workflow = loadJsonFile(
+      workflowPath,
+      WorkflowSchema,
+      { notFound: `workflow.json not found at ${workflowPath}` },
+      'workflow.json',
+    );
+    genResult = { workflow, workflowPath };
+  }
+
+  let pbResult: { playbook: Playbook; playbookPath: string };
+  if (startIdx <= STEPS.indexOf('compile-playbook')) {
+    const result = await compilePlaybook({
+      sessionPath: opts.sessionPath,
+      outPath: pathJoin(workflowDir, 'playbook.yaml'),
+      llmConfig: { provider: opts.providerName },
+      candidate: plan.candidate,
+      sharedContext: plan.sharedContext,
+    });
+    assertCandidateToolName('Compiled playbook', result.playbook.toolName, plan.candidate);
+    pbResult = { playbook: result.playbook, playbookPath: result.playbookPath };
+    updateCheckpoint(site, state, plan.workflowKey, 'compile-playbook');
+  } else {
+    const playbookPath = pathJoin(workflowDir, 'playbook.yaml');
+    const { parsePlaybook } = await import('./playbook-parser.ts');
+    const playbook = parsePlaybook(readFileSync(playbookPath, 'utf8'));
+    assertCandidateToolName('Stored playbook', playbook.toolName, plan.candidate);
+    pbResult = { playbook, playbookPath };
+  }
+
+  let emitOutPath: string;
+  if (startIdx <= STEPS.indexOf('emit')) {
+    const emitResult = emit({
+      workflowPath: genResult.workflowPath,
+      outDir: workflowDir,
+      force: true,
+    });
+    emitOutPath = emitResult.outPath;
+    updateCheckpoint(site, state, plan.workflowKey, 'emit');
+  } else {
+    emitOutPath = pathJoin(workflowDir, 'index.ts');
+  }
+
+  exportSiteManifest(site, workflowDir, genResult.workflow, pbResult.playbook);
+
+  return {
     workflowPath: genResult.workflowPath,
     playbookPath: pbResult.playbookPath,
     indexPath: emitOutPath,
     workflow: genResult.workflow,
     playbook: pbResult.playbook,
   };
+}
+
+export async function mapLimit<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  let firstError: unknown;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length && firstError === undefined) {
+      const index = next++;
+      const item = items[index];
+      if (item === undefined) continue;
+      try {
+        results[index] = await fn(item);
+      } catch (err) {
+        firstError ??= err;
+      }
+    }
+  });
+  await Promise.allSettled(workers);
+  if (firstError !== undefined) throw firstError;
+  return results;
 }
 
 // ─── Credential capture (interactive) ───────────────────────────────────────
@@ -926,18 +1191,30 @@ async function promptAndPersistCredentials(opts: {
 }
 
 /** Write `<workflowDir>/credentials.manifest.json` so consumers of the
- *  shared skill know what credentials to provision. No values, just names. */
-function exportSiteManifest(site: string, workflowDir: string): void {
+ *  generated tool know what credentials to provision. No values, just names. */
+function exportSiteManifest(
+  site: string,
+  workflowDir: string,
+  workflow: Workflow,
+  playbook: Playbook,
+): void {
   const m = readSiteManifest(site);
   if (!m || (m.secrets.length === 0 && (m.storage?.length ?? 0) === 0)) return;
+  const requiredSecrets = referencedCredentialNames(workflow, playbook);
+  const requiredStorageKeys = referencedStorageKeys(workflow, playbook);
+  const secrets = m.secrets.filter((s) => requiredSecrets.has(s.name));
+  const storage = (m.storage ?? []).filter((s) =>
+    requiredStorageKeys.has(`${s.origin}\n${s.kind}\n${s.key}`),
+  );
+  if (secrets.length === 0 && storage.length === 0) return;
   const out = {
     site: m.site,
-    secrets: m.secrets.map((s) => ({
+    secrets: secrets.map((s) => ({
       name: s.name,
       kind: s.kind,
       description: s.description,
     })),
-    storage: (m.storage ?? []).map((s) => ({
+    storage: storage.map((s) => ({
       origin: s.origin,
       kind: s.kind,
       key: s.key,
@@ -949,6 +1226,27 @@ function exportSiteManifest(site: string, workflowDir: string): void {
     `${JSON.stringify(out, null, 2)}\n`,
     'utf8',
   );
+}
+
+function referencedCredentialNames(workflow: Workflow, playbook: Playbook): Set<string> {
+  const names = new Set<string>();
+  const text = `${JSON.stringify(workflow)}\n${JSON.stringify(playbook)}`;
+  for (const match of text.matchAll(/\$\{credential\.([^}]+)\}/g)) {
+    if (match[1]) names.add(match[1]);
+  }
+  return names;
+}
+
+function referencedStorageKeys(workflow: Workflow, _playbook: Playbook): Set<string> {
+  const refs = new Set<string>();
+  for (const capture of workflow.bootstrap?.captures ?? []) {
+    if (capture.source === 'local_storage') {
+      refs.add(`${capture.origin}\nlocalStorage\n${capture.key}`);
+    } else if (capture.source === 'session_storage') {
+      refs.add(`${capture.origin}\nsessionStorage\n${capture.key}`);
+    }
+  }
+  return refs;
 }
 
 async function persistFinding(opts: {
@@ -1005,19 +1303,14 @@ function updateCheckpoint(
 
 function friendlySessionTimestamp(sessionPath: string): string {
   const m = sessionPath.match(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})/);
-  if (!m) return 'unknown';
+  if (!m) return pathBasename(sessionPath);
   return `${m[1]} ${m[2]}:${m[3]}`;
 }
 
 function toRelative(site: string, absPath: string): string {
   const localRelative = relativeToLocalSite(site, absPath);
   if (localRelative) return localRelative;
-
-  const siteDir = pathResolve('examples', site);
-  if (absPath.startsWith(siteDir)) {
-    return absPath.slice(siteDir.length + 1);
-  }
-  return absPath;
+  return `_external_/${pathBasename(absPath)}`;
 }
 
 // ─── Resume TUI ─────────────────────────────────────────────────────────────
@@ -1120,9 +1413,11 @@ async function interactivePlatformSetup(opts: {
   site: string;
   workflowDir: string;
   workflow: Workflow;
+  workflows?: Workflow[];
   playbook: Playbook;
+  playbooks?: Playbook[];
 }): Promise<void> {
-  const { site, workflowDir, workflow, playbook } = opts;
+  const { site, workflowDir, workflow, workflows, playbook, playbooks } = opts;
   const imprintCommand = detectImprintCommand();
 
   const platformChoice = await p.select({
@@ -1208,17 +1503,31 @@ async function interactivePlatformSetup(opts: {
         console.log(`  ${cmdDisplay}\n`);
       }
     } else {
-      const snippet = generatePasteSnippet({ site, workflow, platform, imprintCommand });
+      const snippet = generatePasteSnippet({
+        site,
+        workflow,
+        workflows,
+        platform,
+        imprintCommand,
+      });
       console.log('\nPaste this into your terminal or AI tool:\n');
       console.log(`  ${snippet}\n`);
     }
   } else {
-    const snippet = generatePasteSnippet({ site, workflow, platform, imprintCommand });
+    const snippet = generatePasteSnippet({ site, workflow, workflows, platform, imprintCommand });
     console.log(`\n${snippet}\n`);
   }
 
   if (platform === 'openclaw' || platform === 'hermes') {
-    await offerSkillExport({ site, workflowDir, workflow, playbook, platform });
+    await offerSkillExport({
+      site,
+      workflowDir,
+      workflow,
+      workflows,
+      playbook,
+      playbooks,
+      platform,
+    });
   }
 }
 
@@ -1226,10 +1535,12 @@ async function offerSkillExport(opts: {
   site: string;
   workflowDir: string;
   workflow: Workflow;
+  workflows?: Workflow[];
   playbook: Playbook;
+  playbooks?: Playbook[];
   platform: 'openclaw' | 'hermes';
 }): Promise<void> {
-  const { site, workflowDir, workflow, playbook, platform } = opts;
+  const { site, workflowDir, workflow, workflows, playbook, playbooks, platform } = opts;
 
   const cronPath = pathResolve(workflowDir, 'cron.json');
   let cronConfig: CronConfig | undefined;
@@ -1248,7 +1559,15 @@ async function offerSkillExport(opts: {
 
   if (p.isCancel(exportConfirm) || !exportConfirm) return;
 
-  const skillContent = generateSkillMd({ site, workflow, playbook, cronConfig, platform });
+  const skillContent = generateSkillMd({
+    site,
+    workflow,
+    workflows,
+    playbook,
+    playbooks,
+    cronConfig,
+    platform,
+  });
 
   let outDir: string;
   if (platform === 'hermes') {

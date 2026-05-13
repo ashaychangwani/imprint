@@ -57,9 +57,9 @@ The site is blocking API replay or needs browser-minted state. Three escalating 
 
 2. **Probe and cache the working backend:**
    ```bash
-   imprint probe-backends <site>
+   imprint probe-backends <site> --tool <toolName>
    ```
-   This writes `backends.json`; cron + MCP read it at startup.
+   This writes `backends.json`; cron + MCP read it at startup. On a single-tool site, `--tool` is optional; on multi-tool sites, `--out ~/.imprint/<site>/<toolName>/backends.json` also selects the target.
 
 3. **Compile a playbook fallback:**
    ```bash
@@ -73,7 +73,7 @@ The workflow referenced a required `${state.NAME}` or cookie value that was not 
 
 - `ordinary_http` — an earlier safe/idempotent HTTP request was expected to produce the value. Check `requests[].captures`, request order, and whether the producer request still sets the cookie/header/body field.
 - `browser_bootstrap` — add or fix `workflow.bootstrap`; `fetch-bootstrap` should be able to mint this state before API replay.
-- `stealth_bootstrap` — use `replayBackend: "auto"` or `stealth-fetch`; plain Chromium did not mint the bot-defense state.
+- `stealth_bootstrap` — `stealth-fetch` supplies bot-defense cookies/headers to API replay but does not fill `${state.NAME}` placeholders by itself. Use `replayBackend: "auto"` so the ladder escalates to `fetch-bootstrap` (if the workflow has bootstrap metadata) or the `playbook` fallback. If neither resolves the missing state, regenerate the workflow from a recording that includes the state-producing interaction.
 - `credential_required` — provision secrets/cookies/storage with `imprint login`, `imprint credential set`, or `imprint credential import`.
 - `unsupported` — the workflow references state no backend knows how to produce; regenerate or edit `workflow.json`.
 
@@ -125,6 +125,24 @@ The Vertex Anthropic call returned text instead of JSON. This happens occasional
 
 **Fix:** re-run `imprint generate`. If it persists, try `--no-shrink` or split the recording into smaller workflows.
 
+## "Compile is slow or looks stuck"
+
+Recent compilers compact repeated request metadata before candidate detection, request triage, and compile-agent summaries, while keeping full request/response bodies available through explicit read tools. If a compile still looks slow, turn on local Phoenix tracing and inspect which stage or tool call is spending time:
+
+```bash
+uv tool install arize-phoenix
+phoenix serve
+
+IMPRINT_TRACE=1 \
+IMPRINT_TRACE_BATCH=false \
+IMPRINT_TRACE_LLM_IO=1 \
+IMPRINT_TRACE_TOOL_IO=1 \
+PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
+imprint teach <site> --from-session ~/.imprint/<site>/sessions/<ts>.json --provider codex-cli
+```
+
+If Phoenix is open at `http://localhost:6006` but empty, check that `PHOENIX_COLLECTOR_ENDPOINT` points at that URL and use `IMPRINT_TRACE_BATCH=false` for immediate local export. `IMPRINT_TRACE_LLM_IO=1` records prompts/responses; `IMPRINT_TRACE_TOOL_IO=1` records compile-agent tool arguments/results; `IMPRINT_TRACE_IO_MAX_CHARS=200000` raises the per-payload capture cap when the default is too small.
+
 ## "MCP tools panel is empty in Claude Desktop"
 
 Common causes:
@@ -133,7 +151,7 @@ Common causes:
 
 2. **Restart required.** Claude Desktop reads config only at startup.
 
-3. **No examples/<site>/<toolName>/index.ts.** Imprint discovers tools by scanning nested tool directories under `examples/`. If you haven't run `imprint emit`, there's nothing to expose.
+3. **No `~/.imprint/<site>/<toolName>/index.ts`.** Imprint discovers tools by scanning nested tool directories under `IMPRINT_HOME` (`~/.imprint` by default). If you haven't run `imprint teach` or `imprint emit`, there's nothing to expose.
 
 4. **Vertex env not set.** MCP server starts fine without it, but tool calls fail. Set `ANTHROPIC_VERTEX_PROJECT_ID`.
 
@@ -161,9 +179,9 @@ Headed mode opens a visible Chromium so you can watch it run.
 
 The generated workflow expects a `param.X`, but you didn't pass it. The error message lists which params *were* passed (or, if none, the exact `--param X=<value>` to add).
 
-For `imprint cron`, the params live in `examples/<site>/<toolName>/cron.json` under the `params` key. For `imprint mcp-server`, the agent passes them in the tool call.
+For `imprint cron`, the params live in `~/.imprint/<site>/<toolName>/cron.json` under the `params` key. For `imprint mcp-server`, the agent passes them in the tool call.
 
-If the param name in the workflow looks wrong (e.g. `q` instead of `query`), edit `examples/<site>/<toolName>/workflow.json`'s `parameters` array — the runtime substitutes by name.
+If the param name in the workflow looks wrong (e.g. `q` instead of `query`), edit `~/.imprint/<site>/<toolName>/workflow.json`'s `parameters` array — the runtime substitutes by name.
 
 ## "Invalid cron expression in cron.json"
 

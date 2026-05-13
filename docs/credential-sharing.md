@@ -1,14 +1,16 @@
 # Sharing Imprint skills (and their credentials) across machines
 
-Imprint skills are designed to ship without secrets. The skill folder you commit to git contains:
+Imprint skills are designed to ship without secrets. The generated tool folder contains:
 
 - `workflow.json` — request templates with `${credential.NAME}` placeholders and named `${state.NAME}` captures
 - `playbook.yaml` — DOM playbook (no secrets)
 - `index.ts` — generated MCP tool (no secrets)
-- `credentials.manifest.json` — names + descriptions of required secrets/storage keys (**no values**)
+- `credentials.manifest.json` — names + descriptions of secrets/storage keys referenced by this generated tool (**no values**)
 - `parser.ts` (optional) — response parser
 
 The *values* of those credentials live in the local credential manager on each machine that runs the skill. That can include named secrets, cookies captured by `imprint login`, and declared durable browser-storage keys. There are two supported provisioning paths.
+
+Generated `index.ts` modules import Imprint's runtime from the local checkout that emitted them. When moving a skill folder to another machine, install Imprint there and rerun `imprint emit <workflow.json> --force` so the wrapper points at that machine's runtime.
 
 ## Path A — interactive provisioning on the agent (simplest)
 
@@ -21,7 +23,7 @@ imprint credential set southwest-seats username   # prompts (silent input)
 imprint credential set southwest-seats password   # prompts (silent input)
 ```
 
-The names come from the skill's `credentials.manifest.json`. Imprint stores values in the OS keychain (macOS Keychain / Linux Secret Service / Windows Credential Manager) when available; it falls back to a libsodium-encrypted file at `~/.config/imprint/secrets.enc` (passphrase from `IMPRINT_PASSPHRASE` env var, or interactive prompt) on headless boxes.
+The names come from the tool's `credentials.manifest.json`; credential values are still stored per site so several tools for one site can share the same login safely. Imprint stores values in the OS keychain (macOS Keychain / Linux Secret Service / Windows Credential Manager) when available; it falls back to a libsodium-encrypted file at `~/.config/imprint/secrets.enc` (passphrase from `IMPRINT_PASSPHRASE` env var, or interactive prompt) on headless boxes.
 
 This path requires the user to know (or look up) each credential value on the agent. It's the right answer for one-off setup or when you don't want secrets to travel between machines.
 

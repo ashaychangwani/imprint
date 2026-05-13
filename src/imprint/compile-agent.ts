@@ -30,7 +30,9 @@ import {
 } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
+import { localSiteDir } from './paths.ts';
 import { redactSession } from './redact.ts';
+import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type Session, SessionSchema } from './types.ts';
 
 export type { CompileAgentProgress } from './compile-agent-types.ts';
@@ -70,6 +72,12 @@ interface CompileAgentOptions {
    *  prompts — values flow into the credential manager only when the user
    *  goes through the teach flow). */
   replacements?: Replacement[];
+  /** Directory where workflow.json/parser.ts/parser.test.ts are written. */
+  outDir?: string;
+  /** Candidate-specific compile scope for multi-tool teach. */
+  candidate?: ToolCandidate;
+  /** Shared auth/helper guidance generated once for a multi-tool teach run. */
+  sharedContext?: SharedCompileContext;
 }
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
@@ -114,8 +122,8 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
     }
   }
 
-  // 3. Determine the example dir
-  const absoluteExampleDir = pathJoin(REPO_ROOT, 'examples', session.site);
+  // 3. Determine the generated tool directory.
+  const absoluteToolDir = opts.outDir ?? localSiteDir(session.site);
 
   // 4. Load the system prompt
   const systemPromptPath = pathJoin(PROMPTS_DIR, 'compile-agent.md');
@@ -131,7 +139,10 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
     ? opts.sessionPath
     : pathJoin(REPO_ROOT, opts.sessionPath);
   const tools = [
-    ...buildCompileTools(session, absoluteExampleDir, sessionPathAbs),
+    ...buildCompileTools(session, absoluteToolDir, sessionPathAbs, {
+      candidate: opts.candidate,
+      sharedContext: opts.sharedContext,
+    }),
     doneTool(),
     giveUpTool(),
   ];
@@ -140,8 +151,9 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
   const initialUserMessage = `A new compile task is starting.
 
 Session path: ${sessionPathAbs}
-Example directory: ${absoluteExampleDir}
-You will write artifacts into the example directory.
+Tool directory: ${absoluteToolDir}
+You will write artifacts into the tool directory.
+${formatCandidateContext(opts.candidate, opts.sharedContext)}
 
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
 
@@ -160,25 +172,29 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     if (resolvedProvider.name === 'claude-cli') {
       return await compileViaClaudeCli({
         session,
-        absoluteExampleDir,
+        absoluteToolDir,
         sessionPath: opts.sessionPath,
         systemPromptPath,
         deadlineMs,
         onProgress: opts.onProgress,
         startTime,
         keepTest: opts.keepTest,
+        candidate: opts.candidate,
+        sharedContext: opts.sharedContext,
       });
     }
     if (resolvedProvider.name === 'codex-cli') {
       return await compileViaCodexCli({
         session,
-        absoluteExampleDir,
+        absoluteToolDir,
         sessionPath: opts.sessionPath,
         systemPromptPath,
         deadlineMs,
         onProgress: opts.onProgress,
         startTime,
         keepTest: opts.keepTest,
+        candidate: opts.candidate,
+        sharedContext: opts.sharedContext,
       });
     }
     if (!isToolUseProvider(resolvedProvider)) {
@@ -243,13 +259,15 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     // Perform external verification
-    const failures = await externalVerification(absoluteExampleDir, session, sessionPathAbs);
+    const failures = await externalVerification(absoluteToolDir, session, sessionPathAbs, {
+      expectedToolName: opts.candidate?.toolName,
+    });
 
     if (failures.length === 0) {
       // Success
       message = result.doneSummary ?? 'Task completed';
       if (!opts.keepTest) {
-        const testPath = pathJoin(absoluteExampleDir, 'parser.test.ts');
+        const testPath = pathJoin(absoluteToolDir, 'parser.test.ts');
         if (existsSync(testPath)) unlinkSync(testPath);
       }
       break;
@@ -271,14 +289,14 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
   }
 
   // 10. Persist conversation log
-  mkdirSync(absoluteExampleDir, { recursive: true });
-  const conversationLogPath = pathJoin(absoluteExampleDir, '.compile-log.json');
+  mkdirSync(absoluteToolDir, { recursive: true });
+  const conversationLogPath = pathJoin(absoluteToolDir, '.compile-log.json');
   writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
 
   // 11. Return the result
-  const workflowPath = pathJoin(absoluteExampleDir, 'workflow.json');
-  const parserPath = pathJoin(absoluteExampleDir, 'parser.ts');
-  const parserTestPath = pathJoin(absoluteExampleDir, 'parser.test.ts');
+  const workflowPath = pathJoin(absoluteToolDir, 'workflow.json');
+  const parserPath = pathJoin(absoluteToolDir, 'parser.ts');
+  const parserTestPath = pathJoin(absoluteToolDir, 'parser.test.ts');
 
   return {
     success: outcome === 'done',
@@ -309,4 +327,19 @@ function buildMessageFromOutcome(result: AgentResult): string {
     default:
       return 'Unknown outcome';
   }
+}
+
+function formatCandidateContext(
+  candidate: ToolCandidate | undefined,
+  sharedContext: SharedCompileContext | undefined,
+): string {
+  if (!candidate && !sharedContext) return '';
+  return `
+Selected candidate context:
+${candidate ? JSON.stringify(candidate, null, 2) : '(none)'}
+
+Shared compile context:
+${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
+
+Compile only the selected candidate. Do not create tools for other actions in the recording.`;
 }

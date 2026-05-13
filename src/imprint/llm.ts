@@ -3,6 +3,14 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
+import {
+  llmSpanAttributes,
+  resolveTraceTokenCount,
+  setSpanAttributes,
+  traceLlmIoEnabled,
+  traceLlmMessages,
+  traced,
+} from './tracing.ts';
 
 export type ProviderName = 'anthropic-api' | 'vertex' | 'claude-cli' | 'codex-cli' | 'cursor-cli';
 
@@ -17,6 +25,18 @@ interface AnalyzeResult {
 interface LLMProvider {
   readonly name: ProviderName;
   analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult>;
+}
+
+interface CliProcessWithOutput {
+  stdout: ReadableStream<Uint8Array>;
+  stderr: ReadableStream<Uint8Array>;
+  exited: Promise<number>;
+}
+
+interface TraceAnalyzeDetails {
+  inputText: string;
+  inputMessages: Array<{ role: string; content: string }>;
+  invocationParameters?: Record<string, unknown>;
 }
 
 /** Subset of providers that support the Anthropic tool-use protocol.
@@ -84,34 +104,49 @@ class VertexProvider implements LLMProvider {
   }
 
   async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
-    const t0 = Date.now();
     const userText = JSON.stringify(userPayload);
-
-    let response: Awaited<ReturnType<typeof this.client.messages.create>>;
-    try {
-      response = await this.client.messages.create({
-        model: this.config.model,
-        max_tokens: this.config.maxTokens,
-        ...temperatureFragment(this.config.model, this.config.temperature),
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userText }],
-      });
-    } catch (err) {
-      throw enrichVertexError(err, this.config);
-    }
-
-    const text = response.content
-      .filter((block) => block.type === 'text')
-      .map((block) => ('text' in block ? block.text : ''))
-      .join('');
-
-    return {
-      text,
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      durationMs: Date.now() - t0,
-      stopReason: response.stop_reason ?? null,
+    const invocationParameters = {
+      max_tokens: this.config.maxTokens,
+      ...temperatureFragment(this.config.model, this.config.temperature),
     };
+    return await traceAnalyze(
+      this.name,
+      this.config.model,
+      systemPrompt,
+      userText.length,
+      async () => {
+        const t0 = Date.now();
+
+        let response: Awaited<ReturnType<typeof this.client.messages.create>>;
+        try {
+          response = await this.client.messages.create({
+            model: this.config.model,
+            max_tokens: invocationParameters.max_tokens,
+            ...(invocationParameters.temperature === undefined
+              ? {}
+              : { temperature: invocationParameters.temperature }),
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userText }],
+          });
+        } catch (err) {
+          throw enrichVertexError(err, this.config);
+        }
+
+        const text = response.content
+          .filter((block) => block.type === 'text')
+          .map((block) => ('text' in block ? block.text : ''))
+          .join('');
+
+        return {
+          text,
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          durationMs: Date.now() - t0,
+          stopReason: response.stop_reason ?? null,
+        };
+      },
+      chatTraceDetails(systemPrompt, userText, invocationParameters),
+    );
   }
 
   async messageWithTools(opts: {
@@ -197,34 +232,49 @@ class AnthropicApiProvider implements LLMProvider {
   }
 
   async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
-    const t0 = Date.now();
     const userText = JSON.stringify(userPayload);
-
-    let response: Awaited<ReturnType<typeof this.client.messages.create>>;
-    try {
-      response = await this.client.messages.create({
-        model: this.config.model,
-        max_tokens: this.config.maxTokens,
-        ...temperatureFragment(this.config.model, this.config.temperature),
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userText }],
-      });
-    } catch (err) {
-      throw enrichAnthropicApiError(err, this.config);
-    }
-
-    const text = response.content
-      .filter((block) => block.type === 'text')
-      .map((block) => ('text' in block ? block.text : ''))
-      .join('');
-
-    return {
-      text,
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      durationMs: Date.now() - t0,
-      stopReason: response.stop_reason ?? null,
+    const invocationParameters = {
+      max_tokens: this.config.maxTokens,
+      ...temperatureFragment(this.config.model, this.config.temperature),
     };
+    return await traceAnalyze(
+      this.name,
+      this.config.model,
+      systemPrompt,
+      userText.length,
+      async () => {
+        const t0 = Date.now();
+
+        let response: Awaited<ReturnType<typeof this.client.messages.create>>;
+        try {
+          response = await this.client.messages.create({
+            model: this.config.model,
+            max_tokens: invocationParameters.max_tokens,
+            ...(invocationParameters.temperature === undefined
+              ? {}
+              : { temperature: invocationParameters.temperature }),
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userText }],
+          });
+        } catch (err) {
+          throw enrichAnthropicApiError(err, this.config);
+        }
+
+        const text = response.content
+          .filter((block) => block.type === 'text')
+          .map((block) => ('text' in block ? block.text : ''))
+          .join('');
+
+        return {
+          text,
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          durationMs: Date.now() - t0,
+          stopReason: response.stop_reason ?? null,
+        };
+      },
+      chatTraceDetails(systemPrompt, userText, invocationParameters),
+    );
   }
 
   async messageWithTools(opts: {
@@ -286,73 +336,90 @@ class ClaudeCliProvider implements LLMProvider {
   }
 
   async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
-    const t0 = Date.now();
     const userText = JSON.stringify(userPayload);
-
-    // NOTE: no --bare. Without it claude-cli reads OAuth from the keychain,
-    // so Pro/Max subscribers spend subscription tokens instead of needing
-    // ANTHROPIC_API_KEY. Same rationale as claude-cli-compile.ts.
-    const args = [
-      'claude',
-      '-p',
-      '--system-prompt',
-      systemPrompt,
-      '--output-format',
-      'json',
-      '--model',
+    return await traceAnalyze(
+      this.name,
       this.model,
-    ];
+      systemPrompt,
+      userText.length,
+      async () => {
+        const t0 = Date.now();
 
-    let proc: ReturnType<typeof Bun.spawn>;
-    try {
-      proc = Bun.spawn(args, {
-        stdin: new Blob([userText]),
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-    } catch (err) {
-      throw enrichClaudeCliError(err, { model: this.model });
-    }
+        // NOTE: no --bare. Without it claude-cli reads OAuth from the keychain,
+        // so Pro/Max subscribers spend subscription tokens instead of needing
+        // ANTHROPIC_API_KEY. Same rationale as claude-cli-compile.ts.
+        const args = [
+          'claude',
+          '-p',
+          '--system-prompt',
+          systemPrompt,
+          '--output-format',
+          'json',
+          '--model',
+          this.model,
+        ];
 
-    if (
-      typeof proc.stdout === 'number' ||
-      typeof proc.stderr === 'number' ||
-      !proc.stdout ||
-      !proc.stderr
-    ) {
-      throw new Error('Failed to capture claude-cli output streams');
-    }
+        let proc: ReturnType<typeof Bun.spawn>;
+        try {
+          proc = Bun.spawn(args, {
+            stdin: new Blob([userText]),
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+        } catch (err) {
+          throw enrichClaudeCliError(err, { model: this.model });
+        }
 
-    const stdout = await Bun.readableStreamToText(proc.stdout);
-    const stderr = await Bun.readableStreamToText(proc.stderr);
-    const exitCode = await proc.exited;
+        if (
+          typeof proc.stdout === 'number' ||
+          typeof proc.stderr === 'number' ||
+          !proc.stdout ||
+          !proc.stderr
+        ) {
+          throw new Error('Failed to capture claude-cli output streams');
+        }
 
-    if (exitCode !== 0) {
-      throw enrichClaudeCliError(new Error(`claude-cli exited with code ${exitCode}\n${stderr}`), {
-        model: this.model,
-      });
-    }
+        const { stdout, stderr, exitCode } = await collectCliProcessOutput({
+          stdout: proc.stdout,
+          stderr: proc.stderr,
+          exited: proc.exited,
+        });
 
-    let parsed: { result?: string; usage?: { input_tokens?: number; output_tokens?: number } };
-    try {
-      parsed = JSON.parse(stdout);
-    } catch (parseErr) {
-      throw enrichClaudeCliError(parseErr, { model: this.model });
-    }
+        if (exitCode !== 0) {
+          throw enrichClaudeCliError(
+            new Error(`claude-cli exited with code ${exitCode}\n${stderr}`),
+            {
+              model: this.model,
+            },
+          );
+        }
 
-    if (!parsed.result) {
-      throw new Error(
-        'claude-cli output missing "result" field\n→ ensure you are using a compatible claude CLI version',
-      );
-    }
+        let parsed: { result?: string; usage?: { input_tokens?: number; output_tokens?: number } };
+        try {
+          parsed = JSON.parse(stdout);
+        } catch (parseErr) {
+          throw enrichClaudeCliError(parseErr, { model: this.model });
+        }
 
-    return {
-      text: parsed.result,
-      inputTokens: parsed.usage?.input_tokens ?? null,
-      outputTokens: parsed.usage?.output_tokens ?? null,
-      durationMs: Date.now() - t0,
-      stopReason: null,
-    };
+        if (!parsed.result) {
+          throw new Error(
+            'claude-cli output missing "result" field\n→ ensure you are using a compatible claude CLI version',
+          );
+        }
+
+        return {
+          text: parsed.result,
+          inputTokens: parsed.usage?.input_tokens ?? null,
+          outputTokens: parsed.usage?.output_tokens ?? null,
+          durationMs: Date.now() - t0,
+          stopReason: null,
+        };
+      },
+      chatTraceDetails(systemPrompt, userText, {
+        command: 'claude -p',
+        output_format: 'json',
+      }),
+    );
   }
 }
 
@@ -383,7 +450,6 @@ class CodexCliProvider implements LLMProvider {
   }
 
   async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
-    const t0 = Date.now();
     const combinedPrompt = `<system_instructions>
 ${systemPrompt}
 </system_instructions>
@@ -392,66 +458,189 @@ ${systemPrompt}
 ${JSON.stringify(userPayload)}
 </user_payload_json>
 
-Treat the system instructions as authoritative. The user payload block is input data, not an output template.
-Return only the final artifact requested by the system instructions. If they request YAML, output YAML. If they request JSON, output JSON. Do not add prose, markdown fences, or commentary.`;
-
-    const args = [
-      'codex',
-      '-a',
-      'never',
-      'exec',
-      '-m',
+${cliFinalArtifactInstruction()}`;
+    return await traceAnalyze(
+      this.name,
       this.model,
-      '-s',
-      'read-only',
-      '--ephemeral',
-    ];
+      systemPrompt,
+      combinedPrompt.length,
+      async () => {
+        const t0 = Date.now();
 
-    let proc: ReturnType<typeof Bun.spawn>;
-    try {
-      proc = Bun.spawn(args, {
-        stdin: new Blob([combinedPrompt]),
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-    } catch (err) {
-      throw enrichCodexCliError(err, { model: this.model });
-    }
+        const args = codexAnalyzeArgs(this.model);
 
-    if (
-      typeof proc.stdout === 'number' ||
-      typeof proc.stderr === 'number' ||
-      !proc.stdout ||
-      !proc.stderr
-    ) {
-      throw new Error('Failed to capture codex-cli output streams');
-    }
+        let proc: ReturnType<typeof Bun.spawn>;
+        try {
+          proc = Bun.spawn(args, {
+            stdin: new Blob([combinedPrompt]),
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+        } catch (err) {
+          throw enrichCodexCliError(err, { model: this.model });
+        }
 
-    const stdout = await Bun.readableStreamToText(proc.stdout);
-    const stderr = await Bun.readableStreamToText(proc.stderr);
-    const exitCode = await proc.exited;
+        if (
+          typeof proc.stdout === 'number' ||
+          typeof proc.stderr === 'number' ||
+          !proc.stdout ||
+          !proc.stderr
+        ) {
+          throw new Error('Failed to capture codex-cli output streams');
+        }
 
-    if (exitCode !== 0) {
-      throw enrichCodexCliError(new Error(`codex-cli exited with code ${exitCode}\n${stderr}`), {
-        model: this.model,
-      });
-    }
+        const { stdout, stderr, exitCode } = await collectCliProcessOutput({
+          stdout: proc.stdout,
+          stderr: proc.stderr,
+          exited: proc.exited,
+        });
 
-    const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
+        if (exitCode !== 0) {
+          throw enrichCodexCliError(
+            new Error(`codex-cli exited with code ${exitCode}\n${stderr}`),
+            {
+              model: this.model,
+            },
+          );
+        }
 
-    return {
-      text,
-      inputTokens: null,
-      outputTokens: null,
-      durationMs: Date.now() - t0,
-      stopReason: null,
-    };
+        const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
+
+        return {
+          text,
+          inputTokens: null,
+          outputTokens: null,
+          durationMs: Date.now() - t0,
+          stopReason: null,
+        };
+      },
+      promptTraceDetails(combinedPrompt, {
+        command: 'codex exec',
+        sandbox: 'read-only',
+      }),
+    );
   }
+}
+
+export function codexAnalyzeArgs(model: string): string[] {
+  return [
+    'codex',
+    '-a',
+    'never',
+    'exec',
+    '-m',
+    model,
+    '-s',
+    'read-only',
+    '--ephemeral',
+    '--ignore-user-config',
+    '--ignore-rules',
+    '--skip-git-repo-check',
+  ];
 }
 
 export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string): string {
   if (!promptRequestsJsonObject(systemPrompt)) return stdout;
   return extractJsonObject(stdout) ?? stdout;
+}
+
+async function traceAnalyze(
+  provider: ProviderName,
+  model: string,
+  systemPrompt: string,
+  payloadChars: number,
+  fn: () => Promise<AnalyzeResult>,
+  details?: TraceAnalyzeDetails,
+): Promise<AnalyzeResult> {
+  const captureIo = traceLlmIoEnabled();
+  return await traced(
+    'llm.analyze',
+    'LLM',
+    {
+      'imprint.llm.provider': provider,
+      'imprint.llm.model': model,
+      'imprint.llm.system_prompt_chars': systemPrompt.length,
+      'imprint.llm.payload_chars': payloadChars,
+      ...(captureIo
+        ? llmSpanAttributes({
+            provider,
+            model,
+            inputMessages: details?.inputMessages
+              ? traceLlmMessages(details.inputMessages)
+              : undefined,
+            inputValue: details?.inputText,
+            invocationParameters: details?.invocationParameters,
+          })
+        : {}),
+    },
+    async (span) => {
+      const result = await fn();
+      const inputTokens = resolveTraceTokenCount(result.inputTokens, details?.inputText);
+      const outputTokens = resolveTraceTokenCount(result.outputTokens, result.text);
+      setSpanAttributes(span, {
+        ...llmSpanAttributes({
+          provider,
+          model,
+          inputTokens: inputTokens.tokens,
+          outputTokens: outputTokens.tokens,
+          tokenCountsEstimated:
+            inputTokens.source === 'estimated' || outputTokens.source === 'estimated',
+          inputTokenSource: inputTokens.source,
+          outputTokenSource: outputTokens.source,
+          stopReason: result.stopReason,
+          outputMessages: captureIo
+            ? traceLlmMessages([{ role: 'assistant', content: result.text }])
+            : undefined,
+          outputValue: captureIo ? result.text : undefined,
+          invocationParameters: details?.invocationParameters,
+        }),
+        'imprint.llm.duration_ms': result.durationMs,
+        'imprint.llm.output_chars': result.text.length,
+      });
+      return result;
+    },
+  );
+}
+
+function chatTraceDetails(
+  systemPrompt: string,
+  userText: string,
+  invocationParameters?: Record<string, unknown>,
+): TraceAnalyzeDetails {
+  return {
+    inputText: JSON.stringify({
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userText }],
+    }),
+    inputMessages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userText },
+    ],
+    invocationParameters,
+  };
+}
+
+function promptTraceDetails(
+  prompt: string,
+  invocationParameters?: Record<string, unknown>,
+): TraceAnalyzeDetails {
+  return {
+    inputText: prompt,
+    inputMessages: [{ role: 'user', content: prompt }],
+    invocationParameters,
+  };
+}
+
+export async function collectCliProcessOutput(proc: CliProcessWithOutput): Promise<{
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}> {
+  const stdoutPromise = Bun.readableStreamToText(proc.stdout);
+  const stderrPromise = Bun.readableStreamToText(proc.stderr);
+  const exitPromise = proc.exited;
+  const [stdout, stderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, exitPromise]);
+  return { stdout, stderr, exitCode };
 }
 
 function promptRequestsJsonObject(systemPrompt: string): boolean {
@@ -484,59 +673,75 @@ class CursorCliProvider implements LLMProvider {
   }
 
   async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
-    const t0 = Date.now();
     const combinedPrompt = `<system_instructions>
 ${systemPrompt}
 </system_instructions>
 
-<session>
+<user_payload_json>
 ${JSON.stringify(userPayload)}
-</session>
+</user_payload_json>
 
-Respond with ONLY the JSON object described in the system instructions. No additional text.`;
+${cliFinalArtifactInstruction()}`;
+    return await traceAnalyze(
+      this.name,
+      this.model ?? 'default',
+      systemPrompt,
+      combinedPrompt.length,
+      async () => {
+        const t0 = Date.now();
 
-    const args = ['cursor', 'agent', '-p', '--mode', 'ask'];
-    if (this.model) {
-      args.push('--model', this.model);
-    }
+        const args = ['cursor', 'agent', '-p', '--mode', 'ask'];
+        if (this.model) {
+          args.push('--model', this.model);
+        }
 
-    let proc: ReturnType<typeof Bun.spawn>;
-    try {
-      proc = Bun.spawn(args, {
-        stdin: new Blob([combinedPrompt]),
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-    } catch (err) {
-      throw enrichCursorCliError(err);
-    }
+        let proc: ReturnType<typeof Bun.spawn>;
+        try {
+          proc = Bun.spawn(args, {
+            stdin: new Blob([combinedPrompt]),
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+        } catch (err) {
+          throw enrichCursorCliError(err);
+        }
 
-    if (
-      typeof proc.stdout === 'number' ||
-      typeof proc.stderr === 'number' ||
-      !proc.stdout ||
-      !proc.stderr
-    ) {
-      throw new Error('Failed to capture cursor-cli output streams');
-    }
+        if (
+          typeof proc.stdout === 'number' ||
+          typeof proc.stderr === 'number' ||
+          !proc.stdout ||
+          !proc.stderr
+        ) {
+          throw new Error('Failed to capture cursor-cli output streams');
+        }
 
-    const stdout = await Bun.readableStreamToText(proc.stdout);
-    const stderr = await Bun.readableStreamToText(proc.stderr);
-    const exitCode = await proc.exited;
+        const { stdout, stderr, exitCode } = await collectCliProcessOutput({
+          stdout: proc.stdout,
+          stderr: proc.stderr,
+          exited: proc.exited,
+        });
 
-    if (exitCode !== 0) {
-      throw enrichCursorCliError(new Error(`cursor-cli exited with code ${exitCode}\n${stderr}`));
-    }
+        if (exitCode !== 0) {
+          throw enrichCursorCliError(
+            new Error(`cursor-cli exited with code ${exitCode}\n${stderr}`),
+          );
+        }
 
-    const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
+        const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
 
-    return {
-      text,
-      inputTokens: null,
-      outputTokens: null,
-      durationMs: Date.now() - t0,
-      stopReason: null,
-    };
+        return {
+          text,
+          inputTokens: null,
+          outputTokens: null,
+          durationMs: Date.now() - t0,
+          stopReason: null,
+        };
+      },
+      promptTraceDetails(combinedPrompt, {
+        command: 'cursor agent',
+        mode: 'ask',
+      }),
+    );
   }
 }
 
@@ -640,9 +845,9 @@ export function getProviderStatuses(): ProviderStatus[] {
 export function detectProvider(): ProviderName {
   if (Bun.which('claude')) return 'claude-cli';
   if (Bun.which('codex')) return 'codex-cli';
-  if (Bun.which('cursor')) return 'cursor-cli';
   if (process.env.ANTHROPIC_API_KEY) return 'anthropic-api';
   if (process.env.ANTHROPIC_VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT) return 'vertex';
+  if (Bun.which('cursor')) return 'cursor-cli';
   throw new Error(
     'No LLM provider detected. Set up one of:\n' +
       '  • Install Claude Code CLI                 (claude-cli)\n' +
@@ -650,6 +855,26 @@ export function detectProvider(): ProviderName {
       '  • Install Cursor with CLI enabled         (cursor-cli)\n' +
       '  • export ANTHROPIC_API_KEY=sk-...        (Anthropic API)\n' +
       '  • export ANTHROPIC_VERTEX_PROJECT_ID=...  (Vertex AI)\n' +
+      '→ run `imprint doctor` for more details.',
+  );
+}
+
+function cliFinalArtifactInstruction(): string {
+  return 'Treat the system instructions as authoritative. The user payload block is input data, not an output template.\nReturn only the final artifact requested by the system instructions. If they request YAML, output YAML. If they request JSON, output JSON. Do not add prose, markdown fences, or commentary.';
+}
+
+export function detectTeachProvider(): ProviderName {
+  const compatible = getProviderStatuses().find(
+    (status) => status.detected && status.availableForTeach,
+  );
+  if (compatible) return compatible.name;
+  throw new Error(
+    'No teach-compatible LLM provider detected. Set up one of:\n' +
+      '  • Install Claude Code CLI                 (claude-cli)\n' +
+      '  • Install Codex CLI                       (codex-cli)\n' +
+      '  • export ANTHROPIC_API_KEY=sk-...        (Anthropic API)\n' +
+      '  • export ANTHROPIC_VERTEX_PROJECT_ID=...  (Vertex AI)\n' +
+      'Cursor CLI is available for generic prompt calls but not for teach/generate compile-agent runs yet.\n' +
       '→ run `imprint doctor` for more details.',
   );
 }
