@@ -4,6 +4,7 @@ import { VERB_HELP } from '../src/cli.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
 import { localSiteDir } from '../src/imprint/paths.ts';
 import {
+  assertCandidateToolName,
   buildTeachProviderPickerOptions,
   buildTeachStateFromSession,
   promptForTeachProvider,
@@ -137,5 +138,32 @@ describe('teach session state helpers', () => {
       expect(state.redactedPath).toBeUndefined();
       expect(state.completedSteps).toEqual(['record']);
     });
+  });
+});
+
+describe('teach candidate artifact validation', () => {
+  const candidate = {
+    toolName: 'search_domain_extensions',
+    description: 'Search domain extensions',
+    rationale: 'primary intent',
+    confidence: 0.9,
+    primary: true,
+    requestSeqs: [133],
+    eventSeqs: [151],
+    expectedOutput: 'domain results',
+    likelyParams: [],
+    dependencySeqs: [],
+  };
+
+  it('accepts matching artifact tool names', () => {
+    expect(() =>
+      assertCandidateToolName('Compiled playbook', 'search_domain_extensions', candidate),
+    ).not.toThrow();
+  });
+
+  it('rejects playbook drift to another candidate before checkpointing', () => {
+    expect(() =>
+      assertCandidateToolName('Compiled playbook', 'add_domain_to_cart', candidate),
+    ).toThrow(/does not match selected candidate/);
   });
 });

@@ -149,6 +149,17 @@ export function buildTeachStateFromSession(
   return ws;
 }
 
+export function assertCandidateToolName(
+  artifact: string,
+  actualToolName: string,
+  candidate?: ToolCandidate,
+): void {
+  if (!candidate || actualToolName === candidate.toolName) return;
+  throw new Error(
+    `${artifact} toolName "${actualToolName}" does not match selected candidate "${candidate.toolName}".`,
+  );
+}
+
 // ─── State management ───────────────────────────────────────────────────────
 
 function statePath(site: string): string {
@@ -977,11 +988,7 @@ async function compileSelectedCandidate(opts: {
       sharedContext: plan.sharedContext,
       onProgress: opts.onProgress,
     });
-    if (plan.candidate && result.workflow.toolName !== plan.candidate.toolName) {
-      throw new Error(
-        `Compiled workflow toolName "${result.workflow.toolName}" does not match selected candidate "${plan.candidate.toolName}".`,
-      );
-    }
+    assertCandidateToolName('Compiled workflow', result.workflow.toolName, plan.candidate);
     genResult = { workflow: result.workflow, workflowPath: result.workflowPath };
     updateCheckpoint(site, state, plan.workflowKey, 'generate', {
       candidate: plan.candidate,
@@ -1007,12 +1014,14 @@ async function compileSelectedCandidate(opts: {
       candidate: plan.candidate,
       sharedContext: plan.sharedContext,
     });
+    assertCandidateToolName('Compiled playbook', result.playbook.toolName, plan.candidate);
     pbResult = { playbook: result.playbook, playbookPath: result.playbookPath };
     updateCheckpoint(site, state, plan.workflowKey, 'compile-playbook');
   } else {
     const playbookPath = pathJoin(workflowDir, 'playbook.yaml');
     const { parsePlaybook } = await import('./playbook-parser.ts');
     const playbook = parsePlaybook(readFileSync(playbookPath, 'utf8'));
+    assertCandidateToolName('Stored playbook', playbook.toolName, plan.candidate);
     pbResult = { playbook, playbookPath };
   }
 

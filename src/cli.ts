@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /** CLI entry point. Run `imprint --help` for the verb list. */
 
+import { basename, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { ProviderName } from './imprint/llm.ts';
 import { isDebug } from './imprint/log.ts';
@@ -323,6 +324,16 @@ export function tryParseParamKV(
     else out[k] = v;
   }
   return out;
+}
+
+export function inferPlaybookSiteForSmokeCommand(playbookPath: string, toolName: string): string {
+  const parent = basename(dirname(playbookPath));
+  if (!parent) return '<site>';
+  if (parent === toolName) {
+    const grandparent = basename(dirname(dirname(playbookPath)));
+    return grandparent || '<site>';
+  }
+  return parent;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -738,7 +749,10 @@ async function main(argv: string[]): Promise<number> {
         `[imprint] tokens: ${result.inputTokens ?? 'N/A'} in, ${result.outputTokens ?? 'N/A'} out — ${(result.durationMs / 1000).toFixed(1)}s`,
       );
       // Suggest a smoke run; the playbook is most useful behind the cron ladder.
-      const playbookSite = result.playbookPath.split('/').slice(-2, -1)[0] ?? '<site>';
+      const playbookSite = inferPlaybookSiteForSmokeCommand(
+        result.playbookPath,
+        result.playbook.toolName,
+      );
       console.log('');
       console.log('next step:');
       console.log(

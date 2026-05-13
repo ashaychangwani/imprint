@@ -145,18 +145,11 @@ export function primaryToolCandidate(detection: ToolCandidateDetection): ToolCan
 
 export function buildSharedCompileContext(
   detection: ToolCandidateDetection,
-  selected: ToolCandidate[],
+  _selected: ToolCandidate[],
 ): SharedCompileContext {
-  const selectedSeqs = new Set<number>();
-  for (const candidate of selected) {
-    for (const seq of candidate.dependencySeqs) selectedSeqs.add(seq);
-  }
-  const loginRequestSeqs = [
-    ...new Set([...detection.sharedContext.loginRequestSeqs, ...selectedSeqs]),
-  ].sort((a, b) => a - b);
   return {
     ...detection.sharedContext,
-    loginRequestSeqs,
+    loginRequestSeqs: [...new Set(detection.sharedContext.loginRequestSeqs)].sort((a, b) => a - b),
   };
 }
 

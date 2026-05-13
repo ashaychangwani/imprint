@@ -91,7 +91,7 @@ describe('tool candidate validation', () => {
     ).toThrow(/exactly one primary/);
   });
 
-  it('builds shared compile context from selected dependency seqs', () => {
+  it('keeps candidate-specific dependency seqs out of shared login context', () => {
     const detection = validateToolCandidateDetection({
       sharedContext: { loginRequestSeqs: [1], credentialNames: ['username'] },
       candidates: [
@@ -104,11 +104,24 @@ describe('tool candidate validation', () => {
           requestSeqs: [2],
           dependencySeqs: [1, 4],
         },
+        {
+          toolName: 'list_orders',
+          description: 'List orders',
+          rationale: 'secondary intent',
+          confidence: 0.7,
+          primary: false,
+          requestSeqs: [8],
+          dependencySeqs: [7, 9],
+        },
       ],
     });
     const primary = primaryToolCandidate(detection);
-    const shared = buildSharedCompileContext(detection, [primary]);
-    expect(shared.loginRequestSeqs).toEqual([1, 4]);
+    const secondary = detection.candidates[1];
+    const shared = buildSharedCompileContext(
+      detection,
+      secondary ? [primary, secondary] : [primary],
+    );
+    expect(shared.loginRequestSeqs).toEqual([1]);
     expect(shared.credentialNames).toEqual(['username']);
   });
 });

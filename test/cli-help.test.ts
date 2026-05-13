@@ -8,7 +8,12 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
-import { VERB_HELP, closestVerb, tryParseParamKV } from '../src/cli.ts';
+import {
+  VERB_HELP,
+  closestVerb,
+  inferPlaybookSiteForSmokeCommand,
+  tryParseParamKV,
+} from '../src/cli.ts';
 
 const CLI_SOURCE = readFileSync(pathResolve(import.meta.dir, '..', 'src', 'cli.ts'), 'utf8');
 
@@ -128,5 +133,25 @@ describe('tryParseParamKV', () => {
     expect(tryParseParamKV(['url=https://x.com?a=b'])).toEqual({
       url: 'https://x.com?a=b',
     });
+  });
+});
+
+describe('inferPlaybookSiteForSmokeCommand', () => {
+  it('infers the site from nested generated tool playbook paths', () => {
+    expect(
+      inferPlaybookSiteForSmokeCommand(
+        '/Users/me/.imprint/namecheap-domains/search_domain_extensions/playbook.yaml',
+        'search_domain_extensions',
+      ),
+    ).toBe('namecheap-domains');
+  });
+
+  it('keeps supporting old site-level playbook paths', () => {
+    expect(
+      inferPlaybookSiteForSmokeCommand(
+        '/Users/me/.imprint/namecheap-domains/playbook.yaml',
+        'search_domain_extensions',
+      ),
+    ).toBe('namecheap-domains');
   });
 });
