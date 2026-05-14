@@ -175,6 +175,7 @@ export async function launchChromium(opts: LaunchOptions = {}): Promise<Launched
     '--no-default-browser-check',
     '--disable-features=Translate,MediaRouter',
     '--disable-popup-blocking',
+    '--use-mock-keychain',
   ];
   if (opts.headless) args.push('--headless=new');
   if (opts.extraArgs) args.push(...opts.extraArgs);

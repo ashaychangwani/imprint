@@ -49,6 +49,7 @@ const examples = [
   { name: 'google-flights', use: 'Carrier search', detail: 'Parses raw flight-search payloads into structured results.' },
   { name: 'google-hotels', use: 'Hotel search', detail: 'Nightly totals, guest scores, stars, and filters from real-time results.' },
   { name: 'discoverandgo', use: 'Authed booking', detail: 'Museum-pass flow using the per-site credential store and replay state.' },
+  { name: 'namecheap-domains', use: 'Domain search', detail: 'CRC32 URL signing reverse-engineered from JS bundle, 5-endpoint chain with availability + aftermarket pricing.' },
 ];
 
 function LogoMark() {
@@ -428,6 +429,7 @@ export default function App() {
               <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay with named state captures for low-latency tasks and cron jobs.</p></article>
               <article className="artifact"><small>Fallback path</small><h3>playbook.yaml</h3><p>DOM-level steps for sites that move logic into the browser.</p></article>
               <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and a local runtime wrapper you can re-emit per machine.</p></article>
+              <article className="artifact"><small>Optional</small><h3>request-transform.ts</h3><p>URL signing or request mutation when the API requires per-call tokens (HMAC, CRC32, OAuth).</p></article>
             </div>
           </section>
 

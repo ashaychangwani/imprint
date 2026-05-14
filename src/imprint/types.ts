@@ -228,6 +228,10 @@ export const WorkflowSchema = z.object({
    *  exporting `extract(rawResponse): unknown`. Applied by the runtime
    *  to transform the raw API response into structured agent output. */
   parserModule: z.string().optional(),
+  /** Path to a sibling request-transform module (relative to workflow.json)
+   *  exporting `transform(method: string, url: string, responses: unknown[]): string`. Called
+   *  before each request to append signing params (HMAC, MD5, etc.). */
+  requestTransformModule: z.string().optional(),
 });
 export type Workflow = z.infer<typeof WorkflowSchema>;
 

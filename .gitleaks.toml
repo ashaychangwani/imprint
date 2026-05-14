@@ -22,6 +22,12 @@ regexes = [
   '''REDACTED''',
   '''placeholder''',
 ]
+# Public app-level signing constants extracted from site JS bundles.
+# NOT per-user secrets — identical for every visitor.
+stopwords = [
+  '''815e7ef93be85bebe5959f6f72d7e542''',
+  '''8f6c7d5691eebd3b5090dc6b06755d58''',
+]
 
 # --- Custom rules. The default ruleset doesn't catch everything we care
 # about (it's mostly aimed at API tokens). The rules below close the gaps.

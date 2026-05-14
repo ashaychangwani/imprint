@@ -203,7 +203,7 @@ Add to `~/.openclaw/openclaw.json` under the `mcp.servers` key:
 
 The SKILL.md is written to `./imprint-mysite/SKILL.md` (ready for `openclaw skill install ./imprint-mysite`).
 
-When sharing a generated skill folder across machines, install Imprint on the receiving machine and rerun `imprint emit <workflow.json> --force` for each workflow. The workflow/playbook files are portable, but the generated `index.ts` wrapper imports the local Imprint runtime path from the machine that emitted it.
+Generated skill folders are portable — just install the `imprint` package on the receiving machine via `npm install imprint` or `bun install imprint`. The generated `index.ts` imports from `imprint/runtime` via a node_modules symlink managed by emit, not a local checkout path.
 
 ### Publishing to ClawHub
 
@@ -237,7 +237,7 @@ Similar to OpenClaw, Hermes reads SKILL.md files from `~/.hermes/skills/`. `impr
 
 If `~/.hermes/` exists, the SKILL.md is written directly to `~/.hermes/skills/imprint-mysite/SKILL.md`. Otherwise it's written to `./imprint-mysite/SKILL.md`.
 
-For remote Hermes hosts, install Imprint on that host and rerun `imprint emit <workflow.json> --force` after copying the skill folder so generated wrappers use the host's local runtime path.
+For remote Hermes hosts, install the `imprint` package on that host (the generated wrappers import from `imprint/runtime`, so the package must be installed but no re-emit is needed).
 
 ### Cron mapping
 

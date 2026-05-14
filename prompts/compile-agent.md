@@ -15,11 +15,15 @@ You will produce three artifacts in the generated tool directory (`~/.imprint/<s
 
 2. **parser.ts** — a TypeScript module that exports this function:
    ```typescript
-   export function extract(rawResponse: unknown): unknown {
+   export function extract(rawResponse: unknown, context?: { params: Record<string, string | number | boolean>; responses: unknown[] }): unknown {
      // Transform the raw API response into structured agent-usable data
    }
    ```
-   The function takes the raw response body (already parsed if JSON, otherwise a string) and returns a clean, named-field object suitable for an AI agent's consumption.
+   The function takes the raw response body of the LAST request (already parsed if JSON, otherwise a string) and an optional context object containing:
+   - `params`: the tool parameters the user provided (e.g., `{ query: "imprint", category: "all" }`)
+   - `responses`: an array of ALL response bodies from the workflow chain (index 0 = first request, etc.)
+
+   Use `context.params` when the parser needs a tool parameter value that isn't in the API response (e.g., constructing `{query}.{tld}` from a TLD catalog that doesn't echo the query back). Use `context.responses` when the parser needs to merge data from multiple chained requests (e.g., combining a 569-entry TLD pricing catalog with a 10-entry aftermarket listing).
 
 3. **parser.test.ts** — a `bun:test` suite that proves `extract()` produces correct output when run against the captured response body. Must contain at least 5 meaningful assertions referencing real values from the session. **This file is ephemeral**: the harness deletes it after verification passes (unless the user passed `--keep-test`). Treat it as a debugging tool you write to drive iteration, not a permanent artifact.
 
@@ -51,9 +55,13 @@ Follow these steps to compile the session:
    - **CRITICAL — Login chains.** If the input session contains a login request whose body has been pre-templated to `${credential.username}` / `${credential.password}` (you'll see those literal strings in the request body when you `read_request`), you MUST keep that login request as request[0] in your workflow. Do NOT drop it. Use named `captures` (canonical `${state.name}`) or legacy `extract` to capture any returned auth tokens (`id_token`, `access_token`, `swa_token`, cookies projected into headers, etc.) and reference them in subsequent requests. The runtime substitutes the username/password from the local credential manager at call time, so the workflow is self-sufficient — caller doesn't need to log in separately.
    - **Distinguish credentials from session tokens.** `${credential.NAME}` is for STABLE per-user values that the user provides once (username, password, API token). For ephemeral per-call values (passenger tokens, ride-along session IDs, recordLocator-bound state, CSRF cookies minted by an earlier request) you MUST use named request/bootstrap captures and `${state.NAME}` — NEVER use `${credential.X}` for those. Test: would the user be able to type this value into an `imprint credential set` prompt? If no, it's captured state, not a credential.
    - Keep headers minimal — drop bot-detection headers (Akamai fingerprints, DataDome, PerimeterX), drop browser-internal headers, keep `Content-Type`, `Origin`, `Referer` when needed
+   - **CRITICAL: Preserve ALL query parameters from the recorded URL.** Unlike HTTP headers — where you drop bot-detection fingerprints — query params are part of the API's functional contract. Even if a param value looks obfuscated or high-entropy (base64, hex, random-looking), it likely carries meaning the server checks (anti-bot tokens, session binding, A/B bucketing, obfuscated checksums). Preserve every param key: substitute the value with `${response[N].name}` or `${state.name}` if it came from an earlier response, `${param.NAME}` if user-variable, or keep the literal value if it's a static constant (like `search=false`). Missing a single query param can silently cause the API to return sentinel/degraded data rather than an error — the server may fall back to generic defaults instead of returning the actual results.
+   - **Per-call query params (URL signing).** If a query param has a different high-entropy value on every request to the same URL path in the session, it is likely a URL signing token computed by client-side JavaScript. Do NOT hardcode the recorded value — it is per-call and will expire. Instead: use `search_response_body` to search the session's JavaScript responses (look for `.js` URLs) for the param name. The signing function is usually simple (HMAC, MD5, XOR + base64 with a static key). Once you find it, write a `requestTransformModule` (sibling to `parser.ts`) that exports `transform(method: string, url: string): string` — it takes the unsigned URL and returns the URL with the signing param appended. Set `"requestTransformModule": "./request-transform.ts"` in workflow.json. The runtime calls this function before each request.
    - **`x-api-key` is normally NOT a credential.** It's an app-level identifier baked into the site's JavaScript — same for every visitor, not user-specific. Keep it as a literal string in the workflow. Only treat it as a credential if you can clearly see it varies per account (e.g., it appears in a `Set-Cookie` after login, or differs across sessions). The same applies to `x-channel-id`, `x-app-id`, `x-app-version`, and similar metadata headers — hardcode them.
    - **NEVER use `${env.NAME}` placeholders.** The `${env.X}` syntax exists in the runtime but is reserved for operator-level configuration, not for values you can see in the recording. If a value appears in the captured request, hardcode it. If multiple candidates in the same session use different API keys for different endpoints, hardcode each one — they are endpoint-specific app constants, not secrets. The only valid placeholder types for your workflow are `${param.NAME}`, `${credential.NAME}`, `${state.NAME}`, and `${response[N].NAME}`.
    - If the workflow chains multiple requests (request N+1 uses a value from request N's response), add an `extract` field to request N and reference it in request N+1 via `${response[N].name}`
+   - **Chaining complementary endpoints.** When multiple endpoints contribute complementary data for the same user intent (e.g. a product catalog + a pricing/inventory endpoint), chain them in the workflow. The parser's `extract(rawResponse, context)` receives `context.responses` — an array of ALL response bodies from the chain — so it can merge data from multiple requests. For example: request[0] fetches a large catalog, request[1] fetches a supplementary listing, and the parser merges both into one comprehensive result using `context.responses[0]` and `context.responses[1]`. The parser also receives `context.params` for constructing values the API doesn't echo back (e.g. combining a user's search term with catalog entries that don't include it in their response).
+   - **If you write a `parser.ts`, you MUST set `"parserModule": "./parser.ts"` in workflow.json.** Without this field, the runtime cannot find the parser and the raw API response will be returned to the agent verbatim — your parser becomes dead code.
    - Validate against `WorkflowSchema` by reading `src/imprint/types.ts` lines 118-129
 
 6. **Read the response body.** Use `read_response_body` to fetch the raw response. For large responses, you can paginate via offset/length. For opaque binary formats, this is where you discover if the response is parseable.
@@ -96,16 +104,48 @@ Follow these steps to compile the session:
 
    The session under `sessions/` is gitignored (auth tokens / PII risk) and the test file is deleted after verification passes — together that means the test is local-and-ephemeral by design. Don't try to persist the response body to disk to dodge the env var.
 
-10. **Run tests.** Use `run_tests` (or `run_bash` with `bun test parser.test.ts`) to execute the suite. Read failures carefully — they tell you exactly what's wrong.
+10. **Write integration.test.ts.** Create a live API test that imports the generated tool and calls it through the backend ladder. This verifies the workflow produces real data — not just that the parser handles recorded responses. The boilerplate:
+    ```typescript
+    import { expect, test } from 'bun:test';
+    import { dirname } from 'node:path';
+    import { fileURLToPath } from 'node:url';
+    import { executeWorkflow, loadCredentialStore } from '<runtime-import-path>';
+    // Import the workflow constant from your generated index.ts
+    import { WORKFLOW } from './index.ts';
 
-11. **Fix and iterate.** If tests fail:
-    - Read the error message and stack trace
-    - Re-read the response body or re-inspect the structure
-    - Adjust the parser logic
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+
+    test('live API call returns data', async () => {
+      const params: Record<string, string | number | boolean> = {
+        /* fill in default param values */
+      };
+      const credentials = await loadCredentialStore(WORKFLOW.site) ?? undefined;
+      const result = await executeWorkflow({
+        workflow: WORKFLOW,
+        params,
+        credentials,
+        workflowPath: __dirname + '/workflow.json',
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data).toBeDefined();
+        // Add assertions on the live data shape
+      }
+    }, 30_000);
+    ```
+    If the live call fails (400, 403, expired tokens), this test fails and you must fix the workflow. Common fixes: chain a session/token request first, write a `requestTransformModule` for URL signing, or use `${state.X}` captures instead of hardcoded values. If a query param changes per call (check `stateHints` for `query_param_changes_across_calls`), use `search_response_body` to find the signing function in `.js` responses and replicate it in `request-transform.ts`.
+
+    **This file is ephemeral** like parser.test.ts — deleted after verification unless `--keep-test` is passed.
+
+11. **Run tests.** Use `run_tests` (or `run_bash` with `bun test parser.test.ts integration.test.ts`) to execute both suites. Read failures carefully — they tell you exactly what's wrong.
+
+12. **Fix and iterate.** If tests fail:
+    - **parser.test.ts failures**: re-read the response body, adjust the parser logic
+    - **integration.test.ts failures**: the workflow can't produce live data. Read the error (400 = bad params/tokens, 403 = bot detection or missing signing). Investigate and fix the workflow — don't just retry the same request.
     - Re-run tests
     - Repeat until all tests pass
 
-12. **Claim completion.** When tests pass and you've verified the output looks correct, call `done`. The harness will independently verify your work — if verification fails, you'll get the failure as a tool result and must continue iterating.
+13. **Claim completion.** When tests pass and you've verified the output looks correct, call `done`. The harness will independently verify your work — if verification fails, you'll get the failure as a tool result and must continue iterating.
 
 ## Strategies for Response Shapes
 
@@ -211,6 +251,8 @@ Assertions must reference real values derived from the narration or response str
 
 4. **Do not write a parser that just returns the raw input.** The parser must transform — extract the fields the user cares about, discard irrelevant data.
 
+4a. **Do not infer fields the API didn't return.** Every field in the parser output must trace back to a concrete value in the API response. Do not synthesize boolean status fields (like `available`, `registered`, `in_stock`) from the absence of data — absence of a record in one endpoint does not imply a status that only a different endpoint could confirm.
+
 5. **Do not write workflow.json with hardcoded user-specific values.** Replace them with `${param.NAME}` or `${credential.NAME}` as appropriate.
 
 5a. **Do not drop the login request when its body uses `${credential.username}`/`${credential.password}` placeholders.** That's the signal that the workflow needs to log in fresh on each call. Keep it as request[0], `extract` the returned auth tokens, chain them into subsequent requests. The runtime substitutes the username/password from the credential manager at call time.
@@ -262,11 +304,12 @@ The goal is a working tool, not a perfect tool. You can always refine later. Get
 
 When you call `done`, the harness independently verifies your work:
 
-1. **Re-runs tests** — `bun test parser.test.ts` in a fresh subprocess; must exit 0
+1. **Re-runs parser tests** — `bun test parser.test.ts` in a fresh subprocess; must exit 0
 2. **Parses test file AST** — must have at least 3 `expect()` calls referencing non-trivial values (rejects `expect(true).toBe(true)` style)
 3. **Imports parser.ts and runs extract()** on the captured response body — must return non-null/non-empty
 4. **Validates workflow.json** against `WorkflowSchema`
 5. **Checks candidate scope** — when a selected candidate is provided, `workflow.toolName` must exactly match that candidate's `toolName`
+6. **Runs integration test** — `bun test integration.test.ts` must exit 0. This makes a live API call and verifies the workflow returns real data. If it fails, the workflow has hardcoded/expired values or missing URL signing.
 
 If any check fails, you get the failure as a tool result and must continue working. You cannot fake completion.
 

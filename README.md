@@ -27,20 +27,19 @@ That's it. Imprint opens a browser, you drive the workflow, and it compiles a de
 
 ## See it in action
 
-After teaching, your agent has a tool called `search_southwest_flights`. Here's what happens when it runs:
+After teaching, your agent has a tool called `search_namecheap_domains`. The compile-agent reverse-engineered the site's CRC32 URL signing scheme from a captured JavaScript bundle, chains five API endpoints, and merges availability + pricing + aftermarket data:
 
 ```
-$ imprint cron southwest --once
+$ claude "search for getimprint on Namecheap, under $20/yr renewal"
 
-stealth-fetch bootstrapping Chromium...       13.4s
-stealth-fetch request complete                 1.2s
-
-  SFO → LAX   2026-05-15   $87   Wanna Get Away
-  SFO → LAX   2026-05-15  $142   Anytime
-  SFO → LAX   2026-05-15  $177   Business Select
+  getimprint.com     taken         registered 2008         GoDaddy.com, LLC
+  getimprint.dev     available     $12.98/yr (19% off)     renews $20.98/yr
+  getimprint.org     available     $7.48/yr (42% off)      renews $15.98/yr
+  getimprint.fyi     available     $6.98/yr                renews $9.68/yr
+  getimprint.xyz     available     $2.00/yr (90% off)      renews $19.48/yr
 ```
 
-Live Southwest fares, defeating Akamai bot detection — no paid proxy, no CAPTCHA solver.
+Real-time domain availability with per-request URL signing — the agent wrote the signing function itself by reading the site's JS bundle.
 
 <br>
 
@@ -59,17 +58,18 @@ imprint teach mysite \
 
 A browser opens. You drive the workflow and narrate what you're doing. Imprint records every network request and DOM interaction.
 
-Raw recordings are stored locally under `~/.imprint/<site>/sessions/`, and each generated tool lives under `~/.imprint/<site>/<toolName>/` by default, outside the repo. The generated `index.ts` wrapper points at the local Imprint runtime, so rerun `imprint emit <workflow.json> --force` after moving a tool folder to another machine. The tracked `examples/` tree remains as source fixtures and demos.
+Raw recordings are stored locally under `~/.imprint/<site>/sessions/`, and each generated tool lives under `~/.imprint/<site>/<toolName>/` by default, outside the repo. The generated `index.ts` imports from `imprint/runtime` via a `node_modules/imprint` symlink that `emit` manages automatically — portable across worktrees and machines (just install Imprint on the new machine). The tracked `examples/` tree remains as source fixtures and demos.
 
 </td>
 <td width="33%">
 
 ### 2. Compile
 
-Imprint generates two replay artifacts:
+Imprint generates replay artifacts:
 
-- **`workflow.json`** — API-level replay (fast, now with named state captures)
+- **`workflow.json`** — API-level replay (fast, with named state captures)
 - **`playbook.yaml`** — DOM-level fallback (universal)
+- **`request-transform.ts`** — URL signing when the API requires per-call tokens (optional)
 
 Both artifacts are written into the generated tool directory (`~/.imprint/<site>/<toolName>/`). `compile-playbook` uses that nested location by default so cron and MCP discovery can see the fallback without a custom `--out`.
 
@@ -222,6 +222,7 @@ The checked-in `examples/` directory contains committed fixtures and demos. Gene
 | [**google-flights**](examples/google-flights) | Real-time flight search across all carriers, parses Google's raw protobuf response | `IMPRINT_HOME=examples imprint mcp-server google-flights` |
 | [**google-hotels**](examples/google-hotels) | Hotel search with star rating, guest scores, nightly + total prices | `IMPRINT_HOME=examples imprint mcp-server google-hotels` |
 | [**discoverandgo**](examples/discoverandgo) | Authenticated booking via per-site credential store | `IMPRINT_HOME=examples imprint cron discoverandgo --once` |
+| [**namecheap-domains**](examples/namecheap-domains) | Domain search with CRC32 URL signing reverse-engineered from JS, 5-endpoint chain with availability + aftermarket pricing | `IMPRINT_HOME=examples imprint mcp-server namecheap-domains` |
 | [**echo**](examples/echo) | MCP smoke-test fixture (no network, no LLM) | `IMPRINT_HOME=examples imprint mcp-server echo` |
 
 <br>

@@ -57,3 +57,12 @@ Rules:
     If a parameter can accept multiple values, describe that in description and
     use "string" instead of array syntax such as "string[]".
 11. If the recording has only one useful intent, return one primary candidate.
+12. When an endpoint returns a large dataset (high responseBodyLength — e.g.
+    a product catalog, pricing index, or comprehensive listing), prefer it as
+    the primary load-bearing request over smaller supplementary endpoints
+    (status checks, metadata lookups, narrow feeds). Include both in
+    requestSeqs when they serve the same user intent.
+13. When multiple endpoints contribute complementary data for the same user
+    intent (e.g. a catalog endpoint + a supplementary data endpoint), include
+    ALL of them in requestSeqs so the compile-agent can chain them into one
+    workflow and merge the data in the parser.

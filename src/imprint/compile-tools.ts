@@ -175,6 +175,44 @@ function buildStateHints(session: Session): Array<Record<string, unknown>> {
     }
   }
 
+  // Detect per-call query params: params whose values change across repeated
+  // requests to the same URL path. These are browser-minted (computed by
+  // in-page JS per call) and cannot be hardcoded or derived from prior responses.
+  const urlsByPath = new Map<string, Array<{ seq: number; params: URLSearchParams }>>();
+  for (const req of session.requests) {
+    try {
+      const url = new URL(req.url);
+      const pathKey = `${url.hostname}${url.pathname}`;
+      const existing = urlsByPath.get(pathKey) ?? [];
+      existing.push({ seq: req.seq, params: url.searchParams });
+      urlsByPath.set(pathKey, existing);
+    } catch {
+      // skip malformed URLs
+    }
+  }
+  for (const [pathKey, entries] of urlsByPath) {
+    if (entries.length < 2) continue;
+    const firstEntry = entries[0];
+    if (!firstEntry) continue;
+    for (const paramName of firstEntry.params.keys()) {
+      const values = new Set(entries.map((e) => e.params.get(paramName) ?? ''));
+      if (values.size > 1) {
+        const sample = entries[0]?.params.get(paramName) ?? '';
+        const looksHighEntropy = sample.length > 20 && /[+/=A-Z0-9]{10,}/i.test(sample);
+        if (looksHighEntropy) {
+          hints.push({
+            type: 'query_param_changes_across_calls',
+            urlPath: pathKey,
+            paramName,
+            distinctValues: values.size,
+            sampleSeqs: entries.slice(0, 3).map((e) => e.seq),
+            note: `Query param "${paramName}" has ${values.size} distinct high-entropy values across ${entries.length} requests to the same URL path. This is likely a URL signing token computed by client-side JavaScript. Use search_response_body to find the signing function in .js responses, then write a requestTransformModule that replicates the computation.`,
+          });
+        }
+      }
+    }
+  }
+
   return hints;
 }
 
@@ -271,7 +309,6 @@ function buildReadRequestTool(session: Session): AgentTool {
       if (!req) {
         return { result: `Request seq ${seq} not found`, isError: true };
       }
-
       const summary = {
         method: req.method,
         url: req.url,
@@ -445,7 +482,13 @@ function buildWriteFileTool(toolDir: string): AgentTool {
         };
       }
 
-      const allowed = ['workflow.json', 'parser.ts', 'parser.test.ts'];
+      const allowed = [
+        'workflow.json',
+        'parser.ts',
+        'parser.test.ts',
+        'request-transform.ts',
+        'integration.test.ts',
+      ];
       const isNotes = relativePath.startsWith('notes/') && relativePath.endsWith('.md');
       if (!allowed.includes(relativePath) && !isNotes) {
         return {
@@ -749,6 +792,19 @@ export async function externalVerification(
     }
   }
 
+  if (existsSync(workflowPath) && existsSync(parserPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(workflowPath, 'utf8'));
+      if (!raw.parserModule) {
+        failures.push(
+          'parser.ts exists but workflow.json does not declare "parserModule": "./parser.ts" — the parser will be dead code at runtime',
+        );
+      }
+    } catch {
+      // workflow parse already flagged above
+    }
+  }
+
   if (!existsSync(parserPath)) {
     failures.push('parser.ts was not written');
   } else {
@@ -809,6 +865,25 @@ export async function externalVerification(
     }
   }
 
+  const integrationTestPath = pathJoin(toolDir, 'integration.test.ts');
+  if (!existsSync(integrationTestPath)) {
+    failures.push(
+      'integration.test.ts was not written — the tool must include a live API test that calls the workflow and verifies it returns real data',
+    );
+  } else {
+    const result = await runCommand('bun test integration.test.ts', toolDir, 60000);
+    const output = JSON.parse(result.result) as {
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+    };
+    if (output.exitCode !== 0) {
+      failures.push(
+        `bun test integration.test.ts exited ${output.exitCode} — the workflow failed to produce live data.\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,
+      );
+    }
+  }
+
   if (existsSync(parserPath) || existsSync(parserTestPath)) {
     const output = await runGeneratedArtifactTypecheck(toolDir);
     if (output.exitCode !== 0 || output.timedOut) {
@@ -835,7 +910,17 @@ export async function externalVerification(
             raw = responseBody;
           }
 
-          const extracted = mod.extract(raw);
+          const allResponses = loadBearing.map((r) => {
+            try {
+              return r.response?.body ? JSON.parse(r.response.body) : r.response?.body;
+            } catch {
+              return r.response?.body;
+            }
+          });
+          const extracted = mod.extract(raw, {
+            params: {},
+            responses: allResponses,
+          });
           if (
             extracted == null ||
             (typeof extracted === 'object' && Object.keys(extracted).length === 0)

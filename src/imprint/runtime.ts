@@ -115,6 +115,21 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   const dependencyPreflight = preflightStateDependencies(opts.workflow, state, stateCapabilities);
   if (!dependencyPreflight.ok) return dependencyPreflight.result;
 
+  let requestTransform: ((method: string, url: string, responses: unknown[]) => string) | null =
+    null;
+  if (opts.workflow.requestTransformModule && opts.workflowPath) {
+    try {
+      const transformPath = pathResolve(
+        dirname(opts.workflowPath),
+        opts.workflow.requestTransformModule,
+      );
+      const mod = await import(transformPath);
+      if (typeof mod.transform === 'function') requestTransform = mod.transform;
+    } catch {
+      // Non-fatal — proceed without transform.
+    }
+  }
+
   for (let i = 0; i < opts.workflow.requests.length; i++) {
     const req = opts.workflow.requests[i];
     if (!req) continue;
@@ -130,6 +145,18 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     });
     if (!subbedResult.ok) return subbedResult.result;
     const subbed = subbedResult.value;
+
+    if (requestTransform) {
+      try {
+        subbed.url = requestTransform(
+          subbed.method,
+          subbed.url,
+          responseSlots.map((s) => s.raw),
+        );
+      } catch {
+        // Non-fatal — proceed with the original URL.
+      }
+    }
 
     const cookieHeader = cookieJar.getCookieHeader(subbed.url);
     if (cookieHeader && !hasHeader(subbed.headers, 'cookie')) subbed.headers.cookie = cookieHeader;
@@ -246,7 +273,10 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           remediation: 'regenerate the workflow via `imprint compile`',
         };
       }
-      finalData = mod.extract(finalData);
+      finalData = mod.extract(finalData, {
+        params: opts.params,
+        responses: responseSlots.map((s) => s.raw),
+      });
     } catch (err) {
       return {
         ok: false,
