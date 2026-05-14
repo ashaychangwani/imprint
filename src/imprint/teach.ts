@@ -1133,6 +1133,8 @@ async function compileSelectedCandidate(opts: {
 
   exportSiteManifest(site, workflowDir, genResult.workflow, pbResult.playbook);
 
+  await writeQuickBackendsCache(workflowDir, genResult.workflow);
+
   return {
     workflowPath: genResult.workflowPath,
     playbookPath: pbResult.playbookPath,
@@ -1661,4 +1663,87 @@ function formatCompileProgress(progress: CompileAgentProgress): string {
   const activity = describeAgentActivity(progress);
   const retry = progress.verificationCycle > 1 ? `, retry ${progress.verificationCycle - 1}` : '';
   return `Compiling • ${activity} (${formatElapsed(progress.elapsedMs)}${retry})`;
+}
+
+// ─── Quick backend probe (after emit) ────────────────────────────────────────
+
+/**
+ * After a workflow is emitted, quickly probe whether plain fetch works.
+ * If it returns FORBIDDEN (bot protection), write a backends.json that
+ * skips fetch so the MCP server goes straight to stealth-fetch → playbook.
+ * This avoids the ~16s wasted on failing backends when the MCP tool is called.
+ */
+async function writeQuickBackendsCache(workflowDir: string, workflow: Workflow): Promise<void> {
+  const backendsPath = pathJoin(workflowDir, 'backends.json');
+  if (existsSync(backendsPath)) return;
+  const { createHash } = await import('node:crypto');
+
+  const defaults: Record<string, string | number | boolean> = {};
+  for (const param of workflow.parameters) {
+    if (param.default !== undefined) {
+      defaults[param.name] = param.default;
+    } else {
+      defaults[param.name] = param.type === 'number' ? 0 : param.type === 'boolean' ? false : '';
+    }
+  }
+
+  const body = workflow.requests[0]?.body;
+  const url = workflow.requests[0]?.url;
+  if (!url) return;
+
+  const { substituteString } = await import('./runtime.ts');
+  const emptyState = { site: workflow.site ?? '', cookies: [], values: {} };
+  let resolvedUrl: string;
+  let resolvedBody: string | undefined;
+  try {
+    resolvedUrl = substituteString(url, defaults, emptyState, []);
+    resolvedBody = body ? substituteString(body, defaults, emptyState, []) : undefined;
+  } catch {
+    return;
+  }
+
+  const method = workflow.requests[0]?.method ?? 'GET';
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(workflow.requests[0]?.headers ?? {})) {
+    if (typeof v === 'string') headers[k] = v;
+  }
+
+  try {
+    const resp = await fetch(resolvedUrl, {
+      method,
+      headers,
+      body: method !== 'GET' ? resolvedBody : undefined,
+      signal: AbortSignal.timeout(5000),
+    });
+
+    const wfHash = createHash('sha256')
+      .update(JSON.stringify(WorkflowSchema.parse(workflow)))
+      .digest('hex');
+
+    const hasPlaybook = existsSync(pathJoin(workflowDir, 'playbook.yaml'));
+
+    if (resp.status === 403) {
+      const preferred = hasPlaybook ? ['stealth-fetch', 'playbook'] : ['stealth-fetch'];
+      const cache = {
+        probedAt: new Date().toISOString(),
+        imprintVersion: '0.1.0',
+        schemaVersion: 2,
+        workflowHash: wfHash,
+        preferredOrder: preferred,
+        results: {
+          fetch: {
+            outcome: 'forbidden' as const,
+            durationMs: 0,
+            detail: `Quick probe during teach: HTTP ${resp.status}`,
+          },
+        },
+      };
+      writeFileSync(backendsPath, `${JSON.stringify(cache, null, 2)}\n`);
+      process.stderr.write(
+        `[imprint teach] backend probe: fetch blocked → wrote ${backendsPath}\n`,
+      );
+    }
+  } catch {
+    // Fetch failed (timeout, network error) — don't write cache, let runtime discover
+  }
 }

@@ -205,7 +205,7 @@ result:
 
 9. **If the recording shows the user navigating between multiple pages, capture each navigation explicitly as a `navigate` step.** Don't assume single-page.
 
-10. **Output format is strict.** YAML, parsed by `YAML.parse` then validated against the Zod schema in `src/imprint/types.ts` (search for `PlaybookSchema`). Stick to the templates above.
+10. **Output format is strict.** YAML, parsed by `YAML.parse` then validated against the Zod schema in `src/imprint/types.ts` (search for `PlaybookSchema`). Stick to the templates above. **YAML quoting**: if any string value contains colons, single quotes, or YAML-special characters (`{}[]|>&*!#%@`), wrap the entire value in double quotes.
 
 ## Example
 

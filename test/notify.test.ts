@@ -9,8 +9,13 @@ import { extractAt } from '../src/imprint/json-path.ts';
 import { evaluateNotifyWhen } from '../src/imprint/notify.ts';
 
 describe('extractAt', () => {
-  it('extracts a single numeric leaf via dot path', () => {
-    expect(extractAt({ a: { b: 7 } }, 'a.b')).toEqual([7]);
+  it('extracts a single value via dot path (no [])', () => {
+    expect(extractAt({ a: { b: 7 } }, 'a.b')).toEqual(7);
+  });
+
+  it('extracts a complex object via dot path (no [])', () => {
+    const data = { data: { results: { items: [1, 2, 3] } } };
+    expect(extractAt(data, 'data.results')).toEqual({ items: [1, 2, 3] });
   });
 
   it('iterates an array with [] and gathers all numeric leaves', () => {
@@ -28,26 +33,26 @@ describe('extractAt', () => {
     expect(extractAt(data, 'bounds[].flights[].fares[].price.amount')).toEqual([89, 109, 49]);
   });
 
-  it('returns [] when the path is missing partway down', () => {
-    expect(extractAt({ a: {} }, 'a.b.c')).toEqual([]);
+  it('returns undefined when the path is missing (no [])', () => {
+    expect(extractAt({ a: {} }, 'a.b.c')).toEqual(undefined);
   });
 
   it('returns [] when an array along the path is empty', () => {
     expect(extractAt({ items: [] }, 'items[].price')).toEqual([]);
   });
 
-  it('skips non-numeric leaves silently (e.g., null/undefined prices)', () => {
+  it('collects all non-null leaves including non-numeric values', () => {
     const data = {
       items: [{ price: 10 }, { price: null }, { price: 'free' }, { price: 30 }],
     };
-    expect(extractAt(data, 'items[].price')).toEqual([10, 30]);
+    expect(extractAt(data, 'items[].price')).toEqual([10, 'free', 30]);
   });
 
-  it('coerces numeric strings (Southwest/Stripe-style "108.40") to numbers', () => {
+  it('collects all values including strings and numbers', () => {
     const data = {
       items: [{ price: '108.40' }, { price: '49.00' }, { price: 'N/A' }, { price: 199 }],
     };
-    expect(extractAt(data, 'items[].price')).toEqual([108.4, 49, 199]);
+    expect(extractAt(data, 'items[].price')).toEqual(['108.40', '49.00', 'N/A', 199]);
   });
 
   it('throws when [] is applied to a non-array', () => {

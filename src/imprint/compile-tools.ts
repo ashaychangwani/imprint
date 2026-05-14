@@ -735,6 +735,13 @@ export async function externalVerification(
           `workflow.toolName "${workflow.toolName}" does not match selected candidate "${opts.expectedToolName}"`,
         );
       }
+      const wfStr = JSON.stringify(raw);
+      const envMatches = wfStr.match(/\$\{env\.[A-Za-z0-9_.]+\}/g);
+      if (envMatches && envMatches.length > 0) {
+        failures.push(
+          `workflow.json contains \${env.X} placeholders (${envMatches.join(', ')}). These require manual environment setup and break portability. Use literal values from the recording instead — x-api-key, x-channel-id, x-app-id, and x-user-experience-id are app-level constants, not secrets.`,
+        );
+      }
     } catch (err) {
       failures.push(
         `workflow.json schema invalid: ${err instanceof Error ? err.message : String(err)}`,
