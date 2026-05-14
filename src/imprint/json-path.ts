@@ -1,18 +1,47 @@
 /**
- * JSON dot-path walker. `[]` segments iterate arrays; numeric leaves
- * (including coerced numeric strings like "108.40") are collected.
+ * JSON dot-path walker.
  *
- *   extractAt({a:[{b:1},{b:2}]}, "a[].b")                 → [1, 2]
- *   extractAt({x:[{y:[{z:5}]}]}, "x[].y[].z")             → [5]
+ * Paths WITHOUT `[]` navigate to a single value and return it as-is:
+ *   extractAt({a:{b:{c:42}}}, "a.b")          → {c:42}
+ *   extractAt({data:{results:[1,2]}}, "data.results") → [1,2]
+ *
+ * Paths WITH `[]` iterate arrays and collect leaf values:
+ *   extractAt({a:[{b:1},{b:2}]}, "a[].b")     → [1, 2]
+ *   extractAt({x:[{y:[{z:5}]}]}, "x[].y[].z") → [5]
  *
  * Throws on shape mismatches (non-array where `[]` expected, primitive
  * where descent expected) so misconfigured paths fail loudly.
  */
-export function extractAt(data: unknown, path: string): number[] {
+export function extractNumbers(data: unknown, path: string): number[] {
+  const result = extractAt(data, path);
+  if (Array.isArray(result)) {
+    const nums: number[] = [];
+    for (const v of result) {
+      if (typeof v === 'number' && Number.isFinite(v)) nums.push(v);
+      else if (typeof v === 'string') {
+        const n = Number(v);
+        if (Number.isFinite(n)) nums.push(n);
+      }
+    }
+    return nums;
+  }
+  if (typeof result === 'number' && Number.isFinite(result)) return [result];
+  if (typeof result === 'string') {
+    const n = Number(result);
+    if (Number.isFinite(n)) return [n];
+  }
+  return [];
+}
+
+export function extractAt(data: unknown, path: string): unknown {
   if (path.length === 0) throw new Error('extractAt: empty path');
   const segments = parsePath(path);
-  const out: number[] = [];
-  walk(data, segments, 0, out);
+  const hasIterate = segments.some((s) => s.iterate);
+  if (!hasIterate) {
+    return navigatePath(data, segments);
+  }
+  const out: unknown[] = [];
+  walkCollect(data, segments, 0, out);
   return out;
 }
 
@@ -30,15 +59,24 @@ function parsePath(path: string): PathSegment[] {
   });
 }
 
-function walk(node: unknown, segs: PathSegment[], i: number, out: number[]): void {
+function navigatePath(node: unknown, segs: PathSegment[]): unknown {
+  let current = node;
+  for (const seg of segs) {
+    if (typeof current !== 'object' || current === null) {
+      throw new Error(
+        `extractAt: expected object/array at segment "${seg.key}", got ${current === null ? 'null' : typeof current}`,
+      );
+    }
+    current = (current as Record<string, unknown>)[seg.key];
+    if (current === undefined) return undefined;
+  }
+  return current;
+}
+
+function walkCollect(node: unknown, segs: PathSegment[], i: number, out: unknown[]): void {
   if (i === segs.length) {
-    // Many APIs return money as decimal strings ("108.40") to dodge
-    // float-precision games — coerce.
-    if (typeof node === 'number' && Number.isFinite(node)) {
+    if (node !== null && node !== undefined) {
       out.push(node);
-    } else if (typeof node === 'string') {
-      const n = Number(node);
-      if (Number.isFinite(n)) out.push(n);
     }
     return;
   }
@@ -55,8 +93,8 @@ function walk(node: unknown, segs: PathSegment[], i: number, out: number[]): voi
     if (!Array.isArray(next)) {
       throw new Error(`extractAt: "${seg.key}[]" expected an array, got ${typeof next}`);
     }
-    for (const item of next) walk(item, segs, i + 1, out);
+    for (const item of next) walkCollect(item, segs, i + 1, out);
   } else {
-    walk(next, segs, i + 1, out);
+    walkCollect(next, segs, i + 1, out);
   }
 }

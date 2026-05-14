@@ -8,7 +8,7 @@
  * can't crash the cron loop. See docs/notifications.md for setup.
  */
 
-import { extractAt } from './json-path.ts';
+import { extractNumbers } from './json-path.ts';
 import { createLog } from './log.ts';
 import type { NotifyWhen } from './types.ts';
 
@@ -42,7 +42,7 @@ export function evaluateNotifyWhen(
       const prices: number[] = [];
       for (const p of paths) {
         try {
-          prices.push(...extractAt(data, p));
+          prices.push(...extractNumbers(data, p));
         } catch {
           // Path didn't match this shape — try the next one. If ALL paths
           // throw, prices stays empty and we treat it as "no signal" below.

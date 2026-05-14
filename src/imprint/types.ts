@@ -341,7 +341,7 @@ export const BackendsCacheSchema = z.object({
   /** Ladder for runtime — preferredOrder[0] cheapest, rest fall back on
    *  FORBIDDEN. Excludes 'auto'. */
   preferredOrder: z.array(ConcreteBackendSchema).min(1),
-  results: z.record(ConcreteBackendSchema, BackendProbeResultSchema),
+  results: z.record(z.string(), BackendProbeResultSchema),
 });
 export type BackendsCache = z.infer<typeof BackendsCacheSchema>;
 

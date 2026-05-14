@@ -18,6 +18,58 @@ import { hasFreeformRedactionHint, redactFreeformText } from './freeform-redact.
 import { isSensitiveHeader, isSensitiveKey } from './sensitive-keys.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
+const USER_INTERACTION_TYPES = new Set(['click', 'input', 'change', 'submit']);
+const MULTI_VALUE_HEADERS = new Set(['cookie', 'set-cookie']);
+
+/**
+ * Detect sensitive headers whose values are page-minted constants — baked
+ * into the site's JavaScript, not per-user secrets. The recording starts
+ * from a clean browser with no cookies or stored state, so any sensitive
+ * header value present in requests BEFORE the user's first interaction
+ * that wasn't set by a prior Set-Cookie or storage snapshot is an app
+ * constant and should not be redacted.
+ *
+ * Returns header names (lowercase) that should be passed to
+ * `redactSession()` via `keepHeaders`.
+ */
+export function detectPageMintedHeaders(session: Session): string[] {
+  const firstInteraction = session.events.find((e) => USER_INTERACTION_TYPES.has(e.type));
+  const cutoff = firstInteraction?.timestamp ?? Number.POSITIVE_INFINITY;
+
+  const producedValues = new Set<string>();
+  for (const snap of session.storageSnapshots ?? []) {
+    for (const v of Object.values(snap.localStorage ?? {})) producedValues.add(v);
+    for (const v of Object.values(snap.sessionStorage ?? {})) producedValues.add(v);
+  }
+  for (const req of session.requests) {
+    if (req.timestamp >= cutoff) break;
+    const sc = Object.entries(req.response?.headers ?? {}).find(
+      ([n]) => n.toLowerCase() === 'set-cookie',
+    )?.[1];
+    if (sc) {
+      for (const cookie of splitSetCookieHeader(sc)) {
+        const first = cookie.split(';', 1)[0] ?? '';
+        const eq = first.indexOf('=');
+        if (eq > 0) producedValues.add(first.slice(eq + 1));
+      }
+    }
+  }
+
+  const pageMinted = new Set<string>();
+  for (const req of session.requests) {
+    if (req.timestamp >= cutoff) break;
+    for (const [name, value] of Object.entries(req.headers)) {
+      const lower = name.toLowerCase();
+      if (!isSensitiveHeader(name)) continue;
+      if (MULTI_VALUE_HEADERS.has(lower)) continue;
+      if (producedValues.has(value)) continue;
+      pageMinted.add(lower);
+    }
+  }
+
+  return [...pageMinted];
+}
+
 const REDACTED = (originalLength: number): string => `[REDACTED:${originalLength}]`;
 
 interface RedactionMarkerContext {

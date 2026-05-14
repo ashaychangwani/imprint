@@ -603,16 +603,36 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
   }`;
 
   const llm = resolveProvider(opts.llmConfig ?? {});
-  const result = await llm.analyze(systemPrompt, slimmed);
 
   let playbook: Playbook;
-  try {
-    playbook = parsePlaybook(stripCodeFences(result.text).trim());
-  } catch (err) {
+  let lastResult = await llm.analyze(systemPrompt, slimmed);
+  let llmInputTokens = lastResult.inputTokens;
+  let llmOutputTokens = lastResult.outputTokens;
+  let llmDurationMs = lastResult.durationMs;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      playbook = parsePlaybook(stripCodeFences(lastResult.text).trim());
+      lastErr = undefined;
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0) {
+        log('playbook YAML failed to parse, retrying with error feedback…');
+        const fixPrompt = `Your previous output was invalid YAML. The parser error was:\n\n${err instanceof Error ? err.message : String(err)}\n\nFix the YAML and return the corrected playbook. Output ONLY valid YAML, no prose.`;
+        lastResult = await llm.analyze(systemPrompt, `${JSON.stringify(slimmed)}\n\n${fixPrompt}`);
+        llmInputTokens = addNullable(llmInputTokens, lastResult.inputTokens);
+        llmOutputTokens = addNullable(llmOutputTokens, lastResult.outputTokens);
+        llmDurationMs += lastResult.durationMs;
+      }
+    }
+  }
+  if (lastErr) {
     throw new Error(
-      `Compiled playbook failed to parse: ${err instanceof Error ? err.message : String(err)}\nRaw output:\n${result.text.slice(0, 1500)}`,
+      `Compiled playbook failed to parse: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}\nRaw output:\n${lastResult.text.slice(0, 1500)}`,
     );
   }
+  playbook = playbook!;
 
   if (opts.candidate && playbook.toolName !== opts.candidate.toolName) {
     throw new Error(
@@ -623,14 +643,14 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
   const outPath =
     opts.outPath ?? resolveDefaultCompilePlaybookPath(session.site, playbook.toolName);
   mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, `${stripCodeFences(result.text).trim()}\n`);
+  writeFileSync(outPath, `${stripCodeFences(lastResult.text).trim()}\n`);
 
   return {
     playbook,
     playbookPath: outPath,
-    inputTokens: addNullable(triageTokens.input, result.inputTokens),
-    outputTokens: addNullable(triageTokens.output, result.outputTokens),
-    durationMs: triageTokens.durationMs + result.durationMs,
+    inputTokens: addNullable(triageTokens.input, llmInputTokens),
+    outputTokens: addNullable(triageTokens.output, llmOutputTokens),
+    durationMs: triageTokens.durationMs + llmDurationMs,
   };
 }
 
