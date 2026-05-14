@@ -114,3 +114,27 @@ This shows up everywhere: `requirePositional` → "→ run \`imprint <verb> --he
 The compile-agent writes this module when `stateHints` flag per-call query params (`query_param_changes_across_calls`). It uses `search_response_body` to find the signing function in the session's JavaScript responses and replicates the computation. Example: Namecheap's CRC32 + XOR + base64 URL signing.
 
 **Alternative:** Bake signing logic into the workflow JSON URL template syntax (e.g. a `${sign(...)}` function). Too rigid — signing schemes vary widely (HMAC, CRC32, OAuth, custom XOR). A JS module is testable, composable, and doesn't pollute the workflow schema with execution semantics.
+
+## D17 — Agentic workflow compilation with verification loop
+
+**Decided.** Workflow compilation uses a multi-turn agent loop (`compile-agent.ts`) that writes `workflow.json` + `parser.ts` + `parser.test.ts`, runs external verification via a test-runner tool, and iterates on failures until tests pass. The agent has read tools for inspecting individual request/response bodies on demand rather than receiving the entire session upfront.
+
+**Alternative:** Single-shot LLM call with a "generate the perfect workflow" prompt. Produces unverified code — high risk of subtle bugs (incorrect JSONPath, wrong header substitution, off-by-one request indexing). Playbook compilation (D3) still uses the simpler single-shot path since playbooks are less error-prone (DOM locators, not API schemas).
+
+**Rationale:** Verification-driven iteration catches the majority of codegen bugs before the user sees them. Selective request access (the agent asks for specific seq numbers) solves token budget blowouts on complex sites — e.g., Southwest fires 800+ requests, and the agent only needs to read 5-10 of them.
+
+## D18 — OpenTelemetry tracing with Phoenix for LLM observability
+
+**Decided.** All LLM calls, agent turns, tool invocations, and compile stages emit OpenTelemetry spans in OpenInference format. Tracing is opt-in via `IMPRINT_TRACE=1` or `PHOENIX_COLLECTOR_ENDPOINT=<url>`. Span attributes include token counts, prompt/completion text (when `IMPRINT_TRACE_LLM_IO=1`), and error details.
+
+**Alternative:** Structured logging to stderr. Harder to correlate multi-step compile failures; no visualization of parallel tool calls or nested agent loops.
+
+**Rationale:** Phoenix's trace UI makes it trivial to spot which LLM call is slow, which tool call failed, and what the exact prompt/response was. Essential for debugging multi-turn compile-agent failures where the error surfaces many turns deep.
+
+## D19 — LLM-based request triage before compilation
+
+**Decided.** Before compiling, send request metadata (method/URL/resourceType/status/mimeType, with bodies truncated to 4 KB) to the LLM and ask it to return the seq numbers relevant to the user's intent. Only the selected requests pass to the compile agent.
+
+**Alternative:** Heuristic filtering (e.g., same-origin + XHR/Fetch only). Misses cross-origin SSO flows and over-filters on sites with unconventional API patterns.
+
+**Rationale:** Modern SPAs fire 500-1000 requests; sending all of them blows the compile-agent's context window. The triage call costs ~$0.02 and reduces the agent's input from millions of tokens to hundreds of thousands on complex sites. The agent still has read-access to filtered-out requests if it discovers it needs them.

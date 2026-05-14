@@ -10,6 +10,8 @@ This document is for manual setup or advanced configuration.
 
 Each site gets its own MCP server: `imprint mcp-server southwest` registers as `imprint-southwest`. This isolation ensures multiple Imprint tools coexist without name collisions.
 
+> For sites that require authentication, run `imprint login <site>` or `imprint credential set <site> <name>` before starting the MCP server. The server will warn about missing credentials at startup.
+
 ---
 
 ## Claude Code
@@ -73,7 +75,7 @@ If `imprint` is not on your PATH, Codex won't find it. Either:
 2. Use the absolute path to the Imprint CLI in the command:
 
 ```bash
-codex mcp add imprint-mysite -- bun run /absolute/path/to/imprint/src/cli.ts mcp-server mysite
+codex mcp add imprint-mysite -- bun run /absolute<imprint-clone-dir>/src/cli.ts mcp-server mysite
 ```
 
 ---
@@ -125,43 +127,7 @@ If `imprint` is not on your PATH, use the absolute path to the CLI:
   "mcpServers": {
     "imprint-mysite": {
       "command": "bun",
-      "args": ["run", "/absolute/path/to/imprint/src/cli.ts", "mcp-server", "mysite"]
-    }
-  }
-}
-```
-
----
-
-## Cursor / Continue.dev
-
-Cursor and Continue.dev support MCP via config files.
-
-### Cursor
-
-Add to `~/.cursor/config.json` (Linux/macOS) or `%APPDATA%\Cursor\config.json` (Windows):
-
-```json
-{
-  "mcp": {
-    "imprint-mysite": {
-      "command": "imprint",
-      "args": ["mcp-server", "mysite"]
-    }
-  }
-}
-```
-
-### Continue.dev
-
-Add to `~/.continue/config.json`:
-
-```json
-{
-  "mcp": {
-    "imprint-mysite": {
-      "command": "imprint",
-      "args": ["mcp-server", "mysite"]
+      "args": ["run", "/absolute<imprint-clone-dir>/src/cli.ts", "mcp-server", "mysite"]
     }
   }
 }
@@ -299,6 +265,7 @@ RUN bun install
 RUN bunx playwright install chromium --with-deps
 
 ENV ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
+ENV CLOUD_ML_REGION=us-east5
 
 EXPOSE 8765
 CMD ["bun", "src/cli.ts", "mcp-server", "mysite", "--http", "--port", "8765"]
@@ -323,8 +290,8 @@ After=network.target
 [Service]
 Type=simple
 User=youruser
-WorkingDirectory=/path/to/imprint
-Environment="ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project"
+WorkingDirectory=<imprint-clone-dir>
+Environment="ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project" "CLOUD_ML_REGION=us-east5"
 ExecStart=/usr/local/bin/bun src/cli.ts mcp-server mysite --http --port 8765
 Restart=always
 

@@ -70,7 +70,7 @@ IMPRINT_TRACE=1 IMPRINT_TRACE_LLM_IO=1 PHOENIX_COLLECTOR_ENDPOINT=http://localho
 
 ## Reporting a vulnerability
 
-Email security issues to <ashay@example.com> (replace with real address before publishing). Please don't open a public issue for security disclosures — give us a chance to fix before disclosure.
+Email security issues to <security@imprint.dev> or [open a private security advisory](https://github.com/ashaychangwani/imprint/security/advisories/new) on GitHub. Please don't open a public issue for security disclosures — give us a chance to fix before disclosure.
 
 For non-security bugs, the public issue tracker is fine.
 

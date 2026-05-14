@@ -1,0 +1,64 @@
+import gettingStarted from '@docs/getting-started.md?raw';
+import integrations from '@docs/integrations.md?raw';
+import glossary from '@docs/glossary.md?raw';
+import captureProtocol from '@docs/capture-protocol.md?raw';
+import credentialSharing from '@docs/credential-sharing.md?raw';
+import notifications from '@docs/notifications.md?raw';
+import troubleshooting from '@docs/troubleshooting.md?raw';
+import playbookDebugging from '@docs/playbook-debugging.md?raw';
+import architecture from '@docs/architecture.md?raw';
+import security from '@docs/security.md?raw';
+import decisions from '@docs/decisions.md?raw';
+import design from '@docs/design.md?raw';
+
+const docsManifest = [
+  {
+    category: 'Getting Started',
+    items: [
+      { slug: 'getting-started', title: 'Quick Start' },
+      { slug: 'integrations', title: 'Integrations' },
+      { slug: 'glossary', title: 'Glossary' },
+    ],
+  },
+  {
+    category: 'Guides',
+    items: [
+      { slug: 'capture-protocol', title: 'Capture Protocol' },
+      { slug: 'credential-sharing', title: 'Credential Sharing' },
+      { slug: 'notifications', title: 'Notifications' },
+    ],
+  },
+  {
+    category: 'Troubleshooting',
+    items: [
+      { slug: 'troubleshooting', title: 'Troubleshooting' },
+      { slug: 'playbook-debugging', title: 'Playbook Debugging' },
+    ],
+  },
+  {
+    category: 'Reference',
+    items: [
+      { slug: 'architecture', title: 'Architecture' },
+      { slug: 'security', title: 'Security' },
+      { slug: 'decisions', title: 'Design Decisions' },
+      { slug: 'design', title: 'Product Strategy' },
+    ],
+  },
+];
+
+const docsContent = {
+  'getting-started': gettingStarted,
+  'integrations': integrations,
+  'glossary': glossary,
+  'capture-protocol': captureProtocol,
+  'credential-sharing': credentialSharing,
+  'notifications': notifications,
+  'troubleshooting': troubleshooting,
+  'playbook-debugging': playbookDebugging,
+  'architecture': architecture,
+  'security': security,
+  'decisions': decisions,
+  'design': design,
+};
+
+export { docsManifest, docsContent };

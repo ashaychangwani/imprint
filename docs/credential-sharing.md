@@ -5,8 +5,11 @@ Imprint skills are designed to ship without secrets. The generated tool folder c
 - `workflow.json` — request templates with `${credential.NAME}` placeholders and named `${state.NAME}` captures
 - `playbook.yaml` — DOM playbook (no secrets)
 - `index.ts` — generated MCP tool (no secrets)
-- `credentials.manifest.json` — names + descriptions of secrets/storage keys referenced by this generated tool (**no values**)
 - `parser.ts` (optional) — response parser
+- `backends.json` (optional) — backend configuration
+- `cron.json` (optional) — scheduled execution config
+
+Credential metadata (which secrets a site needs, their descriptions) is stored locally in `~/.config/imprint/manifests/<site>.json` on each machine — it is **not** shipped with the tool folder. Use `imprint credential list <site>` to see what credentials are required.
 
 The *values* of those credentials live in the local credential manager on each machine that runs the skill. That can include named secrets, cookies captured by `imprint login`, and declared durable browser-storage keys. There are two supported provisioning paths.
 

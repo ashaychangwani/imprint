@@ -67,7 +67,7 @@ A Chromium window opens with the D&G homepage. Drive it normally:
 | localStorage/sessionStorage snapshots | Page evaluation at relevant origins | State captures + durable storage credentials |
 | Your narration | Terminal stdin loop | LLM intent identification (both compilers) |
 
-Password fields are auto-redacted before being captured. Other input values are captured verbatim (truncated to 200 chars per value).
+Password fields are auto-redacted before being captured. Other input values are captured verbatim (truncated to 200 chars per value). Response bodies larger than 256 KB are truncated with a `[…truncated…]` marker — if you're recording a site with very large payloads (e.g., flight search results), the workflow compiler will still generate correct code but the truncated body won't be available for parser verification.
 
 **One recording, two artifacts.** The same session.json compiles to both:
 - `imprint generate` → `workflow.json` → `imprint emit` → `index.ts` (API replay path, including named state captures)
