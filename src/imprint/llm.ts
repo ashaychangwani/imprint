@@ -155,19 +155,21 @@ class VertexProvider implements LLMProvider {
     tools: Anthropic.Tool[];
     maxTokens?: number;
   }): Promise<Anthropic.Message> {
-    try {
-      const response = await this.client.messages.create({
-        model: this.config.model,
-        max_tokens: opts.maxTokens ?? this.config.maxTokens,
-        ...temperatureFragment(this.config.model, this.config.temperature),
-        system: opts.system,
-        messages: opts.messages,
-        tools: opts.tools,
-      });
-      return response as unknown as Anthropic.Message;
-    } catch (err) {
-      throw enrichVertexError(err, this.config);
-    }
+    return await traceMessageWithTools(this.name, this.config.model, opts, async () => {
+      try {
+        const response = await this.client.messages.create({
+          model: this.config.model,
+          max_tokens: opts.maxTokens ?? this.config.maxTokens,
+          ...temperatureFragment(this.config.model, this.config.temperature),
+          system: opts.system,
+          messages: opts.messages,
+          tools: opts.tools,
+        });
+        return response as unknown as Anthropic.Message;
+      } catch (err) {
+        throw enrichVertexError(err, this.config);
+      }
+    });
   }
 }
 
@@ -283,19 +285,21 @@ class AnthropicApiProvider implements LLMProvider {
     tools: Anthropic.Tool[];
     maxTokens?: number;
   }): Promise<Anthropic.Message> {
-    try {
-      const response = await this.client.messages.create({
-        model: this.config.model,
-        max_tokens: opts.maxTokens ?? this.config.maxTokens,
-        ...temperatureFragment(this.config.model, this.config.temperature),
-        system: opts.system,
-        messages: opts.messages,
-        tools: opts.tools,
-      });
-      return response;
-    } catch (err) {
-      throw enrichAnthropicApiError(err, this.config);
-    }
+    return await traceMessageWithTools(this.name, this.config.model, opts, async () => {
+      try {
+        const response = await this.client.messages.create({
+          model: this.config.model,
+          max_tokens: opts.maxTokens ?? this.config.maxTokens,
+          ...temperatureFragment(this.config.model, this.config.temperature),
+          system: opts.system,
+          messages: opts.messages,
+          tools: opts.tools,
+        });
+        return response;
+      } catch (err) {
+        throw enrichAnthropicApiError(err, this.config);
+      }
+    });
   }
 }
 
@@ -598,6 +602,50 @@ async function traceAnalyze(
         'imprint.llm.output_chars': result.text.length,
       });
       return result;
+    },
+  );
+}
+
+async function traceMessageWithTools(
+  provider: ProviderName,
+  model: string,
+  opts: {
+    system: string;
+    messages: Anthropic.MessageParam[];
+    tools: Anthropic.Tool[];
+    maxTokens?: number;
+  },
+  fn: () => Promise<Anthropic.Message>,
+): Promise<Anthropic.Message> {
+  return await traced(
+    'llm.message_with_tools',
+    'LLM',
+    {
+      'imprint.llm.provider': provider,
+      'imprint.llm.model': model,
+      'imprint.llm.message_count': opts.messages.length,
+      'imprint.llm.tool_count': opts.tools.length,
+      'imprint.llm.tool_names': opts.tools.map((t) => t.name).join(', '),
+    },
+    async (span) => {
+      const t0 = Date.now();
+      const response = await fn();
+      const toolUseNames = response.content
+        .filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
+        .map((b) => b.name);
+      setSpanAttributes(span, {
+        ...llmSpanAttributes({
+          provider,
+          model,
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          stopReason: response.stop_reason,
+        }),
+        'imprint.llm.duration_ms': Date.now() - t0,
+        'imprint.llm.tools_called': toolUseNames.join(', '),
+        'imprint.llm.tools_called_count': toolUseNames.length,
+      });
+      return response;
     },
   );
 }
