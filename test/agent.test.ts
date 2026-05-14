@@ -285,7 +285,9 @@ describe('runAgentLoop — loop semantics', () => {
       // Turn 1: model calls a tool but hits max_tokens mid-output
       assistantToolUseWithStopReason([{ name: 'my_tool', input: {}, id: 'tu_max' }], 'max_tokens'),
       // Turn 2: model finishes
-      assistantToolUse([{ name: 'done', input: { summary: 'finished after max_tokens recovery' } }]),
+      assistantToolUse([
+        { name: 'done', input: { summary: 'finished after max_tokens recovery' } },
+      ]),
     ]);
 
     const result = await runAgentLoop({
