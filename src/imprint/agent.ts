@@ -228,13 +228,14 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
       content: response.content,
     });
 
-    // Handle different stop reasons
-    if (response.stop_reason === 'tool_use') {
-      // Extract all tool_use blocks
-      const toolUseBlocks = response.content.filter(
-        (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
-      );
+    // Extract tool_use blocks regardless of stop_reason — a max_tokens or
+    // end_turn response can still contain completed tool_use blocks that
+    // need matching tool_result blocks in the next user message.
+    const toolUseBlocks = response.content.filter(
+      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
+    );
 
+    if (toolUseBlocks.length > 0) {
       // Check for done() or give_up() first
       for (const block of toolUseBlocks) {
         if (block.name === 'done') {
@@ -315,15 +316,22 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
         });
       }
 
-      // Append all tool results as a single user message
-      messages.push({ role: 'user', content: toolResults });
-      conversationLog.push({
-        turn,
-        role: 'user',
-        content: toolResults,
-      });
+      // Build the user response: tool results first, plus an optional
+      // continuation nudge if the model was cut off mid-output.
+      const userContent: (Anthropic.ToolResultBlockParam | Anthropic.TextBlockParam)[] = [
+        ...toolResults,
+      ];
+      if (response.stop_reason === 'max_tokens') {
+        userContent.push({
+          type: 'text',
+          text: 'You hit max_tokens. Continue from where you stopped.',
+        });
+      }
+
+      messages.push({ role: 'user', content: userContent });
+      conversationLog.push({ turn, role: 'user', content: userContent });
     } else if (response.stop_reason === 'end_turn') {
-      // Model stopped without calling done() or give_up()
+      // Model stopped without calling any tools or done()/give_up()
       const nudgeMessage =
         'You stopped without calling done() or give_up(). If you are finished, call done. If you encountered a categorical impossibility, call give_up. Otherwise continue working.';
       messages.push({ role: 'user', content: nudgeMessage });
@@ -333,7 +341,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
         content: nudgeMessage,
       });
     } else if (response.stop_reason === 'max_tokens') {
-      // Model hit max_tokens
+      // Model hit max_tokens with no tool calls
       const continueMessage = 'You hit max_tokens. Continue from where you stopped.';
       messages.push({ role: 'user', content: continueMessage });
       conversationLog.push({
@@ -341,8 +349,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
         role: 'user',
         content: continueMessage,
       });
-    } else {
-      // Unexpected stop reason
+    } else if (response.stop_reason !== 'tool_use') {
+      // Unexpected stop reason (tool_use with zero blocks would be odd but harmless)
       return {
         outcome: 'error',
         errorMessage: `unexpected stop_reason: ${response.stop_reason}`,

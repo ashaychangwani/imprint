@@ -76,6 +76,27 @@ function assistantText(
   } as unknown as Anthropic.Message;
 }
 
+function assistantToolUseWithStopReason(
+  toolUses: Array<{ name: string; input: object; id?: string }>,
+  stop_reason: 'tool_use' | 'max_tokens' | 'end_turn',
+): Anthropic.Message {
+  return {
+    id: 'msg_test',
+    type: 'message',
+    role: 'assistant',
+    model: 'test',
+    content: toolUses.map((t, i) => ({
+      type: 'tool_use' as const,
+      id: t.id ?? `tu_${i}`,
+      name: t.name,
+      input: t.input,
+    })),
+    stop_reason,
+    stop_sequence: null,
+    usage: { input_tokens: 10, output_tokens: 20 },
+  } as unknown as Anthropic.Message;
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('runAgentLoop — loop semantics', () => {
@@ -246,6 +267,53 @@ describe('runAgentLoop — loop semantics', () => {
         e.role === 'user' && typeof e.content === 'string' && e.content.includes('hit max_tokens'),
     );
     expect(maxTokensNudge).toBeDefined();
+  });
+
+  it('dispatches tool_use blocks in a max_tokens response before continuing', async () => {
+    let toolCalled = false;
+    const myTool: AgentTool = {
+      name: 'my_tool',
+      description: 'Test tool',
+      input_schema: { type: 'object', properties: {} },
+      handler: async () => {
+        toolCalled = true;
+        return { result: 'tool executed' };
+      },
+    };
+
+    const llm = new MockProvider([
+      // Turn 1: model calls a tool but hits max_tokens mid-output
+      assistantToolUseWithStopReason([{ name: 'my_tool', input: {}, id: 'tu_max' }], 'max_tokens'),
+      // Turn 2: model finishes
+      assistantToolUse([
+        { name: 'done', input: { summary: 'finished after max_tokens recovery' } },
+      ]),
+    ]);
+
+    const result = await runAgentLoop({
+      systemPrompt: 'test',
+      initialUserMessage: 'start',
+      tools: [myTool, doneTool(), giveUpTool()],
+      deadlineMs: Date.now() + 60000,
+      llm: llm as ToolUseProvider,
+    });
+
+    expect(result.outcome).toBe('done');
+    expect(toolCalled).toBe(true);
+
+    // The user message after the max_tokens turn should contain both
+    // the tool result AND the continuation nudge
+    const userMsg = result.conversationLog.find((e) => {
+      if (e.role !== 'user' || !Array.isArray(e.content)) return false;
+      const hasToolResult = (e.content as Array<{ type: string }>).some(
+        (b) => b.type === 'tool_result',
+      );
+      const hasContinueText = (e.content as Array<{ type: string; text?: string }>).some(
+        (b) => b.type === 'text' && b.text?.includes('max_tokens'),
+      );
+      return hasToolResult && hasContinueText;
+    });
+    expect(userMsg).toBeDefined();
   });
 });
 
