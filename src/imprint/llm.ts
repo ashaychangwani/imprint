@@ -617,6 +617,7 @@ async function traceMessageWithTools(
   },
   fn: () => Promise<Anthropic.Message>,
 ): Promise<Anthropic.Message> {
+  const captureIo = traceLlmIoEnabled();
   return await traced(
     'llm.message_with_tools',
     'LLM',
@@ -626,6 +627,21 @@ async function traceMessageWithTools(
       'imprint.llm.message_count': opts.messages.length,
       'imprint.llm.tool_count': opts.tools.length,
       'imprint.llm.tool_names': opts.tools.map((t) => t.name).join(', '),
+      ...(captureIo
+        ? llmSpanAttributes({
+            provider,
+            model,
+            inputMessages: traceLlmMessages(
+              flattenAnthropicMessages(opts.system, opts.messages),
+            ),
+            inputValue: JSON.stringify({
+              system: opts.system,
+              messages: opts.messages,
+              tools: opts.tools.map((t) => t.name),
+            }),
+            inputMimeType: 'application/json',
+          })
+        : {}),
     },
     async (span) => {
       const t0 = Date.now();
@@ -633,6 +649,13 @@ async function traceMessageWithTools(
       const toolUseNames = response.content
         .filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
         .map((b) => b.name);
+      const outputText = response.content
+        .map((b) => {
+          if (b.type === 'text') return b.text;
+          if (b.type === 'tool_use') return `[tool_use: ${b.name}]`;
+          return `[${b.type}]`;
+        })
+        .join('\n');
       setSpanAttributes(span, {
         ...llmSpanAttributes({
           provider,
@@ -640,6 +663,10 @@ async function traceMessageWithTools(
           inputTokens: response.usage.input_tokens,
           outputTokens: response.usage.output_tokens,
           stopReason: response.stop_reason,
+          outputMessages: captureIo
+            ? traceLlmMessages([{ role: 'assistant', content: outputText }])
+            : undefined,
+          outputValue: captureIo ? outputText : undefined,
         }),
         'imprint.llm.duration_ms': Date.now() - t0,
         'imprint.llm.tools_called': toolUseNames.join(', '),
@@ -648,6 +675,40 @@ async function traceMessageWithTools(
       return response;
     },
   );
+}
+
+function flattenAnthropicMessages(
+  system: string,
+  messages: Anthropic.MessageParam[],
+): Array<{ role: string; content: string }> {
+  const out: Array<{ role: string; content: string }> = [
+    { role: 'system', content: system },
+  ];
+  for (const msg of messages) {
+    const text =
+      typeof msg.content === 'string'
+        ? msg.content
+        : msg.content
+            .map((b) => {
+              if (b.type === 'text') return b.text;
+              if (b.type === 'tool_result') {
+                const inner =
+                  typeof b.content === 'string'
+                    ? b.content
+                    : Array.isArray(b.content)
+                      ? b.content
+                          .map((c) => ('text' in c ? c.text : `[${c.type}]`))
+                          .join('\n')
+                      : `[tool_result: ${b.tool_use_id}]`;
+                return inner;
+              }
+              if (b.type === 'tool_use') return `[tool_use: ${b.name}]`;
+              return `[${b.type}]`;
+            })
+            .join('\n');
+    out.push({ role: msg.role, content: text });
+  }
+  return out;
 }
 
 function chatTraceDetails(
