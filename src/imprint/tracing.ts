@@ -101,6 +101,14 @@ export function resolveTraceTokenCount(
   fallbackText: string | undefined,
 ): { tokens?: number; source: 'provider' | 'estimated' | 'missing' } {
   if (typeof providerTokens === 'number' && Number.isFinite(providerTokens)) {
+    // Sanity check: CLI providers sometimes report impossibly low counts
+    // (e.g. 6 tokens for a 50K-char prompt). Prefer estimation in that case.
+    if (fallbackText !== undefined && providerTokens > 0) {
+      const estimated = estimateTokensFromText(fallbackText);
+      if (estimated > 0 && providerTokens < estimated / 10) {
+        return { tokens: estimated, source: 'estimated' };
+      }
+    }
     return { tokens: providerTokens, source: 'provider' };
   }
   if (fallbackText !== undefined) {
