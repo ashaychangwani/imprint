@@ -1,8 +1,8 @@
 /** `imprint emit` — generate <assetRoot>/<site>/<toolName>/index.ts: a thin wrapper
  *  around runtime.executeWorkflow with the workflow JSON embedded inline. */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join as pathJoin, resolve as pathResolve, relative } from 'node:path';
+import { existsSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { loadJsonFile } from './load-json.ts';
 import { type Workflow, WorkflowSchema } from './types.ts';
 
@@ -46,11 +46,13 @@ export function emit(opts: EmitOptions): EmitResult {
     );
   }
 
-  // Generated files live in <IMPRINT_HOME>/<site>/<toolName>/ by default.
-  const runtimeModule = pathResolve(import.meta.dir, 'runtime.ts');
-  const importPath = relative(outDir, runtimeModule);
+  // Ensure IMPRINT_HOME has a node_modules/imprint symlink so generated
+  // tools can `import 'imprint/runtime'` via standard module resolution.
+  // The symlink survives worktree deletion — only needs updating when the
+  // imprint source tree moves (re-run `bun link && imprint emit --force`).
+  ensureImprintSymlink(outDir);
 
-  const source = renderModule(workflow, importPath);
+  const source = renderModule(workflow);
   writeFileSync(outPath, source, 'utf8');
 
   return {
@@ -67,7 +69,25 @@ function defaultOutDir(workflowPath: string, workflow: Workflow): string {
   return pathJoin(workflowDir, workflow.toolName);
 }
 
-function renderModule(workflow: Workflow, runtimeImportPath: string): string {
+function ensureImprintSymlink(outDir: string): void {
+  const repoRoot = pathResolve(import.meta.dir, '..', '..');
+  // Walk up from outDir to find the IMPRINT_HOME root (the directory
+  // containing sites). For ~/.imprint/<site>/<tool>/, that's ~/.imprint/.
+  // For examples/<site>/<tool>/, that's examples/.
+  const imprintHome = pathResolve(outDir, '..', '..');
+  const nodeModulesDir = pathJoin(imprintHome, 'node_modules');
+  const symlinkPath = pathJoin(nodeModulesDir, 'imprint');
+  try {
+    mkdirSync(nodeModulesDir, { recursive: true });
+    // Remove stale symlink if it points elsewhere
+    if (existsSync(symlinkPath)) unlinkSync(symlinkPath);
+    symlinkSync(repoRoot, symlinkPath, 'dir');
+  } catch {
+    // Non-fatal — relative-path fallback will be used if this fails.
+  }
+}
+
+function renderModule(workflow: Workflow): string {
   const paramTypeFields = workflow.parameters
     .map((p) => {
       const optional = p.default !== undefined ? '?' : '';
@@ -102,8 +122,8 @@ import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
   type CredentialStore,
-} from '${runtimeImportPath.replace(/\.ts$/, '.ts')}';
-import type { ToolResult, Workflow } from '${pathRel(runtimeImportPath, 'types.ts')}';
+} from 'imprint/runtime';
+import type { ToolResult, Workflow } from 'imprint/types';
 
 const WORKFLOW: Workflow = ${workflowJson};
 
@@ -148,8 +168,4 @@ function camelCase(s: string): string {
 
 function escapeJsdoc(s: string): string {
   return s.replace(/\*\//g, '*\\/');
-}
-
-function pathRel(from: string, sibling: string): string {
-  return from.replace(/[^/]+$/, sibling);
 }

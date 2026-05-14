@@ -13,8 +13,8 @@ import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
   type CredentialStore,
-} from '../../../src/imprint/runtime.ts';
-import type { ToolResult, Workflow } from '../../../src/imprint/types.ts';
+} from 'imprint/runtime';
+import type { ToolResult, Workflow } from 'imprint/types';
 
 const WORKFLOW: Workflow = {
   "toolName": "search_namecheap_domains",
