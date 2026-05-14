@@ -1,12 +1,31 @@
 #!/usr/bin/env bun
 /** CLI entry point. Run `imprint --help` for the verb list. */
 
-import { basename, dirname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { ProviderName } from './imprint/llm.ts';
 import { isDebug } from './imprint/log.ts';
 import { shutdownTracing, traced } from './imprint/tracing.ts';
 import { VERSION } from './imprint/version.ts';
+
+/** Load .env from the project root (next to src/) if present.
+ *  Bun auto-loads .env from CWD, but this covers running from other directories. */
+function loadDotenv(): void {
+  const envPath = resolve(import.meta.dir, '..', '.env');
+  if (!existsSync(envPath)) return;
+  for (const line of readFileSync(envPath, 'utf8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq);
+    const value = trimmed.slice(eq + 1);
+    if (!(key in process.env)) process.env[key] = value;
+  }
+}
+
+loadDotenv();
 
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
 
