@@ -55,6 +55,10 @@ src/imprint/
 ├── compile.ts           One LLM compiler, two configs:
 │                          - generate (Workflow)
 │                          - compilePlaybook (Playbook)
+├── compile-agent.ts     Agentic compile orchestrator (session → workflow.json + parser.ts)
+├── agent.ts             General-purpose tool-using agent loop + per-turn/per-tool tracing
+├── claude-cli-compile.ts  Claude CLI compile driver with stream-json per-turn tracing
+├── codex-cli-compile.ts   Codex CLI compile driver with JSONL per-turn tracing
 ├── compile-tools.ts     Compile-agent read/write/test tools + state hints
 ├── request-context.ts   Shared request metadata compaction for LLM context
 ├── llm.ts               Provider wrappers + JSON extraction + trace spans
@@ -174,7 +178,30 @@ The tracked `examples/` directory remains as source fixtures and demos, but runt
 
 LLM-facing overview payloads are intentionally compact. Candidate detection, request triage, and compile-agent `read_session_summary` all collapse repeated identical request metadata into one representative row with `repeatCount`, `repeatedSeqs`, and `lastTimestamp`. Candidate-selected requests and auth/setup dependencies stay as separate rows so a tool-specific request cannot disappear inside a shared representative. Full request and response bodies are still available through the explicit compile-agent tools (`read_request`, `read_response_body`, `search_response_body`).
 
-Set `IMPRINT_TRACE=1` with `PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006` to emit OpenInference spans to a local Phoenix server. Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise; cost attributes are added when `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` are set.
+Set `IMPRINT_TRACE=1` with `PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006` to emit OpenInference spans to a local Phoenix server. The trace hierarchy drills into every stage of the compile pipeline:
+
+```
+cli.teach (AGENT)
+├─ compile.triage_requests (RETRIEVER)
+│   └─ llm.analyze (LLM)
+├─ teach.detect_tool_candidates (AGENT)
+│   └─ llm.analyze (LLM)
+├─ compile.generate (AGENT)
+│   ├─ agent.turn.1 (CHAIN)           ← per-turn token counts
+│   │   ├─ llm.message_with_tools (LLM)  ← model, tokens, stop reason
+│   │   ├─ agent.tool.read_session_summary (TOOL)
+│   │   └─ agent.tool.write_file (TOOL)
+│   ├─ agent.turn.2 (CHAIN)
+│   │   └─ ...
+│   └─ ...
+└─ compile.playbook (CHAIN)
+    ├─ compile.triage_requests (RETRIEVER)
+    └─ llm.analyze (LLM)
+```
+
+Each `agent.turn.N` span records per-turn input/output tokens and stop reason. Each `llm.message_with_tools` span records model, provider, token counts, and which tools the model called. Each `agent.tool.X` span records tool execution time, result size, and (when `IMPRINT_TRACE_TOOL_IO=1`) the input arguments and output.
+
+Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise; cost attributes are added when `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` are set.
 
 **Ephemeral artifacts** the compile-agent writes during a run but does not persist:
 

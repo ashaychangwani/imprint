@@ -383,7 +383,7 @@ export default function App() {
               <div className="hero-meta" aria-label="Project highlights">
                 <div className="meta-tile"><strong>v0.1</strong><span>Shipped with working browser automation demos</span></div>
                 <div className="meta-tile"><strong>4 modes</strong><span>fetch, fetch-bootstrap, stealth-fetch, and playbook</span></div>
-                <div className="meta-tile"><strong>Traceable</strong><span>Phoenix spans for slow or expensive compiles</span></div>
+                <div className="meta-tile"><strong>Traceable</strong><span>Per-turn, per-tool, per-LLM-call Phoenix spans</span></div>
               </div>
             </div>
             <TerminalCard />

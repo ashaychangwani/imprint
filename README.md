@@ -150,7 +150,7 @@ PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
 imprint teach namecheap-domains --from-session ~/.imprint/namecheap-domains/sessions/<ts>.json --provider codex-cli
 ```
 
-Tracing records compile stages, agent tool calls, estimated token counts, and optional prompt/response bodies. Set `IMPRINT_TRACE_IO_MAX_CHARS` to raise or lower captured payload size. Set `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` to add estimated cost attributes.
+Traces show the full compile pipeline at every level of detail: each `agent.turn.N` span captures per-turn token counts; each `llm.message_with_tools` span records model, provider, input/output tokens, and stop reason; each `agent.tool.X` span times individual tool dispatches. Drill from `cli.teach` → `compile.generate` → `agent.turn.1` → tool calls to find exactly which turn or tool is spending tokens. Set `IMPRINT_TRACE_IO_MAX_CHARS` to raise or lower captured payload size. Set `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` to add estimated cost attributes.
 
 <br>
 
