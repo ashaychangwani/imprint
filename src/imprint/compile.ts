@@ -604,7 +604,7 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
 
   const llm = resolveProvider(opts.llmConfig ?? {});
 
-  let playbook: Playbook;
+  let playbook: Playbook | undefined;
   let lastResult = await llm.analyze(systemPrompt, slimmed);
   let llmInputTokens = lastResult.inputTokens;
   let llmOutputTokens = lastResult.outputTokens;
@@ -632,7 +632,9 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
       `Compiled playbook failed to parse: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}\nRaw output:\n${lastResult.text.slice(0, 1500)}`,
     );
   }
-  playbook = playbook!;
+  if (!playbook) {
+    throw new Error('Playbook was not assigned after compile loop — this should not happen.');
+  }
 
   if (opts.candidate && playbook.toolName !== opts.candidate.toolName) {
     throw new Error(

@@ -32,8 +32,8 @@ import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-t
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
-import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
+import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-claude-cli');
@@ -298,8 +298,10 @@ async function driveStreamJson(
       conversationLog.push(evt);
 
       // Token accounting from any event that carries usage.
-      const evtInputTokens = (evt.usage?.input_tokens ?? 0) + (evt.message?.usage?.input_tokens ?? 0);
-      const evtOutputTokens = (evt.usage?.output_tokens ?? 0) + (evt.message?.usage?.output_tokens ?? 0);
+      const evtInputTokens =
+        (evt.usage?.input_tokens ?? 0) + (evt.message?.usage?.input_tokens ?? 0);
+      const evtOutputTokens =
+        (evt.usage?.output_tokens ?? 0) + (evt.message?.usage?.output_tokens ?? 0);
       if (evtInputTokens || evtOutputTokens) {
         inputTokens += evtInputTokens;
         outputTokens += evtOutputTokens;

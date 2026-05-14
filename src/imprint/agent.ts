@@ -9,7 +9,7 @@
 
 import type { Anthropic } from '@anthropic-ai/sdk';
 import type { ToolUseProvider } from './llm.ts';
-import { setSpanAttributes, traced, traceToolIoEnabled } from './tracing.ts';
+import { setSpanAttributes, traceToolIoEnabled, traced } from './tracing.ts';
 
 export interface AgentTool {
   name: string;
@@ -122,9 +122,7 @@ export function giveUpTool(): AgentTool {
 
 const TOOL_RESULT_TRUNCATE_LIMIT = 32 * 1024; // 32KB
 
-type TurnOutcome =
-  | { action: 'continue' }
-  | { action: 'return'; result: AgentResult };
+type TurnOutcome = { action: 'continue' } | { action: 'return'; result: AgentResult };
 
 /**
  * Run an agent loop with tool-use.
