@@ -911,7 +911,8 @@ async function selectTeachCandidates(
   }
 
   const answer = await p.multiselect({
-    message: 'Which tools should Imprint compile from this recording?',
+    message:
+      'Which tools should Imprint compile from this recording?\n  (press [space] to toggle, [enter] to submit)',
     required: true,
     initialValues: detection.candidates
       .filter((candidate) => candidate.primary)
