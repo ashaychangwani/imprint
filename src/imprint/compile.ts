@@ -406,13 +406,7 @@ function triageRequestGroupKey(request: TriageRequestContext): unknown[] {
   } catch {
     // keep full url as fallback
   }
-  return [
-    request.method,
-    urlKey,
-    request.resourceType,
-    request.status,
-    request.mimeType,
-  ];
+  return [request.method, urlKey, request.resourceType, request.status, request.mimeType];
 }
 
 function truncateHeaders(headers: Record<string, string>): string {
@@ -541,10 +535,7 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
       ...(opts.candidate?.dependencySeqs ?? []),
       ...(opts.sharedContext?.loginRequestSeqs ?? []),
     ]);
-    const finalSeqs = new Set([
-      ...opts.preTriagedSession.selectedSeqs,
-      ...preserveSeqs,
-    ]);
+    const finalSeqs = new Set([...opts.preTriagedSession.selectedSeqs, ...preserveSeqs]);
     session = {
       ...session,
       requests: session.requests.filter((r) => finalSeqs.has(r.seq)),

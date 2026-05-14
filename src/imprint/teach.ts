@@ -313,7 +313,12 @@ function isExistingFile(path: string | null | undefined): path is string {
 
 function requireSessionFile(
   path: string | null,
-  opts: { site: string; workflowKey: string; startFrom: Step; kind: 'raw' | 'redacted' | 'triaged' },
+  opts: {
+    site: string;
+    workflowKey: string;
+    startFrom: Step;
+    kind: 'raw' | 'redacted' | 'triaged';
+  },
 ): string {
   if (isExistingFile(path)) return path;
 
@@ -742,7 +747,9 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     const providerName = await getProviderName();
     spinner.start('Triaging requests...');
     triageResult = await triageRequests(triageSession, { provider: providerName });
-    spinner.stop(`Triaged to ${triageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`);
+    spinner.stop(
+      `Triaged to ${triageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`,
+    );
 
     triagedPath = triageSessionPath.replace(/\.redacted\.json$/, '.triaged.json');
     writeFileSync(triagedPath, `${JSON.stringify(triageResult.session, null, 2)}\n`, 'utf8');
