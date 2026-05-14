@@ -30,13 +30,13 @@ That's it. Imprint opens a browser, you drive the workflow, and it compiles a de
 After teaching, your agent has a tool called `search_namecheap_domains`. The compile-agent reverse-engineered the site's CRC32 URL signing scheme from a captured JavaScript bundle, chains five API endpoints, and merges availability + pricing + aftermarket data:
 
 ```
-$ claude "check if imprint.dev is available on Namecheap"
+$ claude "search for getimprint on Namecheap, under $20/yr renewal"
 
-  imprint.dev     available     $12.98/yr (19% off)     renews $20.98/yr
-  imprint.com     taken         registered 1995         GoDaddy.com, LLC
-  imprint.ai      taken         registered 2017         aftermarket: $43,000+
-  imprint.fit     available     $2.98/yr (91% off)      renews $45.98/yr
-  imprint.to      taken         premium                 aftermarket: $8,911
+  getimprint.com     taken         registered 2008         GoDaddy.com, LLC
+  getimprint.dev     available     $12.98/yr (19% off)     renews $20.98/yr
+  getimprint.org     available     $7.48/yr (42% off)      renews $15.98/yr
+  getimprint.fyi     available     $6.98/yr                renews $9.68/yr
+  getimprint.xyz     available     $2.00/yr (90% off)      renews $19.48/yr
 ```
 
 Real-time domain availability with per-request URL signing — the agent wrote the signing function itself by reading the site's JS bundle.
