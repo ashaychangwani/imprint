@@ -2,7 +2,44 @@
 
 All notable changes to Imprint. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) (Added / Changed / Deprecated / Removed / Fixed / Security).
 
-## [Unreleased] — refactor/de-slop branch
+## [0.2.0] — 2026-05-14
+
+v0.2 overhauls the teach-to-tool pipeline, adds full observability tracing, and introduces state-aware API replay. 12 new features, 7 bug fixes across 24 commits.
+
+### Added
+- **Multi-tool teach** — `imprint teach` captures multiple tools in a single session with shared request triage across tools for optimized token usage (#23, #29).
+- **Deterministic MCP tools** — teach produces functional, deterministic tool definitions that agents can call reliably (#28).
+- **Full-depth tracing** — LLM calls and agent loop iterations are traced end-to-end for debugging and observability (#31).
+- **Dotenv support** — `.env` file with tracing defaults, auto-loaded by the CLI via dotenv (#32).
+- **State-aware API replay** — replay engine tracks API state across requests for more reliable automation (#24).
+- **Credential manager** — catch login secrets during teach, store in OS keychain, replay via `${credential.X}` placeholders (#14).
+- **Interactive compile provider picker** — choose your LLM provider interactively when compiling (#17).
+- **Claude CLI + MCP compilation** — drive compile-agent via claude-cli and stdio MCP server (#11).
+- **Landing page** — Imprint website at `web/` (#22).
+- **Improved session redaction** — broader PII and credential coverage across content types (#20).
+- **Gitleaks pre-commit hook** — automated secret scanning before commits; fail-closed when gitleaks is not installed.
+- **Teach UX improvements** — keybinding hints in multi-tool select prompt (#26), auto-prompt for missing site and starting URL (#10).
+
+### Changed
+- **Examples layout** — tools now require nested directory structure per tool (#16).
+- **README** — added google-flights and google-hotels examples, removed southwest-seats.
+- **README** — polished for GitHub discoverability and conversion.
+
+### Fixed
+- Wire parserModule and preserve query params in compile-agent (#27).
+- Dispatch tool_use blocks in max_tokens responses (#30).
+- Fix credential/PII leaks in sessions with non-JSON content-types (#13).
+- Use correct field name `stopCount` in parser test (#18).
+- Store recordings outside examples directory (#19).
+- Replace hardcoded API key with env var.
+
+### Documentation
+- State-aware replay guide (#25).
+- CI test count badge.
+
+---
+
+## [0.1.0] — 2026-05-05 (post-sprint polish)
 
 A de-slop pass on the v0.1 codebase: deep audit + rearchitect to make the implementation sleek and the docs adoption-friendly. **No behavioral changes to existing verbs** — every demo still works (live-verified end-to-end against Southwest via stealth-fetch). One new verb (`imprint doctor`) added.
 
