@@ -606,6 +606,9 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
 
   let playbook: Playbook;
   let lastResult = await llm.analyze(systemPrompt, slimmed);
+  let llmInputTokens = lastResult.inputTokens;
+  let llmOutputTokens = lastResult.outputTokens;
+  let llmDurationMs = lastResult.durationMs;
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -618,6 +621,9 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
         log('playbook YAML failed to parse, retrying with error feedback…');
         const fixPrompt = `Your previous output was invalid YAML. The parser error was:\n\n${err instanceof Error ? err.message : String(err)}\n\nFix the YAML and return the corrected playbook. Output ONLY valid YAML, no prose.`;
         lastResult = await llm.analyze(systemPrompt, `${JSON.stringify(slimmed)}\n\n${fixPrompt}`);
+        llmInputTokens = addNullable(llmInputTokens, lastResult.inputTokens);
+        llmOutputTokens = addNullable(llmOutputTokens, lastResult.outputTokens);
+        llmDurationMs += lastResult.durationMs;
       }
     }
   }
@@ -642,9 +648,9 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
   return {
     playbook,
     playbookPath: outPath,
-    inputTokens: addNullable(triageTokens.input, lastResult.inputTokens),
-    outputTokens: addNullable(triageTokens.output, lastResult.outputTokens),
-    durationMs: triageTokens.durationMs + lastResult.durationMs,
+    inputTokens: addNullable(triageTokens.input, llmInputTokens),
+    outputTokens: addNullable(triageTokens.output, llmOutputTokens),
+    durationMs: triageTokens.durationMs + llmDurationMs,
   };
 }
 
