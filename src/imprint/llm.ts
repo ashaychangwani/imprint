@@ -631,9 +631,7 @@ async function traceMessageWithTools(
         ? llmSpanAttributes({
             provider,
             model,
-            inputMessages: traceLlmMessages(
-              flattenAnthropicMessages(opts.system, opts.messages),
-            ),
+            inputMessages: traceLlmMessages(flattenAnthropicMessages(opts.system, opts.messages)),
             inputValue: JSON.stringify({
               system: opts.system,
               messages: opts.messages,
@@ -681,9 +679,7 @@ function flattenAnthropicMessages(
   system: string,
   messages: Anthropic.MessageParam[],
 ): Array<{ role: string; content: string }> {
-  const out: Array<{ role: string; content: string }> = [
-    { role: 'system', content: system },
-  ];
+  const out: Array<{ role: string; content: string }> = [{ role: 'system', content: system }];
   for (const msg of messages) {
     const text =
       typeof msg.content === 'string'
@@ -696,9 +692,7 @@ function flattenAnthropicMessages(
                   typeof b.content === 'string'
                     ? b.content
                     : Array.isArray(b.content)
-                      ? b.content
-                          .map((c) => ('text' in c ? c.text : `[${c.type}]`))
-                          .join('\n')
+                      ? b.content.map((c) => ('text' in c ? c.text : `[${c.type}]`)).join('\n')
                       : `[tool_result: ${b.tool_use_id}]`;
                 return inner;
               }
