@@ -31,7 +31,7 @@ import {
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { localSiteDir } from './paths.ts';
-import { redactSession } from './redact.ts';
+import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type Session, SessionSchema } from './types.ts';
 
@@ -109,7 +109,8 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
       const auto = extractCredentials(session);
       replacements = auto.replacements;
     }
-    const r = redactSession(session, { replacements });
+    const pageMintedHeaders = detectPageMintedHeaders(session);
+    const r = redactSession(session, { replacements, keepHeaders: pageMintedHeaders });
     session = r.session;
     if (r.stats.totalRedactions > 0 || r.stats.placeholdersInjected > 0) {
       const freeformNote =

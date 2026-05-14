@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  detectPageMintedHeaders,
   redactBody,
   redactFormBody,
   redactHeaders,
@@ -391,5 +392,134 @@ describe('redactSession', () => {
     expect(body).toContain('${credential.password}');
     expect(body).not.toContain('alice@example.com');
     expect(body).not.toContain('[REDACTED]');
+  });
+});
+
+describe('detectPageMintedHeaders', () => {
+  function makeSession(overrides: Partial<Session> = {}): Session {
+    return {
+      site: 'test',
+      url: 'https://example.com',
+      startedAt: '2026-01-01T00:00:00Z',
+      imprintVersion: '0.1.0',
+      requests: [],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+      ...overrides,
+    };
+  }
+
+  it('detects x-api-key as page-minted when it appears before user interaction with no producer', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 500,
+          method: 'GET',
+          url: 'https://example.com/',
+          headers: {},
+          resourceType: 'Document',
+          response: { status: 200, headers: {}, mimeType: 'text/html' },
+        },
+        {
+          seq: 2,
+          timestamp: 2000,
+          method: 'POST',
+          url: 'https://example.com/api/data',
+          headers: { 'X-API-Key': 'l7xx-app-constant-123', 'Content-Type': 'application/json' },
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, mimeType: 'application/json' },
+        },
+      ],
+      events: [{ seq: 1, timestamp: 10000, type: 'click', detail: '{}' }],
+    });
+    expect(detectPageMintedHeaders(session)).toEqual(['x-api-key']);
+  });
+
+  it('does NOT flag headers whose values came from Set-Cookie', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 500,
+          method: 'GET',
+          url: 'https://example.com/',
+          headers: {},
+          resourceType: 'Document',
+          response: {
+            status: 200,
+            headers: { 'Set-Cookie': 'auth-token=secret-from-server; Path=/' },
+            mimeType: 'text/html',
+          },
+        },
+        {
+          seq: 2,
+          timestamp: 2000,
+          method: 'POST',
+          url: 'https://example.com/api/data',
+          headers: { 'X-Auth-Token': 'secret-from-server' },
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, mimeType: 'application/json' },
+        },
+      ],
+      events: [{ seq: 1, timestamp: 10000, type: 'click', detail: '{}' }],
+    });
+    expect(detectPageMintedHeaders(session)).toEqual([]);
+  });
+
+  it('ignores cookie and set-cookie headers', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 500,
+          method: 'GET',
+          url: 'https://example.com/',
+          headers: { Cookie: 'session=abc123' },
+          resourceType: 'Document',
+          response: { status: 200, headers: {}, mimeType: 'text/html' },
+        },
+      ],
+      events: [{ seq: 1, timestamp: 10000, type: 'click', detail: '{}' }],
+    });
+    expect(detectPageMintedHeaders(session)).toEqual([]);
+  });
+
+  it('ignores headers that appear AFTER user interaction', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 15000,
+          method: 'POST',
+          url: 'https://example.com/api/data',
+          headers: { 'X-API-Key': 'might-be-user-triggered' },
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, mimeType: 'application/json' },
+        },
+      ],
+      events: [{ seq: 1, timestamp: 10000, type: 'click', detail: '{}' }],
+    });
+    expect(detectPageMintedHeaders(session)).toEqual([]);
+  });
+
+  it('treats all requests as pre-interaction when no events exist', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 500,
+          method: 'POST',
+          url: 'https://example.com/api',
+          headers: { 'X-API-Key': 'app-constant' },
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, mimeType: 'application/json' },
+        },
+      ],
+      events: [],
+    });
+    expect(detectPageMintedHeaders(session)).toEqual(['x-api-key']);
   });
 });

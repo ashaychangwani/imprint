@@ -63,7 +63,7 @@ import {
 } from './paths.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
-import { redactSession } from './redact.ts';
+import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import {
   type SharedCompileContext,
   type ToolCandidate,
@@ -691,8 +691,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
 
     spinner.start('Redacting credentials...');
+    const pageMintedHeaders = detectPageMintedHeaders(session);
     const { session: scrubbed, stats } = redactSession(session, {
       replacements: confirmedReplacements,
+      keepHeaders: pageMintedHeaders,
     });
     redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
     writeFileSync(redactedPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
