@@ -10,7 +10,7 @@ Imprint skills are designed to ship without secrets. The generated tool folder c
 
 The *values* of those credentials live in the local credential manager on each machine that runs the skill. That can include named secrets, cookies captured by `imprint login`, and declared durable browser-storage keys. There are two supported provisioning paths.
 
-Generated `index.ts` modules import Imprint's runtime from the local checkout that emitted them. When moving a skill folder to another machine, install Imprint there and rerun `imprint emit <workflow.json> --force` so the wrapper points at that machine's runtime.
+Generated `index.ts` modules import Imprint's runtime via `imprint/runtime` (a node_modules symlink managed by emit). Skill folders are portable — just install the `imprint` package on the receiving machine via `npm install imprint` or `bun install imprint`.
 
 ## Path A — interactive provisioning on the agent (simplest)
 

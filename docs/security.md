@@ -81,6 +81,6 @@ The TS module emitted by `imprint emit` is the executable artifact your MCP / cr
 - The full `workflow.json` inlined as a constant (so the file is committable).
 - A thin wrapper around the local Imprint `runtime.executeWorkflow`.
 
-It does NOT contain credential values, cookie values, storage values, or redaction marker maps — those are loaded from the credential store or captured at runtime. Generated files can be committed to a private repo without exposing secrets, *provided* the workflow.json was generated from a redacted session (which it always is — `generate` enforces this). If you move the generated folder to another machine, install Imprint there and rerun `imprint emit <workflow.json> --force` so `index.ts` points at that machine's runtime.
+It does NOT contain credential values, cookie values, storage values, or redaction marker maps — those are loaded from the credential store or captured at runtime. Generated files can be committed to a private repo without exposing secrets, *provided* the workflow.json was generated from a redacted session (which it always is — `generate` enforces this). Generated folders are portable — just install the `imprint` package on the receiving machine (`index.ts` imports from `imprint/runtime`, not a local checkout path).
 
 If you committed a non-redacted workflow.json by mistake: rotate the cookies / tokens visible in it, then re-run `redact` + `generate` from a fresh recording.

@@ -58,7 +58,7 @@ imprint teach mysite \
 
 A browser opens. You drive the workflow and narrate what you're doing. Imprint records every network request and DOM interaction.
 
-Raw recordings are stored locally under `~/.imprint/<site>/sessions/`, and each generated tool lives under `~/.imprint/<site>/<toolName>/` by default, outside the repo. The generated `index.ts` wrapper points at the local Imprint runtime, so rerun `imprint emit <workflow.json> --force` after moving a tool folder to another machine. The tracked `examples/` tree remains as source fixtures and demos.
+Raw recordings are stored locally under `~/.imprint/<site>/sessions/`, and each generated tool lives under `~/.imprint/<site>/<toolName>/` by default, outside the repo. The generated `index.ts` imports from `imprint/runtime` via a `node_modules/imprint` symlink that `emit` manages automatically — portable across worktrees and machines (just install Imprint on the new machine). The tracked `examples/` tree remains as source fixtures and demos.
 
 </td>
 <td width="33%">
