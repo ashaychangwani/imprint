@@ -9,6 +9,7 @@
 
 import type { Anthropic } from '@anthropic-ai/sdk';
 import type { ToolUseProvider } from './llm.ts';
+import { setSpanAttributes, traceToolIoEnabled, traced } from './tracing.ts';
 
 export interface AgentTool {
   name: string;
@@ -121,6 +122,8 @@ export function giveUpTool(): AgentTool {
 
 const TOOL_RESULT_TRUNCATE_LIMIT = 32 * 1024; // 32KB
 
+type TurnOutcome = { action: 'continue' } | { action: 'return'; result: AgentResult };
+
 /**
  * Run an agent loop with tool-use.
  *
@@ -194,173 +197,231 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
       outputTokens,
     });
 
-    // Call LLM with tools
-    let response: Anthropic.Message;
-    try {
-      response = await opts.llm.messageWithTools({
-        system: opts.systemPrompt,
-        messages,
-        tools: anthropicTools,
-      });
-    } catch (err) {
-      return {
-        outcome: 'error',
-        errorMessage: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
-        turns: turn,
-        durationMs: Date.now() - startTime,
-        inputTokens,
-        outputTokens,
-        conversationLog,
-      };
-    }
+    const turnOutcome = await traced(
+      `agent.turn.${turn}`,
+      'CHAIN',
+      {
+        'imprint.agent.turn': turn,
+        'imprint.agent.cumulative_input_tokens': inputTokens,
+        'imprint.agent.cumulative_output_tokens': outputTokens,
+      },
+      async (turnSpan): Promise<TurnOutcome> => {
+        // Call LLM with tools — llm.message_with_tools span nests as child
+        let response: Anthropic.Message;
+        try {
+          response = await opts.llm.messageWithTools({
+            system: opts.systemPrompt,
+            messages,
+            tools: anthropicTools,
+          });
+        } catch (err) {
+          return {
+            action: 'return',
+            result: {
+              outcome: 'error',
+              errorMessage: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
+              turns: turn,
+              durationMs: Date.now() - startTime,
+              inputTokens,
+              outputTokens,
+              conversationLog,
+            },
+          };
+        }
 
-    // Update token counts
-    inputTokens += response.usage.input_tokens;
-    outputTokens += response.usage.output_tokens;
+        // Update token counts
+        inputTokens += response.usage.input_tokens;
+        outputTokens += response.usage.output_tokens;
 
-    // Append assistant response to messages
-    messages.push({ role: 'assistant', content: response.content });
+        setSpanAttributes(turnSpan, {
+          'imprint.agent.turn_input_tokens': response.usage.input_tokens,
+          'imprint.agent.turn_output_tokens': response.usage.output_tokens,
+          'imprint.agent.stop_reason': response.stop_reason ?? 'unknown',
+        });
 
-    // Add to conversation log
-    conversationLog.push({
-      turn,
-      role: 'assistant',
-      content: response.content,
-    });
+        // Append assistant response to messages
+        messages.push({ role: 'assistant', content: response.content });
 
-    // Extract tool_use blocks regardless of stop_reason — a max_tokens or
-    // end_turn response can still contain completed tool_use blocks that
-    // need matching tool_result blocks in the next user message.
-    const toolUseBlocks = response.content.filter(
-      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
+        // Add to conversation log
+        conversationLog.push({
+          turn,
+          role: 'assistant',
+          content: response.content,
+        });
+
+        // Extract tool_use blocks regardless of stop_reason — a max_tokens or
+        // end_turn response can still contain completed tool_use blocks that
+        // need matching tool_result blocks in the next user message.
+        const toolUseBlocks = response.content.filter(
+          (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
+        );
+
+        if (toolUseBlocks.length > 0) {
+          setSpanAttributes(turnSpan, {
+            'imprint.agent.tools_requested': toolUseBlocks.map((b) => b.name).join(', '),
+          });
+
+          // Check for done() or give_up() first
+          for (const block of toolUseBlocks) {
+            if (block.name === 'done') {
+              const input = block.input as { summary?: string };
+              return {
+                action: 'return',
+                result: {
+                  outcome: 'done',
+                  doneSummary: input.summary ?? 'Task completed',
+                  turns: turn,
+                  durationMs: Date.now() - startTime,
+                  inputTokens,
+                  outputTokens,
+                  conversationLog,
+                },
+              };
+            }
+            if (block.name === 'give_up') {
+              const input = block.input as { reason?: string; what_was_tried?: string };
+              return {
+                action: 'return',
+                result: {
+                  outcome: 'give_up',
+                  giveUpReason: input.reason ?? 'Cannot proceed',
+                  giveUpDetail: input.what_was_tried,
+                  turns: turn,
+                  durationMs: Date.now() - startTime,
+                  inputTokens,
+                  outputTokens,
+                  conversationLog,
+                },
+              };
+            }
+          }
+
+          // Dispatch all other tools and collect results
+          const toolResults: Anthropic.ToolResultBlockParam[] = [];
+          for (const block of toolUseBlocks) {
+            const tool = opts.tools.find((t) => t.name === block.name);
+            if (!tool) {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: block.id,
+                content: `Error: unknown tool "${block.name}"`,
+                is_error: true,
+              });
+              continue;
+            }
+
+            // Fire progress before tool execution
+            opts.onProgress?.({
+              turn,
+              phase: 'tool',
+              toolName: tool.name,
+              elapsedMs: Date.now() - startMs,
+              budgetMs,
+              inputTokens,
+              outputTokens,
+            });
+
+            // Call the tool handler — wrapped in a trace span
+            const toolResult = await traced(
+              `agent.tool.${tool.name}`,
+              'TOOL',
+              {
+                'imprint.agent.tool_name': tool.name,
+                'imprint.agent.turn': turn,
+                ...(traceToolIoEnabled()
+                  ? { 'imprint.agent.tool_input': JSON.stringify(block.input).slice(0, 2000) }
+                  : {}),
+              },
+              async (toolSpan): Promise<{ result: string; isError?: boolean }> => {
+                let result: { result: string; isError?: boolean };
+                try {
+                  result = await tool.handler(block.input);
+                } catch (err) {
+                  result = {
+                    result: err instanceof Error ? err.message : String(err),
+                    isError: true,
+                  };
+                }
+                setSpanAttributes(toolSpan, {
+                  'imprint.agent.tool_is_error': result.isError ?? false,
+                  'imprint.agent.tool_result_chars': result.result.length,
+                  ...(traceToolIoEnabled()
+                    ? { 'imprint.agent.tool_output': result.result.slice(0, 2000) }
+                    : {}),
+                });
+                return result;
+              },
+            );
+
+            // Truncate large results
+            let content = toolResult.result;
+            if (content.length > TOOL_RESULT_TRUNCATE_LIMIT) {
+              const originalLength = content.length;
+              content = `${content.slice(0, TOOL_RESULT_TRUNCATE_LIMIT)}\n[…truncated, original length ${originalLength}…]`;
+            }
+
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: block.id,
+              content,
+              is_error: toolResult.isError ?? false,
+            });
+          }
+
+          // Build the user response: tool results first, plus an optional
+          // continuation nudge if the model was cut off mid-output.
+          const userContent: (Anthropic.ToolResultBlockParam | Anthropic.TextBlockParam)[] = [
+            ...toolResults,
+          ];
+          if (response.stop_reason === 'max_tokens') {
+            userContent.push({
+              type: 'text',
+              text: 'You hit max_tokens. Continue from where you stopped.',
+            });
+          }
+
+          messages.push({ role: 'user', content: userContent });
+          conversationLog.push({ turn, role: 'user', content: userContent });
+        } else if (response.stop_reason === 'end_turn') {
+          // Model stopped without calling any tools or done()/give_up()
+          const nudgeMessage =
+            'You stopped without calling done() or give_up(). If you are finished, call done. If you encountered a categorical impossibility, call give_up. Otherwise continue working.';
+          messages.push({ role: 'user', content: nudgeMessage });
+          conversationLog.push({
+            turn,
+            role: 'user',
+            content: nudgeMessage,
+          });
+        } else if (response.stop_reason === 'max_tokens') {
+          // Model hit max_tokens with no tool calls
+          const continueMessage = 'You hit max_tokens. Continue from where you stopped.';
+          messages.push({ role: 'user', content: continueMessage });
+          conversationLog.push({
+            turn,
+            role: 'user',
+            content: continueMessage,
+          });
+        } else if (response.stop_reason !== 'tool_use') {
+          // Unexpected stop reason (tool_use with zero blocks would be odd but harmless)
+          return {
+            action: 'return',
+            result: {
+              outcome: 'error',
+              errorMessage: `unexpected stop_reason: ${response.stop_reason}`,
+              turns: turn,
+              durationMs: Date.now() - startTime,
+              inputTokens,
+              outputTokens,
+              conversationLog,
+            },
+          };
+        }
+
+        return { action: 'continue' };
+      },
     );
 
-    if (toolUseBlocks.length > 0) {
-      // Check for done() or give_up() first
-      for (const block of toolUseBlocks) {
-        if (block.name === 'done') {
-          const input = block.input as { summary?: string };
-          return {
-            outcome: 'done',
-            doneSummary: input.summary ?? 'Task completed',
-            turns: turn,
-            durationMs: Date.now() - startTime,
-            inputTokens,
-            outputTokens,
-            conversationLog,
-          };
-        }
-        if (block.name === 'give_up') {
-          const input = block.input as { reason?: string; what_was_tried?: string };
-          return {
-            outcome: 'give_up',
-            giveUpReason: input.reason ?? 'Cannot proceed',
-            giveUpDetail: input.what_was_tried,
-            turns: turn,
-            durationMs: Date.now() - startTime,
-            inputTokens,
-            outputTokens,
-            conversationLog,
-          };
-        }
-      }
-
-      // Dispatch all other tools and collect results
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const block of toolUseBlocks) {
-        const tool = opts.tools.find((t) => t.name === block.name);
-        if (!tool) {
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: `Error: unknown tool "${block.name}"`,
-            is_error: true,
-          });
-          continue;
-        }
-
-        // Fire progress before tool execution
-        opts.onProgress?.({
-          turn,
-          phase: 'tool',
-          toolName: tool.name,
-          elapsedMs: Date.now() - startMs,
-          budgetMs,
-          inputTokens,
-          outputTokens,
-        });
-
-        // Call the tool handler
-        let result: { result: string; isError?: boolean };
-        try {
-          result = await tool.handler(block.input);
-        } catch (err) {
-          result = {
-            result: err instanceof Error ? err.message : String(err),
-            isError: true,
-          };
-        }
-
-        // Truncate large results
-        let content = result.result;
-        if (content.length > TOOL_RESULT_TRUNCATE_LIMIT) {
-          const originalLength = content.length;
-          content = `${content.slice(0, TOOL_RESULT_TRUNCATE_LIMIT)}\n[…truncated, original length ${originalLength}…]`;
-        }
-
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content,
-          is_error: result.isError ?? false,
-        });
-      }
-
-      // Build the user response: tool results first, plus an optional
-      // continuation nudge if the model was cut off mid-output.
-      const userContent: (Anthropic.ToolResultBlockParam | Anthropic.TextBlockParam)[] = [
-        ...toolResults,
-      ];
-      if (response.stop_reason === 'max_tokens') {
-        userContent.push({
-          type: 'text',
-          text: 'You hit max_tokens. Continue from where you stopped.',
-        });
-      }
-
-      messages.push({ role: 'user', content: userContent });
-      conversationLog.push({ turn, role: 'user', content: userContent });
-    } else if (response.stop_reason === 'end_turn') {
-      // Model stopped without calling any tools or done()/give_up()
-      const nudgeMessage =
-        'You stopped without calling done() or give_up(). If you are finished, call done. If you encountered a categorical impossibility, call give_up. Otherwise continue working.';
-      messages.push({ role: 'user', content: nudgeMessage });
-      conversationLog.push({
-        turn,
-        role: 'user',
-        content: nudgeMessage,
-      });
-    } else if (response.stop_reason === 'max_tokens') {
-      // Model hit max_tokens with no tool calls
-      const continueMessage = 'You hit max_tokens. Continue from where you stopped.';
-      messages.push({ role: 'user', content: continueMessage });
-      conversationLog.push({
-        turn,
-        role: 'user',
-        content: continueMessage,
-      });
-    } else if (response.stop_reason !== 'tool_use') {
-      // Unexpected stop reason (tool_use with zero blocks would be odd but harmless)
-      return {
-        outcome: 'error',
-        errorMessage: `unexpected stop_reason: ${response.stop_reason}`,
-        turns: turn,
-        durationMs: Date.now() - startTime,
-        inputTokens,
-        outputTokens,
-        conversationLog,
-      };
-    }
+    if (turnOutcome.action === 'return') return turnOutcome.result;
 
     // Loop continues...
   }

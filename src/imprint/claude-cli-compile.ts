@@ -27,11 +27,13 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
+import type { Span } from '@opentelemetry/api';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
+import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-claude-cli');
@@ -82,6 +84,32 @@ interface StreamJsonEvent {
 }
 
 export async function compileViaClaudeCli(
+  opts: CompileViaClaudeCliOptions,
+): Promise<CompileAgentResult> {
+  return await traced(
+    'compile.claude_cli_agent',
+    'AGENT',
+    {
+      'imprint.site': opts.session.site,
+      'imprint.tool_dir': opts.absoluteToolDir,
+      'imprint.provider': 'claude-cli',
+      'imprint.model': preferredAgentModel('claude-cli'),
+    },
+    async (span) => {
+      const result = await compileViaClaudeCliImpl(opts);
+      setSpanAttributes(span, {
+        'imprint.compile.outcome': result.outcome,
+        'imprint.compile.turns': result.turns,
+        'imprint.compile.duration_ms': result.durationMs,
+        'imprint.compile.input_tokens': result.inputTokens,
+        'imprint.compile.output_tokens': result.outputTokens,
+      });
+      return result;
+    },
+  );
+}
+
+async function compileViaClaudeCliImpl(
   opts: CompileViaClaudeCliOptions,
 ): Promise<CompileAgentResult> {
   // Ensure tool dir exists and clear any prior sentinels — a stale
@@ -212,6 +240,9 @@ async function driveStreamJson(
   let turn = 0;
   let lastErrorEvent: StreamJsonEvent | null = null;
   let stderrBuf = '';
+  let currentTurnSpan: Span | null = null;
+  let turnInputTokens = 0;
+  let turnOutputTokens = 0;
 
   const budgetMs = Math.max(0, opts.deadlineMs - Date.now());
   const fireProgress = (phase: 'thinking' | 'tool', toolName?: string): void => {
@@ -267,13 +298,15 @@ async function driveStreamJson(
       conversationLog.push(evt);
 
       // Token accounting from any event that carries usage.
-      if (evt.usage) {
-        inputTokens += evt.usage.input_tokens ?? 0;
-        outputTokens += evt.usage.output_tokens ?? 0;
-      }
-      if (evt.message?.usage) {
-        inputTokens += evt.message.usage.input_tokens ?? 0;
-        outputTokens += evt.message.usage.output_tokens ?? 0;
+      const evtInputTokens =
+        (evt.usage?.input_tokens ?? 0) + (evt.message?.usage?.input_tokens ?? 0);
+      const evtOutputTokens =
+        (evt.usage?.output_tokens ?? 0) + (evt.message?.usage?.output_tokens ?? 0);
+      if (evtInputTokens || evtOutputTokens) {
+        inputTokens += evtInputTokens;
+        outputTokens += evtOutputTokens;
+        turnInputTokens += evtInputTokens;
+        turnOutputTokens += evtOutputTokens;
       }
 
       if (evt.type === 'system' && evt.subtype === 'init') {
@@ -282,7 +315,21 @@ async function driveStreamJson(
       }
 
       if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
+        if (currentTurnSpan) {
+          setSpanAttributes(currentTurnSpan, {
+            'imprint.agent.turn_input_tokens': turnInputTokens,
+            'imprint.agent.turn_output_tokens': turnOutputTokens,
+          });
+          endTraceSpan(currentTurnSpan);
+        }
         turn++;
+        turnInputTokens = 0;
+        turnOutputTokens = 0;
+        currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
+          'imprint.agent.turn': turn,
+          'imprint.agent.cumulative_input_tokens': inputTokens,
+          'imprint.agent.cumulative_output_tokens': outputTokens,
+        });
         fireProgress('thinking');
         for (const block of evt.message.content) {
           if (block && (block as { type?: string }).type === 'tool_use') {
@@ -328,6 +375,13 @@ async function driveStreamJson(
     child.once('error', () => resolve(-1));
   });
   clearTimeout(deadlineTimer);
+  if (currentTurnSpan) {
+    setSpanAttributes(currentTurnSpan, {
+      'imprint.agent.turn_input_tokens': turnInputTokens,
+      'imprint.agent.turn_output_tokens': turnOutputTokens,
+    });
+    endTraceSpan(currentTurnSpan);
+  }
 
   // Drain any remaining buffered output.
   if (stdoutBuf.trim()) {

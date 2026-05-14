@@ -27,7 +27,7 @@ import { parsePlaybook } from './playbook-parser.ts';
 import { redactSession } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
-import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
+import { setSpanAttributes, traced } from './tracing.ts';
 import {
   type Playbook,
   type Session,
@@ -292,110 +292,110 @@ export async function triageRequests(
   const candidates = session.requests.filter(
     (r) => TRIAGE_RESOURCE_TYPES.has(r.resourceType) || preserveSeqs.has(r.seq),
   );
-  const traceSpan = startTraceSpan('compile.triage_requests', 'RETRIEVER', {
-    'imprint.site': session.site,
-    'imprint.requests_total': session.requests.length,
-    'imprint.requests_considered': candidates.length,
-    'imprint.provider': llmConfig?.provider ?? 'auto',
-  });
 
-  try {
-    const compacted = compactRequestContexts(
-      candidates.map((r) => ({
-        seq: r.seq,
-        timestamp: r.timestamp,
-        method: r.method,
-        url: r.url,
-        resourceType: r.resourceType,
-        status: r.response?.status,
-        mimeType: r.response?.mimeType,
-        headers: truncateHeaders(r.headers),
-        body: truncate(r.body, TRIAGE_BODY_LIMIT),
-        bodyDigest: requestContextDigest(r.body),
-        bodyLength: r.body?.length,
-        responseBodyDigest: requestContextDigest(r.response?.body),
-        responseBodyLength: r.response?.body?.length,
-      })),
-      triageRequestGroupKey,
-      { preserveSeqs },
-    );
-    // Strip digest/length fields the LLM doesn't use — they served compaction only
-    const metadata = compacted.map(
-      ({ bodyDigest, responseBodyDigest, bodyLength, responseBodyLength, ...rest }) => rest,
-    );
-
-    const triagePayload = {
-      site: session.site,
-      url: session.url,
-      narration: session.narration,
-      requests: metadata,
-    };
-
-    const promptPath = pathJoin(PROMPTS_DIR, 'request-triage.md');
-    if (!existsSync(promptPath)) {
-      throw new Error(
-        `Triage prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
+  return await traced(
+    'compile.triage_requests',
+    'RETRIEVER',
+    {
+      'imprint.site': session.site,
+      'imprint.requests_total': session.requests.length,
+      'imprint.requests_considered': candidates.length,
+      'imprint.provider': llmConfig?.provider ?? 'auto',
+    },
+    async (span) => {
+      const compacted = compactRequestContexts(
+        candidates.map((r) => ({
+          seq: r.seq,
+          timestamp: r.timestamp,
+          method: r.method,
+          url: r.url,
+          resourceType: r.resourceType,
+          status: r.response?.status,
+          mimeType: r.response?.mimeType,
+          headers: truncateHeaders(r.headers),
+          body: truncate(r.body, TRIAGE_BODY_LIMIT),
+          bodyDigest: requestContextDigest(r.body),
+          bodyLength: r.body?.length,
+          responseBodyDigest: requestContextDigest(r.response?.body),
+          responseBodyLength: r.response?.body?.length,
+        })),
+        triageRequestGroupKey,
+        { preserveSeqs },
       );
-    }
-    const systemPrompt = readFileSync(promptPath, 'utf8');
-
-    log(
-      `triaging ${metadata.length} compacted requests (from ${candidates.length} candidates / ${session.requests.length} total)…`,
-    );
-    const llm = resolveProvider(llmConfig ?? {});
-    const result = await llm.analyze(systemPrompt, triagePayload);
-
-    const arrayText = extractJsonArray(result.text);
-    if (!arrayText) {
-      throw new Error(
-        `Triage LLM did not return a JSON array.\nRaw response:\n${result.text.slice(0, 1000)}`,
+      // Strip digest/length fields the LLM doesn't use — they served compaction only
+      const metadata = compacted.map(
+        ({ bodyDigest, responseBodyDigest, bodyLength, responseBodyLength, ...rest }) => rest,
       );
-    }
 
-    let seqs: unknown;
-    try {
-      seqs = JSON.parse(arrayText);
-    } catch (err) {
-      throw new Error(
-        `Triage response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${arrayText.slice(0, 500)}`,
+      const triagePayload = {
+        site: session.site,
+        url: session.url,
+        narration: session.narration,
+        requests: metadata,
+      };
+
+      const promptPath = pathJoin(PROMPTS_DIR, 'request-triage.md');
+      if (!existsSync(promptPath)) {
+        throw new Error(
+          `Triage prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
+        );
+      }
+      const systemPrompt = readFileSync(promptPath, 'utf8');
+
+      log(
+        `triaging ${metadata.length} compacted requests (from ${candidates.length} candidates / ${session.requests.length} total)…`,
       );
-    }
+      const llm = resolveProvider(llmConfig ?? {});
+      const result = await llm.analyze(systemPrompt, triagePayload);
 
-    if (!Array.isArray(seqs) || !seqs.every((s) => typeof s === 'number')) {
-      throw new Error(
-        `Triage response is not an array of numbers.\nParsed: ${JSON.stringify(seqs).slice(0, 500)}`,
-      );
-    }
+      const arrayText = extractJsonArray(result.text);
+      if (!arrayText) {
+        throw new Error(
+          `Triage LLM did not return a JSON array.\nRaw response:\n${result.text.slice(0, 1000)}`,
+        );
+      }
 
-    const selectedSet = new Set([...(seqs as number[]), ...preserveSeqs]);
-    const triaged: Session = {
-      ...session,
-      requests: session.requests.filter((r) => selectedSet.has(r.seq)),
-    };
+      let seqs: unknown;
+      try {
+        seqs = JSON.parse(arrayText);
+      } catch (err) {
+        throw new Error(
+          `Triage response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${arrayText.slice(0, 500)}`,
+        );
+      }
 
-    log(`triage selected ${selectedSet.size} requests out of ${candidates.length} candidates`);
+      if (!Array.isArray(seqs) || !seqs.every((s) => typeof s === 'number')) {
+        throw new Error(
+          `Triage response is not an array of numbers.\nParsed: ${JSON.stringify(seqs).slice(0, 500)}`,
+        );
+      }
 
-    const triageResult = {
-      session: triaged,
-      selectedSeqs: [...selectedSet],
-      consideredCount: candidates.length,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      durationMs: result.durationMs,
-    };
-    setSpanAttributes(traceSpan, {
-      'imprint.requests_compacted': metadata.length,
-      'imprint.requests_selected': selectedSet.size,
-      'imprint.triage.duration_ms': result.durationMs,
-      'imprint.triage.input_tokens': result.inputTokens,
-      'imprint.triage.output_tokens': result.outputTokens,
-    });
-    endTraceSpan(traceSpan);
-    return triageResult;
-  } catch (err) {
-    endTraceSpan(traceSpan, err);
-    throw err;
-  }
+      const selectedSet = new Set([...(seqs as number[]), ...preserveSeqs]);
+      const triaged: Session = {
+        ...session,
+        requests: session.requests.filter((r) => selectedSet.has(r.seq)),
+      };
+
+      log(`triage selected ${selectedSet.size} requests out of ${candidates.length} candidates`);
+
+      setSpanAttributes(span, {
+        'imprint.requests_compacted': metadata.length,
+        'imprint.requests_selected': selectedSet.size,
+        'imprint.triage.duration_ms': result.durationMs,
+        'imprint.triage.input_tokens': result.inputTokens,
+        'imprint.triage.output_tokens': result.outputTokens,
+      });
+
+      return {
+        session: triaged,
+        selectedSeqs: [...selectedSet],
+        consideredCount: candidates.length,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        durationMs: result.durationMs,
+      };
+    },
+  );
 }
 
 function triageRequestGroupKey(request: TriageRequestContext): unknown[] {
@@ -604,7 +604,7 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
 
   const llm = resolveProvider(opts.llmConfig ?? {});
 
-  let playbook: Playbook;
+  let playbook: Playbook | undefined;
   let lastResult = await llm.analyze(systemPrompt, slimmed);
   let llmInputTokens = lastResult.inputTokens;
   let llmOutputTokens = lastResult.outputTokens;
@@ -632,7 +632,9 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
       `Compiled playbook failed to parse: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}\nRaw output:\n${lastResult.text.slice(0, 1500)}`,
     );
   }
-  playbook = playbook!;
+  if (!playbook) {
+    throw new Error('Playbook was not assigned after compile loop — this should not happen.');
+  }
 
   if (opts.candidate && playbook.toolName !== opts.candidate.toolName) {
     throw new Error(

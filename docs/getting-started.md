@@ -96,7 +96,7 @@ PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
 imprint teach google-flights --from-session "$SESSION" --provider codex-cli
 ```
 
-`IMPRINT_TRACE_LLM_IO=1` captures prompts/responses; `IMPRINT_TRACE_TOOL_IO=1` captures compile-agent tool arguments and results. Raise `IMPRINT_TRACE_IO_MAX_CHARS` when you need longer payloads in Phoenix.
+In Phoenix you'll see every agent turn (`agent.turn.N`) with per-turn token counts, every LLM call (`llm.message_with_tools`) with model and token usage, and every tool dispatch (`agent.tool.X`) with timing. Add `IMPRINT_TRACE_LLM_IO=1` to capture prompts/responses and `IMPRINT_TRACE_TOOL_IO=1` to capture tool arguments and results. Raise `IMPRINT_TRACE_IO_MAX_CHARS` when you need longer payloads.
 
 ## Connect to your AI tool
 

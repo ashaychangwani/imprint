@@ -278,6 +278,7 @@ async function driveJsonl(
   let stderrBuf = '';
   let agentMessageCount = 0;
   const toolSpans = new Map<string, Span>();
+  let currentTurnSpan: Span | null = null;
 
   const budgetMs = Math.max(0, opts.deadlineMs - Date.now());
   const fireProgress = (phase: 'thinking' | 'tool', toolName?: string): void => {
@@ -348,7 +349,13 @@ async function driveJsonl(
       }
 
       if (evt.type === 'turn.started') {
+        if (currentTurnSpan) endTraceSpan(currentTurnSpan);
         turn++;
+        currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
+          'imprint.agent.turn': turn,
+          'imprint.agent.cumulative_input_tokens': inputTokens,
+          'imprint.agent.cumulative_output_tokens': outputTokens,
+        });
         fireProgress('thinking');
         continue;
       }
@@ -379,9 +386,19 @@ async function driveJsonl(
         continue;
       }
 
-      if (evt.type === 'turn.completed' && evt.usage) {
-        inputTokens += evt.usage.input_tokens ?? 0;
-        outputTokens += evt.usage.output_tokens ?? 0;
+      if (evt.type === 'turn.completed') {
+        const turnInput = evt.usage?.input_tokens ?? 0;
+        const turnOutput = evt.usage?.output_tokens ?? 0;
+        inputTokens += turnInput;
+        outputTokens += turnOutput;
+        if (currentTurnSpan) {
+          setSpanAttributes(currentTurnSpan, {
+            'imprint.agent.turn_input_tokens': turnInput,
+            'imprint.agent.turn_output_tokens': turnOutput,
+          });
+          endTraceSpan(currentTurnSpan);
+          currentTurnSpan = null;
+        }
         continue;
       }
 
@@ -403,6 +420,7 @@ async function driveJsonl(
   });
   clearInterval(sentinelTimer);
   clearTimeout(deadlineTimer);
+  if (currentTurnSpan) endTraceSpan(currentTurnSpan);
   for (const span of toolSpans.values()) endTraceSpan(span);
   toolSpans.clear();
 
