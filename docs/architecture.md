@@ -161,6 +161,7 @@ The ladder escalates only when every required missing item is satisfiable by the
 ~/.imprint/<site>/<toolName>/
 ├── workflow.json               output of `imprint generate`
 ├── parser.ts                   API-response → structured output
+├── request-transform.ts        optional — URL signing / request mutation
 ├── playbook.yaml               output of `imprint compile-playbook`
 ├── index.ts                    output of `imprint emit` (consumed by cron + MCP)
 ├── cron.json                   schedule + params + replayBackend + notifyWhen
@@ -206,6 +207,7 @@ Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts
 **Ephemeral artifacts** the compile-agent writes during a run but does not persist:
 
 - `parser.test.ts` — `bun:test` suite that exercises `parser.extract()` against the load-bearing response body. Reads the redacted session via `process.env.IMPRINT_SESSION_PATH` set by the harness. Deleted after verification passes; pass `--keep-test` to `teach` / `generate` to retain it for local debugging.
+- `integration.test.ts` — live API test that imports the generated tool and calls `executeWorkflow` with default params. Verifies the workflow produces real data (catches expired hardcoded tokens, missing URL signing). Also deleted after verification unless `--keep-test`.
 - `.compile-log.json`, `.compile-done.json`, `.compile-give-up.json` — agent loop transcript + sentinels (gitignored).
 
 ## Extending Imprint
@@ -235,3 +237,32 @@ Less common, but if you build e.g. `paid-stealth-fetch` (an external stealth API
 5. Define which `StateCapability` values the backend can satisfy if it should participate in `STATE_MISSING` escalation.
 
 The ladder's escalation logic is shape-preserving: your backend returns a `ToolResult`, and the ladder routes `FORBIDDEN` plus satisfiable `STATE_MISSING` to the next backend while returning terminal errors directly.
+
+### Add a request transform (URL signing, header injection)
+
+Some APIs require per-request URL signing (HMAC, CRC32, OAuth). The signing keys are public app-level constants in client-side JavaScript. The compile-agent can reverse-engineer these from captured JS bundles.
+
+Set `workflow.requestTransformModule` to the relative path of a sibling TypeScript module (e.g. `"./request-transform.ts"`). The module exports:
+
+```ts
+export function transform(method: string, url: string, responses: unknown[]): string
+```
+
+The runtime calls `transform` before each outgoing request. The `responses` array contains previous response bodies from the workflow chain, enabling dynamic URL construction (e.g. building a domain list from search results for a batch status check).
+
+The compile-agent writes this module when `stateHints` flag `query_param_changes_across_calls` — high-entropy query params that vary per call. It uses `search_response_body` to find the signing function in `.js` responses and replicates it.
+
+Example: `examples/namecheap-domains/search_namecheap_domains/request-transform.ts` implements Namecheap's CRC32 + XOR + base64 URL signing scheme.
+
+### Parser context
+
+The parser's `extract()` function receives an optional second argument:
+
+```ts
+extract(rawResponse: unknown, context?: { params: Record<string, string | number | boolean>; responses: unknown[] }): unknown
+```
+
+- `context.params` — the tool parameters the caller provided.
+- `context.responses` — all response bodies from the workflow chain (index 0 = first request).
+
+Use `params` when the parser needs a value the API doesn't echo back (e.g. the search term for constructing domain names from a TLD catalog). Use `responses` when the parser merges data from multiple chained requests.

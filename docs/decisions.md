@@ -106,3 +106,11 @@ This shows up everywhere: `requirePositional` → "→ run \`imprint <verb> --he
 **Decided.** The compiler should prefer named captures plus `${state.NAME}` for ephemeral values. Direct `${cookie["NAME"]}` lookup remains an expert escape hatch, but named captures can pin URL/domain/path constraints and avoid ambiguity.
 
 **Alternative:** Let generated workflows rely on `${cookie.NAME}` and raw response aliases everywhere. That is shorter, but it breaks on duplicate cookie names, misses storage-derived state, and makes redacted equality hints harder for the compiler to use safely.
+
+## D16 — requestTransformModule for site-specific request mutations
+
+**Decided.** Allow `workflow.json` to declare an optional `requestTransformModule` path. The module exports `transform(method, url, responses) → url`. The runtime calls it before each request, enabling per-request URL signing, header injection, or dynamic query param construction.
+
+The compile-agent writes this module when `stateHints` flag per-call query params (`query_param_changes_across_calls`). It uses `search_response_body` to find the signing function in the session's JavaScript responses and replicates the computation. Example: Namecheap's CRC32 + XOR + base64 URL signing.
+
+**Alternative:** Bake signing logic into the workflow JSON URL template syntax (e.g. a `${sign(...)}` function). Too rigid — signing schemes vary widely (HMAC, CRC32, OAuth, custom XOR). A JS module is testable, composable, and doesn't pollute the workflow schema with execution semantics.

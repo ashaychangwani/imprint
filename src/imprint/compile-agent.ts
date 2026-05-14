@@ -268,8 +268,10 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       // Success
       message = result.doneSummary ?? 'Task completed';
       if (!opts.keepTest) {
-        const testPath = pathJoin(absoluteToolDir, 'parser.test.ts');
-        if (existsSync(testPath)) unlinkSync(testPath);
+        for (const f of ['parser.test.ts', 'integration.test.ts']) {
+          const testPath = pathJoin(absoluteToolDir, f);
+          if (existsSync(testPath)) unlinkSync(testPath);
+        }
       }
       break;
     }
