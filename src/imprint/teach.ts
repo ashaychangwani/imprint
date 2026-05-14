@@ -25,7 +25,13 @@ import {
   resolve as pathResolve,
 } from 'node:path';
 import * as p from '@clack/prompts';
-import { type CompileAgentProgress, compilePlaybook, generate } from './compile.ts';
+import {
+  type CompileAgentProgress,
+  type TriageResult,
+  compilePlaybook,
+  generate,
+  triageRequests,
+} from './compile.ts';
 import {
   type CredentialFinding,
   type Replacement,
@@ -73,6 +79,7 @@ import type { CronConfig, Playbook, Workflow } from './types.ts';
 const STEPS = [
   'record',
   'redact',
+  'triage',
   'detect-candidates',
   'generate',
   'compile-playbook',
@@ -84,6 +91,7 @@ type Step = (typeof STEPS)[number];
 interface WorkflowState {
   sessionPath: string;
   redactedPath?: string;
+  triagedPath?: string;
   completedSteps: Step[];
   error?: string;
   startedAt: string;
@@ -305,12 +313,22 @@ function isExistingFile(path: string | null | undefined): path is string {
 
 function requireSessionFile(
   path: string | null,
-  opts: { site: string; workflowKey: string; startFrom: Step; kind: 'raw' | 'redacted' },
+  opts: {
+    site: string;
+    workflowKey: string;
+    startFrom: Step;
+    kind: 'raw' | 'redacted' | 'triaged';
+  },
 ): string {
   if (isExistingFile(path)) return path;
 
-  const noun = opts.kind === 'raw' ? 'original session JSON' : 'redacted session JSON';
-  const redoStep = opts.kind === 'raw' ? 'record' : 'redact';
+  const noun =
+    opts.kind === 'raw'
+      ? 'original session JSON'
+      : opts.kind === 'triaged'
+        ? 'triaged session JSON'
+        : 'redacted session JSON';
+  const redoStep = opts.kind === 'raw' ? 'record' : opts.kind === 'triaged' ? 'triage' : 'redact';
   throw new Error(
     [
       `Cannot redo "${opts.workflowKey}" from ${opts.startFrom}: the ${noun} is missing.`,
@@ -585,6 +603,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       kind: 'raw',
     });
   } else if (
+    startFrom === 'triage' ||
     startFrom === 'detect-candidates' ||
     startFrom === 'generate' ||
     startFrom === 'compile-playbook'
@@ -705,14 +724,55 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     });
   }
 
-  // ── 3. Detect and select tool candidates ───────────────────────────
-  let plans: CandidateCompilePlan[];
-  if (startIdx <= STEPS.indexOf('detect-candidates')) {
-    const compileSessionPath = requireSessionFile(redactedPath, {
+  // ── 2b. Triage — once for all tools ──────────────────────────────
+  let triageResult: TriageResult | undefined;
+  let triagedPath: string | null = null;
+  if (startIdx <= STEPS.indexOf('triage')) {
+    const triageSessionPath = requireSessionFile(redactedPath, {
       site,
       workflowKey,
       startFrom,
       kind: 'redacted',
+    });
+    const triageSession = loadJsonFile(
+      triageSessionPath,
+      SessionSchema,
+      {
+        notFound: 'Redacted session file not found before triage.',
+        badSchema: 'Redacted session file is malformed.',
+      },
+      'session',
+    );
+
+    const providerName = await getProviderName();
+    spinner.start('Triaging requests...');
+    triageResult = await triageRequests(triageSession, { provider: providerName });
+    spinner.stop(
+      `Triaged to ${triageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`,
+    );
+
+    triagedPath = triageSessionPath.replace(/\.redacted\.json$/, '.triaged.json');
+    writeFileSync(triagedPath, `${JSON.stringify(triageResult.session, null, 2)}\n`, 'utf8');
+
+    updateCheckpoint(site, state, workflowKey, 'triage', {
+      triagedPath: toRelative(site, triagedPath),
+    });
+  } else {
+    // Resuming from a later step — try to load existing triaged session
+    const ws = state.workflows[workflowKey];
+    if (ws?.triagedPath) {
+      triagedPath = resolveTeachStatePath(site, ws.triagedPath);
+    }
+  }
+
+  // ── 3. Detect and select tool candidates ───────────────────────────
+  let plans: CandidateCompilePlan[];
+  if (startIdx <= STEPS.indexOf('detect-candidates')) {
+    const compileSessionPath = requireSessionFile(triagedPath ?? redactedPath, {
+      site,
+      workflowKey,
+      startFrom,
+      kind: triagedPath ? 'triaged' : 'redacted',
     });
     const providerName = await getProviderName();
     spinner.start('Detecting candidate tools...');
@@ -806,6 +866,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     compileModel,
     keepTest: opts.keepTest,
     spinner,
+    sharedTriageResult: triageResult,
   });
 
   if (results.length === 0) {
@@ -947,6 +1008,7 @@ async function compileCandidatePlans(opts: {
   compileModel: string;
   keepTest?: boolean;
   spinner: ReturnType<typeof p.spinner>;
+  sharedTriageResult?: TriageResult;
 }): Promise<TeachToolResult[]> {
   const concurrency = opts.plans.length === 1 ? 1 : 2;
   return await mapLimit(opts.plans, concurrency, async (plan) => {
@@ -999,6 +1061,7 @@ async function compileSelectedCandidate(opts: {
   compileModel: string;
   keepTest?: boolean;
   onProgress: (progress: CompileAgentProgress) => void;
+  sharedTriageResult?: TriageResult;
 }): Promise<TeachToolResult> {
   const { plan, site, state } = opts;
   const startIdx = STEPS.indexOf(plan.startFrom);
@@ -1042,6 +1105,7 @@ async function compileSelectedCandidate(opts: {
       llmConfig: { provider: opts.providerName },
       candidate: plan.candidate,
       sharedContext: plan.sharedContext,
+      preTriagedSession: opts.sharedTriageResult,
     });
     assertCandidateToolName('Compiled playbook', result.playbook.toolName, plan.candidate);
     pbResult = { playbook: result.playbook, playbookPath: result.playbookPath };

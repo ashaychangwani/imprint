@@ -55,6 +55,10 @@ interface CompileOptions {
   candidate?: ToolCandidate;
   /** Shared auth/helper guidance generated once for a multi-tool teach run. */
   sharedContext?: SharedCompileContext;
+  /** Pre-computed triage result from a shared pass. When set, compilePlaybook
+   *  skips its own triageRequests() LLM call and merges the shared selectedSeqs
+   *  with any per-tool preserveSeqs locally. */
+  preTriagedSession?: TriageResult;
 }
 
 // ─── generate (workflow.json) ────────────────────────────────────────────────
@@ -247,7 +251,7 @@ const HEADER_TRUNCATE_LIMIT = 200;
 // site can total >1MB and blow the 200K-token cap on `claude-opus-4-7`.
 const TRIAGE_BODY_LIMIT = 500;
 
-interface TriageResult {
+export interface TriageResult {
   session: Session;
   selectedSeqs: number[];
   consideredCount: number;
@@ -275,7 +279,7 @@ interface TriageRequestContext {
   lastTimestamp?: number;
 }
 
-async function triageRequests(
+export async function triageRequests(
   session: Session,
   llmConfig?: LLMOptions,
   context: Pick<CompileOptions, 'candidate' | 'sharedContext'> = {},
@@ -296,7 +300,7 @@ async function triageRequests(
   });
 
   try {
-    const metadata = compactRequestContexts(
+    const compacted = compactRequestContexts(
       candidates.map((r) => ({
         seq: r.seq,
         timestamp: r.timestamp,
@@ -314,6 +318,10 @@ async function triageRequests(
       })),
       triageRequestGroupKey,
       { preserveSeqs },
+    );
+    // Strip digest/length fields the LLM doesn't use — they served compaction only
+    const metadata = compacted.map(
+      ({ bodyDigest, responseBodyDigest, bodyLength, responseBodyLength, ...rest }) => rest,
     );
 
     const triagePayload = {
@@ -391,18 +399,14 @@ async function triageRequests(
 }
 
 function triageRequestGroupKey(request: TriageRequestContext): unknown[] {
-  return [
-    request.method,
-    request.url,
-    request.resourceType,
-    request.status,
-    request.mimeType,
-    request.headers,
-    request.bodyDigest,
-    request.bodyLength,
-    request.responseBodyDigest,
-    request.responseBodyLength,
-  ];
+  let urlKey: string = request.url;
+  try {
+    const parsed = new URL(request.url);
+    urlKey = `${parsed.hostname}${parsed.pathname}`;
+  } catch {
+    // keep full url as fallback
+  }
+  return [request.method, urlKey, request.resourceType, request.status, request.mimeType];
 }
 
 function truncateHeaders(headers: Record<string, string>): string {
@@ -524,7 +528,25 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
     output: null,
     durationMs: 0,
   };
-  if (!opts.noShrink) {
+  if (opts.preTriagedSession && !opts.noShrink) {
+    // Shared triage path: merge pre-computed seqs with candidate-specific preserveSeqs
+    const preserveSeqs = new Set([
+      ...(opts.candidate?.requestSeqs ?? []),
+      ...(opts.candidate?.dependencySeqs ?? []),
+      ...(opts.sharedContext?.loginRequestSeqs ?? []),
+    ]);
+    const finalSeqs = new Set([...opts.preTriagedSession.selectedSeqs, ...preserveSeqs]);
+    session = {
+      ...session,
+      requests: session.requests.filter((r) => finalSeqs.has(r.seq)),
+    };
+    log('using shared triage result (skipping per-tool triage LLM call)');
+    triageTokens = {
+      input: opts.preTriagedSession.inputTokens,
+      output: opts.preTriagedSession.outputTokens,
+      durationMs: opts.preTriagedSession.durationMs,
+    };
+  } else if (!opts.noShrink) {
     const triage = await triageRequests(session, opts.llmConfig, {
       candidate: opts.candidate,
       sharedContext: opts.sharedContext,

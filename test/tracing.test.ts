@@ -114,6 +114,29 @@ describe('LLM trace usage and cost attributes', () => {
     });
   });
 
+  it('falls back to estimation when provider count is suspiciously low', () => {
+    const longText = 'x'.repeat(1000); // estimated ~250 tokens
+    expect(resolveTraceTokenCount(6, longText)).toEqual({
+      tokens: 250,
+      source: 'estimated',
+    });
+  });
+
+  it('trusts provider when count is within reasonable range', () => {
+    const longText = 'x'.repeat(1000); // estimated ~250 tokens
+    expect(resolveTraceTokenCount(200, longText)).toEqual({
+      tokens: 200,
+      source: 'provider',
+    });
+  });
+
+  it('does not sanity-check provider count of zero', () => {
+    expect(resolveTraceTokenCount(0, 'x'.repeat(1000))).toEqual({
+      tokens: 0,
+      source: 'provider',
+    });
+  });
+
   it('adds OpenInference token, cost, and message attributes when rates are configured', () => {
     process.env.IMPRINT_TRACE_INPUT_USD_PER_1M = '2';
     process.env.IMPRINT_TRACE_OUTPUT_USD_PER_1M = '10';
