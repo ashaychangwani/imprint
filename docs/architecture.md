@@ -229,8 +229,8 @@ Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts
 
 **Ephemeral artifacts** the compile-agent writes during a run but does not persist:
 
-- `parser.test.ts` — `bun:test` suite that exercises `parser.extract()` against the load-bearing response body. Reads the redacted session via `process.env.IMPRINT_SESSION_PATH` set by the harness. Deleted after verification passes; pass `--keep-test` to `teach` / `generate` to retain it for local debugging.
-- `integration.test.ts` — live API test that imports the generated tool and calls `executeWorkflow` with default params. Verifies the workflow produces real data (catches expired hardcoded tokens, missing URL signing). Also deleted after verification unless `--keep-test`.
+- `parser.test.ts` — `bun:test` suite that exercises `parser.extract()` against the load-bearing response body. Reads the redacted session via `process.env.IMPRINT_SESSION_PATH` set by the harness. Deleted after verification passes; pass `--keep-test` to `teach` / `generate` (or set `IMPRINT_KEEP_TEST=1`) to retain it for local debugging.
+- `integration.test.ts` — live API test that imports the generated tool and calls `executeWorkflow` with default params. Verifies the workflow produces real data (catches expired hardcoded tokens, missing URL signing). Also deleted after verification unless `--keep-test` or `IMPRINT_KEEP_TEST=1`.
 - `.compile-log.json`, `.compile-done.json`, `.compile-give-up.json` — agent loop transcript + sentinels (gitignored).
 
 ## Extending Imprint

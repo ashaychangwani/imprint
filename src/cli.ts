@@ -116,7 +116,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--keep-test',
         description:
-          'Retain the agent-generated parser.test.ts after compile (debug). Default deletes it; the test reads the gitignored redacted session via $IMPRINT_SESSION_PATH and is not portable.',
+          'Retain the agent-generated parser.test.ts after compile (debug). Default deletes it; the test reads the gitignored redacted session via $IMPRINT_SESSION_PATH and is not portable. Also settable via IMPRINT_KEEP_TEST=1.',
       },
     ],
     example: 'imprint teach google-flights --url https://flights.google.com',
@@ -167,7 +167,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--keep-test',
         description:
-          'Retain the agent-generated parser.test.ts after compile (debug). Default deletes it; the test reads the gitignored redacted session via $IMPRINT_SESSION_PATH and is not portable.',
+          'Retain the agent-generated parser.test.ts after compile (debug). Default deletes it; the test reads the gitignored redacted session via $IMPRINT_SESSION_PATH and is not portable. Also settable via IMPRINT_KEEP_TEST=1.',
       },
     ],
     example: 'imprint generate ~/.imprint/acmecorp/sessions/<ts>.redacted.json',
@@ -579,7 +579,7 @@ async function main(argv: string[]): Promise<number> {
         outPath: values.out,
         maxDurationMs,
         llmConfig: { provider: providerName, model: compileModel },
-        keepTest: values['keep-test'],
+        keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
         onProgress: (p) => {
           const activity = describeAgentActivity(p);
           if (activity === lastActivity) return;
@@ -920,7 +920,7 @@ async function main(argv: string[]): Promise<number> {
               signal: ctrl.signal,
               noInteractive: values['no-interactive'],
               provider: values.provider as ProviderName | undefined,
-              keepTest: values['keep-test'],
+              keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
               allTools: values['all-tools'],
             }),
         );
