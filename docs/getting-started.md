@@ -83,6 +83,18 @@ You now have an MCP tool any agent can call.
 
 Stateful workflows still run through the same generated tool. If a request sets a cookie or response value that a later request needs, the workflow compiler emits named captures and `${state.NAME}` placeholders. Plain HTTP producers stay on the fast `fetch` path; browser bootstrap is used only when the workflow declares that Chromium is needed to mint the state.
 
+## Compile options
+
+`imprint teach` prompts for a **provider** and **model** interactively. To skip the prompts or override defaults:
+
+```bash
+imprint teach google-flights --provider vertex --model claude-sonnet-4-6 --timeout 10m
+```
+
+Each tool has a **5-minute compile timeout** by default. If your site is complex or the compile agent needs more time for verification, increase it with `--timeout`. If a tool fails to compile (e.g. timeout or bot defense), the other tools in the same recording still compile successfully.
+
+To skip the replay-and-diff stage (the automated second pass that classifies values as constant vs browser-minted), add `--skip-replay`. This is faster but means the compile agent can't distinguish ephemeral values (timestamps, CSRF tokens) from constants, which may reduce workflow accuracy for sites with dynamic request parameters.
+
 ## Inspect slow compiles
 
 For local trace visibility, run Phoenix and enable Imprint tracing:

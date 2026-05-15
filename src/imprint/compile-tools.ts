@@ -13,6 +13,7 @@ import type { AgentTool } from './agent.ts';
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
+import type { ClassifiedValue } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type CapturedRequest, type Session, WorkflowSchema } from './types.ts';
 
@@ -46,6 +47,7 @@ export function buildCompileTools(
 interface CompileToolContext {
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
+  classifications?: ClassifiedValue[];
 }
 
 // ─── Tool: read_session_summary ──────────────────────────────────────────────
@@ -101,7 +103,7 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
         sharedContext: context.sharedContext,
         narration: session.narration.map((n) => ({ timestamp: n.timestamp, text: n.text })),
         requestCount: session.requests.length,
-        stateHints: buildStateHints(session),
+        stateHints: buildStateHints(session, context.classifications),
         loadBearingRequests,
       };
       return { result: JSON.stringify(summary, null, 2) };
@@ -109,7 +111,10 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
   };
 }
 
-function buildStateHints(session: Session): Array<Record<string, unknown>> {
+function buildStateHints(
+  session: Session,
+  dualPassClassifications?: ClassifiedValue[],
+): Array<Record<string, unknown>> {
   const hints: Array<Record<string, unknown>> = [];
   const cookieMarkers = new Map<string, Array<{ requestSeq: number; cookie: string }>>();
   const storageMarkers = new Map<string, { origin: string; kind: string; key: string }>();
@@ -210,6 +215,28 @@ function buildStateHints(session: Session): Array<Record<string, unknown>> {
           });
         }
       }
+    }
+  }
+
+  if (dualPassClassifications) {
+    for (const c of dualPassClassifications) {
+      if (c.classification === 'constant') continue;
+      const note =
+        c.classification === 'server_derived'
+          ? `This value differs across independent executions and was found in response seq ${c.producerSeq} at ${c.producerPath}. Use a capture on that request and reference via \${state.${c.suggestedStateName ?? 'NAME'}}.`
+          : 'This value differs across independent executions and is NOT traceable to any prior server response. It is browser-minted (computed by client-side JS). Consider: bootstrap capture (if session-scoped), requestTransformModule (if per-request), or stealth_bootstrap (if bot-defense).';
+      hints.push({
+        type: 'dual_pass_value_classification',
+        classification: c.classification,
+        originalSeq: c.originalSeq,
+        location: c.location,
+        value1: c.value1,
+        value2: c.value2,
+        producerSeq: c.producerSeq,
+        producerPath: c.producerPath,
+        suggestedStateName: c.suggestedStateName,
+        note,
+      });
     }
   }
 

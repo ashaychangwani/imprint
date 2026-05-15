@@ -27,6 +27,19 @@ function loadDotenv(): void {
 
 loadDotenv();
 
+/** Parse a duration string: "5m" → 300000, "1h" → 3600000, "30s" → 30000, "5000" → 5000.
+ *  Returns null if the format is invalid. */
+export function parseDuration(dur: string): number | null {
+  const match = dur.match(/^(\d+)(m|h|s|ms)?$/);
+  if (!match) return null;
+  const num = Number.parseInt(match[1] ?? '0', 10);
+  const unit = match[2] ?? 'ms';
+  if (unit === 'h') return num * 60 * 60 * 1000;
+  if (unit === 'm') return num * 60 * 1000;
+  if (unit === 's') return num * 1000;
+  return num;
+}
+
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
 
 USAGE
@@ -89,7 +102,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--provider <name>] [--keep-test]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
@@ -114,9 +127,23 @@ export const VERB_HELP: Record<string, VerbHelp> = {
           'Compile-agent provider: anthropic-api, vertex, claude-cli, codex-cli (auto-detected if omitted).',
       },
       {
+        name: '--model <name>',
+        description:
+          'Override the compile-agent model (e.g. claude-sonnet-4-6). Default is prompted interactively or auto-selected per provider.',
+      },
+      {
+        name: '--timeout <duration>',
+        description: 'Per-tool compile timeout. Accepts 5m, 1h, 300s, or plain ms. Default 5m.',
+      },
+      {
         name: '--keep-test',
         description:
           'Retain the agent-generated parser.test.ts after compile (debug). Default deletes it; the test reads the gitignored redacted session via $IMPRINT_SESSION_PATH and is not portable. Also settable via IMPRINT_KEEP_TEST=1.',
+      },
+      {
+        name: '--skip-replay',
+        description:
+          "Skip the replay-and-diff stage. Faster, but the compile agent won't be able to distinguish browser-minted values from constants, which may reduce workflow accuracy.",
       },
     ],
     example: 'imprint teach google-flights --url https://flights.google.com',
@@ -157,7 +184,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--out <path>', description: 'Override the workflow.json output path.' },
       {
         name: '--max-duration <time>',
-        description: 'Agent timeout (e.g., "30m", "1h", "300s"). Default 30m.',
+        description: 'Agent timeout (e.g., "10m", "1h", "300s"). Default 5m.',
       },
       {
         name: '--provider <name>',
@@ -532,23 +559,15 @@ async function main(argv: string[]): Promise<number> {
         }
       }
 
-      // Parse --max-duration: "Nm" (minutes), "Nh" (hours), "Ns" (seconds), plain N (ms)
       let maxDurationMs: number | undefined;
       if (values['max-duration']) {
-        const dur = values['max-duration'];
-        const match = dur.match(/^(\d+)(m|h|s|ms)?$/);
-        if (!match) {
+        maxDurationMs = parseDuration(values['max-duration']) ?? undefined;
+        if (maxDurationMs === undefined) {
           console.error(
-            `error: invalid --max-duration "${dur}"\n→ use format: 30m, 1h, 300s, or plain milliseconds`,
+            `error: invalid --max-duration "${values['max-duration']}"\n→ use format: 30m, 1h, 300s, or plain milliseconds`,
           );
           return 2;
         }
-        const num = Number.parseInt(match[1] ?? '0', 10);
-        const unit = match[2] ?? 'ms';
-        if (unit === 'h') maxDurationMs = num * 60 * 60 * 1000;
-        else if (unit === 'm') maxDurationMs = num * 60 * 1000;
-        else if (unit === 's') maxDurationMs = num * 1000;
-        else maxDurationMs = num;
       }
 
       const { generate } = await import('./imprint/compile.ts');
@@ -872,7 +891,10 @@ async function main(argv: string[]): Promise<number> {
           'no-interactive': { type: 'boolean' },
           'all-tools': { type: 'boolean' },
           provider: { type: 'string' },
+          model: { type: 'string' },
+          timeout: { type: 'string' },
           'keep-test': { type: 'boolean' },
+          'skip-replay': { type: 'boolean' },
         },
         allowPositionals: false,
       });
@@ -894,6 +916,17 @@ async function main(argv: string[]): Promise<number> {
         }
       }
 
+      let teachTimeoutMs: number | undefined;
+      if (values.timeout) {
+        teachTimeoutMs = parseDuration(values.timeout) ?? undefined;
+        if (teachTimeoutMs === undefined) {
+          console.error(
+            `error: invalid --timeout "${values.timeout}"\n→ use format: 5m, 1h, 300s, or plain milliseconds`,
+          );
+          return 2;
+        }
+      }
+
       const ctrl = new AbortController();
       const onSigint = (): void => ctrl.abort();
       process.once('SIGINT', onSigint);
@@ -908,8 +941,11 @@ async function main(argv: string[]): Promise<number> {
             'imprint.url': values.url,
             'imprint.from_session': values['from-session'],
             'imprint.provider': values.provider ?? 'auto',
+            'imprint.model': values.model ?? 'auto',
+            'imprint.timeout_ms': teachTimeoutMs ?? 'default',
             'imprint.all_tools': values['all-tools'] ?? false,
             'imprint.no_interactive': values['no-interactive'] ?? false,
+            'imprint.skip_replay': values['skip-replay'] ?? false,
           },
           () =>
             teach({
@@ -920,8 +956,11 @@ async function main(argv: string[]): Promise<number> {
               signal: ctrl.signal,
               noInteractive: values['no-interactive'],
               provider: values.provider as ProviderName | undefined,
+              model: values.model,
+              maxDurationMs: teachTimeoutMs,
               keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
               allTools: values['all-tools'],
+              skipReplay: values['skip-replay'],
             }),
         );
       } finally {

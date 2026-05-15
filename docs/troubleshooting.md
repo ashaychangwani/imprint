@@ -131,9 +131,33 @@ The Vertex Anthropic call returned text instead of JSON. This happens occasional
 
 **Fix:** re-run `imprint generate`. If it persists, try `--no-shrink` or split the recording into smaller workflows.
 
+## "Replay-and-diff is slow or failing"
+
+The replay-and-diff stage re-runs your recorded actions in a fresh browser to classify which request values are ephemeral (timestamps, CSRF tokens) vs constant. If the automated replay fails or the site blocks it, `teach` falls back to asking you to manually re-record the same flow.
+
+To skip this stage entirely:
+
+```bash
+imprint teach <site> --skip-replay
+```
+
+This is faster but means the compile agent won't be able to distinguish browser-minted values from constants, which may reduce workflow accuracy for sites with dynamic request parameters. For simple sites with mostly static API calls, this is usually fine.
+
 ## "Compile is slow or looks stuck"
 
-Recent compilers compact repeated request metadata before candidate detection, request triage, and compile-agent summaries, while keeping full request/response bodies available through explicit read tools. If a compile still looks slow, turn on local Phoenix tracing and inspect which stage or tool call is spending time:
+Each tool compiles with a **5-minute timeout** by default. If a tool hits the timeout, it fails gracefully and other tools continue compiling. To increase the timeout for complex sites:
+
+```bash
+imprint teach <site> --timeout 10m
+```
+
+If a tool consistently fails to compile within the timeout (e.g. due to bot defense on verification), try a faster model:
+
+```bash
+imprint teach <site> --model claude-sonnet-4-6 --timeout 10m
+```
+
+For deeper debugging, turn on local Phoenix tracing and inspect which stage or tool call is spending time:
 
 ```bash
 uv tool install arize-phoenix

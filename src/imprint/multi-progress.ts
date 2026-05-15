@@ -16,9 +16,11 @@ export class MultiProgress {
   private lines = new Map<string, string>();
   private renderedCount = 0;
   private cursorSaved = false;
+  private paused = false;
 
   update(key: string, message: string): void {
     this.lines.set(key, message);
+    if (this.paused) return;
     if (!isTTY()) {
       process.stderr.write(`${message}\n`);
       return;
@@ -30,6 +32,7 @@ export class MultiProgress {
     this.lines.delete(key);
   }
 
+  /** Erase all rendered progress lines from the terminal. */
   clear(): void {
     if (!isTTY() || this.renderedCount === 0) return;
     let buf = '';
@@ -40,7 +43,19 @@ export class MultiProgress {
     this.cursorSaved = false;
   }
 
+  /** Stop writing to the terminal. Updates are buffered in memory. */
+  pause(): void {
+    this.paused = true;
+  }
+
+  /** Resume writing. Redraws current state immediately. */
+  resume(): void {
+    this.paused = false;
+    if (isTTY() && this.lines.size > 0) this.redraw();
+  }
+
   render(): void {
+    if (this.paused) return;
     if (!isTTY() || this.lines.size === 0) return;
     this.redraw();
   }
@@ -52,7 +67,7 @@ export class MultiProgress {
     }
     buf += '\x1b7\x1b[J';
     for (const [, msg] of this.lines) {
-      buf += `${msg}\n`;
+      buf += `│  ${msg}\n`;
     }
     process.stderr.write(buf);
     this.cursorSaved = true;

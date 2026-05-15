@@ -26,6 +26,7 @@ import { localSiteDir, localToolDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { redactSession } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
+import type { ClassifiedValue } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import {
@@ -72,6 +73,8 @@ interface GenerateOptions extends CompileOptions {
   keepTest?: boolean;
   /** Directory where workflow.json/parser.ts/parser.test.ts are written. */
   outDir?: string;
+  /** Dual-pass value classifications from replay-and-diff. */
+  classifications?: ClassifiedValue[];
 }
 
 interface GenerateResult {
@@ -108,6 +111,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         outDir,
         candidate: opts.candidate,
         sharedContext: opts.sharedContext,
+        classifications: opts.classifications,
       });
 
       setSpanAttributes(span, {
@@ -120,15 +124,19 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       });
 
       if (!result.success) {
-        throw new Error(
-          [
-            'compile agent did not produce a verified workflow.',
-            `outcome: ${result.outcome}`,
-            `message: ${result.message}`,
-            `turns: ${result.turns}, duration: ${(result.durationMs / 1000).toFixed(1)}s`,
-            `conversation log: ${result.conversationLogPath}`,
-          ].join('\n'),
-        );
+        const lines = [
+          'compile agent did not produce a verified workflow.',
+          `outcome: ${result.outcome}`,
+          `message: ${result.message}`,
+          `turns: ${result.turns}, duration: ${(result.durationMs / 1000).toFixed(1)}s`,
+          `conversation log: ${result.conversationLogPath}`,
+        ];
+        if (result.outcome === 'timeout') {
+          lines.push(
+            'hint: increase the timeout with --timeout (teach) or --max-duration (generate)',
+          );
+        }
+        throw new Error(lines.join('\n'));
       }
 
       // Load the agent-written workflow.json from disk and validate.

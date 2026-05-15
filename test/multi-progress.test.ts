@@ -25,7 +25,7 @@ describe('MultiProgress', () => {
     mp.update('tool1', 'tool1: thinking');
     expect(writes).toHaveLength(1);
     // \x1b7 = DECSC (save), \x1b[J = erase to end of screen
-    expect(writes[0]).toBe('\x1b7\x1b[Jtool1: thinking\n');
+    expect(writes[0]).toBe('\x1b7\x1b[J│  tool1: thinking\n');
   });
 
   it('second update: restore + save + erase + line in single write', () => {
@@ -36,7 +36,7 @@ describe('MultiProgress', () => {
     mp.update('tool1', 'tool1: running');
     expect(writes).toHaveLength(1);
     // \x1b8 = DECRC (restore), \x1b7 = DECSC (re-save), \x1b[J = erase
-    expect(writes[0]).toBe('\x1b8\x1b7\x1b[Jtool1: running\n');
+    expect(writes[0]).toBe('\x1b8\x1b7\x1b[J│  tool1: running\n');
   });
 
   it('two keys: restore + save + erase + two lines', () => {
@@ -47,7 +47,7 @@ describe('MultiProgress', () => {
 
     mp.update('tool1', 'tool1: running');
     expect(writes).toHaveLength(1);
-    expect(writes[0]).toBe('\x1b8\x1b7\x1b[Jtool1: running\ntool2: thinking\n');
+    expect(writes[0]).toBe('\x1b8\x1b7\x1b[J│  tool1: running\n│  tool2: thinking\n');
   });
 
   it('clear: restore + erase, resets cursorSaved', () => {
@@ -73,7 +73,7 @@ describe('MultiProgress', () => {
     // After clear, cursorSaved is false so no restore — just save + erase + line
     mp.render();
     expect(writes).toHaveLength(1);
-    expect(writes[0]).toBe('\x1b7\x1b[Jline-b\n');
+    expect(writes[0]).toBe('\x1b7\x1b[J│  line-b\n');
   });
 
   it('non-TTY falls back to plain newlines', () => {
@@ -100,8 +100,8 @@ describe('MultiProgress', () => {
     expect(writes).toHaveLength(1);
     const out = writes[0] as string;
     expect(out).toStartWith('\x1b8\x1b7\x1b[J');
-    expect(out).toContain('line-a-v2');
-    expect(out).toContain('line-c');
+    expect(out).toContain('│  line-a-v2');
+    expect(out).toContain('│  line-c');
     expect(out).not.toContain('line-b');
   });
 });
