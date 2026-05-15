@@ -1007,7 +1007,7 @@ function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider 
       return new ClaudeCliProvider({ model });
     case 'codex-cli':
       return new CodexCliProvider({
-        model: opts.model ?? process.env.CODEX_MODEL ?? 'gpt-5.4',
+        model: opts.model ?? process.env.CODEX_MODEL ?? 'gpt-5.5',
       });
     case 'cursor-cli':
       return new CursorCliProvider({ model: opts.model });
@@ -1040,7 +1040,7 @@ export function preferredAgentModel(provider: ProviderName): string {
     case 'claude-cli':
       return 'claude-opus-4-7';
     case 'codex-cli':
-      return 'gpt-5.4';
+      return 'gpt-5.5';
     case 'cursor-cli':
       return 'claude-opus-4-7'; // best-effort; cursor passes through
   }
@@ -1059,16 +1059,38 @@ export function availableModelsForProvider(provider: ProviderName): ModelOption[
       return [
         { model: 'claude-opus-4-7', isDefault: true },
         { model: 'claude-sonnet-4-6', isDefault: false },
+        { model: 'claude-haiku-4-5', isDefault: false },
+        { model: 'claude-opus-4-6', isDefault: false },
+        { model: 'claude-sonnet-4-5', isDefault: false },
+        { model: 'claude-opus-4-5', isDefault: false },
       ];
     case 'codex-cli':
       return [
-        { model: 'gpt-5.4', isDefault: true },
+        { model: 'gpt-5.5', isDefault: true },
+        { model: 'gpt-5.4', isDefault: false },
+        { model: 'gpt-5.4-mini', isDefault: false },
+        { model: 'gpt-5.2', isDefault: false },
+        { model: 'gpt-5.2-pro', isDefault: false },
+        { model: 'gpt-5.1', isDefault: false },
+        { model: 'gpt-5', isDefault: false },
+        { model: 'gpt-4.1', isDefault: false },
+        { model: 'gpt-4.1-mini', isDefault: false },
+        { model: 'o4-mini', isDefault: false },
         { model: 'o3', isDefault: false },
+        { model: 'o3-mini', isDefault: false },
+        { model: 'o1', isDefault: false },
       ];
     case 'cursor-cli':
       return [
         { model: 'claude-opus-4-7', isDefault: true },
         { model: 'claude-sonnet-4-6', isDefault: false },
+        { model: 'claude-haiku-4-5', isDefault: false },
+        { model: 'gpt-5.5', isDefault: false },
+        { model: 'gpt-5.4', isDefault: false },
+        { model: 'gpt-5.4-mini', isDefault: false },
+        { model: 'o3', isDefault: false },
+        { model: 'gemini-2.5-pro', isDefault: false },
+        { model: 'gemini-2.5-flash', isDefault: false },
       ];
   }
 }

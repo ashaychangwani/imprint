@@ -316,7 +316,7 @@ describe('provider status metadata', () => {
 
   it('uses a current Codex model for agentic compile by default', () => {
     withProviderEnv({}, () => {
-      expect(preferredAgentModel('codex-cli')).toBe('gpt-5.4');
+      expect(preferredAgentModel('codex-cli')).toBe('gpt-5.5');
     });
   });
 });
