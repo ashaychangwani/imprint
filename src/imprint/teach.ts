@@ -54,6 +54,7 @@ import {
   isTeachCompatibleProvider,
 } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
+import { MultiProgress } from './multi-progress.ts';
 import {
   localSessionsDir,
   localSiteDir,
@@ -1013,6 +1014,7 @@ async function compileCandidatePlans(opts: {
   sharedTriageResult?: TriageResult;
 }): Promise<TeachToolResult[]> {
   const concurrency = opts.plans.length === 1 ? 1 : 3;
+  const mp = opts.plans.length > 1 ? new MultiProgress() : null;
   return await mapLimit(opts.plans, concurrency, async (plan) => {
     const displayName = plan.candidate?.toolName ?? plan.workflowKey;
     let lastActivity = '';
@@ -1020,23 +1022,26 @@ async function compileCandidatePlans(opts: {
       const activity = formatCompileProgress(progress);
       if (activity === lastActivity) return;
       lastActivity = activity;
-      if (opts.plans.length === 1) {
-        opts.spinner.message(activity);
+      if (mp) {
+        mp.update(displayName, `[imprint teach] ${displayName}: ${activity}`);
       } else {
-        process.stderr.write(`[imprint teach] ${displayName}: ${activity}\n`);
+        opts.spinner.message(activity);
       }
     };
-    if (opts.plans.length === 1) opts.spinner.start(`Compiling ${displayName}...`);
+    if (!mp) opts.spinner.start(`Compiling ${displayName}...`);
     try {
       const result = await compileSelectedCandidate({
         ...opts,
         plan,
         onProgress,
       });
-      if (opts.plans.length === 1) {
-        opts.spinner.stop(`${displayName} compiled.`);
-      } else {
+      if (mp) {
+        mp.clear();
+        mp.remove(displayName);
         p.log.success(`${displayName} compiled.`);
+        mp.render();
+      } else {
+        opts.spinner.stop(`${displayName} compiled.`);
       }
       return result;
     } catch (err) {
@@ -1046,7 +1051,10 @@ async function compileCandidatePlans(opts: {
         ws.updatedAt = new Date().toISOString();
         saveTeachState(opts.site, opts.state);
       }
-      if (opts.plans.length === 1) {
+      if (mp) {
+        mp.clear();
+        mp.remove(displayName);
+      } else {
         opts.spinner.stop(`${displayName} failed.`);
       }
       throw err;
