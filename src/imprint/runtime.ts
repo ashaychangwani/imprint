@@ -238,12 +238,10 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 
     const text = await safeText(resp);
     let parsed: unknown = text;
-    if ((resp.headers.get('content-type') ?? '').includes('json')) {
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        // leave as text
-      }
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // Not valid JSON — keep as raw text string.
     }
     const aliases = evaluateLegacyExtract(req, parsed);
     responseSlots.push({ raw: parsed, aliases });

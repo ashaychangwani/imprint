@@ -108,6 +108,40 @@ describe('executeWorkflow', () => {
     expect(r.data).toEqual({ results: [1, 2, 3] });
   });
 
+  it('parses JSON body even when content-type is text/html', async () => {
+    const fetchMock = (async () =>
+      new Response(JSON.stringify({ vehicles: [{ type: 'SUV', price: 45 }] }), {
+        status: 200,
+        headers: { 'content-type': 'text/html;charset=UTF-8' },
+      })) as unknown as typeof fetch;
+    const r = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'test' },
+      credentials: STORE,
+      fetchImpl: fetchMock,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data).toEqual({ vehicles: [{ type: 'SUV', price: 45 }] });
+  });
+
+  it('leaves non-JSON text/html responses as strings', async () => {
+    const fetchMock = (async () =>
+      new Response('<html><body>Hello</body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html;charset=UTF-8' },
+      })) as unknown as typeof fetch;
+    const r = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'test' },
+      credentials: STORE,
+      fetchImpl: fetchMock,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.data).toBe('<html><body>Hello</body></html>');
+  });
+
   it('classifies 401 as AUTH_EXPIRED with a helpful remediation', async () => {
     const fetchMock = (async () =>
       new Response('session expired', { status: 401 })) as unknown as typeof fetch;
