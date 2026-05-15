@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "accentColor": "#CFFF58",
@@ -366,6 +367,7 @@ export default function App() {
               <a href="#comparison">Why it wins</a>
               <a href="#examples">Examples</a>
               <a href="#install">Install</a>
+              <Link to="/docs">Docs</Link>
             </div>
             <a className="nav-cta" href={product.githubUrl} aria-label="Open Imprint on GitHub">GitHub ↗</a>
           </nav>
@@ -523,7 +525,7 @@ export default function App() {
                 <p>Bring Bun 1.3+, Chrome, and a compile-agent provider already available on your machine. Imprint detects Claude CLI, Codex CLI, Anthropic API, or Vertex; Cursor CLI is available for playbook compilation.</p>
                 <div className="hero-actions">
                   <a className="btn btn-primary" href={product.githubUrl}>Clone the repo</a>
-                  <a className="btn btn-secondary" href="https://github.com/ashaychangwani/imprint/blob/main/docs/getting-started.md">Read getting started</a>
+                  <Link className="btn btn-secondary" to="/docs/getting-started">Read getting started</Link>
                 </div>
               </div>
               <div className="command-list" aria-label="Install commands">
@@ -541,7 +543,7 @@ export default function App() {
             <span>Imprint · deterministic browser skills for AI agents</span>
             <div className="footer-links" aria-label="Footer links">
               <a href={product.githubUrl}>GitHub</a>
-              <a href="https://github.com/ashaychangwani/imprint/blob/main/docs/security.md">Security</a>
+              <Link to="/docs/security">Security</Link>
               <a href="https://github.com/ashaychangwani/imprint/blob/main/CONTRIBUTING.md">Contributing</a>
               <a href="https://github.com/ashaychangwani/imprint/blob/main/LICENSE">MIT License</a>
             </div>

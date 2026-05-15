@@ -49,7 +49,7 @@ Status 403 with `{"code": 403050700}` = Akamai bot block (use stealth — alread
 
 ## 5. Compare playbook to recorded events
 
-The compiler is good but not infallible. Verify what the user actually did vs what the playbook compiled to:
+The compiler is good but not infallible. Verify what the user actually did vs what the playbook compiled to. (This reads YOUR original `session.json` from when you recorded the workflow — stored at `~/.imprint/<site>/sessions/<ts>.json`. If you're debugging a playbook someone else taught, you won't have this file.)
 ```bash
 python3 -c "
 import json

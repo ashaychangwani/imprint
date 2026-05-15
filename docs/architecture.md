@@ -46,45 +46,68 @@ Both are auto-discovered by the cron daemon and the MCP server, which dispatch t
 
 ```
 src/imprint/
+│ ── Orchestration ──
+├── teach.ts             End-to-end pipeline: record → redact → triage → generate → emit → register
+├── integrations.ts      Platform registration (Claude Code, Codex, Claude Desktop, OpenClaw, Hermes)
+│
+│ ── Capture ──
 ├── record.ts            CDP capture + DOM listener + JSONL stream
 ├── session-writer.ts    JSONL writer + Session assembler
 ├── inject-listener.ts   Sentinel-prefixed DOM event capture (injected)
 ├── redact.ts            Credential / PII scrub
+├── freeform-redact.ts   Supplemental free-form PII/secret detection (113 patterns)
+├── sensitive-keys.ts    Sensitive credential key lists for extraction + redaction
+├── credential-extract.ts  Automatic login-pair detection + redaction mapping from sessions
 ├── check.ts             Sanity-check captured sessions
 │
-├── compile.ts           One LLM compiler, two configs:
-│                          - generate (Workflow)
-│                          - compilePlaybook (Playbook)
+│ ── Compile ──
+├── compile.ts           LLM compiler entry points: generate() + compilePlaybook()
 ├── compile-agent.ts     Agentic compile orchestrator (session → workflow.json + parser.ts)
+├── compile-agent-types.ts  Shared types for compile agent (progress, result)
 ├── agent.ts             General-purpose tool-using agent loop + per-turn/per-tool tracing
 ├── claude-cli-compile.ts  Claude CLI compile driver with stream-json per-turn tracing
 ├── codex-cli-compile.ts   Codex CLI compile driver with JSONL per-turn tracing
 ├── compile-tools.ts     Compile-agent read/write/test tools + state hints
 ├── request-context.ts   Shared request metadata compaction for LLM context
+├── tool-candidates.ts   Multi-tool detection from a single recording session
+├── tool-selection.ts    Tool selection helpers for cron + probe
 ├── llm.ts               Provider wrappers + JSON extraction + trace spans
 ├── tracing.ts           OpenInference/Phoenix tracing helpers
 ├── playbook-parser.ts   YAML → Playbook (Zod-validated)
 │
+│ ── Emit + Runtime ──
 ├── emit.ts              workflow.json → ~/.imprint/<site>/<toolName>/index.ts
+├── mcp-compile-server.ts  MCP server for compile operations (claude-cli integration)
 ├── runtime.ts           executeWorkflow — substitutions + state captures + classification
 ├── cookie-jar.ts        Runtime cookie jar + Set-Cookie ingestion
 ├── tool-loader.ts       Discover ~/.imprint/<site>/<toolName>/index.ts modules
 │
+│ ── Backend ladder ──
 ├── backend-ladder.ts    runWithLadder + resolveLadder
 ├── stealth-fetch.ts     Headless Chromium → mint sensor tokens → native fetch
 ├── playbook-runner.ts   Playwright + stealth + locator priority + DOM walk
 │
+│ ── Services ──
 ├── cron.ts              Polling daemon
 ├── mcp-server.ts        MCP stdio + Streamable HTTP
 ├── probe-backends.ts    Try each backend at record time → backends.json
 ├── notify.ts            evaluateNotifyWhen + Pushover/ntfy delivery
 ├── login.ts             Session.json → credentials store
 │
+│ ── Credentials ──
+├── credential-store.ts  Credential storage abstraction (keyring → encrypted file → legacy JSON)
+├── credential-bundle.ts Import/export encrypted credential bundles
+├── cli-credential.ts    `imprint credential` CLI commands (list/get/set/delete/export/import)
+│
+│ ── Utilities ──
 ├── chromium.ts          Locate + launch Chromium for CDP
 ├── doctor.ts            Environment health check (Bun, Chromium, Vertex env)
+├── etld.ts              eTLD+1 domain parsing (registrable domains)
 ├── json-path.ts         Dot-path walker (a[].b.c)
 ├── load-json.ts         Shared file/JSON/schema-validation helper
 ├── log.ts               createLog factory + isDebug/isQuiet env helpers
+├── paths.ts             IMPRINT_HOME path resolution + site/tool directory helpers
+├── progress.ts          Compile-agent progress formatting
 ├── sites.ts             availableSitesHint — "did you mean?" for site typos
 ├── types.ts             Zod schemas (Session, Workflow, Playbook, Cron, etc.)
 └── version.ts           Single source for VERSION (read from package.json)

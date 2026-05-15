@@ -15,10 +15,13 @@ The fastest path is `imprint teach`, which runs the full pipeline interactively 
 ```bash
 git clone https://github.com/ashaychangwani/imprint.git
 cd imprint
-bun install
+bun install                       # also installs Chromium via postinstall hook
 bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
-bunx playwright install chromium  # for fetch-bootstrap, stealth-fetch, and playbook backends
 ```
+
+> `bun install` runs `bunx playwright install chromium` automatically via the postinstall hook. If you need to re-install Chromium manually (e.g., after a Playwright upgrade), run `bunx playwright install chromium`.
+
+By default, all Imprint data lives in `~/.imprint/`. Set `IMPRINT_HOME` to relocate it.
 
 If `imprint --help` says "command not found" after `bun link`, your `~/.bun/bin` isn't on `PATH`. Either add it (Bun's installer normally does this) or skip `bun link` and call everything via `bun src/cli.ts <verb>`.
 

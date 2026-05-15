@@ -10,6 +10,12 @@ imprint doctor
 
 Checks every prerequisite (Bun, Chromium binary, Playwright Chromium install, Vertex project ID, region, push providers). Catches ~80% of "I just installed and nothing works" cases in one command. If a check fails the output includes the exact fix command.
 
+For any command, set `IMPRINT_DEBUG=1` to see full stack traces and verbose logging:
+
+```bash
+IMPRINT_DEBUG=1 imprint mcp-server mysite
+```
+
 ## "command not found: imprint"
 
 You ran `bun link` from inside the imprint directory but the binary isn't on PATH. Two fixes:
@@ -193,10 +199,28 @@ The `schedule` field must be a 5-field cron expression (`minute hour day-of-mont
 "0 9 * * 1-5"     # 9am weekdays only
 ```
 
-## "No locator matched" (in playbook runner)
+## "Playbook failed at step N: ..." (playbook runner errors)
 
-The site's DOM changed since the recording. Locators are tried in priority order: `role+name → aria_label → text → id → css`. Roles and aria-labels are most stable; CSS selectors break first.
+The playbook runner reports failures as `Playbook failed at step N: <underlying error>`. Common underlying errors include locator timeouts (DOM changed since recording), navigation failures, and element not visible/clickable. Locators are tried in priority order: `role+name → aria_label → text → id → css`. Roles and aria-labels are most stable; CSS selectors break first.
 
 **Fix:** re-record the session, then `imprint compile-playbook` again. Locators are LLM-generated from the recorded DOM, so a fresh recording captures the current shape.
 
 For deeper debugging, see [docs/playbook-debugging.md](playbook-debugging.md).
+
+## "No generated tool found for site X"
+
+The MCP server can't find any emitted tool directories under `~/.imprint/<site>/`.
+
+**Fix:** run `imprint teach <site>` first (which handles the full pipeline), or if you have a compiled workflow, run `imprint emit <site>`.
+
+## "site X has N workflows — specify which with --path"
+
+A site has multiple tools (e.g., `search_flights` and `book_flight`) and you didn't specify which one to use.
+
+**Fix:** add `--path ~/.imprint/<site>/<toolName>` to your command.
+
+## Crashed recording left a `.jsonl` instead of `.json`
+
+If a recording crashes or is interrupted before clean shutdown, the session is left as a raw `.jsonl` stream rather than a finalized `.json` file.
+
+**Fix:** run `imprint assemble <path-to-file.jsonl>` to reconstruct the session from the stream.
