@@ -54,6 +54,7 @@ import {
   isTeachCompatibleProvider,
 } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
+import { muteLog, unmuteLog } from './log.ts';
 import { MultiProgress } from './multi-progress.ts';
 import {
   localSessionsDir,
@@ -860,17 +861,23 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     kind: 'redacted',
   });
 
-  const results = await compileCandidatePlans({
-    plans,
-    site,
-    state,
-    sessionPath: compileSessionPath,
-    providerName: compileProviderName,
-    compileModel,
-    keepTest: opts.keepTest,
-    spinner,
-    sharedTriageResult: triageResult,
-  });
+  if (plans.length > 1) muteLog();
+  let results: TeachToolResult[];
+  try {
+    results = await compileCandidatePlans({
+      plans,
+      site,
+      state,
+      sessionPath: compileSessionPath,
+      providerName: compileProviderName,
+      compileModel,
+      keepTest: opts.keepTest,
+      spinner,
+      sharedTriageResult: triageResult,
+    });
+  } finally {
+    if (plans.length > 1) unmuteLog();
+  }
 
   if (results.length === 0) {
     throw new Error('No selected tools were compiled.');
