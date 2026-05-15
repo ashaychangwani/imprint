@@ -213,6 +213,8 @@ The MCP server can't find any emitted tool directories under `~/.imprint/<site>/
 
 **Fix:** run `imprint teach <site>` first (which handles the full pipeline), or if you have a compiled workflow, run `imprint emit <site>`.
 
+If `~/.imprint/<site>/<tool>/` directories *do* exist but every tool was skipped at startup with `Cannot find module 'imprint/runtime'`, the `~/.imprint/node_modules/imprint` symlink is dangling — the repo it pointed to has moved or been deleted (common with Conductor / git-worktree workflows). Imprint self-heals this on the next `mcp-server` / `cron` / `probe-backends` invocation, so just re-run the same command. If it still fails, check that the directory containing the symlink is writable.
+
 ## "site X has N workflows — specify which with --path"
 
 A site has multiple tools (e.g., `search_flights` and `book_flight`) and you didn't specify which one to use.
