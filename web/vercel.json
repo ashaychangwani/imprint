@@ -3,6 +3,7 @@
   "installCommand": "bun install",
   "outputDirectory": "dist",
   "framework": "vite",
+  "ignoreCommand": "[ \"$VERCEL_ENV\" != production ]",
   "rewrites": [
     { "source": "/docs/(.*)", "destination": "/index.html" },
     { "source": "/docs", "destination": "/index.html" }
