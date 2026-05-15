@@ -898,15 +898,23 @@ export async function externalVerification(
       'integration.test.ts was not written — the tool must include a live API test that calls the workflow and verifies it returns real data',
     );
   } else {
-    const result = await runCommand('bun test integration.test.ts', toolDir, 60000);
-    const output = JSON.parse(result.result) as {
-      stdout: string;
-      stderr: string;
-      exitCode: number;
-    };
-    if (output.exitCode !== 0) {
+    let integrationPassed = false;
+    let lastOutput = { stdout: '', stderr: '', exitCode: 1 };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await runCommand('bun test integration.test.ts', toolDir, 60000);
+      lastOutput = JSON.parse(result.result) as {
+        stdout: string;
+        stderr: string;
+        exitCode: number;
+      };
+      if (lastOutput.exitCode === 0) {
+        integrationPassed = true;
+        break;
+      }
+    }
+    if (!integrationPassed) {
       failures.push(
-        `bun test integration.test.ts exited ${output.exitCode} — the workflow failed to produce live data.\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,
+        `bun test integration.test.ts exited ${lastOutput.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
       );
     }
   }
