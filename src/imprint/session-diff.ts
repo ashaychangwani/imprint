@@ -125,8 +125,10 @@ export function alignRequests(run1: RequestLike[], run2: RequestLike[]): Aligned
 
     // Match by relative position within group
     for (let i = 0; i < g1.length; i++) {
+      // biome-ignore lint/style/noNonNullAssertion: bounded by loop condition
       const r1 = g1[i]!;
       if (i < g2.length) {
+        // biome-ignore lint/style/noNonNullAssertion: bounded by loop condition
         const r2 = g2[i]!;
         if (usedRun2Seqs.has(r2.seq)) continue;
 
@@ -248,6 +250,7 @@ function searchPriorResponses(
   if (value.length < 4) return null; // skip trivially short values
 
   for (let i = requests.length - 1; i >= 0; i--) {
+    // biome-ignore lint/style/noNonNullAssertion: bounded by loop condition
     const req = requests[i]!;
     if (req.seq >= beforeSeq) continue;
     const resp = req.response;

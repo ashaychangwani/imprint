@@ -192,6 +192,7 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
     let prevTimestamp = replayableEvents[0]?.timestamp ?? 0;
 
     for (let i = 0; i < replayableEvents.length; i++) {
+      // biome-ignore lint/style/noNonNullAssertion: bounded by loop condition
       const event = replayableEvents[i]!;
 
       // Use timestamp delta as minimum delay between events
