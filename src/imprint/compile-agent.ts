@@ -154,7 +154,7 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
   }
   const harnessNmPath = pathJoin(absoluteToolDir, 'node_modules');
   if (!existsSync(harnessNmPath)) {
-    Bun.spawnSync(['bun', 'install', '--frozen-lockfile=false'], { cwd: absoluteToolDir });
+    Bun.spawnSync(['bun', 'install'], { cwd: absoluteToolDir });
   }
 
   // 4. Load the system prompt

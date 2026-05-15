@@ -22,10 +22,11 @@ import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonArray, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
-import { localSiteDir, localToolDir } from './paths.ts';
+import { imprintHomeDir, localSiteDir, localToolDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { redactSession } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
+import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
@@ -101,6 +102,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       'imprint.out_dir': opts.outDir,
     },
     async (span) => {
+      ensureImprintRuntimeLink(imprintHomeDir());
       const outDir = opts.outDir ?? (opts.outPath ? dirname(opts.outPath) : undefined);
       const result = await compileAgent({
         sessionPath: opts.sessionPath,

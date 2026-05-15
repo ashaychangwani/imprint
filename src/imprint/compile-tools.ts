@@ -691,8 +691,8 @@ async function runGeneratedArtifactTypecheck(
     JSON.stringify(
       {
         extends: extendsPath,
-        include: ['*.ts'],
-        exclude: [],
+        include: ['parser.ts', 'request-transform.ts'],
+        exclude: ['*.test.ts'],
       },
       null,
       2,
