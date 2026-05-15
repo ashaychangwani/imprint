@@ -844,7 +844,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         '',
         plans.length === 1
           ? 'An LLM agent will reverse-engineer the API response format.'
-          : `${plans.length} LLM compile agents will reverse-engineer selected tools with concurrency 2.`,
+          : `${plans.length} LLM compile agents will reverse-engineer selected tools with concurrency 3.`,
         'Expect ~3-5 minutes per tool and moderate to high token use, depending on',
         'the complexity of the recording. You can interrupt with Ctrl-C.',
       ].join('\n'),
@@ -1012,7 +1012,7 @@ async function compileCandidatePlans(opts: {
   spinner: ReturnType<typeof p.spinner>;
   sharedTriageResult?: TriageResult;
 }): Promise<TeachToolResult[]> {
-  const concurrency = opts.plans.length === 1 ? 1 : 2;
+  const concurrency = opts.plans.length === 1 ? 1 : 3;
   return await mapLimit(opts.plans, concurrency, async (plan) => {
     const displayName = plan.candidate?.toolName ?? plan.workflowKey;
     let lastActivity = '';
