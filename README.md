@@ -10,6 +10,7 @@
   <a href="https://github.com/ashaychangwani/imprint/releases"><img src="https://img.shields.io/github/v/release/ashaychangwani/imprint?label=release" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
   <a href="https://github.com/ashaychangwani/imprint/stargazers"><img src="https://img.shields.io/github/stars/ashaychangwani/imprint?style=social" alt="GitHub Stars"></a>
+[![SafeSkill 20/100](https://img.shields.io/badge/SafeSkill-20%2F100_Blocked-red)](https://safeskill.dev/scan/ashaychangwani-imprint)
 </p>
 
 <br>
