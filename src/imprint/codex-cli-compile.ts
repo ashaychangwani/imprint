@@ -10,7 +10,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
-import type { Span } from '@opentelemetry/api';
+import { context as otelContext, type Span } from '@opentelemetry/api';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
@@ -270,6 +270,12 @@ async function driveJsonl(
   opts: CompileViaCodexCliOptions,
   traceSpan?: Span,
 ): Promise<CompileAgentResult> {
+  // Capture OTel context so child-process event handlers can parent spans
+  // under the current compile.codex_cli_agent span. Bun's event emitters
+  // don't propagate AsyncLocalStorage, so without this the agent.turn.*
+  // spans appear as orphaned root traces in Phoenix.
+  const parentCtx = otelContext.active();
+
   const conversationLog: unknown[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
@@ -324,6 +330,7 @@ async function driveJsonl(
 
   let stdoutBuf = '';
   child.stdout?.on('data', (chunk: Buffer) => {
+    otelContext.with(parentCtx, () => {
     stdoutBuf += chunk.toString('utf8');
     while (true) {
       const nl = stdoutBuf.indexOf('\n');
@@ -406,6 +413,7 @@ async function driveJsonl(
         lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
       }
     }
+    });
   });
 
   child.stderr?.on('data', (chunk: Buffer) => {
