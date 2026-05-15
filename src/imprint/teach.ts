@@ -39,7 +39,6 @@ import {
 } from './credential-extract.ts';
 import { getCredentialBackend, readSiteManifest, upsertManifestEntry } from './credential-store.ts';
 import { emit } from './emit.ts';
-import { MultiProgress } from './multi-progress.ts';
 import {
   type Platform,
   buildRegistrationCommand,
@@ -55,6 +54,7 @@ import {
   isTeachCompatibleProvider,
 } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
+import { MultiProgress } from './multi-progress.ts';
 import {
   localSessionsDir,
   localSiteDir,
