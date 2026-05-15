@@ -126,6 +126,34 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
   // 3. Determine the generated tool directory.
   const absoluteToolDir = opts.outDir ?? localSiteDir(session.site);
 
+  // 3b. Ensure type dependencies exist so the agent doesn't waste turns
+  //     discovering and installing @types/bun + @types/node during the loop.
+  mkdirSync(absoluteToolDir, { recursive: true });
+  const harnessPkgPath = pathJoin(absoluteToolDir, 'package.json');
+  if (!existsSync(harnessPkgPath)) {
+    writeFileSync(
+      harnessPkgPath,
+      JSON.stringify(
+        {
+          name: `imprint-tool-${session.site}`,
+          private: true,
+          devDependencies: {
+            '@types/bun': 'latest',
+            '@types/node': 'latest',
+            'bun-types': 'latest',
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+  }
+  const harnessNmPath = pathJoin(absoluteToolDir, 'node_modules');
+  if (!existsSync(harnessNmPath)) {
+    Bun.spawnSync(['bun', 'install', '--frozen-lockfile=false'], { cwd: absoluteToolDir });
+  }
+
   // 4. Load the system prompt
   const systemPromptPath = pathJoin(PROMPTS_DIR, 'compile-agent.md');
   if (!existsSync(systemPromptPath)) {
