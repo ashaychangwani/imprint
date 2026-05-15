@@ -1007,7 +1007,7 @@ function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider 
       return new ClaudeCliProvider({ model });
     case 'codex-cli':
       return new CodexCliProvider({
-        model: opts.model ?? process.env.CODEX_MODEL ?? 'gpt-5.4',
+        model: opts.model ?? process.env.CODEX_MODEL ?? 'gpt-5.5',
       });
     case 'cursor-cli':
       return new CursorCliProvider({ model: opts.model });
@@ -1040,7 +1040,7 @@ export function preferredAgentModel(provider: ProviderName): string {
     case 'claude-cli':
       return 'claude-opus-4-7';
     case 'codex-cli':
-      return 'gpt-5.4';
+      return 'gpt-5.5';
     case 'cursor-cli':
       return 'claude-opus-4-7'; // best-effort; cursor passes through
   }
@@ -1066,7 +1066,8 @@ export function availableModelsForProvider(provider: ProviderName): ModelOption[
       ];
     case 'codex-cli':
       return [
-        { model: 'gpt-5.4', isDefault: true },
+        { model: 'gpt-5.5', isDefault: true },
+        { model: 'gpt-5.4', isDefault: false },
         { model: 'gpt-5.4-mini', isDefault: false },
         { model: 'gpt-5.2', isDefault: false },
         { model: 'gpt-5.2-pro', isDefault: false },
@@ -1084,6 +1085,7 @@ export function availableModelsForProvider(provider: ProviderName): ModelOption[
         { model: 'claude-opus-4-7', isDefault: true },
         { model: 'claude-sonnet-4-6', isDefault: false },
         { model: 'claude-haiku-4-5', isDefault: false },
+        { model: 'gpt-5.5', isDefault: false },
         { model: 'gpt-5.4', isDefault: false },
         { model: 'gpt-5.4-mini', isDefault: false },
         { model: 'o3', isDefault: false },
