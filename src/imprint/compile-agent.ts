@@ -32,6 +32,7 @@ import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { localSiteDir } from './paths.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
+import type { ClassifiedValue } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type Session, SessionSchema } from './types.ts';
 
@@ -51,7 +52,7 @@ export function resolveCompileAgentModel(provider: ProviderName): string {
 interface CompileAgentOptions {
   /** Path to the recorded session JSON (absolute or relative). */
   sessionPath: string;
-  /** Hard wall-clock budget. Default 30 minutes. */
+  /** Hard wall-clock budget. Default 5 minutes. */
   maxDurationMs?: number;
   /** Override LLM config (region, model, project). */
   llmConfig?: LLMOptions;
@@ -78,6 +79,8 @@ interface CompileAgentOptions {
   candidate?: ToolCandidate;
   /** Shared auth/helper guidance generated once for a multi-tool teach run. */
   sharedContext?: SharedCompileContext;
+  /** Dual-pass value classifications from replay-and-diff. */
+  classifications?: ClassifiedValue[];
 }
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
@@ -171,6 +174,7 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
     ...buildCompileTools(session, absoluteToolDir, sessionPathAbs, {
       candidate: opts.candidate,
       sharedContext: opts.sharedContext,
+      classifications: opts.classifications,
     }),
     doneTool(),
     giveUpTool(),
@@ -187,7 +191,7 @@ ${formatCandidateContext(opts.candidate, opts.sharedContext)}
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
 
   // 7. Compute deadline
-  const deadlineMs = Date.now() + (opts.maxDurationMs ?? 30 * 60 * 1000);
+  const deadlineMs = Date.now() + (opts.maxDurationMs ?? 5 * 60 * 1000);
 
   // 8. Instantiate provider (or use injected one for testing).
   //    CLI providers take a different path: they don't implement Anthropic

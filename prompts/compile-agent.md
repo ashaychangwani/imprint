@@ -37,6 +37,17 @@ Follow these steps to compile the session:
 
    Read `stateHints` carefully. They are deterministic, redacted equality relationships discovered before the LLM step, such as “request B header equals cookie set by request A” or “request header equals a storage key.” Use these hints to emit named `captures` plus `${state.name}` references. Never copy `[REDACTED:...]` marker IDs into workflow.json.
 
+   **Dual-pass value classifications.** When `stateHints` includes entries with `type: “dual_pass_value_classification”`, these values were verified to differ across two independent executions of the same workflow with identical user inputs. They are the highest-confidence signal for ephemeral state — treat them seriously, but reason about them rather than following blindly:
+
+   - **`server_derived`**: The value differed and was found in a prior response. The hint includes `producerSeq` and `producerPath` telling you exactly where to capture from. Add a `captures` entry on the producer request and reference via `${state.NAME}`.
+   - **`browser_minted`**: The value differed and is NOT in any prior response — it was computed by client-side JavaScript. Choose the right remedy based on the value's behavior:
+     - *Session-scoped state* (minted once per page load, reused across requests): add a bootstrap capture with `browser_bootstrap` capability.
+     - *Per-request state* (unique per API call — nonces, request IDs, timestamps): write a `requestTransformModule` that generates fresh values.
+     - *Bot-defense state* (sensor headers, fingerprints): use `stealth_bootstrap` capability.
+   - **`constant`**: Identical in both runs — usually safe to hardcode. BUT: scrutinize high-entropy “constants” (UUIDs, JWTs, long hex/base64 strings). They may be slow-rotating tokens that happened to match across two runs taken minutes apart. If a constant looks like a token, treat it with suspicion and consider adding a bootstrap capture as a safety measure.
+
+   Classifications reduce ambiguity but don't eliminate it. Your existing reasoning about stale values, signing tokens, and session state still applies — classifications add a strong empirical signal on top.
+
 2. **Understand the user's intent.** Read the narration to learn what the user was trying to accomplish. The narration is your highest-signal input — it tells you what data the user cares about.
 
 3. **Identify load-bearing requests.** Most captured requests are noise (analytics, telemetry, asset loads, fonts, images). The load-bearing request is the one that returned the data the user wanted. Typical signals:

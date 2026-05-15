@@ -1046,6 +1046,33 @@ export function preferredAgentModel(provider: ProviderName): string {
   }
 }
 
+interface ModelOption {
+  model: string;
+  isDefault: boolean;
+}
+
+export function availableModelsForProvider(provider: ProviderName): ModelOption[] {
+  switch (provider) {
+    case 'anthropic-api':
+    case 'vertex':
+    case 'claude-cli':
+      return [
+        { model: 'claude-opus-4-7', isDefault: true },
+        { model: 'claude-sonnet-4-6', isDefault: false },
+      ];
+    case 'codex-cli':
+      return [
+        { model: 'gpt-5.4', isDefault: true },
+        { model: 'o3', isDefault: false },
+      ];
+    case 'cursor-cli':
+      return [
+        { model: 'claude-opus-4-7', isDefault: true },
+        { model: 'claude-sonnet-4-6', isDefault: false },
+      ];
+  }
+}
+
 /** Extract the first balanced top-level JSON array — handles fenced
  *  code blocks and preamble text. Returns null if no array is found. */
 export function extractJsonArray(text: string): string | null {

@@ -66,6 +66,7 @@ import {
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
+import type { ClassifiedValue } from './session-diff.ts';
 import {
   type SharedCompileContext,
   type ToolCandidate,
@@ -81,6 +82,7 @@ import type { CronConfig, Playbook, Workflow } from './types.ts';
 const STEPS = [
   'record',
   'redact',
+  'replay-and-diff',
   'triage',
   'detect-candidates',
   'generate',
@@ -94,6 +96,7 @@ interface WorkflowState {
   sessionPath: string;
   redactedPath?: string;
   triagedPath?: string;
+  classificationsPath?: string;
   completedSteps: Step[];
   error?: string;
   startedAt: string;
@@ -113,11 +116,17 @@ interface TeachOptions {
   signal?: AbortSignal;
   noInteractive?: boolean;
   provider?: ProviderName;
+  /** Override the compile model (otherwise prompted or auto-detected). */
+  model?: string;
+  /** Per-tool compile timeout in ms. Default 5 minutes. */
+  maxDurationMs?: number;
   fromSession?: string;
   /** Retain parser.test.ts after successful compile-agent verification. */
   keepTest?: boolean;
   /** Non-interactive: compile every detected candidate instead of primary only. */
   allTools?: boolean;
+  /** Skip the replay-and-diff stage entirely. */
+  skipReplay?: boolean;
 }
 
 interface TeachResult {
@@ -498,6 +507,26 @@ export async function promptForTeachProvider(
   }
 }
 
+async function promptForModel(provider: ProviderName): Promise<string> {
+  const { availableModelsForProvider } = await import('./llm.ts');
+  const models = availableModelsForProvider(provider);
+  if (models.length <= 1) return models[0]?.model ?? 'claude-opus-4-7';
+
+  const choice = await p.select({
+    message: 'Which model should compile the workflow?',
+    options: models.map((m) => ({
+      value: m.model,
+      label: m.isDefault ? `${m.model} (default)` : m.model,
+    })),
+    initialValue: models.find((m) => m.isDefault)?.model,
+  });
+  if (p.isCancel(choice)) {
+    p.outro('Cancelled.');
+    process.exit(0);
+  }
+  return String(choice);
+}
+
 // ─── Main teach function ────────────────────────────────────────────────────
 
 export async function teach(opts: TeachOptions): Promise<TeachResult> {
@@ -541,7 +570,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   if (opts.fromSession) {
     const candidateRedacted = opts.fromSession.replace(/\.json$/, '.redacted.json');
-    startFrom = isExistingFile(candidateRedacted) ? 'detect-candidates' : 'redact';
+    startFrom = isExistingFile(candidateRedacted) ? 'replay-and-diff' : 'redact';
     sessionPath = pathResolve(opts.fromSession);
     if (isExistingFile(candidateRedacted)) redactedPath = pathResolve(candidateRedacted);
     usingFromSession = true;
@@ -605,6 +634,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       kind: 'raw',
     });
   } else if (
+    startFrom === 'replay-and-diff' ||
     startFrom === 'triage' ||
     startFrom === 'detect-candidates' ||
     startFrom === 'generate' ||
@@ -719,7 +749,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     redactedPath = sessionPath ? sessionPath.replace(/\.json$/, '.redacted.json') : null;
   }
 
-  if (startIdx <= STEPS.indexOf('compile-playbook')) {
+  if (startIdx <= STEPS.indexOf('generate')) {
     redactedPath = requireSessionFile(redactedPath, {
       site,
       workflowKey,
@@ -728,98 +758,238 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     });
   }
 
-  // ── 2b. Triage — once for all tools ──────────────────────────────
+  // ── 2b+3. Replay || (Triage → Detect → Select) — deep parallelism ──
+  //
+  // replay-and-diff is slow (~2 min) and only needed at compile time.
+  // triage→detect→select is fast (~30s) and independent of replay.
+  // Run them in parallel so the user can select tools while replay runs.
+  let siteClassifications: ClassifiedValue[] | undefined;
   let triageResult: TriageResult | undefined;
   let triagedPath: string | null = null;
-  if (startIdx <= STEPS.indexOf('triage')) {
-    const triageSessionPath = requireSessionFile(redactedPath, {
+  let plans: CandidateCompilePlan[];
+
+  const needsReplay = startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
+  const needsCandidates = startIdx <= STEPS.indexOf('detect-candidates');
+
+  if (opts.skipReplay && startIdx <= STEPS.indexOf('replay-and-diff')) {
+    p.log.warn(
+      "Skipping replay-and-diff stage. The compile agent won't be able to distinguish browser-minted values (timestamps, CSRF tokens) from constants — this may reduce workflow accuracy for sites with ephemeral request parameters.",
+    );
+    updateCheckpoint(site, state, workflowKey, 'replay-and-diff', {});
+  }
+
+  if (needsReplay || needsCandidates) {
+    const replaySessionPath = requireSessionFile(redactedPath, {
       site,
       workflowKey,
       startFrom,
       kind: 'redacted',
     });
-    const triageSession = loadJsonFile(
-      triageSessionPath,
-      SessionSchema,
-      {
-        notFound: 'Redacted session file not found before triage.',
-        badSchema: 'Redacted session file is malformed.',
-      },
-      'session',
-    );
 
-    const providerName = await getProviderName();
-    spinner.start('Triaging requests...');
-    triageResult = await triageRequests(triageSession, { provider: providerName });
-    spinner.stop(
-      `Triaged to ${triageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`,
-    );
+    // Resolve provider eagerly so triage/detect don't block on prompt mid-parallel
+    if (needsCandidates) await getProviderName();
 
-    triagedPath = triageSessionPath.replace(/\.redacted\.json$/, '.triaged.json');
-    writeFileSync(triagedPath, `${JSON.stringify(triageResult.session, null, 2)}\n`, 'utf8');
+    muteLog();
+    try {
+      const mp = new MultiProgress();
 
-    updateCheckpoint(site, state, workflowKey, 'triage', {
-      triagedPath: toRelative(site, triagedPath),
-    });
+      // Branch A: replay-and-diff (slow, ~2 min)
+      const replayPromise = (async () => {
+        if (!needsReplay) {
+          const classPath = pathJoin(localSiteDir(site), '.classifications.json');
+          if (existsSync(classPath)) {
+            try {
+              return JSON.parse(readFileSync(classPath, 'utf8'))
+                .classifications as ClassifiedValue[];
+            } catch {
+              /* proceed without */
+            }
+          }
+          return undefined;
+        }
+        return siteReplayAndDiff(site, replaySessionPath, mp);
+      })();
+
+      // Branch B: triage → detect-candidates → user selection (fast, ~30s)
+      type CandidateChainResult = {
+        triageRes?: { result: TriageResult; sessionPath: string };
+        plans: CandidateCompilePlan[];
+      };
+      const candidatePromise = (async (): Promise<CandidateChainResult> => {
+        if (!needsCandidates) {
+          const ws = state.workflows[workflowKey];
+          return {
+            plans: [
+              {
+                workflowKey,
+                startFrom,
+                candidate: ws?.candidate,
+                sharedContext: ws?.sharedContext,
+              },
+            ],
+          };
+        }
+
+        // ── triage ──
+        let localTriageResult: TriageResult | undefined;
+        let localTriagedPath: string | null = null;
+        if (startIdx <= STEPS.indexOf('triage')) {
+          const triageSession = loadJsonFile(
+            replaySessionPath,
+            SessionSchema,
+            {
+              notFound: 'Redacted session file not found before triage.',
+              badSchema: 'Redacted session file is malformed.',
+            },
+            'session',
+          );
+          const providerName = await getProviderName();
+          mp.pause();
+          mp.clear();
+          spinner.start('Triaging requests...');
+          localTriageResult = await triageRequests(triageSession, { provider: providerName });
+          spinner.stop(
+            `Triaged to ${localTriageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`,
+          );
+          mp.resume();
+
+          localTriagedPath = replaySessionPath.replace(/\.redacted\.json$/, '.triaged.json');
+          writeFileSync(
+            localTriagedPath,
+            `${JSON.stringify(localTriageResult.session, null, 2)}\n`,
+            'utf8',
+          );
+        } else {
+          const ws = state.workflows[workflowKey];
+          if (ws?.triagedPath) {
+            localTriagedPath = resolveTeachStatePath(site, ws.triagedPath);
+          }
+        }
+
+        // ── detect candidates ──
+        const compileSessionPath = requireSessionFile(localTriagedPath ?? redactedPath, {
+          site,
+          workflowKey,
+          startFrom,
+          kind: localTriagedPath ? 'triaged' : 'redacted',
+        });
+        const providerName = await getProviderName();
+        mp.pause();
+        mp.clear();
+        spinner.start('Detecting candidate tools...');
+        const detection = await detectTeachCandidates({
+          sessionPath: compileSessionPath,
+          providerName,
+        });
+        spinner.stop(
+          `Detected ${detection.candidates.length} candidate tool${detection.candidates.length === 1 ? '' : 's'}.`,
+        );
+
+        // ── interactive selection — keep mp paused during prompt ──
+        const selected = await selectTeachCandidates(detection, opts);
+        mp.resume();
+
+        const sharedContext = buildCandidateSharedCompileContext(detection, selected);
+        const pendingKey = workflowKey.startsWith('_pending_') ? workflowKey : null;
+        const rawSessionPath = requireSessionFile(sessionPath, {
+          site,
+          workflowKey,
+          startFrom,
+          kind: 'raw',
+        });
+        const baseState = buildTeachStateFromSession(site, rawSessionPath, redactedPath);
+        const candidatePlans = selected.map((candidate) => {
+          checkpoint(site, state, candidate.toolName, {
+            ...baseState,
+            completedSteps: ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+            candidate,
+            sharedContext,
+          });
+          return {
+            workflowKey: candidate.toolName,
+            startFrom: 'generate' as Step,
+            candidate,
+            sharedContext,
+          };
+        });
+
+        if (pendingKey && state.workflows[pendingKey]) {
+          delete state.workflows[pendingKey];
+          saveTeachState(site, state);
+        }
+
+        return {
+          triageRes: localTriageResult
+            ? { result: localTriageResult, sessionPath: replaySessionPath }
+            : undefined,
+          plans: candidatePlans,
+        };
+      })();
+
+      // Wait for candidate chain (includes user interaction)
+      const candidateResult = await candidatePromise;
+      plans = candidateResult.plans;
+
+      if (candidateResult.triageRes) {
+        triageResult = candidateResult.triageRes.result;
+        triagedPath = candidateResult.triageRes.sessionPath.replace(
+          /\.redacted\.json$/,
+          '.triaged.json',
+        );
+      }
+
+      // Wait for replay — may already be done, or show progress while waiting
+      let replaySettled = false;
+      replayPromise.then(
+        () => {
+          replaySettled = true;
+        },
+        () => {
+          replaySettled = true;
+        },
+      );
+      await new Promise((r) => setTimeout(r, 0));
+      const showedSpinner = !replaySettled;
+      if (showedSpinner) {
+        spinner.start('Waiting for replay to finish...');
+      }
+      siteClassifications = await replayPromise;
+      if (showedSpinner) {
+        spinner.stop('Replay complete.');
+      }
+
+      mp.clear();
+
+      // Checkpoints — write sequentially after both complete
+      if (needsReplay) {
+        updateCheckpoint(site, state, workflowKey, 'replay-and-diff', {
+          classificationsPath: siteClassifications
+            ? toRelative(site, pathJoin(localSiteDir(site), '.classifications.json'))
+            : undefined,
+        });
+      }
+      if (candidateResult.triageRes && triagedPath) {
+        updateCheckpoint(site, state, workflowKey, 'triage', {
+          triagedPath: toRelative(site, triagedPath),
+        });
+      }
+    } finally {
+      unmuteLog();
+    }
   } else {
-    // Resuming from a later step — try to load existing triaged session
+    // Resuming from generate or later — load cached data
+    const classPath = pathJoin(localSiteDir(site), '.classifications.json');
+    if (existsSync(classPath)) {
+      try {
+        siteClassifications = JSON.parse(readFileSync(classPath, 'utf8')).classifications;
+      } catch {
+        /* proceed without */
+      }
+    }
     const ws = state.workflows[workflowKey];
     if (ws?.triagedPath) {
       triagedPath = resolveTeachStatePath(site, ws.triagedPath);
     }
-  }
-
-  // ── 3. Detect and select tool candidates ───────────────────────────
-  let plans: CandidateCompilePlan[];
-  if (startIdx <= STEPS.indexOf('detect-candidates')) {
-    const compileSessionPath = requireSessionFile(triagedPath ?? redactedPath, {
-      site,
-      workflowKey,
-      startFrom,
-      kind: triagedPath ? 'triaged' : 'redacted',
-    });
-    const providerName = await getProviderName();
-    spinner.start('Detecting candidate tools...');
-    const detection = await detectTeachCandidates({
-      sessionPath: compileSessionPath,
-      providerName,
-    });
-    spinner.stop(
-      `Detected ${detection.candidates.length} candidate tool${detection.candidates.length === 1 ? '' : 's'}.`,
-    );
-    const selected = await selectTeachCandidates(detection, opts);
-    const sharedContext = buildCandidateSharedCompileContext(detection, selected);
-
-    const pendingKey = workflowKey.startsWith('_pending_') ? workflowKey : null;
-
-    const rawSessionPath = requireSessionFile(sessionPath, {
-      site,
-      workflowKey,
-      startFrom,
-      kind: 'raw',
-    });
-    const baseState = buildTeachStateFromSession(site, rawSessionPath, redactedPath);
-    plans = selected.map((candidate) => {
-      checkpoint(site, state, candidate.toolName, {
-        ...baseState,
-        completedSteps: ['record', 'redact', 'detect-candidates'],
-        candidate,
-        sharedContext,
-      });
-      return {
-        workflowKey: candidate.toolName,
-        startFrom: 'generate' as Step,
-        candidate,
-        sharedContext,
-      };
-    });
-
-    if (pendingKey && state.workflows[pendingKey]) {
-      delete state.workflows[pendingKey];
-      saveTeachState(site, state);
-    }
-  } else {
-    const ws = state.workflows[workflowKey];
     plans = [
       {
         workflowKey,
@@ -838,16 +1008,30 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     : ('claude-cli' as ProviderName);
   let compileModel = '';
   if (needsCompileProvider) {
-    const { resolveCompileAgentModel } = await import('./compile-agent.ts');
-    compileModel = resolveCompileAgentModel(compileProviderName);
+    if (opts.model) {
+      compileModel = opts.model;
+    } else if (!opts.noInteractive) {
+      compileModel = await promptForModel(compileProviderName);
+    } else {
+      const { resolveCompileAgentModel } = await import('./compile-agent.ts');
+      compileModel = resolveCompileAgentModel(compileProviderName);
+    }
+    const timeoutMs = opts.maxDurationMs ?? 5 * 60 * 1000;
+    const timeoutDisplay =
+      timeoutMs >= 3_600_000
+        ? `${Math.round(timeoutMs / 3_600_000)}h`
+        : timeoutMs >= 60_000
+          ? `${Math.round(timeoutMs / 60_000)}m`
+          : `${Math.round(timeoutMs / 1000)}s`;
     p.note(
       [
         `Provider: ${compileProviderName}    Model: ${compileModel}`,
+        `Timeout: ${timeoutDisplay} per tool`,
         '',
         plans.length === 1
           ? 'An LLM agent will reverse-engineer the API response format.'
           : `${plans.length} LLM compile agents will reverse-engineer selected tools with concurrency 3.`,
-        'Expect ~3-5 minutes per tool and moderate to high token use, depending on',
+        `Expect up to ${timeoutDisplay} per tool and moderate to high token use, depending on`,
         'the complexity of the recording. You can interrupt with Ctrl-C.',
       ].join('\n'),
       'Compile step',
@@ -871,9 +1055,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       sessionPath: compileSessionPath,
       providerName: compileProviderName,
       compileModel,
+      maxDurationMs: opts.maxDurationMs,
       keepTest: opts.keepTest,
       spinner,
       sharedTriageResult: triageResult,
+      siteClassifications,
     });
   } finally {
     if (plans.length > 1) unmuteLog();
@@ -1016,13 +1202,15 @@ async function compileCandidatePlans(opts: {
   sessionPath: string;
   providerName: ProviderName;
   compileModel: string;
+  maxDurationMs?: number;
   keepTest?: boolean;
   spinner: ReturnType<typeof p.spinner>;
   sharedTriageResult?: TriageResult;
+  siteClassifications?: ClassifiedValue[];
 }): Promise<TeachToolResult[]> {
   const concurrency = opts.plans.length === 1 ? 1 : 3;
   const mp = opts.plans.length > 1 ? new MultiProgress() : null;
-  return await mapLimit(opts.plans, concurrency, async (plan) => {
+  const outcomes = await mapLimitSettled(opts.plans, concurrency, async (plan) => {
     const displayName = plan.candidate?.toolName ?? plan.workflowKey;
     let lastActivity = '';
     const onProgress = (progress: CompileAgentProgress): void => {
@@ -1061,12 +1249,37 @@ async function compileCandidatePlans(opts: {
       if (mp) {
         mp.clear();
         mp.remove(displayName);
+        p.log.warn(`${displayName} failed: ${err instanceof Error ? err.message : String(err)}`);
+        mp.render();
       } else {
         opts.spinner.stop(`${displayName} failed.`);
+        p.log.warn(`${err instanceof Error ? err.message : String(err)}`);
       }
       throw err;
     }
   });
+
+  const successes: TeachToolResult[] = [];
+  const failures: string[] = [];
+  for (let i = 0; i < outcomes.length; i++) {
+    const outcome = outcomes[i];
+    const displayName = opts.plans[i]?.candidate?.toolName ?? opts.plans[i]?.workflowKey ?? '?';
+    if (outcome?.ok) {
+      successes.push(outcome.value);
+    } else {
+      const msg = outcome?.error instanceof Error ? outcome.error.message : String(outcome?.error);
+      failures.push(`${displayName}: ${msg.split('\n')[0]}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    p.log.warn(
+      `${successes.length} of ${outcomes.length} tools compiled. ` +
+        `${failures.length} failed:\n${failures.map((f) => `  • ${f}`).join('\n')}`,
+    );
+  }
+
+  return successes;
 }
 
 async function compileSelectedCandidate(opts: {
@@ -1076,9 +1289,11 @@ async function compileSelectedCandidate(opts: {
   sessionPath: string;
   providerName: ProviderName;
   compileModel: string;
+  maxDurationMs?: number;
   keepTest?: boolean;
   onProgress: (progress: CompileAgentProgress) => void;
   sharedTriageResult?: TriageResult;
+  siteClassifications?: ClassifiedValue[];
 }): Promise<TeachToolResult> {
   const { plan, site, state } = opts;
   const startIdx = STEPS.indexOf(plan.startFrom);
@@ -1086,16 +1301,19 @@ async function compileSelectedCandidate(opts: {
   const workflowDir = localToolDir(site, toolName);
   mkdirSync(workflowDir, { recursive: true });
 
+  // ── Step 1: generate (workflow.json, enriched with site-level classifications) ──
   let genResult: { workflow: Workflow; workflowPath: string };
   if (startIdx <= STEPS.indexOf('generate')) {
     const result = await generate({
       sessionPath: opts.sessionPath,
       outDir: workflowDir,
+      maxDurationMs: opts.maxDurationMs,
       llmConfig: { provider: opts.providerName, model: opts.compileModel },
       keepTest: opts.keepTest,
       candidate: plan.candidate,
       sharedContext: plan.sharedContext,
       onProgress: opts.onProgress,
+      classifications: opts.siteClassifications,
     });
     assertCandidateToolName('Compiled workflow', result.workflow.toolName, plan.candidate);
     genResult = { workflow: result.workflow, workflowPath: result.workflowPath };
@@ -1114,6 +1332,7 @@ async function compileSelectedCandidate(opts: {
     genResult = { workflow, workflowPath };
   }
 
+  // ── Step 2: compile-playbook (after generate — runtime artifact, not needed for dual-pass) ──
   let pbResult: { playbook: Playbook; playbookPath: string };
   if (startIdx <= STEPS.indexOf('compile-playbook')) {
     const result = await compilePlaybook({
@@ -1135,6 +1354,7 @@ async function compileSelectedCandidate(opts: {
     pbResult = { playbook, playbookPath };
   }
 
+  // ── Step 3: emit ──
   let emitOutPath: string;
   if (startIdx <= STEPS.indexOf('emit')) {
     const emitResult = emit({
@@ -1161,6 +1381,96 @@ async function compileSelectedCandidate(opts: {
   };
 }
 
+/**
+ * Site-level replay-and-diff: replay the entire original recording in a fresh
+ * browser, capture all requests, diff against the original to classify values.
+ * Runs once per teach, not per-tool.
+ */
+async function siteReplayAndDiff(
+  site: string,
+  sessionPath: string,
+  mp: MultiProgress,
+): Promise<ClassifiedValue[] | undefined> {
+  try {
+    const { replayRawSession } = await import('./replay-capture.ts');
+    const { diffTriagedSessions, triageByAlignment } = await import('./session-diff.ts');
+
+    const session = loadJsonFile(
+      sessionPath,
+      SessionSchema,
+      { notFound: 'Session not found for replay.' },
+      'session',
+    );
+
+    mp.update('replay', 'Replaying session in fresh browser...');
+    const replayResult = await replayRawSession({
+      session,
+      site,
+      onProgress: (current, total, captured) => {
+        mp.update('replay', `Replaying event ${current}/${total} (${captured} requests captured)`);
+      },
+    });
+
+    let replayRequests = replayResult.requests;
+
+    if (!replayResult.ok) {
+      mp.clear();
+      mp.remove('replay');
+      p.log.warn(`Automated replay failed: ${replayResult.error}`);
+      p.log.info(
+        'Recording the same flow again in a fresh browser for dual-pass analysis.\n' +
+          'No narration needed — just repeat the same actions, then close the browser.',
+      );
+      mp.render();
+
+      const recordResult = await record({ site, url: session.url });
+      const secondSession = loadJsonFile(
+        recordResult.sessionPath,
+        SessionSchema,
+        { notFound: 'Second recording session not found.' },
+        'session',
+      );
+
+      replayRequests = secondSession.requests;
+    }
+
+    mp.update('replay', 'Diffing replay against original...');
+
+    const triaged2Seqs = triageByAlignment(session.requests, replayRequests);
+    const triaged2Requests = replayRequests.filter((r) => triaged2Seqs.includes(r.seq));
+    const diffResult = diffTriagedSessions(session, { requests: triaged2Requests });
+
+    const classPath = pathJoin(localSiteDir(site), '.classifications.json');
+    writeFileSync(classPath, JSON.stringify(diffResult, null, 2));
+
+    mp.clear();
+    mp.remove('replay');
+
+    const nonConstant = diffResult.classifications.filter((c) => c.classification !== 'constant');
+    if (nonConstant.length > 0) {
+      const counts: Record<string, number> = {};
+      for (const c of nonConstant) counts[c.classification] = (counts[c.classification] ?? 0) + 1;
+      const breakdown = Object.entries(counts)
+        .map(([k, v]) => `${v} ${k}`)
+        .join(', ');
+      p.log.info(
+        `Dual-pass: ${nonConstant.length} ephemeral values (${breakdown}). ${replayRequests.length} requests captured.`,
+      );
+    } else {
+      p.log.info(`Dual-pass: all values constant. ${replayRequests.length} requests captured.`);
+    }
+
+    mp.render();
+    return diffResult.classifications;
+  } catch (err) {
+    mp.clear();
+    mp.remove('replay');
+    p.log.warn(`Dual-pass analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+    mp.render();
+    return undefined;
+  }
+}
+
 export async function mapLimit<T, R>(
   items: T[],
   concurrency: number,
@@ -1183,6 +1493,31 @@ export async function mapLimit<T, R>(
   });
   await Promise.allSettled(workers);
   if (firstError !== undefined) throw firstError;
+  return results;
+}
+
+type SettledResult<R> = { ok: true; value: R } | { ok: false; error: unknown };
+
+export async function mapLimitSettled<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<SettledResult<R>[]> {
+  const results = new Array<SettledResult<R>>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      const item = items[index];
+      if (item === undefined) continue;
+      try {
+        results[index] = { ok: true, value: await fn(item) };
+      } catch (err) {
+        results[index] = { ok: false, error: err };
+      }
+    }
+  });
+  await Promise.allSettled(workers);
   return results;
 }
 

@@ -47,7 +47,7 @@ Both are auto-discovered by the cron daemon and the MCP server, which dispatch t
 ```
 src/imprint/
 │ ── Orchestration ──
-├── teach.ts             End-to-end pipeline: record → redact → triage → generate → emit → register
+├── teach.ts             End-to-end pipeline: record → redact → [replay-and-diff ‖ triage → detect → select] → generate → compile-playbook → emit → register
 ├── integrations.ts      Platform registration (Claude Code, Codex, Claude Desktop, OpenClaw, Hermes)
 │
 │ ── Capture ──
@@ -59,6 +59,10 @@ src/imprint/
 ├── sensitive-keys.ts    Sensitive credential key lists for extraction + redaction
 ├── credential-extract.ts  Automatic login-pair detection + redaction mapping from sessions
 ├── check.ts             Sanity-check captured sessions
+│
+│ ── Dual-pass replay ──
+├── replay-capture.ts    Raw DOM event replay in fresh browser for dual-pass analysis
+├── session-diff.ts      Request alignment + value classification (constant/server_derived/browser_minted)
 │
 │ ── Compile ──
 ├── compile.ts           LLM compiler entry points: generate() + compilePlaybook()

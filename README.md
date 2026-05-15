@@ -130,6 +130,8 @@ Shows which providers are detected. Interactive `imprint teach` prompts you to c
 
 To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. `teach` and `generate` require a compile-agent provider (`claude-cli`, `codex-cli`, `anthropic-api`, or `vertex`); `compile-playbook` can also use `cursor-cli`.
 
+After selecting a provider, `teach` prompts for a **model** (e.g. `claude-opus-4-7` vs `claude-sonnet-4-6` for Anthropic, `gpt-5.4` vs `o3` for Codex). Override with `--model <name>`. Each tool compiles with a **5-minute timeout** by default; override with `--timeout <duration>` (e.g. `--timeout 10m`, `--timeout 1h`). To skip the replay-and-diff stage (the automated second pass that classifies ephemeral vs constant values), pass `--skip-replay` — faster, but may reduce workflow accuracy for sites with dynamic request parameters.
+
 <br>
 
 ## Local compile tracing
