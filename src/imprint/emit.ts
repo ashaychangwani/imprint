@@ -1,9 +1,10 @@
 /** `imprint emit` — generate <assetRoot>/<site>/<toolName>/index.ts: a thin wrapper
  *  around runtime.executeWorkflow with the workflow JSON embedded inline. */
 
-import { existsSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { loadJsonFile } from './load-json.ts';
+import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import { type Workflow, WorkflowSchema } from './types.ts';
 
 interface EmitOptions {
@@ -48,9 +49,9 @@ export function emit(opts: EmitOptions): EmitResult {
 
   // Ensure IMPRINT_HOME has a node_modules/imprint symlink so generated
   // tools can `import 'imprint/runtime'` via standard module resolution.
-  // The symlink survives worktree deletion — only needs updating when the
-  // imprint source tree moves (re-run `bun link && imprint emit --force`).
-  ensureImprintSymlink(outDir);
+  // discoverTools also calls this at runtime so dangling links self-heal
+  // without re-emitting.
+  ensureImprintRuntimeLink(pathResolve(outDir, '..', '..'));
 
   const source = renderModule(workflow);
   writeFileSync(outPath, source, 'utf8');
@@ -67,24 +68,6 @@ function defaultOutDir(workflowPath: string, workflow: Workflow): string {
   const workflowDir = pathResolve(dirname(workflowPath));
   if (basename(workflowDir) === workflow.toolName) return workflowDir;
   return pathJoin(workflowDir, workflow.toolName);
-}
-
-function ensureImprintSymlink(outDir: string): void {
-  const repoRoot = pathResolve(import.meta.dir, '..', '..');
-  // Walk up from outDir to find the IMPRINT_HOME root (the directory
-  // containing sites). For ~/.imprint/<site>/<tool>/, that's ~/.imprint/.
-  // For examples/<site>/<tool>/, that's examples/.
-  const imprintHome = pathResolve(outDir, '..', '..');
-  const nodeModulesDir = pathJoin(imprintHome, 'node_modules');
-  const symlinkPath = pathJoin(nodeModulesDir, 'imprint');
-  try {
-    mkdirSync(nodeModulesDir, { recursive: true });
-    // Remove stale symlink if it points elsewhere
-    if (existsSync(symlinkPath)) unlinkSync(symlinkPath);
-    symlinkSync(repoRoot, symlinkPath, 'dir');
-  } catch {
-    // Non-fatal — relative-path fallback will be used if this fails.
-  }
 }
 
 function renderModule(workflow: Workflow): string {

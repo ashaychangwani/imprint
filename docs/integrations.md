@@ -169,7 +169,7 @@ Add to `~/.openclaw/openclaw.json` under the `mcp.servers` key:
 
 The SKILL.md is written to `./imprint-mysite/SKILL.md` (ready for `openclaw skill install ./imprint-mysite`).
 
-Generated skill folders are portable — just install the `imprint` package on the receiving machine via `npm install imprint` or `bun install imprint`. The generated `index.ts` imports from `imprint/runtime` via a node_modules symlink managed by emit, not a local checkout path.
+Generated skill folders are portable — just install the `imprint` package on the receiving machine via `npm install imprint` or `bun install imprint`. The generated `index.ts` imports from `imprint/runtime` via a node_modules symlink that Imprint maintains automatically (created at `emit`, self-healed at runtime), not a local checkout path.
 
 ### Publishing to ClawHub
 

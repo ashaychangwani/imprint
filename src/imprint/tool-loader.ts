@@ -4,6 +4,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
 import { z } from 'zod';
+import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { ToolResult, Workflow, WorkflowParameter } from './types.ts';
 
 type GeneratedToolFn = (
@@ -33,6 +34,10 @@ export async function discoverTools(
   logPrefix = '[imprint]',
 ): Promise<ResolvedTool[]> {
   if (!existsSync(assetRoot)) return [];
+  // Self-heal the node_modules/imprint symlink so generated tools' import
+  // of `imprint/runtime` resolves even when the original codegen-time
+  // repo path has moved or vanished (e.g. ephemeral Conductor workspace).
+  ensureImprintRuntimeLink(assetRoot);
   const entries = readdirSync(assetRoot);
   const out: ResolvedTool[] = [];
   for (const entry of entries) {

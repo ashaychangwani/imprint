@@ -13,7 +13,7 @@ Credential metadata (which secrets a site needs, their descriptions) is stored l
 
 The *values* of those credentials live in the local credential manager on each machine that runs the skill. That can include named secrets, cookies captured by `imprint login`, and declared durable browser-storage keys. There are two supported provisioning paths.
 
-Generated `index.ts` modules import Imprint's runtime via `imprint/runtime` (a node_modules symlink managed by emit). Skill folders are portable — just install the `imprint` package on the receiving machine via `npm install imprint` or `bun install imprint`.
+Generated `index.ts` modules import Imprint's runtime via `imprint/runtime` (a node_modules symlink that Imprint maintains automatically — created on `emit`, self-healed at runtime if the link goes stale). Skill folders are portable — just install the `imprint` package on the receiving machine via `npm install imprint` or `bun install imprint`.
 
 ## Path A — interactive provisioning on the agent (simplest)
 
