@@ -6,6 +6,7 @@ Names you'll see in code, docs, and CLI output.
 |---|---|
 | **Site** | The organizing label for a group of recordings and tools. Chosen by the user during `imprint teach` or `imprint record` — becomes the directory name at `~/.imprint/<site>/`. |
 | **IMPRINT_HOME** | Environment variable that overrides the default `~/.imprint` root directory. Set this to relocate all Imprint data (sessions, tools, cron configs). |
+| **IMPRINT_KEEP_TEST** | Environment variable (`=1` to enable). Retains the agent-generated `parser.test.ts` and `integration.test.ts` after compilation succeeds. Equivalent to the `--keep-test` CLI flag on `teach` and `generate`. Useful when you always want to inspect compile-agent test output without passing the flag every time. |
 | **MCP** | Model Context Protocol — the standard interface Imprint tools expose. AI agents (Claude Code, Codex, etc.) communicate with `imprint mcp-server` over stdio or HTTP to invoke generated tools. |
 | **Provider** | An LLM provider used by compile commands: `anthropic-api` (direct API), `vertex` (GCP Vertex), `claude-cli` (Claude Code CLI), `codex-cli` (Codex CLI), `cursor-cli` (Cursor CLI — playbook compilation only). |
 | **Session** | A captured browser run: every network request + every DOM event + the user's narration. On disk: `~/.imprint/<site>/sessions/<ts>.{jsonl,json}`. |
