@@ -10,7 +10,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
-import type { Span } from '@opentelemetry/api';
+import { type Span, context as otelContext } from '@opentelemetry/api';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
@@ -270,6 +270,12 @@ async function driveJsonl(
   opts: CompileViaCodexCliOptions,
   traceSpan?: Span,
 ): Promise<CompileAgentResult> {
+  // Capture OTel context so child-process event handlers can parent spans
+  // under the current compile.codex_cli_agent span. Bun's event emitters
+  // don't propagate AsyncLocalStorage, so without this the agent.turn.*
+  // spans appear as orphaned root traces in Phoenix.
+  const parentCtx = otelContext.active();
+
   const conversationLog: unknown[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
@@ -324,88 +330,92 @@ async function driveJsonl(
 
   let stdoutBuf = '';
   child.stdout?.on('data', (chunk: Buffer) => {
-    stdoutBuf += chunk.toString('utf8');
-    while (true) {
-      const nl = stdoutBuf.indexOf('\n');
-      if (nl < 0) break;
-      const line = stdoutBuf.slice(0, nl).trim();
-      stdoutBuf = stdoutBuf.slice(nl + 1);
-      if (!line) continue;
+    otelContext.with(parentCtx, () => {
+      stdoutBuf += chunk.toString('utf8');
+      while (true) {
+        const nl = stdoutBuf.indexOf('\n');
+        if (nl < 0) break;
+        const line = stdoutBuf.slice(0, nl).trim();
+        stdoutBuf = stdoutBuf.slice(nl + 1);
+        if (!line) continue;
 
-      let evt: CodexJsonEvent;
-      try {
-        evt = JSON.parse(line) as CodexJsonEvent;
-      } catch (err) {
-        log(`unparseable jsonl line: ${errMsg(err)}`);
-        continue;
-      }
-
-      conversationLog.push(evt);
-
-      if (evt.type === 'thread.started') {
-        log(`thread_id=${evt.thread_id ?? '(none)'}`);
-        setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
-        continue;
-      }
-
-      if (evt.type === 'turn.started') {
-        if (currentTurnSpan) endTraceSpan(currentTurnSpan);
-        turn++;
-        currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
-          'imprint.agent.turn': turn,
-          'imprint.agent.cumulative_input_tokens': inputTokens,
-          'imprint.agent.cumulative_output_tokens': outputTokens,
-        });
-        fireProgress('thinking');
-        continue;
-      }
-
-      if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
-        const agentMessage = codexAgentMessageText(evt.item);
-        if (agentMessage && evt.type === 'item.completed') {
-          agentMessageCount++;
-          setSpanAttributes(traceSpan, {
-            'imprint.codex.agent_messages': agentMessageCount,
-            'imprint.codex.last_agent_message_chars': agentMessage.length,
-            ...(traceLlmIoEnabled()
-              ? llmSpanAttributes({
-                  provider: 'codex-cli',
-                  model: preferredAgentModel('codex-cli'),
-                  outputMessages: traceLlmMessages([{ role: 'assistant', content: agentMessage }]),
-                  outputValue: agentMessage,
-                })
-              : {}),
-          });
+        let evt: CodexJsonEvent;
+        try {
+          evt = JSON.parse(line) as CodexJsonEvent;
+        } catch (err) {
+          log(`unparseable jsonl line: ${errMsg(err)}`);
           continue;
         }
-        const toolName = codexToolName(evt.item);
-        if (toolName) {
-          traceCodexToolEvent(toolSpans, evt.type, evt.item, toolName);
-          fireProgress(evt.type === 'item.started' ? 'tool' : 'thinking', toolName);
-        }
-        continue;
-      }
 
-      if (evt.type === 'turn.completed') {
-        const turnInput = evt.usage?.input_tokens ?? 0;
-        const turnOutput = evt.usage?.output_tokens ?? 0;
-        inputTokens += turnInput;
-        outputTokens += turnOutput;
-        if (currentTurnSpan) {
-          setSpanAttributes(currentTurnSpan, {
-            'imprint.agent.turn_input_tokens': turnInput,
-            'imprint.agent.turn_output_tokens': turnOutput,
+        conversationLog.push(evt);
+
+        if (evt.type === 'thread.started') {
+          log(`thread_id=${evt.thread_id ?? '(none)'}`);
+          setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
+          continue;
+        }
+
+        if (evt.type === 'turn.started') {
+          if (currentTurnSpan) endTraceSpan(currentTurnSpan);
+          turn++;
+          currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
+            'imprint.agent.turn': turn,
+            'imprint.agent.cumulative_input_tokens': inputTokens,
+            'imprint.agent.cumulative_output_tokens': outputTokens,
           });
-          endTraceSpan(currentTurnSpan);
-          currentTurnSpan = null;
+          fireProgress('thinking');
+          continue;
         }
-        continue;
-      }
 
-      if (evt.type === 'error' || evt.type === 'turn.failed') {
-        lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
+        if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
+          const agentMessage = codexAgentMessageText(evt.item);
+          if (agentMessage && evt.type === 'item.completed') {
+            agentMessageCount++;
+            setSpanAttributes(traceSpan, {
+              'imprint.codex.agent_messages': agentMessageCount,
+              'imprint.codex.last_agent_message_chars': agentMessage.length,
+              ...(traceLlmIoEnabled()
+                ? llmSpanAttributes({
+                    provider: 'codex-cli',
+                    model: preferredAgentModel('codex-cli'),
+                    outputMessages: traceLlmMessages([
+                      { role: 'assistant', content: agentMessage },
+                    ]),
+                    outputValue: agentMessage,
+                  })
+                : {}),
+            });
+            continue;
+          }
+          const toolName = codexToolName(evt.item);
+          if (toolName) {
+            traceCodexToolEvent(toolSpans, evt.type, evt.item, toolName);
+            fireProgress(evt.type === 'item.started' ? 'tool' : 'thinking', toolName);
+          }
+          continue;
+        }
+
+        if (evt.type === 'turn.completed') {
+          const turnInput = evt.usage?.input_tokens ?? 0;
+          const turnOutput = evt.usage?.output_tokens ?? 0;
+          inputTokens += turnInput;
+          outputTokens += turnOutput;
+          if (currentTurnSpan) {
+            setSpanAttributes(currentTurnSpan, {
+              'imprint.agent.turn_input_tokens': turnInput,
+              'imprint.agent.turn_output_tokens': turnOutput,
+            });
+            endTraceSpan(currentTurnSpan);
+            currentTurnSpan = null;
+          }
+          continue;
+        }
+
+        if (evt.type === 'error' || evt.type === 'turn.failed') {
+          lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
+        }
       }
-    }
+    });
   });
 
   child.stderr?.on('data', (chunk: Buffer) => {

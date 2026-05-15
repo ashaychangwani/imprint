@@ -27,7 +27,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
-import type { Span } from '@opentelemetry/api';
+import { type Span, context as otelContext } from '@opentelemetry/api';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
@@ -234,6 +234,12 @@ async function driveStreamJson(
   child: ChildProcess,
   opts: CompileViaClaudeCliOptions,
 ): Promise<CompileAgentResult> {
+  // Capture OTel context so child-process event handlers can parent spans
+  // under the current compile.claude_cli_agent span. Bun's event emitters
+  // don't propagate AsyncLocalStorage, so without this the agent.turn.*
+  // spans appear as orphaned root traces in Phoenix.
+  const parentCtx = otelContext.active();
+
   const conversationLog: unknown[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
@@ -279,87 +285,89 @@ async function driveStreamJson(
   // Stdout: newline-delimited stream-json events.
   let stdoutBuf = '';
   child.stdout?.on('data', (chunk: Buffer) => {
-    stdoutBuf += chunk.toString('utf8');
-    while (true) {
-      const nl = stdoutBuf.indexOf('\n');
-      if (nl < 0) break;
-      const line = stdoutBuf.slice(0, nl).trim();
-      stdoutBuf = stdoutBuf.slice(nl + 1);
-      if (!line) continue;
+    otelContext.with(parentCtx, () => {
+      stdoutBuf += chunk.toString('utf8');
+      while (true) {
+        const nl = stdoutBuf.indexOf('\n');
+        if (nl < 0) break;
+        const line = stdoutBuf.slice(0, nl).trim();
+        stdoutBuf = stdoutBuf.slice(nl + 1);
+        if (!line) continue;
 
-      let evt: StreamJsonEvent;
-      try {
-        evt = JSON.parse(line);
-      } catch (err) {
-        log(`unparseable stream-json line: ${err instanceof Error ? err.message : String(err)}`);
-        continue;
-      }
-
-      conversationLog.push(evt);
-
-      // Token accounting from any event that carries usage.
-      const evtInputTokens =
-        (evt.usage?.input_tokens ?? 0) + (evt.message?.usage?.input_tokens ?? 0);
-      const evtOutputTokens =
-        (evt.usage?.output_tokens ?? 0) + (evt.message?.usage?.output_tokens ?? 0);
-      if (evtInputTokens || evtOutputTokens) {
-        inputTokens += evtInputTokens;
-        outputTokens += evtOutputTokens;
-        turnInputTokens += evtInputTokens;
-        turnOutputTokens += evtOutputTokens;
-      }
-
-      if (evt.type === 'system' && evt.subtype === 'init') {
-        log(`session_id=${evt.session_id ?? '(none)'}`);
-        continue;
-      }
-
-      if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
-        if (currentTurnSpan) {
-          setSpanAttributes(currentTurnSpan, {
-            'imprint.agent.turn_input_tokens': turnInputTokens,
-            'imprint.agent.turn_output_tokens': turnOutputTokens,
-          });
-          endTraceSpan(currentTurnSpan);
+        let evt: StreamJsonEvent;
+        try {
+          evt = JSON.parse(line);
+        } catch (err) {
+          log(`unparseable stream-json line: ${err instanceof Error ? err.message : String(err)}`);
+          continue;
         }
-        turn++;
-        turnInputTokens = 0;
-        turnOutputTokens = 0;
-        currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
-          'imprint.agent.turn': turn,
-          'imprint.agent.cumulative_input_tokens': inputTokens,
-          'imprint.agent.cumulative_output_tokens': outputTokens,
-        });
-        fireProgress('thinking');
-        for (const block of evt.message.content) {
-          if (block && (block as { type?: string }).type === 'tool_use') {
-            const fullName = (block as { name?: string }).name ?? '(unknown)';
-            // Strip mcp__<server>__ prefix for human-readable progress.
-            const short = fullName.replace(`mcp__${MCP_SERVER_NAME}__`, '');
-            fireProgress('tool', short);
+
+        conversationLog.push(evt);
+
+        // Token accounting from any event that carries usage.
+        const evtInputTokens =
+          (evt.usage?.input_tokens ?? 0) + (evt.message?.usage?.input_tokens ?? 0);
+        const evtOutputTokens =
+          (evt.usage?.output_tokens ?? 0) + (evt.message?.usage?.output_tokens ?? 0);
+        if (evtInputTokens || evtOutputTokens) {
+          inputTokens += evtInputTokens;
+          outputTokens += evtOutputTokens;
+          turnInputTokens += evtInputTokens;
+          turnOutputTokens += evtOutputTokens;
+        }
+
+        if (evt.type === 'system' && evt.subtype === 'init') {
+          log(`session_id=${evt.session_id ?? '(none)'}`);
+          continue;
+        }
+
+        if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
+          if (currentTurnSpan) {
+            setSpanAttributes(currentTurnSpan, {
+              'imprint.agent.turn_input_tokens': turnInputTokens,
+              'imprint.agent.turn_output_tokens': turnOutputTokens,
+            });
+            endTraceSpan(currentTurnSpan);
           }
+          turn++;
+          turnInputTokens = 0;
+          turnOutputTokens = 0;
+          currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
+            'imprint.agent.turn': turn,
+            'imprint.agent.cumulative_input_tokens': inputTokens,
+            'imprint.agent.cumulative_output_tokens': outputTokens,
+          });
+          fireProgress('thinking');
+          for (const block of evt.message.content) {
+            if (block && (block as { type?: string }).type === 'tool_use') {
+              const fullName = (block as { name?: string }).name ?? '(unknown)';
+              // Strip mcp__<server>__ prefix for human-readable progress.
+              const short = fullName.replace(`mcp__${MCP_SERVER_NAME}__`, '');
+              fireProgress('tool', short);
+            }
+          }
+          continue;
         }
-        continue;
-      }
 
-      if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
-        // Tool result envelope. Nothing to surface here — onProgress already
-        // fired when we saw the matching tool_use.
-        continue;
-      }
-
-      if (evt.type === 'result') {
-        // Terminal event from claude-cli. Capture any final usage and break.
-        if (evt.is_error) {
-          lastErrorEvent = evt;
+        if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
+          // Tool result envelope. Nothing to surface here — onProgress already
+          // fired when we saw the matching tool_use.
+          continue;
         }
-        continue;
-      }
 
-      if (evt.type === 'system' && evt.subtype === 'api_retry') {
-        log(`api_retry: ${(evt as { error?: string }).error ?? '(unknown)'}`);
+        if (evt.type === 'result') {
+          // Terminal event from claude-cli. Capture any final usage and break.
+          if (evt.is_error) {
+            lastErrorEvent = evt;
+          }
+          continue;
+        }
+
+        if (evt.type === 'system' && evt.subtype === 'api_retry') {
+          log(`api_retry: ${(evt as { error?: string }).error ?? '(unknown)'}`);
+        }
       }
-    }
+    });
   });
 
   child.stderr?.on('data', (chunk: Buffer) => {
