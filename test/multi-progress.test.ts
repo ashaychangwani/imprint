@@ -47,9 +47,7 @@ describe('MultiProgress', () => {
 
     mp.update('tool1', 'tool1: running');
     expect(writes).toHaveLength(1);
-    expect(writes[0]).toBe(
-      '\x1b8\x1b7\x1b[Jtool1: running\ntool2: thinking\n',
-    );
+    expect(writes[0]).toBe('\x1b8\x1b7\x1b[Jtool1: running\ntool2: thinking\n');
   });
 
   it('clear: restore + erase, resets cursorSaved', () => {
@@ -100,7 +98,7 @@ describe('MultiProgress', () => {
 
     mp.update('a', 'line-a-v2');
     expect(writes).toHaveLength(1);
-    const out = writes[0]!;
+    const out = writes[0] as string;
     expect(out).toStartWith('\x1b8\x1b7\x1b[J');
     expect(out).toContain('line-a-v2');
     expect(out).toContain('line-c');
