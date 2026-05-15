@@ -48,6 +48,13 @@ function validateTracingUrl(raw: string | undefined): string | undefined {
 function ensureTracingInitialized(): void {
   if (attemptedInit || !isTracingEnabled()) return;
   attemptedInit = true;
+  // The OTEL SDK default is 128 attributes per span. getLLMAttributes() flattens
+  // each input message into ~2+ attributes (role, content, tool_calls…), so a
+  // 60-message conversation exceeds the cap and silently drops later attributes
+  // including token_count and finish_reason. Bump to 1000 to avoid this.
+  if (!process.env.OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT) {
+    process.env.OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT = '1000';
+  }
   const url = validateTracingUrl(
     process.env.PHOENIX_COLLECTOR_ENDPOINT ?? process.env.PHOENIX_HOST,
   );
