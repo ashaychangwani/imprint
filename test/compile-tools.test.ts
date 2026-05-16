@@ -300,7 +300,7 @@ describe('extract', () => {
         'utf8',
       );
 
-      const failures = await externalVerification(exampleDir, session, sessionPath);
+      const { failures } = await externalVerification(exampleDir, session, sessionPath);
       expect(failures.some((failure) => failure.includes('failed typecheck'))).toBe(true);
     } finally {
       rmSync(exampleDir, { recursive: true, force: true });

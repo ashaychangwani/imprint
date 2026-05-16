@@ -292,13 +292,20 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     // Perform external verification
-    const failures = await externalVerification(absoluteToolDir, session, sessionPathAbs, {
+    const { failures, warnings } = await externalVerification(absoluteToolDir, session, sessionPathAbs, {
       expectedToolName: opts.candidate?.toolName,
     });
 
+    if (warnings.length > 0) {
+      log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
+    }
+
     if (failures.length === 0) {
-      // Success
+      // Success (possibly with warnings)
       message = result.doneSummary ?? 'Task completed';
+      if (warnings.length > 0) {
+        message += `\n\nWarnings:\n${warnings.join('\n')}`;
+      }
       if (!opts.keepTest) {
         for (const f of ['parser.test.ts', 'integration.test.ts']) {
           const testPath = pathJoin(absoluteToolDir, f);
