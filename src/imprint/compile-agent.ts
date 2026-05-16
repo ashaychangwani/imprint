@@ -292,9 +292,14 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     // Perform external verification
-    const { failures, warnings } = await externalVerification(absoluteToolDir, session, sessionPathAbs, {
-      expectedToolName: opts.candidate?.toolName,
-    });
+    const { failures, warnings } = await externalVerification(
+      absoluteToolDir,
+      session,
+      sessionPathAbs,
+      {
+        expectedToolName: opts.candidate?.toolName,
+      },
+    );
 
     if (warnings.length > 0) {
       log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);

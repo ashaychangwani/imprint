@@ -547,7 +547,10 @@ function buildReadFileTool(toolDir: string): AgentTool {
     input_schema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Relative path within the tool directory (e.g. parser.ts, workflow.json)' },
+        path: {
+          type: 'string',
+          description: 'Relative path within the tool directory (e.g. parser.ts, workflow.json)',
+        },
       },
       required: ['path'],
     },
@@ -913,7 +916,8 @@ export async function externalVerification(
     }
     if (!integrationPassed) {
       const combined = `${lastOutput.stdout}\n${lastOutput.stderr}`;
-      const botDetectionPatterns = /\b(403|429|PerimeterX|DataDome|Akamai|captcha|challenge|blocked|rate.?limit)/i;
+      const botDetectionPatterns =
+        /\b(403|429|PerimeterX|DataDome|Akamai|captcha|challenge|blocked|rate.?limit)/i;
       if (botDetectionPatterns.test(combined)) {
         warnings.push(
           `integration test failed with likely bot-detection or rate-limiting (tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,

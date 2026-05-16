@@ -136,9 +136,14 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     if (name === 'done') {
       const summary = (args as { summary?: string }).summary ?? 'Task completed';
       log(`done() called: ${summary}`);
-      const { failures, warnings } = await externalVerification(opts.toolDir, session, opts.sessionPath, {
-        expectedToolName: opts.candidate?.toolName,
-      });
+      const { failures, warnings } = await externalVerification(
+        opts.toolDir,
+        session,
+        opts.sessionPath,
+        {
+          expectedToolName: opts.candidate?.toolName,
+        },
+      );
       if (warnings.length > 0) {
         log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
       }
@@ -146,7 +151,11 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
         const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
         writeFileSync(
           sentinel,
-          JSON.stringify({ summary, verification: 'passed', warnings, timestamp: Date.now() }, null, 2),
+          JSON.stringify(
+            { summary, verification: 'passed', warnings, timestamp: Date.now() },
+            null,
+            2,
+          ),
           'utf8',
         );
         log(`verification passed; wrote ${sentinel}`);
