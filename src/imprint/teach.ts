@@ -286,10 +286,7 @@ function discoverOrphanSession(site: string, state: TeachState): WorkflowState |
   for (const sessDir of [localSessionsDir(site), pathResolve('examples', site, 'sessions')]) {
     if (!existsSync(sessDir)) continue;
     const sessions = readdirSync(sessDir).filter(
-      (f) =>
-        f.endsWith('.json') &&
-        !f.includes('.redacted') &&
-        !f.includes('.triaged'),
+      (f) => f.endsWith('.json') && !f.includes('.redacted') && !f.includes('.triaged'),
     );
     for (const file of sessions) candidates.push({ absPath: pathJoin(sessDir, file), file });
   }
