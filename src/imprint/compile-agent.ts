@@ -52,7 +52,7 @@ export function resolveCompileAgentModel(provider: ProviderName): string {
 interface CompileAgentOptions {
   /** Path to the recorded session JSON (absolute or relative). */
   sessionPath: string;
-  /** Hard wall-clock budget. Default 5 minutes. */
+  /** Hard wall-clock budget. Default 10 minutes. */
   maxDurationMs?: number;
   /** Override LLM config (region, model, project). */
   llmConfig?: LLMOptions;
@@ -191,7 +191,7 @@ ${formatCandidateContext(opts.candidate, opts.sharedContext)}
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
 
   // 7. Compute deadline
-  const deadlineMs = Date.now() + (opts.maxDurationMs ?? 5 * 60 * 1000);
+  const deadlineMs = Date.now() + (opts.maxDurationMs ?? 10 * 60 * 1000);
 
   // 8. Instantiate provider (or use injected one for testing).
   //    CLI providers take a different path: they don't implement Anthropic

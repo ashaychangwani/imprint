@@ -66,3 +66,10 @@ Rules:
     intent (e.g. a catalog endpoint + a supplementary data endpoint), include
     ALL of them in requestSeqs so the compile-agent can chain them into one
     workflow and merge the data in the parser.
+14. Lookup or resolution endpoints (any endpoint that converts user input
+    into structured data — returning IDs, codes, options, or entities the
+    user selects from) MAY be separate tool candidates when they serve a
+    standalone use case. Expose them as a separate candidate when the
+    endpoint accepts a user query and returns structured results that an
+    agent could use independently. Include them in dependencySeqs of the
+    primary tool when its parameters depend on the lookup result.

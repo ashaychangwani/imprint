@@ -91,7 +91,7 @@ Stateful workflows still run through the same generated tool. If a request sets 
 imprint teach google-flights --provider vertex --model claude-sonnet-4-6 --timeout 10m
 ```
 
-Each tool has a **5-minute compile timeout** by default. If your site is complex or the compile agent needs more time for verification, increase it with `--timeout`. If a tool fails to compile (e.g. timeout or bot defense), the other tools in the same recording still compile successfully.
+Each tool has a **10-minute compile timeout** by default. If your site is complex or the compile agent needs more time for verification, increase it with `--timeout`. If a tool fails to compile (e.g. timeout or bot defense), the other tools in the same recording still compile successfully.
 
 To skip the replay-and-diff stage (the automated second pass that classifies values as constant vs browser-minted), add `--skip-replay`. This is faster but means the compile agent can't distinguish ephemeral values (timestamps, CSRF tokens) from constants, which may reduce workflow accuracy for sites with dynamic request parameters.
 
