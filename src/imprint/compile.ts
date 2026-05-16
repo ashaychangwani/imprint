@@ -410,13 +410,31 @@ export async function triageRequests(
 
 function triageRequestGroupKey(request: TriageRequestContext): unknown[] {
   let urlKey: string = request.url;
+  let paramSignature = '';
   try {
     const parsed = new URL(request.url);
     urlKey = `${parsed.hostname}${parsed.pathname}`;
+    // Include sorted query parameter names so requests with different
+    // parameter signatures are grouped separately (e.g., a config fetch
+    // vs a lookup endpoint that shares the same pathname but adds a
+    // filter/query param). Cap at 10 params — URLs with more are
+    // typically analytics/telemetry where slight param-set variation
+    // should not prevent compaction.
+    const paramNames = [...new Set(parsed.searchParams.keys())].sort();
+    if (paramNames.length > 0 && paramNames.length <= 10) {
+      paramSignature = paramNames.join(',');
+    }
   } catch {
     // keep full url as fallback
   }
-  return [request.method, urlKey, request.resourceType, request.status, request.mimeType];
+  return [
+    request.method,
+    urlKey,
+    paramSignature,
+    request.resourceType,
+    request.status,
+    request.mimeType,
+  ];
 }
 
 function truncateHeaders(headers: Record<string, string>): string {

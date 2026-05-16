@@ -118,7 +118,7 @@ interface TeachOptions {
   provider?: ProviderName;
   /** Override the compile model (otherwise prompted or auto-detected). */
   model?: string;
-  /** Per-tool compile timeout in ms. Default 5 minutes. */
+  /** Per-tool compile timeout in ms. Default 10 minutes. */
   maxDurationMs?: number;
   fromSession?: string;
   /** Retain parser.test.ts after successful compile-agent verification. */
@@ -286,7 +286,7 @@ function discoverOrphanSession(site: string, state: TeachState): WorkflowState |
   for (const sessDir of [localSessionsDir(site), pathResolve('examples', site, 'sessions')]) {
     if (!existsSync(sessDir)) continue;
     const sessions = readdirSync(sessDir).filter(
-      (f) => f.endsWith('.json') && !f.endsWith('.redacted.json'),
+      (f) => f.endsWith('.json') && !f.includes('.redacted') && !f.includes('.triaged'),
     );
     for (const file of sessions) candidates.push({ absPath: pathJoin(sessDir, file), file });
   }
@@ -601,6 +601,19 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       if (ws) {
         sessionPath = resolveTeachStatePath(site, ws.sessionPath);
         redactedPath = resolveTeachStatePath(site, ws.redactedPath);
+        // If the stored sessionPath is a derived artifact (.triaged.json,
+        // .triaged.redacted.json), resolve back to the original recording
+        // so redo-from-redact operates on the full session.
+        if (sessionPath) {
+          const original = sessionPath
+            .replace(/\.triaged/g, '')
+            .replace(/\.redacted/g, '')
+            .replace(/\.json$/, '.json');
+          if (original !== sessionPath && isExistingFile(original)) {
+            sessionPath = original;
+            redactedPath = null;
+          }
+        }
       }
       if (!sessionPath && startFrom !== 'record') {
         // Completed workflow with no state — find the latest session.
@@ -1016,7 +1029,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       const { resolveCompileAgentModel } = await import('./compile-agent.ts');
       compileModel = resolveCompileAgentModel(compileProviderName);
     }
-    const timeoutMs = opts.maxDurationMs ?? 5 * 60 * 1000;
+    const timeoutMs = opts.maxDurationMs ?? 10 * 60 * 1000;
     const timeoutDisplay =
       timeoutMs >= 3_600_000
         ? `${Math.round(timeoutMs / 3_600_000)}h`

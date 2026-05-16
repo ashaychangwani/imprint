@@ -145,7 +145,7 @@ This is faster but means the compile agent won't be able to distinguish browser-
 
 ## "Compile is slow or looks stuck"
 
-Each tool compiles with a **5-minute timeout** by default. If a tool hits the timeout, it fails gracefully and other tools continue compiling. To increase the timeout for complex sites:
+Each tool compiles with a **10-minute timeout** by default. If a tool hits the timeout, it fails gracefully and other tools continue compiling. To increase the timeout for complex sites:
 
 ```bash
 imprint teach <site> --timeout 10m
