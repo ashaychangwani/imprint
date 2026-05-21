@@ -12,6 +12,32 @@ Each site gets its own MCP server: `imprint mcp-server southwest` registers as `
 
 > For sites that require authentication, run `imprint login <site>` or `imprint credential set <site> <name>` before starting the MCP server. The server will warn about missing credentials at startup.
 
+## Audit and cleanup
+
+Use `imprint mcp status` before debugging a client-specific tool list. It audits known Imprint-owned registrations across Claude Code, Codex CLI user/project config, Claude Desktop, OpenClaw, and Hermes, then compares them with local generated tools and `teach` checkpoint state under `IMPRINT_HOME`.
+
+```bash
+imprint mcp status
+imprint mcp status --site mysite --json
+```
+
+Run `imprint mcp` for an interactive cleanup flow, or use direct commands in scripts:
+
+```bash
+imprint mcp disable imprint-mysite --client all --yes
+imprint mcp enable imprint-mysite --client all --yes
+imprint mcp delete imprint-mysite --client codex --yes
+imprint mcp prune-state --site mysite --missing-session --yes
+```
+
+`disable` is reversible. Codex keeps the entry with `enabled = false`; other clients remove the active entry and store a restorable snapshot at `<IMPRINT_HOME>/.mcp-disabled.json`. That snapshot preserves the full server definition, including fields such as `env` and `cwd`. `delete` removes active MCP registrations and does not remove generated tools or recordings unless you pass `--local tool` or `--local site`.
+
+Raw session recordings can include cookies or other sensitive browser state. Imprint only deletes recordings when you explicitly choose full local site deletion with `--local site`.
+
+Claude Desktop, OpenClaw, and Hermes read their config at startup, so restart those clients after direct config edits. Claude Code and Codex pick up most changes in new sessions.
+
+See [MCP Maintenance](mcp-maintenance.md) for status classifications, local artifact cleanup modes, and the full direct command reference.
+
 ---
 
 ## Claude Code

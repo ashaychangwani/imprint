@@ -57,9 +57,9 @@ function LogoMark() {
   return (
     <a className="brand" href="#top" aria-label="Imprint home">
       <span className="brand-mark" aria-hidden="true">
-        <span className="mark-track"></span>
-        <span className="mark-dot dot-a"></span>
-        <span className="mark-dot dot-b"></span>
+        <span className="mark-track" />
+        <span className="mark-dot dot-a" />
+        <span className="mark-dot dot-b" />
       </span>
       <span className="brand-word">Imprint</span>
     </a>
@@ -70,7 +70,9 @@ function TerminalCard() {
   return (
     <div className="terminal-card" aria-label="Imprint command preview">
       <div className="terminal-chrome">
-        <span></span><span></span><span></span>
+        <span />
+        <span />
+        <span />
         <strong>bun run imprint</strong>
       </div>
       <pre><code>{`$ git clone https://github.com/ashaychangwani/imprint.git
@@ -84,6 +86,12 @@ compiling state-aware API workflow...      workflow.json
 compiling DOM playbook fallback...         <tool>/playbook.yaml
 state hints found...                       cookie → header
 emitting MCP tool...                       search_southwest_flights
+wiring MCP registration...                 imprint-southwest
+
+$ bun run imprint mcp status --site southwest
+registrations...                           claude-code/imprint-southwest
+local tools...                             1 complete, 0 incomplete
+issues...                                  none
 
 $ bun run imprint cron southwest --once
 auto ladder...                             gated browser fallback
@@ -376,7 +384,7 @@ export default function App() {
         <main>
           <section className="section hero" aria-labelledby="hero-title">
             <div className="hero-copy">
-              <span className="eyebrow"><span className="pulse" aria-hidden="true"></span> Postman for AI agents · open source CLI</span>
+              <span className="eyebrow"><span className="pulse" aria-hidden="true" /> Postman for AI agents · open source CLI</span>
               <h1 id="hero-title">Don’t do anything twice.</h1>
               <p className="lead">Teach Imprint one real browser session and it turns that recording into a deterministic MCP tool: a state-aware API workflow, a DOM playbook fallback, and an agent-callable TypeScript module.</p>
               <div className="hero-actions">

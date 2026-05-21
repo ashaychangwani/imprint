@@ -13,6 +13,8 @@ Recording produces:
 
 Sessions are **not** redacted on disk by default. `imprint generate` and `imprint compile-playbook` auto-redact in memory before LLM calls — if the session does not already contain `[REDACTED:` markers, the pipeline runs the full redaction pass and logs the count. If auto-redaction produces zero redactions on a session that contains auth-like requests, treat it as suspicious and run `imprint redact` manually to audit. `imprint redact` writes a reviewable redacted artifact you can audit or share.
 
+MCP cleanup is conservative around recordings. `imprint mcp delete <site>` removes external MCP registrations only; `--local tool` removes generated tool directories but keeps sessions; `--local site` is the explicit option that removes the site directory and its recordings. Reversible disables for clients without native disable support write `<IMPRINT_HOME>/.mcp-disabled.json`; treat that file as local-sensitive too because it preserves the full MCP server definition, including any `env` values from the client config.
+
 ## Redaction pipeline
 
 Always run `imprint redact` before:
