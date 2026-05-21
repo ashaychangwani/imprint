@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import { discoverTools, findToolFunction, toCamelCase } from '../src/imprint/tool-loader.ts';
@@ -139,5 +139,80 @@ describe('discoverTools', () => {
     const tool = out[0];
     if (!tool) throw new Error('expected one tool');
     expect(tool.site).toBe('beta');
+  });
+
+  it('repairs stale wrappers that import an old repo runtime path', async () => {
+    const dir = pathResolve(root, 'stale', 'stale_tool');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      pathResolve(dir, 'workflow.json'),
+      JSON.stringify(
+        {
+          toolName: 'stale_tool',
+          intent: { description: 'repair stale wrapper' },
+          parameters: [],
+          requests: [],
+          site: 'stale',
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    writeFileSync(
+      pathResolve(dir, 'index.ts'),
+      `
+import { executeWorkflow } from '../../../deleted-workspace/src/imprint/runtime.ts';
+export const WORKFLOW = { toolName: 'stale_tool', intent: { description: '' }, parameters: [], requests: [], site: 'stale' };
+export async function staleTool() {
+  return executeWorkflow({ workflow: WORKFLOW, params: {} });
+}
+`,
+      'utf8',
+    );
+
+    const out = await discoverTools(root);
+
+    expect(out.map((tool) => tool.workflow.toolName)).toEqual(['stale_tool']);
+    expect(readFileSync(pathResolve(dir, 'index.ts'), 'utf8')).toContain("'imprint/runtime'");
+  });
+
+  it('does not repair hand-written fixtures with type-only legacy imports', async () => {
+    const dir = pathResolve(root, 'echo', 'echo_test');
+    mkdirSync(dir, { recursive: true });
+    const indexPath = pathResolve(dir, 'index.ts');
+    writeFileSync(
+      indexPath,
+      `
+import type { Workflow } from '../../../deleted-workspace/src/imprint/types.ts';
+
+export const WORKFLOW: Workflow = {
+  toolName: 'echo_test',
+  intent: { description: 'echo' },
+  parameters: [],
+  requests: [],
+  site: 'echo',
+};
+
+export async function echoTest() {
+  return { ok: true, data: {} };
+}
+`,
+      'utf8',
+    );
+    const stderrWrite = process.stderr.write;
+    const stderr: string[] = [];
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const out = await discoverTools(root);
+      expect(out.map((tool) => tool.workflow.toolName)).toEqual(['echo_test']);
+    } finally {
+      process.stderr.write = stderrWrite;
+    }
+    expect(stderr.join('')).not.toContain('could not repair stale generated wrapper');
+    expect(readFileSync(indexPath, 'utf8')).toContain('deleted-workspace/src/imprint/types.ts');
   });
 });

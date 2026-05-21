@@ -5,7 +5,7 @@
  * Site: discoverandgo
  * Intent: Reserve a museum pass on Discover & Go for a specific offer and date using a San Diego Public Library card.
  *
- * To regenerate: imprint emit examples/discoverandgo/book_discoverandgo_museum_pass/workflow.json --force
+ * To regenerate: imprint emit ~/.imprint/discoverandgo/book_discoverandgo_museum_pass/workflow.json --force
  */
 
 import { fileURLToPath } from 'node:url';
@@ -13,8 +13,8 @@ import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
   type CredentialStore,
-} from '../../../src/imprint/runtime.ts';
-import type { ToolResult, Workflow } from '../../../src/imprint/types.ts';
+} from 'imprint/runtime';
+import type { ToolResult, Workflow } from 'imprint/types';
 
 const WORKFLOW: Workflow = {
   "toolName": "book_discoverandgo_museum_pass",
@@ -67,7 +67,7 @@ export interface BookDiscoverandgoMuseumPassInput {
 
 export async function bookDiscoverandgoMuseumPass(
   input: BookDiscoverandgoMuseumPassInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
@@ -81,6 +81,7 @@ export async function bookDiscoverandgoMuseumPass(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });
 }

@@ -4,13 +4,39 @@ How to connect Imprint MCP tools to your AI platform.
 
 ## Overview
 
-`imprint teach` handles this automatically — it runs the full pipeline (record, redact, generate, compile-playbook, emit) and then asks which platform you use. For Claude Code and Codex, it runs the setup command directly. For Claude Desktop, OpenClaw, and Hermes, it prints a paste-ready snippet.
+`imprint teach` handles this automatically — it runs the full pipeline (record, redact, generate, compile-playbook, emit) and then asks which platform you use. After a tool has been emitted, run `imprint install <site>` any time to add the same MCP server to another platform. Remove platform registrations with `imprint uninstall <site>`.
 
-This document is for manual setup or advanced configuration.
+This document is for the install/uninstall commands, manual setup, and advanced configuration.
 
 Each site gets its own MCP server: `imprint mcp-server southwest` registers as `imprint-southwest`. This isolation ensures multiple Imprint tools coexist without name collisions.
 
 > For sites that require authentication, run `imprint login <site>` or `imprint credential set <site> <name>` before starting the MCP server. The server will warn about missing credentials at startup.
+
+## Install Command
+
+Install an emitted local tool:
+
+```bash
+imprint install mysite --platform claude-code
+```
+
+Install a checked-in example without recording or compiling anything:
+
+```bash
+imprint install google-flights --source examples --platform claude-desktop
+```
+
+Run `imprint install` with no arguments for an interactive picker. The picker only shows AI platforms detected on the current machine. The command registers the MCP server with the right `IMPRINT_HOME` so generated tools use your local `~/.imprint` assets and examples use the repo's `examples/` assets. For config-file clients such as Claude Desktop, OpenClaw, and Hermes, Imprint writes an absolute Bun + CLI path instead of relying on the GUI app's shell PATH. Add `--print` to show the command/config without changing platform state.
+
+## Uninstall Command
+
+Remove a registered Imprint MCP server from a platform:
+
+```bash
+imprint uninstall mysite --platform claude-code
+```
+
+You can also run `imprint uninstall` with no arguments and answer the prompts, or choose "Uninstall an MCP server" from the interactive `imprint install` TUI. The picker only shows detected platforms that currently have installed `imprint-*` MCP servers, then lists those installed servers directly. For Claude Code and Codex, Imprint reads the platform's MCP list and runs the platform's MCP remove command. For Claude Desktop, OpenClaw, and Hermes, it reads and removes the `imprint-<site>` entry from the platform config file. Add `--print` to show the remove command/config edit without applying it.
 
 ## Audit and cleanup
 
@@ -118,8 +144,8 @@ Add the following to the `mcpServers` object:
 {
   "mcpServers": {
     "imprint-mysite": {
-      "command": "imprint",
-      "args": ["mcp-server", "mysite"]
+      "command": "/absolute/path/to/bun",
+      "args": ["run", "/absolute/path/to/imprint/src/cli.ts", "mcp-server", "mysite"]
     }
   }
 }
@@ -131,12 +157,12 @@ If you have multiple Imprint sites, add one entry per site:
 {
   "mcpServers": {
     "imprint-southwest": {
-      "command": "imprint",
-      "args": ["mcp-server", "southwest"]
+      "command": "/absolute/path/to/bun",
+      "args": ["run", "/absolute/path/to/imprint/src/cli.ts", "mcp-server", "southwest"]
     },
     "imprint-discoverandgo": {
-      "command": "imprint",
-      "args": ["mcp-server", "discoverandgo"]
+      "command": "/absolute/path/to/bun",
+      "args": ["run", "/absolute/path/to/imprint/src/cli.ts", "mcp-server", "discoverandgo"]
     }
   }
 }
@@ -144,16 +170,18 @@ If you have multiple Imprint sites, add one entry per site:
 
 Restart Claude Desktop for the changes to take effect.
 
-### Absolute path fallback
+`imprint install` generates this form automatically. To find your Bun path manually, run `which bun`.
 
-If `imprint` is not on your PATH, use the absolute path to the CLI:
+### PATH fallback
+
+If your MCP client definitely inherits a PATH where `imprint` resolves to a runnable binary, this shorter form also works:
 
 ```json
 {
   "mcpServers": {
     "imprint-mysite": {
-      "command": "bun",
-      "args": ["run", "/absolute<imprint-clone-dir>/src/cli.ts", "mcp-server", "mysite"]
+      "command": "imprint",
+      "args": ["mcp-server", "mysite"]
     }
   }
 }
@@ -174,8 +202,8 @@ Add to `~/.openclaw/openclaw.json` under the `mcp.servers` key:
   "mcp": {
     "servers": {
       "imprint-mysite": {
-        "command": "imprint",
-        "args": ["mcp-server", "mysite"]
+        "command": "/absolute/path/to/bun",
+        "args": ["run", "/absolute/path/to/imprint/src/cli.ts", "mcp-server", "mysite"]
       }
     }
   }
@@ -217,8 +245,8 @@ Add to `~/.hermes/config.yaml` under the `mcp_servers` key:
 ```yaml
 mcp_servers:
   imprint-mysite:
-    command: "imprint"
-    args: ["mcp-server", "mysite"]
+    command: "/absolute/path/to/bun"
+    args: ["run", "/absolute/path/to/imprint/src/cli.ts", "mcp-server", "mysite"]
 ```
 
 Restart Hermes for the changes to take effect.

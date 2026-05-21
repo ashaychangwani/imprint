@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'bun:test';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve as pathResolve } from 'node:path';
 import { VERB_HELP } from '../src/cli.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
-import { localSiteDir } from '../src/imprint/paths.ts';
+import { localSessionsDir, localSiteDir } from '../src/imprint/paths.ts';
 import {
   assertCandidateToolName,
   buildTeachProviderPickerOptions,
   buildTeachStateFromSession,
+  discoverOrphanSession,
   mapLimit,
   promptForTeachProvider,
   resolveTeachStatePath,
@@ -138,6 +141,27 @@ describe('teach session state helpers', () => {
       expect(state.sessionPath).toBe('sessions/2026-05-08T09-24-14-916Z.json');
       expect(state.redactedPath).toBeUndefined();
       expect(state.completedSteps).toEqual(['record']);
+    });
+  });
+
+  it('does not treat checked-in example sessions as resumable local teach state', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      expect(discoverOrphanSession('google-flights', { workflows: {} })).toBeNull();
+    });
+  });
+
+  it('discovers orphan sessions from the active IMPRINT_HOME', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      const sessionsDir = localSessionsDir('google-flights');
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(pathResolve(sessionsDir, '2026-05-08T09-24-14-916Z.json'), '{}\n');
+
+      const state = discoverOrphanSession('google-flights', { workflows: {} });
+
+      expect(state?.sessionPath).toBe('sessions/2026-05-08T09-24-14-916Z.json');
+      expect(state?.completedSteps).toEqual(['record']);
     });
   });
 });

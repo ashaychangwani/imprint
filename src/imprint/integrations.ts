@@ -16,6 +16,13 @@ interface ImprintCommand {
   args: string[];
 }
 
+export interface McpServerConfig {
+  name: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
+
 /**
  * Detects whether `imprint` is available on PATH; falls back to
  * `bun run <abs-path>` if not. Used by teach.ts to generate paste snippets.
@@ -25,9 +32,13 @@ export function detectImprintCommand(): ImprintCommand {
     execSync('which imprint', { stdio: 'ignore' });
     return { command: 'imprint', args: [] };
   } catch {
-    const cliPath = pathResolve(import.meta.dir, '..', 'cli.ts');
-    return { command: 'bun', args: ['run', cliPath] };
+    return detectDirectBunImprintCommand();
   }
+}
+
+export function detectDirectBunImprintCommand(): ImprintCommand {
+  const cliPath = pathResolve(import.meta.dir, '..', 'cli.ts');
+  return { command: process.execPath || 'bun', args: ['run', cliPath] };
 }
 
 /**
@@ -40,8 +51,9 @@ export function generatePasteSnippet(opts: {
   workflows?: Workflow[];
   platform: Platform;
   imprintCommand: ImprintCommand;
+  env?: Record<string, string>;
 }): string {
-  const { site, workflow, workflows, platform, imprintCommand: ic } = opts;
+  const { site, workflow, workflows, platform, imprintCommand: ic, env } = opts;
   const toolName = `imprint-${site}`;
   const workflowList = workflows && workflows.length > 0 ? workflows : [workflow];
   const descLower =
@@ -52,26 +64,35 @@ export function generatePasteSnippet(opts: {
     workflowList.length === 1
       ? formatParams(workflow.parameters)
       : workflowList.map((w) => `${w.toolName}: ${formatParams(w.parameters)}`).join('; ');
-  const shellCmd = [ic.command, ...ic.args, 'mcp-server', site].join(' ');
   const mcpArgs = [...ic.args, 'mcp-server', site];
   const argsStr = `[${mcpArgs.map((a) => `"${a}"`).join(', ')}]`;
+  const envStr = env ? `, "env": ${JSON.stringify(env)}` : '';
+  const registrationCommand = buildRegistrationCommand({
+    site,
+    platform,
+    imprintCommand: ic,
+    env,
+  });
+  const shellCmd = registrationCommand
+    ? registrationCommand.map(shellQuote).join(' ')
+    : [ic.command, ...mcpArgs].map(shellQuote).join(' ');
 
   switch (platform) {
     case 'claude-code':
-      return `Add the ${toolName} tool: run \`claude mcp add --scope user ${toolName} -- ${shellCmd}\` to register ${descLower}. Parameters: ${paramList}. The backend ladder handles browser/API state and bot detection automatically (fetch → gated fetch-bootstrap → stealth-fetch → playbook).`;
+      return `Add the ${toolName} tool: run \`${shellCmd}\` to register ${descLower}. Parameters: ${paramList}. The backend ladder handles browser/API state and bot detection automatically (fetch → gated fetch-bootstrap → stealth-fetch → playbook).`;
 
     case 'codex':
-      return `Add the ${toolName} tool: run \`codex mcp add ${toolName} -- ${shellCmd}\` to register ${descLower}. Parameters: ${paramList}.`;
+      return `Add the ${toolName} tool: run \`${shellCmd}\` to register ${descLower}. Parameters: ${paramList}.`;
 
     case 'claude-desktop':
       return `Add to ~/Library/Application Support/Claude/claude_desktop_config.json under "mcpServers":
 
-  "${toolName}": { "command": "${ic.command}", "args": ${argsStr} }`;
+  "${toolName}": { "command": "${ic.command}", "args": ${argsStr}${envStr} }`;
 
     case 'openclaw':
       return `Add the ${toolName} tool: add to ~/.openclaw/openclaw.json under mcp.servers:
 
-  "${toolName}": { "command": "${ic.command}", "args": ${argsStr} }
+  "${toolName}": { "command": "${ic.command}", "args": ${argsStr}${envStr} }
 
 This gives your agent a tool that ${descLower}. Parameters: ${paramList}.`;
 
@@ -81,6 +102,7 @@ This gives your agent a tool that ${descLower}. Parameters: ${paramList}.`;
   ${toolName}:
     command: "${ic.command}"
     args: ${argsStr}
+${env ? `    env: ${JSON.stringify(env)}` : ''}
 
 This gives your agent a tool that ${descLower}. Parameters: ${paramList}.`;
 
@@ -114,16 +136,36 @@ export function buildRegistrationCommand(opts: {
   site: string;
   platform: Platform;
   imprintCommand: ImprintCommand;
+  env?: Record<string, string>;
 }): string[] | null {
-  const { site, platform, imprintCommand: ic } = opts;
+  const { site, platform, imprintCommand: ic, env } = opts;
   const toolName = `imprint-${site}`;
   const imprintArgs = [ic.command, ...ic.args, 'mcp-server', site];
+  const envPairs = Object.entries(env ?? {}).map(([key, value]) => `${key}=${value}`);
 
   switch (platform) {
     case 'claude-code':
-      return ['claude', 'mcp', 'add', '--scope', 'user', toolName, '--', ...imprintArgs];
+      return [
+        'claude',
+        'mcp',
+        'add',
+        '--scope',
+        'user',
+        ...envPairs.flatMap((pair) => ['-e', pair]),
+        toolName,
+        '--',
+        ...imprintArgs,
+      ];
     case 'codex':
-      return ['codex', 'mcp', 'add', toolName, '--', ...imprintArgs];
+      return [
+        'codex',
+        'mcp',
+        'add',
+        ...envPairs.flatMap((pair) => ['--env', pair]),
+        toolName,
+        '--',
+        ...imprintArgs,
+      ];
     case 'claude-desktop':
       return null;
     case 'openclaw':
@@ -135,6 +177,48 @@ export function buildRegistrationCommand(opts: {
       throw new Error(`Unknown platform: ${_exhaustive}`);
     }
   }
+}
+
+export function buildUnregistrationCommand(opts: { site: string; platform: Platform }):
+  | string[]
+  | null {
+  const toolName = `imprint-${opts.site}`;
+
+  switch (opts.platform) {
+    case 'claude-code':
+      return ['claude', 'mcp', 'remove', '--scope', 'user', toolName];
+    case 'codex':
+      return ['codex', 'mcp', 'remove', toolName];
+    case 'claude-desktop':
+      return null;
+    case 'openclaw':
+      return null;
+    case 'hermes':
+      return null;
+    default: {
+      const _exhaustive: never = opts.platform;
+      throw new Error(`Unknown platform: ${_exhaustive}`);
+    }
+  }
+}
+
+export function buildMcpServerConfig(opts: {
+  site: string;
+  imprintCommand: ImprintCommand;
+  env?: Record<string, string>;
+}): McpServerConfig {
+  const { site, imprintCommand, env } = opts;
+  return {
+    name: `imprint-${site}`,
+    command: imprintCommand.command,
+    args: [...imprintCommand.args, 'mcp-server', site],
+    ...(env && Object.keys(env).length > 0 ? { env } : {}),
+  };
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 /**

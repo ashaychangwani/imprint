@@ -185,7 +185,7 @@ It reports external registrations, generated tools under `IMPRINT_HOME`, incompl
 
 Common causes:
 
-1. **Wrong path in claude_desktop_config.json.** If you didn't `bun link`, the entry needs to be `bun run /abs/path/to/imprint/src/cli.ts mcp-server`.
+1. **Wrong path in claude_desktop_config.json.** Run `imprint install <site> --platform claude-desktop` to write the config. If editing by hand, use an absolute Bun command plus the repo CLI path, for example `"command": "/abs/path/to/bun"` with `"args": ["run", "/abs/path/to/imprint/src/cli.ts", "mcp-server", "mysite"]`. GUI-launched apps may not inherit your shell PATH, and linked shims can fail under Bun.
 
 2. **Restart required.** Claude Desktop reads config only at startup.
 

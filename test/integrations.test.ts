@@ -6,7 +6,10 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type Platform,
+  buildMcpServerConfig,
   buildRegistrationCommand,
+  buildUnregistrationCommand,
+  detectDirectBunImprintCommand,
   detectImprintCommand,
   generatePasteSnippet,
   generateSkillMd,
@@ -129,6 +132,18 @@ describe('generatePasteSnippet', () => {
     expect(snippet).toContain('codex mcp add imprint-testsite -- imprint mcp-server testsite');
   });
 
+  it('includes IMPRINT_HOME env when provided', () => {
+    const snippet = generatePasteSnippet({
+      site: 'testsite',
+      workflow: FIXTURE_WORKFLOW,
+      platform: 'claude-desktop',
+      imprintCommand: { command: 'imprint', args: [] },
+      env: { IMPRINT_HOME: '/tmp/imprint-examples' },
+    });
+
+    expect(snippet).toContain('"env": {"IMPRINT_HOME":"/tmp/imprint-examples"}');
+  });
+
   it('includes JSON config for claude-desktop', () => {
     const snippet = generatePasteSnippet({
       site: 'testsite',
@@ -248,6 +263,52 @@ describe('buildRegistrationCommand', () => {
     ]);
   });
 
+  it('passes env vars to claude-code registrations', () => {
+    const cmd = buildRegistrationCommand({
+      site: 'testsite',
+      platform: 'claude-code',
+      imprintCommand: { command: 'imprint', args: [] },
+      env: { IMPRINT_HOME: '/tmp/imprint-examples' },
+    });
+
+    expect(cmd).toEqual([
+      'claude',
+      'mcp',
+      'add',
+      '--scope',
+      'user',
+      '-e',
+      'IMPRINT_HOME=/tmp/imprint-examples',
+      'imprint-testsite',
+      '--',
+      'imprint',
+      'mcp-server',
+      'testsite',
+    ]);
+  });
+
+  it('passes env vars to codex registrations', () => {
+    const cmd = buildRegistrationCommand({
+      site: 'testsite',
+      platform: 'codex',
+      imprintCommand: { command: 'imprint', args: [] },
+      env: { IMPRINT_HOME: '/tmp/imprint-examples' },
+    });
+
+    expect(cmd).toEqual([
+      'codex',
+      'mcp',
+      'add',
+      '--env',
+      'IMPRINT_HOME=/tmp/imprint-examples',
+      'imprint-testsite',
+      '--',
+      'imprint',
+      'mcp-server',
+      'testsite',
+    ]);
+  });
+
   it('returns null for claude-desktop (manual config)', () => {
     const cmd = buildRegistrationCommand({
       site: 'testsite',
@@ -276,6 +337,61 @@ describe('buildRegistrationCommand', () => {
     });
 
     expect(cmd).toBeNull();
+  });
+});
+
+describe('buildUnregistrationCommand', () => {
+  it('returns a remove argv array for claude-code', () => {
+    expect(buildUnregistrationCommand({ site: 'testsite', platform: 'claude-code' })).toEqual([
+      'claude',
+      'mcp',
+      'remove',
+      '--scope',
+      'user',
+      'imprint-testsite',
+    ]);
+  });
+
+  it('returns a remove argv array for codex', () => {
+    expect(buildUnregistrationCommand({ site: 'testsite', platform: 'codex' })).toEqual([
+      'codex',
+      'mcp',
+      'remove',
+      'imprint-testsite',
+    ]);
+  });
+
+  it('returns null for config-file platforms', () => {
+    expect(buildUnregistrationCommand({ site: 'testsite', platform: 'claude-desktop' })).toBeNull();
+    expect(buildUnregistrationCommand({ site: 'testsite', platform: 'openclaw' })).toBeNull();
+    expect(buildUnregistrationCommand({ site: 'testsite', platform: 'hermes' })).toBeNull();
+  });
+});
+
+describe('buildMcpServerConfig', () => {
+  it('creates a config object with command args and env', () => {
+    expect(
+      buildMcpServerConfig({
+        site: 'testsite',
+        imprintCommand: { command: 'bun', args: ['run', '/custom/path/cli.ts'] },
+        env: { IMPRINT_HOME: '/tmp/imprint-home' },
+      }),
+    ).toEqual({
+      name: 'imprint-testsite',
+      command: 'bun',
+      args: ['run', '/custom/path/cli.ts', 'mcp-server', 'testsite'],
+      env: { IMPRINT_HOME: '/tmp/imprint-home' },
+    });
+  });
+});
+
+describe('detectDirectBunImprintCommand', () => {
+  it('returns an absolute Bun command that runs the repo CLI directly', () => {
+    const command = detectDirectBunImprintCommand();
+
+    expect(command.command).toBe(process.execPath);
+    expect(command.args[0]).toBe('run');
+    expect(command.args[1]).toEndWith('/src/cli.ts');
   });
 });
 
@@ -454,7 +570,10 @@ describe('detectImprintCommand', () => {
     expect(Array.isArray(ic.args)).toBe(true);
 
     const isImprint = ic.command === 'imprint' && ic.args.length === 0;
-    const isBunRun = ic.command === 'bun' && ic.args[0] === 'run' && ic.args[1]?.includes('cli.ts');
+    const isBunRun =
+      (ic.command === 'bun' || ic.command === process.execPath || ic.command.endsWith('/bun')) &&
+      ic.args[0] === 'run' &&
+      ic.args[1]?.endsWith('/src/cli.ts');
 
     expect(isImprint || isBunRun).toBe(true);
   });

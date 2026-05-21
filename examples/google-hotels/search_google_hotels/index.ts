@@ -5,7 +5,7 @@
  * Site: google-hotels
  * Intent: Search Google Hotels for lodging in a destination over a given date range and party composition, returning the list of nearby hotels with star rating, guest rating, nightly + total prices, and Google identifiers.
  *
- * To regenerate: imprint emit examples/google-hotels/search_google_hotels/workflow.json --force
+ * To regenerate: imprint emit ~/.imprint/google-hotels/search_google_hotels/workflow.json --force
  */
 
 import { fileURLToPath } from 'node:url';
@@ -13,8 +13,8 @@ import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
   type CredentialStore,
-} from '../../../src/imprint/runtime.ts';
-import type { ToolResult, Workflow } from '../../../src/imprint/types.ts';
+} from 'imprint/runtime';
+import type { ToolResult, Workflow } from 'imprint/types';
 
 const WORKFLOW: Workflow = {
   "toolName": "search_google_hotels",
@@ -161,7 +161,7 @@ export interface SearchGoogleHotelsInput {
 
 export async function searchGoogleHotels(
   input: SearchGoogleHotelsInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
@@ -186,6 +186,7 @@ export async function searchGoogleHotels(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });
 }

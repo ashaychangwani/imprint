@@ -81,6 +81,24 @@ imprint mcp-server google-flights    # stdio MCP server
 
 You now have an MCP tool any agent can call.
 
+To add that same emitted MCP server to another platform later:
+
+```bash
+imprint install google-flights --platform claude-desktop
+```
+
+To remove it from a platform:
+
+```bash
+imprint uninstall google-flights --platform claude-desktop
+```
+
+To try a checked-in demo without recording or compiling:
+
+```bash
+imprint install google-flights --source examples --platform claude-code
+```
+
 Stateful workflows still run through the same generated tool. If a request sets a cookie or response value that a later request needs, the workflow compiler emits named captures and `${state.NAME}` placeholders. Plain HTTP producers stay on the fast `fetch` path; browser bootstrap is used only when the workflow declares that Chromium is needed to mint the state.
 
 ## Compile options

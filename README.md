@@ -80,7 +80,7 @@ Credentials and PII are redacted automatically: credential values become `${cred
 
 ### 3. Use
 
-A typed MCP tool is generated and wired into your AI platform. Your agent calls it like any other tool — structured input in, structured results out.
+A typed MCP tool is generated and wired into your AI platform. Re-run `imprint install <site>` any time to add the same emitted MCP server to another platform, or remove it later with `imprint uninstall <site>`.
 
 </td>
 </tr>
@@ -230,6 +230,14 @@ State-aware workflows use named captures and `${state.NAME}` placeholders. For e
 ## Examples
 
 The checked-in `examples/` directory contains committed fixtures and demos. Generated tools from `imprint teach` go into `~/.imprint/<site>/<toolName>/` by default (configurable via `IMPRINT_HOME`). Runtime discovery (cron, MCP, probe-backends) reads `IMPRINT_HOME`, so to run the checked-in examples, point it at the repo's `examples/` directory:
+
+You can also install an example directly into an MCP client:
+
+```bash
+imprint install google-flights --source examples --platform claude-desktop
+```
+
+Run `imprint install` with no arguments for an interactive install/uninstall picker. It only shows detected AI platforms; uninstall lists installed `imprint-*` MCP servers directly. For GUI config-file clients such as Claude Desktop, install writes an absolute Bun + Imprint CLI path so the app does not depend on your shell PATH.
 
 | Example | What it demonstrates | Run it |
 |---|---|---|

@@ -94,6 +94,7 @@ src/imprint/
 │ ── Services ──
 ├── cron.ts              Polling daemon
 ├── mcp-server.ts        MCP stdio + Streamable HTTP
+├── install.ts           Register/remove emitted local or example tools with MCP clients
 ├── probe-backends.ts    Try each backend at record time → backends.json
 ├── notify.ts            evaluateNotifyWhen + Pushover/ntfy delivery
 ├── login.ts             Session.json → credentials store
