@@ -163,7 +163,7 @@ Follow these steps to compile the session:
     - Repeat until all tests pass
 
     **Escalation rules for integration test failures:**
-    - If the integration test returns 403/429 with bot-detection signatures (PerimeterX, DataDome, Akamai, CAPTCHA), try at most **2 different approaches** (e.g., add bootstrap, try stealth-fetch). If both fail, **call `done` immediately** — the verification harness retries 3 times and will handle transient blocks. Do not spend more turns on bot-detection workarounds.
+    - If the integration test returns 403/429 with bot-detection signatures (PerimeterX, DataDome, Akamai, CAPTCHA), try at most **4 different approaches** (e.g., add bootstrap, try stealth-fetch). If all fail, **call `done` immediately** — the verification harness retries 3 times and will handle transient blocks. Do not spend more turns on bot-detection workarounds.
     - If the integration test returns 400 or assertion failures on response shape, the workflow is wrong — fix it.
     - If the integration test returns 401, check if the workflow needs a login chain or credential capture.
 
@@ -302,7 +302,7 @@ You may call `give_up` only in these cases:
 
 4. **Authentication is fundamentally broken.** Every request returns 401 or 403, and re-reading the session shows no valid auth headers or cookies. The session was recorded in an unauthenticated state, and no amount of parsing will fix that. Recommend the user run `imprint login <site>` and re-record.
 
-5. **Bot detection blocks the live API after multiple bypass attempts.** If the integration test consistently returns 403 with bot-detection signatures (PerimeterX, DataDome, Akamai, CAPTCHA) and you've tried 2+ different approaches (bootstrap, stealth-fetch, different headers) without success, give up. The workflow and parser are likely correct — the endpoint requires browser-level interaction that fetch-based replay cannot provide. Recommend the user add a playbook-based backend for this site.
+5. **Bot detection blocks the live API after multiple bypass attempts.** If the integration test consistently returns 403 with bot-detection signatures (PerimeterX, DataDome, Akamai, CAPTCHA) and you've tried 4+ different approaches (bootstrap, stealth-fetch, different headers) without success, give up. The workflow and parser are likely correct — the endpoint requires browser-level interaction that fetch-based replay cannot provide. Recommend the user add a playbook-based backend for this site.
 
 In all cases, the `give_up` call must include a `what_was_tried` field listing concrete approaches and why each failed. "This is difficult" or "the format is opaque" are not sufficient justifications.
 
