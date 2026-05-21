@@ -543,33 +543,34 @@ function buildWriteFileTool(toolDir: string): AgentTool {
 function buildReadFileTool(toolDir: string): AgentTool {
   return {
     name: 'read_file',
-    description: 'Read a file from allowed roots: the tool directory, prompts/, src/imprint/.',
+    description: 'Read a file in the generated tool directory.',
     input_schema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Absolute or relative path to read' },
+        path: {
+          type: 'string',
+          description: 'Relative path within the tool directory (e.g. parser.ts, workflow.json)',
+        },
       },
       required: ['path'],
     },
     handler: async (input: unknown) => {
       const { path } = input as { path: string };
 
-      let absolutePath = path;
-      if (!path.startsWith('/')) {
-        absolutePath = pathJoin(REPO_ROOT, path);
+      if (path.includes('..') || path.startsWith('/')) {
+        return {
+          result: `invalid path: "${path}" — must be a relative path within the tool directory, no ".." or leading "/"`,
+          isError: true,
+        };
       }
 
-      const allowedRoots = [
-        toolDir,
-        pathJoin(REPO_ROOT, 'prompts'),
-        pathJoin(REPO_ROOT, 'src', 'imprint'),
-        pathJoin(REPO_ROOT, 'test'),
-      ];
+      const absolutePath = pathJoin(toolDir, path);
+      const allowedRoots = [toolDir];
 
       const isAllowed = allowedRoots.some((root) => absolutePath.startsWith(root));
       if (!isAllowed) {
         return {
-          result: `path "${absolutePath}" not allowed — must be in the tool directory, prompts/, src/imprint/, or test/`,
+          result: `path "${path}" not allowed — must be a relative path within the tool directory`,
           isError: true,
         };
       }
@@ -787,8 +788,9 @@ export async function externalVerification(
   session: Session,
   sessionPath: string,
   opts: { expectedToolName?: string } = {},
-): Promise<string[]> {
+): Promise<{ failures: string[]; warnings: string[] }> {
   const failures: string[] = [];
+  const warnings: string[] = [];
 
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   const parserPath = pathJoin(toolDir, 'parser.ts');
@@ -877,7 +879,7 @@ export async function externalVerification(
   }
 
   if (existsSync(parserTestPath)) {
-    const result = await runCommand('bun test parser.test.ts', toolDir, 120000, {
+    const result = await runCommand(`bun test ${parserTestPath}`, toolDir, 120000, {
       [SESSION_PATH_ENV]: sessionPath,
     });
     const output = JSON.parse(result.result) as {
@@ -901,7 +903,7 @@ export async function externalVerification(
     let integrationPassed = false;
     let lastOutput = { stdout: '', stderr: '', exitCode: 1 };
     for (let attempt = 0; attempt < 3; attempt++) {
-      const result = await runCommand('bun test integration.test.ts', toolDir, 60000);
+      const result = await runCommand(`bun test ${integrationTestPath}`, toolDir, 60000);
       lastOutput = JSON.parse(result.result) as {
         stdout: string;
         stderr: string;
@@ -913,9 +915,18 @@ export async function externalVerification(
       }
     }
     if (!integrationPassed) {
-      failures.push(
-        `bun test integration.test.ts exited ${lastOutput.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
-      );
+      const combined = `${lastOutput.stdout}\n${lastOutput.stderr}`;
+      const botSignatures = /PerimeterX|DataDome|Akamai|captcha|challenge|blocked|rate.?limit/i;
+      const hasStatusBlock = /\b(403|429)\b/.test(combined);
+      if (hasStatusBlock && botSignatures.test(combined)) {
+        warnings.push(
+          `integration test failed with likely bot-detection or rate-limiting (tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
+        );
+      } else {
+        failures.push(
+          `bun test integration.test.ts exited ${lastOutput.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
+        );
+      }
     }
   }
 
@@ -971,5 +982,5 @@ export async function externalVerification(
     }
   }
 
-  return failures;
+  return { failures, warnings };
 }

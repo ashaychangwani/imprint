@@ -152,6 +152,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
   let turn = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let budgetNudgeSent = false;
 
   const conversationLog: ConversationLogEntry[] = [];
 
@@ -378,6 +379,19 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
               type: 'text',
               text: 'You hit max_tokens. Continue from where you stopped.',
             });
+          }
+
+          // Budget nudge: fire once when 70% of time or 60% of turns are consumed
+          if (!budgetNudgeSent) {
+            const elapsedFraction = (Date.now() - startMs) / budgetMs;
+            const turnFraction = turn / softTurnCap;
+            if (elapsedFraction > 0.7 || turnFraction > 0.6) {
+              budgetNudgeSent = true;
+              userContent.push({
+                type: 'text',
+                text: `Budget check: you have used ${turn} turns and ${Math.round(elapsedFraction * 100)}% of your time. If your parser tests pass, call done now. Do not spend remaining turns debugging integration test failures — the verification harness retries automatically.`,
+              });
+            }
           }
 
           messages.push({ role: 'user', content: userContent });
