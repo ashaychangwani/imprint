@@ -585,10 +585,21 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   let triagedPath: string | null = null;
   let plans: CandidateCompilePlan[];
 
-  const needsReplay = startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
+  let needsReplay = startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
   const needsCandidates = startIdx <= STEPS.indexOf('detect-candidates');
 
-  if (opts.skipReplay && startIdx <= STEPS.indexOf('replay-and-diff')) {
+  if (needsReplay && !opts.noInteractive) {
+    const runReplay = await p.confirm({
+      message:
+        'Run the replay stage? This replays your flow in a fresh browser session to identify browser-minted tokens, CSRF values, and other ephemeral parameters. It can take a couple of minutes but improves workflow accuracy.',
+      initialValue: true,
+    });
+    if (p.isCancel(runReplay) || !runReplay) {
+      needsReplay = false;
+    }
+  }
+
+  if (!needsReplay && startIdx <= STEPS.indexOf('replay-and-diff')) {
     p.log.warn(
       "Skipping replay-and-diff stage. The compile agent won't be able to distinguish browser-minted values (timestamps, CSRF tokens) from constants — this may reduce workflow accuracy for sites with ephemeral request parameters.",
     );
