@@ -163,7 +163,11 @@ function findInJsonBody(req: CapturedRequest): BodyFinding | null {
   if (typeof pwdHit.value !== 'string' || pwdHit.value.length === 0) return null;
 
   // Look for a username-like key; prefer one in the same parent object.
-  const userHit = findFirstByPredicate(parsed, (k) => USERNAME_KEY_RE.test(normalizeKey(k)), pwdHit.parent);
+  const userHit = findFirstByPredicate(
+    parsed,
+    (k) => USERNAME_KEY_RE.test(normalizeKey(k)),
+    pwdHit.parent,
+  );
   if (!userHit || typeof userHit.value !== 'string' || userHit.value.length === 0) return null;
 
   return {
