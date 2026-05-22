@@ -434,6 +434,7 @@ function triageRequestGroupKey(request: TriageRequestContext): unknown[] {
     request.resourceType,
     request.status,
     request.mimeType,
+    request.bodyDigest,
   ];
 }
 
