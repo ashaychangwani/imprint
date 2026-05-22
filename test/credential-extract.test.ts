@@ -182,6 +182,72 @@ describe('extractCredentials', () => {
   });
 });
 
+describe('extractCredentials — userid / loginid variants', () => {
+  it('finds userid + password in form-encoded body', () => {
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/auth',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: 'userid=fixture-user&password=fixture-pass-9472',
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user');
+    expect(out.findings[0]?.passwordValue).toBe('fixture-pass-9472');
+    expect(out.replacements).toHaveLength(2);
+  });
+
+  it('finds user_id + password in JSON body', () => {
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/login',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ user_id: 'fixture-user', password: 'fixture-pass-9472' }),
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user');
+    expect(out.findings[0]?.passwordValue).toBe('fixture-pass-9472');
+  });
+
+  it('finds loginid + pwd in form-encoded body', () => {
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: 'loginid=fixture-user&pwd=fixture-pass-9472&remember=1',
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user');
+    expect(out.findings[0]?.passwordValue).toBe('fixture-pass-9472');
+  });
+});
+
 describe('extractCredentials — Southwest-shaped synthetic fixture', () => {
   // Mirrors Southwest's recorded login POST shape without using any real
   // credential. The point is to prove the extractor recognises the

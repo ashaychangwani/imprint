@@ -138,17 +138,17 @@ const SENSITIVE_HEADERS = [
 
 const SENSITIVE_HEADER_SET = new Set(SENSITIVE_HEADERS.map((h) => h.toLowerCase()));
 
-const normalize = (s: string): string => s.toLowerCase().replace(/[-_]/g, '');
+export const normalizeKey = (s: string): string => s.toLowerCase().replace(/[-_]/g, '');
 
 /** True if the key name suggests a sensitive value (auth, payment, PII). */
 export function isSensitiveKey(key: string): boolean {
-  return SENSITIVE_KEY_SET.has(normalize(key));
+  return SENSITIVE_KEY_SET.has(normalizeKey(key));
 }
 
 /** True if the key name suggests a *password* specifically (not arbitrary
  *  PII). Used when pairing a username + password in extraction. */
 export function isSensitiveCredentialKey(key: string): boolean {
-  return PASSWORD_LIKE_KEYS.has(normalize(key));
+  return PASSWORD_LIKE_KEYS.has(normalizeKey(key));
 }
 
 export function isSensitiveHeader(header: string): boolean {

@@ -12,14 +12,14 @@
  * value is visible and lets us confirm which form was the login form.
  */
 
-import { isSensitiveCredentialKey } from './sensitive-keys.ts';
+import { isSensitiveCredentialKey, normalizeKey } from './sensitive-keys.ts';
 import type { CapturedEvent, CapturedRequest, Session } from './types.ts';
 
 /** Field-name patterns we'll treat as the username/email partner of a
  *  password field. Ordered by preference: emails first, then user-ish
  *  identifiers. */
 const USERNAME_KEY_RE =
-  /^(user(?:name)?|email(?:address)?|login|account|patron(?:number|_number|id)?)$/i;
+  /^(user(?:name|id)?|email(?:address)?|login(?:id)?|account|patron(?:number|id)?)$/i;
 
 /** Where, within a request, a redactable value lives. */
 export type ReplacementLocation =
@@ -132,7 +132,7 @@ function findInFormBody(req: CapturedRequest): BodyFinding | null {
 
   // Second pass: find a username-like key.
   for (const { key, value } of pairs) {
-    if (USERNAME_KEY_RE.test(key) && value.length > 0) {
+    if (USERNAME_KEY_RE.test(normalizeKey(key)) && value.length > 0) {
       usernameKey = key;
       usernameValue = value;
       break;
@@ -163,7 +163,7 @@ function findInJsonBody(req: CapturedRequest): BodyFinding | null {
   if (typeof pwdHit.value !== 'string' || pwdHit.value.length === 0) return null;
 
   // Look for a username-like key; prefer one in the same parent object.
-  const userHit = findFirstByPredicate(parsed, (k) => USERNAME_KEY_RE.test(k), pwdHit.parent);
+  const userHit = findFirstByPredicate(parsed, (k) => USERNAME_KEY_RE.test(normalizeKey(k)), pwdHit.parent);
   if (!userHit || typeof userHit.value !== 'string' || userHit.value.length === 0) return null;
 
   return {

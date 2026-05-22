@@ -24,6 +24,7 @@ import {
   extractCredentials,
 } from './credential-extract.ts';
 import { getCredentialBackend, readSiteManifest, upsertManifestEntry } from './credential-store.ts';
+import { loadCredentialStore } from './runtime.ts';
 import { emit } from './emit.ts';
 import {
   type Platform,
@@ -895,6 +896,22 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   if (results.length === 0) {
     throw new Error('No selected tools were compiled.');
+  }
+
+  for (const result of results) {
+    const creds = referencedCredentialNames(result.workflow, result.playbook);
+    if (creds.size > 0) {
+      const store = await loadCredentialStore(site);
+      const storedNames = store ? new Set(Object.keys(store.values)) : new Set<string>();
+      const missing = [...creds].filter((name) => !storedNames.has(name));
+      if (missing.length > 0) {
+        p.log.warn(
+          `Tool "${result.workflow.toolName}" needs credentials [${missing.join(', ')}] ` +
+            `but they are not in the credential store.\n` +
+            `Run: ${missing.map((n) => `imprint credential set ${site} ${n}`).join(' && ')}`,
+        );
+      }
+    }
   }
 
   const primaryResult = results[0] as TeachToolResult;
