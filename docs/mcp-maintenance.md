@@ -30,7 +30,7 @@ It also scans `IMPRINT_HOME` for generated tools, `.teach-state.json`, raw and r
 | `orphan-session` | A session file exists but no `teach` workflow references it. |
 | `stale-registration` | An external MCP registration points at `imprint mcp-server <site>`, but there is no complete generated tool for that site. |
 
-Each issue includes a next-step hint. In interactive mode, choose `Fix an issue` to apply the exact matching cleanup action instead of selecting a registration or site manually.
+Each issue includes a next-step hint. In interactive mode, choose `Fix an issue` to apply the exact matching cleanup action instead of selecting a registration or site manually. The fix prompt is a multi-select: toggle individual issues with `space`, or pick `Select all issues` to fix everything in one pass. Orphan-session deletions still ask once for confirmation before removing recordings.
 
 Use JSON output for scripts:
 
