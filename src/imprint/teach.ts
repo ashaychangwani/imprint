@@ -46,6 +46,7 @@ import { localSiteDir, localToolDir } from './paths.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
+import { loadCredentialStore } from './runtime.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import {
   TEACH_STEPS as STEPS,
@@ -895,6 +896,20 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   if (results.length === 0) {
     throw new Error('No selected tools were compiled.');
+  }
+
+  for (const result of results) {
+    const creds = referencedCredentialNames(result.workflow, result.playbook);
+    if (creds.size > 0) {
+      const store = await loadCredentialStore(site);
+      const storedNames = store ? new Set(Object.keys(store.values)) : new Set<string>();
+      const missing = [...creds].filter((name) => !storedNames.has(name));
+      if (missing.length > 0) {
+        p.log.warn(
+          `Tool "${result.workflow.toolName}" needs credentials [${missing.join(', ')}] but they are not in the credential store.\nRun: ${missing.map((n) => `imprint credential set ${site} ${n}`).join(' && ')}`,
+        );
+      }
+    }
   }
 
   const primaryResult = results[0] as TeachToolResult;
