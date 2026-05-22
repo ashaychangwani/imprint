@@ -5,11 +5,11 @@ import { resolve as pathResolve } from 'node:path';
 import { VERB_HELP } from '../src/cli.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
 import { localSessionsDir, localSiteDir } from '../src/imprint/paths.ts';
+import { discoverOrphanSession } from '../src/imprint/teach-state.ts';
 import {
   assertCandidateToolName,
   buildTeachProviderPickerOptions,
   buildTeachStateFromSession,
-  discoverOrphanSession,
   mapLimit,
   promptForTeachProvider,
   resolveTeachStatePath,

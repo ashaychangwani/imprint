@@ -11,6 +11,14 @@ import type { CronConfig, Playbook, Workflow, WorkflowParameter } from './types.
 
 export type Platform = 'claude-code' | 'codex' | 'claude-desktop' | 'openclaw' | 'hermes';
 
+export const PLATFORMS: readonly Platform[] = [
+  'claude-code',
+  'codex',
+  'claude-desktop',
+  'openclaw',
+  'hermes',
+] as const;
+
 interface ImprintCommand {
   command: string;
   args: string[];
@@ -216,7 +224,7 @@ export function buildMcpServerConfig(opts: {
   };
 }
 
-function shellQuote(value: string): string {
+export function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) return value;
   return `'${value.replaceAll("'", "'\\''")}'`;
 }

@@ -5,7 +5,6 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
-import { emit } from './emit.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { ToolResult, Workflow, WorkflowParameter } from './types.ts';
 
@@ -77,12 +76,15 @@ async function tryLoadTool(
 ): Promise<ResolvedTool | null> {
   let mod: GeneratedModule;
   if (hasStaleRuntimeImport(modulePath)) {
-    tryRepairGeneratedModule(modulePath, logPrefix);
+    await tryRepairGeneratedModule(modulePath, logPrefix);
   }
   try {
     mod = (await import(modulePath)) as GeneratedModule;
   } catch (err) {
-    if (canRepairStaleRuntimeImport(err) && tryRepairGeneratedModule(modulePath, logPrefix)) {
+    if (
+      canRepairStaleRuntimeImport(err) &&
+      (await tryRepairGeneratedModule(modulePath, logPrefix))
+    ) {
       try {
         const repairedUrl = `${pathToFileURL(modulePath).href}?imprintRepair=${Date.now()}`;
         mod = (await import(repairedUrl)) as GeneratedModule;
@@ -127,10 +129,11 @@ function canRepairStaleRuntimeImport(err: unknown): boolean {
   return message.includes('Cannot find module') && message.includes('/src/imprint/runtime.ts');
 }
 
-function tryRepairGeneratedModule(modulePath: string, logPrefix: string): boolean {
+async function tryRepairGeneratedModule(modulePath: string, logPrefix: string): Promise<boolean> {
   const toolDir = dirname(modulePath);
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   try {
+    const { emit } = await import('./emit.ts');
     emit({ workflowPath, outDir: toolDir, force: true });
     process.stderr.write(`${logPrefix} repaired stale generated wrapper at ${modulePath}\n`);
     return true;

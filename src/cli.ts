@@ -55,9 +55,11 @@ COMPILE
   generate <session>       Session → workflow.json (API replay).
   compile-playbook <sess>  Session → playbook.yaml (DOM replay).
   emit <workflow.json>     workflow.json → ~/.imprint/<site>/<toolName>/index.ts.
-  install <site>           Install an emitted MCP server into an AI platform.
-  uninstall <site>         Remove an installed Imprint MCP server from an AI platform.
   probe-backends <site>    Try each backend once, cache the working order.
+
+INSTALL
+  install [<site>]         Install an emitted MCP server into an AI platform.
+  uninstall [<site>]       Remove an installed Imprint MCP server from an AI platform.
 
 RUN
   mcp-server <site>        Serve one site's tools as MCP (stdio default).
@@ -747,10 +749,10 @@ async function main(argv: string[]): Promise<number> {
         allowPositionals: false,
       });
 
-      const platforms = ['claude-code', 'codex', 'claude-desktop', 'openclaw', 'hermes'] as const;
-      if (values.platform && !platforms.includes(values.platform as (typeof platforms)[number])) {
+      const { PLATFORMS } = await import('./imprint/integrations.ts');
+      if (values.platform && !PLATFORMS.includes(values.platform as (typeof PLATFORMS)[number])) {
         console.error(
-          `error: unknown platform '${values.platform}' — valid: ${platforms.join(', ')}`,
+          `error: unknown platform '${values.platform}' — valid: ${PLATFORMS.join(', ')}`,
         );
         return 2;
       }
@@ -767,7 +769,7 @@ async function main(argv: string[]): Promise<number> {
         ? await installTui()
         : await install({
             site,
-            platform: values.platform as (typeof platforms)[number] | undefined,
+            platform: values.platform as (typeof PLATFORMS)[number] | undefined,
             source: values.source as (typeof sources)[number] | undefined,
             print: values.print,
             noInteractive: values['no-interactive'],
@@ -792,10 +794,10 @@ async function main(argv: string[]): Promise<number> {
         allowPositionals: false,
       });
 
-      const platforms = ['claude-code', 'codex', 'claude-desktop', 'openclaw', 'hermes'] as const;
-      if (values.platform && !platforms.includes(values.platform as (typeof platforms)[number])) {
+      const { PLATFORMS } = await import('./imprint/integrations.ts');
+      if (values.platform && !PLATFORMS.includes(values.platform as (typeof PLATFORMS)[number])) {
         console.error(
-          `error: unknown platform '${values.platform}' — valid: ${platforms.join(', ')}`,
+          `error: unknown platform '${values.platform}' — valid: ${PLATFORMS.join(', ')}`,
         );
         return 2;
       }
@@ -803,7 +805,7 @@ async function main(argv: string[]): Promise<number> {
       const { uninstall } = await import('./imprint/install.ts');
       const result = await uninstall({
         site,
-        platform: values.platform as (typeof platforms)[number] | undefined,
+        platform: values.platform as (typeof PLATFORMS)[number] | undefined,
         print: values.print,
         noInteractive: values['no-interactive'],
       });

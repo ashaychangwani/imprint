@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
@@ -6,6 +5,7 @@ import * as p from '@clack/prompts';
 import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
 import {
   type McpServerConfig,
+  PLATFORMS,
   type Platform,
   buildMcpServerConfig,
   buildRegistrationCommand,
@@ -13,14 +13,13 @@ import {
   detectDirectBunImprintCommand,
   detectImprintCommand,
   generatePasteSnippet,
+  shellQuote,
 } from './integrations.ts';
 import { imprintHomeDir } from './paths.ts';
 import { discoverTools } from './tool-loader.ts';
 import type { Workflow } from './types.ts';
 
 type InstallSource = 'local' | 'examples';
-
-const PLATFORMS: Platform[] = ['claude-code', 'codex', 'claude-desktop', 'openclaw', 'hermes'];
 const installedMcpServerCache = new Map<Platform, InstalledMcpServer[]>();
 
 interface InstallOptions {
@@ -307,6 +306,7 @@ export async function install(opts: InstallOptions = {}): Promise<InstallResult>
     message = `${server.name} installed in ${formatPlatform(platform)} config: ${configPath}`;
   }
 
+  installedMcpServerCache.delete(platform);
   return {
     platform,
     site: target.site,
@@ -356,6 +356,7 @@ export async function uninstall(opts: UninstallOptions = {}): Promise<UninstallR
       : `${serverName} was not installed in ${formatPlatform(platform)} config: ${result.path}`;
   }
 
+  installedMcpServerCache.delete(platform);
   return { platform, site, serverName, message, configPath, removed };
 }
 
@@ -494,7 +495,7 @@ function runRegistrationCommand(platform: Platform, serverName: string, command:
           ? ['codex', 'mcp', 'remove', serverName]
           : null;
     if (removeCommand) {
-      execFileSync(removeCommand[0] ?? '', removeCommand.slice(1), { stdio: 'ignore' });
+      Bun.spawnSync(removeCommand, { stdio: ['ignore', 'ignore', 'ignore'] });
       const retry = Bun.spawnSync(command, { stdio: ['ignore', 'pipe', 'pipe'] });
       if (retry.exitCode === 0) return;
       throw new Error(retry.stderr.toString().trim() || `Command exited with ${retry.exitCode}`);
@@ -519,7 +520,16 @@ function upsertJsonConfig(
   path: string,
   update: (config: unknown) => Record<string, unknown>,
 ): void {
-  const parsed = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+  let parsed: unknown = {};
+  if (existsSync(path)) {
+    try {
+      parsed = JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      throw new Error(
+        `Config at ${path} contains invalid JSON — fix it manually or delete it and retry.`,
+      );
+    }
+  }
   writeConfigFile(path, `${JSON.stringify(update(parsed), null, 2)}\n`);
 }
 
@@ -528,7 +538,14 @@ function deleteJsonConfig(
   update: (config: unknown) => { config: Record<string, unknown>; removed: boolean },
 ): boolean {
   if (!existsSync(path)) return false;
-  const parsed = JSON.parse(readFileSync(path, 'utf8'));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    throw new Error(
+      `Config at ${path} contains invalid JSON — fix it manually or delete it and retry.`,
+    );
+  }
   const result = update(parsed);
   if (result.removed) writeConfigFile(path, `${JSON.stringify(result.config, null, 2)}\n`);
   return result.removed;
@@ -536,7 +553,14 @@ function deleteJsonConfig(
 
 function readYamlRecord(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
-  const parsed = yamlParse(readFileSync(path, 'utf8'));
+  let parsed: unknown;
+  try {
+    parsed = yamlParse(readFileSync(path, 'utf8'));
+  } catch {
+    throw new Error(
+      `Config at ${path} contains invalid YAML — fix it manually or delete it and retry.`,
+    );
+  }
   return asRecord(parsed);
 }
 
@@ -639,12 +663,9 @@ function isPlatformDetected(platform: Platform): boolean {
 }
 
 function commandExists(command: string): boolean {
-  try {
-    execFileSync('which', [command], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
+  return (
+    Bun.spawnSync(['which', command], { stdio: ['ignore', 'ignore', 'ignore'] }).exitCode === 0
+  );
 }
 
 function platformOptionLabel(platform: Platform, verb: string): string {
@@ -735,14 +756,17 @@ function serverNameForSite(site: string): string {
   return `imprint-${normalizeSiteInput(site)}`;
 }
 
+const VALID_SITE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+
 function normalizeSiteInput(value: string): string {
   const trimmed = value.trim();
-  return trimmed.startsWith('imprint-') ? trimmed.slice('imprint-'.length) : trimmed;
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) return value;
-  return `'${value.replaceAll("'", "'\\''")}'`;
+  const site = trimmed.startsWith('imprint-') ? trimmed.slice('imprint-'.length) : trimmed;
+  if (!VALID_SITE_NAME.test(site)) {
+    throw new Error(
+      `Invalid site name "${site}" — must be lowercase alphanumeric with dots, underscores, or hyphens (e.g. "google-flights").`,
+    );
+  }
+  return site;
 }
 
 function isAlreadyAbsent(output: string): boolean {
