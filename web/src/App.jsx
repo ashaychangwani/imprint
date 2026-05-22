@@ -13,6 +13,7 @@ const product = {
   githubUrl: 'https://github.com/ashaychangwani/imprint',
   install: 'git clone https://github.com/ashaychangwani/imprint.git && cd imprint',
   teach: 'bun run imprint teach southwest --url https://www.southwest.com',
+  installMcp: 'bun run imprint install southwest --platform claude-desktop',
 };
 
 const pipeline = [
@@ -31,8 +32,8 @@ const pipeline = [
   {
     step: '03',
     title: 'Call forever',
-    body: 'Emit a typed MCP tool your agent can invoke from Claude Code, Codex CLI, Claude Desktop, OpenClaw, or a Bun-powered cron run.',
-    artifact: 'bun run imprint mcp-server <site>',
+    body: 'Emit a typed MCP tool and install or remove it wherever your agent runs: Claude Code, Codex CLI, Claude Desktop, OpenClaw, Hermes, or cron.',
+    artifact: 'bun run imprint install <site>',
   },
 ];
 
@@ -422,7 +423,7 @@ export default function App() {
                 <span className="kicker">One command pipeline</span>
                 <h2 id="workflow-title">From browser session to callable tool.</h2>
               </div>
-              <p><code>bun run imprint teach</code> runs the complete path interactively: record, redact, generate, compile, emit, and wire the MCP server into the AI platform you choose.</p>
+              <p><code>bun run imprint teach</code> runs the complete path interactively: record, redact, generate, compile, emit, and wire the MCP server into the AI platform you choose. <code>imprint install</code> adds the same emitted server to another platform later, using absolute CLI paths for desktop config clients; <code>imprint uninstall</code> removes it.</p>
             </div>
             <div className="pipeline">
               {pipeline.map((item) => <PipelineCard key={item.step} item={item} />)}
@@ -438,7 +439,7 @@ export default function App() {
             <div className="artifact-stack" aria-label="Generated artifacts">
               <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay with named state captures for low-latency tasks and cron jobs.</p></article>
               <article className="artifact"><small>Fallback path</small><h3>playbook.yaml</h3><p>DOM-level steps for sites that move logic into the browser.</p></article>
-              <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and a local runtime wrapper you can re-emit per machine.</p></article>
+              <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and an installable MCP server for local tools or checked-in examples.</p></article>
               <article className="artifact"><small>Optional</small><h3>request-transform.ts</h3><p>URL signing or request mutation when the API requires per-call tokens (HMAC, CRC32, OAuth).</p></article>
             </div>
           </section>
@@ -491,7 +492,7 @@ export default function App() {
                   <span className="kicker">Working examples</span>
                   <h2 id="examples-title">Real sites, real friction, real replay.</h2>
                 </div>
-                <p>Imprint ships with examples that exercise bot protection, protobuf parsing, authenticated flows, notifications, and MCP smoke testing.</p>
+                <p>Imprint ships with examples that exercise bot protection, protobuf parsing, authenticated flows, notifications, and MCP smoke testing. Install any example directly with <code>imprint install --source examples</code> and remove the registration later with <code>imprint uninstall</code>.</p>
               </div>
               <div className="example-grid">
                 {examples.map((example) => (
@@ -541,6 +542,7 @@ export default function App() {
                 <div className="command"><b>2</b><code>bun install && bun link</code></div>
                 <div className="command"><b>3</b><code>bunx playwright install chromium</code></div>
                 <div className="command"><b>4</b><code>{product.teach}</code></div>
+                <div className="command"><b>5</b><code>{product.installMcp}</code></div>
               </div>
             </div>
           </section>

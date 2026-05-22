@@ -57,6 +57,10 @@ COMPILE
   emit <workflow.json>     workflow.json → ~/.imprint/<site>/<toolName>/index.ts.
   probe-backends <site>    Try each backend once, cache the working order.
 
+INSTALL
+  install [<site>]         Install an emitted MCP server into an AI platform.
+  uninstall [<site>]       Remove an installed Imprint MCP server from an AI platform.
+
 RUN
   mcp-server <site>        Serve one site's tools as MCP (stdio default).
   cron <site>              Polling daemon for ~/.imprint/<site>/<toolName>/cron.json.
@@ -227,6 +231,52 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--force', description: 'Overwrite an existing index.ts.' },
     ],
     example: 'imprint emit ~/.imprint/acmecorp/my-workflow/workflow.json',
+  },
+  install: {
+    summary:
+      'Install an already-emitted MCP server into Claude Code, Codex, Claude Desktop, OpenClaw, or Hermes.',
+    usage: [
+      'imprint install [<site>] [--platform <name>] [--source local|examples] [--print] [--no-interactive]',
+    ],
+    flags: [
+      {
+        name: '--platform <name>',
+        description: 'Target platform: claude-code, codex, claude-desktop, openclaw, hermes.',
+      },
+      {
+        name: '--source <source>',
+        description: 'Install generated tools from local IMPRINT_HOME or checked-in examples.',
+      },
+      {
+        name: '--print',
+        description: 'Print the platform config/command instead of writing or running it.',
+      },
+      {
+        name: '--no-interactive',
+        description: 'Do not prompt; requires <site> and --platform.',
+      },
+    ],
+    example: 'imprint install google-flights --source examples --platform claude-desktop',
+  },
+  uninstall: {
+    summary:
+      'Remove an installed Imprint MCP server from Claude Code, Codex, Claude Desktop, OpenClaw, or Hermes.',
+    usage: ['imprint uninstall [<site>] [--platform <name>] [--print] [--no-interactive]'],
+    flags: [
+      {
+        name: '--platform <name>',
+        description: 'Target platform: claude-code, codex, claude-desktop, openclaw, hermes.',
+      },
+      {
+        name: '--print',
+        description: 'Print the platform remove command/config edit instead of applying it.',
+      },
+      {
+        name: '--no-interactive',
+        description: 'Do not prompt; requires <site> and --platform.',
+      },
+    ],
+    example: 'imprint uninstall google-flights --platform claude-desktop',
   },
   login: {
     summary: 'Persist auth cookies for <site> from a captured session.',
@@ -681,6 +731,85 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `  imprint cron ${site} --tool ${result.toolName} --once       # one-shot test (after creating cron.json)`,
       );
+      return 0;
+    }
+
+    case 'install': {
+      const rawSite = argv[1];
+      let site: string | undefined;
+      if (rawSite && !rawSite.startsWith('-')) site = rawSite;
+      const { values } = parseArgs({
+        args: argv.slice(site ? 2 : 1),
+        options: {
+          platform: { type: 'string' },
+          source: { type: 'string' },
+          print: { type: 'boolean' },
+          'no-interactive': { type: 'boolean' },
+        },
+        allowPositionals: false,
+      });
+
+      const { PLATFORMS } = await import('./imprint/integrations.ts');
+      if (values.platform && !PLATFORMS.includes(values.platform as (typeof PLATFORMS)[number])) {
+        console.error(
+          `error: unknown platform '${values.platform}' — valid: ${PLATFORMS.join(', ')}`,
+        );
+        return 2;
+      }
+      const sources = ['local', 'examples'] as const;
+      if (values.source && !sources.includes(values.source as (typeof sources)[number])) {
+        console.error(`error: unknown source '${values.source}' — valid: ${sources.join(', ')}`);
+        return 2;
+      }
+
+      const { install, installTui } = await import('./imprint/install.ts');
+      const useTui =
+        !site && !values.platform && !values.source && !values.print && !values['no-interactive'];
+      const result = useTui
+        ? await installTui()
+        : await install({
+            site,
+            platform: values.platform as (typeof PLATFORMS)[number] | undefined,
+            source: values.source as (typeof sources)[number] | undefined,
+            print: values.print,
+            noInteractive: values['no-interactive'],
+          });
+      console.log(`[imprint] ${result.message}`);
+      if ('source' in result)
+        console.log(`[imprint] source: ${result.source} (${result.assetRoot})`);
+      return 0;
+    }
+
+    case 'uninstall': {
+      const rawSite = argv[1];
+      let site: string | undefined;
+      if (rawSite && !rawSite.startsWith('-')) site = rawSite;
+      const { values } = parseArgs({
+        args: argv.slice(site ? 2 : 1),
+        options: {
+          platform: { type: 'string' },
+          print: { type: 'boolean' },
+          'no-interactive': { type: 'boolean' },
+        },
+        allowPositionals: false,
+      });
+
+      const { PLATFORMS } = await import('./imprint/integrations.ts');
+      if (values.platform && !PLATFORMS.includes(values.platform as (typeof PLATFORMS)[number])) {
+        console.error(
+          `error: unknown platform '${values.platform}' — valid: ${PLATFORMS.join(', ')}`,
+        );
+        return 2;
+      }
+
+      const { uninstall } = await import('./imprint/install.ts');
+      const result = await uninstall({
+        site,
+        platform: values.platform as (typeof PLATFORMS)[number] | undefined,
+        print: values.print,
+        noInteractive: values['no-interactive'],
+      });
+      console.log(`[imprint] ${result.message}`);
       return 0;
     }
 

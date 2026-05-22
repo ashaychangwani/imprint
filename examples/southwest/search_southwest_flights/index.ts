@@ -5,7 +5,7 @@
  * Site: southwest
  * Intent: Search for one-way Southwest Airlines flights between two airports on a given departure date, returning available flights and fares.
  *
- * To regenerate: imprint emit examples/southwest/search_southwest_flights/workflow.json --force
+ * To regenerate: imprint emit ~/.imprint/southwest/search_southwest_flights/workflow.json --force
  */
 
 import { fileURLToPath } from 'node:url';
@@ -13,8 +13,8 @@ import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
   type CredentialStore,
-} from '../../../src/imprint/runtime.ts';
-import type { ToolResult, Workflow } from '../../../src/imprint/types.ts';
+} from 'imprint/runtime';
+import type { ToolResult, Workflow } from 'imprint/types';
 
 const WORKFLOW: Workflow = {
   "toolName": "search_southwest_flights",
@@ -86,7 +86,7 @@ export interface SearchSouthwestFlightsInput {
 
 export async function searchSouthwestFlights(
   input: SearchSouthwestFlightsInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
@@ -102,6 +102,7 @@ export async function searchSouthwestFlights(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });
 }

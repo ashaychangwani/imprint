@@ -184,19 +184,18 @@ export function discoverCompletedWorkflows(site: string): string[] {
   return names;
 }
 
-/** Find the latest session that has no matching state entry.
- * Recordings live under ~/.imprint/<site>/sessions/. */
+/** Find the latest local session that has no matching state entry.
+ *  Recordings live under IMPRINT_HOME/<site>/sessions/. */
 export function discoverOrphanSession(site: string, state: TeachState): WorkflowState | null {
   const trackedPaths = new Set(Object.values(state.workflows).map((ws) => ws.sessionPath));
 
   const candidates: Array<{ absPath: string; file: string }> = [];
-  for (const sessDir of [localSessionsDir(site), pathResolve('examples', site, 'sessions')]) {
-    if (!existsSync(sessDir)) continue;
-    const sessions = readdirSync(sessDir).filter(
-      (f) => f.endsWith('.json') && !f.includes('.redacted') && !f.includes('.triaged'),
-    );
-    for (const file of sessions) candidates.push({ absPath: pathJoin(sessDir, file), file });
-  }
+  const sessDir = localSessionsDir(site);
+  if (!existsSync(sessDir)) return null;
+  const sessions = readdirSync(sessDir).filter(
+    (f) => f.endsWith('.json') && !f.includes('.redacted') && !f.includes('.triaged'),
+  );
+  for (const file of sessions) candidates.push({ absPath: pathJoin(sessDir, file), file });
 
   candidates.sort((a, b) => b.file.localeCompare(a.file));
 

@@ -1,8 +1,9 @@
 /** Discover + load generated tools from <assetRoot>/<site>/<toolName>/index.ts. Used
  *  by mcp-server, cron, and probe-backends. */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import { dirname, resolve as pathResolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { ToolResult, Workflow, WorkflowParameter } from './types.ts';
@@ -74,13 +75,31 @@ async function tryLoadTool(
   logPrefix: string,
 ): Promise<ResolvedTool | null> {
   let mod: GeneratedModule;
+  if (hasStaleRuntimeImport(modulePath)) {
+    await tryRepairGeneratedModule(modulePath, logPrefix);
+  }
   try {
     mod = (await import(modulePath)) as GeneratedModule;
   } catch (err) {
-    process.stderr.write(
-      `${logPrefix} skipping ${modulePath}: failed to load (${err instanceof Error ? err.message : String(err)})\n`,
-    );
-    return null;
+    if (
+      canRepairStaleRuntimeImport(err) &&
+      (await tryRepairGeneratedModule(modulePath, logPrefix))
+    ) {
+      try {
+        const repairedUrl = `${pathToFileURL(modulePath).href}?imprintRepair=${Date.now()}`;
+        mod = (await import(repairedUrl)) as GeneratedModule;
+      } catch (repairErr) {
+        process.stderr.write(
+          `${logPrefix} skipping ${modulePath}: failed to load after repair (${repairErr instanceof Error ? repairErr.message : String(repairErr)})\n`,
+        );
+        return null;
+      }
+    } else {
+      process.stderr.write(
+        `${logPrefix} skipping ${modulePath}: failed to load (${err instanceof Error ? err.message : String(err)})\n`,
+      );
+      return null;
+    }
   }
   if (!mod.WORKFLOW) {
     process.stderr.write(`${logPrefix} skipping ${modulePath}: missing WORKFLOW export\n`);
@@ -94,6 +113,36 @@ async function tryLoadTool(
     return null;
   }
   return { site, dir: dirname(modulePath), workflow: mod.WORKFLOW, toolFn: fn };
+}
+
+function hasStaleRuntimeImport(modulePath: string): boolean {
+  try {
+    const source = readFileSync(modulePath, 'utf8');
+    return /from\s+['"][^'"]*\/src\/imprint\/runtime\.ts['"]/.test(source);
+  } catch {
+    return false;
+  }
+}
+
+function canRepairStaleRuntimeImport(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes('Cannot find module') && message.includes('/src/imprint/runtime.ts');
+}
+
+async function tryRepairGeneratedModule(modulePath: string, logPrefix: string): Promise<boolean> {
+  const toolDir = dirname(modulePath);
+  const workflowPath = pathJoin(toolDir, 'workflow.json');
+  try {
+    const { emit } = await import('./emit.ts');
+    emit({ workflowPath, outDir: toolDir, force: true });
+    process.stderr.write(`${logPrefix} repaired stale generated wrapper at ${modulePath}\n`);
+    return true;
+  } catch (err) {
+    process.stderr.write(
+      `${logPrefix} could not repair stale generated wrapper at ${modulePath}: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return false;
+  }
 }
 
 /** Tool fn export is the camelCase of toolName: book_x_y → bookXY. */
