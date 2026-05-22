@@ -1,11 +1,10 @@
 /**
  * In-place multi-line progress renderer for concurrent compile agents.
  *
- * Uses DECSC/DECRC (save/restore cursor) to return to an absolute terminal
- * position on each redraw, then erases from that point to the end of the
- * screen.  This avoids relative cursor-up (CSI CUU) which breaks when
- * other code writes to stderr between redraws or when the terminal
- * processes escape sequences non-atomically.
+ * Uses CSI CPL (\x1b[nF — cursor previous line) to move back to the
+ * first rendered line, then CSI ED (\x1b[J — erase to end of screen)
+ * before rewriting.  Everything is emitted in a single write() call
+ * so the terminal processes it atomically.
  *
  * Falls back to plain newline-per-update for non-TTY output.
  */
@@ -15,7 +14,6 @@ const isTTY = (): boolean => process.stderr.isTTY ?? false;
 export class MultiProgress {
   private lines = new Map<string, string>();
   private renderedCount = 0;
-  private cursorSaved = false;
   private paused = false;
 
   update(key: string, message: string): void {
@@ -35,12 +33,8 @@ export class MultiProgress {
   /** Erase all rendered progress lines from the terminal. */
   clear(): void {
     if (!isTTY() || this.renderedCount === 0) return;
-    let buf = '';
-    if (this.cursorSaved) buf += '\x1b8';
-    buf += '\x1b[J';
-    process.stderr.write(buf);
+    process.stderr.write(`\x1b[${this.renderedCount}F\x1b[J`);
     this.renderedCount = 0;
-    this.cursorSaved = false;
   }
 
   /** Stop writing to the terminal. Updates are buffered in memory. */
@@ -62,15 +56,14 @@ export class MultiProgress {
 
   private redraw(): void {
     let buf = '';
-    if (this.cursorSaved) {
-      buf += '\x1b8';
+    if (this.renderedCount > 0) {
+      buf += `\x1b[${this.renderedCount}F`;
     }
-    buf += '\x1b7\x1b[J';
+    buf += '\x1b[J';
     for (const [, msg] of this.lines) {
       buf += `│  ${msg}\n`;
     }
     process.stderr.write(buf);
-    this.cursorSaved = true;
     this.renderedCount = this.lines.size;
   }
 }

@@ -20,26 +20,24 @@ describe('MultiProgress', () => {
     (process.stderr as { isTTY: boolean | undefined }).isTTY = origIsTTY;
   });
 
-  it('first update: save cursor + erase + line', () => {
+  it('first update: erase + line (no cursor-up)', () => {
     const mp = new MultiProgress();
     mp.update('tool1', 'tool1: thinking');
     expect(writes).toHaveLength(1);
-    // \x1b7 = DECSC (save), \x1b[J = erase to end of screen
-    expect(writes[0]).toBe('\x1b7\x1b[J│  tool1: thinking\n');
+    expect(writes[0]).toBe('\x1b[J│  tool1: thinking\n');
   });
 
-  it('second update: restore + save + erase + line in single write', () => {
+  it('second update: cursor-up 1 + erase + line in single write', () => {
     const mp = new MultiProgress();
     mp.update('tool1', 'tool1: thinking');
     writes.length = 0;
 
     mp.update('tool1', 'tool1: running');
     expect(writes).toHaveLength(1);
-    // \x1b8 = DECRC (restore), \x1b7 = DECSC (re-save), \x1b[J = erase
-    expect(writes[0]).toBe('\x1b8\x1b7\x1b[J│  tool1: running\n');
+    expect(writes[0]).toBe('\x1b[1F\x1b[J│  tool1: running\n');
   });
 
-  it('two keys: restore + save + erase + two lines', () => {
+  it('two keys: cursor-up 2 + erase + two lines', () => {
     const mp = new MultiProgress();
     mp.update('tool1', 'tool1: thinking');
     mp.update('tool2', 'tool2: thinking');
@@ -47,10 +45,10 @@ describe('MultiProgress', () => {
 
     mp.update('tool1', 'tool1: running');
     expect(writes).toHaveLength(1);
-    expect(writes[0]).toBe('\x1b8\x1b7\x1b[J│  tool1: running\n│  tool2: thinking\n');
+    expect(writes[0]).toBe('\x1b[2F\x1b[J│  tool1: running\n│  tool2: thinking\n');
   });
 
-  it('clear: restore + erase, resets cursorSaved', () => {
+  it('clear: cursor-up + erase', () => {
     const mp = new MultiProgress();
     mp.update('a', 'line-a');
     mp.update('b', 'line-b');
@@ -58,10 +56,10 @@ describe('MultiProgress', () => {
 
     mp.clear();
     expect(writes).toHaveLength(1);
-    expect(writes[0]).toBe('\x1b8\x1b[J');
+    expect(writes[0]).toBe('\x1b[2F\x1b[J');
   });
 
-  it('clear then render saves new cursor position', () => {
+  it('clear then render starts fresh (no cursor-up)', () => {
     const mp = new MultiProgress();
     mp.update('a', 'line-a');
     mp.update('b', 'line-b');
@@ -70,10 +68,9 @@ describe('MultiProgress', () => {
     mp.remove('a');
     writes.length = 0;
 
-    // After clear, cursorSaved is false so no restore — just save + erase + line
     mp.render();
     expect(writes).toHaveLength(1);
-    expect(writes[0]).toBe('\x1b7\x1b[J│  line-b\n');
+    expect(writes[0]).toBe('\x1b[J│  line-b\n');
   });
 
   it('non-TTY falls back to plain newlines', () => {
@@ -99,7 +96,7 @@ describe('MultiProgress', () => {
     mp.update('a', 'line-a-v2');
     expect(writes).toHaveLength(1);
     const out = writes[0] as string;
-    expect(out).toStartWith('\x1b8\x1b7\x1b[J');
+    expect(out).toStartWith('\x1b[3F\x1b[J');
     expect(out).toContain('│  line-a-v2');
     expect(out).toContain('│  line-c');
     expect(out).not.toContain('line-b');
