@@ -238,7 +238,12 @@ function collectFormSubmitUsernames(events: CapturedEvent[]): Set<string> {
         fields?: Array<{ name?: string; type?: string; value?: string }>;
       };
       for (const f of detail.fields ?? []) {
-        if (f.name && f.value && f.type !== 'password' && USERNAME_KEY_RE.test(f.name)) {
+        if (
+          f.name &&
+          f.value &&
+          f.type !== 'password' &&
+          USERNAME_KEY_RE.test(normalizeKey(f.name))
+        ) {
           out.add(f.value);
         }
       }
