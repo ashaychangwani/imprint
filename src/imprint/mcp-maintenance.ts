@@ -354,21 +354,79 @@ async function runInteractiveMcp(): Promise<number> {
 }
 
 async function runInteractiveIssueFix(status: McpStatus, ctx: MaintenanceContext): Promise<void> {
-  const issueChoice = await p.select({
-    message: 'Fix which issue?',
-    options: status.issues.map((issue, index) => ({
-      value: String(index),
-      label: `${issue.kind}: ${issue.message}`,
-    })),
-  });
-  if (p.isCancel(issueChoice)) return;
+  const SELECT_ALL = '__select_all__';
+  const SELECT_NONE = '__select_none__';
 
-  const issue = status.issues[Number(issueChoice)];
-  if (!issue) {
-    reportMutation({ changed: [], skipped: ['selection disappeared'] });
+  const issueOptions = status.issues.map((issue, index) => ({
+    value: String(index),
+    label: `${issue.kind}: ${issue.message}`,
+  }));
+
+  const choice = await p.multiselect<string>({
+    message:
+      'Fix which issues? (space to toggle, enter to submit; pick "Select all" to fix everything)',
+    options: [
+      { value: SELECT_ALL, label: 'Select all issues' },
+      { value: SELECT_NONE, label: 'Select none (cancel)' },
+      ...issueOptions,
+    ],
+    required: false,
+    initialValues: [],
+  });
+  if (p.isCancel(choice)) return;
+
+  const selected = choice as string[];
+  if (selected.includes(SELECT_NONE) && !selected.includes(SELECT_ALL)) {
+    p.log.info('No issues selected.');
     return;
   }
 
+  const indices = selected.includes(SELECT_ALL)
+    ? status.issues.map((_, i) => i)
+    : selected
+        .filter((value) => value !== SELECT_ALL && value !== SELECT_NONE)
+        .map((value) => Number(value))
+        .filter((index) => Number.isInteger(index) && index >= 0 && index < status.issues.length);
+
+  if (indices.length === 0) {
+    p.log.info('No issues selected.');
+    return;
+  }
+
+  const orphanIssues = indices
+    .map((i) => status.issues[i])
+    .filter(
+      (issue): issue is McpIssue => !!issue && issue.kind === 'orphan-session' && !!issue.path,
+    );
+
+  let deleteOrphans = true;
+  if (orphanIssues.length > 0) {
+    const confirm = await p.confirm({
+      message: `Delete ${orphanIssues.length} orphan session file${orphanIssues.length === 1 ? '' : 's'}?`,
+      initialValue: false,
+    });
+    if (p.isCancel(confirm)) return;
+    deleteOrphans = confirm === true;
+  }
+
+  const aggregate: MutationResult = { changed: [], skipped: [] };
+  for (const index of indices) {
+    const issue = status.issues[index];
+    if (!issue) {
+      appendMutation(aggregate, { changed: [], skipped: ['selection disappeared'] });
+      continue;
+    }
+    appendMutation(aggregate, fixIssue(issue, status, ctx, { deleteOrphans }));
+  }
+  reportMutation(aggregate);
+}
+
+function fixIssue(
+  issue: McpIssue,
+  status: McpStatus,
+  ctx: MaintenanceContext,
+  opts: { deleteOrphans: boolean },
+): MutationResult {
   if (issue.kind === 'stale-registration') {
     const reg = status.registrations.find(
       (r) =>
@@ -376,30 +434,26 @@ async function runInteractiveIssueFix(status: McpStatus, ctx: MaintenanceContext
         r.name === issue.name &&
         (!issue.configPath || r.configPath === issue.configPath),
     );
-    reportMutation(
-      reg
-        ? deleteRegistration(reg, ctx, 'none')
-        : { changed: [], skipped: ['registration not found'] },
-    );
-    return;
+    return reg
+      ? deleteRegistration(reg, ctx, 'none')
+      : {
+          changed: [],
+          skipped: [`registration not found for ${issue.client ?? '?'}/${issue.name ?? '?'}`],
+        };
   }
 
   if ((issue.kind === 'incomplete' || issue.kind === 'missing-session') && issue.workflow) {
-    reportMutation(pruneSingleTeachWorkflow(issue.site, issue.workflow));
-    return;
+    return pruneSingleTeachWorkflow(issue.site, issue.workflow);
   }
 
   if (issue.kind === 'orphan-session' && issue.path) {
-    const confirm = await p.confirm({
-      message: `Delete orphan session file ${issue.path}?`,
-      initialValue: false,
-    });
-    if (p.isCancel(confirm) || confirm !== true) return;
-    reportMutation(deleteOrphanSessionFile(issue.path));
-    return;
+    if (!opts.deleteOrphans) {
+      return { changed: [], skipped: [`kept orphan session ${issue.path}`] };
+    }
+    return deleteOrphanSessionFile(issue.path);
   }
 
-  reportMutation({ changed: [], skipped: [`no automatic fix for ${issue.kind}`] });
+  return { changed: [], skipped: [`no automatic fix for ${issue.kind}`] };
 }
 
 async function runInteractiveLocalDelete(status: McpStatus): Promise<void> {
