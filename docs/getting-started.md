@@ -127,6 +127,20 @@ claude mcp add --scope user imprint-google-flights -- imprint mcp-server google-
 npx @modelcontextprotocol/inspector imprint mcp-server google-flights
 ```
 
+Audit the registration and local generated state any time a client does not show the tool:
+
+```bash
+imprint mcp status --site google-flights
+```
+
+For cleanup or stale `teach` checkpoints, use the interactive flow:
+
+```bash
+imprint mcp
+```
+
+See [MCP Maintenance](mcp-maintenance.md) for direct disable/delete/prune commands and recording deletion caveats.
+
 ## Schedule it
 
 Drop a `cron.json` next to your generated tool:
@@ -153,6 +167,6 @@ Optional: configure push notifications by setting `PUSHOVER_TOKEN` + `PUSHOVER_U
 
 ## When something doesn't work
 
-See [docs/troubleshooting.md](troubleshooting.md) for the predictable failures (Akamai 403, Playwright not installed, MCP client not seeing tools, etc.).
+See [docs/troubleshooting.md](troubleshooting.md) for the predictable failures (Akamai 403, Playwright not installed, MCP client not seeing tools, etc.). For MCP registration cleanup, start with [MCP Maintenance](mcp-maintenance.md).
 
 For deeper architectural context, [docs/architecture.md](architecture.md).

@@ -1,15 +1,16 @@
-import gettingStarted from '@docs/getting-started.md?raw';
-import integrations from '@docs/integrations.md?raw';
-import glossary from '@docs/glossary.md?raw';
+import architecture from '@docs/architecture.md?raw';
 import captureProtocol from '@docs/capture-protocol.md?raw';
 import credentialSharing from '@docs/credential-sharing.md?raw';
-import notifications from '@docs/notifications.md?raw';
-import troubleshooting from '@docs/troubleshooting.md?raw';
-import playbookDebugging from '@docs/playbook-debugging.md?raw';
-import architecture from '@docs/architecture.md?raw';
-import security from '@docs/security.md?raw';
 import decisions from '@docs/decisions.md?raw';
 import design from '@docs/design.md?raw';
+import gettingStarted from '@docs/getting-started.md?raw';
+import glossary from '@docs/glossary.md?raw';
+import integrations from '@docs/integrations.md?raw';
+import mcpMaintenance from '@docs/mcp-maintenance.md?raw';
+import notifications from '@docs/notifications.md?raw';
+import playbookDebugging from '@docs/playbook-debugging.md?raw';
+import security from '@docs/security.md?raw';
+import troubleshooting from '@docs/troubleshooting.md?raw';
 
 const docsManifest = [
   {
@@ -17,6 +18,7 @@ const docsManifest = [
     items: [
       { slug: 'getting-started', title: 'Quick Start' },
       { slug: 'integrations', title: 'Integrations' },
+      { slug: 'mcp-maintenance', title: 'MCP Maintenance' },
       { slug: 'glossary', title: 'Glossary' },
     ],
   },
@@ -48,17 +50,18 @@ const docsManifest = [
 
 const docsContent = {
   'getting-started': gettingStarted,
-  'integrations': integrations,
-  'glossary': glossary,
+  integrations: integrations,
+  'mcp-maintenance': mcpMaintenance,
+  glossary: glossary,
   'capture-protocol': captureProtocol,
   'credential-sharing': credentialSharing,
-  'notifications': notifications,
-  'troubleshooting': troubleshooting,
+  notifications: notifications,
+  troubleshooting: troubleshooting,
   'playbook-debugging': playbookDebugging,
-  'architecture': architecture,
-  'security': security,
-  'decisions': decisions,
-  'design': design,
+  architecture: architecture,
+  security: security,
+  decisions: decisions,
+  design: design,
 };
 
 export { docsManifest, docsContent };

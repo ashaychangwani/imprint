@@ -170,6 +170,19 @@ At the end of `imprint teach`, you pick your AI platform and Imprint handles the
 
 Each site registers as its own MCP server (`imprint-southwest`, `imprint-discoverandgo`, ...) so tools never collide. See [Integrations](docs/integrations.md) for HTTP transport, Docker, and systemd options.
 
+Audit or clean up those registrations with `imprint mcp`:
+
+```bash
+imprint mcp status                         # registrations + local teach state
+imprint mcp                                # interactive cleanup TUI
+imprint mcp disable imprint-mysite --yes   # reversible; stores a local snapshot
+imprint mcp delete imprint-mysite --yes    # removes external MCP registrations only
+```
+
+Raw recordings under `~/.imprint/<site>/sessions/` may contain sensitive browser state. Cleanup commands leave them alone unless you explicitly choose `--local site`.
+
+See [MCP Maintenance](docs/mcp-maintenance.md) for status classifications, supported client config files, reversible disable behavior, and local artifact cleanup rules.
+
 <br>
 
 ## Sharing skills across machines
@@ -241,7 +254,7 @@ imprint <command> --help    # per-command options
 | **Pipeline** | `teach` · `record` · `redact` · `generate` · `compile-playbook` · `emit` |
 | **Runtime** | `cron` · `mcp-server` · `playbook` · `probe-backends` |
 | **Credentials** | `credential set` · `credential list` · `credential export` · `credential import` · `credential migrate` |
-| **Utilities** | `login` · `assemble` · `check` · `doctor` |
+| **Utilities** | `mcp` · `login` · `assemble` · `check` · `doctor` |
 
 `teach`, `generate`, and `compile-playbook` accept `--provider <name>` to override the auto-detected LLM (see [Install](#install) for valid names and compile-agent support). `teach` and `generate` also take `--keep-test` to retain the agent-written `parser.test.ts` for debugging — it's deleted by default since it reads the gitignored redacted session via `$IMPRINT_SESSION_PATH` and isn't reproducible elsewhere. For multi-tool sites, use `imprint cron <site> --tool <toolName>` and `imprint probe-backends <site> --tool <toolName>` unless `--config` or `--out` points inside the target tool directory.
 
@@ -251,6 +264,7 @@ imprint <command> --help    # per-command options
 
 - [Getting Started](docs/getting-started.md) — full walkthrough
 - [Integrations](docs/integrations.md) — per-platform setup
+- [MCP Maintenance](docs/mcp-maintenance.md) — audit, disable, restore, and prune Imprint MCP state
 - [Sharing Skills](docs/credential-sharing.md) — laptop ↔ OpenClaw / Hermes / remote-agent provisioning
 - [Architecture](docs/architecture.md) — data flow and module map
 - [Security](docs/security.md) — redaction, credential handling, what gets stored

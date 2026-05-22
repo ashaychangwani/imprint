@@ -64,6 +64,7 @@ RUN
 
 OTHER
   doctor                   Check that the environment is set up correctly.
+  mcp                      Audit/disable/delete Imprint MCP registrations.
   assemble <session.jsonl> Recover session.json from a partial JSONL.
   check <session>          Sanity-check a captured session.
   login <site>             Persist cookies for <site> from a session.
@@ -299,6 +300,34 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--port <num>', description: 'Port for HTTP transport (default 8765).' },
     ],
     example: 'imprint mcp-server southwest',
+  },
+  mcp: {
+    summary:
+      'Audit, disable, re-enable, and delete Imprint MCP registrations and stale teach state.',
+    usage: [
+      'imprint mcp',
+      'imprint mcp status [--site <site>] [--json]',
+      'imprint mcp disable <server-or-site> [--client <name|all>] [--yes]',
+      'imprint mcp enable <server-or-site> [--client <name|all>] [--yes]',
+      'imprint mcp delete <server-or-site> [--client <name|all>] [--local none|tool|site] [--yes]',
+      'imprint mcp prune-state [--site <site>] [--missing-session] [--incomplete] [--yes]',
+    ],
+    flags: [
+      { name: '--site <site>', description: 'Limit status/prune-state to one Imprint site.' },
+      {
+        name: '--client <name|all>',
+        description:
+          'Limit mutations to one client (claude-code, codex, claude-desktop, openclaw, hermes) or all.',
+      },
+      {
+        name: '--local none|tool|site',
+        description:
+          'For delete: also remove local generated tools or the full local site directory.',
+      },
+      { name: '--yes', description: 'Required for direct mutating subcommands.' },
+      { name: '--json', description: 'Print machine-readable status output.' },
+    ],
+    example: 'imprint mcp status',
   },
 };
 
@@ -972,6 +1001,11 @@ async function main(argv: string[]): Promise<number> {
     case 'credential': {
       const { runCredentialCommand } = await import('./imprint/cli-credential.ts');
       return await runCredentialCommand(argv.slice(1));
+    }
+
+    case 'mcp': {
+      const { runMcpCommand } = await import('./imprint/mcp-maintenance.ts');
+      return await runMcpCommand(argv.slice(1));
     }
 
     // Hidden verb: spawned by claude-cli-compile.ts via --mcp-config. Not in

@@ -175,6 +175,14 @@ If Phoenix is open at `http://localhost:6006` but empty, check that `PHOENIX_COL
 
 ## "MCP tools panel is empty in Claude Desktop"
 
+Start with Imprint's local audit:
+
+```bash
+imprint mcp status
+```
+
+It reports external registrations, generated tools under `IMPRINT_HOME`, incomplete `teach` checkpoints, missing session recordings, orphan sessions, and stale MCP entries that point at sites with no complete generated tool.
+
 Common causes:
 
 1. **Wrong path in claude_desktop_config.json.** If you didn't `bun link`, the entry needs to be `bun run /abs/path/to/imprint/src/cli.ts mcp-server`.
@@ -189,6 +197,19 @@ Verify with mcp-inspector instead — it's faster to iterate on:
 ```bash
 npx @modelcontextprotocol/inspector imprint mcp-server
 ```
+
+To clean up stale entries:
+
+```bash
+imprint mcp                    # interactive cleanup
+imprint mcp disable imprint-mysite --yes
+imprint mcp delete imprint-mysite --yes
+imprint mcp prune-state --site mysite --missing-session --yes
+```
+
+`delete` only removes external MCP registrations by default. It does not remove generated tools or raw recordings unless you explicitly pass `--local tool` or `--local site`; recordings may contain sensitive cookies or browser state. Restart Claude Desktop, OpenClaw, or Hermes after direct config edits.
+
+For the complete cleanup command reference, see [MCP Maintenance](mcp-maintenance.md).
 
 ## "No backend succeeded for <site>"
 
