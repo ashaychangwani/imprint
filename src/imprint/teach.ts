@@ -24,7 +24,6 @@ import {
   extractCredentials,
 } from './credential-extract.ts';
 import { getCredentialBackend, readSiteManifest, upsertManifestEntry } from './credential-store.ts';
-import { loadCredentialStore } from './runtime.ts';
 import { emit } from './emit.ts';
 import {
   type Platform,
@@ -47,6 +46,7 @@ import { localSiteDir, localToolDir } from './paths.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
+import { loadCredentialStore } from './runtime.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import {
   TEACH_STEPS as STEPS,
@@ -906,9 +906,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       const missing = [...creds].filter((name) => !storedNames.has(name));
       if (missing.length > 0) {
         p.log.warn(
-          `Tool "${result.workflow.toolName}" needs credentials [${missing.join(', ')}] ` +
-            `but they are not in the credential store.\n` +
-            `Run: ${missing.map((n) => `imprint credential set ${site} ${n}`).join(' && ')}`,
+          `Tool "${result.workflow.toolName}" needs credentials [${missing.join(', ')}] but they are not in the credential store.\nRun: ${missing.map((n) => `imprint credential set ${site} ${n}`).join(' && ')}`,
         );
       }
     }
