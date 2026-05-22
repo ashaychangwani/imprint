@@ -374,10 +374,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
 
   if (opts.fromSession) {
-    const candidateRedacted = opts.fromSession.replace(/\.json$/, '.redacted.json');
-    startFrom = isExistingFile(candidateRedacted) ? 'replay-and-diff' : 'redact';
+    startFrom = 'redact';
     sessionPath = pathResolve(opts.fromSession);
-    if (isExistingFile(candidateRedacted)) redactedPath = pathResolve(candidateRedacted);
     usingFromSession = true;
   } else if (hasExisting && !opts.noInteractive) {
     const choice = await promptResumeChoice(site, completedWorkflows, incompleteWorkflows);
