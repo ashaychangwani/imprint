@@ -331,6 +331,15 @@ async function runInteractiveMcp(): Promise<number> {
       p.outro('Cancelled.');
       return 0;
     }
+    if (local === 'site') {
+      const confirm = await p.confirm({
+        message: 'This will permanently delete the local site directory, including raw recordings. Continue?',
+      });
+      if (p.isCancel(confirm) || !confirm) {
+        p.outro('Cancelled.');
+        return 0;
+      }
+    }
     const reg = findRegistrationChoice(status, String(target));
     reportMutation(
       reg
@@ -414,6 +423,13 @@ async function runInteractiveLocalDelete(status: McpStatus): Promise<void> {
     initialValue: 'tool',
   });
   if (p.isCancel(local)) return;
+
+  if (local === 'site') {
+    const confirm = await p.confirm({
+      message: 'This will permanently delete the local site directory, including raw recordings. Continue?',
+    });
+    if (p.isCancel(confirm) || !confirm) return;
+  }
 
   reportMutation(deleteMcpTarget(String(selectedSite), { local: local as LocalDeleteMode }));
 }
@@ -875,7 +891,7 @@ function disableRegistration(reg: McpRegistration, ctx: MaintenanceContext): Mut
     result.skipped.push(`${reg.client}/${reg.name} is not restorable (missing server config)`);
     return result;
   }
-  const removed = removeRegistration(reg, true, ctx);
+  const removed = removeRegistration(reg);
   if (removed) {
     addDisabledSnapshot(ctx, {
       client: reg.client,
@@ -996,7 +1012,7 @@ function deleteMcpTarget(
   const sites = new Set<string>();
   for (const reg of regs) {
     if (reg.site) sites.add(reg.site);
-    if (removeRegistration(reg, false, ctx)) {
+    if (removeRegistration(reg)) {
       result.changed.push(`deleted ${reg.client}/${reg.name}`);
     } else {
       result.skipped.push(`could not delete ${reg.client}/${reg.name}`);
@@ -1022,7 +1038,7 @@ function deleteRegistration(
   const result: MutationResult = { changed: [], skipped: [] };
   const sites = new Set<string>();
   if (reg.site) sites.add(reg.site);
-  if (removeRegistration(reg, false, ctx)) {
+  if (removeRegistration(reg)) {
     result.changed.push(`deleted ${reg.client}/${reg.name}`);
   } else {
     result.skipped.push(`could not delete ${reg.client}/${reg.name}`);
@@ -1479,11 +1495,7 @@ function siteFromName(name: string): string | null {
   return name.startsWith('imprint-') ? name.slice('imprint-'.length) : null;
 }
 
-function removeRegistration(
-  reg: McpRegistration,
-  _forDisable: boolean,
-  _ctx: MaintenanceContext,
-): boolean {
+function removeRegistration(reg: McpRegistration): boolean {
   switch (reg.client) {
     case 'codex':
       return removeCodexRegistration(reg.configPath, reg.name);

@@ -317,7 +317,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--client <name|all>',
         description:
-          'Limit mutations to one client: claude-code, codex, claude-desktop, openclaw, hermes.',
+          'Limit mutations to one client (claude-code, codex, claude-desktop, openclaw, hermes) or all.',
       },
       {
         name: '--local none|tool|site',
