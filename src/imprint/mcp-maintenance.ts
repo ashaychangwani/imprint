@@ -333,7 +333,8 @@ async function runInteractiveMcp(): Promise<number> {
     }
     if (local === 'site') {
       const confirm = await p.confirm({
-        message: 'This will permanently delete the local site directory, including raw recordings. Continue?',
+        message:
+          'This will permanently delete the local site directory, including raw recordings. Continue?',
       });
       if (p.isCancel(confirm) || !confirm) {
         p.outro('Cancelled.');
@@ -426,7 +427,8 @@ async function runInteractiveLocalDelete(status: McpStatus): Promise<void> {
 
   if (local === 'site') {
     const confirm = await p.confirm({
-      message: 'This will permanently delete the local site directory, including raw recordings. Continue?',
+      message:
+        'This will permanently delete the local site directory, including raw recordings. Continue?',
     });
     if (p.isCancel(confirm) || !confirm) return;
   }
