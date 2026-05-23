@@ -17,6 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
+import { inferAppApiHosts } from './app-api-hosts.ts';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonArray, resolveProvider } from './llm.ts';
@@ -220,6 +221,7 @@ function relocateGeneratedWorkflow(workflowPath: string, workflow: Workflow): st
 export function shrinkSession(session: Session): Session {
   const startUrl = safeUrl(session.url);
   const startRoot = startUrl ? registrableDomain(startUrl.hostname) : null;
+  const appApiHosts = inferAppApiHosts(session, startRoot);
 
   const NOISE_RESOURCE_TYPES = new Set([
     'Image',
@@ -237,7 +239,12 @@ export function shrinkSession(session: Session): Session {
     const url = safeUrl(r.url);
     if (!url) return false;
     if (NOISE_RESOURCE_TYPES.has(r.resourceType)) return false;
-    if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) return false;
+    if (
+      startRoot &&
+      !isSameRegistrableDomain(url.hostname, startRoot) &&
+      !appApiHosts.has(url.hostname)
+    )
+      return false;
     return true;
   });
 

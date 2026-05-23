@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin, relative as pathRelative } from 'node:path';
 import type { AgentTool } from './agent.ts';
+import { inferAppApiHosts } from './app-api-hosts.ts';
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
@@ -288,11 +289,17 @@ function compileSummaryRequestGroupKey(request: CompileSummaryRequestContext): u
 function identifyLoadBearingRequests(session: Session): CapturedRequest[] {
   const startUrl = safeUrl(session.url);
   const startRoot = startUrl ? registrableDomain(startUrl.hostname) : null;
+  const appApiHosts = inferAppApiHosts(session, startRoot);
 
   return session.requests.filter((r) => {
     const url = safeUrl(r.url);
     if (!url) return false;
-    if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) return false;
+    if (
+      startRoot &&
+      !isSameRegistrableDomain(url.hostname, startRoot) &&
+      !appApiHosts.has(url.hostname)
+    )
+      return false;
     if (r.resourceType !== 'XHR' && r.resourceType !== 'Fetch') return false;
     if (!r.response || r.response.status < 200 || r.response.status >= 300) return false;
     if (!r.response.body) return false;
