@@ -9,7 +9,7 @@
  * browser sent credentials to them, so they're part of the application.
  */
 
-import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
+import { isSameRegistrableDomain } from './etld.ts';
 import { isSensitiveHeader } from './sensitive-keys.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
