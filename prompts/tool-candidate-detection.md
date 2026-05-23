@@ -73,3 +73,12 @@ Rules:
     endpoint accepts a user query and returns structured results that an
     agent could use independently. Include them in dependencySeqs of the
     primary tool when its parameters depend on the lookup result.
+15. Prefer more candidates over fewer. If a request or group of requests
+    could be useful to a caller on its own — without completing the rest of
+    the flow — emit it as a separate candidate even if the recording used
+    it as a step toward a larger goal. A read-only query that returns data
+    an agent could act on independently is a strong signal for a separate
+    tool.
+16. Every candidate MUST have at least one seq in requestSeqs. A tool with
+    no backing requests cannot be compiled. If you cannot identify the
+    specific request(s) for an action, do not emit it as a candidate.

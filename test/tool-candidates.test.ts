@@ -153,6 +153,54 @@ describe('tool candidate payload', () => {
     expect(payload.requests[1]?.likelyLoginOrAuth).toBe(true);
   });
 
+  it('promotes all requests to a cross-origin host when any request carries auth signals', () => {
+    const crossOriginApiSession: Session = {
+      ...session,
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://api.backend.net/auth/login',
+          headers: { authorization: '[REDACTED:v3:id=1:len=32]' },
+          body: '{"user":"test"}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{"token":"abc"}' },
+        },
+        {
+          seq: 2,
+          timestamp: 200,
+          method: 'GET',
+          url: 'https://api.backend.net/menu/items',
+          headers: { 'content-type': 'application/json' },
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: '{"items":[]}' },
+        },
+        {
+          seq: 3,
+          timestamp: 300,
+          method: 'POST',
+          url: 'https://api.backend.net/cart/add',
+          headers: { 'content-type': 'application/json' },
+          body: '{"itemId":"123"}',
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: '{"success":true}' },
+        },
+        {
+          seq: 4,
+          timestamp: 400,
+          method: 'GET',
+          url: 'https://analytics.tracker.io/collect',
+          headers: {},
+          resourceType: 'XHR',
+        },
+      ],
+    };
+
+    const payload = buildToolCandidatePayload(crossOriginApiSession);
+    expect(payload.requests.map((r) => r.seq)).toEqual([1, 2, 3]);
+  });
+
   it('compacts identical repeated requests before sending candidate context', () => {
     const duplicateSession: Session = {
       ...session,

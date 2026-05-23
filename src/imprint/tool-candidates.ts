@@ -9,6 +9,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
+import { inferAppApiHosts } from './app-api-hosts.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
@@ -216,7 +217,23 @@ export async function detectToolCandidates(
 }
 
 export function validateToolCandidateDetection(input: unknown): ToolCandidateDetection {
-  return ToolCandidateDetectionSchema.parse(input);
+  const raw = ToolCandidateDetectionSchema.parse(input);
+  const before = raw.candidates.length;
+  raw.candidates = raw.candidates.filter((c) => c.requestSeqs.length > 0);
+  if (raw.candidates.length === 0) {
+    throw new Error(
+      `All ${before} candidate(s) had empty requestSeqs — cannot compile tools without backing requests.`,
+    );
+  }
+  if (raw.candidates.length < before) {
+    log(
+      `dropped ${before - raw.candidates.length} candidate(s) with empty requestSeqs (${raw.candidates.length} remaining)`,
+    );
+  }
+  if (!raw.candidates.some((c) => c.primary)) {
+    raw.candidates[0]!.primary = true;
+  }
+  return raw;
 }
 
 export function primaryToolCandidate(detection: ToolCandidateDetection): ToolCandidate {
@@ -269,9 +286,10 @@ interface ToolCandidatePayload {
 
 export function buildToolCandidatePayload(session: Session): ToolCandidatePayload {
   const startRoot = candidateStartRoot(session);
+  const appApiHosts = inferAppApiHosts(session, startRoot);
   const requests = compactRequestContexts(
     session.requests
-      .filter((request) => isCandidateRequest(request, startRoot))
+      .filter((request) => isCandidateRequest(request, startRoot, appApiHosts))
       .map((request) => {
         const body = truncate(request.body, BODY_LIMIT);
         const responsePreview = truncate(request.response?.body, RESPONSE_PREVIEW_LIMIT);
@@ -352,12 +370,16 @@ function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
   ];
 }
 
-function isCandidateRequest(request: CapturedRequest, startRoot: string | null): boolean {
+function isCandidateRequest(
+  request: CapturedRequest,
+  startRoot: string | null,
+  appApiHosts: Set<string>,
+): boolean {
   if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
   const url = safeUrl(request.url);
   if (!url) return false;
   if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) {
-    return likelyLoginOrAuth(request);
+    return appApiHosts.has(url.hostname);
   }
   return true;
 }
