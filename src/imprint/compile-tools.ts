@@ -294,7 +294,11 @@ function identifyLoadBearingRequests(session: Session): CapturedRequest[] {
   return session.requests.filter((r) => {
     const url = safeUrl(r.url);
     if (!url) return false;
-    if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot) && !appApiHosts.has(url.hostname))
+    if (
+      startRoot &&
+      !isSameRegistrableDomain(url.hostname, startRoot) &&
+      !appApiHosts.has(url.hostname)
+    )
       return false;
     if (r.resourceType !== 'XHR' && r.resourceType !== 'Fetch') return false;
     if (!r.response || r.response.status < 200 || r.response.status >= 300) return false;

@@ -231,7 +231,8 @@ export function validateToolCandidateDetection(input: unknown): ToolCandidateDet
     );
   }
   if (!raw.candidates.some((c) => c.primary)) {
-    raw.candidates[0]!.primary = true;
+    const first = raw.candidates[0];
+    if (first) first.primary = true;
   }
   return raw;
 }

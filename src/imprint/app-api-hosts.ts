@@ -28,10 +28,7 @@ function hasAuthSignals(request: CapturedRequest): boolean {
   return false;
 }
 
-export function inferAppApiHosts(
-  session: Session,
-  startRoot: string | null,
-): Set<string> {
+export function inferAppApiHosts(session: Session, startRoot: string | null): Set<string> {
   const hosts = new Set<string>();
   if (!startRoot) return hosts;
 

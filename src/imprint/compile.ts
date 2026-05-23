@@ -239,7 +239,11 @@ export function shrinkSession(session: Session): Session {
     const url = safeUrl(r.url);
     if (!url) return false;
     if (NOISE_RESOURCE_TYPES.has(r.resourceType)) return false;
-    if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot) && !appApiHosts.has(url.hostname))
+    if (
+      startRoot &&
+      !isSameRegistrableDomain(url.hostname, startRoot) &&
+      !appApiHosts.has(url.hostname)
+    )
       return false;
     return true;
   });
