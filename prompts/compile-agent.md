@@ -41,6 +41,8 @@ Follow these steps to compile the session:
 
    **Capture hints.** The session summary may include `captureHints` — pre-built capture block suggestions derived from dual-pass analysis. When a `captureHint` exists for a server-derived value, copy its `capture` definition directly into your workflow.json's `captures` array on the indicated request, and use `${state.NAME}` in downstream requests as shown in the `usedBy` entries. This saves you from having to discover the producer response and build the capture manually.
 
+   **Parameter checklist (`likelyParams`).** When `selectedCandidate` includes a `likelyParams` array, it contains the candidate detector's analysis of which inputs the user controlled — based on the narration and request patterns. Treat this as your **parameter extraction checklist**: every entry should become a `${param.NAME}` in workflow.json unless you can document a structural reason it cannot be templated. Parameters that appear as `null`, `[]`, or absent in the recorded request body are still valid — they represent filters or options the user interacted with during recording but did not apply in the final request state. Do not skip them.
+
    **Dual-pass value classifications.** When `stateHints` includes entries with `type: “dual_pass_value_classification”`, these values were verified to differ across two independent executions of the same workflow with identical user inputs. They are the highest-confidence signal for ephemeral state — treat them seriously, but reason about them rather than following blindly:
 
    - **`server_derived`**: The value differed and was found in a prior response. The hint includes `producerSeq` and `producerPath` telling you exactly where to capture from. Add a `captures` entry on the producer request and reference via `${state.NAME}`.
@@ -66,6 +68,12 @@ Follow these steps to compile the session:
 
 5. **Write workflow.json.** Template the request(s):
    - Replace user-variable values with `${param.NAME}` placeholders (e.g., origin airport, date, passenger count)
+   - **Use `selectedCandidate.likelyParams` as your parameter checklist** (when present). Every `likelyParam` should become a workflow parameter and be templated into the request body/URL:
+     - Parameters with concrete recorded values (airport codes, dates, passenger counts): replace the literal value with `${param.NAME}` as usual.
+     - Parameters that are `null`, `[]`, or absent in the recorded request (filters/constraints the user toggled during recording but didn't apply in the final request state): these are **valid parameters** — add them as optional with defaults meaning "no filter applied" and template them at the correct position in the request body/URL.
+     - For JSPB/protobuf nested-array bodies: use `sharedHelperNotes` to locate each parameter's array index, and replace `null`/`[]` placeholders with `${param.NAME}`.
+     - Filter-type parameter defaults should use the API's "unfiltered" sentinel (typically `0`, `null`, `[]`, or empty string — infer from what the recorded request uses in that position).
+     - If a `likelyParam` genuinely has no plausible insertion point in any request (no matching query param, no array position, no JSON key), skip it and note why — but treat `null`/`[]` positions as valid insertion points, not absence of the parameter.
    - Replace per-user credentials with `${credential.NAME}` (e.g., `patron_id`, `csrf_token`, `account_uuid`)
    - **CRITICAL — Login chains.** If the input session contains a login request whose body has been pre-templated to `${credential.username}` / `${credential.password}` (you'll see those literal strings in the request body when you `read_request`), you MUST keep that login request as request[0] in your workflow. Do NOT drop it. Use named `captures` (canonical `${state.name}`) or legacy `extract` to capture any returned auth tokens (`id_token`, `access_token`, `swa_token`, cookies projected into headers, etc.) and reference them in subsequent requests. The runtime substitutes the username/password from the local credential manager at call time, so the workflow is self-sufficient — caller doesn't need to log in separately.
    - **Distinguish credentials from session tokens.** `${credential.NAME}` is for STABLE per-user values that the user provides once (username, password, API token). For ephemeral per-call values (passenger tokens, ride-along session IDs, recordLocator-bound state, CSRF cookies minted by an earlier request) you MUST use named request/bootstrap captures and `${state.NAME}` — NEVER use `${credential.X}` for those. Test: would the user be able to type this value into an `imprint credential set` prompt? If no, it's captured state, not a credential.
@@ -301,6 +309,8 @@ Assertions must reference real values derived from the narration or response str
 6. **Do not include bot-detection headers in workflow.json.** Headers like Akamai fingerprints (random prefix + `-a`/`-b`/`-c`/`-d` suffixes), DataDome (`x-dd-*`), PerimeterX (`_px*`), and other opaque base64-ish strings are session-bound and go stale on replay. Drop them. The runtime will replay without them; if the API flags the request as bot-driven, the failure tells the operator to pivot.
 
 7. **Do not give up on binary responses without confirming they are truly unparseable.** Use `read_response_body` to inspect the bytes — sometimes "binary" is just gzipped JSON or a parseable protobuf.
+
+8. **Do not ignore `likelyParams` from the candidate detector.** If `selectedCandidate.likelyParams` lists a parameter (airlines, price cap, time window, bags, duration, etc.) but the recorded request has `null` or `[]` in that position, it means the user didn't apply that filter during recording — NOT that the parameter doesn't exist. Template it anyway as an optional parameter with a default meaning "unfiltered."
 
 ## When `give_up` is Appropriate (Narrow)
 
