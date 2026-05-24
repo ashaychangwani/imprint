@@ -1082,7 +1082,10 @@ export async function externalVerification(
   toolDir: string,
   session: Session,
   sessionPath: string,
-  opts: { expectedToolName?: string } = {},
+  opts: {
+    expectedToolName?: string;
+    likelyParams?: Array<{ name: string; type?: string; description?: string }>;
+  } = {},
 ): Promise<{ failures: string[]; warnings: string[] }> {
   const failures: string[] = [];
   const warnings: string[] = [];
@@ -1108,6 +1111,25 @@ export async function externalVerification(
         failures.push(
           `workflow.json contains \${env.X} placeholders (${envMatches.join(', ')}). These require manual environment setup and break portability. If the value appeared in the recorded session, hardcode it as a literal string instead.`,
         );
+      }
+
+      if (opts.likelyParams && opts.likelyParams.length > 0) {
+        const workflowParamNames = new Set(
+          workflow.parameters.map((p: { name: string }) => p.name),
+        );
+        const missing = opts.likelyParams
+          .filter((lp) => !workflowParamNames.has(lp.name))
+          .map((lp) => lp.name);
+        if (missing.length > 0) {
+          failures.push(
+            `workflow.json is missing ${missing.length} parameter(s) from the candidate detector's likelyParams: ${missing.join(', ')}. ` +
+              'These were identified as user-controllable inputs during candidate detection. ' +
+              'Add each as a ${param.NAME} placeholder in the request body/URL with a default meaning "no filter." ' +
+              'If a parameter genuinely cannot be templated (no insertion point in any request), ' +
+              'add it to workflow.json parameters anyway with a descriptive default — ' +
+              'the runtime will substitute it even if the API ignores it.',
+          );
+        }
       }
     } catch (err) {
       failures.push(

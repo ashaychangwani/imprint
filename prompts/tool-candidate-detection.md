@@ -82,3 +82,10 @@ Rules:
 16. Every candidate MUST have at least one seq in requestSeqs. A tool with
     no backing requests cannot be compiled. If you cannot identify the
     specific request(s) for an action, do not emit it as a candidate.
+17. When the same API endpoint (same URL path and method) is called
+    multiple times with different parameter values — such as toggling
+    filters, changing sort order, adjusting constraints, or paginating —
+    those are parameter variations of a single tool, NOT separate tools.
+    Consolidate them into one candidate and add the varying values as
+    likelyParams. Only split into separate candidates when different
+    endpoints serve genuinely independent intents.

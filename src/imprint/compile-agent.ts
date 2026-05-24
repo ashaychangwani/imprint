@@ -306,6 +306,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       sessionPathAbs,
       {
         expectedToolName: opts.candidate?.toolName,
+        likelyParams: opts.candidate?.likelyParams,
       },
     );
 

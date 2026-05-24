@@ -69,10 +69,10 @@ Follow these steps to compile the session:
 5. **Write workflow.json.** Template the request(s):
    - Replace user-variable values with `${param.NAME}` placeholders (e.g., origin airport, date, passenger count)
    - **Use `selectedCandidate.likelyParams` as your parameter checklist** (when present). Every `likelyParam` should become a workflow parameter and be templated into the request body/URL:
-     - Parameters with concrete recorded values (airport codes, dates, passenger counts): replace the literal value with `${param.NAME}` as usual.
+     - Parameters with concrete recorded values: replace the literal value with `${param.NAME}` as usual.
      - Parameters that are `null`, `[]`, or absent in the recorded request (filters/constraints the user toggled during recording but didn't apply in the final request state): these are **valid parameters** — add them as optional with defaults meaning "no filter applied" and template them at the correct position in the request body/URL.
-     - For JSPB/protobuf nested-array bodies: use `sharedHelperNotes` to locate each parameter's array index, and replace `null`/`[]` placeholders with `${param.NAME}`.
-     - Filter-type parameter defaults should use the API's "unfiltered" sentinel (typically `0`, `null`, `[]`, or empty string — infer from what the recorded request uses in that position).
+     - For positional/array-encoded bodies (JSPB, protobuf, etc.): use `sharedHelperNotes` to locate each parameter's position, and replace `null`/`[]` placeholders with `${param.NAME}`.
+     - Filter/constraint parameter defaults should use the API's "unfiltered" sentinel (typically `0`, `null`, `[]`, or empty string — infer from what the recorded request uses in that position).
      - If a `likelyParam` genuinely has no plausible insertion point in any request (no matching query param, no array position, no JSON key), skip it and note why — but treat `null`/`[]` positions as valid insertion points, not absence of the parameter.
    - Replace per-user credentials with `${credential.NAME}` (e.g., `patron_id`, `csrf_token`, `account_uuid`)
    - **CRITICAL — Login chains.** If the input session contains a login request whose body has been pre-templated to `${credential.username}` / `${credential.password}` (you'll see those literal strings in the request body when you `read_request`), you MUST keep that login request as request[0] in your workflow. Do NOT drop it. Use named `captures` (canonical `${state.name}`) or legacy `extract` to capture any returned auth tokens (`id_token`, `access_token`, `swa_token`, cookies projected into headers, etc.) and reference them in subsequent requests. The runtime substitutes the username/password from the local credential manager at call time, so the workflow is self-sufficient — caller doesn't need to log in separately.
@@ -310,7 +310,7 @@ Assertions must reference real values derived from the narration or response str
 
 7. **Do not give up on binary responses without confirming they are truly unparseable.** Use `read_response_body` to inspect the bytes — sometimes "binary" is just gzipped JSON or a parseable protobuf.
 
-8. **Do not ignore `likelyParams` from the candidate detector.** If `selectedCandidate.likelyParams` lists a parameter (airlines, price cap, time window, bags, duration, etc.) but the recorded request has `null` or `[]` in that position, it means the user didn't apply that filter during recording — NOT that the parameter doesn't exist. Template it anyway as an optional parameter with a default meaning "unfiltered."
+8. **Do not ignore `likelyParams` from the candidate detector.** If `selectedCandidate.likelyParams` lists a parameter but the recorded request has `null` or `[]` in that position, it means the user didn't apply that filter/constraint during recording — NOT that the parameter doesn't exist. Template it anyway as an optional parameter with a default meaning "unfiltered."
 
 ## When `give_up` is Appropriate (Narrow)
 
@@ -362,7 +362,8 @@ When you call `done`, the harness independently verifies your work:
 3. **Imports parser.ts and runs extract()** on the captured response body — must return non-null/non-empty
 4. **Validates workflow.json** against `WorkflowSchema`
 5. **Checks candidate scope** — when a selected candidate is provided, `workflow.toolName` must exactly match that candidate's `toolName`
-6. **Runs integration test** — `bun test integration.test.ts` must exit 0. This makes a live API call and verifies the workflow returns real data. If it fails, the workflow has hardcoded/expired values or missing URL signing.
+6. **Checks likelyParams coverage** — when the selected candidate includes `likelyParams`, every parameter name must appear in `workflow.json`'s `parameters` array. Missing params are reported as failures with the names listed. If a param genuinely cannot be templated into the request, add it to `parameters` anyway with a descriptive default — the verifier checks presence, not whether `${param.NAME}` appears in the request body.
+7. **Runs integration test** — `bun test integration.test.ts` must exit 0. This makes a live API call and verifies the workflow returns real data. If it fails, the workflow has hardcoded/expired values or missing URL signing.
 
 If any check fails, you get the failure as a tool result and must continue working. You cannot fake completion.
 
