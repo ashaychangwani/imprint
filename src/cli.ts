@@ -685,7 +685,7 @@ async function main(argv: string[]): Promise<number> {
               );
             });
             rl.close();
-            return answer.toLowerCase() !== 'n' ? 10 * 60 * 1000 : null;
+            return answer.trim().toLowerCase().startsWith('n') ? null : 10 * 60 * 1000;
           }
         : undefined;
       const result = await generate({
