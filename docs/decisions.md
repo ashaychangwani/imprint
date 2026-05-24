@@ -117,11 +117,11 @@ The compile-agent writes this module when `stateHints` flag per-call query param
 
 ## D17 — Agentic workflow compilation with verification loop
 
-**Decided.** Workflow compilation uses a multi-turn agent loop (`compile-agent.ts`) that writes `workflow.json` + `parser.ts` + `parser.test.ts`, runs external verification via a test-runner tool, and iterates on failures until tests pass. The agent has read tools for inspecting individual request/response bodies on demand rather than receiving the entire session upfront.
+**Decided.** Workflow compilation uses a multi-turn agent loop (`compile-agent.ts`) that writes `workflow.json` + `parser.ts` + `parser.test.ts`, runs external verification via a test-runner tool, and iterates on failures until tests pass. Candidate-scoped requests get inline data (headers, bodies, truncated responses) directly in the session summary so the agent can start writing immediately. On-demand read tools (`read_request`, `read_response_body`, `search_response_body`) remain available for requests outside the candidate scope or when inline previews are truncated.
 
 **Alternative:** Single-shot LLM call with a "generate the perfect workflow" prompt. Produces unverified code — high risk of subtle bugs (incorrect JSONPath, wrong header substitution, off-by-one request indexing). Playbook compilation (D3) still uses the simpler single-shot path since playbooks are less error-prone (DOM locators, not API schemas).
 
-**Rationale:** Verification-driven iteration catches the majority of codegen bugs before the user sees them. Selective request access (the agent asks for specific seq numbers) solves token budget blowouts on complex sites — e.g., Southwest fires 800+ requests, and the agent only needs to read 5-10 of them.
+**Rationale:** Verification-driven iteration catches the majority of codegen bugs before the user sees them. Inline data for candidate-scoped requests eliminates 20-30 serial read tool calls that previously inflated context from ~20 K to ~130 K tokens. On-demand access for the remaining requests still solves token budget blowouts on complex sites — e.g., Southwest fires 800+ requests, and the agent only needs full bodies for 5-10 of them. A budget-aware reduction strategy progressively strips inline response bodies to stay within `claude-cli`'s tool-result size limit (~40 K chars).
 
 ## D18 — OpenTelemetry tracing with Phoenix for LLM observability
 
