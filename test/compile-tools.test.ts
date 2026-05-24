@@ -307,7 +307,7 @@ describe('extract', () => {
     }
   });
 
-  it('fails when workflow.json is missing likelyParams from the candidate', async () => {
+  it('fails when likelyParams are not templated in any request', async () => {
     const repoRoot = pathJoin(import.meta.dir, '..');
     const scratchRoot = pathJoin(repoRoot, '.context');
     mkdirSync(scratchRoot, { recursive: true });
@@ -373,7 +373,7 @@ describe('extract', () => {
         ],
       });
 
-      expect(failures.some((f) => f.includes('likelyParams'))).toBe(true);
+      expect(failures.some((f) => f.includes('not templated'))).toBe(true);
       expect(failures.some((f) => f.includes('max_price'))).toBe(true);
       expect(failures.some((f) => f.includes('sort_order'))).toBe(true);
       expect(failures.some((f) => f.includes('query'))).toBe(false);
@@ -382,7 +382,82 @@ describe('extract', () => {
     }
   });
 
-  it('passes when all likelyParams are present in workflow.json', async () => {
+  it('fails when likelyParams are in parameters but not referenced in requests', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-likelyparams-phantom-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'likelyparams-phantom-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/search?q=test',
+          headers: {},
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ results: [] }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'search_items',
+            intent: { description: 'Search items' },
+            parameters: [
+              { name: 'query', type: 'string', description: 'Search query' },
+              { name: 'max_price', type: 'number', description: 'Max price' },
+            ],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/api/search?q=${param.query}',
+                headers: { Accept: 'application/json' },
+              },
+            ],
+            site: 'likelyparams-phantom-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const { failures } = await externalVerification(exampleDir, session, sessionPath, {
+        likelyParams: [
+          { name: 'query', type: 'string', description: 'Search query' },
+          { name: 'max_price', type: 'number', description: 'Max price' },
+        ],
+      });
+
+      expect(failures.some((f) => f.includes('max_price'))).toBe(true);
+      expect(failures.some((f) => f.includes('query'))).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes when all likelyParams are templated in requests', async () => {
     const repoRoot = pathJoin(import.meta.dir, '..');
     const scratchRoot = pathJoin(repoRoot, '.context');
     mkdirSync(scratchRoot, { recursive: true });

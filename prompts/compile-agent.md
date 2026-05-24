@@ -362,7 +362,7 @@ When you call `done`, the harness independently verifies your work:
 3. **Imports parser.ts and runs extract()** on the captured response body — must return non-null/non-empty
 4. **Validates workflow.json** against `WorkflowSchema`
 5. **Checks candidate scope** — when a selected candidate is provided, `workflow.toolName` must exactly match that candidate's `toolName`
-6. **Checks likelyParams coverage** — when the selected candidate includes `likelyParams`, every parameter name must appear in `workflow.json`'s `parameters` array. Missing params are reported as failures with the names listed. If a param genuinely cannot be templated into the request, add it to `parameters` anyway with a descriptive default — the verifier checks presence, not whether `${param.NAME}` appears in the request body.
+6. **Checks likelyParams coverage** — when the selected candidate includes `likelyParams`, every parameter must be templated as `${param.NAME}` in at least one request's URL, body, or headers. Parameters that exist in the `parameters` array but aren't referenced in any request will fail this check — they must be wired into the actual API call.
 7. **Runs integration test** — `bun test integration.test.ts` must exit 0. This makes a live API call and verifies the workflow returns real data. If it fails, the workflow has hardcoded/expired values or missing URL signing.
 
 If any check fails, you get the failure as a tool result and must continue working. You cannot fake completion.

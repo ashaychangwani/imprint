@@ -1114,20 +1114,16 @@ export async function externalVerification(
       }
 
       if (opts.likelyParams && opts.likelyParams.length > 0) {
-        const workflowParamNames = new Set(
-          workflow.parameters.map((p: { name: string }) => p.name),
-        );
-        const missing = opts.likelyParams
-          .filter((lp) => !workflowParamNames.has(lp.name))
+        const requestsStr = JSON.stringify(workflow.requests);
+        const notTemplated = opts.likelyParams
+          .filter((lp) => !requestsStr.includes(`\${param.${lp.name}}`))
           .map((lp) => lp.name);
-        if (missing.length > 0) {
+        if (notTemplated.length > 0) {
           failures.push(
-            `workflow.json is missing ${missing.length} parameter(s) from the candidate detector's likelyParams: ${missing.join(', ')}. ` +
-              'These were identified as user-controllable inputs during candidate detection. ' +
-              'Add each as a ${param.NAME} placeholder in the request body/URL with a default meaning "no filter." ' +
-              'If a parameter genuinely cannot be templated (no insertion point in any request), ' +
-              'add it to workflow.json parameters anyway with a descriptive default — ' +
-              'the runtime will substitute it even if the API ignores it.',
+            `${notTemplated.length} likelyParam(s) are not templated in any request: ${notTemplated.join(', ')}. ` +
+              'Each must appear as ${param.NAME} in a request URL, body, or header. ' +
+              'For parameters recorded as null or [] (filters the user toggled but didn\'t apply), ' +
+              'find the correct position in the request body and replace the placeholder value with ${param.NAME}.',
           );
         }
       }
