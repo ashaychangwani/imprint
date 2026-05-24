@@ -81,6 +81,8 @@ interface CompileAgentOptions {
   sharedContext?: SharedCompileContext;
   /** Dual-pass value classifications from replay-and-diff. */
   classifications?: ClassifiedValue[];
+  /** Credential values extracted during teach, passed to integration tests via env var. */
+  teachCredentials?: { site: string; values: Record<string, string> };
 }
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
@@ -175,6 +177,7 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
       candidate: opts.candidate,
       sharedContext: opts.sharedContext,
       classifications: opts.classifications,
+      teachCredentials: opts.teachCredentials,
     }),
     doneTool(),
     giveUpTool(),

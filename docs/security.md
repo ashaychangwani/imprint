@@ -64,6 +64,10 @@ When you run `imprint teach`, `imprint generate`, or `imprint compile-playbook`,
 2. **Anthropic API** sends directly to Anthropic using `ANTHROPIC_API_KEY`.
 3. **Vertex** sends to your Google Cloud project's Vertex AI endpoint; retention and audit behavior are governed by your GCP project settings.
 
+The compile agent's session summary includes inline request/response data for candidate-scoped requests (the requests relevant to the tool being compiled plus auth dependencies). Response bodies are smart-truncated and subject to a 30 KB summary budget. All inline data comes from the already-redacted session — credential values appear as `${credential.X}` placeholders and sensitive values as `[REDACTED:v3:id=N:len=L]` markers.
+
+**Credential pass-through during teach.** When `imprint teach` extracts credentials during the redact step, it passes them to the compile agent's integration tests via the `IMPRINT_TEACH_CREDENTIALS` environment variable. This is a process-scoped JSON payload (`{ site, values }`) that lives only in the subprocess tree — it is never written to disk, logged, or sent to the LLM. The runtime merges these values into the credential store at test execution time so integration tests can verify workflows end-to-end.
+
 To audit what Imprint sent during a compile, use local Phoenix tracing:
 ```bash
 IMPRINT_TRACE=1 IMPRINT_TRACE_LLM_IO=1 PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \

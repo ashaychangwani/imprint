@@ -33,6 +33,9 @@ export function buildCompileTools(
   sessionPath: string,
   context: CompileToolContext = {},
 ): AgentTool[] {
+  const credEnv = context.teachCredentials
+    ? { IMPRINT_TEACH_CREDENTIALS: JSON.stringify(context.teachCredentials) }
+    : undefined;
   return [
     buildReadSessionSummaryTool(session, context),
     buildReadRequestTool(session),
@@ -40,8 +43,8 @@ export function buildCompileTools(
     buildSearchResponseBodyTool(session),
     buildWriteFileTool(toolDir),
     buildReadFileTool(toolDir),
-    buildRunBashTool(toolDir),
-    buildRunTestsTool(toolDir, sessionPath),
+    buildRunBashTool(toolDir, credEnv),
+    buildRunTestsTool(toolDir, sessionPath, credEnv),
   ];
 }
 
@@ -49,6 +52,7 @@ interface CompileToolContext {
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
   classifications?: ClassifiedValue[];
+  teachCredentials?: { site: string; values: Record<string, string> };
 }
 
 // ─── Tool: read_session_summary ──────────────────────────────────────────────
@@ -57,7 +61,7 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
   return {
     name: 'read_session_summary',
     description:
-      'Get a high-level summary of the session including narration, selected candidate scope, and load-bearing requests.',
+      'Get a high-level summary of the session including narration, selected candidate scope, load-bearing requests with inline data, and capture hints.',
     input_schema: {
       type: 'object',
       properties: {},
@@ -83,9 +87,16 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
           mimeType: r.response?.mimeType,
           bodySize: r.response?.body?.length,
           responseBodyDigest: requestContextDigest(r.response?.body),
+          ...(preserveSeqs.has(r.seq) ? { inlineData: buildInlineData(r) } : {}),
         })),
         compileSummaryRequestGroupKey,
         { preserveSeqs },
+      );
+      const stateHints = buildStateHints(session, context.classifications);
+      const captureHints = buildCaptureHints(
+        context.classifications,
+        context.candidate,
+        context.sharedContext,
       );
       const summary = {
         site: session.site,
@@ -104,12 +115,284 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
         sharedContext: context.sharedContext,
         narration: session.narration.map((n) => ({ timestamp: n.timestamp, text: n.text })),
         requestCount: session.requests.length,
-        stateHints: buildStateHints(session, context.classifications),
+        stateHints,
+        captureHints: captureHints.length > 0 ? captureHints : undefined,
         loadBearingRequests,
       };
+
+      const result = JSON.stringify(summary, null, 2);
+      if (result.length <= SUMMARY_SIZE_BUDGET) return { result };
+
+      // Over budget — rebuild with reduced inline data to fit
+      const reducedRequests = reduceInlineData(
+        loadBearingRequests as Array<Record<string, unknown>>,
+        result.length,
+      );
+      // biome-ignore lint/suspicious/noExplicitAny: type-safe reduction preserves shape
+      (summary as any).loadBearingRequests = reducedRequests;
       return { result: JSON.stringify(summary, null, 2) };
     },
   };
+}
+
+// ─── Inline request/response data for candidate-scoped requests ─────────────
+
+// claude-cli truncates tool results > ~40K chars. Keep the total summary
+// well under that so the agent actually receives the inline data.
+const SUMMARY_SIZE_BUDGET = 30_000;
+
+const JSON_BODY_LIMIT = 16 * 1024;
+const JSON_STRUCTURE_THRESHOLD = 50 * 1024;
+const HTML_BODY_LIMIT = 4 * 1024;
+
+function buildInlineData(req: CapturedRequest): Record<string, unknown> {
+  const result: Record<string, unknown> = {
+    requestHeaders: req.headers,
+  };
+  if (req.body) result.requestBody = req.body;
+
+  if (req.response) {
+    result.responseStatus = req.response.status;
+    result.responseHeaders = req.response.headers;
+
+    const body = req.response.body;
+    if (body) {
+      const mime = (req.response.mimeType ?? '').toLowerCase();
+      const isJson = mime.includes('json') || isJsonBody(body);
+      const isHtml = mime.includes('html');
+
+      if (isJson) {
+        if (body.length <= JSON_BODY_LIMIT) {
+          result.responseBody = body;
+        } else if (body.length > JSON_STRUCTURE_THRESHOLD) {
+          result.responseBody = body.slice(0, JSON_BODY_LIMIT / 2);
+          result.responseBodyTruncated = true;
+          result.responseBodyTotalLength = body.length;
+          result.responseBodyStructure = summarizeJsonStructure(body);
+        } else {
+          result.responseBody = body.slice(0, JSON_BODY_LIMIT);
+          result.responseBodyTruncated = true;
+          result.responseBodyTotalLength = body.length;
+        }
+      } else if (isHtml) {
+        if (body.length <= HTML_BODY_LIMIT) {
+          result.responseBody = body;
+        } else {
+          result.responseBody = body.slice(0, HTML_BODY_LIMIT);
+          result.responseBodyTruncated = true;
+          result.responseBodyTotalLength = body.length;
+        }
+      } else if (body.length <= HTML_BODY_LIMIT) {
+        result.responseBody = body;
+      } else {
+        result.responseBody = `(${mime || 'unknown'} body, ${body.length} bytes)`;
+        result.responseBodyTruncated = true;
+        result.responseBodyTotalLength = body.length;
+      }
+    }
+  }
+  return result;
+}
+
+function reduceInlineData(
+  requests: Array<Record<string, unknown>>,
+  fullSummarySize: number,
+): Array<Record<string, unknown>> {
+  const reduced = requests.map((r) => ({ ...r }));
+  const budget = SUMMARY_SIZE_BUDGET;
+
+  // The caller passes the full summary size. Track the delta from
+  // reducing the requests array so we can estimate the full summary
+  // size without re-serializing the entire object each phase.
+  const arrayBefore = JSON.stringify(requests).length;
+  const overhead = fullSummarySize - arrayBefore;
+
+  const estimateFullSize = () => JSON.stringify(reduced).length + overhead;
+
+  // Phase 1: drop responseBody from non-candidate requests (shared dependencies)
+  if (estimateFullSize() > budget) {
+    for (const r of reduced) {
+      if (r.sharedDependency && !r.selectedForCandidate && r.inlineData) {
+        const inline = r.inlineData as Record<string, unknown>;
+        inline.responseBody = undefined;
+        inline.responseBodyStructure = undefined;
+        inline.responseBodyTruncated = true;
+        inline.responseBodyNote = 'omitted to fit summary budget — use read_response_body';
+      }
+    }
+  }
+
+  // Phase 2: cap all remaining response bodies at 4KB
+  if (estimateFullSize() > budget) {
+    for (const r of reduced) {
+      if (!r.inlineData) continue;
+      const inline = r.inlineData as Record<string, unknown>;
+      const body = inline.responseBody;
+      if (typeof body === 'string' && body.length > 4096) {
+        inline.responseBody = body.slice(0, 4096);
+        inline.responseBodyTruncated = true;
+      }
+    }
+  }
+
+  // Phase 3: drop all response bodies, keep only request data + headers
+  if (estimateFullSize() > budget) {
+    for (const r of reduced) {
+      if (!r.inlineData) continue;
+      const inline = r.inlineData as Record<string, unknown>;
+      inline.responseBody = undefined;
+      inline.responseBodyStructure = undefined;
+      inline.responseBodyTruncated = true;
+      inline.responseBodyNote = 'omitted to fit summary budget — use read_response_body';
+    }
+  }
+
+  // Phase 4: drop inline data entirely if still over budget
+  if (estimateFullSize() > budget) {
+    for (const r of reduced) {
+      r.inlineData = undefined;
+    }
+  }
+
+  return reduced;
+}
+
+function isJsonBody(body: string): boolean {
+  const trimmed = body.trimStart();
+  return trimmed.startsWith('{') || trimmed.startsWith('[');
+}
+
+function summarizeJsonStructure(body: string): string {
+  try {
+    const parsed = JSON.parse(body);
+    return describeStructure(parsed, 0, 3);
+  } catch {
+    return '(could not parse JSON for structure summary)';
+  }
+}
+
+function describeStructure(value: unknown, depth: number, maxDepth: number): string {
+  if (depth >= maxDepth) return typeof value === 'object' ? '{...}' : String(typeof value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    const first = describeStructure(value[0], depth + 1, maxDepth);
+    return `Array(${value.length}) of ${first}`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return '{}';
+    const fields = entries
+      .slice(0, 20)
+      .map(([k, v]) => `${k}: ${describeStructure(v, depth + 1, maxDepth)}`);
+    if (entries.length > 20) fields.push(`... +${entries.length - 20} more keys`);
+    return `{ ${fields.join(', ')} }`;
+  }
+  return String(typeof value);
+}
+
+// ─── Capture hints from dual-pass classifications ───────────────────────────
+
+interface CaptureHint {
+  producerRequestIndex: number;
+  capture: {
+    source: 'json' | 'response_header' | 'cookie' | 'text_regex';
+    name: string;
+    path?: string;
+    header?: string;
+    cookie?: string;
+    pattern?: string;
+    group?: number;
+  };
+  usedBy: Array<{
+    requestIndex: number;
+    location: string;
+    substitution: string;
+  }>;
+}
+
+function buildCaptureHints(
+  classifications: ClassifiedValue[] | undefined,
+  candidate: ToolCandidate | undefined,
+  sharedContext: SharedCompileContext | undefined,
+): CaptureHint[] {
+  if (!classifications || !candidate) return [];
+
+  const requestChain = [
+    ...(candidate.dependencySeqs ?? []),
+    ...(sharedContext?.loginRequestSeqs ?? []),
+    ...candidate.requestSeqs,
+  ];
+  const uniqueChain = [...new Set(requestChain)].sort((a, b) => a - b);
+  const seqToIndex = new Map(uniqueChain.map((seq, i) => [seq, i]));
+
+  const hints: CaptureHint[] = [];
+
+  for (const c of classifications) {
+    if (c.classification !== 'server_derived') continue;
+    if (c.producerSeq == null || !c.producerPath) continue;
+
+    const producerIndex = seqToIndex.get(c.producerSeq);
+    if (producerIndex == null) continue;
+
+    const consumerIndex = seqToIndex.get(c.originalSeq);
+    if (consumerIndex == null) continue;
+
+    const name = c.suggestedStateName ?? `state_${producerIndex}_${consumerIndex}`;
+    const capture = buildCaptureFromPath(name, c.producerPath);
+    if (!capture) continue;
+
+    hints.push({
+      producerRequestIndex: producerIndex,
+      capture,
+      usedBy: [
+        {
+          requestIndex: consumerIndex,
+          location: c.location,
+          substitution: `\${state.${name}}`,
+        },
+      ],
+    });
+  }
+
+  return deduplicateCaptureHints(hints);
+}
+
+function buildCaptureFromPath(name: string, producerPath: string): CaptureHint['capture'] | null {
+  if (producerPath.startsWith('response_header:')) {
+    return {
+      source: 'response_header',
+      name,
+      header: producerPath.slice('response_header:'.length),
+    };
+  }
+  if (producerPath.startsWith('set-cookie:')) {
+    return {
+      source: 'cookie',
+      name,
+      cookie: producerPath.slice('set-cookie:'.length),
+    };
+  }
+  if (producerPath.startsWith('$') || producerPath.startsWith('.')) {
+    return { source: 'json', name, path: producerPath };
+  }
+  if (producerPath.includes('.')) {
+    return { source: 'json', name, path: `$.${producerPath}` };
+  }
+  return null;
+}
+
+function deduplicateCaptureHints(hints: CaptureHint[]): CaptureHint[] {
+  const byKey = new Map<string, CaptureHint>();
+  for (const hint of hints) {
+    const key = `${hint.producerRequestIndex}:${hint.capture.name}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.usedBy.push(...hint.usedBy);
+    } else {
+      byKey.set(key, { ...hint, usedBy: [...hint.usedBy] });
+    }
+  }
+  return [...byKey.values()];
 }
 
 function buildStateHints(
@@ -604,7 +887,7 @@ function buildReadFileTool(toolDir: string): AgentTool {
 
 // ─── Tool: run_bash ──────────────────────────────────────────────────────────
 
-function buildRunBashTool(toolDir: string): AgentTool {
+function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): AgentTool {
   return {
     name: 'run_bash',
     description: 'Run a shell command in the generated tool directory with a timeout.',
@@ -628,7 +911,7 @@ function buildRunBashTool(toolDir: string): AgentTool {
 
       const cappedTimeout = Math.min(timeoutSec, 300) * 1000;
 
-      return await runCommand(command, toolDir, cappedTimeout);
+      return await runCommand(command, toolDir, cappedTimeout, credEnv);
     },
   };
 }
@@ -736,7 +1019,11 @@ function normalizeTsconfigPath(value: string): string {
 
 // ─── Tool: run_tests ─────────────────────────────────────────────────────────
 
-function buildRunTestsTool(toolDir: string, sessionPath: string): AgentTool {
+function buildRunTestsTool(
+  toolDir: string,
+  sessionPath: string,
+  credEnv?: Record<string, string>,
+): AgentTool {
   return {
     name: 'run_tests',
     description: 'Run bun test parser.test.ts and parse the output for pass/fail counts.',
@@ -756,6 +1043,7 @@ function buildRunTestsTool(toolDir: string, sessionPath: string): AgentTool {
 
       const cmdResult = await runCommand('bun test parser.test.ts', toolDir, 120000, {
         [SESSION_PATH_ENV]: sessionPath,
+        ...credEnv,
       });
 
       const output = JSON.parse(cmdResult.result) as {

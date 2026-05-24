@@ -40,14 +40,35 @@ export interface CredentialStore {
  *  with no legacy file still yields an empty store. */
 export async function loadCredentialStore(site: string): Promise<CredentialStore | null> {
   const view = await loadSiteCredentials(site);
+  const store: CredentialStore = {
+    site: view.site,
+    cookies: view.cookies,
+    values: { ...view.values },
+    storage: view.storage,
+  };
+
+  const envCreds = process.env.IMPRINT_TEACH_CREDENTIALS;
+  if (envCreds) {
+    try {
+      const parsed = JSON.parse(envCreds) as { site: string; values: Record<string, string> };
+      if (parsed.site === site && parsed.values) {
+        for (const [k, v] of Object.entries(parsed.values)) {
+          if (!(k in store.values)) store.values[k] = v;
+        }
+      }
+    } catch {
+      // Malformed env var — ignore silently.
+    }
+  }
+
   if (
-    Object.keys(view.values).length === 0 &&
-    view.cookies.length === 0 &&
-    view.storage.length === 0
+    Object.keys(store.values).length === 0 &&
+    store.cookies.length === 0 &&
+    (store.storage?.length ?? 0) === 0
   ) {
     return null;
   }
-  return { site: view.site, cookies: view.cookies, values: view.values, storage: view.storage };
+  return store;
 }
 
 interface ExecuteOptions {

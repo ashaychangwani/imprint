@@ -37,6 +37,10 @@ Follow these steps to compile the session:
 
    Read `stateHints` carefully. They are deterministic, redacted equality relationships discovered before the LLM step, such as “request B header equals cookie set by request A” or “request header equals a storage key.” Use these hints to emit named `captures` plus `${state.name}` references. Never copy `[REDACTED:...]` marker IDs into workflow.json.
 
+   **Inline request data.** The session summary includes `inlineData` for candidate-scoped requests (those in `selectedCandidate.requestSeqs` and `dependencySeqs`). Each entry contains the full request headers, request body, response headers, and a (possibly truncated) response body. You do NOT need to call `read_request` or `read_response_body` for these requests — the data is already available in the summary. Only use those tools if the inline response body was truncated and you need more, or for requests outside the candidate scope.
+
+   **Capture hints.** The session summary may include `captureHints` — pre-built capture block suggestions derived from dual-pass analysis. When a `captureHint` exists for a server-derived value, copy its `capture` definition directly into your workflow.json's `captures` array on the indicated request, and use `${state.NAME}` in downstream requests as shown in the `usedBy` entries. This saves you from having to discover the producer response and build the capture manually.
+
    **Dual-pass value classifications.** When `stateHints` includes entries with `type: “dual_pass_value_classification”`, these values were verified to differ across two independent executions of the same workflow with identical user inputs. They are the highest-confidence signal for ephemeral state — treat them seriously, but reason about them rather than following blindly:
 
    - **`server_derived`**: The value differed and was found in a prior response. The hint includes `producerSeq` and `producerPath` telling you exactly where to capture from. Add a `captures` entry on the producer request and reference via `${state.NAME}`.
@@ -58,7 +62,7 @@ Follow these steps to compile the session:
    - bodySize is non-trivial (>1KB for data endpoints)
    - timestamp correlates with narration (occurred shortly after the user's stated action)
 
-4. **Read the load-bearing request.** Use `read_request` to get the full request including method, URL, headers, and request body (if POST/PUT).
+4. **Examine the load-bearing request.** Check if `inlineData` is available for this request in the session summary first — it contains the full request headers, body, and response details. Only call `read_request` if inline data is missing or you need a request outside the candidate scope.
 
 5. **Write workflow.json.** Template the request(s):
    - Replace user-variable values with `${param.NAME}` placeholders (e.g., origin airport, date, passenger count)
@@ -75,7 +79,7 @@ Follow these steps to compile the session:
    - **If you write a `parser.ts`, you MUST set `"parserModule": "./parser.ts"` in workflow.json.** Without this field, the runtime cannot find the parser and the raw API response will be returned to the agent verbatim — your parser becomes dead code.
    - Validate against `WorkflowSchema` (defined in the reference section below)
 
-6. **Read the response body.** Use `read_response_body` to fetch the raw response. For large responses, you can paginate via offset/length. For opaque binary formats, this is where you discover if the response is parseable.
+6. **Examine the response body.** Check `inlineData` in the session summary first — for JSON responses under 16KB, the full body is already available. Only call `read_response_body` if the inline body was truncated (`responseBodyTruncated: true`) and you need the full content, or for requests outside the candidate scope.
 
 7. **Analyze the response structure.** Determine the shape:
    - **JSON-keyed REST API**: straightforward — keys are named, traverse the object graph
@@ -175,6 +179,14 @@ Follow these steps to compile the session:
 - **Do not re-run passing tests.** If parser.test.ts passed, move on. Do not "double-check" by running it again.
 - **Use `write_file` to modify files, not bash scripts.** Do not pipe through python/sed/awk to edit workflow.json or test files — rewrite the whole file with `write_file`.
 - **Do not inspect imprint internals.** Do not read runtime.ts, stealth-fetch.ts, backend-ladder.ts, cookie-jar.ts, or other imprint source files. Everything you need is in this prompt and the tools provided. If you find yourself reading imprint source code, you are off track.
+
+### Hard exit conditions
+
+- **Credential STATE_MISSING.** If an integration test returns `STATE_MISSING` for a credential (e.g., `credential.username` not found in the credential store), call `done` immediately with your current artifacts. The credential store is managed by the harness or by `imprint credential set` — do NOT search the filesystem for credential files, do NOT run `find` or `ls` against `~/.config/imprint/`, `~/.imprint/`, or any directory outside your tool directory.
+
+- **Turn budget.** If you have made more than 40 tool calls and your parser tests are still not passing, call `done` with your best-effort artifacts. The harness runs its own external verification.
+
+- **No filesystem exploration.** Do not use `run_bash` to read files outside the tool directory. Specifically: no `find`, `cat`, `ls`, or `grep` against `~/.imprint/`, `~/.config/imprint/`, the imprint source tree, or `node_modules/`. Everything you need is in the session summary (including inline data), state hints, and capture hints.
 
 ## Strategies for Response Shapes
 
@@ -418,5 +430,97 @@ Workflow = {
   requestTransformModule?: string;      // e.g. "./request-transform.ts"
 }
 ```
+
+## Capture Examples
+
+### Login + data fetch
+```json
+{
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://api.example.com/login",
+      "headers": { "Content-Type": "application/json" },
+      "body": "{\"username\":\"${credential.username}\",\"password\":\"${credential.password}\"}",
+      "captures": [
+        { "source": "json", "name": "access_token", "path": "$.token" }
+      ]
+    },
+    {
+      "method": "GET",
+      "url": "https://api.example.com/data?q=${param.query}",
+      "headers": { "Authorization": "Bearer ${state.access_token}" }
+    }
+  ]
+}
+```
+
+### Auth chain with multiple captures
+```json
+{
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://example.com/app",
+      "captures": [
+        { "source": "text_regex", "name": "auth_code", "pattern": "authToken\\.code\\s*=\\s*[\"']([^\"']+)[\"']", "group": 1 }
+      ]
+    },
+    {
+      "method": "POST",
+      "url": "https://api.example.com/guest-login",
+      "headers": { "Content-Type": "application/json" },
+      "body": "{\"authcode\":\"${state.auth_code}\"}",
+      "captures": [
+        { "source": "json", "name": "fingerprint", "path": "$.result.fingerprint" }
+      ]
+    },
+    {
+      "method": "POST",
+      "url": "https://api.example.com/query",
+      "headers": { "Content-Type": "application/json" },
+      "body": "{\"fingerprint\":\"${state.fingerprint}\",\"action\":\"${param.action}\"}"
+    }
+  ]
+}
+```
+
+### Cookie capture from Set-Cookie
+```json
+{
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://example.com/init",
+      "captures": [
+        { "source": "cookie", "name": "csrf_token", "cookie": "XSRF-TOKEN" }
+      ]
+    },
+    {
+      "method": "POST",
+      "url": "https://example.com/api/action",
+      "headers": { "X-CSRF-Token": "${state.csrf_token}" }
+    }
+  ]
+}
+```
+
+### Sample captureHints from session summary
+
+When you call `read_session_summary`, you may see `captureHints` like this:
+```json
+{
+  "captureHints": [
+    {
+      "producerRequestIndex": 0,
+      "capture": { "source": "json", "name": "fingerprint", "path": "$.result.fingerprint" },
+      "usedBy": [
+        { "requestIndex": 1, "location": "body.fingerprint", "substitution": "${state.fingerprint}" }
+      ]
+    }
+  ]
+}
+```
+This means: on request[0], add `captures: [{ source: "json", name: "fingerprint", path: "$.result.fingerprint" }]`, and in request[1]'s body, use `${state.fingerprint}` wherever the fingerprint value appears.
 
 Now begin. Read the session summary and start compiling.

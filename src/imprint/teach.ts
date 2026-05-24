@@ -7,7 +7,7 @@
  * step, and multiple workflows per site (each in its own subdirectory).
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import * as p from '@clack/prompts';
@@ -505,6 +505,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   // ── 2. Redact ──────────────────────────────────────────────────────
+  let teachCredentials: { site: string; values: Record<string, string> } | undefined;
   if (startIdx <= STEPS.indexOf('redact')) {
     sessionPath = requireSessionFile(sessionPath, {
       site,
@@ -536,6 +537,16 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         noInteractive: opts.noInteractive ?? false,
       });
       confirmedReplacements = result.replacements;
+      if (result.confirmedFinding) {
+        const f = result.confirmedFinding;
+        teachCredentials = {
+          site,
+          values: {
+            [f.usernameName ?? 'username']: f.usernameValue,
+            [f.passwordName ?? 'password']: f.passwordValue,
+          },
+        };
+      }
     }
 
     spinner.start('Redacting credentials...');
@@ -872,6 +883,29 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     kind: 'redacted',
   });
 
+  // ── Clean up stale tools from previous teach runs ──
+  const incomingToolNames = new Set(plans.map((pl) => pl.candidate?.toolName ?? pl.workflowKey));
+  const existingTools = discoverCompletedWorkflows(site);
+  const staleTools = existingTools.filter((name) => !incomingToolNames.has(name));
+  if (staleTools.length > 0) {
+    let shouldReplace = true;
+    if (!opts.noInteractive) {
+      const answer = await p.confirm({
+        message: `Found ${staleTools.length} existing tool${staleTools.length === 1 ? '' : 's'} from previous runs. Replace with the ${incomingToolNames.size} new tool${incomingToolNames.size === 1 ? '' : 's'}?`,
+        initialValue: true,
+      });
+      if (p.isCancel(answer)) throw new Error('Cancelled.');
+      shouldReplace = answer;
+    }
+    if (shouldReplace) {
+      for (const name of staleTools) {
+        rmSync(localToolDir(site, name), { recursive: true, force: true });
+        delete state.workflows[name];
+      }
+      saveTeachState(site, state);
+    }
+  }
+
   if (plans.length > 1) muteLog();
   let results: TeachToolResult[];
   try {
@@ -887,6 +921,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       spinner,
       sharedTriageResult: triageResult,
       siteClassifications,
+      teachCredentials,
     });
   } finally {
     if (plans.length > 1) unmuteLog();
@@ -1048,6 +1083,7 @@ async function compileCandidatePlans(opts: {
   spinner: ReturnType<typeof p.spinner>;
   sharedTriageResult?: TriageResult;
   siteClassifications?: ClassifiedValue[];
+  teachCredentials?: { site: string; values: Record<string, string> };
 }): Promise<TeachToolResult[]> {
   const concurrency = opts.plans.length === 1 ? 1 : 3;
   const mp = opts.plans.length > 1 ? new MultiProgress() : null;
@@ -1135,6 +1171,7 @@ async function compileSelectedCandidate(opts: {
   onProgress: (progress: CompileAgentProgress) => void;
   sharedTriageResult?: TriageResult;
   siteClassifications?: ClassifiedValue[];
+  teachCredentials?: { site: string; values: Record<string, string> };
 }): Promise<TeachToolResult> {
   const { plan, site, state } = opts;
   const startIdx = STEPS.indexOf(plan.startFrom);
@@ -1155,6 +1192,7 @@ async function compileSelectedCandidate(opts: {
       sharedContext: plan.sharedContext,
       onProgress: opts.onProgress,
       classifications: opts.siteClassifications,
+      teachCredentials: opts.teachCredentials,
     });
     assertCandidateToolName('Compiled workflow', result.workflow.toolName, plan.candidate);
     genResult = { workflow: result.workflow, workflowPath: result.workflowPath };
@@ -1366,6 +1404,7 @@ export async function mapLimitSettled<T, R>(
 
 interface CredentialPromptResult {
   replacements: Replacement[];
+  confirmedFinding?: CredentialFinding;
 }
 
 async function promptAndPersistCredentials(opts: {
@@ -1407,8 +1446,9 @@ async function promptAndPersistCredentials(opts: {
 
   if (opts.noInteractive) {
     // Persist silently in non-interactive mode — keeps automated runs working.
-    await persistFinding({ site: opts.site, finding: unique[0] as CredentialFinding });
-    return { replacements: opts.replacements };
+    const finding = unique[0] as CredentialFinding;
+    await persistFinding({ site: opts.site, finding });
+    return { replacements: opts.replacements, confirmedFinding: finding };
   }
 
   const proceed = await p.confirm({
@@ -1447,6 +1487,7 @@ async function promptAndPersistCredentials(opts: {
     replacements: opts.replacements.filter(
       (r) => r.originalValue === chosen?.usernameValue || r.originalValue === chosen?.passwordValue,
     ),
+    confirmedFinding: chosen,
   };
 }
 
