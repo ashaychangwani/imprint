@@ -13,7 +13,7 @@ async function gql(query: string, variables?: Record<string, unknown>): Promise<
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, variables }),
   });
-  const json = await resp.json() as { data?: unknown; errors?: Array<{ message: string }> };
+  const json = (await resp.json()) as { data?: unknown; errors?: Array<{ message: string }> };
   if (json.errors) {
     throw new Error(`GraphQL error: ${json.errors.map((e) => e.message).join(', ')}`);
   }
@@ -36,7 +36,7 @@ interface SpanNode {
 }
 
 async function getRecentTeachTraces(limit: number) {
-  const data = await gql(`{
+  const data = (await gql(`{
     node(id: "${PROJECT_ID}") {
       ... on Project {
         spans(first: ${limit}, sort: { col: startTime, dir: desc }, rootSpansOnly: true) {
@@ -48,12 +48,12 @@ async function getRecentTeachTraces(limit: number) {
         }
       }
     }
-  }`) as { node: { spans: { edges: Array<{ node: SpanNode }> } } };
+  }`)) as { node: { spans: { edges: Array<{ node: SpanNode }> } } };
   return data.node.spans.edges.map((e) => e.node).filter((s) => s.name === 'cli.teach');
 }
 
 async function getTraceSpans(traceId: string): Promise<SpanNode[]> {
-  const data = await gql(`{
+  const data = (await gql(`{
     node(id: "${PROJECT_ID}") {
       ... on Project {
         spans(first: 200, sort: { col: startTime, dir: asc }, filterCondition: "trace_id == '${traceId}'") {
@@ -68,7 +68,7 @@ async function getTraceSpans(traceId: string): Promise<SpanNode[]> {
         }
       }
     }
-  }`) as { node: { spans: { edges: Array<{ node: SpanNode }> } } };
+  }`)) as { node: { spans: { edges: Array<{ node: SpanNode }> } } };
   return data.node.spans.edges.map((e) => e.node);
 }
 
@@ -111,7 +111,9 @@ async function analyzeTrace(traceId: string) {
 
   console.log(`\n${'═'.repeat(80)}`);
   console.log(`Trace: ${traceId}`);
-  console.log(`Root: ${root?.name ?? '?'} | Duration: ${formatDuration(root?.latencyMs ?? 0)} | Status: ${root?.statusCode ?? '?'}`);
+  console.log(
+    `Root: ${root?.name ?? '?'} | Duration: ${formatDuration(root?.latencyMs ?? 0)} | Status: ${root?.statusCode ?? '?'}`,
+  );
   console.log(`Started: ${root?.startTime ?? '?'}`);
   console.log(`${'─'.repeat(80)}`);
 
@@ -131,8 +133,12 @@ async function analyzeTrace(traceId: string) {
     const status = span.statusCode === 'OK' ? '✓' : '✗';
 
     console.log(`  ${status} ${toolName}`);
-    console.log(`    Duration: ${formatDuration(span.latencyMs)} | Turns: ${turns ?? '?'} | Outcome: ${outcome ?? '?'}`);
-    console.log(`    Tokens: ${span.tokenCountTotal ?? '?'} total (${span.tokenCountPrompt ?? '?'} prompt, ${span.tokenCountCompletion ?? '?'} completion)`);
+    console.log(
+      `    Duration: ${formatDuration(span.latencyMs)} | Turns: ${turns ?? '?'} | Outcome: ${outcome ?? '?'}`,
+    );
+    console.log(
+      `    Tokens: ${span.tokenCountTotal ?? '?'} total (${span.tokenCountPrompt ?? '?'} prompt, ${span.tokenCountCompletion ?? '?'} completion)`,
+    );
 
     // Get child spans to analyze tool call breakdown
     const children = spans.filter((s) => s.parentId === span.context.spanId);
@@ -151,16 +157,20 @@ async function analyzeTrace(traceId: string) {
       const sorted = [...byName.entries()].sort((a, b) => b[1].totalMs - a[1].totalMs);
       console.log(`    Child spans (${children.length}):`);
       for (const [name, stats] of sorted.slice(0, 10)) {
-        console.log(`      ${name}: ${stats.count}x, total ${formatDuration(stats.totalMs)}, max ${formatDuration(stats.maxMs)}`);
+        console.log(
+          `      ${name}: ${stats.count}x, total ${formatDuration(stats.totalMs)}, max ${formatDuration(stats.maxMs)}`,
+        );
       }
 
       // Find the slowest individual children
       const slowest = [...children].sort((a, b) => b.latencyMs - a.latencyMs).slice(0, 5);
       if (slowest[0] && slowest[0].latencyMs > 10000) {
-        console.log(`    Slowest individual spans:`);
+        console.log('    Slowest individual spans:');
         for (const s of slowest) {
           if (s.latencyMs < 5000) break;
-          console.log(`      ${s.name}: ${formatDuration(s.latencyMs)} (tokens: ${s.tokenCountCompletion ?? '?'} out)`);
+          console.log(
+            `      ${s.name}: ${formatDuration(s.latencyMs)} (tokens: ${s.tokenCountCompletion ?? '?'} out)`,
+          );
         }
       }
     }
@@ -168,17 +178,20 @@ async function analyzeTrace(traceId: string) {
   }
 
   // Also show triage and playbook spans
-  const otherSpans = spans.filter((s) =>
-    s.name === 'compile.triage_requests' ||
-    s.name === 'compile.playbook' ||
-    s.name === 'teach.detect_tool_candidates' ||
-    s.name === 'teach.replay_and_diff'
+  const otherSpans = spans.filter(
+    (s) =>
+      s.name === 'compile.triage_requests' ||
+      s.name === 'compile.playbook' ||
+      s.name === 'teach.detect_tool_candidates' ||
+      s.name === 'teach.replay_and_diff',
   );
   if (otherSpans.length > 0) {
     console.log('Other pipeline spans:');
     for (const s of otherSpans) {
       const toolName = extractToolName(s.attributes);
-      console.log(`  ${s.name}${toolName ? ` (${toolName})` : ''}: ${formatDuration(s.latencyMs)} [${s.statusCode}]`);
+      console.log(
+        `  ${s.name}${toolName ? ` (${toolName})` : ''}: ${formatDuration(s.latencyMs)} [${s.statusCode}]`,
+      );
     }
   }
 }
@@ -193,7 +206,9 @@ if (traceIdIdx >= 0 && args[traceIdIdx + 1]) {
 } else {
   const limit = lastIdx >= 0 ? Number.parseInt(args[lastIdx + 1] ?? '5', 10) : 5;
   const traces = await getRecentTeachTraces(limit + 5);
-  console.log(`Found ${traces.length} recent teach traces (showing last ${Math.min(limit, traces.length)}):\n`);
+  console.log(
+    `Found ${traces.length} recent teach traces (showing last ${Math.min(limit, traces.length)}):\n`,
+  );
 
   for (const trace of traces.slice(0, limit)) {
     await analyzeTrace(trace.context.traceId);

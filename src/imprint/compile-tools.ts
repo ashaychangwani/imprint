@@ -205,7 +205,7 @@ function reduceInlineData(
   // reducing the requests array so we can estimate the full summary
   // size without re-serializing the entire object each phase.
   const arrayBefore = JSON.stringify(requests).length;
-  let overhead = fullSummarySize - arrayBefore;
+  const overhead = fullSummarySize - arrayBefore;
 
   const estimateFullSize = () => JSON.stringify(reduced).length + overhead;
 
@@ -214,8 +214,8 @@ function reduceInlineData(
     for (const r of reduced) {
       if (r.sharedDependency && !r.selectedForCandidate && r.inlineData) {
         const inline = r.inlineData as Record<string, unknown>;
-        delete inline.responseBody;
-        delete inline.responseBodyStructure;
+        inline.responseBody = undefined;
+        inline.responseBodyStructure = undefined;
         inline.responseBodyTruncated = true;
         inline.responseBodyNote = 'omitted to fit summary budget — use read_response_body';
       }
@@ -240,8 +240,8 @@ function reduceInlineData(
     for (const r of reduced) {
       if (!r.inlineData) continue;
       const inline = r.inlineData as Record<string, unknown>;
-      delete inline.responseBody;
-      delete inline.responseBodyStructure;
+      inline.responseBody = undefined;
+      inline.responseBodyStructure = undefined;
       inline.responseBodyTruncated = true;
       inline.responseBodyNote = 'omitted to fit summary budget — use read_response_body';
     }
@@ -250,7 +250,7 @@ function reduceInlineData(
   // Phase 4: drop inline data entirely if still over budget
   if (estimateFullSize() > budget) {
     for (const r of reduced) {
-      delete r.inlineData;
+      r.inlineData = undefined;
     }
   }
 
@@ -357,10 +357,7 @@ function buildCaptureHints(
   return deduplicateCaptureHints(hints);
 }
 
-function buildCaptureFromPath(
-  name: string,
-  producerPath: string,
-): CaptureHint['capture'] | null {
+function buildCaptureFromPath(name: string, producerPath: string): CaptureHint['capture'] | null {
   if (producerPath.startsWith('response_header:')) {
     return {
       source: 'response_header',
@@ -890,10 +887,7 @@ function buildReadFileTool(toolDir: string): AgentTool {
 
 // ─── Tool: run_bash ──────────────────────────────────────────────────────────
 
-function buildRunBashTool(
-  toolDir: string,
-  credEnv?: Record<string, string>,
-): AgentTool {
+function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): AgentTool {
   return {
     name: 'run_bash',
     description: 'Run a shell command in the generated tool directory with a timeout.',

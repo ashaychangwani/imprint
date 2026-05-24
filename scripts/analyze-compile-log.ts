@@ -5,9 +5,9 @@
  *        bun run scripts/analyze-compile-log.ts --site <site> [--tool <tool>]
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join as pathJoin } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { join as pathJoin } from 'node:path';
 
 interface LogEntry {
   role: 'user' | 'assistant' | 'system';
@@ -155,11 +155,12 @@ function analyzeLog(entries: LogEntry[], logPath: string) {
   console.log(`  Assistant turns: ${assistantTurns}`);
   console.log(`  Total tool calls: ${totalToolCalls}`);
   console.log(`  Session summary has inlineData: ${sessionSummaryHasInlineData}`);
-  if (sessionSummarySize) console.log(`  Session summary size: ${(sessionSummarySize / 1024).toFixed(1)}KB`);
+  if (sessionSummarySize)
+    console.log(`  Session summary size: ${(sessionSummarySize / 1024).toFixed(1)}KB`);
   console.log(`  Agent referenced inlineData: ${usedInlineData}`);
   console.log('');
   console.log('  Tool call breakdown:');
-  console.log(`    read_session_summary: 1 (always first)`);
+  console.log('    read_session_summary: 1 (always first)');
   console.log(`    read_request:         ${readRequestCalls}`);
   console.log(`    read_response_body:   ${readResponseBodyCalls}`);
   console.log(`    search_response_body: ${searchResponseBodyCalls}`);
@@ -172,7 +173,9 @@ function analyzeLog(entries: LogEntry[], logPath: string) {
 
   const explorationCalls = readRequestCalls + readResponseBodyCalls + searchResponseBodyCalls;
   const pct = totalToolCalls > 0 ? ((explorationCalls / totalToolCalls) * 100).toFixed(0) : '0';
-  console.log(`  Exploration calls (read_request + read_response + search): ${explorationCalls} (${pct}% of total)`);
+  console.log(
+    `  Exploration calls (read_request + read_response + search): ${explorationCalls} (${pct}% of total)`,
+  );
 
   if (errors.length > 0) {
     console.log(`\n  Errors encountered (${errors.length}):`);
@@ -185,7 +188,9 @@ function analyzeLog(entries: LogEntry[], logPath: string) {
   if (toolCallTimeline.length > 0) {
     console.log('\n  First 10 tool calls:');
     for (const tc of toolCallTimeline.slice(0, 10)) {
-      console.log(`    [turn ${tc.turn}] ${tc.tool}${tc.inputPreview ? ` — ${tc.inputPreview}` : ''}`);
+      console.log(
+        `    [turn ${tc.turn}] ${tc.tool}${tc.inputPreview ? ` — ${tc.inputPreview}` : ''}`,
+      );
     }
     if (toolCallTimeline.length > 20) {
       console.log(`    ... (${toolCallTimeline.length - 20} more) ...`);
@@ -193,7 +198,9 @@ function analyzeLog(entries: LogEntry[], logPath: string) {
     if (toolCallTimeline.length > 10) {
       console.log('  Last 10 tool calls:');
       for (const tc of toolCallTimeline.slice(-10)) {
-        console.log(`    [turn ${tc.turn}] ${tc.tool}${tc.inputPreview ? ` — ${tc.inputPreview}` : ''}`);
+        console.log(
+          `    [turn ${tc.turn}] ${tc.tool}${tc.inputPreview ? ` — ${tc.inputPreview}` : ''}`,
+        );
       }
     }
   }
