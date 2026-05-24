@@ -2,7 +2,6 @@
  *  user payload → raw model text. */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 import {
   llmSpanAttributes,
   resolveTraceTokenCount,
@@ -12,7 +11,7 @@ import {
   traced,
 } from './tracing.ts';
 
-export type ProviderName = 'anthropic-api' | 'vertex' | 'claude-cli' | 'codex-cli' | 'cursor-cli';
+export type ProviderName = 'anthropic-api' | 'claude-cli' | 'codex-cli' | 'cursor-cli';
 
 interface AnalyzeResult {
   text: string;
@@ -40,7 +39,7 @@ interface TraceAnalyzeDetails {
 }
 
 /** Subset of providers that support the Anthropic tool-use protocol.
- *  vertex and anthropic-api qualify. CLI providers use separate orchestration
+ *  anthropic-api qualifies. CLI providers use separate orchestration
  *  paths for agentic compile when supported. */
 export interface ToolUseProvider extends LLMProvider {
   messageWithTools(opts: {
@@ -68,147 +67,6 @@ export interface LLMOptions {
   model?: string;
   temperature?: number;
   maxTokens?: number;
-  projectId?: string;
-  region?: string;
-}
-
-class VertexProvider implements LLMProvider {
-  readonly name: ProviderName = 'vertex';
-  private client: AnthropicVertex;
-  private config: {
-    projectId: string;
-    region: string;
-    model: string;
-    temperature: number;
-    maxTokens: number;
-  };
-
-  constructor({
-    projectId,
-    region,
-    model,
-    temperature,
-    maxTokens,
-  }: {
-    projectId: string;
-    region: string;
-    model: string;
-    temperature: number;
-    maxTokens: number;
-  }) {
-    this.config = { projectId, region, model, temperature, maxTokens };
-    this.client = new AnthropicVertex({
-      projectId,
-      region,
-    });
-  }
-
-  async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
-    const userText = JSON.stringify(userPayload);
-    const invocationParameters = {
-      max_tokens: this.config.maxTokens,
-      ...temperatureFragment(this.config.model, this.config.temperature),
-    };
-    return await traceAnalyze(
-      this.name,
-      this.config.model,
-      systemPrompt,
-      userText.length,
-      async () => {
-        const t0 = Date.now();
-
-        let response: Awaited<ReturnType<typeof this.client.messages.create>>;
-        try {
-          response = await this.client.messages.create({
-            model: this.config.model,
-            max_tokens: invocationParameters.max_tokens,
-            ...(invocationParameters.temperature === undefined
-              ? {}
-              : { temperature: invocationParameters.temperature }),
-            system: systemPrompt,
-            messages: [{ role: 'user', content: userText }],
-          });
-        } catch (err) {
-          throw enrichVertexError(err, this.config);
-        }
-
-        const text = response.content
-          .filter((block) => block.type === 'text')
-          .map((block) => ('text' in block ? block.text : ''))
-          .join('');
-
-        return {
-          text,
-          inputTokens: response.usage.input_tokens,
-          outputTokens: response.usage.output_tokens,
-          durationMs: Date.now() - t0,
-          stopReason: response.stop_reason ?? null,
-        };
-      },
-      chatTraceDetails(systemPrompt, userText, invocationParameters),
-    );
-  }
-
-  async messageWithTools(opts: {
-    system: string;
-    messages: Anthropic.MessageParam[];
-    tools: Anthropic.Tool[];
-    maxTokens?: number;
-  }): Promise<Anthropic.Message> {
-    return await traceMessageWithTools(this.name, this.config.model, opts, async () => {
-      try {
-        const response = await this.client.messages.create({
-          model: this.config.model,
-          max_tokens: opts.maxTokens ?? this.config.maxTokens,
-          ...temperatureFragment(this.config.model, this.config.temperature),
-          system: opts.system,
-          messages: opts.messages,
-          tools: opts.tools,
-        });
-        return response as unknown as Anthropic.Message;
-      } catch (err) {
-        throw enrichVertexError(err, this.config);
-      }
-    });
-  }
-}
-
-function enrichVertexError(
-  err: unknown,
-  config: { projectId: string; region: string; model: string },
-): Error {
-  const msg = err instanceof Error ? err.message : String(err);
-  const lc = msg.toLowerCase();
-
-  if (lc.includes('not_found') || lc.includes('publisher model') || lc.includes('404')) {
-    return new Error(
-      `Vertex Anthropic call failed (${msg.split('\n')[0]?.slice(0, 200)})\n→ check that "${config.model}" is enabled in region "${config.region}" for project "${config.projectId}"\n→ enable models at: https://console.cloud.google.com/vertex-ai/model-garden\n→ run \`imprint doctor\` to verify env vars.`,
-      { cause: err },
-    );
-  }
-
-  if (lc.includes('unauthenticated') || lc.includes('401') || lc.includes('credentials')) {
-    return new Error(
-      `Vertex Anthropic call failed: not authenticated\n→ run \`gcloud auth application-default login\`\n→ ensure the active account has the Vertex AI User role on project "${config.projectId}"`,
-      { cause: err },
-    );
-  }
-
-  if (lc.includes('permission_denied') || lc.includes('403')) {
-    return new Error(
-      `Vertex Anthropic call failed: permission denied\n→ active account needs "roles/aiplatform.user" on project "${config.projectId}"\n→ check IAM at: https://console.cloud.google.com/iam-admin/iam`,
-      { cause: err },
-    );
-  }
-
-  if (lc.includes('resource_exhausted') || lc.includes('429') || lc.includes('quota')) {
-    return new Error(
-      'Vertex Anthropic call failed: quota exceeded\n→ check quota at: https://console.cloud.google.com/iam-admin/quotas\n→ or wait + retry; transient quota errors are common at peak',
-      { cause: err },
-    );
-  }
-
-  return new Error(`Vertex Anthropic call failed: ${msg}`, { cause: err });
 }
 
 class AnthropicApiProvider implements LLMProvider {
@@ -864,7 +722,6 @@ function enrichCursorCliError(err: unknown): Error {
 
 const VALID_PROVIDERS: readonly ProviderName[] = [
   'anthropic-api',
-  'vertex',
   'claude-cli',
   'codex-cli',
   'cursor-cli',
@@ -883,9 +740,7 @@ export function isValidProvider(s: string): s is ProviderName {
 }
 
 export function isTeachCompatibleProvider(name: ProviderName): boolean {
-  return (
-    name === 'anthropic-api' || name === 'vertex' || name === 'claude-cli' || name === 'codex-cli'
-  );
+  return name === 'anthropic-api' || name === 'claude-cli' || name === 'codex-cli';
 }
 
 export function getProviderStatuses(): ProviderStatus[] {
@@ -893,7 +748,6 @@ export function getProviderStatuses(): ProviderStatus[] {
   const codexPath = Bun.which('codex');
   const cursorPath = Bun.which('cursor');
   const hasAnthropicApiKey = !!process.env.ANTHROPIC_API_KEY;
-  const vertexProject = process.env.ANTHROPIC_VERTEX_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT;
 
   const statuses: ProviderStatus[] = [
     {
@@ -930,16 +784,6 @@ export function getProviderStatuses(): ProviderStatus[] {
       setupHint:
         'Create an Anthropic API key, then export it before running Imprint: `export ANTHROPIC_API_KEY=sk-ant-...`. Re-run `imprint teach` in that shell.',
     },
-    {
-      name: 'vertex',
-      detected: !!vertexProject,
-      availableForTeach: !!vertexProject,
-      reason: vertexProject
-        ? `Vertex project detected (${vertexProject})`
-        : 'ANTHROPIC_VERTEX_PROJECT_ID / GOOGLE_CLOUD_PROJECT is not set',
-      setupHint:
-        'Set `ANTHROPIC_VERTEX_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT`, authenticate with `gcloud auth application-default login`, and enable Anthropic Claude models in Vertex AI Model Garden for that project.',
-    },
   ];
 
   return statuses;
@@ -949,7 +793,6 @@ export function detectProvider(): ProviderName {
   if (Bun.which('claude')) return 'claude-cli';
   if (Bun.which('codex')) return 'codex-cli';
   if (process.env.ANTHROPIC_API_KEY) return 'anthropic-api';
-  if (process.env.ANTHROPIC_VERTEX_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT) return 'vertex';
   if (Bun.which('cursor')) return 'cursor-cli';
   throw new Error(
     'No LLM provider detected. Set up one of:\n' +
@@ -957,7 +800,6 @@ export function detectProvider(): ProviderName {
       '  • Install Codex CLI                       (codex-cli)\n' +
       '  • Install Cursor with CLI enabled         (cursor-cli)\n' +
       '  • export ANTHROPIC_API_KEY=sk-...        (Anthropic API)\n' +
-      '  • export ANTHROPIC_VERTEX_PROJECT_ID=...  (Vertex AI)\n' +
       '→ run `imprint doctor` for more details.',
   );
 }
@@ -976,7 +818,6 @@ export function detectTeachProvider(): ProviderName {
       '  • Install Claude Code CLI                 (claude-cli)\n' +
       '  • Install Codex CLI                       (codex-cli)\n' +
       '  • export ANTHROPIC_API_KEY=sk-...        (Anthropic API)\n' +
-      '  • export ANTHROPIC_VERTEX_PROJECT_ID=...  (Vertex AI)\n' +
       'Cursor CLI is available for generic prompt calls but not for teach/generate compile-agent runs yet.\n' +
       '→ run `imprint doctor` for more details.',
   );
@@ -990,19 +831,6 @@ function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider 
   switch (name) {
     case 'anthropic-api':
       return new AnthropicApiProvider({ model, temperature, maxTokens });
-    case 'vertex': {
-      const projectId =
-        opts.projectId ??
-        process.env.ANTHROPIC_VERTEX_PROJECT_ID ??
-        process.env.GOOGLE_CLOUD_PROJECT ??
-        '';
-      if (!projectId)
-        throw new Error(
-          'Vertex provider requires a project ID.\n→ export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id',
-        );
-      const region = opts.region ?? process.env.CLOUD_ML_REGION ?? 'us-east5';
-      return new VertexProvider({ projectId, region, model, temperature, maxTokens });
-    }
     case 'claude-cli':
       return new ClaudeCliProvider({ model });
     case 'codex-cli':
@@ -1036,7 +864,6 @@ export function preferredAgentModel(provider: ProviderName): string {
   if (override) return override;
   switch (provider) {
     case 'anthropic-api':
-    case 'vertex':
     case 'claude-cli':
       return 'claude-opus-4-7';
     case 'codex-cli':
@@ -1054,7 +881,6 @@ interface ModelOption {
 export function availableModelsForProvider(provider: ProviderName): ModelOption[] {
   switch (provider) {
     case 'anthropic-api':
-    case 'vertex':
     case 'claude-cli':
       return [
         { model: 'claude-opus-4-7', isDefault: true },

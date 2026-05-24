@@ -119,8 +119,7 @@ Requires [Bun](https://bun.sh) >= 1.3. Imprint detects LLM providers from what's
 | 1 | `claude-cli` | `claude` on PATH (Claude Code subscription) |
 | 2 | `codex-cli` | `codex` on PATH (Codex subscription) |
 | 3 | `anthropic-api` | `ANTHROPIC_API_KEY` env var |
-| 4 | `vertex` | `ANTHROPIC_VERTEX_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT` env var |
-| 5 | `cursor-cli` | `cursor` on PATH (generic prompt/playbook compile only; not `teach`/`generate`) |
+| 4 | `cursor-cli` | `cursor` on PATH (generic prompt/playbook compile only; not `teach`/`generate`) |
 
 ```bash
 imprint doctor
@@ -128,7 +127,7 @@ imprint doctor
 
 Shows which providers are detected. Interactive `imprint teach` prompts you to choose when multiple compatible compile providers are available, and also lists undetected providers as setup-help entries. Pick one of those help entries to see exactly which CLI or environment variable to add so it will be detected next time.
 
-To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. `teach` and `generate` require a compile-agent provider (`claude-cli`, `codex-cli`, `anthropic-api`, or `vertex`); `compile-playbook` can also use `cursor-cli`.
+To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. `teach` and `generate` require a compile-agent provider (`claude-cli`, `codex-cli`, or `anthropic-api`); `compile-playbook` can also use `cursor-cli`.
 
 After selecting a provider, `teach` prompts for a **model** (e.g. `claude-opus-4-7` vs `claude-sonnet-4-6` for Anthropic, `gpt-5.4` vs `o3` for Codex). Override with `--model <name>`. Each tool compiles with a **5-minute timeout** by default; override with `--timeout <duration>` (e.g. `--timeout 10m`, `--timeout 1h`). To skip the replay-and-diff stage (the automated second pass that classifies ephemeral vs constant values), pass `--skip-replay` — faster, but may reduce workflow accuracy for sites with dynamic request parameters.
 

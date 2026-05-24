@@ -237,7 +237,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       throw new Error(
         [
           `provider "${resolvedProvider.name}" does not support tool use, which the compile-agent requires.`,
-          '→ use one of: claude-cli, codex-cli, anthropic-api, vertex (install a supported CLI, or set ANTHROPIC_API_KEY / ANTHROPIC_VERTEX_PROJECT_ID)',
+          '→ use one of: claude-cli, codex-cli, anthropic-api (install a supported CLI, or set ANTHROPIC_API_KEY)',
         ].join('\n'),
       );
     }

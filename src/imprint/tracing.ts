@@ -349,7 +349,6 @@ function recordSpanError(span: Span, err: unknown): void {
 function openInferenceProvider(provider: string): string {
   if (provider === 'codex-cli') return 'openai';
   if (provider === 'claude-cli' || provider === 'anthropic-api') return 'anthropic';
-  if (provider === 'vertex') return 'google';
   return provider;
 }
 

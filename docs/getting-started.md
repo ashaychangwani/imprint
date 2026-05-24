@@ -8,7 +8,7 @@ The fastest path is `imprint teach`, which runs the full pipeline interactively 
 
 - [Bun](https://bun.sh) ≥ 1.3
 - Google Chrome (any modern build)
-- A compile-agent provider for `teach`/`generate`: Claude CLI, Codex CLI, Anthropic API, or a Google Cloud project with Vertex AI Anthropic models enabled. Cursor CLI is supported for generic prompt/playbook compilation, not the agentic API workflow compiler yet.
+- A compile-agent provider for `teach`/`generate`: Claude CLI, Codex CLI, or Anthropic API. Cursor CLI is supported for generic prompt/playbook compilation, not the agentic API workflow compiler yet.
 
 ## Install
 
@@ -25,18 +25,11 @@ By default, all Imprint data lives in `~/.imprint/`. Set `IMPRINT_HOME` to reloc
 
 If `imprint --help` says "command not found" after `bun link`, your `~/.bun/bin` isn't on `PATH`. Either add it (Bun's installer normally does this) or skip `bun link` and call everything via `bun src/cli.ts <verb>`.
 
-If you use Vertex, set your project once:
-
-```bash
-export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
-export CLOUD_ML_REGION=us-east5    # optional; defaults to us-east5
-```
-
 Verify the install with the built-in environment check:
 
 ```bash
 imprint doctor
-# → checks Bun, Chromium, Playwright Chromium, Vertex env, push providers.
+# → checks Bun, Chromium, Playwright Chromium, LLM providers, push providers.
 # → exits 0 if all required checks pass; 1 otherwise (CI-friendly).
 ```
 
@@ -106,7 +99,7 @@ Stateful workflows still run through the same generated tool. If a request sets 
 `imprint teach` prompts for a **provider** and **model** interactively. To skip the prompts or override defaults:
 
 ```bash
-imprint teach google-flights --provider vertex --model claude-sonnet-4-6 --timeout 10m
+imprint teach google-flights --provider claude-cli --model claude-sonnet-4-6 --timeout 10m
 ```
 
 Each tool has a **10-minute compile timeout** by default. If your site is complex or the compile agent needs more time for verification, increase it with `--timeout`. If a tool fails to compile (e.g. timeout or bot defense), the other tools in the same recording still compile successfully.

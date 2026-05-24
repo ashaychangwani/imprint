@@ -6,13 +6,11 @@ Smoke-tests + ad-hoc diagnostic scripts. **None of these ship with `imprint` its
 
 | Script | What it tests |
 |---|---|
-| [`vertex-smoke.ts`](vertex-smoke.ts) | Calls Vertex Anthropic with one short prompt. Use to verify your `ANTHROPIC_VERTEX_PROJECT_ID` / region / quota are right before spending tokens on a real recording. |
 | [`mcp-smoke-test.ts`](mcp-smoke-test.ts) | Spins up the in-process MCP server, lists tools, calls `echo`. No external deps. Best signal that the MCP wire-up isn't broken after a refactor. |
 | [`mcp-client-test.ts`](mcp-client-test.ts) | Same shape but exercises the SDK's stdio client transport. |
 | [`mcp-http-client-test.ts`](mcp-http-client-test.ts) | Same again over Streamable HTTP transport. |
 
 ```bash
-bun scripts/vertex-smoke.ts        # tests Vertex env (~3s)
 bun scripts/mcp-smoke-test.ts      # tests MCP server (~1s)
 ```
 

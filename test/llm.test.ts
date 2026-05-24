@@ -1,5 +1,5 @@
 /**
- * Tests for the Vertex error-enrichment + JSON extraction helpers.
+ * Tests for the LLM provider helpers and JSON extraction utilities.
  *
  * The `analyze()` method itself is exercised end-to-end by compile.test.ts;
  * here we cover the parts that don't need a live LLM call.
@@ -127,7 +127,6 @@ describe('codexAnalyzeArgs', () => {
 describe('isValidProvider', () => {
   it('accepts valid provider names', () => {
     expect(isValidProvider('anthropic-api')).toBe(true);
-    expect(isValidProvider('vertex')).toBe(true);
     expect(isValidProvider('claude-cli')).toBe(true);
     expect(isValidProvider('codex-cli')).toBe(true);
     expect(isValidProvider('cursor-cli')).toBe(true);
@@ -136,7 +135,7 @@ describe('isValidProvider', () => {
   it('rejects invalid names', () => {
     expect(isValidProvider('openai')).toBe(false);
     expect(isValidProvider('')).toBe(false);
-    expect(isValidProvider('VERTEX')).toBe(false);
+    expect(isValidProvider('vertex')).toBe(false);
   });
 });
 
@@ -182,23 +181,6 @@ describe('detectProvider', () => {
     }
   });
 
-  it('falls back to vertex when no CLI and no API key but ANTHROPIC_VERTEX_PROJECT_ID is set', () => {
-    const origKey = process.env.ANTHROPIC_API_KEY;
-    const origProject = process.env.ANTHROPIC_VERTEX_PROJECT_ID;
-    try {
-      process.env.ANTHROPIC_API_KEY = undefined;
-      process.env.ANTHROPIC_VERTEX_PROJECT_ID = 'test-project';
-      withoutCliProviders(() => {
-        expect(detectProvider()).toBe('vertex');
-      });
-    } finally {
-      if (origKey === undefined) process.env.ANTHROPIC_API_KEY = undefined;
-      else process.env.ANTHROPIC_API_KEY = origKey;
-      if (origProject === undefined) process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
-      else process.env.ANTHROPIC_VERTEX_PROJECT_ID = origProject;
-    }
-  });
-
   it('prefers env providers over cursor-cli for generic provider auto-detection', () => {
     const origWhich = Bun.which;
     const origKey = process.env.ANTHROPIC_API_KEY;
@@ -218,13 +200,9 @@ describe('detectProvider', () => {
   it('falls back to cursor-cli when no compile-agent provider is detected', () => {
     const origWhich = Bun.which;
     const origKey = process.env.ANTHROPIC_API_KEY;
-    const origProject = process.env.ANTHROPIC_VERTEX_PROJECT_ID;
-    const origGoogleProject = process.env.GOOGLE_CLOUD_PROJECT;
     try {
       Bun.which = ((cmd: string) => (cmd === 'cursor' ? '/bin/cursor' : null)) as typeof Bun.which;
       process.env.ANTHROPIC_API_KEY = undefined;
-      process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
-      process.env.GOOGLE_CLOUD_PROJECT = undefined;
 
       expect(detectProvider()).toBe('cursor-cli');
       expect(() => detectTeachProvider()).toThrow(/No teach-compatible/);
@@ -232,10 +210,6 @@ describe('detectProvider', () => {
       Bun.which = origWhich;
       if (origKey === undefined) process.env.ANTHROPIC_API_KEY = undefined;
       else process.env.ANTHROPIC_API_KEY = origKey;
-      if (origProject === undefined) process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
-      else process.env.ANTHROPIC_VERTEX_PROJECT_ID = origProject;
-      if (origGoogleProject === undefined) process.env.GOOGLE_CLOUD_PROJECT = undefined;
-      else process.env.GOOGLE_CLOUD_PROJECT = origGoogleProject;
     }
   });
 });
@@ -244,15 +218,11 @@ describe('provider status metadata', () => {
   function withProviderEnv<T>(opts: { which?: (cmd: string) => string | null }, fn: () => T): T {
     const origWhich = Bun.which;
     const origApiKey = process.env.ANTHROPIC_API_KEY;
-    const origVertex = process.env.ANTHROPIC_VERTEX_PROJECT_ID;
-    const origGoogleProject = process.env.GOOGLE_CLOUD_PROJECT;
     const origCodexModel = process.env.CODEX_MODEL;
     const origCodexAgentModel = process.env.CODEX_MODEL_AGENT;
     try {
       Bun.which = (opts.which ?? (() => null)) as typeof Bun.which;
       process.env.ANTHROPIC_API_KEY = undefined;
-      process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
-      process.env.GOOGLE_CLOUD_PROJECT = undefined;
       process.env.CODEX_MODEL = undefined;
       process.env.CODEX_MODEL_AGENT = undefined;
       return fn();
@@ -260,10 +230,6 @@ describe('provider status metadata', () => {
       Bun.which = origWhich;
       if (origApiKey === undefined) process.env.ANTHROPIC_API_KEY = undefined;
       else process.env.ANTHROPIC_API_KEY = origApiKey;
-      if (origVertex === undefined) process.env.ANTHROPIC_VERTEX_PROJECT_ID = undefined;
-      else process.env.ANTHROPIC_VERTEX_PROJECT_ID = origVertex;
-      if (origGoogleProject === undefined) process.env.GOOGLE_CLOUD_PROJECT = undefined;
-      else process.env.GOOGLE_CLOUD_PROJECT = origGoogleProject;
       if (origCodexModel === undefined) process.env.CODEX_MODEL = undefined;
       else process.env.CODEX_MODEL = origCodexModel;
       if (origCodexAgentModel === undefined) process.env.CODEX_MODEL_AGENT = undefined;
@@ -283,14 +249,12 @@ describe('provider status metadata', () => {
       },
       () => {
         process.env.ANTHROPIC_API_KEY = 'sk-test';
-        process.env.ANTHROPIC_VERTEX_PROJECT_ID = 'test-project';
         const statuses = getProviderStatuses();
         expect(statuses.filter((s) => s.detected).map((s) => s.name)).toEqual([
           'claude-cli',
           'codex-cli',
           'cursor-cli',
           'anthropic-api',
-          'vertex',
         ]);
       },
     );
@@ -302,9 +266,6 @@ describe('provider status metadata', () => {
       expect(statuses.find((s) => s.name === 'codex-cli')?.setupHint).toContain('codex login');
       expect(statuses.find((s) => s.name === 'anthropic-api')?.setupHint).toContain(
         'ANTHROPIC_API_KEY',
-      );
-      expect(statuses.find((s) => s.name === 'vertex')?.setupHint).toContain(
-        'ANTHROPIC_VERTEX_PROJECT_ID',
       );
     });
   });

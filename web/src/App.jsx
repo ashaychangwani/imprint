@@ -531,7 +531,7 @@ export default function App() {
               <div>
                 <span className="kicker">Install</span>
                 <h2 id="install-title">Teach your first agent tool in minutes.</h2>
-                <p>Bring Bun 1.3+, Chrome, and a compile-agent provider already available on your machine. Imprint detects Claude CLI, Codex CLI, Anthropic API, or Vertex; Cursor CLI is available for playbook compilation.</p>
+                <p>Bring Bun 1.3+, Chrome, and a compile-agent provider already available on your machine. Imprint detects Claude CLI, Codex CLI, or Anthropic API; Cursor CLI is available for playbook compilation.</p>
                 <div className="hero-actions">
                   <a className="btn btn-primary" href={product.githubUrl}>Clone the repo</a>
                   <Link className="btn btn-secondary" to="/docs/getting-started">Read getting started</Link>

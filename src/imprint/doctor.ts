@@ -104,7 +104,7 @@ function checkLLMProvider(): CheckResult {
       name: 'LLM provider',
       ok: false,
       detail: `detected: ${detected.map((s) => s.name).join(', ')}; none are compatible with teach compile`,
-      fix: 'install Claude Code / Codex CLI, or set ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID',
+      fix: 'install Claude Code / Codex CLI, or set ANTHROPIC_API_KEY',
     };
   }
 
@@ -112,7 +112,7 @@ function checkLLMProvider(): CheckResult {
     name: 'LLM provider',
     ok: false,
     detail: 'no provider detected',
-    fix: 'install Claude Code / Codex / Cursor CLI, or set ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID',
+    fix: 'install Claude Code / Codex / Cursor CLI, or set ANTHROPIC_API_KEY',
   };
 }
 
