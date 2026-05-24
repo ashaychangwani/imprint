@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { homedir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import * as p from '@clack/prompts';
+import type { OnDeadlineReached } from './agent.ts';
 import {
   type CompileAgentProgress,
   type TriageResult,
@@ -1117,12 +1118,36 @@ async function compileCandidatePlans(opts: {
         opts.spinner.message(activity);
       }
     };
+    const compileStart = Date.now();
+    const onDeadlineReached: OnDeadlineReached | undefined = process.stdin.isTTY
+      ? async () => {
+          const elapsed = Math.round((Date.now() - compileStart) / 60000);
+          if (mp) {
+            mp.clear();
+            mp.pause();
+          } else {
+            opts.spinner.stop();
+          }
+          const extend = await p.confirm({
+            message: `${displayName} has been compiling for ${elapsed} minutes. Give it more time?`,
+          });
+          if (mp) {
+            mp.resume();
+          } else {
+            opts.spinner.start(`Compiling ${displayName}...`);
+          }
+          if (p.isCancel(extend) || !extend) return null;
+          return 10 * 60 * 1000;
+        }
+      : undefined;
+
     if (!mp) opts.spinner.start(`Compiling ${displayName}...`);
     try {
       const result = await compileSelectedCandidate({
         ...opts,
         plan,
         onProgress,
+        onDeadlineReached,
       });
       if (mp) {
         mp.clear();
@@ -1186,6 +1211,7 @@ async function compileSelectedCandidate(opts: {
   maxDurationMs?: number;
   keepTest?: boolean;
   onProgress: (progress: CompileAgentProgress) => void;
+  onDeadlineReached?: OnDeadlineReached;
   sharedTriageResult?: TriageResult;
   siteClassifications?: ClassifiedValue[];
   teachCredentials?: { site: string; values: Record<string, string> };
@@ -1208,6 +1234,7 @@ async function compileSelectedCandidate(opts: {
       candidate: plan.candidate,
       sharedContext: plan.sharedContext,
       onProgress: opts.onProgress,
+      onDeadlineReached: opts.onDeadlineReached,
       classifications: opts.siteClassifications,
       teachCredentials: opts.teachCredentials,
     });

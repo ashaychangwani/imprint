@@ -28,6 +28,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
+import type { OnDeadlineReached } from './agent.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
@@ -51,6 +52,8 @@ interface CompileViaClaudeCliOptions {
   deadlineMs: number;
   startTime: number;
   onProgress?: (p: CompileAgentProgress) => void;
+  /** Called when wall-clock deadline is reached; return ms to extend or null to time out. */
+  onDeadlineReached?: OnDeadlineReached;
   /** Retain parser.test.ts after successful verification. Mirrors the
    *  in-process loop's `keepTest`. */
   keepTest?: boolean;
@@ -265,22 +268,37 @@ async function driveStreamJson(
     });
   };
 
-  // Wall-clock guard: if we hit the deadline, kill the child.
-  const deadlineTimer = setTimeout(
-    () => {
-      log('wall-clock deadline exceeded, terminating claude');
-      try {
-        child.kill('SIGTERM');
-        // SIGKILL fallback after 5s grace
-        setTimeout(() => {
-          if (!child.killed) child.kill('SIGKILL');
-        }, 5000);
-      } catch {
-        // already gone
+  // Wall-clock guard: if we hit the deadline, ask the user or kill the child.
+  let currentDeadlineMs = opts.deadlineMs;
+
+  const killChild = (): void => {
+    log('wall-clock deadline exceeded, terminating claude');
+    try {
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!child.killed) child.kill('SIGKILL');
+      }, 5000);
+    } catch {
+      // already gone
+    }
+  };
+
+  const scheduleDeadlineCheck = (): ReturnType<typeof setTimeout> => {
+    const remaining = Math.max(0, currentDeadlineMs - Date.now());
+    return setTimeout(async () => {
+      if (opts.onDeadlineReached) {
+        const extensionMs = await opts.onDeadlineReached();
+        if (extensionMs != null && extensionMs > 0) {
+          currentDeadlineMs += extensionMs;
+          deadlineTimer = scheduleDeadlineCheck();
+          return;
+        }
       }
-    },
-    Math.max(0, opts.deadlineMs - Date.now()),
-  );
+      killChild();
+    }, remaining);
+  };
+
+  let deadlineTimer = scheduleDeadlineCheck();
 
   // Stdout: newline-delimited stream-json events.
   let stdoutBuf = '';
@@ -453,11 +471,11 @@ async function driveStreamJson(
   };
 
   // Wall-clock deadline exceeded?
-  if (Date.now() > opts.deadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {
+  if (Date.now() > currentDeadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {
     return {
       success: false,
       outcome: 'timeout',
-      message: `claude-cli exceeded the ${Math.round((opts.deadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
+      message: `claude-cli exceeded the ${Math.round((currentDeadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
       ...baseResult,
     };
   }

@@ -377,6 +377,52 @@ describe('runAgentLoop — termination', () => {
     expect(llm.callCount).toBe(0);
   });
 
+  it('extends deadline when onDeadlineReached returns positive ms', async () => {
+    const llm = new MockProvider([
+      assistantToolUse([{ name: 'done', input: { summary: 'finished after extension' } }]),
+    ]);
+
+    let callbackCalled = false;
+    const result = await runAgentLoop({
+      systemPrompt: 'test',
+      initialUserMessage: 'start',
+      tools: [doneTool(), giveUpTool()],
+      deadlineMs: Date.now() - 1000, // already expired
+      llm: llm as ToolUseProvider,
+      onDeadlineReached: async () => {
+        callbackCalled = true;
+        return 60000; // extend by 60s
+      },
+    });
+
+    expect(callbackCalled).toBe(true);
+    expect(result.outcome).toBe('done');
+    expect(llm.callCount).toBe(1);
+  });
+
+  it('times out when onDeadlineReached returns null', async () => {
+    const llm = new MockProvider([
+      assistantToolUse([{ name: 'done', input: { summary: 'should not reach' } }]),
+    ]);
+
+    let callbackCalled = false;
+    const result = await runAgentLoop({
+      systemPrompt: 'test',
+      initialUserMessage: 'start',
+      tools: [doneTool(), giveUpTool()],
+      deadlineMs: Date.now() - 1000, // already expired
+      llm: llm as ToolUseProvider,
+      onDeadlineReached: async () => {
+        callbackCalled = true;
+        return null;
+      },
+    });
+
+    expect(callbackCalled).toBe(true);
+    expect(result.outcome).toBe('timeout');
+    expect(llm.callCount).toBe(0);
+  });
+
   it('returns outcome: soft_cap when turn count exceeds softTurnCap', async () => {
     const llm = new MockProvider([
       assistantText('turn 1', 'end_turn'),

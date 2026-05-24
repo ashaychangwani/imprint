@@ -17,6 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
+import type { OnDeadlineReached } from './agent.ts';
 import { inferAppApiHosts } from './app-api-hosts.ts';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
@@ -71,6 +72,8 @@ interface GenerateOptions extends CompileOptions {
   maxDurationMs?: number;
   /** Progress callback with verification cycle information. */
   onProgress?: (p: CompileAgentProgress) => void;
+  /** Called when wall-clock deadline is reached; return ms to extend or null to time out. */
+  onDeadlineReached?: OnDeadlineReached;
   /** Retain parser.test.ts after successful verification. */
   keepTest?: boolean;
   /** Directory where workflow.json/parser.ts/parser.test.ts are written. */
@@ -112,6 +115,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         maxDurationMs: opts.maxDurationMs,
         llmConfig: opts.llmConfig,
         onProgress: opts.onProgress,
+        onDeadlineReached: opts.onDeadlineReached,
         keepTest: opts.keepTest,
         outDir,
         candidate: opts.candidate,
