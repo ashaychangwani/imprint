@@ -270,6 +270,7 @@ async function driveStreamJson(
 
   // Wall-clock guard: if we hit the deadline, ask the user or kill the child.
   let currentDeadlineMs = opts.deadlineMs;
+  let childExited = false;
 
   const killChild = (): void => {
     log('wall-clock deadline exceeded, terminating claude');
@@ -286,8 +287,10 @@ async function driveStreamJson(
   const scheduleDeadlineCheck = (): ReturnType<typeof setTimeout> => {
     const remaining = Math.max(0, currentDeadlineMs - Date.now());
     return setTimeout(async () => {
+      if (childExited) return;
       if (opts.onDeadlineReached) {
         const extensionMs = await opts.onDeadlineReached();
+        if (childExited) return;
         if (extensionMs != null && extensionMs > 0) {
           currentDeadlineMs += extensionMs;
           deadlineTimer = scheduleDeadlineCheck();
@@ -400,6 +403,7 @@ async function driveStreamJson(
     child.once('exit', (code) => resolve(code ?? -1));
     child.once('error', () => resolve(-1));
   });
+  childExited = true;
   clearTimeout(deadlineTimer);
   if (currentTurnSpan) {
     setSpanAttributes(currentTurnSpan, {
