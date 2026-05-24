@@ -7,7 +7,7 @@
  * step, and multiple workflows per site (each in its own subdirectory).
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import * as p from '@clack/prompts';
@@ -882,6 +882,29 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     startFrom,
     kind: 'redacted',
   });
+
+  // ── Clean up stale tools from previous teach runs ──
+  const incomingToolNames = new Set(plans.map((pl) => pl.candidate?.toolName ?? pl.workflowKey));
+  const existingTools = discoverCompletedWorkflows(site);
+  const staleTools = existingTools.filter((name) => !incomingToolNames.has(name));
+  if (staleTools.length > 0) {
+    let shouldReplace = true;
+    if (!opts.noInteractive) {
+      const answer = await p.confirm({
+        message: `Found ${staleTools.length} existing tool${staleTools.length === 1 ? '' : 's'} from previous runs. Replace with the ${incomingToolNames.size} new tool${incomingToolNames.size === 1 ? '' : 's'}?`,
+        initialValue: true,
+      });
+      if (p.isCancel(answer)) throw new Error('Cancelled.');
+      shouldReplace = answer;
+    }
+    if (shouldReplace) {
+      for (const name of staleTools) {
+        rmSync(localToolDir(site, name), { recursive: true, force: true });
+        delete state.workflows[name];
+      }
+      saveTeachState(site, state);
+    }
+  }
 
   if (plans.length > 1) muteLog();
   let results: TeachToolResult[];
