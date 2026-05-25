@@ -34,7 +34,15 @@ import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
-import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
+import {
+  endTraceSpan,
+  llmSpanAttributes,
+  setSpanAttributes,
+  startTraceSpan,
+  traced,
+  traceLlmIoEnabled,
+  traceJsonInputOutputAttributes,
+} from './tracing.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-claude-cli');
@@ -100,12 +108,26 @@ export async function compileViaClaudeCli(
     },
     async (span) => {
       const result = await compileViaClaudeCliImpl(opts);
+      const totalPrompt =
+        result.inputTokens +
+        (result.cacheReadInputTokens ?? 0) +
+        (result.cacheCreationInputTokens ?? 0);
       setSpanAttributes(span, {
         'imprint.compile.outcome': result.outcome,
         'imprint.compile.turns': result.turns,
         'imprint.compile.duration_ms': result.durationMs,
         'imprint.compile.input_tokens': result.inputTokens,
         'imprint.compile.output_tokens': result.outputTokens,
+        'imprint.compile.cache_read_input_tokens': result.cacheReadInputTokens,
+        'imprint.compile.cache_creation_input_tokens': result.cacheCreationInputTokens,
+        ...llmSpanAttributes({
+          provider: 'claude-cli',
+          model: preferredAgentModel('claude-cli'),
+          inputTokens: totalPrompt,
+          outputTokens: result.outputTokens,
+          cacheReadTokens: result.cacheReadInputTokens,
+          cacheWriteTokens: result.cacheCreationInputTokens,
+        }),
       });
       return result;
     },
@@ -244,8 +266,11 @@ async function driveStreamJson(
   const parentCtx = otelContext.active();
 
   const conversationLog: unknown[] = [];
+  const captureLlmIo = traceLlmIoEnabled();
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadInputTokens = 0;
+  let cacheCreationInputTokens = 0;
   let turn = 0;
   let lastErrorEvent: StreamJsonEvent | null = null;
   let stderrBuf = '';
@@ -358,6 +383,9 @@ async function driveStreamJson(
             'imprint.agent.cumulative_input_tokens': inputTokens,
             'imprint.agent.cumulative_output_tokens': outputTokens,
           });
+          if (currentTurnSpan && captureLlmIo) {
+            setSpanAttributes(currentTurnSpan, traceJsonInputOutputAttributes('output', evt.message.content));
+          }
           fireProgress('thinking');
           for (const block of evt.message.content) {
             if (block && (block as { type?: string }).type === 'tool_use') {
@@ -371,13 +399,20 @@ async function driveStreamJson(
         }
 
         if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
-          // Tool result envelope. Nothing to surface here — onProgress already
-          // fired when we saw the matching tool_use.
+          if (currentTurnSpan && captureLlmIo) {
+            setSpanAttributes(currentTurnSpan, traceJsonInputOutputAttributes('input', evt.message.content));
+          }
           continue;
         }
 
         if (evt.type === 'result') {
-          // Terminal event from claude-cli. Capture any final usage and break.
+          if (evt.usage) {
+            inputTokens = evt.usage.input_tokens ?? inputTokens;
+            outputTokens = evt.usage.output_tokens ?? outputTokens;
+            cacheReadInputTokens = evt.usage.cache_read_input_tokens ?? cacheReadInputTokens;
+            cacheCreationInputTokens =
+              evt.usage.cache_creation_input_tokens ?? cacheCreationInputTokens;
+          }
           if (evt.is_error) {
             lastErrorEvent = evt;
           }
@@ -463,6 +498,8 @@ async function driveStreamJson(
     | 'durationMs'
     | 'inputTokens'
     | 'outputTokens'
+    | 'cacheReadInputTokens'
+    | 'cacheCreationInputTokens'
   > = {
     workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
     parserPath: existsSync(parserPath) ? parserPath : undefined,
@@ -472,6 +509,8 @@ async function driveStreamJson(
     durationMs: Date.now() - opts.startTime,
     inputTokens,
     outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
   };
 
   // Wall-clock deadline exceeded?
@@ -569,6 +608,8 @@ function finalErrorResult(opts: CompileViaClaudeCliOptions, message: string): Co
     durationMs: Date.now() - opts.startTime,
     inputTokens: 0,
     outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
   };
 }
 

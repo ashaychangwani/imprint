@@ -12,6 +12,11 @@ import {
 } from '../src/imprint/tracing.ts';
 
 const ENV_KEYS = [
+  'IMPRINT_TRACE',
+  'IMPRINT_TRACING',
+  'OPENINFERENCE_TRACE',
+  'PHOENIX_COLLECTOR_ENDPOINT',
+  'PHOENIX_HOST',
   'IMPRINT_TRACE_LLM_IO',
   'IMPRINT_TRACE_TOOL_IO',
   'IMPRINT_TRACE_IO',
@@ -56,18 +61,25 @@ describe('traceBatchEnabled', () => {
 });
 
 describe('trace I/O controls', () => {
-  it('keeps prompt and response capture opt-in', () => {
+  it('defaults IO capture to on when tracing is enabled', () => {
     expect(traceLlmIoEnabled()).toBe(false);
     expect(traceToolIoEnabled()).toBe(false);
 
-    process.env.IMPRINT_TRACE_LLM_IO = '1';
+    process.env.IMPRINT_TRACE = '1';
 
     expect(traceLlmIoEnabled()).toBe(true);
-    expect(traceToolIoEnabled()).toBe(false);
-
-    process.env.IMPRINT_TRACE_TOOL_IO = '1';
-
     expect(traceToolIoEnabled()).toBe(true);
+  });
+
+  it('allows granular opt-out of IO capture', () => {
+    process.env.IMPRINT_TRACE = '1';
+
+    process.env.IMPRINT_TRACE_LLM_IO = '0';
+    expect(traceLlmIoEnabled()).toBe(false);
+    expect(traceToolIoEnabled()).toBe(true);
+
+    process.env.IMPRINT_TRACE_TOOL_IO = '0';
+    expect(traceToolIoEnabled()).toBe(false);
   });
 
   it('uses a bounded default trace payload size', () => {
@@ -135,6 +147,50 @@ describe('LLM trace usage and cost attributes', () => {
       tokens: 0,
       source: 'provider',
     });
+  });
+
+  it('falls back to built-in model rates when env vars are not set', () => {
+    expect(traceLlmCostRates('claude-cli', 'claude-opus-4-7')).toEqual({
+      inputUsdPer1M: 5,
+      outputUsdPer1M: 25,
+    });
+    expect(traceLlmCostRates('claude-cli', 'claude-sonnet-4-6')).toEqual({
+      inputUsdPer1M: 3,
+      outputUsdPer1M: 15,
+    });
+    expect(traceLlmCostRates('claude-cli', 'unknown-model')).toBeNull();
+  });
+
+  it('prefers env vars over built-in model rates', () => {
+    process.env.IMPRINT_TRACE_INPUT_USD_PER_1M = '99';
+    process.env.IMPRINT_TRACE_OUTPUT_USD_PER_1M = '199';
+
+    expect(traceLlmCostRates('claude-cli', 'claude-opus-4-7')).toEqual({
+      inputUsdPer1M: 99,
+      outputUsdPer1M: 199,
+    });
+  });
+
+  it('calculates cost using cache-specific rates when cache tokens are provided', () => {
+    const attrs = llmSpanAttributes({
+      provider: 'claude-cli',
+      model: 'claude-opus-4-7',
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheReadTokens: 800_000,
+      cacheWriteTokens: 100_000,
+    });
+
+    // uncached: 100K @ $5/M = $0.50
+    // cache read: 800K @ $0.50/M = $0.40
+    // cache write: 100K @ $6.25/M = $0.625
+    // total prompt = $1.525
+    // output: 100K @ $25/M = $2.50
+    const promptCost = attrs['llm.cost.prompt'] as number;
+    const completionCost = attrs['llm.cost.completion'] as number;
+    expect(promptCost).toBeCloseTo(1.525, 3);
+    expect(completionCost).toBeCloseTo(2.5, 3);
+    expect(attrs['llm.cost.total'] as number).toBeCloseTo(4.025, 3);
   });
 
   it('adds OpenInference token, cost, and message attributes when rates are configured', () => {

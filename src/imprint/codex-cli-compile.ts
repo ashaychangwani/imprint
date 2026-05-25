@@ -477,6 +477,8 @@ async function driveJsonl(
     | 'durationMs'
     | 'inputTokens'
     | 'outputTokens'
+    | 'cacheReadInputTokens'
+    | 'cacheCreationInputTokens'
   > = {
     workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
     parserPath: existsSync(parserPath) ? parserPath : undefined,
@@ -486,6 +488,8 @@ async function driveJsonl(
     durationMs: Date.now() - opts.startTime,
     inputTokens,
     outputTokens,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
   };
 
   if (existsSync(doneSentinel)) {
@@ -683,6 +687,8 @@ function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): Com
     durationMs: Date.now() - opts.startTime,
     inputTokens: 0,
     outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
   };
 }
 

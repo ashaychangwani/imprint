@@ -367,6 +367,8 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
     durationMs: Date.now() - startTime,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
   };
 }
 

@@ -19,6 +19,7 @@ Schema:
       "confidence": 0.0,
       "primary": true,
       "requestSeqs": [number],
+      "representativeSeqs": [number],
       "eventSeqs": [number],
       "eventTimeRange": { "startTimestamp": 0, "endTimestamp": 0 },
       "expectedOutput": "what the tool should return",
@@ -89,3 +90,10 @@ Rules:
     Consolidate them into one candidate and add the varying values as
     likelyParams. Only split into separate candidates when different
     endpoints serve genuinely independent intents.
+18. When requestSeqs contains multiple calls to the same API endpoint with
+    different parameter values (autocomplete keystrokes, pagination, filter
+    toggles, sort changes), list ONE representative seq per unique endpoint
+    pattern in representativeSeqs. The compile agent only needs the
+    representative to understand the API shape. If every seq in requestSeqs
+    is a distinct API call (different endpoints or fundamentally different
+    operations), set representativeSeqs equal to requestSeqs or omit it.

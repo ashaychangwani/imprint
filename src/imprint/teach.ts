@@ -320,7 +320,7 @@ async function promptForModel(provider: ProviderName): Promise<string> {
   if (models.length <= 1) return models[0]?.model ?? 'claude-opus-4-7';
 
   const choice = await p.select({
-    message: 'Which model should compile the workflow?',
+    message: 'Which model should compile this workflow?',
     options: models.map((m) => ({
       value: m.model,
       label: m.isDefault ? `${m.model} (default)` : m.model,
@@ -437,6 +437,20 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   const getProviderName = async (): Promise<ProviderName> => {
     resolvedProviderName ??= await resolveTeachProvider(opts);
     return resolvedProviderName;
+  };
+  let resolvedModel: string | null = null;
+  const getModel = async (): Promise<string> => {
+    if (resolvedModel) return resolvedModel;
+    const providerName = await getProviderName();
+    if (opts.model) {
+      resolvedModel = opts.model;
+    } else if (!opts.noInteractive) {
+      resolvedModel = await promptForModel(providerName);
+    } else {
+      const { resolveCompileAgentModel } = await import('./compile-agent.ts');
+      resolvedModel = resolveCompileAgentModel(providerName);
+    }
+    return resolvedModel;
   };
 
   // Temp key for state tracking before we know the toolName.
@@ -700,10 +714,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
             'session',
           );
           const providerName = await getProviderName();
+          const model = await getModel();
           mp.pause();
           mp.clear();
           spinner.start('Triaging requests...');
-          localTriageResult = await triageRequests(triageSession, { provider: providerName });
+          localTriageResult = await triageRequests(triageSession, { provider: providerName, model });
           spinner.stop(
             `Triaged to ${localTriageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`,
           );
@@ -730,12 +745,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           kind: localTriagedPath ? 'triaged' : 'redacted',
         });
         const providerName = await getProviderName();
+        const model = await getModel();
         mp.pause();
         mp.clear();
         spinner.start('Detecting candidate tools...');
         const detection = await detectTeachCandidates({
           sessionPath: compileSessionPath,
           providerName,
+          model,
         });
         spinner.stop(
           `Detected ${detection.candidates.length} candidate tool${detection.candidates.length === 1 ? '' : 's'}.`,
@@ -864,14 +881,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     : ('claude-cli' as ProviderName);
   let compileModel = '';
   if (needsCompileProvider) {
-    if (opts.model) {
-      compileModel = opts.model;
-    } else if (!opts.noInteractive) {
-      compileModel = await promptForModel(compileProviderName);
-    } else {
-      const { resolveCompileAgentModel } = await import('./compile-agent.ts');
-      compileModel = resolveCompileAgentModel(compileProviderName);
-    }
+    compileModel = await getModel();
     const timeoutMs = opts.maxDurationMs ?? 10 * 60 * 1000;
     const timeoutDisplay =
       timeoutMs >= 3_600_000
@@ -1033,6 +1043,7 @@ interface CandidateCompilePlan {
 async function detectTeachCandidates(opts: {
   sessionPath: string;
   providerName: ProviderName;
+  model?: string;
 }): Promise<Awaited<ReturnType<typeof detectToolCandidates>>> {
   const session = loadJsonFile(
     opts.sessionPath,
@@ -1043,7 +1054,7 @@ async function detectTeachCandidates(opts: {
     },
     'session',
   );
-  return await detectToolCandidates(session, { provider: opts.providerName });
+  return await detectToolCandidates(session, { provider: opts.providerName, model: opts.model });
 }
 
 async function selectTeachCandidates(

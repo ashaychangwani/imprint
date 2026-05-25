@@ -143,19 +143,13 @@ describe('compile tools request compaction', () => {
     const summary = JSON.parse(result.result);
 
     expect(summary.loadBearingRequests.map((request: { seq: number }) => request.seq)).toEqual([
-      1, 2, 4,
+      2, 4,
     ]);
     expect(summary.loadBearingRequests[0]).toMatchObject({
-      seq: 1,
-      repeatCount: 2,
-      repeatedSeqs: [1, 3],
-      lastTimestamp: 140,
-    });
-    expect(summary.loadBearingRequests[1]).toMatchObject({
       seq: 2,
       selectedForCandidate: true,
     });
-    expect(summary.loadBearingRequests[2]).toMatchObject({
+    expect(summary.loadBearingRequests[1]).toMatchObject({
       seq: 4,
       sharedDependency: true,
     });
@@ -211,6 +205,186 @@ describe('compile tools request compaction', () => {
       seq: 1,
       sharedDependency: true,
     });
+  });
+});
+
+describe('compile tools representativeSeqs', () => {
+  it('uses representativeSeqs for inline data when provided', async () => {
+    const session: Session = {
+      site: 'demo',
+      startedAt: '2026-05-24T00:00:00.000Z',
+      url: 'https://www.example.com/start',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 50,
+          method: 'GET',
+          url: 'https://www.example.com/bootstrap',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, mimeType: 'text/html', body: '<html>token=abc</html>' },
+        },
+        ...Array.from({ length: 5 }, (_, i) => ({
+          seq: 10 + i,
+          timestamp: 100 + i * 10,
+          method: 'POST' as const,
+          url: 'https://www.example.com/api/autocomplete',
+          headers: { 'content-type': 'application/json' },
+          resourceType: 'Fetch' as const,
+          response: {
+            status: 200,
+            headers: {},
+            mimeType: 'application/json',
+            body: JSON.stringify({ results: [`result-${i}`] }),
+          },
+        })),
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    const readSummary = buildCompileTools(session, '/tmp/tool', '/tmp/session.json', {
+      candidate: {
+        toolName: 'autocomplete',
+        description: 'Autocomplete search',
+        rationale: 'autocomplete intent',
+        confidence: 0.9,
+        primary: true,
+        requestSeqs: [10, 11, 12, 13, 14],
+        representativeSeqs: [10],
+        eventSeqs: [],
+        expectedOutput: 'suggestions',
+        likelyParams: [],
+        dependencySeqs: [1],
+      },
+    }).find((tool) => tool.name === 'read_session_summary');
+    if (!readSummary) throw new Error('read_session_summary tool missing');
+
+    const result = await readSummary.handler({});
+    const summary = JSON.parse(result.result);
+
+    expect(summary.loadBearingRequests.map((r: { seq: number }) => r.seq)).toEqual([1, 10]);
+    expect(summary.loadBearingRequests[0]).toMatchObject({ seq: 1, sharedDependency: true });
+    expect(summary.loadBearingRequests[1]).toMatchObject({ seq: 10, selectedForCandidate: true });
+    expect(summary.loadBearingRequests[1].inlineData).toBeDefined();
+  });
+
+  it('falls back to requestSeqs when representativeSeqs is empty', async () => {
+    const session: Session = {
+      site: 'demo',
+      startedAt: '2026-05-24T00:00:00.000Z',
+      url: 'https://www.example.com/start',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://www.example.com/api/search',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, mimeType: 'application/json', body: '{"a":1}' },
+        },
+        {
+          seq: 2,
+          timestamp: 200,
+          method: 'POST',
+          url: 'https://www.example.com/api/book',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, mimeType: 'application/json', body: '{"b":2}' },
+        },
+        {
+          seq: 3,
+          timestamp: 300,
+          method: 'GET',
+          url: 'https://www.example.com/api/confirm',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, mimeType: 'application/json', body: '{"c":3}' },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    const readSummary = buildCompileTools(session, '/tmp/tool', '/tmp/session.json', {
+      candidate: {
+        toolName: 'book_item',
+        description: 'Book an item',
+        rationale: 'booking flow',
+        confidence: 0.9,
+        primary: true,
+        requestSeqs: [1, 2, 3],
+        eventSeqs: [],
+        expectedOutput: 'confirmation',
+        likelyParams: [],
+        dependencySeqs: [],
+      },
+    }).find((tool) => tool.name === 'read_session_summary');
+    if (!readSummary) throw new Error('read_session_summary tool missing');
+
+    const result = await readSummary.handler({});
+    const summary = JSON.parse(result.result);
+
+    expect(summary.loadBearingRequests.map((r: { seq: number }) => r.seq)).toEqual([1, 2, 3]);
+    for (const r of summary.loadBearingRequests) {
+      expect(r.selectedForCandidate).toBe(true);
+    }
+  });
+
+  it('excludes non-candidate load-bearing requests from summary', async () => {
+    const session: Session = {
+      site: 'demo',
+      startedAt: '2026-05-24T00:00:00.000Z',
+      url: 'https://www.example.com/start',
+      imprintVersion: '0.1.0',
+      requests: [
+        makeSummaryRequest(1, 100),
+        {
+          seq: 2,
+          timestamp: 200,
+          method: 'POST',
+          url: 'https://www.example.com/api/target',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, mimeType: 'application/json', body: '{"data":true}' },
+        },
+        makeSummaryRequest(3, 300),
+        makeSummaryRequest(4, 400),
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    const readSummary = buildCompileTools(session, '/tmp/tool', '/tmp/session.json', {
+      candidate: {
+        toolName: 'target_action',
+        description: 'Target action',
+        rationale: 'primary intent',
+        confidence: 0.9,
+        primary: true,
+        requestSeqs: [2],
+        eventSeqs: [],
+        expectedOutput: 'data',
+        likelyParams: [],
+        dependencySeqs: [],
+      },
+    }).find((tool) => tool.name === 'read_session_summary');
+    if (!readSummary) throw new Error('read_session_summary tool missing');
+
+    const result = await readSummary.handler({});
+    const summary = JSON.parse(result.result);
+
+    expect(summary.loadBearingRequests.map((r: { seq: number }) => r.seq)).toEqual([2]);
+    expect(summary.loadBearingRequests[0]).toMatchObject({ seq: 2, selectedForCandidate: true });
   });
 });
 

@@ -68,7 +68,13 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
       required: [],
     },
     handler: async () => {
-      const selectedRequestSeqs = new Set(context.candidate?.requestSeqs ?? []);
+      const allCandidateSeqs = new Set(context.candidate?.requestSeqs ?? []);
+      const representativeSeqs = context.candidate?.representativeSeqs ?? [];
+      const selectedRequestSeqs = new Set(
+        representativeSeqs.length > 0
+          ? representativeSeqs
+          : (context.candidate?.requestSeqs ?? []),
+      );
       const dependencySeqs = new Set([
         ...(context.candidate?.dependencySeqs ?? []),
         ...(context.sharedContext?.loginRequestSeqs ?? []),
@@ -79,7 +85,7 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
         summaryRequests.map((r) => ({
           seq: r.seq,
           timestamp: r.timestamp,
-          selectedForCandidate: selectedRequestSeqs.has(r.seq),
+          selectedForCandidate: selectedRequestSeqs.has(r.seq) || allCandidateSeqs.has(r.seq),
           sharedDependency: dependencySeqs.has(r.seq),
           method: r.method,
           url: r.url,
@@ -106,7 +112,9 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
               toolName: context.candidate.toolName,
               description: context.candidate.description,
               expectedOutput: context.candidate.expectedOutput,
-              requestSeqs: context.candidate.requestSeqs,
+              requestSeqs: (context.candidate.representativeSeqs?.length ?? 0) > 0
+                ? context.candidate.representativeSeqs
+                : context.candidate.requestSeqs,
               dependencySeqs: context.candidate.dependencySeqs,
               eventSeqs: context.candidate.eventSeqs,
               likelyParams: context.candidate.likelyParams,
@@ -591,12 +599,7 @@ function identifyLoadBearingRequests(session: Session): CapturedRequest[] {
 }
 
 function identifySummaryRequests(session: Session, preserveSeqs: Set<number>): CapturedRequest[] {
-  const bySeq = new Map<number, CapturedRequest>();
-  for (const request of identifyLoadBearingRequests(session)) bySeq.set(request.seq, request);
-  for (const request of session.requests) {
-    if (preserveSeqs.has(request.seq)) bySeq.set(request.seq, request);
-  }
-  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+  return session.requests.filter((r) => preserveSeqs.has(r.seq)).sort((a, b) => a.seq - b.seq);
 }
 
 function safeUrl(s: string): URL | null {

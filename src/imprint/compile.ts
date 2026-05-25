@@ -130,6 +130,8 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         'imprint.compile.duration_ms': result.durationMs,
         'imprint.compile.input_tokens': result.inputTokens,
         'imprint.compile.output_tokens': result.outputTokens,
+        'imprint.compile.cache_read_input_tokens': result.cacheReadInputTokens,
+        'imprint.compile.cache_creation_input_tokens': result.cacheCreationInputTokens,
         'imprint.compile.conversation_log': result.conversationLogPath,
       });
 
