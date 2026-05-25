@@ -129,7 +129,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--provider <name>',
         description:
-          'Compile-agent provider: anthropic-api, vertex, claude-cli, codex-cli (auto-detected if omitted).',
+          'Compile-agent provider: anthropic-api, claude-cli, codex-cli (auto-detected if omitted).',
       },
       {
         name: '--model <name>',
@@ -154,7 +154,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     example: 'imprint teach google-flights --url https://flights.google.com',
   },
   doctor: {
-    summary: 'Check that the environment is set up correctly (Bun, Chromium, Vertex env, push).',
+    summary: 'Check that the environment is set up correctly (Bun, Chromium, LLM providers, push).',
     usage: ['imprint doctor'],
     example: 'imprint doctor',
   },
@@ -194,7 +194,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--provider <name>',
         description:
-          'Compile-agent provider: anthropic-api, vertex, claude-cli, codex-cli (auto-detected if omitted).',
+          'Compile-agent provider: anthropic-api, claude-cli, codex-cli (auto-detected if omitted).',
       },
       {
         name: '--keep-test',
@@ -218,7 +218,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--provider <name>',
         description:
-          'LLM provider: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
+          'LLM provider: anthropic-api, claude-cli, codex-cli, cursor-cli (auto-detected if omitted).',
       },
     ],
     example: 'imprint compile-playbook ~/.imprint/acmecorp/sessions/<ts>.redacted.json',
@@ -626,13 +626,13 @@ async function main(argv: string[]): Promise<number> {
         const { isTeachCompatibleProvider, isValidProvider } = await import('./imprint/llm.ts');
         if (!isValidProvider(values.provider)) {
           console.error(
-            `error: unknown provider '${values.provider}' — valid: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli`,
+            `error: unknown provider '${values.provider}' — valid: anthropic-api, claude-cli, codex-cli, cursor-cli`,
           );
           return 2;
         }
         if (!isTeachCompatibleProvider(values.provider)) {
           console.error(
-            `error: provider '${values.provider}' is not supported for generate — use anthropic-api, vertex, claude-cli, or codex-cli`,
+            `error: provider '${values.provider}' is not supported for generate — use anthropic-api, claude-cli, or codex-cli`,
           );
           return 2;
         }
@@ -943,7 +943,7 @@ async function main(argv: string[]): Promise<number> {
         const { isValidProvider } = await import('./imprint/llm.ts');
         if (!isValidProvider(values.provider)) {
           console.error(
-            `error: unknown provider '${values.provider}' — valid: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli`,
+            `error: unknown provider '${values.provider}' — valid: anthropic-api, claude-cli, codex-cli, cursor-cli`,
           );
           return 2;
         }
@@ -1068,7 +1068,7 @@ async function main(argv: string[]): Promise<number> {
         const { isValidProvider } = await import('./imprint/llm.ts');
         if (!isValidProvider(values.provider)) {
           console.error(
-            `error: unknown provider '${values.provider}' — valid: anthropic-api, vertex, claude-cli, codex-cli, cursor-cli`,
+            `error: unknown provider '${values.provider}' — valid: anthropic-api, claude-cli, codex-cli, cursor-cli`,
           );
           return 2;
         }

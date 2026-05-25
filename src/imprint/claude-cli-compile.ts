@@ -3,7 +3,7 @@
  *
  * claude-cli doesn't implement messageWithTools (its CLI surface only does
  * single-turn text completion), so we can't drive it turn-by-turn the way
- * runAgentLoop drives anthropic-api / vertex. Instead we shell out to
+ * runAgentLoop drives anthropic-api. Instead we shell out to
  * `claude -p` with imprint's compile tools registered as a stdio MCP server
  * and let claude-cli's own internal agent loop drive the work.
  *

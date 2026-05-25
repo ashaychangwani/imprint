@@ -232,7 +232,7 @@ function assertTeachProvider(name: ProviderName): void {
     [
       `provider "${name}" is not supported for \`imprint teach\` compile yet.`,
       status?.reason ? `detected status: ${status.reason}` : undefined,
-      '→ use one of: claude-cli, codex-cli, anthropic-api, vertex',
+      '→ use one of: claude-cli, codex-cli, anthropic-api',
     ]
       .filter(Boolean)
       .join('\n'),

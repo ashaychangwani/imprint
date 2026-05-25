@@ -8,7 +8,7 @@ The predictable failure modes. Most error messages in Imprint already include a 
 imprint doctor
 ```
 
-Checks every prerequisite (Bun, Chromium binary, Playwright Chromium install, Vertex project ID, region, push providers). Catches ~80% of "I just installed and nothing works" cases in one command. If a check fails the output includes the exact fix command.
+Checks every prerequisite (Bun, Chromium binary, Playwright Chromium install, LLM providers, push providers). Catches ~80% of "I just installed and nothing works" cases in one command. If a check fails the output includes the exact fix command.
 
 For any command, set `IMPRINT_DEBUG=1` to see full stack traces and verbose logging:
 
@@ -112,20 +112,9 @@ export NTFY_URL=https://ntfy.sh/your-secret-topic-name
 
 See [docs/notifications.md](notifications.md) for setup.
 
-## "Vertex Anthropic call failed: ..."
-
-The new error message will tell you which of the four common cases hit:
-
-- **404 / publisher model not found** — the model isn't enabled on your project in the configured region. Open https://console.cloud.google.com/vertex-ai/model-garden, find Claude, click "Enable". Or set `CLOUD_ML_REGION` to a region that already has it (`us-east5` is the default).
-- **401 / not authenticated** — `gcloud auth application-default login` hasn't been run, or your active account doesn't have credentials. The fix command is in the error.
-- **403 / permission denied** — auth worked but your account is missing `roles/aiplatform.user` on the project. Add it via IAM console.
-- **429 / quota exceeded** — you hit a quota limit (per-minute or per-day). Retry, or request more quota.
-
-The raw SDK error is preserved as the JS `cause` chain — set `IMPRINT_DEBUG=1` to see it.
-
 ## "LLM response did not contain a JSON object"
 
-The Vertex Anthropic call returned text instead of JSON. This happens occasionally when:
+The LLM call returned text instead of JSON. This happens occasionally when:
 - The prompt is being clipped (very large session)
 - The model returned an apology / refusal (rare)
 
@@ -190,8 +179,6 @@ Common causes:
 2. **Restart required.** Claude Desktop reads config only at startup.
 
 3. **No `~/.imprint/<site>/<toolName>/index.ts`.** Imprint discovers tools by scanning nested tool directories under `IMPRINT_HOME` (`~/.imprint` by default). If you haven't run `imprint teach` or `imprint emit`, there's nothing to expose.
-
-4. **Vertex env not set.** MCP server starts fine without it, but tool calls fail. Set `ANTHROPIC_VERTEX_PROJECT_ID`.
 
 Verify with mcp-inspector instead — it's faster to iterate on:
 ```bash

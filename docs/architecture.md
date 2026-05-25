@@ -106,7 +106,7 @@ src/imprint/
 │
 │ ── Utilities ──
 ├── chromium.ts          Locate + launch Chromium for CDP
-├── doctor.ts            Environment health check (Bun, Chromium, Vertex env)
+├── doctor.ts            Environment health check (Bun, Chromium, LLM providers)
 ├── etld.ts              eTLD+1 domain parsing (registrable domains)
 ├── json-path.ts         Dot-path walker (a[].b.c)
 ├── load-json.ts         Shared file/JSON/schema-validation helper

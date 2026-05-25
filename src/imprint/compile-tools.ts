@@ -2,7 +2,7 @@
  * Shared compile-agent tool implementations.
  *
  * The same 8 read/write tools and the verification logic are used both by
- * the in-process agent loop (anthropic-api / vertex providers) and by the
+ * the in-process agent loop (anthropic-api provider) and by the
  * stdio MCP server that claude-cli drives through `--mcp-config`.
  */
 

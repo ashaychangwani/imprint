@@ -2,8 +2,8 @@
  * Shared types for the compile-agent surface.
  *
  * Lives in its own file so both compile-agent.ts (the in-process loop driver
- * for anthropic-api / vertex) and claude-cli-compile.ts (the claude-cli MCP
- * driver) can reference them without importing each other.
+ * for anthropic-api) and claude-cli-compile.ts (the claude-cli MCP driver)
+ * can reference them without importing each other.
  */
 
 import type { AgentProgress } from './agent.ts';

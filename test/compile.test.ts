@@ -1,7 +1,7 @@
 /**
  * Tests for the LLM compiler (compile.ts).
  *
- * The Vertex LLM call itself is not exercised — that needs a live model.
+ * The LLM call itself is not exercised — that needs a live model.
  * What we cover:
  *   - shrinkSession (pure noise-stripping logic; this is what saves
  *     6.5M → 0.3M tokens on Southwest)

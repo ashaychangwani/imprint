@@ -14,7 +14,7 @@ import type { ProviderName, ToolUseProvider } from '../src/imprint/llm.ts';
 // ─── Mock Provider ───────────────────────────────────────────────────────────
 
 class MockProvider implements ToolUseProvider {
-  readonly name: ProviderName = 'vertex';
+  readonly name: ProviderName = 'anthropic-api';
   callCount = 0;
   capturedCalls: Array<{ system: string; messages: unknown; tools: unknown }> = [];
 

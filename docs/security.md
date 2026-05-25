@@ -62,7 +62,6 @@ When you run `imprint teach`, `imprint generate`, or `imprint compile-playbook`,
 
 1. **CLI providers** (`claude-cli`, `codex-cli`, `cursor-cli` for playbook compile) send prompts through the locally installed CLI and that provider's account/session.
 2. **Anthropic API** sends directly to Anthropic using `ANTHROPIC_API_KEY`.
-3. **Vertex** sends to your Google Cloud project's Vertex AI endpoint; retention and audit behavior are governed by your GCP project settings.
 
 The compile agent's session summary includes inline request/response data for candidate-scoped requests (the requests relevant to the tool being compiled plus auth dependencies). Response bodies are smart-truncated and subject to a 30 KB summary budget. All inline data comes from the already-redacted session — credential values appear as `${credential.X}` placeholders and sensitive values as `[REDACTED:v3:id=N:len=L]` markers.
 

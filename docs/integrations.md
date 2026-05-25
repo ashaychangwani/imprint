@@ -318,9 +318,6 @@ COPY . .
 RUN bun install
 RUN bunx playwright install chromium --with-deps
 
-ENV ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project
-ENV CLOUD_ML_REGION=us-east5
-
 EXPOSE 8765
 CMD ["bun", "src/cli.ts", "mcp-server", "mysite", "--http", "--port", "8765"]
 ```
@@ -345,7 +342,6 @@ After=network.target
 Type=simple
 User=youruser
 WorkingDirectory=<imprint-clone-dir>
-Environment="ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project" "CLOUD_ML_REGION=us-east5"
 ExecStart=/usr/local/bin/bun src/cli.ts mcp-server mysite --http --port 8765
 Restart=always
 
