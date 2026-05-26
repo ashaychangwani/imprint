@@ -491,6 +491,8 @@ describe('executeWorkflow', () => {
 });
 
 describe('requestTransformModule', () => {
+  const scratchRoot = `${import.meta.dir}/../.context`;
+
   const transformWorkflow: Workflow = {
     toolName: 'test_transform',
     intent: { description: 'test' },
@@ -517,9 +519,10 @@ describe('requestTransformModule', () => {
         headers: { 'content-type': 'application/json' },
       })) as unknown as typeof fetch;
 
-    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
     const { join } = await import('node:path');
-    const tmpDir = mkdtempSync(join(import.meta.dir, '..', '.context', 'rt-transform-'));
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-'));
     try {
       writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(transformWorkflow));
       writeFileSync(
@@ -556,9 +559,10 @@ describe('requestTransformModule', () => {
       });
     }) as unknown as typeof fetch;
 
-    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
     const { join } = await import('node:path');
-    const tmpDir = mkdtempSync(join(import.meta.dir, '..', '.context', 'rt-transform-str-'));
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-str-'));
     try {
       writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(transformWorkflow));
       writeFileSync(
@@ -593,9 +597,10 @@ describe('requestTransformModule', () => {
       });
     }) as unknown as typeof fetch;
 
-    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
     const { join } = await import('node:path');
-    const tmpDir = mkdtempSync(join(import.meta.dir, '..', '.context', 'rt-transform-hdr-'));
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-hdr-'));
     try {
       writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(transformWorkflow));
       writeFileSync(
