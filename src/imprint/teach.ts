@@ -43,6 +43,7 @@ import { loadJsonFile } from './load-json.ts';
 import { muteLog, unmuteLog } from './log.ts';
 import { MultiProgress } from './multi-progress.ts';
 import { localSiteDir, localToolDir } from './paths.ts';
+import { listSiteSessions, mergeSessions, writeCombinedSession } from './session-merge.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
@@ -72,7 +73,7 @@ import {
   primaryToolCandidate,
 } from './tool-candidates.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
-import type { CronConfig, Playbook, Workflow } from './types.ts';
+import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
 
 export { buildTeachStateFromSession, resolveTeachStatePath } from './teach-state.ts';
 
@@ -502,6 +503,22 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       startedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
+
+    // ── 1b. Combine with past sessions (optional) ────────────────────
+    const originalSessionPath = sessionPath;
+    sessionPath = await promptSessionCombine({
+      site,
+      currentSessionPath: sessionPath,
+      noInteractive: opts.noInteractive ?? false,
+    });
+    if (sessionPath !== originalSessionPath) {
+      checkpoint(site, state, workflowKey, {
+        sessionPath: toRelative(site, sessionPath),
+        completedSteps: ['record'],
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
   }
 
   // ── 2. Redact ──────────────────────────────────────────────────────
@@ -1879,6 +1896,78 @@ async function offerSkillExport(opts: {
   if (platform === 'openclaw') {
     p.log.info(`Install: openclaw skill install ${outDir}`);
   }
+}
+
+// ─── Session combination (post-record, pre-redact) ────────────────────────
+
+async function promptSessionCombine(opts: {
+  site: string;
+  currentSessionPath: string;
+  noInteractive: boolean;
+}): Promise<string> {
+  if (opts.noInteractive) return opts.currentSessionPath;
+
+  const pastSessions = listSiteSessions(opts.site).filter(
+    (s) => s.absPath !== opts.currentSessionPath,
+  );
+
+  if (pastSessions.length === 0) return opts.currentSessionPath;
+
+  const combine = await p.confirm({
+    message: `Found ${pastSessions.length} past recording session${pastSessions.length === 1 ? '' : 's'} for "${opts.site}". Combine with the new recording?`,
+    initialValue: false,
+  });
+
+  if (p.isCancel(combine) || !combine) return opts.currentSessionPath;
+
+  const selected = await p.multiselect({
+    message:
+      'Select sessions to combine with the new recording:\n  (press [space] to toggle, [enter] to submit)',
+    required: true,
+    initialValues: pastSessions.map((s) => s.absPath),
+    options: pastSessions.map((s) => ({
+      value: s.absPath,
+      label: `${s.friendlyTimestamp} — ${s.url}`,
+      hint: `${s.requestCount} requests, ${s.narrationCount} narrations`,
+    })),
+  });
+
+  if (p.isCancel(selected)) return opts.currentSessionPath;
+
+  const selectedPaths = selected as string[];
+  if (selectedPaths.length === 0) return opts.currentSessionPath;
+
+  const spinner = p.spinner();
+  spinner.start('Combining sessions...');
+
+  const sessions: Session[] = [];
+  for (const path of selectedPaths) {
+    sessions.push(
+      loadJsonFile(
+        path,
+        SessionSchema,
+        { notFound: `Past session not found: ${path}`, badSchema: 'Session file is malformed.' },
+        'session',
+      ),
+    );
+  }
+  sessions.push(
+    loadJsonFile(
+      opts.currentSessionPath,
+      SessionSchema,
+      { notFound: 'Current session not found.', badSchema: 'Session file is malformed.' },
+      'session',
+    ),
+  );
+
+  const combined = mergeSessions(sessions);
+  const combinedPath = writeCombinedSession(opts.site, combined);
+
+  spinner.stop(
+    `Combined ${sessions.length} sessions (${combined.requests.length} requests, ${combined.narration.length} narrations).`,
+  );
+
+  return combinedPath;
 }
 
 function formatCompileProgress(progress: CompileAgentProgress): string {
