@@ -12,14 +12,13 @@
  * value is visible and lets us confirm which form was the login form.
  */
 
-import { isSensitiveCredentialKey, normalizeKey } from './sensitive-keys.ts';
+import { isSensitiveCredentialKey, isUsernameLikeKey } from './sensitive-keys.ts';
 import type { CapturedEvent, CapturedRequest, Session } from './types.ts';
 
-/** Field-name patterns we'll treat as the username/email partner of a
- *  password field. Ordered by preference: emails first, then user-ish
- *  identifiers. */
-const USERNAME_KEY_RE =
-  /^(user(?:name|id)?|email(?:address)?|login(?:id)?|account|patron(?:number|id)?)$/i;
+/** Predicate: this key looks like the username/email/login partner of a
+ *  password field. Backed by `USERNAME_LIKE_KEYS` in sensitive-keys.ts so
+ *  the dictionary stays in one place. */
+const isUsernameKey = (key: string): boolean => isUsernameLikeKey(key);
 
 /** Where, within a request, a redactable value lives. */
 export type ReplacementLocation =
@@ -58,6 +57,29 @@ interface ExtractionResult {
   replacements: Replacement[];
 }
 
+/** Parsers are tried in this order on every request that has a body. Each
+ *  one is side-effect-free and returns `null` when its input doesn't fit
+ *  its expected framing — so trying JSON first on a form body, or form on
+ *  a JSON body, is safe: only the parser that actually fits will produce a
+ *  finding.
+ *
+ *  Dispatch is parser-driven, not Content-Type-driven, because real sites
+ *  routinely mislabel their bodies — the canonical example is the Nextep
+ *  cafe API (`Content-Type: text/plain` for JSON bodies). Letting the data
+ *  speak for itself prevents whole classes of silent extraction failures.
+ *
+ *  URL-query parsing runs even on requests without a body (e.g. GET-based
+ *  logins that pass credentials in the query string). Multipart is checked
+ *  before generic form-urlencoded because a multipart body still contains
+ *  `=` characters and would be parsed as a single malformed form pair
+ *  otherwise. */
+const BODY_PARSERS: Array<(r: CapturedRequest) => BodyFinding | null> = [
+  findInJsonBody,
+  findInJsonWrappedInForm,
+  findInMultipartBody,
+  findInFormBody,
+];
+
 /** Top-level entry point. */
 export function extractCredentials(session: Session): ExtractionResult {
   const findings: CredentialFinding[] = [];
@@ -65,13 +87,17 @@ export function extractCredentials(session: Session): ExtractionResult {
   const usernamesInDom = collectFormSubmitUsernames(session.events);
 
   for (const req of session.requests) {
-    if (!req.body) continue;
-    const ct = (req.headers['content-type'] ?? req.headers['Content-Type'] ?? '').toLowerCase();
-    const found = ct.includes('json')
-      ? findInJsonBody(req)
-      : ct.includes('urlencoded') || req.body.includes('=')
-        ? findInFormBody(req)
-        : null;
+    let found: BodyFinding | null = null;
+    if (req.body) {
+      for (const parse of BODY_PARSERS) {
+        found = parse(req);
+        if (found) break;
+      }
+    }
+    // Last-resort: credentials in the URL query string (rare but real for
+    // some legacy GET-based login endpoints). Tried after body parsers so
+    // body-based logins always win when both are present.
+    if (!found) found = findInUrlQuery(req);
     if (!found) continue;
 
     const confirmedByDom = usernamesInDom.has(found.usernameValue);
@@ -132,7 +158,7 @@ function findInFormBody(req: CapturedRequest): BodyFinding | null {
 
   // Second pass: find a username-like key.
   for (const { key, value } of pairs) {
-    if (USERNAME_KEY_RE.test(normalizeKey(key)) && value.length > 0) {
+    if (isUsernameKey(key) && value.length > 0) {
       usernameKey = key;
       usernameValue = value;
       break;
@@ -163,11 +189,7 @@ function findInJsonBody(req: CapturedRequest): BodyFinding | null {
   if (typeof pwdHit.value !== 'string' || pwdHit.value.length === 0) return null;
 
   // Look for a username-like key; prefer one in the same parent object.
-  const userHit = findFirstByPredicate(
-    parsed,
-    (k) => USERNAME_KEY_RE.test(normalizeKey(k)),
-    pwdHit.parent,
-  );
+  const userHit = findFirstByPredicate(parsed, isUsernameKey, pwdHit.parent);
   if (!userHit || typeof userHit.value !== 'string' || userHit.value.length === 0) return null;
 
   return {
@@ -175,6 +197,138 @@ function findInJsonBody(req: CapturedRequest): BodyFinding | null {
     passwordValue: pwdHit.value,
     usernameLocation: { kind: 'body-json', path: userHit.path },
     passwordLocation: { kind: 'body-json', path: pwdHit.path },
+  };
+}
+
+/** Handles legacy framings where a JSON document is the value of a single
+ *  form-encoded field — `payload={"username":"…","password":"…"}` or
+ *  `data=…` or `request=…`. Real PHP / ColdFusion apps do this. We delegate
+ *  the inner pairing to findInJsonBody by synthesizing a child request, and
+ *  re-encode the path as `body-form` so the redactor knows to swap the
+ *  whole inner JSON string back in. */
+function findInJsonWrappedInForm(req: CapturedRequest): BodyFinding | null {
+  if (!req.body) return null;
+  const pairs = parseFormBody(req.body);
+  if (pairs.length === 0) return null;
+
+  const WRAPPER_KEYS = new Set(['payload', 'data', 'request', 'json', 'body']);
+  for (const { key, value } of pairs) {
+    if (!WRAPPER_KEYS.has(key.toLowerCase())) continue;
+    if (!value.startsWith('{') && !value.startsWith('[')) continue;
+    // Build a synthetic request with the unwrapped JSON as body.
+    const inner: CapturedRequest = { ...req, body: value };
+    const found = findInJsonBody(inner);
+    if (!found) continue;
+    // Project the JSON paths back into form-key terms — the redactor
+    // matches on `originalValue` regardless of `location`, but we keep the
+    // location semantically correct so future readers aren't confused.
+    return {
+      ...found,
+      usernameLocation: { kind: 'body-form', key },
+      passwordLocation: { kind: 'body-form', key },
+    };
+  }
+  return null;
+}
+
+/** Parse a multipart/form-data body into {key, value} pairs and pair like
+ *  the form-urlencoded path. Defensive: any malformed part is skipped.
+ *
+ *  We sniff the boundary from the first line (`--<boundary>`) rather than
+ *  trusting the Content-Type header, because the whole point of this
+ *  module is to not trust Content-Type. */
+function findInMultipartBody(req: CapturedRequest): BodyFinding | null {
+  if (!req.body) return null;
+  const body = req.body;
+  // First line should be `--<boundary>`. If it doesn't start with `--` or
+  // there's no following newline, this isn't multipart.
+  const firstNewline = body.indexOf('\n');
+  if (firstNewline < 0) return null;
+  const firstLine = body.slice(0, firstNewline).trimEnd();
+  if (!firstLine.startsWith('--')) return null;
+  const boundary = firstLine.slice(2);
+  if (boundary.length === 0 || boundary.length > 200) return null;
+  // Split on the boundary; skip the prologue (empty before first boundary)
+  // and the epilogue (after closing `--<boundary>--`).
+  const sep = `--${boundary}`;
+  const parts = body.split(sep).slice(1);
+  const pairs: Array<{ key: string; value: string }> = [];
+  for (const partRaw of parts) {
+    const part = partRaw.startsWith('\r\n')
+      ? partRaw.slice(2)
+      : partRaw.startsWith('\n')
+        ? partRaw.slice(1)
+        : partRaw;
+    if (part.startsWith('--')) break; // closing boundary
+    // Headers and body are separated by a blank line.
+    const headerEnd = part.indexOf('\r\n\r\n');
+    const headerEnd2 = headerEnd >= 0 ? headerEnd : part.indexOf('\n\n');
+    if (headerEnd2 < 0) continue;
+    const sepLen = headerEnd >= 0 ? 4 : 2;
+    const headers = part.slice(0, headerEnd2);
+    let value = part.slice(headerEnd2 + sepLen);
+    // Strip the trailing CRLF that precedes the next boundary.
+    value = value.replace(/\r?\n$/, '');
+    const nameMatch = headers.match(/name="([^"]*)"/i);
+    if (!nameMatch) continue;
+    const key = nameMatch[1] ?? '';
+    if (!key) continue;
+    pairs.push({ key, value });
+  }
+  if (pairs.length === 0) return null;
+  return pairFromKeyValuePairs(pairs, 'body-form');
+}
+
+/** Credentials in the URL query string — `GET /login?username=…&password=…`
+ *  or a POST whose body is empty but credentials ride in the URL. Rare but
+ *  real for some legacy CGI endpoints. */
+function findInUrlQuery(req: CapturedRequest): BodyFinding | null {
+  let qs: string;
+  try {
+    const u = new URL(req.url);
+    qs = u.search.startsWith('?') ? u.search.slice(1) : u.search;
+  } catch {
+    return null;
+  }
+  if (!qs) return null;
+  const pairs = parseFormBody(qs);
+  if (pairs.length === 0) return null;
+  return pairFromKeyValuePairs(pairs, 'body-form');
+}
+
+/** Shared pairing: given key/value pairs, find a password partner and a
+ *  username partner. Returns a BodyFinding or null. Used by every parser
+ *  that flattens its input into key/value pairs (form, multipart, URL
+ *  query). The `location.kind` argument is passed through unchanged. */
+function pairFromKeyValuePairs(
+  pairs: Array<{ key: string; value: string }>,
+  kind: 'body-form',
+): BodyFinding | null {
+  let passwordKey: string | null = null;
+  let passwordValue: string | null = null;
+  for (const { key, value } of pairs) {
+    if (isSensitiveCredentialKey(key) && value.length > 0) {
+      passwordKey = key;
+      passwordValue = value;
+      break;
+    }
+  }
+  if (passwordKey === null || passwordValue === null) return null;
+  let usernameKey: string | null = null;
+  let usernameValue: string | null = null;
+  for (const { key, value } of pairs) {
+    if (isUsernameKey(key) && value.length > 0) {
+      usernameKey = key;
+      usernameValue = value;
+      break;
+    }
+  }
+  if (usernameKey === null || usernameValue === null) return null;
+  return {
+    usernameValue,
+    passwordValue,
+    usernameLocation: { kind, key: usernameKey },
+    passwordLocation: { kind, key: passwordKey },
   };
 }
 
@@ -238,12 +392,7 @@ function collectFormSubmitUsernames(events: CapturedEvent[]): Set<string> {
         fields?: Array<{ name?: string; type?: string; value?: string }>;
       };
       for (const f of detail.fields ?? []) {
-        if (
-          f.name &&
-          f.value &&
-          f.type !== 'password' &&
-          USERNAME_KEY_RE.test(normalizeKey(f.name))
-        ) {
+        if (f.name && f.value && f.type !== 'password' && isUsernameKey(f.name)) {
           out.add(f.value);
         }
       }

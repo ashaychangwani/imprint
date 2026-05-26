@@ -48,6 +48,7 @@ import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import { loadCredentialStore } from './runtime.ts';
+import { isSensitiveCredentialKey } from './sensitive-keys.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import { listSiteSessions, mergeSessions, writeCombinedSession } from './session-merge.ts';
 import {
@@ -599,8 +600,38 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       `Redacted ${stats.totalRedactions} value(s) across ${stats.requestsRedacted} request(s) and ${stats.cookiesRedacted} cookie(s)${placeholderNote}${freeformNote}.`,
     );
 
+    // Post-redact pairing audit: if any request body contained a
+    // password-shaped field but credential extraction failed to produce a
+    // confirmed username+password pair, the downstream compile stage will
+    // template credentials as `${param.X}` instead of `${credential.X}` —
+    // shipping a broken MCP tool that asks callers to provide credentials
+    // by hand instead of pulling from the credential store.
+    //
+    // The most common reason is an unusual request framing (custom
+    // Content-Type, unusual key naming) that the extractor's dictionaries
+    // or parsers don't yet cover. Surface this loudly so the user can
+    // either re-record, file a bug, or proceed knowing the tool needs
+    // hand-editing.
+    const warnings: string[] = [];
+    const unpairedPasswordSeqs = findUnpairedPasswordRequests(session);
+    if (unpairedPasswordSeqs.length > 0 && confirmedReplacements.length === 0) {
+      warnings.push('credentials_not_paired');
+      const seqList = unpairedPasswordSeqs.slice(0, 5).join(', ');
+      const more = unpairedPasswordSeqs.length > 5 ? ', …' : '';
+      p.log.warn(
+        [
+          `Detected ${unpairedPasswordSeqs.length} request(s) with a password-shaped field (seqs: ${seqList}${more}) but no username+password pair was extracted.`,
+          'The generated workflow will treat credentials as plain parameters and will NOT pull from the credential store.',
+          'This usually means the request body uses an unusual framing (Content-Type, key naming, multipart variant) the extractor did not recognise.',
+          `→ Recommended: file a bug with the redacted session at ${toRelative(site, redactedPath)}, then re-record once the extractor is fixed.`,
+          '→ To proceed anyway, just continue — the tool will need manual credential wiring before it works.',
+        ].join('\n'),
+      );
+    }
+
     updateCheckpoint(site, state, workflowKey, 'redact', {
       redactedPath: toRelative(site, redactedPath),
+      warnings: warnings.length > 0 ? warnings : undefined,
     });
   }
 
@@ -1566,6 +1597,102 @@ async function promptAndPersistCredentials(opts: {
     ),
     confirmedFinding: chosen,
   };
+}
+
+/** Find request seqs whose body contains a password-shaped key (per the
+ *  shared sensitive-keys dictionary) — regardless of whether credential
+ *  extraction succeeded in pairing it with a username.
+ *
+ *  Used by the post-redact pairing audit to detect the failure mode where
+ *  a recorded login *did* happen but the extractor couldn't pair its
+ *  fields, so the redacted session has no `${credential.X}` placeholders
+ *  and the compile stage will template credentials as plain parameters.
+ *
+ *  Body shapes covered:
+ *    - JSON (any nesting depth)
+ *    - form-urlencoded (`a=b&c=d`)
+ *    - multipart/form-data (sniffed by leading `--<boundary>`)
+ *    - URL query string (covers GET-based logins)
+ *
+ *  The scan is intentionally lossy and fast: we substring-check for
+ *  password-like key names in the raw body text plus exact-key checks in
+ *  parsed JSON. False positives are tolerable here (one extra warning);
+ *  false negatives are not (silent failure recurrence). */
+export function findUnpairedPasswordRequests(session: Session): number[] {
+  const PASSWORD_LIKE_TOKENS = [
+    'password',
+    'passwd',
+    'pwd',
+    'patronpassword',
+    'patron_password',
+    'j_password',
+    'userpassword',
+    'loginpassword',
+    'accountpassword',
+  ];
+  const out: number[] = [];
+  for (const req of session.requests) {
+    let hit = false;
+    // 1. Check URL query string for password-shaped param names.
+    try {
+      const u = new URL(req.url);
+      for (const k of u.searchParams.keys()) {
+        if (isSensitiveCredentialKey(k)) {
+          hit = true;
+          break;
+        }
+      }
+    } catch {
+      // Bad URL — skip URL-side check.
+    }
+
+    // 2. Check body — try JSON first, then fall back to substring scan
+    //    that covers form-urlencoded and multipart in one pass.
+    if (!hit && req.body) {
+      const body = req.body;
+      // JSON path.
+      try {
+        const parsed = JSON.parse(body);
+        if (hasPasswordLikeKey(parsed)) hit = true;
+      } catch {
+        // Not JSON — substring scan handles form / multipart / anything
+        // else that contains the key name verbatim.
+      }
+      if (!hit) {
+        const lower = body.toLowerCase();
+        for (const tok of PASSWORD_LIKE_TOKENS) {
+          // Match a key-shaped occurrence: `"password"` (JSON), `password=`
+          // (form/query), or `name="password"` (multipart). Avoid bare
+          // substring matches that could fire on prose payloads.
+          if (
+            lower.includes(`"${tok}"`) ||
+            lower.includes(`${tok}=`) ||
+            lower.includes(`name="${tok}"`)
+          ) {
+            hit = true;
+            break;
+          }
+        }
+      }
+    }
+    if (hit) out.push(req.seq);
+  }
+  return out;
+}
+
+/** Recursive helper for findUnpairedPasswordRequests' JSON path. */
+function hasPasswordLikeKey(node: unknown): boolean {
+  if (Array.isArray(node)) {
+    for (const v of node) if (hasPasswordLikeKey(v)) return true;
+    return false;
+  }
+  if (node && typeof node === 'object') {
+    for (const [k, v] of Object.entries(node)) {
+      if (isSensitiveCredentialKey(k)) return true;
+      if (hasPasswordLikeKey(v)) return true;
+    }
+  }
+  return false;
 }
 
 /** Write `<workflowDir>/credentials.manifest.json` so consumers of the

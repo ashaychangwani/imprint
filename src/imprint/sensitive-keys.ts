@@ -112,15 +112,127 @@ const SENSITIVE_KEYS = [
   'dob',
 ];
 
-const SENSITIVE_KEY_SET = new Set(SENSITIVE_KEYS.map((k) => k.toLowerCase()));
+// `normalizeKey` (defined below) lowercases and strips `_`/`-` — set
+// membership goes through it, so we MUST pre-normalize the stored entries
+// or lookups for e.g. `j_password` (→ `jpassword`) will miss a stored
+// `j_password`. Hoisting a local copy of the rule rather than ordering
+// gymnastics keeps the file linear.
+const _normalize = (s: string): string => s.toLowerCase().replace(/[-_]/g, '');
+
+const SENSITIVE_KEY_SET = new Set(SENSITIVE_KEYS.map(_normalize));
 
 /** Subset of SENSITIVE_KEYS that specifically denote a credential (not PII).
  *  Used by credential-extract.ts when looking for the password half of a
- *  login form pair — we don't want to treat e.g. `dob` as a password. */
+ *  login form pair — we don't want to treat e.g. `dob` as a password.
+ *
+ *  Inclusion criterion: a key name that, when present in a request body
+ *  alongside a username-like partner, almost always means "this is the
+ *  password the user typed at login time." Be liberal here — false positives
+ *  cost the user one extra prompt confirmation; false negatives ship broken
+ *  tools. New additions should reference a real recorded site that broke
+ *  without them.
+ *
+ *  Sites observed needing each entry:
+ *    - password / passwd / pwd:                most modern APIs
+ *    - pin:                                    bank / utility login forms
+ *    - pass:                                   legacy PHP forms (e.g. SMF)
+ *    - secret:                                 OAuth ROPC payloads
+ *    - j_password:                             Java EE / Spring Security default form-login
+ *    - userpassword / loginpassword / accountpassword:
+ *                                              vendor SSO portals that namespace fields
+ *    - patronpassword / patron_password:       Discover & Go libraries (kept for back-compat)
+ */
 const PASSWORD_LIKE_KEYS = new Set(
-  ['password', 'passwd', 'pwd', 'pin', 'patronpassword', 'patron_password'].map((k) =>
-    k.toLowerCase(),
-  ),
+  [
+    'password',
+    'passwd',
+    'pwd',
+    'pin',
+    'pass',
+    'secret',
+    'j_password',
+    'userpassword',
+    'loginpassword',
+    'accountpassword',
+    'patronpassword',
+    'patron_password',
+  ].map(_normalize),
+);
+
+/** Subset of SENSITIVE_KEYS that specifically denote a username/email/login
+ *  identifier — the partner half of a username+password login pair.
+ *
+ *  Same inclusion criterion as PASSWORD_LIKE_KEYS: liberal coverage of real
+ *  recorded forms, narrow enough not to match arbitrary identifiers. Note
+ *  this set is intentionally distinct from `email`, `phone` etc. in
+ *  SENSITIVE_KEYS — those get redacted as PII regardless, but only the
+ *  subset here qualifies as the "username partner" the credential extractor
+ *  pairs with a password.
+ *
+ *  Sites observed needing each entry:
+ *    - user / username / user_name / userid / user_id:
+ *                                              most APIs
+ *    - login / loginid / login_id / login_email:
+ *                                              REST endpoints that name the form field after the action
+ *    - email / emailaddress / email_address:   email-as-username flows
+ *    - account / accountid / account_id:       enterprise SSO portals
+ *    - patron / patronnumber / patron_number / patronid / patron_id:
+ *                                              library systems (Discover & Go)
+ *    - j_username:                             Java EE / Spring Security default form-login
+ *    - signin / signinid / sign_in_id:         vendor SSO portals (Okta-style)
+ *    - usr / uid:                              legacy CGI / older PHP
+ *    - memberid / member_id / membername / member_name:
+ *                                              membership-driven sites (gyms, clubs)
+ *    - customerid / customer_id / customernumber / customer_number:
+ *                                              ecommerce account portals
+ *    - clientid / client_id / clientnumber / client_number:
+ *                                              B2B portals (CAUTION: also matches OAuth client_id;
+ *                                              credential-extract.ts gates on having a password
+ *                                              partner in the same parent, so OAuth token endpoints
+ *                                              that pass client_id without a password won't match)
+ */
+const USERNAME_LIKE_KEYS = new Set(
+  [
+    'user',
+    'username',
+    'user_name',
+    'userid',
+    'user_id',
+    'login',
+    'loginid',
+    'login_id',
+    'loginemail',
+    'login_email',
+    'email',
+    'emailaddress',
+    'email_address',
+    'account',
+    'accountid',
+    'account_id',
+    'patron',
+    'patronnumber',
+    'patron_number',
+    'patronid',
+    'patron_id',
+    'j_username',
+    'signin',
+    'signinid',
+    'sign_in_id',
+    'usr',
+    'uid',
+    'memberid',
+    'member_id',
+    'membername',
+    'member_name',
+    'customerid',
+    'customer_id',
+    'customernumber',
+    'customer_number',
+    'clientid',
+    'client_id',
+    'clientnumber',
+    'client_number',
+  ].map(_normalize),
 );
 
 const SENSITIVE_HEADERS = [
@@ -138,7 +250,7 @@ const SENSITIVE_HEADERS = [
 
 const SENSITIVE_HEADER_SET = new Set(SENSITIVE_HEADERS.map((h) => h.toLowerCase()));
 
-export const normalizeKey = (s: string): string => s.toLowerCase().replace(/[-_]/g, '');
+export const normalizeKey = _normalize;
 
 /** True if the key name suggests a sensitive value (auth, payment, PII). */
 export function isSensitiveKey(key: string): boolean {
@@ -149,6 +261,23 @@ export function isSensitiveKey(key: string): boolean {
  *  PII). Used when pairing a username + password in extraction. */
 export function isSensitiveCredentialKey(key: string): boolean {
   return PASSWORD_LIKE_KEYS.has(normalizeKey(key));
+}
+
+/** True if the key name suggests a username/email/login identifier — the
+ *  partner half of a login pair. Used in credential extraction and in the
+ *  pre-emit guardrail that flags workflows templating credentials as plain
+ *  parameters. */
+export function isUsernameLikeKey(key: string): boolean {
+  return USERNAME_LIKE_KEYS.has(normalizeKey(key));
+}
+
+/** True for either half of a login pair (username or password). Used by the
+ *  pre-emit guardrail and the post-redact pairing audit, which both need to
+ *  decide "is this parameter name credential-shaped?" without caring which
+ *  half. */
+export function isLoginFieldKey(key: string): boolean {
+  const n = normalizeKey(key);
+  return PASSWORD_LIKE_KEYS.has(n) || USERNAME_LIKE_KEYS.has(n);
 }
 
 export function isSensitiveHeader(header: string): boolean {
