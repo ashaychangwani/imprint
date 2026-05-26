@@ -71,9 +71,7 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
       const allCandidateSeqs = new Set(context.candidate?.requestSeqs ?? []);
       const representativeSeqs = context.candidate?.representativeSeqs ?? [];
       const selectedRequestSeqs = new Set(
-        representativeSeqs.length > 0
-          ? representativeSeqs
-          : (context.candidate?.requestSeqs ?? []),
+        representativeSeqs.length > 0 ? representativeSeqs : (context.candidate?.requestSeqs ?? []),
       );
       const dependencySeqs = new Set([
         ...(context.candidate?.dependencySeqs ?? []),
@@ -112,9 +110,10 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
               toolName: context.candidate.toolName,
               description: context.candidate.description,
               expectedOutput: context.candidate.expectedOutput,
-              requestSeqs: (context.candidate.representativeSeqs?.length ?? 0) > 0
-                ? context.candidate.representativeSeqs
-                : context.candidate.requestSeqs,
+              requestSeqs:
+                (context.candidate.representativeSeqs?.length ?? 0) > 0
+                  ? context.candidate.representativeSeqs
+                  : context.candidate.requestSeqs,
               dependencySeqs: context.candidate.dependencySeqs,
               eventSeqs: context.candidate.eventSeqs,
               likelyParams: context.candidate.likelyParams,
@@ -1123,10 +1122,7 @@ export async function externalVerification(
           .map((lp) => lp.name);
         if (notTemplated.length > 0) {
           failures.push(
-            `${notTemplated.length} likelyParam(s) are not templated in any request: ${notTemplated.join(', ')}. ` +
-              'Each must appear as ${param.NAME} in a request URL, body, or header. ' +
-              'For parameters recorded as null or [] (filters the user toggled but didn\'t apply), ' +
-              'find the correct position in the request body and replace the placeholder value with ${param.NAME}.',
+            `${notTemplated.length} likelyParam(s) are not templated in any request: ${notTemplated.join(', ')}. Each must appear as \${param.NAME} in a request URL, body, or header. For parameters recorded as null or [] (filters the user toggled but didn\'t apply), find the correct position in the request body and replace the placeholder value with \${param.NAME}.`,
           );
         }
       }
