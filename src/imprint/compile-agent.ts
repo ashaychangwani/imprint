@@ -11,6 +11,7 @@ import { join as pathJoin } from 'node:path';
 import {
   type AgentProgress,
   type AgentResult,
+  type OnDeadlineReached,
   doneTool,
   giveUpTool,
   runAgentLoop,
@@ -83,6 +84,8 @@ interface CompileAgentOptions {
   classifications?: ClassifiedValue[];
   /** Credential values extracted during teach, passed to integration tests via env var. */
   teachCredentials?: { site: string; values: Record<string, string> };
+  /** Called when wall-clock deadline is reached; return ms to extend or null to time out. */
+  onDeadlineReached?: OnDeadlineReached;
 }
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
@@ -213,6 +216,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         systemPromptPath,
         deadlineMs,
         onProgress: opts.onProgress,
+        onDeadlineReached: opts.onDeadlineReached,
         startTime,
         keepTest: opts.keepTest,
         candidate: opts.candidate,
@@ -279,6 +283,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       deadlineMs,
       llm: provider,
       onProgress: wrappedOnProgress,
+      onDeadlineReached: opts.onDeadlineReached,
     });
 
     totalTurns += result.turns;
@@ -301,6 +306,8 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       sessionPathAbs,
       {
         expectedToolName: opts.candidate?.toolName,
+        likelyParams: opts.candidate?.likelyParams,
+        candidateRequestSeqs: opts.candidate?.requestSeqs,
       },
     );
 
@@ -361,6 +368,8 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
     durationMs: Date.now() - startTime,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
   };
 }
 

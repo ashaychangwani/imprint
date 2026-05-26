@@ -672,12 +672,29 @@ async function main(argv: string[]): Promise<number> {
       // Stream one stderr line per *changed* activity so non-TTY runs (CI,
       // piped, backgrounded) get visibility instead of silence.
       let lastActivity = '';
+      const compileStart = Date.now();
+      const onDeadlineReached = process.stdin.isTTY
+        ? async (): Promise<number | null> => {
+            const { createInterface } = await import('node:readline');
+            const elapsed = Math.round((Date.now() - compileStart) / 60000);
+            const rl = createInterface({ input: process.stdin, output: process.stderr });
+            const answer = await new Promise<string>((resolve) => {
+              rl.question(
+                `[imprint compile] Timeout reached after ${elapsed} minutes. Give it 10 more minutes? [Y/n] `,
+                resolve,
+              );
+            });
+            rl.close();
+            return answer.trim().toLowerCase().startsWith('n') ? null : 10 * 60 * 1000;
+          }
+        : undefined;
       const result = await generate({
         sessionPath,
         outPath: values.out,
         maxDurationMs,
         llmConfig: { provider: providerName, model: compileModel },
         keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
+        onDeadlineReached,
         onProgress: (p) => {
           const activity = describeAgentActivity(p);
           if (activity === lastActivity) return;

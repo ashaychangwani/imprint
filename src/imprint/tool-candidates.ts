@@ -103,6 +103,7 @@ export const ToolCandidateSchema = z.object({
   confidence: z.number().min(0).max(1),
   primary: z.boolean(),
   requestSeqs: z.array(z.number().int().nonnegative()).default([]),
+  representativeSeqs: z.array(z.number().int().nonnegative()).default([]),
   eventSeqs: z.array(z.number().int().nonnegative()).default([]),
   eventTimeRange: z
     .object({

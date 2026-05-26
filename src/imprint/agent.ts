@@ -40,6 +40,12 @@ export interface AgentProgress {
   outputTokens: number;
 }
 
+/**
+ * Called when the wall-clock deadline is reached. Return a positive number of
+ * milliseconds to extend the deadline, or null/undefined to let it time out.
+ */
+export type OnDeadlineReached = () => Promise<number | null>;
+
 export interface AgentResult {
   outcome: 'done' | 'give_up' | 'timeout' | 'soft_cap' | 'error';
   doneSummary?: string;
@@ -71,6 +77,8 @@ interface AgentLoopOptions {
   llm: ToolUseProvider;
   /** called before each LLM call and tool dispatch with structured progress */
   onProgress?: (p: AgentProgress) => void;
+  /** called when the wall-clock deadline is reached; return ms to extend or null to time out */
+  onDeadlineReached?: OnDeadlineReached;
 }
 
 /** Helper: creates the standard 'done' tool */
@@ -137,7 +145,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
   const startTime = Date.now();
   const softTurnCap = opts.softTurnCap ?? 100;
   const startMs = Date.now();
-  const budgetMs = Math.max(0, opts.deadlineMs - startMs);
+  let deadlineMs = opts.deadlineMs;
+  let budgetMs = Math.max(0, deadlineMs - startMs);
 
   // Convert AgentTools to Anthropic.Tool format (strip handlers)
   const anthropicTools: Anthropic.Tool[] = opts.tools.map((t) => ({
@@ -165,15 +174,32 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
 
   while (true) {
     // Check wall-clock deadline
-    if (Date.now() > opts.deadlineMs) {
-      return {
-        outcome: 'timeout',
-        turns: turn,
-        durationMs: Date.now() - startTime,
-        inputTokens,
-        outputTokens,
-        conversationLog,
-      };
+    if (Date.now() > deadlineMs) {
+      if (opts.onDeadlineReached) {
+        const extensionMs = await opts.onDeadlineReached();
+        if (extensionMs != null && extensionMs > 0) {
+          deadlineMs += extensionMs;
+          budgetMs += extensionMs;
+        } else {
+          return {
+            outcome: 'timeout',
+            turns: turn,
+            durationMs: Date.now() - startTime,
+            inputTokens,
+            outputTokens,
+            conversationLog,
+          };
+        }
+      } else {
+        return {
+          outcome: 'timeout',
+          turns: turn,
+          durationMs: Date.now() - startTime,
+          inputTokens,
+          outputTokens,
+          conversationLog,
+        };
+      }
     }
 
     // Check soft turn cap

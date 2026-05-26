@@ -142,6 +142,8 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
         opts.sessionPath,
         {
           expectedToolName: opts.candidate?.toolName,
+          likelyParams: opts.candidate?.likelyParams,
+          candidateRequestSeqs: opts.candidate?.requestSeqs,
         },
       );
       if (warnings.length > 0) {

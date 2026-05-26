@@ -28,12 +28,21 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
+import type { OnDeadlineReached } from './agent.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
-import { endTraceSpan, setSpanAttributes, startTraceSpan, traced } from './tracing.ts';
+import {
+  endTraceSpan,
+  llmSpanAttributes,
+  setSpanAttributes,
+  startTraceSpan,
+  traceJsonInputOutputAttributes,
+  traceLlmIoEnabled,
+  traced,
+} from './tracing.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-claude-cli');
@@ -51,6 +60,8 @@ interface CompileViaClaudeCliOptions {
   deadlineMs: number;
   startTime: number;
   onProgress?: (p: CompileAgentProgress) => void;
+  /** Called when wall-clock deadline is reached; return ms to extend or null to time out. */
+  onDeadlineReached?: OnDeadlineReached;
   /** Retain parser.test.ts after successful verification. Mirrors the
    *  in-process loop's `keepTest`. */
   keepTest?: boolean;
@@ -78,7 +89,12 @@ interface StreamJsonEvent {
   duration_ms?: number;
   num_turns?: number;
   total_cost_usd?: number;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
   // partial-message stream events
   event?: { delta?: { type?: string; text?: string } };
 }
@@ -103,6 +119,16 @@ export async function compileViaClaudeCli(
         'imprint.compile.duration_ms': result.durationMs,
         'imprint.compile.input_tokens': result.inputTokens,
         'imprint.compile.output_tokens': result.outputTokens,
+        'imprint.compile.cache_read_input_tokens': result.cacheReadInputTokens,
+        'imprint.compile.cache_creation_input_tokens': result.cacheCreationInputTokens,
+        ...llmSpanAttributes({
+          provider: 'claude-cli',
+          model: preferredAgentModel('claude-cli'),
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          cacheReadTokens: result.cacheReadInputTokens,
+          cacheWriteTokens: result.cacheCreationInputTokens,
+        }),
       });
       return result;
     },
@@ -241,8 +267,11 @@ async function driveStreamJson(
   const parentCtx = otelContext.active();
 
   const conversationLog: unknown[] = [];
+  const captureLlmIo = traceLlmIoEnabled();
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadInputTokens = 0;
+  let cacheCreationInputTokens = 0;
   let turn = 0;
   let lastErrorEvent: StreamJsonEvent | null = null;
   let stderrBuf = '';
@@ -265,22 +294,40 @@ async function driveStreamJson(
     });
   };
 
-  // Wall-clock guard: if we hit the deadline, kill the child.
-  const deadlineTimer = setTimeout(
-    () => {
-      log('wall-clock deadline exceeded, terminating claude');
-      try {
-        child.kill('SIGTERM');
-        // SIGKILL fallback after 5s grace
-        setTimeout(() => {
-          if (!child.killed) child.kill('SIGKILL');
-        }, 5000);
-      } catch {
-        // already gone
+  // Wall-clock guard: if we hit the deadline, ask the user or kill the child.
+  let currentDeadlineMs = opts.deadlineMs;
+  let childExited = false;
+
+  const killChild = (): void => {
+    log('wall-clock deadline exceeded, terminating claude');
+    try {
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!child.killed) child.kill('SIGKILL');
+      }, 5000);
+    } catch {
+      // already gone
+    }
+  };
+
+  const scheduleDeadlineCheck = (): ReturnType<typeof setTimeout> => {
+    const remaining = Math.max(0, currentDeadlineMs - Date.now());
+    return setTimeout(async () => {
+      if (childExited) return;
+      if (opts.onDeadlineReached) {
+        const extensionMs = await opts.onDeadlineReached();
+        if (childExited) return;
+        if (extensionMs != null && extensionMs > 0) {
+          currentDeadlineMs += extensionMs;
+          deadlineTimer = scheduleDeadlineCheck();
+          return;
+        }
       }
-    },
-    Math.max(0, opts.deadlineMs - Date.now()),
-  );
+      killChild();
+    }, remaining);
+  };
+
+  let deadlineTimer = scheduleDeadlineCheck();
 
   // Stdout: newline-delimited stream-json events.
   let stdoutBuf = '';
@@ -337,6 +384,12 @@ async function driveStreamJson(
             'imprint.agent.cumulative_input_tokens': inputTokens,
             'imprint.agent.cumulative_output_tokens': outputTokens,
           });
+          if (currentTurnSpan && captureLlmIo) {
+            setSpanAttributes(
+              currentTurnSpan,
+              traceJsonInputOutputAttributes('output', evt.message.content),
+            );
+          }
           fireProgress('thinking');
           for (const block of evt.message.content) {
             if (block && (block as { type?: string }).type === 'tool_use') {
@@ -350,13 +403,23 @@ async function driveStreamJson(
         }
 
         if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
-          // Tool result envelope. Nothing to surface here — onProgress already
-          // fired when we saw the matching tool_use.
+          if (currentTurnSpan && captureLlmIo) {
+            setSpanAttributes(
+              currentTurnSpan,
+              traceJsonInputOutputAttributes('input', evt.message.content),
+            );
+          }
           continue;
         }
 
         if (evt.type === 'result') {
-          // Terminal event from claude-cli. Capture any final usage and break.
+          if (evt.usage) {
+            inputTokens = evt.usage.input_tokens ?? inputTokens;
+            outputTokens = evt.usage.output_tokens ?? outputTokens;
+            cacheReadInputTokens = evt.usage.cache_read_input_tokens ?? cacheReadInputTokens;
+            cacheCreationInputTokens =
+              evt.usage.cache_creation_input_tokens ?? cacheCreationInputTokens;
+          }
           if (evt.is_error) {
             lastErrorEvent = evt;
           }
@@ -382,6 +445,7 @@ async function driveStreamJson(
     child.once('exit', (code) => resolve(code ?? -1));
     child.once('error', () => resolve(-1));
   });
+  childExited = true;
   clearTimeout(deadlineTimer);
   if (currentTurnSpan) {
     setSpanAttributes(currentTurnSpan, {
@@ -441,6 +505,8 @@ async function driveStreamJson(
     | 'durationMs'
     | 'inputTokens'
     | 'outputTokens'
+    | 'cacheReadInputTokens'
+    | 'cacheCreationInputTokens'
   > = {
     workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
     parserPath: existsSync(parserPath) ? parserPath : undefined,
@@ -450,14 +516,16 @@ async function driveStreamJson(
     durationMs: Date.now() - opts.startTime,
     inputTokens,
     outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
   };
 
   // Wall-clock deadline exceeded?
-  if (Date.now() > opts.deadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {
+  if (Date.now() > currentDeadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {
     return {
       success: false,
       outcome: 'timeout',
-      message: `claude-cli exceeded the ${Math.round((opts.deadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
+      message: `claude-cli exceeded the ${Math.round((currentDeadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
       ...baseResult,
     };
   }
@@ -547,6 +615,8 @@ function finalErrorResult(opts: CompileViaClaudeCliOptions, message: string): Co
     durationMs: Date.now() - opts.startTime,
     inputTokens: 0,
     outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
   };
 }
 

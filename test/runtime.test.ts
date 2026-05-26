@@ -490,6 +490,140 @@ describe('executeWorkflow', () => {
   });
 });
 
+describe('requestTransformModule', () => {
+  const scratchRoot = `${import.meta.dir}/../.context`;
+
+  const transformWorkflow: Workflow = {
+    toolName: 'test_transform',
+    intent: { description: 'test' },
+    parameters: [
+      { name: 'q', type: 'string', description: 'query' },
+      { name: 'filter', type: 'string', description: 'filter value' },
+    ],
+    requests: [
+      {
+        method: 'POST',
+        url: 'https://api.example.com/search',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"placeholder": true}',
+      },
+    ],
+    site: 'test',
+    requestTransformModule: './request-transform.ts',
+  };
+
+  it('passes params to transform and applies object return with body override', async () => {
+    const fetchMock = (async (_url: string, init?: RequestInit) =>
+      new Response(JSON.stringify({ body: init?.body }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })) as unknown as typeof fetch;
+
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-'));
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(transformWorkflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform(method, url, responses, params) {
+          return { url, body: JSON.stringify({ q: params?.q, filter: params?.filter }) };
+        }`,
+      );
+
+      const r = await executeWorkflow({
+        workflow: transformWorkflow,
+        params: { q: 'hello', filter: 'price<100' },
+        fetchImpl: fetchMock,
+        workflowPath: join(tmpDir, 'workflow.json'),
+      });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const data = r.data as { body: string };
+      const parsed = JSON.parse(data.body);
+      expect(parsed.q).toBe('hello');
+      expect(parsed.filter).toBe('price<100');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('backward-compatible: string return still works as URL-only transform', async () => {
+    let capturedUrl = '';
+    const fetchMock = (async (url: string) => {
+      capturedUrl = url;
+      return new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-str-'));
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(transformWorkflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform(method, url) {
+          return url + '?signed=true';
+        }`,
+      );
+
+      const r = await executeWorkflow({
+        workflow: transformWorkflow,
+        params: { q: 'test', filter: 'none' },
+        fetchImpl: fetchMock,
+        workflowPath: join(tmpDir, 'workflow.json'),
+      });
+      expect(r.ok).toBe(true);
+      expect(capturedUrl).toBe('https://api.example.com/search?signed=true');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('applies header overrides from object return', async () => {
+    let capturedHeaders: Record<string, string> = {};
+    const fetchMock = (async (_url: string, init?: RequestInit) => {
+      capturedHeaders = Object.fromEntries(
+        Object.entries(init?.headers ?? {}).filter(([k]) => k.startsWith('X-')),
+      );
+      return new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-hdr-'));
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(transformWorkflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform(method, url, responses, params) {
+          return { url, headers: { 'X-Custom': 'injected-' + (params?.q ?? '') } };
+        }`,
+      );
+
+      const r = await executeWorkflow({
+        workflow: transformWorkflow,
+        params: { q: 'test', filter: 'none' },
+        fetchImpl: fetchMock,
+        workflowPath: join(tmpDir, 'workflow.json'),
+      });
+      expect(r.ok).toBe(true);
+      expect(capturedHeaders['X-Custom']).toBe('injected-test');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('splitSetCookieHeader', () => {
   it('returns the single cookie unchanged when only one is present', () => {
     expect(splitSetCookieHeader('sid=abc123; Path=/; HttpOnly')).toEqual([

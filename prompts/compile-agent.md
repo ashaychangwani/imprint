@@ -41,6 +41,8 @@ Follow these steps to compile the session:
 
    **Capture hints.** The session summary may include `captureHints` — pre-built capture block suggestions derived from dual-pass analysis. When a `captureHint` exists for a server-derived value, copy its `capture` definition directly into your workflow.json's `captures` array on the indicated request, and use `${state.NAME}` in downstream requests as shown in the `usedBy` entries. This saves you from having to discover the producer response and build the capture manually.
 
+   **Parameter checklist (`likelyParams`).** When `selectedCandidate` includes a `likelyParams` array, it contains the candidate detector's analysis of which inputs the user controlled — based on the narration and request patterns. Treat this as your **parameter extraction checklist**: every entry should become a `${param.NAME}` in workflow.json unless you can document a structural reason it cannot be templated. Parameters that appear as `null`, `[]`, or absent in the recorded request body are still valid — they represent filters or options the user interacted with during recording but did not apply in the final request state. Do not skip them.
+
    **Dual-pass value classifications.** When `stateHints` includes entries with `type: “dual_pass_value_classification”`, these values were verified to differ across two independent executions of the same workflow with identical user inputs. They are the highest-confidence signal for ephemeral state — treat them seriously, but reason about them rather than following blindly:
 
    - **`server_derived`**: The value differed and was found in a prior response. The hint includes `producerSeq` and `producerPath` telling you exactly where to capture from. Add a `captures` entry on the producer request and reference via `${state.NAME}`.
@@ -66,12 +68,31 @@ Follow these steps to compile the session:
 
 5. **Write workflow.json.** Template the request(s):
    - Replace user-variable values with `${param.NAME}` placeholders (e.g., origin airport, date, passenger count)
+   - **Use `selectedCandidate.likelyParams` as your parameter checklist** (when present). Every `likelyParam` should become a workflow parameter and be templated into the request body/URL:
+     - Parameters with concrete recorded values: replace the literal value with `${param.NAME}` as usual.
+     - Parameters that are `null`, `[]`, or absent in the recorded request (filters/constraints the user toggled during recording but didn't apply in the final request state): these are **valid parameters** — add them as optional with defaults meaning "no filter applied" and template them at the correct position in the request body/URL.
+     - For positional/array-encoded bodies (JSPB, protobuf, etc.): use `sharedHelperNotes` to locate each parameter's position, and replace `null`/`[]` placeholders with `${param.NAME}`.
+     - Filter/constraint parameter defaults should use the API's "unfiltered" sentinel (typically `0`, `null`, `[]`, or empty string — infer from what the recorded request uses in that position).
+     - If a `likelyParam` genuinely has no plausible insertion point in any request (no matching query param, no array position, no JSON key), skip it and note why — but treat `null`/`[]` positions as valid insertion points, not absence of the parameter.
    - Replace per-user credentials with `${credential.NAME}` (e.g., `patron_id`, `csrf_token`, `account_uuid`)
    - **CRITICAL — Login chains.** If the input session contains a login request whose body has been pre-templated to `${credential.username}` / `${credential.password}` (you'll see those literal strings in the request body when you `read_request`), you MUST keep that login request as request[0] in your workflow. Do NOT drop it. Use named `captures` (canonical `${state.name}`) or legacy `extract` to capture any returned auth tokens (`id_token`, `access_token`, `swa_token`, cookies projected into headers, etc.) and reference them in subsequent requests. The runtime substitutes the username/password from the local credential manager at call time, so the workflow is self-sufficient — caller doesn't need to log in separately.
    - **Distinguish credentials from session tokens.** `${credential.NAME}` is for STABLE per-user values that the user provides once (username, password, API token). For ephemeral per-call values (passenger tokens, ride-along session IDs, recordLocator-bound state, CSRF cookies minted by an earlier request) you MUST use named request/bootstrap captures and `${state.NAME}` — NEVER use `${credential.X}` for those. Test: would the user be able to type this value into an `imprint credential set` prompt? If no, it's captured state, not a credential.
    - Keep headers minimal — drop bot-detection headers (Akamai fingerprints, DataDome, PerimeterX), drop browser-internal headers, keep `Content-Type`, `Origin`, `Referer` when needed
    - **CRITICAL: Preserve ALL query parameters from the recorded URL.** Unlike HTTP headers — where you drop bot-detection fingerprints — query params are part of the API's functional contract. Even if a param value looks obfuscated or high-entropy (base64, hex, random-looking), it likely carries meaning the server checks (anti-bot tokens, session binding, A/B bucketing, obfuscated checksums). Preserve every param key: substitute the value with `${response[N].name}` or `${state.name}` if it came from an earlier response, `${param.NAME}` if user-variable, or keep the literal value if it's a static constant (like `search=false`). Missing a single query param can silently cause the API to return sentinel/degraded data rather than an error — the server may fall back to generic defaults instead of returning the actual results.
    - **Per-call query params (URL signing).** If a query param has a different high-entropy value on every request to the same URL path in the session, it is likely a URL signing token computed by client-side JavaScript. Do NOT hardcode the recorded value — it is per-call and will expire. Instead: use `search_response_body` to search the session's JavaScript responses (look for `.js` URLs) for the param name. The signing function is usually simple (HMAC, MD5, XOR + base64 with a static key). Once you find it, write a `requestTransformModule` (sibling to `parser.ts`) that exports `transform(method: string, url: string): string` — it takes the unsigned URL and returns the URL with the signing param appended. Set `"requestTransformModule": "./request-transform.ts"` in workflow.json. The runtime calls this function before each request.
+   - **Complex body construction via requestTransformModule.** When the API uses a body format where simple `${param.X}` placeholder substitution cannot correctly encode values — e.g., JSPB arrays in form-encoded fields, nested JSON strings with position-dependent escaping — write a `requestTransformModule` that constructs the body programmatically. The transform receives `params` as a 4th argument and can return an object instead of a string:
+     ```typescript
+     export function transform(
+       method: string,
+       url: string,
+       responses: unknown[],
+       params?: Record<string, string | number | boolean>,
+     ): { url: string; body?: string } {
+       const body = buildRequestBody(params ?? {});
+       return { url, body };
+     }
+     ```
+     Returning a plain `string` (just the URL) still works for simple URL-signing. Use the object return when you need to build or modify the request body or headers. Do NOT invent URL query parameters as a workaround for body-encoding complexity — the server ignores unknown query params and the parameters will have no effect.
    - **`x-api-key` is normally NOT a credential.** It's an app-level identifier baked into the site's JavaScript — same for every visitor, not user-specific. Keep it as a literal string in the workflow. Only treat it as a credential if you can clearly see it varies per account (e.g., it appears in a `Set-Cookie` after login, or differs across sessions). The same applies to `x-channel-id`, `x-app-id`, `x-app-version`, and similar metadata headers — hardcode them.
    - **NEVER use `${env.NAME}` placeholders.** The `${env.X}` syntax exists in the runtime but is reserved for operator-level configuration, not for values you can see in the recording. If a value appears in the captured request, hardcode it. If multiple candidates in the same session use different API keys for different endpoints, hardcode each one — they are endpoint-specific app constants, not secrets. The only valid placeholder types for your workflow are `${param.NAME}`, `${credential.NAME}`, `${state.NAME}`, and `${response[N].NAME}`.
    - If the workflow chains multiple requests (request N+1 uses a value from request N's response), add an `extract` field to request N and reference it in request N+1 via `${response[N].name}`
@@ -155,6 +176,36 @@ Follow these steps to compile the session:
     }, 30_000);
     ```
     If the live call fails (400, 403, expired tokens), this test fails and you must fix the workflow. Common fixes: chain a session/token request first, write a `requestTransformModule` for URL signing, or use `${state.X}` captures instead of hardcoded values. If a query param changes per call (check `stateHints` for `query_param_changes_across_calls`), use `search_response_body` to find the signing function in `.js` responses and replicate it in `request-transform.ts`.
+
+    **Per-representative test cases.** Beyond the baseline test above, write one additional test case for each representative request that has non-default parameter values (visible in `inlineData.requestBodyDecoded` or via `read_request`). Each test case should call `executeWorkflow` with the param values from that representative and assert the results are constrained accordingly — e.g., with `stops: 1` all returned flights have 0 stops, with a carrier filter only those carriers appear, with a price cap all prices are under the cap. Use concrete values from the recording, not invented ones.
+
+    These tests serve as functional verification that each parameter actually reaches the API and affects the response. If a parameter is wired into a position the server ignores (e.g., an invented URL query param), the filtered test case will return unfiltered results and fail the assertion.
+
+    ```typescript
+    test('stops=1 returns only nonstop flights', async () => {
+      const params: Record<string, string | number | boolean> = {
+        /* same defaults as baseline, but override: */
+        stops: 1,
+      };
+      const credentials = await loadCredentialStore(WORKFLOW.site) ?? undefined;
+      const result = await executeWorkflow({
+        workflow: WORKFLOW,
+        params,
+        credentials,
+        workflowPath: __dirname + '/workflow.json',
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const data = result.data as { flights: Array<{ stops: number }> };
+        // Every flight should be nonstop when stops=1
+        for (const f of data.flights ?? []) {
+          expect(f.stops).toBe(0);
+        }
+      }
+    }, 30_000);
+    ```
+
+    You don't need a separate test for every single parameter — group related params (e.g., all four time-range params in one test) and prioritize params that constrain results in verifiable ways. Aim for at least 2-3 param-variation tests beyond the baseline.
 
     **This file is ephemeral** like parser.test.ts — deleted after verification unless `--keep-test` is passed.
 
@@ -302,6 +353,8 @@ Assertions must reference real values derived from the narration or response str
 
 7. **Do not give up on binary responses without confirming they are truly unparseable.** Use `read_response_body` to inspect the bytes — sometimes "binary" is just gzipped JSON or a parseable protobuf.
 
+8. **Do not ignore `likelyParams` from the candidate detector.** If `selectedCandidate.likelyParams` lists a parameter but the recorded request has `null` or `[]` in that position, it means the user didn't apply that filter/constraint during recording — NOT that the parameter doesn't exist. Template it anyway as an optional parameter with a default meaning "unfiltered."
+
 ## When `give_up` is Appropriate (Narrow)
 
 You may call `give_up` only in these cases:
@@ -352,7 +405,8 @@ When you call `done`, the harness independently verifies your work:
 3. **Imports parser.ts and runs extract()** on the captured response body — must return non-null/non-empty
 4. **Validates workflow.json** against `WorkflowSchema`
 5. **Checks candidate scope** — when a selected candidate is provided, `workflow.toolName` must exactly match that candidate's `toolName`
-6. **Runs integration test** — `bun test integration.test.ts` must exit 0. This makes a live API call and verifies the workflow returns real data. If it fails, the workflow has hardcoded/expired values or missing URL signing.
+6. **Checks likelyParams coverage** — when the selected candidate includes `likelyParams`, every parameter must be templated as `${param.NAME}` in at least one request's URL, body, or headers. Parameters that exist in the `parameters` array but aren't referenced in any request will fail this check — they must be wired into the actual API call.
+7. **Runs integration test** — `bun test integration.test.ts` must exit 0. This makes a live API call and verifies the workflow returns real data. If it fails, the workflow has hardcoded/expired values or missing URL signing.
 
 If any check fails, you get the failure as a tool result and must continue working. You cannot fake completion.
 

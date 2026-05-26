@@ -35,4 +35,6 @@ export interface CompileAgentResult {
   durationMs: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
 }

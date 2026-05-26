@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { homedir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import * as p from '@clack/prompts';
+import type { OnDeadlineReached } from './agent.ts';
 import {
   type CompileAgentProgress,
   type TriageResult,
@@ -319,7 +320,7 @@ async function promptForModel(provider: ProviderName): Promise<string> {
   if (models.length <= 1) return models[0]?.model ?? 'claude-opus-4-7';
 
   const choice = await p.select({
-    message: 'Which model should compile the workflow?',
+    message: 'Which model should compile this workflow?',
     options: models.map((m) => ({
       value: m.model,
       label: m.isDefault ? `${m.model} (default)` : m.model,
@@ -436,6 +437,20 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   const getProviderName = async (): Promise<ProviderName> => {
     resolvedProviderName ??= await resolveTeachProvider(opts);
     return resolvedProviderName;
+  };
+  let resolvedModel: string | null = null;
+  const getModel = async (): Promise<string> => {
+    if (resolvedModel) return resolvedModel;
+    const providerName = await getProviderName();
+    if (opts.model) {
+      resolvedModel = opts.model;
+    } else if (!opts.noInteractive) {
+      resolvedModel = await promptForModel(providerName);
+    } else {
+      const { resolveCompileAgentModel } = await import('./compile-agent.ts');
+      resolvedModel = resolveCompileAgentModel(providerName);
+    }
+    return resolvedModel;
   };
 
   // Temp key for state tracking before we know the toolName.
@@ -699,10 +714,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
             'session',
           );
           const providerName = await getProviderName();
+          const model = await getModel();
           mp.pause();
           mp.clear();
           spinner.start('Triaging requests...');
-          localTriageResult = await triageRequests(triageSession, { provider: providerName });
+          localTriageResult = await triageRequests(triageSession, {
+            provider: providerName,
+            model,
+          });
           spinner.stop(
             `Triaged to ${localTriageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`,
           );
@@ -729,12 +748,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           kind: localTriagedPath ? 'triaged' : 'redacted',
         });
         const providerName = await getProviderName();
+        const model = await getModel();
         mp.pause();
         mp.clear();
         spinner.start('Detecting candidate tools...');
         const detection = await detectTeachCandidates({
           sessionPath: compileSessionPath,
           providerName,
+          model,
         });
         spinner.stop(
           `Detected ${detection.candidates.length} candidate tool${detection.candidates.length === 1 ? '' : 's'}.`,
@@ -863,14 +884,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     : ('claude-cli' as ProviderName);
   let compileModel = '';
   if (needsCompileProvider) {
-    if (opts.model) {
-      compileModel = opts.model;
-    } else if (!opts.noInteractive) {
-      compileModel = await promptForModel(compileProviderName);
-    } else {
-      const { resolveCompileAgentModel } = await import('./compile-agent.ts');
-      compileModel = resolveCompileAgentModel(compileProviderName);
-    }
+    compileModel = await getModel();
     const timeoutMs = opts.maxDurationMs ?? 10 * 60 * 1000;
     const timeoutDisplay =
       timeoutMs >= 3_600_000
@@ -1032,6 +1046,7 @@ interface CandidateCompilePlan {
 async function detectTeachCandidates(opts: {
   sessionPath: string;
   providerName: ProviderName;
+  model?: string;
 }): Promise<Awaited<ReturnType<typeof detectToolCandidates>>> {
   const session = loadJsonFile(
     opts.sessionPath,
@@ -1042,7 +1057,7 @@ async function detectTeachCandidates(opts: {
     },
     'session',
   );
-  return await detectToolCandidates(session, { provider: opts.providerName });
+  return await detectToolCandidates(session, { provider: opts.providerName, model: opts.model });
 }
 
 async function selectTeachCandidates(
@@ -1104,6 +1119,13 @@ async function compileCandidatePlans(opts: {
 }): Promise<TeachToolResult[]> {
   const concurrency = opts.plans.length === 1 ? 1 : 3;
   const mp = opts.plans.length > 1 ? new MultiProgress() : null;
+
+  // Mutex for deadline prompts: concurrent compile agents can hit their
+  // deadline at the same time, but only one p.confirm() can be active on
+  // stdin at a time. Without serialization, a second prompt cancels/steals
+  // input from the first, causing it to auto-resolve as cancelled.
+  let promptLock: Promise<void> = Promise.resolve();
+
   const outcomes = await mapLimitSettled(opts.plans, concurrency, async (plan) => {
     const displayName = plan.candidate?.toolName ?? plan.workflowKey;
     let lastActivity = '';
@@ -1117,12 +1139,48 @@ async function compileCandidatePlans(opts: {
         opts.spinner.message(activity);
       }
     };
+    const compileStart = Date.now();
+    const onDeadlineReached: OnDeadlineReached | undefined = process.stdin.isTTY
+      ? async () => {
+          // Serialize deadline prompts so only one p.confirm() is active at a time.
+          const prev = promptLock;
+          let releaseLock: () => void = () => {};
+          promptLock = new Promise<void>((r) => {
+            releaseLock = r;
+          });
+          await prev;
+
+          try {
+            const elapsed = Math.round((Date.now() - compileStart) / 60000);
+            if (mp) {
+              mp.clear();
+              mp.pause();
+            } else {
+              opts.spinner.stop();
+            }
+            const extend = await p.confirm({
+              message: `${displayName} has been compiling for ${elapsed} minutes. Give it more time?`,
+            });
+            if (mp) {
+              mp.resume();
+            } else {
+              opts.spinner.start(`Compiling ${displayName}...`);
+            }
+            if (p.isCancel(extend) || !extend) return null;
+            return 10 * 60 * 1000;
+          } finally {
+            releaseLock();
+          }
+        }
+      : undefined;
+
     if (!mp) opts.spinner.start(`Compiling ${displayName}...`);
     try {
       const result = await compileSelectedCandidate({
         ...opts,
         plan,
         onProgress,
+        onDeadlineReached,
       });
       if (mp) {
         mp.clear();
@@ -1186,6 +1244,7 @@ async function compileSelectedCandidate(opts: {
   maxDurationMs?: number;
   keepTest?: boolean;
   onProgress: (progress: CompileAgentProgress) => void;
+  onDeadlineReached?: OnDeadlineReached;
   sharedTriageResult?: TriageResult;
   siteClassifications?: ClassifiedValue[];
   teachCredentials?: { site: string; values: Record<string, string> };
@@ -1208,6 +1267,7 @@ async function compileSelectedCandidate(opts: {
       candidate: plan.candidate,
       sharedContext: plan.sharedContext,
       onProgress: opts.onProgress,
+      onDeadlineReached: opts.onDeadlineReached,
       classifications: opts.siteClassifications,
       teachCredentials: opts.teachCredentials,
     });

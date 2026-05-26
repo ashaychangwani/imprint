@@ -16,7 +16,19 @@ type TraceLlmMessage = { role?: string; content?: string };
 
 let provider: NodeTracerProvider | null = null;
 let attemptedInit = false;
+let suppressInit = false;
+const NOOP_SPAN: Span = trace.wrapSpanContext({
+  traceId: '0'.repeat(32),
+  spanId: '0'.repeat(16),
+  traceFlags: 0,
+});
+
+export function suppressTracingInit(): void {
+  suppressInit = true;
+}
 const DEFAULT_TRACE_IO_MAX_CHARS = 50_000;
+const CACHE_READ_MULTIPLIER = 0.1;
+const CACHE_WRITE_MULTIPLIER = 1.25;
 
 function isTracingEnabled(): boolean {
   return (
@@ -46,7 +58,7 @@ function validateTracingUrl(raw: string | undefined): string | undefined {
 }
 
 function ensureTracingInitialized(): void {
-  if (attemptedInit || !isTracingEnabled()) return;
+  if (attemptedInit || suppressInit || !isTracingEnabled()) return;
   attemptedInit = true;
   // The OTEL SDK default is 128 attributes per span. getLLMAttributes() flattens
   // each input message into ~2+ attributes (role, content, tool_calls…), so a
@@ -71,19 +83,19 @@ export function traceBatchEnabled(value: string | undefined): boolean {
 }
 
 export function traceLlmIoEnabled(): boolean {
-  return (
-    isTruthy(process.env.IMPRINT_TRACE_LLM_IO) ||
-    isTruthy(process.env.IMPRINT_TRACE_IO) ||
-    isTruthy(process.env.IMPRINT_TRACE_FULL)
-  );
+  if (process.env.IMPRINT_TRACE_LLM_IO !== undefined)
+    return isTruthy(process.env.IMPRINT_TRACE_LLM_IO);
+  if (process.env.IMPRINT_TRACE_IO !== undefined) return isTruthy(process.env.IMPRINT_TRACE_IO);
+  if (process.env.IMPRINT_TRACE_FULL !== undefined) return isTruthy(process.env.IMPRINT_TRACE_FULL);
+  return isTracingEnabled();
 }
 
 export function traceToolIoEnabled(): boolean {
-  return (
-    isTruthy(process.env.IMPRINT_TRACE_TOOL_IO) ||
-    isTruthy(process.env.IMPRINT_TRACE_IO) ||
-    isTruthy(process.env.IMPRINT_TRACE_FULL)
-  );
+  if (process.env.IMPRINT_TRACE_TOOL_IO !== undefined)
+    return isTruthy(process.env.IMPRINT_TRACE_TOOL_IO);
+  if (process.env.IMPRINT_TRACE_IO !== undefined) return isTruthy(process.env.IMPRINT_TRACE_IO);
+  if (process.env.IMPRINT_TRACE_FULL !== undefined) return isTruthy(process.env.IMPRINT_TRACE_FULL);
+  return isTracingEnabled();
 }
 
 export function traceIoMaxChars(value = process.env.IMPRINT_TRACE_IO_MAX_CHARS): number {
@@ -124,14 +136,30 @@ export function resolveTraceTokenCount(
   return { source: 'missing' };
 }
 
+const DEFAULT_MODEL_RATES: Record<string, { inputUsdPer1M: number; outputUsdPer1M: number }> = {
+  'claude-opus-4-7': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
+  'claude-opus-4-6': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
+  'claude-opus-4-5': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
+  'claude-opus-4-1': { inputUsdPer1M: 15, outputUsdPer1M: 75 },
+  'claude-sonnet-4-6': { inputUsdPer1M: 3, outputUsdPer1M: 15 },
+  'claude-sonnet-4-5': { inputUsdPer1M: 3, outputUsdPer1M: 15 },
+  'claude-haiku-4-5': { inputUsdPer1M: 1, outputUsdPer1M: 5 },
+};
+
 export function traceLlmCostRates(
   providerName: string,
   modelName?: string,
 ): { inputUsdPer1M: number; outputUsdPer1M: number } | null {
   const inputUsdPer1M = envNumber(rateEnvNames(providerName, modelName, 'INPUT'));
   const outputUsdPer1M = envNumber(rateEnvNames(providerName, modelName, 'OUTPUT'));
-  if (inputUsdPer1M === null || outputUsdPer1M === null) return null;
-  return { inputUsdPer1M, outputUsdPer1M };
+  if (inputUsdPer1M !== null && outputUsdPer1M !== null) {
+    return { inputUsdPer1M, outputUsdPer1M };
+  }
+  if (modelName) {
+    const defaultRate = DEFAULT_MODEL_RATES[modelName];
+    if (defaultRate) return defaultRate;
+  }
+  return null;
 }
 
 export function traceInputOutputAttributes(
@@ -179,6 +207,9 @@ export async function traced<T>(
   attributes: TraceAttributes | undefined,
   fn: (span: Span) => Promise<T> | T,
 ): Promise<T> {
+  if (!isTracingEnabled()) {
+    return await fn(NOOP_SPAN);
+  }
   ensureTracingInitialized();
   const tracer = trace.getTracer('imprint');
   return await tracer.startActiveSpan(
@@ -234,6 +265,8 @@ export function llmSpanAttributes(opts: {
   model?: string;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
   tokenCountsEstimated?: boolean;
   inputTokenSource?: string;
   outputTokenSource?: string;
@@ -254,6 +287,8 @@ export function llmSpanAttributes(opts: {
       ? llmCostAttributes({
           inputTokens: prompt,
           outputTokens: completion,
+          cacheReadTokens: opts.cacheReadTokens ?? undefined,
+          cacheWriteTokens: opts.cacheWriteTokens ?? undefined,
           inputUsdPer1M: costRates.inputUsdPer1M,
           outputUsdPer1M: costRates.outputUsdPer1M,
         })
@@ -395,13 +430,28 @@ function stringifyTraceValue(value: unknown): string {
 function llmCostAttributes(opts: {
   inputTokens?: number;
   outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   inputUsdPer1M: number;
   outputUsdPer1M: number;
 }): Attributes {
-  const prompt =
+  const cacheRead = opts.cacheReadTokens ?? 0;
+  const cacheWrite = opts.cacheWriteTokens ?? 0;
+  const hasCacheBreakdown = cacheRead > 0 || cacheWrite > 0;
+  const uncachedInput =
     opts.inputTokens === undefined
       ? undefined
-      : (opts.inputTokens / 1_000_000) * opts.inputUsdPer1M;
+      : hasCacheBreakdown
+        ? Math.max(0, opts.inputTokens - cacheRead - cacheWrite)
+        : opts.inputTokens;
+  const prompt =
+    uncachedInput === undefined
+      ? undefined
+      : hasCacheBreakdown
+        ? (uncachedInput / 1_000_000) * opts.inputUsdPer1M +
+          (cacheRead / 1_000_000) * opts.inputUsdPer1M * CACHE_READ_MULTIPLIER +
+          (cacheWrite / 1_000_000) * opts.inputUsdPer1M * CACHE_WRITE_MULTIPLIER
+        : (uncachedInput / 1_000_000) * opts.inputUsdPer1M;
   const completion =
     opts.outputTokens === undefined
       ? undefined

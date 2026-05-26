@@ -19,6 +19,7 @@ Schema:
       "confidence": 0.0,
       "primary": true,
       "requestSeqs": [number],
+      "representativeSeqs": [number],
       "eventSeqs": [number],
       "eventTimeRange": { "startTimestamp": 0, "endTimestamp": 0 },
       "expectedOutput": "what the tool should return",
@@ -82,3 +83,22 @@ Rules:
 16. Every candidate MUST have at least one seq in requestSeqs. A tool with
     no backing requests cannot be compiled. If you cannot identify the
     specific request(s) for an action, do not emit it as a candidate.
+17. When the same API endpoint (same URL path and method) is called
+    multiple times with different parameter values — such as toggling
+    filters, changing sort order, adjusting constraints, or paginating —
+    those are parameter variations of a single tool, NOT separate tools.
+    Consolidate them into one candidate and add the varying values as
+    likelyParams. Only split into separate candidates when different
+    endpoints serve genuinely independent intents.
+18. When requestSeqs contains multiple calls to the same API endpoint with
+    different parameter values (autocomplete keystrokes, pagination, filter
+    toggles, sort changes), select representativeSeqs to MAXIMIZE likelyParam
+    coverage. Every likelyParam must have at least one representative where
+    its value is non-default or non-null — a representative where the param
+    is null or absent teaches nothing about its wire position. Start with one
+    baseline representative (all defaults/nulls), then add the minimum number
+    of additional representatives needed so every likelyParam is exercised.
+    Prefer representatives that exercise multiple uncovered params at once.
+    If every seq in requestSeqs is a distinct API call (different endpoints
+    or fundamentally different operations), set representativeSeqs equal to
+    requestSeqs or omit it.
