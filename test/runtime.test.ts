@@ -511,7 +511,6 @@ describe('requestTransformModule', () => {
   };
 
   it('passes params to transform and applies object return with body override', async () => {
-    let receivedParams: Record<string, string | number | boolean> | undefined;
     const fetchMock = (async (_url: string, init?: RequestInit) =>
       new Response(JSON.stringify({ body: init?.body }), {
         status: 200,
@@ -522,10 +521,7 @@ describe('requestTransformModule', () => {
     const { join } = await import('node:path');
     const tmpDir = mkdtempSync(join(import.meta.dir, '..', '.context', 'rt-transform-'));
     try {
-      writeFileSync(
-        join(tmpDir, 'workflow.json'),
-        JSON.stringify(transformWorkflow),
-      );
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(transformWorkflow));
       writeFileSync(
         join(tmpDir, 'request-transform.ts'),
         `export function transform(method, url, responses, params) {
@@ -564,10 +560,7 @@ describe('requestTransformModule', () => {
     const { join } = await import('node:path');
     const tmpDir = mkdtempSync(join(import.meta.dir, '..', '.context', 'rt-transform-str-'));
     try {
-      writeFileSync(
-        join(tmpDir, 'workflow.json'),
-        JSON.stringify(transformWorkflow),
-      );
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(transformWorkflow));
       writeFileSync(
         join(tmpDir, 'request-transform.ts'),
         `export function transform(method, url) {
@@ -604,10 +597,7 @@ describe('requestTransformModule', () => {
     const { join } = await import('node:path');
     const tmpDir = mkdtempSync(join(import.meta.dir, '..', '.context', 'rt-transform-hdr-'));
     try {
-      writeFileSync(
-        join(tmpDir, 'workflow.json'),
-        JSON.stringify(transformWorkflow),
-      );
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(transformWorkflow));
       writeFileSync(
         join(tmpDir, 'request-transform.ts'),
         `export function transform(method, url, responses, params) {

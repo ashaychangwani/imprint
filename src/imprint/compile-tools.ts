@@ -159,9 +159,7 @@ function buildInlineData(req: CapturedRequest): Record<string, unknown> {
   if (req.body) {
     result.requestBody = req.body;
 
-    const reqCt = (
-      req.headers['content-type'] ?? req.headers['Content-Type'] ?? ''
-    ).toLowerCase();
+    const reqCt = (req.headers['content-type'] ?? req.headers['Content-Type'] ?? '').toLowerCase();
     if (reqCt.includes('form-urlencoded')) {
       try {
         const formParams = new URLSearchParams(req.body);

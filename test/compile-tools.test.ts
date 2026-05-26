@@ -782,7 +782,7 @@ describe('extract', () => {
         'utf8',
       );
 
-      const parserCode = `export function extract(raw) { return { flights: [] }; }`;
+      const parserCode = 'export function extract(raw) { return { flights: [] }; }';
       writeFileSync(pathJoin(exampleDir, 'parser.ts'), parserCode, 'utf8');
 
       const { failures, warnings } = await externalVerification(exampleDir, session, sessionPath, {
@@ -862,7 +862,7 @@ describe('extract', () => {
         'utf8',
       );
 
-      const parserCode = `export function extract(raw) { return { results: [] }; }`;
+      const parserCode = 'export function extract(raw) { return { results: [] }; }';
       writeFileSync(pathJoin(exampleDir, 'parser.ts'), parserCode, 'utf8');
 
       const { failures, warnings } = await externalVerification(exampleDir, session, sessionPath, {
@@ -924,6 +924,7 @@ describe('buildInlineData form-encoded decoding', () => {
         eventSeqs: [],
         expectedOutput: 'test',
         likelyParams: [],
+        dependencySeqs: [],
       },
     });
 
@@ -934,9 +935,7 @@ describe('buildInlineData form-encoded decoding', () => {
     const result = await summaryTool.handler({});
     const summary = JSON.parse(result.result);
 
-    const lbr = summary.loadBearingRequests.find(
-      (r: Record<string, unknown>) => r.seq === 1,
-    );
+    const lbr = summary.loadBearingRequests.find((r: Record<string, unknown>) => r.seq === 1);
     expect(lbr).toBeDefined();
     expect(lbr.inlineData.requestBodyDecoded).toBeDefined();
     expect(lbr.inlineData.requestBodyDecoded['f.req']).toEqual([null, 'inner']);
@@ -984,6 +983,7 @@ describe('buildInlineData form-encoded decoding', () => {
         eventSeqs: [],
         expectedOutput: 'test',
         likelyParams: [],
+        dependencySeqs: [],
       },
     });
 
@@ -994,9 +994,7 @@ describe('buildInlineData form-encoded decoding', () => {
     const result = await summaryTool.handler({});
     const summary = JSON.parse(result.result);
 
-    const lbr = summary.loadBearingRequests.find(
-      (r: Record<string, unknown>) => r.seq === 1,
-    );
+    const lbr = summary.loadBearingRequests.find((r: Record<string, unknown>) => r.seq === 1);
     expect(lbr).toBeDefined();
     expect(lbr.inlineData.requestBodyDecoded).toBeUndefined();
   });
