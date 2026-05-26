@@ -229,8 +229,17 @@ export const WorkflowSchema = z.object({
    *  to transform the raw API response into structured agent output. */
   parserModule: z.string().optional(),
   /** Path to a sibling request-transform module (relative to workflow.json)
-   *  exporting `transform(method: string, url: string, responses: unknown[]): string`. Called
-   *  before each request to append signing params (HMAC, MD5, etc.). */
+   *  exporting `transform(method, url, responses, params?)`.
+   *
+   *  Return value:
+   *  - `string` — the transformed URL (backward-compatible).
+   *  - `{ url: string; body?: string; headers?: Record<string, string> }` —
+   *    URL plus optional body and header overrides for complex body formats
+   *    (JSPB, nested JSON-in-form) where placeholder substitution alone
+   *    cannot handle the encoding.
+   *
+   *  The optional 4th arg `params` carries the resolved workflow parameters
+   *  so the transform can construct request bodies programmatically. */
   requestTransformModule: z.string().optional(),
 });
 export type Workflow = z.infer<typeof WorkflowSchema>;

@@ -156,7 +156,34 @@ function buildInlineData(req: CapturedRequest): Record<string, unknown> {
   const result: Record<string, unknown> = {
     requestHeaders: req.headers,
   };
-  if (req.body) result.requestBody = req.body;
+  if (req.body) {
+    result.requestBody = req.body;
+
+    const reqCt = (
+      req.headers['content-type'] ?? req.headers['Content-Type'] ?? ''
+    ).toLowerCase();
+    if (reqCt.includes('form-urlencoded')) {
+      try {
+        const formParams = new URLSearchParams(req.body);
+        const decoded: Record<string, unknown> = {};
+        for (const [k, v] of formParams) {
+          const trimmed = v.trimStart();
+          if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+              decoded[k] = JSON.parse(v);
+            } catch {
+              decoded[k] = v;
+            }
+          } else {
+            decoded[k] = v;
+          }
+        }
+        result.requestBodyDecoded = decoded;
+      } catch {
+        // Non-fatal — raw body is still available.
+      }
+    }
+  }
 
   if (req.response) {
     result.responseStatus = req.response.status;
@@ -1087,6 +1114,7 @@ export async function externalVerification(
   opts: {
     expectedToolName?: string;
     likelyParams?: Array<{ name: string; type?: string; description?: string }>;
+    candidateRequestSeqs?: number[];
   } = {},
 ): Promise<{ failures: string[]; warnings: string[] }> {
   const failures: string[] = [];
@@ -1116,13 +1144,78 @@ export async function externalVerification(
       }
 
       if (opts.likelyParams && opts.likelyParams.length > 0) {
-        const requestsStr = JSON.stringify(workflow.requests);
-        const notTemplated = opts.likelyParams
-          .filter((lp) => !requestsStr.includes(`\${param.${lp.name}}`))
-          .map((lp) => lp.name);
+        // Build the set of query param keys from the original recorded URLs
+        // so we can distinguish real API params from invented ones.
+        const originalQueryParamKeys = new Set<string>();
+        if (opts.candidateRequestSeqs) {
+          for (const seq of opts.candidateRequestSeqs) {
+            const recorded = session.requests.find((r) => r.seq === seq);
+            if (recorded) {
+              try {
+                const url = new URL(recorded.url);
+                for (const key of url.searchParams.keys()) {
+                  originalQueryParamKeys.add(key);
+                }
+              } catch {
+                /* skip malformed URLs */
+              }
+            }
+          }
+        }
+
+        const notTemplated: string[] = [];
+        const inventedOnly: string[] = [];
+
+        for (const lp of opts.likelyParams) {
+          const placeholder = `\${param.${lp.name}}`;
+          let inBody = false;
+          let inHeader = false;
+          let inOriginalQuery = false;
+          let inInventedQuery = false;
+
+          for (const req of workflow.requests) {
+            if (req.body?.includes(placeholder)) inBody = true;
+
+            for (const hv of Object.values(req.headers)) {
+              if (hv.includes(placeholder)) inHeader = true;
+            }
+
+            if (req.url.includes(placeholder)) {
+              const qIdx = req.url.indexOf('?');
+              if (qIdx >= 0 && req.url.indexOf(placeholder) > qIdx) {
+                const queryStr = req.url.slice(qIdx + 1);
+                for (const pair of queryStr.split('&')) {
+                  if (pair.includes(placeholder)) {
+                    const eqIdx = pair.indexOf('=');
+                    const paramKey = eqIdx >= 0 ? pair.slice(0, eqIdx) : pair;
+                    if (originalQueryParamKeys.has(paramKey)) {
+                      inOriginalQuery = true;
+                    } else {
+                      inInventedQuery = true;
+                    }
+                  }
+                }
+              } else {
+                inBody = true;
+              }
+            }
+          }
+
+          if (!inBody && !inHeader && !inOriginalQuery && !inInventedQuery) {
+            notTemplated.push(lp.name);
+          } else if (!inBody && !inHeader && !inOriginalQuery && inInventedQuery) {
+            inventedOnly.push(lp.name);
+          }
+        }
+
         if (notTemplated.length > 0) {
           failures.push(
             `${notTemplated.length} likelyParam(s) are not templated in any request: ${notTemplated.join(', ')}. Each must appear as \${param.NAME} in a request URL, body, or header. For parameters recorded as null or [] (filters the user toggled but didn\'t apply), find the correct position in the request body and replace the placeholder value with \${param.NAME}.`,
+          );
+        }
+        if (inventedOnly.length > 0) {
+          warnings.push(
+            `${inventedOnly.length} likelyParam(s) are templated only in URL query params that do not exist in any recorded request URL: ${inventedOnly.join(', ')}. The API server likely ignores these invented params — wire them into the request body or an existing query param instead. For complex body formats, use a requestTransformModule to construct the body programmatically.`,
           );
         }
       }

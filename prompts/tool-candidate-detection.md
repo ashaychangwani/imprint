@@ -92,8 +92,13 @@ Rules:
     endpoints serve genuinely independent intents.
 18. When requestSeqs contains multiple calls to the same API endpoint with
     different parameter values (autocomplete keystrokes, pagination, filter
-    toggles, sort changes), list ONE representative seq per unique endpoint
-    pattern in representativeSeqs. The compile agent only needs the
-    representative to understand the API shape. If every seq in requestSeqs
-    is a distinct API call (different endpoints or fundamentally different
-    operations), set representativeSeqs equal to requestSeqs or omit it.
+    toggles, sort changes), select representativeSeqs to MAXIMIZE likelyParam
+    coverage. Every likelyParam must have at least one representative where
+    its value is non-default or non-null — a representative where the param
+    is null or absent teaches nothing about its wire position. Start with one
+    baseline representative (all defaults/nulls), then add the minimum number
+    of additional representatives needed so every likelyParam is exercised.
+    Prefer representatives that exercise multiple uncovered params at once.
+    If every seq in requestSeqs is a distinct API call (different endpoints
+    or fundamentally different operations), set representativeSeqs equal to
+    requestSeqs or omit it.

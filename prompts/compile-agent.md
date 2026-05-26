@@ -80,6 +80,19 @@ Follow these steps to compile the session:
    - Keep headers minimal — drop bot-detection headers (Akamai fingerprints, DataDome, PerimeterX), drop browser-internal headers, keep `Content-Type`, `Origin`, `Referer` when needed
    - **CRITICAL: Preserve ALL query parameters from the recorded URL.** Unlike HTTP headers — where you drop bot-detection fingerprints — query params are part of the API's functional contract. Even if a param value looks obfuscated or high-entropy (base64, hex, random-looking), it likely carries meaning the server checks (anti-bot tokens, session binding, A/B bucketing, obfuscated checksums). Preserve every param key: substitute the value with `${response[N].name}` or `${state.name}` if it came from an earlier response, `${param.NAME}` if user-variable, or keep the literal value if it's a static constant (like `search=false`). Missing a single query param can silently cause the API to return sentinel/degraded data rather than an error — the server may fall back to generic defaults instead of returning the actual results.
    - **Per-call query params (URL signing).** If a query param has a different high-entropy value on every request to the same URL path in the session, it is likely a URL signing token computed by client-side JavaScript. Do NOT hardcode the recorded value — it is per-call and will expire. Instead: use `search_response_body` to search the session's JavaScript responses (look for `.js` URLs) for the param name. The signing function is usually simple (HMAC, MD5, XOR + base64 with a static key). Once you find it, write a `requestTransformModule` (sibling to `parser.ts`) that exports `transform(method: string, url: string): string` — it takes the unsigned URL and returns the URL with the signing param appended. Set `"requestTransformModule": "./request-transform.ts"` in workflow.json. The runtime calls this function before each request.
+   - **Complex body construction via requestTransformModule.** When the API uses a body format where simple `${param.X}` placeholder substitution cannot correctly encode values — e.g., JSPB arrays in form-encoded fields, nested JSON strings with position-dependent escaping — write a `requestTransformModule` that constructs the body programmatically. The transform receives `params` as a 4th argument and can return an object instead of a string:
+     ```typescript
+     export function transform(
+       method: string,
+       url: string,
+       responses: unknown[],
+       params?: Record<string, string | number | boolean>,
+     ): { url: string; body?: string } {
+       const body = buildRequestBody(params ?? {});
+       return { url, body };
+     }
+     ```
+     Returning a plain `string` (just the URL) still works for simple URL-signing. Use the object return when you need to build or modify the request body or headers. Do NOT invent URL query parameters as a workaround for body-encoding complexity — the server ignores unknown query params and the parameters will have no effect.
    - **`x-api-key` is normally NOT a credential.** It's an app-level identifier baked into the site's JavaScript — same for every visitor, not user-specific. Keep it as a literal string in the workflow. Only treat it as a credential if you can clearly see it varies per account (e.g., it appears in a `Set-Cookie` after login, or differs across sessions). The same applies to `x-channel-id`, `x-app-id`, `x-app-version`, and similar metadata headers — hardcode them.
    - **NEVER use `${env.NAME}` placeholders.** The `${env.X}` syntax exists in the runtime but is reserved for operator-level configuration, not for values you can see in the recording. If a value appears in the captured request, hardcode it. If multiple candidates in the same session use different API keys for different endpoints, hardcode each one — they are endpoint-specific app constants, not secrets. The only valid placeholder types for your workflow are `${param.NAME}`, `${credential.NAME}`, `${state.NAME}`, and `${response[N].NAME}`.
    - If the workflow chains multiple requests (request N+1 uses a value from request N's response), add an `extract` field to request N and reference it in request N+1 via `${response[N].name}`
@@ -163,6 +176,36 @@ Follow these steps to compile the session:
     }, 30_000);
     ```
     If the live call fails (400, 403, expired tokens), this test fails and you must fix the workflow. Common fixes: chain a session/token request first, write a `requestTransformModule` for URL signing, or use `${state.X}` captures instead of hardcoded values. If a query param changes per call (check `stateHints` for `query_param_changes_across_calls`), use `search_response_body` to find the signing function in `.js` responses and replicate it in `request-transform.ts`.
+
+    **Per-representative test cases.** Beyond the baseline test above, write one additional test case for each representative request that has non-default parameter values (visible in `inlineData.requestBodyDecoded` or via `read_request`). Each test case should call `executeWorkflow` with the param values from that representative and assert the results are constrained accordingly — e.g., with `stops: 1` all returned flights have 0 stops, with a carrier filter only those carriers appear, with a price cap all prices are under the cap. Use concrete values from the recording, not invented ones.
+
+    These tests serve as functional verification that each parameter actually reaches the API and affects the response. If a parameter is wired into a position the server ignores (e.g., an invented URL query param), the filtered test case will return unfiltered results and fail the assertion.
+
+    ```typescript
+    test('stops=1 returns only nonstop flights', async () => {
+      const params: Record<string, string | number | boolean> = {
+        /* same defaults as baseline, but override: */
+        stops: 1,
+      };
+      const credentials = await loadCredentialStore(WORKFLOW.site) ?? undefined;
+      const result = await executeWorkflow({
+        workflow: WORKFLOW,
+        params,
+        credentials,
+        workflowPath: __dirname + '/workflow.json',
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const data = result.data as { flights: Array<{ stops: number }> };
+        // Every flight should be nonstop when stops=1
+        for (const f of data.flights ?? []) {
+          expect(f.stops).toBe(0);
+        }
+      }
+    }, 30_000);
+    ```
+
+    You don't need a separate test for every single parameter — group related params (e.g., all four time-range params in one test) and prioritize params that constrain results in verifiable ways. Aim for at least 2-3 param-variation tests beyond the baseline.
 
     **This file is ephemeral** like parser.test.ts — deleted after verification unless `--keep-test` is passed.
 

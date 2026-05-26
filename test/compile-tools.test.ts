@@ -718,4 +718,286 @@ describe('extract', () => {
       rmSync(exampleDir, { recursive: true, force: true });
     }
   });
+
+  it('warns when likelyParams only appear in invented URL query params', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-invented-qp-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'invented-qp-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/flights',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/search?f.sid=123&bl=build1',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          resourceType: 'Fetch',
+          body: 'f.req=%5B1%2C2%2C3%5D',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ flights: [] }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'search_flights',
+            intent: { description: 'Search flights' },
+            parameters: [
+              { name: 'origin', type: 'string', description: 'Origin' },
+              { name: 'airlines', type: 'string', description: 'Airline filter' },
+            ],
+            requests: [
+              {
+                method: 'POST',
+                url: 'https://example.com/api/search?f.sid=123&bl=build1&_imp_airlines=${param.airlines}',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'f.req=%5B${param.origin}%2C2%2C3%5D',
+              },
+            ],
+            site: 'invented-qp-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const parserCode = `export function extract(raw) { return { flights: [] }; }`;
+      writeFileSync(pathJoin(exampleDir, 'parser.ts'), parserCode, 'utf8');
+
+      const { failures, warnings } = await externalVerification(exampleDir, session, sessionPath, {
+        likelyParams: [
+          { name: 'origin', type: 'string', description: 'Origin' },
+          { name: 'airlines', type: 'string', description: 'Airline filter' },
+        ],
+        candidateRequestSeqs: [1],
+      });
+
+      expect(failures.some((f) => f.includes('origin'))).toBe(false);
+      expect(warnings.some((w) => w.includes('airlines'))).toBe(true);
+      expect(warnings.some((w) => w.includes('invented'))).toBe(true);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not warn when params are in body or original query params', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-legit-qp-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'legit-qp-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/search?q=test&sort=price',
+          headers: {},
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ results: [] }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'search_items',
+            intent: { description: 'Search items' },
+            parameters: [
+              { name: 'query', type: 'string', description: 'Search query' },
+              { name: 'sort', type: 'string', description: 'Sort order' },
+            ],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/api/search?q=${param.query}&sort=${param.sort}',
+                headers: { Accept: 'application/json' },
+              },
+            ],
+            site: 'legit-qp-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const parserCode = `export function extract(raw) { return { results: [] }; }`;
+      writeFileSync(pathJoin(exampleDir, 'parser.ts'), parserCode, 'utf8');
+
+      const { failures, warnings } = await externalVerification(exampleDir, session, sessionPath, {
+        likelyParams: [
+          { name: 'query', type: 'string', description: 'Search query' },
+          { name: 'sort', type: 'string', description: 'Sort order' },
+        ],
+        candidateRequestSeqs: [1],
+      });
+
+      expect(failures.some((f) => f.includes('query'))).toBe(false);
+      expect(failures.some((f) => f.includes('sort'))).toBe(false);
+      expect(warnings.some((w) => w.includes('invented'))).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('buildInlineData form-encoded decoding', () => {
+  it('decodes form-encoded request body with JSON field values', async () => {
+    const session: Session = {
+      site: 'form-decode-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/api',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/data',
+          headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          resourceType: 'Fetch',
+          body: 'f.req=%5Bnull%2C%22inner%22%5D&other=plain',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ ok: true }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    const tools = buildCompileTools(session, '/tmp/test-form-decode', '/tmp/session.json', {
+      candidate: {
+        toolName: 'test_tool',
+        description: 'test',
+        rationale: 'test',
+        confidence: 0.9,
+        primary: true,
+        requestSeqs: [1],
+        representativeSeqs: [1],
+        eventSeqs: [],
+        expectedOutput: 'test',
+        likelyParams: [],
+      },
+    });
+
+    const summaryTool = tools.find((t) => t.name === 'read_session_summary');
+    expect(summaryTool).toBeDefined();
+    if (!summaryTool) return;
+
+    const result = await summaryTool.handler({});
+    const summary = JSON.parse(result.result);
+
+    const lbr = summary.loadBearingRequests.find(
+      (r: Record<string, unknown>) => r.seq === 1,
+    );
+    expect(lbr).toBeDefined();
+    expect(lbr.inlineData.requestBodyDecoded).toBeDefined();
+    expect(lbr.inlineData.requestBodyDecoded['f.req']).toEqual([null, 'inner']);
+    expect(lbr.inlineData.requestBodyDecoded.other).toBe('plain');
+  });
+
+  it('does not add requestBodyDecoded for non-form-encoded bodies', async () => {
+    const session: Session = {
+      site: 'json-body-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/api',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/data',
+          headers: { 'content-type': 'application/json' },
+          resourceType: 'Fetch',
+          body: '{"key": "value"}',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ ok: true }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    const tools = buildCompileTools(session, '/tmp/test-json-body', '/tmp/session.json', {
+      candidate: {
+        toolName: 'test_tool',
+        description: 'test',
+        rationale: 'test',
+        confidence: 0.9,
+        primary: true,
+        requestSeqs: [1],
+        representativeSeqs: [1],
+        eventSeqs: [],
+        expectedOutput: 'test',
+        likelyParams: [],
+      },
+    });
+
+    const summaryTool = tools.find((t) => t.name === 'read_session_summary');
+    expect(summaryTool).toBeDefined();
+    if (!summaryTool) return;
+
+    const result = await summaryTool.handler({});
+    const summary = JSON.parse(result.result);
+
+    const lbr = summary.loadBearingRequests.find(
+      (r: Record<string, unknown>) => r.seq === 1,
+    );
+    expect(lbr).toBeDefined();
+    expect(lbr.inlineData.requestBodyDecoded).toBeUndefined();
+  });
 });

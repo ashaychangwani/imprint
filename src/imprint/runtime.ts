@@ -136,8 +136,15 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   const dependencyPreflight = preflightStateDependencies(opts.workflow, state, stateCapabilities);
   if (!dependencyPreflight.ok) return dependencyPreflight.result;
 
-  let requestTransform: ((method: string, url: string, responses: unknown[]) => string) | null =
-    null;
+  type TransformResult = string | { url: string; body?: string; headers?: Record<string, string> };
+  let requestTransform:
+    | ((
+        method: string,
+        url: string,
+        responses: unknown[],
+        params?: Record<string, string | number | boolean>,
+      ) => TransformResult)
+    | null = null;
   if (opts.workflow.requestTransformModule && opts.workflowPath) {
     try {
       const transformPath = pathResolve(
@@ -169,13 +176,25 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 
     if (requestTransform) {
       try {
-        subbed.url = requestTransform(
+        const transformResult = requestTransform(
           subbed.method,
           subbed.url,
           responseSlots.map((s) => s.raw),
+          opts.params,
         );
+        if (typeof transformResult === 'string') {
+          subbed.url = transformResult;
+        } else if (transformResult && typeof transformResult === 'object') {
+          subbed.url = transformResult.url;
+          if (transformResult.body !== undefined) subbed.body = transformResult.body;
+          if (transformResult.headers) {
+            for (const [k, v] of Object.entries(transformResult.headers)) {
+              subbed.headers[k] = v;
+            }
+          }
+        }
       } catch {
-        // Non-fatal — proceed with the original URL.
+        // Non-fatal — proceed with the original request.
       }
     }
 
