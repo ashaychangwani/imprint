@@ -174,6 +174,7 @@ describe('teach candidate artifact validation', () => {
     confidence: 0.9,
     primary: true,
     requestSeqs: [133],
+    representativeSeqs: [133],
     eventSeqs: [151],
     expectedOutput: 'domain results',
     likelyParams: [],

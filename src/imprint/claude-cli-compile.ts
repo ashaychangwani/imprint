@@ -89,7 +89,12 @@ interface StreamJsonEvent {
   duration_ms?: number;
   num_turns?: number;
   total_cost_usd?: number;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
   // partial-message stream events
   event?: { delta?: { type?: string; text?: string } };
 }
