@@ -1119,6 +1119,13 @@ async function compileCandidatePlans(opts: {
 }): Promise<TeachToolResult[]> {
   const concurrency = opts.plans.length === 1 ? 1 : 3;
   const mp = opts.plans.length > 1 ? new MultiProgress() : null;
+
+  // Mutex for deadline prompts: concurrent compile agents can hit their
+  // deadline at the same time, but only one p.confirm() can be active on
+  // stdin at a time. Without serialization, a second prompt cancels/steals
+  // input from the first, causing it to auto-resolve as cancelled.
+  let promptLock: Promise<void> = Promise.resolve();
+
   const outcomes = await mapLimitSettled(opts.plans, concurrency, async (plan) => {
     const displayName = plan.candidate?.toolName ?? plan.workflowKey;
     let lastActivity = '';
@@ -1135,23 +1142,35 @@ async function compileCandidatePlans(opts: {
     const compileStart = Date.now();
     const onDeadlineReached: OnDeadlineReached | undefined = process.stdin.isTTY
       ? async () => {
-          const elapsed = Math.round((Date.now() - compileStart) / 60000);
-          if (mp) {
-            mp.clear();
-            mp.pause();
-          } else {
-            opts.spinner.stop();
-          }
-          const extend = await p.confirm({
-            message: `${displayName} has been compiling for ${elapsed} minutes. Give it more time?`,
+          // Serialize deadline prompts so only one p.confirm() is active at a time.
+          const prev = promptLock;
+          let releaseLock: () => void = () => {};
+          promptLock = new Promise<void>((r) => {
+            releaseLock = r;
           });
-          if (mp) {
-            mp.resume();
-          } else {
-            opts.spinner.start(`Compiling ${displayName}...`);
+          await prev;
+
+          try {
+            const elapsed = Math.round((Date.now() - compileStart) / 60000);
+            if (mp) {
+              mp.clear();
+              mp.pause();
+            } else {
+              opts.spinner.stop();
+            }
+            const extend = await p.confirm({
+              message: `${displayName} has been compiling for ${elapsed} minutes. Give it more time?`,
+            });
+            if (mp) {
+              mp.resume();
+            } else {
+              opts.spinner.start(`Compiling ${displayName}...`);
+            }
+            if (p.isCancel(extend) || !extend) return null;
+            return 10 * 60 * 1000;
+          } finally {
+            releaseLock();
           }
-          if (p.isCancel(extend) || !extend) return null;
-          return 10 * 60 * 1000;
         }
       : undefined;
 
