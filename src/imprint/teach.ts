@@ -43,12 +43,12 @@ import { loadJsonFile } from './load-json.ts';
 import { muteLog, unmuteLog } from './log.ts';
 import { MultiProgress } from './multi-progress.ts';
 import { localSiteDir, localToolDir } from './paths.ts';
-import { listSiteSessions, mergeSessions, writeCombinedSession } from './session-merge.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import { loadCredentialStore } from './runtime.ts';
 import type { ClassifiedValue } from './session-diff.ts';
+import { listSiteSessions, mergeSessions, writeCombinedSession } from './session-merge.ts';
 import {
   TEACH_STEPS as STEPS,
   type TeachStep as Step,

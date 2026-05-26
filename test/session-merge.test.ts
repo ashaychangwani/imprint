@@ -1,9 +1,13 @@
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { listSiteSessions, mergeSessions, writeCombinedSession } from '../src/imprint/session-merge.ts';
-import { SessionSchema, type Session } from '../src/imprint/types.ts';
+import {
+  listSiteSessions,
+  mergeSessions,
+  writeCombinedSession,
+} from '../src/imprint/session-merge.ts';
+import { type Session, SessionSchema } from '../src/imprint/types.ts';
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -28,7 +32,14 @@ describe('mergeSessions', () => {
   it('returns a copy for single session input', () => {
     const session = makeSession({
       requests: [
-        { seq: 0, timestamp: 100, method: 'GET', url: 'https://example.com/api', headers: {}, resourceType: 'Fetch' },
+        {
+          seq: 0,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api',
+          headers: {},
+          resourceType: 'Fetch',
+        },
       ],
       narration: [{ seq: 1, timestamp: 200, text: 'searched for flights' }],
     });
@@ -44,12 +55,24 @@ describe('mergeSessions', () => {
     const s1 = makeSession({
       startedAt: '2026-05-24T09:00:00.000Z',
       requests: [
-        { seq: 0, timestamp: 100, method: 'GET', url: 'https://example.com/a', headers: {}, resourceType: 'Fetch' },
-        { seq: 1, timestamp: 200, method: 'POST', url: 'https://example.com/b', headers: {}, resourceType: 'XHR' },
+        {
+          seq: 0,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/a',
+          headers: {},
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 1,
+          timestamp: 200,
+          method: 'POST',
+          url: 'https://example.com/b',
+          headers: {},
+          resourceType: 'XHR',
+        },
       ],
-      events: [
-        { seq: 2, timestamp: 150, type: 'click' as const, detail: '{"selector":"button"}' },
-      ],
+      events: [{ seq: 2, timestamp: 150, type: 'click' as const, detail: '{"selector":"button"}' }],
       narration: [{ seq: 3, timestamp: 50, text: 'first action' }],
     });
 
@@ -57,7 +80,14 @@ describe('mergeSessions', () => {
       startedAt: '2026-05-24T10:00:00.000Z',
       url: 'https://example.com/page2',
       requests: [
-        { seq: 0, timestamp: 100, method: 'GET', url: 'https://example.com/c', headers: {}, resourceType: 'Fetch' },
+        {
+          seq: 0,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/c',
+          headers: {},
+          resourceType: 'Fetch',
+        },
       ],
       events: [
         { seq: 1, timestamp: 50, type: 'navigation' as const, detail: 'https://example.com/page2' },
@@ -87,7 +117,14 @@ describe('mergeSessions', () => {
     const s1 = makeSession({
       startedAt: '2026-05-24T09:00:00.000Z',
       requests: [
-        { seq: 0, timestamp: 500, method: 'GET', url: 'https://example.com/late-s1', headers: {}, resourceType: 'Fetch' },
+        {
+          seq: 0,
+          timestamp: 500,
+          method: 'GET',
+          url: 'https://example.com/late-s1',
+          headers: {},
+          resourceType: 'Fetch',
+        },
       ],
     });
 
@@ -95,7 +132,14 @@ describe('mergeSessions', () => {
     const s2 = makeSession({
       startedAt: '2026-05-24T10:00:00.000Z',
       requests: [
-        { seq: 0, timestamp: 100, method: 'GET', url: 'https://example.com/early-s2', headers: {}, resourceType: 'Fetch' },
+        {
+          seq: 0,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/early-s2',
+          headers: {},
+          resourceType: 'Fetch',
+        },
       ],
     });
 
@@ -105,10 +149,7 @@ describe('mergeSessions', () => {
     // s2 request at absolute 10:00:00 + 100ms = late
     // So s1 request should come first (ignoring boundary narrations)
     const requestUrls = merged.requests.map((r) => r.url);
-    expect(requestUrls).toEqual([
-      'https://example.com/late-s1',
-      'https://example.com/early-s2',
-    ]);
+    expect(requestUrls).toEqual(['https://example.com/late-s1', 'https://example.com/early-s2']);
   });
 
   it('inserts boundary narration markers for each session', () => {
@@ -152,8 +193,12 @@ describe('mergeSessions', () => {
       startedAt: '2026-05-24T09:00:00.000Z',
       requests: [
         {
-          seq: 0, timestamp: 100, method: 'GET', url: 'https://example.com/api',
-          headers: { 'content-type': 'application/json' }, resourceType: 'Fetch',
+          seq: 0,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api',
+          headers: { 'content-type': 'application/json' },
+          resourceType: 'Fetch',
           response: { status: 200, headers: {}, body: '{"ok":true}', mimeType: 'application/json' },
         },
       ],
@@ -165,8 +210,12 @@ describe('mergeSessions', () => {
       startedAt: '2026-05-24T10:00:00.000Z',
       requests: [
         {
-          seq: 0, timestamp: 200, method: 'POST', url: 'https://example.com/submit',
-          headers: {}, resourceType: 'XHR',
+          seq: 0,
+          timestamp: 200,
+          method: 'POST',
+          url: 'https://example.com/submit',
+          headers: {},
+          resourceType: 'XHR',
         },
       ],
     });
@@ -197,21 +246,25 @@ describe('mergeSessions', () => {
   it('merges cookie snapshots with adjusted timestamps', () => {
     const s1 = makeSession({
       startedAt: '2026-05-24T09:00:00.000Z',
-      cookieSnapshots: [{
-        takenAt: '2026-05-24T09:00:00.000Z',
-        timestamp: 0,
-        label: 'start' as const,
-        cookies: [{ name: 'sid', value: 'abc', domain: '.example.com', path: '/' }],
-      }],
+      cookieSnapshots: [
+        {
+          takenAt: '2026-05-24T09:00:00.000Z',
+          timestamp: 0,
+          label: 'start' as const,
+          cookies: [{ name: 'sid', value: 'abc', domain: '.example.com', path: '/' }],
+        },
+      ],
     });
     const s2 = makeSession({
       startedAt: '2026-05-24T10:00:00.000Z',
-      cookieSnapshots: [{
-        takenAt: '2026-05-24T10:00:00.000Z',
-        timestamp: 0,
-        label: 'start' as const,
-        cookies: [{ name: 'sid', value: 'def', domain: '.example.com', path: '/' }],
-      }],
+      cookieSnapshots: [
+        {
+          takenAt: '2026-05-24T10:00:00.000Z',
+          timestamp: 0,
+          label: 'start' as const,
+          cookies: [{ name: 'sid', value: 'def', domain: '.example.com', path: '/' }],
+        },
+      ],
     });
 
     const merged = mergeSessions([s1, s2]);
@@ -227,7 +280,14 @@ describe('mergeSessions', () => {
     const s2 = makeSession({
       startedAt: '2026-05-24T10:00:00.000Z',
       requests: [
-        { seq: 0, timestamp: 100, method: 'GET', url: 'https://example.com/a', headers: {}, resourceType: 'Fetch' },
+        {
+          seq: 0,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/a',
+          headers: {},
+          resourceType: 'Fetch',
+        },
       ],
     });
 
@@ -250,7 +310,7 @@ describe('listSiteSessions', () => {
 
   afterEach(() => {
     rmSync(testDir, { recursive: true, force: true });
-    delete process.env.IMPRINT_HOME;
+    process.env.IMPRINT_HOME = undefined;
   });
 
   it('returns empty array when no sessions exist', () => {
@@ -262,8 +322,14 @@ describe('listSiteSessions', () => {
     const session = makeSession();
 
     writeFileSync(pathJoin(sessDir, '2026-05-24T09-00-00-000Z.json'), JSON.stringify(session));
-    writeFileSync(pathJoin(sessDir, '2026-05-24T09-00-00-000Z.redacted.json'), JSON.stringify(session));
-    writeFileSync(pathJoin(sessDir, '2026-05-24T09-00-00-000Z.triaged.json'), JSON.stringify(session));
+    writeFileSync(
+      pathJoin(sessDir, '2026-05-24T09-00-00-000Z.redacted.json'),
+      JSON.stringify(session),
+    );
+    writeFileSync(
+      pathJoin(sessDir, '2026-05-24T09-00-00-000Z.triaged.json'),
+      JSON.stringify(session),
+    );
     writeFileSync(pathJoin(sessDir, '2026-05-24T10-00-00-000Z.json'), JSON.stringify(session));
 
     const results = listSiteSessions('test-site');
@@ -279,7 +345,10 @@ describe('listSiteSessions', () => {
     const session = makeSession();
 
     writeFileSync(pathJoin(sessDir, '2026-05-24T09-00-00-000Z.json'), JSON.stringify(session));
-    writeFileSync(pathJoin(sessDir, 'combined-2026-05-24T09-30-00-000Z.json'), JSON.stringify(session));
+    writeFileSync(
+      pathJoin(sessDir, 'combined-2026-05-24T09-30-00-000Z.json'),
+      JSON.stringify(session),
+    );
 
     const results = listSiteSessions('test-site');
     expect(results.length).toBe(1);
@@ -301,8 +370,22 @@ describe('listSiteSessions', () => {
     const session = makeSession({
       url: 'https://flights.google.com',
       requests: [
-        { seq: 0, timestamp: 100, method: 'GET', url: 'https://flights.google.com/api', headers: {}, resourceType: 'Fetch' },
-        { seq: 1, timestamp: 200, method: 'POST', url: 'https://flights.google.com/search', headers: {}, resourceType: 'XHR' },
+        {
+          seq: 0,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://flights.google.com/api',
+          headers: {},
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 1,
+          timestamp: 200,
+          method: 'POST',
+          url: 'https://flights.google.com/search',
+          headers: {},
+          resourceType: 'XHR',
+        },
       ],
       narration: [{ seq: 2, timestamp: 50, text: 'searched for flights' }],
     });
@@ -328,7 +411,7 @@ describe('writeCombinedSession', () => {
 
   afterEach(() => {
     rmSync(testDir, { recursive: true, force: true });
-    delete process.env.IMPRINT_HOME;
+    process.env.IMPRINT_HOME = undefined;
   });
 
   it('writes a combined session file with correct naming', () => {

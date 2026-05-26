@@ -7,7 +7,7 @@
  * pipeline consumes unchanged.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { localSessionsDir } from './paths.ts';
 import { friendlySessionTimestamp } from './teach-state.ts';
