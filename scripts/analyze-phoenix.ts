@@ -118,14 +118,17 @@ function extractModelName(attrs: string): string | null {
   return (resolveAttr(parsed, 'llm.model_name') as string) ?? null;
 }
 
-const MODEL_RATES: Record<string, { cacheRead: number; cacheWrite: number; input: number; output: number }> = {
-  'claude-opus-4-7': { cacheRead: 0.50, cacheWrite: 6.25, input: 5, output: 25 },
-  'claude-opus-4-6': { cacheRead: 0.50, cacheWrite: 6.25, input: 5, output: 25 },
-  'claude-opus-4-5': { cacheRead: 0.50, cacheWrite: 6.25, input: 5, output: 25 },
-  'claude-opus-4-1': { cacheRead: 1.50, cacheWrite: 18.75, input: 15, output: 75 },
-  'claude-sonnet-4-6': { cacheRead: 0.30, cacheWrite: 3.75, input: 3, output: 15 },
-  'claude-sonnet-4-5': { cacheRead: 0.30, cacheWrite: 3.75, input: 3, output: 15 },
-  'claude-haiku-4-5': { cacheRead: 0.10, cacheWrite: 1.25, input: 1, output: 5 },
+const MODEL_RATES: Record<
+  string,
+  { cacheRead: number; cacheWrite: number; input: number; output: number }
+> = {
+  'claude-opus-4-7': { cacheRead: 0.5, cacheWrite: 6.25, input: 5, output: 25 },
+  'claude-opus-4-6': { cacheRead: 0.5, cacheWrite: 6.25, input: 5, output: 25 },
+  'claude-opus-4-5': { cacheRead: 0.5, cacheWrite: 6.25, input: 5, output: 25 },
+  'claude-opus-4-1': { cacheRead: 1.5, cacheWrite: 18.75, input: 15, output: 75 },
+  'claude-sonnet-4-6': { cacheRead: 0.3, cacheWrite: 3.75, input: 3, output: 15 },
+  'claude-sonnet-4-5': { cacheRead: 0.3, cacheWrite: 3.75, input: 3, output: 15 },
+  'claude-haiku-4-5': { cacheRead: 0.1, cacheWrite: 1.25, input: 1, output: 5 },
 };
 const DEFAULT_RATES = MODEL_RATES['claude-sonnet-4-6'];
 
@@ -159,16 +162,25 @@ async function analyzeTrace(traceId: string) {
     const parsed = parseAttrs(span.attributes);
     const inputTokens = resolveAttr(parsed, 'imprint.compile.input_tokens') as number | null;
     const outputTokens = resolveAttr(parsed, 'imprint.compile.output_tokens') as number | null;
-    const cacheRead = resolveAttr(parsed, 'imprint.compile.cache_read_input_tokens') as number | null;
-    const cacheCreate = resolveAttr(parsed, 'imprint.compile.cache_creation_input_tokens') as number | null;
+    const cacheRead = resolveAttr(parsed, 'imprint.compile.cache_read_input_tokens') as
+      | number
+      | null;
+    const cacheCreate = resolveAttr(parsed, 'imprint.compile.cache_creation_input_tokens') as
+      | number
+      | null;
     const modelName = extractModelName(span.attributes);
     const rates = (modelName && MODEL_RATES[modelName]) || DEFAULT_RATES;
 
     const costParts: string[] = [];
-    if (cacheRead) costParts.push(`cache_read=$${(cacheRead * rates.cacheRead / 1e6).toFixed(2)}`);
-    if (cacheCreate) costParts.push(`cache_create=$${(cacheCreate * rates.cacheWrite / 1e6).toFixed(2)}`);
-    if (outputTokens) costParts.push(`output=$${(outputTokens * rates.output / 1e6).toFixed(2)}`);
-    const totalCost = (cacheRead ?? 0) * rates.cacheRead / 1e6 + (cacheCreate ?? 0) * rates.cacheWrite / 1e6 + (outputTokens ?? 0) * rates.output / 1e6;
+    if (cacheRead)
+      costParts.push(`cache_read=$${((cacheRead * rates.cacheRead) / 1e6).toFixed(2)}`);
+    if (cacheCreate)
+      costParts.push(`cache_create=$${((cacheCreate * rates.cacheWrite) / 1e6).toFixed(2)}`);
+    if (outputTokens) costParts.push(`output=$${((outputTokens * rates.output) / 1e6).toFixed(2)}`);
+    const totalCost =
+      ((cacheRead ?? 0) * rates.cacheRead) / 1e6 +
+      ((cacheCreate ?? 0) * rates.cacheWrite) / 1e6 +
+      ((outputTokens ?? 0) * rates.output) / 1e6;
 
     console.log(`  ${status} ${toolName} [${modelName ?? '?'}]`);
     console.log(
@@ -178,13 +190,9 @@ async function analyzeTrace(traceId: string) {
       console.log(
         `    Tokens: ${(cacheRead ?? 0).toLocaleString()} cache_read, ${(cacheCreate ?? 0).toLocaleString()} cache_create, ${(outputTokens ?? 0).toLocaleString()} output`,
       );
-      console.log(
-        `    Cost: $${totalCost.toFixed(2)} (${costParts.join(', ')})`,
-      );
+      console.log(`    Cost: $${totalCost.toFixed(2)} (${costParts.join(', ')})`);
     } else {
-      console.log(
-        `    Tokens: ${inputTokens ?? '?'} input, ${outputTokens ?? '?'} output`,
-      );
+      console.log(`    Tokens: ${inputTokens ?? '?'} input, ${outputTokens ?? '?'} output`);
     }
 
     // Get child spans to analyze tool call breakdown

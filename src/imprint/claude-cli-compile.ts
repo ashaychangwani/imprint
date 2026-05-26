@@ -39,9 +39,9 @@ import {
   llmSpanAttributes,
   setSpanAttributes,
   startTraceSpan,
-  traced,
-  traceLlmIoEnabled,
   traceJsonInputOutputAttributes,
+  traceLlmIoEnabled,
+  traced,
 } from './tracing.ts';
 import type { Session } from './types.ts';
 
@@ -113,10 +113,6 @@ export async function compileViaClaudeCli(
     },
     async (span) => {
       const result = await compileViaClaudeCliImpl(opts);
-      const totalPrompt =
-        result.inputTokens +
-        (result.cacheReadInputTokens ?? 0) +
-        (result.cacheCreationInputTokens ?? 0);
       setSpanAttributes(span, {
         'imprint.compile.outcome': result.outcome,
         'imprint.compile.turns': result.turns,
@@ -128,7 +124,7 @@ export async function compileViaClaudeCli(
         ...llmSpanAttributes({
           provider: 'claude-cli',
           model: preferredAgentModel('claude-cli'),
-          inputTokens: totalPrompt,
+          inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
           cacheReadTokens: result.cacheReadInputTokens,
           cacheWriteTokens: result.cacheCreationInputTokens,
@@ -389,7 +385,10 @@ async function driveStreamJson(
             'imprint.agent.cumulative_output_tokens': outputTokens,
           });
           if (currentTurnSpan && captureLlmIo) {
-            setSpanAttributes(currentTurnSpan, traceJsonInputOutputAttributes('output', evt.message.content));
+            setSpanAttributes(
+              currentTurnSpan,
+              traceJsonInputOutputAttributes('output', evt.message.content),
+            );
           }
           fireProgress('thinking');
           for (const block of evt.message.content) {
@@ -405,7 +404,10 @@ async function driveStreamJson(
 
         if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
           if (currentTurnSpan && captureLlmIo) {
-            setSpanAttributes(currentTurnSpan, traceJsonInputOutputAttributes('input', evt.message.content));
+            setSpanAttributes(
+              currentTurnSpan,
+              traceJsonInputOutputAttributes('input', evt.message.content),
+            );
           }
           continue;
         }

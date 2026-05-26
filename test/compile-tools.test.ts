@@ -225,7 +225,12 @@ describe('compile tools representativeSeqs', () => {
           url: 'https://www.example.com/bootstrap',
           headers: {},
           resourceType: 'Fetch',
-          response: { status: 200, headers: {}, mimeType: 'text/html', body: '<html>token=abc</html>' },
+          response: {
+            status: 200,
+            headers: {},
+            mimeType: 'text/html',
+            body: '<html>token=abc</html>',
+          },
         },
         ...Array.from({ length: 5 }, (_, i) => ({
           seq: 10 + i,
@@ -356,7 +361,12 @@ describe('compile tools representativeSeqs', () => {
           url: 'https://www.example.com/api/target',
           headers: {},
           resourceType: 'Fetch',
-          response: { status: 200, headers: {}, mimeType: 'application/json', body: '{"data":true}' },
+          response: {
+            status: 200,
+            headers: {},
+            mimeType: 'application/json',
+            body: '{"data":true}',
+          },
         },
         makeSummaryRequest(3, 300),
         makeSummaryRequest(4, 400),

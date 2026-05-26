@@ -718,7 +718,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           mp.pause();
           mp.clear();
           spinner.start('Triaging requests...');
-          localTriageResult = await triageRequests(triageSession, { provider: providerName, model });
+          localTriageResult = await triageRequests(triageSession, {
+            provider: providerName,
+            model,
+          });
           spinner.stop(
             `Triaged to ${localTriageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`,
           );
