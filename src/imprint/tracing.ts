@@ -17,6 +17,11 @@ type TraceLlmMessage = { role?: string; content?: string };
 let provider: NodeTracerProvider | null = null;
 let attemptedInit = false;
 let suppressInit = false;
+const NOOP_SPAN: Span = trace.wrapSpanContext({
+  traceId: '0'.repeat(32),
+  spanId: '0'.repeat(16),
+  traceFlags: 0,
+});
 
 export function suppressTracingInit(): void {
   suppressInit = true;
@@ -203,7 +208,7 @@ export async function traced<T>(
   fn: (span: Span) => Promise<T> | T,
 ): Promise<T> {
   if (!isTracingEnabled()) {
-    return await fn(null as unknown as Span);
+    return await fn(NOOP_SPAN);
   }
   ensureTracingInitialized();
   const tracer = trace.getTracer('imprint');
