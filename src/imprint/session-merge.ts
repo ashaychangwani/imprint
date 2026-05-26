@@ -24,7 +24,7 @@ function friendlyIsoTimestamp(iso: string): string {
   return `${m[1]} ${m[2]}:${m[3]}`;
 }
 
-export interface SessionInfo {
+interface SessionInfo {
   absPath: string;
   filename: string;
   friendlyTimestamp: string;
