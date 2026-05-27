@@ -79,7 +79,7 @@ main() {
   echo "  imprint --help"
   echo ""
   echo "Note: teach, record, and login commands require a full Bun + Playwright install."
-  echo "The standalone binary supports run, mcp-server, install, cron, and credential commands."
+  echo "The standalone binary supports mcp-server, install, cron, and credential commands."
 }
 
 main

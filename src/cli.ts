@@ -497,7 +497,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(
       [
         `The \`${verb}\` command requires a full Bun + Playwright installation.`,
-        'The standalone binary supports run, mcp-server, install, cron, and credential commands.',
+        'The standalone binary supports mcp-server, install, cron, and credential commands.',
         '',
         'To use teach/record/login, install via npm:',
         '  curl -fsSL https://bun.sh/install | bash',

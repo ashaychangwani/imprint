@@ -119,7 +119,7 @@ Or run without installing: `bunx imprint-mcp teach southwest --url https://www.s
 curl -fsSL https://raw.githubusercontent.com/ashaychangwani/imprint/main/scripts/install.sh | bash
 ```
 
-The standalone binary supports `run`, `mcp-server`, `install`, `cron`, and `credential` commands.
+The standalone binary supports `mcp-server`, `install`, `cron`, and `credential` commands.
 Browser commands (`teach`, `record`, `login`, `playbook`) require a full Bun + Playwright install.
 
 ### From source
