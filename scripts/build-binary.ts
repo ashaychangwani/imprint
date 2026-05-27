@@ -75,8 +75,10 @@ async function main(): Promise<void> {
 
 function detectCurrentTarget(): string {
   const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
-  const os = process.platform === 'darwin' ? 'darwin' : 'linux';
-  return `bun-${os}-${arch}`;
+  if (process.platform !== 'darwin' && process.platform !== 'linux') {
+    throw new Error(`Unsupported platform: ${process.platform} (supported: darwin, linux)`);
+  }
+  return `bun-${process.platform}-${arch}`;
 }
 
 main().catch((err) => {
