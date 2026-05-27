@@ -494,15 +494,17 @@ async function main(argv: string[]): Promise<number> {
     'compile-playbook',
   ]);
   if (IS_COMPILED_BINARY && BROWSER_COMMANDS.has(verb)) {
+    const rest = process.argv.slice(2).join(' ');
     console.error(
       [
-        `The \`${verb}\` command requires a full Bun + Playwright installation.`,
-        'The standalone binary supports mcp-server, install, cron, and credential commands.',
+        `The \`${verb}\` command requires Playwright, which isn't included in the standalone binary.`,
         '',
-        'To use teach/record/login, install via npm:',
+        'If you have Bun installed, run it directly:',
+        `  bunx imprint-mcp ${rest}`,
+        '',
+        "If you don't have Bun yet:",
         '  curl -fsSL https://bun.sh/install | bash',
-        '  bun install -g imprint-mcp',
-        '  bunx playwright install chromium',
+        `  bunx imprint-mcp ${rest}`,
       ].join('\n'),
     );
     return 1;
