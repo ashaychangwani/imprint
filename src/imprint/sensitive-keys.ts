@@ -142,22 +142,21 @@ const SENSITIVE_KEY_SET = new Set(SENSITIVE_KEYS.map(_normalize));
  *                                              vendor SSO portals that namespace fields
  *    - patronpassword / patron_password:       Discover & Go libraries (kept for back-compat)
  */
-const PASSWORD_LIKE_KEYS = new Set(
-  [
-    'password',
-    'passwd',
-    'pwd',
-    'pin',
-    'pass',
-    'secret',
-    'j_password',
-    'userpassword',
-    'loginpassword',
-    'accountpassword',
-    'patronpassword',
-    'patron_password',
-  ].map(_normalize),
-);
+const PASSWORD_LIKE_ENTRIES = [
+  'password',
+  'passwd',
+  'pwd',
+  'pin',
+  'pass',
+  'secret',
+  'j_password',
+  'userpassword',
+  'loginpassword',
+  'accountpassword',
+  'patronpassword',
+  'patron_password',
+];
+const PASSWORD_LIKE_KEYS = new Set(PASSWORD_LIKE_ENTRIES.map(_normalize));
 
 /** Subset of SENSITIVE_KEYS that specifically denote a username/email/login
  *  identifier — the partner half of a username+password login pair.
@@ -278,6 +277,12 @@ export function isUsernameLikeKey(key: string): boolean {
 export function isLoginFieldKey(key: string): boolean {
   const n = normalizeKey(key);
   return PASSWORD_LIKE_KEYS.has(n) || USERNAME_LIKE_KEYS.has(n);
+}
+
+/** Raw password-like key strings (pre-normalization) for callers that need
+ *  substring matching against raw body text rather than parsed key lookup. */
+export function passwordLikeTokens(): readonly string[] {
+  return PASSWORD_LIKE_ENTRIES;
 }
 
 export function isSensitiveHeader(header: string): boolean {

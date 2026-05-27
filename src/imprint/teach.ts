@@ -48,7 +48,7 @@ import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import { loadCredentialStore } from './runtime.ts';
-import { isSensitiveCredentialKey } from './sensitive-keys.ts';
+import { isSensitiveCredentialKey, passwordLikeTokens } from './sensitive-keys.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import { listSiteSessions, mergeSessions, writeCombinedSession } from './session-merge.ts';
 import {
@@ -1619,17 +1619,7 @@ async function promptAndPersistCredentials(opts: {
  *  parsed JSON. False positives are tolerable here (one extra warning);
  *  false negatives are not (silent failure recurrence). */
 export function findUnpairedPasswordRequests(session: Session): number[] {
-  const PASSWORD_LIKE_TOKENS = [
-    'password',
-    'passwd',
-    'pwd',
-    'patronpassword',
-    'patron_password',
-    'j_password',
-    'userpassword',
-    'loginpassword',
-    'accountpassword',
-  ];
+  const PASSWORD_LIKE_TOKENS = passwordLikeTokens();
   const out: number[] = [];
   for (const req of session.requests) {
     let hit = false;
