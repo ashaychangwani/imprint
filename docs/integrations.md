@@ -105,7 +105,7 @@ Claude Code reads MCP config from `.mcp.json` in the project root. To share your
 }
 ```
 
-Team members run `bun link` in the Imprint repo to make the `imprint` command available globally, then Claude Code discovers the tools automatically.
+Install Imprint globally (`bun install -g imprint-mcp`) so the `imprint` command is on PATH, then Claude Code discovers the tools automatically.
 
 ---
 
@@ -123,11 +123,11 @@ codex mcp add imprint-mysite -- imprint mcp-server mysite
 
 If `imprint` is not on your PATH, Codex won't find it. Either:
 
-1. Run `bun link` in the Imprint repo to make `imprint` global, or
+1. Install globally: `bun install -g imprint-mcp`, or
 2. Use the absolute path to the Imprint CLI in the command:
 
 ```bash
-codex mcp add imprint-mysite -- bun run /absolute<imprint-clone-dir>/src/cli.ts mcp-server mysite
+codex mcp add imprint-mysite -- bunx imprint-mcp mcp-server mysite
 ```
 
 ---
