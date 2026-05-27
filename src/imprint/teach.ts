@@ -90,7 +90,7 @@ interface TeachOptions {
   provider?: ProviderName;
   /** Override the compile model (otherwise prompted or auto-detected). */
   model?: string;
-  /** Per-tool compile timeout in ms. Default 10 minutes. */
+  /** Per-tool compile timeout in ms. Default 20 minutes. */
   maxDurationMs?: number;
   fromSession?: string;
   /** Retain parser.test.ts after successful compile-agent verification. */
@@ -916,7 +916,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   let compileModel = '';
   if (needsCompileProvider) {
     compileModel = await getModel();
-    const timeoutMs = opts.maxDurationMs ?? 10 * 60 * 1000;
+    const timeoutMs = opts.maxDurationMs ?? 20 * 60 * 1000;
     const timeoutDisplay =
       timeoutMs >= 3_600_000
         ? `${Math.round(timeoutMs / 3_600_000)}h`
@@ -929,10 +929,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         `Timeout: ${timeoutDisplay} per tool`,
         '',
         plans.length === 1
-          ? 'An LLM agent will reverse-engineer the API response format.'
-          : `${plans.length} LLM compile agents will reverse-engineer selected tools with concurrency 3.`,
-        `Expect up to ${timeoutDisplay} per tool and moderate to high token use, depending on`,
-        'the complexity of the recording. You can interrupt with Ctrl-C.',
+          ? 'An LLM agent will reverse-engineer the API response format,'
+          : `${plans.length} LLM compile agents will reverse-engineer selected tools with concurrency 3,`,
+        'write the MCP server, and run thorough verification tests.',
+        'Most complex tools take 10-15 minutes — please be patient.',
+        `Timeout: ${timeoutDisplay} per tool. You can interrupt with Ctrl-C.`,
+        '',
+        'To persist the generated tests after compilation, set IMPRINT_KEEP_TEST=1',
+        'or pass --keep-test.',
       ].join('\n'),
       'Compile step',
     );
