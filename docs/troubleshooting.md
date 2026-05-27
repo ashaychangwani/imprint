@@ -134,16 +134,16 @@ This is faster but means the compile agent won't be able to distinguish browser-
 
 ## "Compile is slow or looks stuck"
 
-Each tool compiles with a **10-minute timeout** by default. If a tool hits the timeout, it fails gracefully and other tools continue compiling. Simple tools (2-3 API requests) typically compile in 2-5 minutes. Complex multi-request workflows (e.g. a full checkout flow with 10+ chained requests) may approach the timeout — increase it for those:
+Each tool compiles with a **20-minute timeout** by default. The compile agent writes the MCP server and runs thorough verification tests, so most complex tools take 10-15 minutes — be patient. If a tool hits the timeout, it fails gracefully and other tools continue compiling. Simple tools (2-3 API requests) typically compile in 2-5 minutes. Complex multi-request workflows (e.g. a full checkout flow with 10+ chained requests) may take longer — increase the timeout for those:
 
 ```bash
-imprint teach <site> --timeout 15m
+imprint teach <site> --timeout 30m
 ```
 
 If a tool consistently fails to compile within the timeout (e.g. due to bot defense on verification), try a faster model:
 
 ```bash
-imprint teach <site> --model claude-sonnet-4-6 --timeout 10m
+imprint teach <site> --model claude-sonnet-4-6 --timeout 20m
 ```
 
 For deeper debugging, turn on local Phoenix tracing and inspect which stage or tool call is spending time:

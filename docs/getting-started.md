@@ -99,10 +99,10 @@ Stateful workflows still run through the same generated tool. If a request sets 
 `imprint teach` prompts for a **provider** and **model** interactively. To skip the prompts or override defaults:
 
 ```bash
-imprint teach google-flights --provider claude-cli --model claude-sonnet-4-6 --timeout 10m
+imprint teach google-flights --provider claude-cli --model claude-sonnet-4-6 --timeout 20m
 ```
 
-Each tool has a **10-minute compile timeout** by default. If your site is complex or the compile agent needs more time for verification, increase it with `--timeout`. If a tool fails to compile (e.g. timeout or bot defense), the other tools in the same recording still compile successfully.
+Each tool has a **20-minute compile timeout** by default. The compile agent writes the MCP server and runs thorough verification tests — most complex tools take 10-15 minutes, so be patient. If your site is especially complex, increase the timeout with `--timeout`. If a tool fails to compile (e.g. timeout or bot defense), the other tools in the same recording still compile successfully. To persist the generated tests after compilation, set `IMPRINT_KEEP_TEST=1` or pass `--keep-test`.
 
 To skip the replay-and-diff stage (the automated second pass that classifies values as constant vs browser-minted), add `--skip-replay`. This is faster but means the compile agent can't distinguish ephemeral values (timestamps, CSRF tokens) from constants, which may reduce workflow accuracy for sites with dynamic request parameters.
 

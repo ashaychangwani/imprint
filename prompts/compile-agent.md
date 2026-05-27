@@ -373,7 +373,7 @@ In all cases, the `give_up` call must include a `what_was_tried` field listing c
 
 ## Time Budget
 
-You have a 10-minute wall-clock deadline. Most successful runs take 8-20 turns. If you're past 20 turns and still not converging, step back and reconsider your approach:
+You have a 20-minute wall-clock deadline. Most successful runs take 8-20 turns. If you're past 20 turns and still not converging, step back and reconsider your approach:
 - Re-read the response body from scratch
 - Look for a different anchor value
 - Try a different extraction shape

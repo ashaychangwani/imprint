@@ -138,7 +138,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       },
       {
         name: '--timeout <duration>',
-        description: 'Per-tool compile timeout. Accepts 10m, 1h, 300s, or plain ms. Default 10m.',
+        description: 'Per-tool compile timeout. Accepts 20m, 1h, 300s, or plain ms. Default 20m.',
       },
       {
         name: '--keep-test',
@@ -189,7 +189,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--out <path>', description: 'Override the workflow.json output path.' },
       {
         name: '--max-duration <time>',
-        description: 'Agent timeout (e.g., "10m", "1h", "300s"). Default 10m.',
+        description: 'Agent timeout (e.g., "20m", "1h", "300s"). Default 20m.',
       },
       {
         name: '--provider <name>',

@@ -129,7 +129,7 @@ Shows which providers are detected. Interactive `imprint teach` prompts you to c
 
 To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. `teach` and `generate` require a compile-agent provider (`claude-cli`, `codex-cli`, or `anthropic-api`); `compile-playbook` can also use `cursor-cli`.
 
-After selecting a provider, `teach` prompts for a **model** (e.g. `claude-opus-4-7` vs `claude-sonnet-4-6` for Anthropic, `gpt-5.4` vs `o3` for Codex). Override with `--model <name>`. Each tool compiles with a **5-minute timeout** by default; override with `--timeout <duration>` (e.g. `--timeout 10m`, `--timeout 1h`). To skip the replay-and-diff stage (the automated second pass that classifies ephemeral vs constant values), pass `--skip-replay` — faster, but may reduce workflow accuracy for sites with dynamic request parameters.
+After selecting a provider, `teach` prompts for a **model** (e.g. `claude-opus-4-7` vs `claude-sonnet-4-6` for Anthropic, `gpt-5.4` vs `o3` for Codex). Override with `--model <name>`. Each tool compiles with a **20-minute timeout** by default — the compile agent writes the MCP server and runs thorough verification tests, so most complex tools take 10-15 minutes. Override with `--timeout <duration>` (e.g. `--timeout 30m`, `--timeout 1h`). To persist the generated tests after compilation, set `IMPRINT_KEEP_TEST=1` or pass `--keep-test`. To skip the replay-and-diff stage (the automated second pass that classifies ephemeral vs constant values), pass `--skip-replay` — faster, but may reduce workflow accuracy for sites with dynamic request parameters.
 
 <br>
 

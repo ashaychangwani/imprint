@@ -145,7 +145,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         ];
         if (result.outcome === 'timeout') {
           lines.push(
-            'hint: increase the timeout with --timeout (teach) or --max-duration (generate)',
+            'hint: most complex tools take 10-15 minutes. increase the timeout with --timeout (teach) or --max-duration (generate)',
           );
         }
         throw new Error(lines.join('\n'));
