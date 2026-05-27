@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { IS_COMPILED_BINARY } from './imprint/is-compiled.ts';
 import type { ProviderName } from './imprint/llm.ts';
 import { isDebug } from './imprint/log.ts';
 import { shutdownTracing, traced } from './imprint/tracing.ts';
@@ -482,6 +483,29 @@ async function main(argv: string[]): Promise<number> {
   if (verb in VERB_HELP && isVerbHelpRequest(argv.slice(1))) {
     printVerbHelp(verb);
     return 0;
+  }
+
+  const BROWSER_COMMANDS = new Set([
+    'teach',
+    'record',
+    'login',
+    'playbook',
+    'generate',
+    'compile-playbook',
+  ]);
+  if (IS_COMPILED_BINARY && BROWSER_COMMANDS.has(verb)) {
+    console.error(
+      [
+        `The \`${verb}\` command requires a full Bun + Playwright installation.`,
+        'The standalone binary supports run, mcp-server, install, cron, and credential commands.',
+        '',
+        'To use teach/record/login, install via npm:',
+        '  curl -fsSL https://bun.sh/install | bash',
+        '  bun install -g imprint-mcp',
+        '  bunx playwright install chromium',
+      ].join('\n'),
+    );
+    return 1;
   }
 
   switch (verb) {

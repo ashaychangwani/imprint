@@ -15,9 +15,7 @@
 <br>
 
 ```bash
-git clone https://github.com/ashaychangwani/imprint.git && cd imprint
-bun install && bun link
-
+bun install -g imprint-mcp
 imprint teach southwest --url https://www.southwest.com
 ```
 
@@ -107,12 +105,41 @@ Other browser-tool frameworks (browser-use, Computer Use) ask the LLM to **decid
 
 ## Install
 
+### npm (requires [Bun](https://bun.sh) >= 1.3)
+
+```bash
+bun install -g imprint-mcp
+```
+
+Or run without installing: `bunx imprint-mcp teach southwest --url https://www.southwest.com`
+
+### Standalone binary (no Bun needed)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ashaychangwani/imprint/main/scripts/install.sh | bash
+```
+
+The standalone binary supports `run`, `mcp-server`, `install`, `cron`, and `credential` commands.
+Browser commands (`teach`, `record`, `login`, `playbook`) require a full Bun + Playwright install.
+
+### From source
+
 ```bash
 git clone https://github.com/ashaychangwani/imprint.git && cd imprint
 bun install && bun link
 ```
 
-Requires [Bun](https://bun.sh) >= 1.3. Imprint detects LLM providers from what's already on your system:
+### Browser commands
+
+The `teach`, `record`, `login`, and `playbook` commands need Playwright's Chromium. Install it once:
+
+```bash
+bunx playwright install chromium
+```
+
+### LLM providers
+
+Imprint detects LLM providers from what's already on your system:
 
 | Priority | Provider | Triggered by |
 |---|---|---|

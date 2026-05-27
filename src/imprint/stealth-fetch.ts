@@ -10,7 +10,7 @@
  * ~12s bootstrap one-time, ~1s per API call after.
  */
 
-import { type Browser, chromium } from 'playwright';
+import type { Browser } from 'playwright';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { createLog } from './log.ts';
 
@@ -327,6 +327,7 @@ function mergeCookieHeader(browserCookie: string, runtimeCookie: string | undefi
  * request, closes the browser. Returns a fresh TokenCache.
  */
 async function defaultBootstrap(args: BootstrapArgs): Promise<TokenCache> {
+  const { chromium } = await import('playwright');
   let browser: Browser | undefined;
   try {
     browser = await chromium.launch({

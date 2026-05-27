@@ -8,7 +8,7 @@
 
 import { existsSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
-import { type Page, chromium } from 'playwright';
+import type { Page } from 'playwright';
 import { RuntimeCookieJar } from './cookie-jar.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
@@ -268,6 +268,7 @@ async function runFetchBootstrap(
   };
   const bootstrapUrl = substituteString(tool.workflow.bootstrap.url, params, credentials, []);
   const initialState: Record<string, unknown> = {};
+  const { chromium } = await import('playwright');
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
     browser = await chromium.launch({ headless: true });
