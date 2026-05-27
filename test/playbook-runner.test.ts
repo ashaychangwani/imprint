@@ -6,8 +6,8 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { runPlaybook } from '../src/imprint/playbook-runner.ts';
-import type { Playbook } from '../src/imprint/types.ts';
+import { extractResult, runPlaybook } from '../src/imprint/playbook-runner.ts';
+import type { Playbook, PlaybookResult } from '../src/imprint/types.ts';
 
 const MIN_PLAYBOOK: Playbook = {
   toolName: 'test_tool',
@@ -64,6 +64,58 @@ describe('runPlaybook', () => {
     if (r.ok) return;
     expect(r.error).toBe('BAD_RESPONSE');
     expect(r.message).toContain('stub-page failure');
+  });
+
+  it('passes raw body to parser when extract is "*" and body is non-JSON', async () => {
+    // Many APIs return non-JSON envelopes — Google XSSI (`)]}'\n<size>\n...`),
+    // JSONP, chunked batchexecute, protobuf, server-sent events — that the
+    // downstream parser knows how to decode. The playbook fallback must
+    // hand those raw bytes through (matching workflow runtime semantics)
+    // rather than throwing before the parser sees them. Otherwise the
+    // playbook path silently breaks for every site whose API isn't pure JSON.
+    const result: PlaybookResult = {
+      source: 'xhr',
+      url_pattern: '/data/batchexecute',
+      extract: '*',
+      return_as: 'raw',
+    };
+    const xssiBody =
+      ')]}\'\n590\n[["wrb.fr","H028ib","[[[1,\\"airport\\"]]]",null,null,null,"generic"]]\n';
+    const captured = [
+      {
+        url: 'https://www.google.com/_/FlightsFrontendUi/data/batchexecute?rpcids=H028ib',
+        method: 'POST',
+        status: 200,
+        body: xssiBody,
+      },
+    ];
+    // Page is unused in the xhr branch; a bare stub satisfies the type.
+    const stubPage = {} as unknown as import('playwright').Page;
+    const out = await extractResult(stubPage, result, captured);
+    expect(out.raw).toBe(xssiBody);
+    expect(out.source_url).toContain('batchexecute');
+  });
+
+  it('still throws on non-JSON body when extract is a path expression', async () => {
+    // Path extraction (`items[].id`) requires structured data to navigate.
+    // The relaxed-on-`*` behavior must NOT regress this case — the parser
+    // would silently get garbage. Locked in behavior.
+    const result: PlaybookResult = {
+      source: 'xhr',
+      url_pattern: '/api/search',
+      extract: 'items[].id',
+      return_as: 'hits',
+    };
+    const captured = [
+      {
+        url: 'https://example.com/api/search',
+        method: 'GET',
+        status: 200,
+        body: 'not-json-at-all',
+      },
+    ];
+    const stubPage = {} as unknown as import('playwright').Page;
+    await expect(extractResult(stubPage, result, captured)).rejects.toThrow(/body was not JSON/);
   });
 
   it('loads playbook from a YAML path string', async () => {

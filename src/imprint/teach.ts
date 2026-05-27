@@ -988,6 +988,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       sharedTriageResult: triageResult,
       siteClassifications,
       teachCredentials,
+      allTools: opts.allTools,
     });
   } finally {
     if (plans.length > 1) unmuteLog();
@@ -1071,7 +1072,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
 // ─── Candidate detection + per-tool compile ────────────────────────────────
 
-interface CandidateCompilePlan {
+export interface CandidateCompilePlan {
   workflowKey: string;
   startFrom: Step;
   candidate?: ToolCandidate;
@@ -1151,6 +1152,10 @@ async function compileCandidatePlans(opts: {
   sharedTriageResult?: TriageResult;
   siteClassifications?: ClassifiedValue[];
   teachCredentials?: { site: string; values: Record<string, string> };
+  /** Mirror of TeachOptions.allTools — when true, partial failures abort
+   *  the run with a non-zero exit so the user notices missing tools instead
+   *  of getting a silent warning. */
+  allTools?: boolean;
 }): Promise<TeachToolResult[]> {
   const concurrency = opts.plans.length === 1 ? 1 : 3;
   const mp = opts.plans.length > 1 ? new MultiProgress() : null;
@@ -1246,27 +1251,80 @@ async function compileCandidatePlans(opts: {
     }
   });
 
-  const successes: TeachToolResult[] = [];
-  const failures: string[] = [];
-  for (let i = 0; i < outcomes.length; i++) {
-    const outcome = outcomes[i];
-    const displayName = opts.plans[i]?.candidate?.toolName ?? opts.plans[i]?.workflowKey ?? '?';
-    if (outcome?.ok) {
-      successes.push(outcome.value);
+  const summary = summarizeCompileOutcomes(outcomes, opts.plans);
+
+  // Print the structured summary on every multi-tool run so users see
+  // exactly what compiled vs what failed — a single warn line buried in
+  // log output is easy to miss when 4 of 6 tools compiled cleanly.
+  if (opts.plans.length > 1) {
+    const lines = renderCompileSummary(summary);
+    if (summary.failures.length === 0) {
+      p.log.success(lines.join('\n'));
     } else {
-      const msg = outcome?.error instanceof Error ? outcome.error.message : String(outcome?.error);
-      failures.push(`${displayName}: ${msg.split('\n')[0]}`);
+      p.log.warn(lines.join('\n'));
     }
+  } else if (summary.failures.length > 0) {
+    // Single-tool run: keep the old single-line warn for backwards-compat
+    // since there's nothing to summarize.
+    const first = summary.failures[0];
+    if (first) p.log.warn(`${first.name}: ${first.firstLineError}`);
   }
 
-  if (failures.length > 0) {
-    p.log.warn(
-      `${successes.length} of ${outcomes.length} tools compiled. ` +
-        `${failures.length} failed:\n${failures.map((f) => `  • ${f}`).join('\n')}`,
+  // Hard-fail when --all-tools was requested AND any tool failed. Silent
+  // partial compiles ship MCP servers with missing tools; the user only
+  // notices later when an LLM tries to call one that doesn't exist.
+  if (opts.allTools && summary.failures.length > 0) {
+    throw new Error(
+      `--all-tools requested but ${summary.failures.length} of ${opts.plans.length} tools failed to compile. See the summary above; re-run \`imprint teach\` after addressing the failures (or omit --all-tools to ship only what compiled).`,
     );
   }
 
-  return successes;
+  return summary.successes;
+}
+
+/** Pure summarizer — extracted so unit tests can drive arbitrary outcome
+ *  shapes without spinning up real compile pipelines. */
+interface CompileOutcomeSummary {
+  detected: number;
+  successes: TeachToolResult[];
+  successNames: string[];
+  failures: Array<{ name: string; firstLineError: string }>;
+}
+
+export function summarizeCompileOutcomes(
+  outcomes: Array<{ ok: true; value: TeachToolResult } | { ok: false; error: unknown } | null>,
+  plans: CandidateCompilePlan[],
+): CompileOutcomeSummary {
+  const successes: TeachToolResult[] = [];
+  const successNames: string[] = [];
+  const failures: Array<{ name: string; firstLineError: string }> = [];
+  for (let i = 0; i < outcomes.length; i++) {
+    const outcome = outcomes[i];
+    const displayName = plans[i]?.candidate?.toolName ?? plans[i]?.workflowKey ?? '?';
+    if (outcome?.ok) {
+      successes.push(outcome.value);
+      successNames.push(displayName);
+    } else {
+      const msg = outcome?.error instanceof Error ? outcome.error.message : String(outcome?.error);
+      failures.push({ name: displayName, firstLineError: msg.split('\n')[0] ?? '' });
+    }
+  }
+  return { detected: plans.length, successes, successNames, failures };
+}
+
+function renderCompileSummary(summary: CompileOutcomeSummary): string[] {
+  const lines: string[] = [];
+  lines.push(`Compile summary: ${summary.successes.length}/${summary.detected} tools compiled.`);
+  if (summary.successNames.length > 0) {
+    lines.push(`Compiled: ${summary.successNames.join(', ')}`);
+  }
+  if (summary.failures.length > 0) {
+    lines.push(`Failed (${summary.failures.length}):`);
+    for (const f of summary.failures) {
+      lines.push(`  • ${f.name}: ${f.firstLineError}`);
+    }
+  }
+  return lines;
 }
 
 async function compileSelectedCandidate(opts: {
