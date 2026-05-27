@@ -485,7 +485,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  const BROWSER_COMMANDS = new Set([
+  const BINARY_BLOCKED_COMMANDS = new Set([
     'teach',
     'record',
     'login',
@@ -493,11 +493,15 @@ async function main(argv: string[]): Promise<number> {
     'generate',
     'compile-playbook',
   ]);
-  if (IS_COMPILED_BINARY && BROWSER_COMMANDS.has(verb)) {
+  if (IS_COMPILED_BINARY && BINARY_BLOCKED_COMMANDS.has(verb)) {
     const rest = process.argv.slice(2).join(' ');
+    const reason =
+      verb === 'generate' || verb === 'compile-playbook'
+        ? `The \`${verb}\` command spawns \`bun test\` for verification and requires the Bun runtime on PATH.`
+        : `The \`${verb}\` command requires Playwright, which isn't included in the standalone binary.`;
     console.error(
       [
-        `The \`${verb}\` command requires Playwright, which isn't included in the standalone binary.`,
+        reason,
         '',
         'If you have Bun installed, run it directly:',
         `  bunx imprint-mcp ${rest}`,
