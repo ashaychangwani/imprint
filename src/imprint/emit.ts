@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { loadJsonFile } from './load-json.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
+import { isLoginFieldKey } from './sensitive-keys.ts';
 import { type Workflow, WorkflowSchema } from './types.ts';
 
 interface EmitOptions {
@@ -35,6 +36,8 @@ export function emit(opts: EmitOptions): EmitResult {
     },
     'workflow.json',
   );
+
+  assertNoCredentialShapedParams(workflow);
 
   const outDir = opts.outDir ?? defaultOutDir(opts.workflowPath, workflow);
 
@@ -135,6 +138,88 @@ ${defaultsBlock && requiredCopies ? requiredCopies : ''}
 
 export { WORKFLOW };
 `;
+}
+
+/** Pre-emit guardrail: refuse to write a workflow whose parameters look
+ *  like login credentials (`password`, `userid`, `email`, etc., per the
+ *  shared dictionary in sensitive-keys.ts) but are templated as plain
+ *  `${param.X}` instead of credential-store references like
+ *  `${credential.X}`.
+ *
+ *  This catches the failure mode where upstream credential extraction
+ *  silently failed (e.g. unusual Content-Type, body framing the parser
+ *  didn't recognise, declined credential-save prompt), so the compile
+ *  agent had no credential anchor and chose to model the login fields as
+ *  ordinary callable parameters. The resulting MCP tool would advertise
+ *  `userid`/`password` as required inputs, forward whatever the caller
+ *  passed verbatim, and (most often) silently produce empty results when
+ *  the caller passed empty strings.
+ *
+ *  We require either:
+ *    - The parameter isn't credential-shaped, OR
+ *    - The body template references `${credential.<name>}` (or another
+ *      `credential.*` reference), in which case the workflow is pulling
+ *      from the credential store and the `${param.X}` parameter is
+ *      effectively a no-op the user can safely ignore.
+ *
+ *  Throws with the remediation steps the user needs to take. */
+function assertNoCredentialShapedParams(workflow: Workflow): void {
+  const offenders: Array<{ name: string; matches: string[] }> = [];
+  for (const param of workflow.parameters) {
+    if (!isLoginFieldKey(param.name)) continue;
+    const paramRef = `\${param.${param.name}}`;
+    const credentialRef = `\${credential.${param.name}}`;
+    const requestsUsingParam: string[] = [];
+    let coveredByCredentialRef = false;
+    for (let i = 0; i < workflow.requests.length; i++) {
+      const req = workflow.requests[i];
+      if (!req) continue;
+      const haystack = `${req.url} ${req.body ?? ''} ${Object.values(req.headers).join(' ')}`;
+      if (haystack.includes(credentialRef)) {
+        coveredByCredentialRef = true;
+      }
+      if (haystack.includes(paramRef)) {
+        requestsUsingParam.push(`requests[${i}] (${req.method} ${req.url})`);
+      }
+    }
+    // Only flag if the body templates the param and there's no parallel
+    // credential reference. A workflow that uses both `${param.X}` and
+    // `${credential.X}` is suspicious but not necessarily broken — leave
+    // it to the user. The dangerous case is `${param.X}` alone.
+    if (requestsUsingParam.length > 0 && !coveredByCredentialRef) {
+      offenders.push({ name: param.name, matches: requestsUsingParam });
+    }
+  }
+  if (offenders.length === 0) return;
+
+  const lines = [
+    `Workflow ${JSON.stringify(workflow.toolName)} declares ${offenders.length} credential-shaped parameter(s) that are templated as plain \`\${param.X}\` instead of \`\${credential.X}\`:`,
+    '',
+  ];
+  for (const o of offenders) {
+    lines.push(`  • parameter \`${o.name}\` — used in:`);
+    for (const m of o.matches) lines.push(`      - ${m}`);
+  }
+  lines.push(
+    '',
+    'Credentials MUST be pulled from the credential store via `${credential.<name>}`, never modelled as plain workflow parameters.',
+    "This usually means the redact stage failed to extract a username+password pair from the recorded login request — common causes include unusual Content-Type headers, multipart bodies, or login fields the extractor dictionary doesn't yet cover.",
+    '',
+    'To fix:',
+    `  1. Delete the redacted session: rm ${workflowToolHint(workflow)}/sessions/*.redacted.json (or the relevant one)`,
+    `  2. Re-run from the redact stage: imprint teach ${workflow.site} --from redact`,
+    '  3. Accept the "Save credentials for site to the credential manager?" prompt this time.',
+    '  4. Let teach continue through generate → compile-playbook → emit.',
+    '',
+    "If the prompt does NOT appear during step 3, the extractor still cannot pair this site's login fields — please file a bug attaching the (redacted!) session.",
+  );
+  throw new Error(lines.join('\n'));
+}
+
+/** Pretty path hint for the error message above. We don't have IMPRINT_HOME
+ *  in scope and don't need it — `~/.imprint/<site>` is the convention. */
+function workflowToolHint(workflow: Workflow): string {
+  return `~/.imprint/${workflow.site}`;
 }
 
 function pascalCase(s: string): string {

@@ -248,6 +248,242 @@ describe('extractCredentials — userid / loginid variants', () => {
   });
 });
 
+describe('extractCredentials — body-shape-agnostic dispatch', () => {
+  it('finds credentials in a JSON body even when Content-Type is text/plain', () => {
+    // Synthetic Nextep-shaped body: JSON, nested under a key, with an
+    // embedded URL containing `=`. Content-Type is text/plain — the bug
+    // before the fix sent this down the form-urlencoded path and missed
+    // the credential pair entirely.
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/execute',
+          headers: { 'content-type': 'text/plain' },
+          body: JSON.stringify({
+            authcode: 'fixture-token-uuid',
+            name: 'LOGIN',
+            locationid: 'STORE01',
+            LOGIN: {
+              userid: 'fixture-user@example.com',
+              password: 'fixture-pass-9472',
+              context: 'mobileWeb',
+              url: 'https://example.com/cmp/?storeid=STORE01',
+            },
+          }),
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user@example.com');
+    expect(out.findings[0]?.passwordValue).toBe('fixture-pass-9472');
+    expect(out.replacements[0]?.location.kind).toBe('body-json');
+  });
+
+  it('finds credentials in a JSON body with NO Content-Type header at all', () => {
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/login',
+          headers: {},
+          body: JSON.stringify({ username: 'fixture-user', password: 'fixture-pass' }),
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user');
+  });
+
+  it('finds credentials in a form body even when Content-Type lies as application/json', () => {
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: { 'content-type': 'application/json' }, // wrong on purpose
+          body: 'username=fixture-user&password=fixture-pass-9472&remember=1',
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user');
+    expect(out.findings[0]?.passwordValue).toBe('fixture-pass-9472');
+  });
+
+  it('finds credentials in a multipart/form-data body', () => {
+    const boundary = '----WebKitFormBoundaryFixture123';
+    const body = [
+      `--${boundary}`,
+      'Content-Disposition: form-data; name="username"',
+      '',
+      'fixture-user',
+      `--${boundary}`,
+      'Content-Disposition: form-data; name="password"',
+      '',
+      'fixture-pass-multipart',
+      `--${boundary}`,
+      'Content-Disposition: form-data; name="csrf_token"',
+      '',
+      'csrf-token-value',
+      `--${boundary}--`,
+      '',
+    ].join('\r\n');
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+          body,
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user');
+    expect(out.findings[0]?.passwordValue).toBe('fixture-pass-multipart');
+  });
+
+  it('finds credentials wrapped in a form field (payload={…})', () => {
+    const inner = JSON.stringify({ username: 'fixture-user', password: 'fixture-pass-wrap' });
+    const body = `payload=${encodeURIComponent(inner)}&action=login`;
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body,
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user');
+    expect(out.findings[0]?.passwordValue).toBe('fixture-pass-wrap');
+  });
+
+  it('finds credentials in the URL query string for a GET-based login', () => {
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://legacy.example.com/cgi/login?username=fixture-user&password=fixture-pass-qs&next=/home',
+          headers: {},
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user');
+    expect(out.findings[0]?.passwordValue).toBe('fixture-pass-qs');
+  });
+
+  it('finds OAuth ROPC credentials (grant_type=password, username, password)', () => {
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://auth.example.com/oauth/token',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body:
+            'grant_type=password' +
+            '&username=fixture-user' +
+            '&password=fixture-pass-ropc' +
+            '&client_id=test-client' +
+            '&scope=openid',
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user');
+    expect(out.findings[0]?.passwordValue).toBe('fixture-pass-ropc');
+  });
+
+  it('finds Java EE / Spring Security form-login fields (j_username + j_password)', () => {
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://j2ee.example.com/j_security_check',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: 'j_username=fixture-user&j_password=fixture-pass-jee',
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    expect(out.findings).toHaveLength(1);
+    expect(out.findings[0]?.usernameValue).toBe('fixture-user');
+    expect(out.findings[0]?.passwordValue).toBe('fixture-pass-jee');
+  });
+
+  it('does NOT match an OAuth client-credentials body (client_id only, no password)', () => {
+    // Defense against false positives from the broadened username dict —
+    // client_credentials grant has no real password partner.
+    const session: Session = {
+      ...emptySession(),
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://auth.example.com/oauth/token',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body:
+            'grant_type=client_credentials' +
+            '&client_id=test-client-id' +
+            '&client_secret=test-client-secret-value',
+          resourceType: 'XHR',
+        },
+      ],
+    };
+    const out = extractCredentials(session);
+    // `client_secret` matches PASSWORD_LIKE_KEYS (`secret`)... actually
+    // `client_secret` normalizes to `clientsecret` which is NOT in the set.
+    // So no password match → no findings. Asserting this so a future
+    // dictionary tweak that adds `clientsecret` doesn't silently start
+    // pairing client_id+client_secret as a login pair.
+    expect(out.findings).toEqual([]);
+  });
+});
+
 describe('extractCredentials — Southwest-shaped synthetic fixture', () => {
   // Mirrors Southwest's recorded login POST shape without using any real
   // credential. The point is to prove the extractor recognises the

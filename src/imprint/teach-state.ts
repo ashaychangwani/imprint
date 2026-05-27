@@ -55,6 +55,13 @@ export interface WorkflowState {
   updatedAt: string;
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
+  /** Non-fatal flags raised by upstream stages that downstream stages (and
+   *  the user) should know about. Currently used by the redact stage to
+   *  record `'credentials_not_paired'` when a password-shaped body field
+   *  was scrubbed but no username+password pair could be extracted —
+   *  meaning the generated workflow will template credentials as plain
+   *  parameters instead of `${credential.X}` references. */
+  warnings?: string[];
 }
 
 export interface TeachState {

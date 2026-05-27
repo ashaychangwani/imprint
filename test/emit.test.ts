@@ -133,3 +133,154 @@ describe('emit', () => {
     });
   });
 });
+
+describe('emit — credential-shape guardrail', () => {
+  // Exactly the panw-canteen failure mode: workflow declares
+  // userid/password as plain parameters and templates them with
+  // `${param.X}` in the LOGIN body. The guardrail must refuse to write.
+  it('refuses to emit when password is templated as a plain parameter', () => {
+    withTempDir((dir) => {
+      const wf: Workflow = {
+        toolName: 'load_thing_with_login',
+        intent: { description: 'Logs in and loads.' },
+        parameters: [
+          { name: 'store_id', type: 'string', description: 'store id', default: 'STORE01' },
+          { name: 'userid', type: 'string', description: 'email/username' },
+          { name: 'password', type: 'string', description: 'password' },
+        ],
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://example.com/api/execute',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({
+              name: 'LOGIN',
+              locationid: '${param.store_id}',
+              LOGIN: { userid: '${param.userid}', password: '${param.password}' },
+            }),
+          },
+        ],
+        site: 'demo-creds',
+      };
+      const wfPath = writeWorkflow(dir, wf);
+      expect(() => emit({ workflowPath: wfPath, outDir: dir })).toThrow(
+        /credential-shaped parameter/,
+      );
+    });
+  });
+
+  it('refuses to emit even when only the username half is parameterized', () => {
+    withTempDir((dir) => {
+      const wf: Workflow = {
+        toolName: 'login_only',
+        intent: { description: 'Logs in.' },
+        parameters: [{ name: 'email', type: 'string', description: 'email' }],
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://example.com/login',
+            headers: {},
+            body: 'email=${param.email}&password=${param.password_unused}',
+          },
+        ],
+        site: 'demo-creds',
+      };
+      const wfPath = writeWorkflow(dir, wf);
+      expect(() => emit({ workflowPath: wfPath, outDir: dir })).toThrow(
+        /credential-shaped parameter/,
+      );
+    });
+  });
+
+  it('allows credential-store-templated workflows through', () => {
+    // The correct pattern: same login flow but using `${credential.X}`.
+    // `userid`/`password` are not even declared as parameters — they come
+    // from the credential store. This must emit cleanly.
+    withTempDir((dir) => {
+      const wf: Workflow = {
+        toolName: 'load_thing_with_login_correct',
+        intent: { description: 'Logs in and loads.' },
+        parameters: [
+          { name: 'store_id', type: 'string', description: 'store id', default: 'STORE01' },
+        ],
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://example.com/api/execute',
+            headers: {},
+            body: JSON.stringify({
+              name: 'LOGIN',
+              locationid: '${param.store_id}',
+              LOGIN: {
+                userid: '${credential.userid}',
+                password: '${credential.password}',
+              },
+            }),
+          },
+        ],
+        site: 'demo-creds',
+      };
+      const wfPath = writeWorkflow(dir, wf);
+      const r = emit({ workflowPath: wfPath, outDir: dir });
+      const source = readFileSync(r.outPath, 'utf8');
+      // userid/password should NOT appear as Input fields since they
+      // aren't workflow parameters.
+      expect(source).not.toMatch(/userid\??: string/);
+      expect(source).not.toMatch(/password\??: string/);
+    });
+  });
+
+  it('allows credential-shaped param names when both ${param} and ${credential} are present', () => {
+    // Edge case: some workflows expose userid as an optional override
+    // alongside ${credential.userid} fallback in the body. Today this
+    // isn't an enforced pattern — but it's a defensible choice and the
+    // guardrail shouldn't block it. We require at least one credential
+    // reference in the workflow to mark intent.
+    withTempDir((dir) => {
+      const wf: Workflow = {
+        toolName: 'load_with_override',
+        intent: { description: 'Logs in with optional override.' },
+        parameters: [{ name: 'userid', type: 'string', description: 'override', default: '' }],
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://example.com/api',
+            headers: {},
+            body: JSON.stringify({
+              userid: '${param.userid}',
+              fallback: '${credential.userid}',
+            }),
+          },
+        ],
+        site: 'demo-creds',
+      };
+      const wfPath = writeWorkflow(dir, wf);
+      expect(() => emit({ workflowPath: wfPath, outDir: dir })).not.toThrow();
+    });
+  });
+
+  it('allows non-credential parameters with familiar names through', () => {
+    // `store_id`, `account_number` (not credential-shaped), `email` only
+    // in URL paths, etc. shouldn't trip the guardrail.
+    withTempDir((dir) => {
+      const wf: Workflow = {
+        toolName: 'plain_search',
+        intent: { description: 'Searches.' },
+        parameters: [
+          { name: 'store_id', type: 'string', description: 'store id' },
+          { name: 'q', type: 'string', description: 'query' },
+        ],
+        requests: [
+          {
+            method: 'GET',
+            url: 'https://example.com/search?store=${param.store_id}&q=${param.q}',
+            headers: {},
+          },
+        ],
+        site: 'demo-search',
+      };
+      const wfPath = writeWorkflow(dir, wf);
+      expect(() => emit({ workflowPath: wfPath, outDir: dir })).not.toThrow();
+    });
+  });
+});
