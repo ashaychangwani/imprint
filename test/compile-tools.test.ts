@@ -880,6 +880,128 @@ describe('extract', () => {
       rmSync(exampleDir, { recursive: true, force: true });
     }
   });
+
+  it('flags declared params that integration.test.ts does not exercise with a distinct value', async () => {
+    // Per-parameter coverage check: a parameter declared on the tool surface
+    // must appear with at least two distinct values in integration.test.ts
+    // (baseline + override) or carry a `// exposed-but-not-verified`
+    // annotation. This is the structural enforcement that catches "broken
+    // filter ships untested" — e.g., google-flights' max_duration_minutes
+    // bug, where the param was declared and templated but no test ever set
+    // it to a discriminating value.
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-coverage-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'coverage-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/search?q=test&sort=price',
+          headers: {},
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ results: [] }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'search_items',
+            intent: { description: 'Search items' },
+            parameters: [
+              { name: 'query', type: 'string', description: 'Query' },
+              { name: 'sort', type: 'string', description: 'Sort key' },
+              { name: 'max_price', type: 'number', description: 'Max price' },
+              { name: 'discount_code', type: 'string', description: 'Discount' },
+            ],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/api/search?q=${param.query}&sort=${param.sort}&max=${param.max_price}&disc=${param.discount_code}',
+                headers: {},
+              },
+            ],
+            site: 'coverage-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      // Integration test that exercises `query` (two distinct values: 'baseline' and 'apple'),
+      // mentions `sort` only once at its baseline default (uncovered),
+      // never mentions `max_price` (uncovered),
+      // and explicitly annotates `discount_code` as not verified (allowed).
+      writeFileSync(
+        pathJoin(exampleDir, 'integration.test.ts'),
+        `import { expect, test } from 'bun:test';
+
+test('baseline', async () => {
+  const params = { query: 'baseline', sort: 'price' };
+  // exposed-but-not-verified: discount_code is templated but the recording
+  // had no variation and no discriminating value is derivable from baseline.
+  expect(params).toBeDefined();
+});
+
+test('override query', async () => {
+  const params = { query: 'apple', sort: 'price' };
+  expect(params).toBeDefined();
+});
+`,
+        'utf8',
+      );
+
+      const parserCode = 'export function extract(raw) { return { items: [] }; }';
+      writeFileSync(pathJoin(exampleDir, 'parser.ts'), parserCode, 'utf8');
+
+      const { failures } = await externalVerification(exampleDir, session, sessionPath, {
+        likelyParams: [
+          { name: 'query', type: 'string', description: 'Query' },
+          { name: 'sort', type: 'string', description: 'Sort key' },
+          { name: 'max_price', type: 'number', description: 'Max price' },
+          { name: 'discount_code', type: 'string', description: 'Discount' },
+        ],
+      });
+
+      const coverageFailure = failures.find((f) =>
+        f.includes('have no discriminating integration test'),
+      );
+      expect(coverageFailure).toBeDefined();
+      // query has two distinct values → covered, not flagged
+      expect(coverageFailure ?? '').not.toContain('query');
+      // sort appears only as 'price' in both tests → 1 distinct value → uncovered
+      expect(coverageFailure ?? '').toContain('sort');
+      // max_price not mentioned at all → uncovered
+      expect(coverageFailure ?? '').toContain('max_price');
+      // discount_code annotated → allowed, not flagged
+      expect(coverageFailure ?? '').not.toContain('discount_code');
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('buildInlineData form-encoded decoding', () => {

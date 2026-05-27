@@ -177,9 +177,21 @@ Follow these steps to compile the session:
     ```
     If the live call fails (400, 403, expired tokens), this test fails and you must fix the workflow. Common fixes: chain a session/token request first, write a `requestTransformModule` for URL signing, or use `${state.X}` captures instead of hardcoded values. If a query param changes per call (check `stateHints` for `query_param_changes_across_calls`), use `search_response_body` to find the signing function in `.js` responses and replicate it in `request-transform.ts`.
 
-    **Per-representative test cases.** Beyond the baseline test above, write one additional test case for each representative request that has non-default parameter values (visible in `inlineData.requestBodyDecoded` or via `read_request`). Each test case should call `executeWorkflow` with the param values from that representative and assert the results are constrained accordingly — e.g., with `stops: 1` all returned flights have 0 stops, with a carrier filter only those carriers appear, with a price cap all prices are under the cap. Use concrete values from the recording, not invented ones.
+    **Per-parameter coverage tests.** Beyond the baseline test above, you must write one integration test for **every parameter that has a non-default value in any captured request** (visible in `inlineData.requestBodyDecoded` or via `read_request`). Walk every recorded request, decode its body, and enumerate the set of `(paramName, nonDefaultValue)` tuples. Each tuple is a coverage unit — write a test that overrides that param and asserts a constraint on the response.
 
-    These tests serve as functional verification that each parameter actually reaches the API and affects the response. If a parameter is wired into a position the server ignores (e.g., an invented URL query param), the filtered test case will return unfiltered results and fail the assertion.
+    These tests are the only signal that each parameter actually reaches the API and affects the response. If a parameter is wired into a position the server ignores (an invented URL query param, a slot guessed wrong in a positional JSPB body), the test fails because the filtered response will look like the unfiltered one. Skipping a parameter means shipping it untested.
+
+    **Pick discriminating values.** A test that doesn't constrain anything is a false-pass. Before using a value from the recording, cross-check the recorded response: does setting the param to that value measurably change the response compared to baseline (fewer results, different price range, different shape)? If yes, use it. If no — e.g., the recording has `max_duration_minutes=540` but baseline flights are 85 minutes long so the filter is a no-op — derive a tighter value from the baseline response (e.g., the median duration) that actually splits the results, and use that.
+
+    If no discriminating value exists in the recording AND none can be derived from the baseline response (rare — e.g., a parameter that only affects authenticated views you haven't recorded), annotate the test explicitly:
+
+    ```typescript
+    // exposed-but-not-verified: no recorded variation and no discriminating
+    // value derivable from baseline. The parameter is templated and reaches
+    // the API, but its effect on the response is unverified.
+    ```
+
+    The annotation satisfies the verifier coverage check but surfaces the gap in the verifier output so the user knows what's untested.
 
     ```typescript
     test('stops=1 returns only nonstop flights', async () => {
@@ -205,7 +217,7 @@ Follow these steps to compile the session:
     }, 30_000);
     ```
 
-    You don't need a separate test for every single parameter — group related params (e.g., all four time-range params in one test) and prioritize params that constrain results in verifiable ways. Aim for at least 2-3 param-variation tests beyond the baseline.
+    Write one test per parameter — do NOT batch unrelated params into a single test ("all four time-range params in one test" lets you skip dimensions silently and reduces the chance any one filter fails an assertion if it's broken). One param per test, one constraint per test, one assertion per constraint.
 
     **This file is ephemeral** like parser.test.ts — deleted after verification unless `--keep-test` is passed.
 
@@ -353,7 +365,7 @@ Assertions must reference real values derived from the narration or response str
 
 7. **Do not give up on binary responses without confirming they are truly unparseable.** Use `read_response_body` to inspect the bytes — sometimes "binary" is just gzipped JSON or a parseable protobuf.
 
-8. **Do not ignore `likelyParams` from the candidate detector.** If `selectedCandidate.likelyParams` lists a parameter but the recorded request has `null` or `[]` in that position, it means the user didn't apply that filter/constraint during recording — NOT that the parameter doesn't exist. Template it anyway as an optional parameter with a default meaning "unfiltered."
+8. **Do not ignore `likelyParams` from the candidate detector.** If `selectedCandidate.likelyParams` lists a parameter but the recorded request has `null` or `[]` in that position, it means the user didn't apply that filter/constraint during recording — NOT that the parameter doesn't exist. Template it anyway as an optional parameter with a default meaning "unfiltered." Then mark it in `integration.test.ts` with `// exposed-but-not-verified: not exercised in recording` so the verifier and downstream readers know the parameter is templated but its server-side effect is untested. Do not silently expose unexercised parameters — every declared parameter must either have a discriminating integration test or carry the annotation.
 
 ## When `give_up` is Appropriate (Narrow)
 
