@@ -12,14 +12,22 @@ The fastest path is `imprint teach`, which runs the full pipeline interactively 
 
 ## Install
 
+### npm (recommended)
+
+```bash
+bun install -g imprint-mcp
+bunx playwright install chromium   # needed for teach/record/login
+```
+
+### From source
+
 ```bash
 git clone https://github.com/ashaychangwani/imprint.git
 cd imprint
-bun install                       # also installs Chromium via postinstall hook
+bun install
 bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
+bunx playwright install chromium  # needed for teach/record/login
 ```
-
-> `bun install` runs `bunx playwright install chromium` automatically via the postinstall hook. If you need to re-install Chromium manually (e.g., after a Playwright upgrade), run `bunx playwright install chromium`.
 
 By default, all Imprint data lives in `~/.imprint/`. Set `IMPRINT_HOME` to relocate it.
 

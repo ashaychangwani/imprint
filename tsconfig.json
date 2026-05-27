@@ -23,7 +23,12 @@
 
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": false
+    "verbatimModuleSyntax": false,
+
+    "paths": {
+      "imprint/runtime": ["./src/imprint/runtime.ts"],
+      "imprint/types": ["./src/imprint/types.ts"]
+    }
   },
   "include": ["src/**/*", "test/**/*", "examples/**/*"],
   "exclude": ["node_modules", "dist"]

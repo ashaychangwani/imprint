@@ -18,16 +18,18 @@ IMPRINT_DEBUG=1 imprint mcp-server mysite
 
 ## "command not found: imprint"
 
-You ran `bun link` from inside the imprint directory but the binary isn't on PATH. Two fixes:
+The `imprint` binary isn't on PATH. Fixes depending on how you installed:
 
-1. **Add `~/.bun/bin` to PATH.** Bun's installer does this by default in `~/.zshrc` / `~/.bashrc`; if you skipped that step or installed via a non-standard route:
+1. **npm install** — ensure `~/.bun/bin` is on PATH (Bun's installer adds it by default):
    ```bash
    echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.zshrc
    source ~/.zshrc
    imprint --help    # should now work
    ```
 
-2. **Skip linking entirely.** Run every verb via `bun src/cli.ts` from the imprint repo:
+2. **Standalone binary** — ensure `~/.local/bin` (or wherever you installed) is on PATH.
+
+3. **From source** — run `bun link` in the repo, or skip linking and call via `bun src/cli.ts`:
    ```bash
    bun src/cli.ts doctor
    bun src/cli.ts record mysite --url https://...

@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { IS_COMPILED_BINARY } from './imprint/is-compiled.ts';
 import type { ProviderName } from './imprint/llm.ts';
 import { isDebug } from './imprint/log.ts';
 import { shutdownTracing, traced } from './imprint/tracing.ts';
@@ -482,6 +483,35 @@ async function main(argv: string[]): Promise<number> {
   if (verb in VERB_HELP && isVerbHelpRequest(argv.slice(1))) {
     printVerbHelp(verb);
     return 0;
+  }
+
+  const BINARY_BLOCKED_COMMANDS = new Set([
+    'teach',
+    'record',
+    'login',
+    'playbook',
+    'generate',
+    'compile-playbook',
+  ]);
+  if (IS_COMPILED_BINARY && BINARY_BLOCKED_COMMANDS.has(verb)) {
+    const rest = process.argv.slice(2).join(' ');
+    const reason =
+      verb === 'generate' || verb === 'compile-playbook'
+        ? `The \`${verb}\` command spawns \`bun test\` for verification and requires the Bun runtime on PATH.`
+        : `The \`${verb}\` command requires Playwright, which isn't included in the standalone binary.`;
+    console.error(
+      [
+        reason,
+        '',
+        'If you have Bun installed, run it directly:',
+        `  bunx imprint-mcp ${rest}`,
+        '',
+        "If you don't have Bun yet:",
+        '  curl -fsSL https://bun.sh/install | bash',
+        `  bunx imprint-mcp ${rest}`,
+      ].join('\n'),
+    );
+    return 1;
   }
 
   switch (verb) {

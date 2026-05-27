@@ -11,9 +11,9 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 const product = {
   repo: 'github.com/ashaychangwani/imprint',
   githubUrl: 'https://github.com/ashaychangwani/imprint',
-  install: 'git clone https://github.com/ashaychangwani/imprint.git && cd imprint',
-  teach: 'bun run imprint teach southwest --url https://www.southwest.com',
-  installMcp: 'bun run imprint install southwest --platform claude-desktop',
+  install: 'bun install -g imprint-mcp',
+  teach: 'imprint teach southwest --url https://www.southwest.com',
+  installMcp: 'imprint install southwest --platform claude-desktop',
 };
 
 const pipeline = [
@@ -74,10 +74,9 @@ function TerminalCard() {
         <span />
         <span />
         <span />
-        <strong>bun run imprint</strong>
+        <strong>imprint</strong>
       </div>
-      <pre><code>{`$ git clone https://github.com/ashaychangwani/imprint.git
-$ cd imprint && bun install && bun link
+      <pre><code>{`$ ${product.install}
 
 $ ${product.teach}
 
@@ -531,18 +530,17 @@ export default function App() {
               <div>
                 <span className="kicker">Install</span>
                 <h2 id="install-title">Teach your first agent tool in minutes.</h2>
-                <p>Bring Bun 1.3+, Chrome, and a compile-agent provider already available on your machine. Imprint detects Claude CLI, Codex CLI, or Anthropic API; Cursor CLI is available for playbook compilation.</p>
+                <p>Install via npm (requires Bun 1.3+) or download a standalone binary. Imprint detects Claude CLI, Codex CLI, or Anthropic API; Cursor CLI is available for playbook compilation.</p>
                 <div className="hero-actions">
-                  <a className="btn btn-primary" href={product.githubUrl}>Clone the repo</a>
+                  <a className="btn btn-primary" href={product.githubUrl}>View on GitHub</a>
                   <Link className="btn btn-secondary" to="/docs/getting-started">Read getting started</Link>
                 </div>
               </div>
               <div className="command-list" aria-label="Install commands">
                 <div className="command"><b>1</b><code>{product.install}</code></div>
-                <div className="command"><b>2</b><code>bun install && bun link</code></div>
-                <div className="command"><b>3</b><code>bunx playwright install chromium</code></div>
-                <div className="command"><b>4</b><code>{product.teach}</code></div>
-                <div className="command"><b>5</b><code>{product.installMcp}</code></div>
+                <div className="command"><b>2</b><code>bunx playwright install chromium</code></div>
+                <div className="command"><b>3</b><code>{product.teach}</code></div>
+                <div className="command"><b>4</b><code>{product.installMcp}</code></div>
               </div>
             </div>
           </section>
