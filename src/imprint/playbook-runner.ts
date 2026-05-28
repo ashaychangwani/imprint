@@ -387,7 +387,10 @@ async function applyWait(
   }
 }
 
-async function extractResult(
+/** Exported for testing — drives the XHR-body extraction contract that
+ *  must stay symmetric with the workflow runtime (runtime.ts:279-285).
+ */
+export async function extractResult(
   page: Page,
   result: PlaybookResult,
   captured: Array<{ url: string; method: string; status: number; body: string | null }>,
@@ -410,16 +413,29 @@ async function extractResult(
         `Result XHR returned ${last.status} (${last.url}): ${last.body.slice(0, 300)}.${hint}`,
       );
     }
-    let parsed: unknown;
+    // Mirror runtime.ts (workflow path) semantics: try JSON first, but fall
+    // back to the raw body string when parsing fails. Many APIs return
+    // non-JSON envelopes that a downstream parser knows how to decode —
+    // Google XSSI prefix (`)]}'`), chunked batchexecute payloads, JSONP
+    // callbacks, protobuf-over-HTTP, etc. Throwing here would bypass the
+    // parser entirely; passing the raw bytes lets the parser do its job and
+    // keeps the playbook fallback's contract symmetric with the workflow
+    // path.
+    let parsed: unknown = last.body;
     try {
       parsed = JSON.parse(last.body);
     } catch {
-      throw new Error(`Result XHR body was not JSON (${last.url}): ${last.body.slice(0, 200)}`);
+      // Path-based extraction (`items[].id`) needs a structured value to
+      // navigate, so we still fail loudly in that case. Whole-body
+      // extraction (`extract === '*'`) is the contract that says "the
+      // parser owns the bytes," so we pass them through.
+      const wholeBody = result.extract === '*' || result.extract === '';
+      if (!wholeBody) {
+        throw new Error(`Result XHR body was not JSON (${last.url}): ${last.body.slice(0, 200)}`);
+      }
     }
-    // `*` returns the full parsed JSON unchanged — useful when the consumer
-    // (parser.ts, MCP caller) wants the rich object graph rather than just
-    // numeric leaves.
-    if (result.extract === '*') {
+    const wholeBody = result.extract === '*' || result.extract === '';
+    if (wholeBody) {
       return { [result.return_as]: parsed, source_url: last.url };
     }
     return { [result.return_as]: extractAt(parsed, result.extract), source_url: last.url };

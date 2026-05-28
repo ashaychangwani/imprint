@@ -1333,6 +1333,55 @@ export async function externalVerification(
     }
   }
 
+  // Per-parameter coverage check — every parameter declared on the tool
+  // surface must appear in at least two distinct value bindings in
+  // integration.test.ts (baseline + at least one override), OR carry an
+  // explicit `// exposed-but-not-verified` annotation naming the parameter.
+  //
+  // This catches the structural failure mode that lets broken filters ship
+  // silently: an agent declares a parameter (because the recording exercised
+  // it), templates it into the workflow, but never writes a discriminating
+  // integration test. Without this check, the parameter passes through to
+  // the API but its server-side effect is unverified — the very class of
+  // bug that motivated this enforcement.
+  //
+  // We count *distinct values* rather than occurrences so that agents which
+  // inline baseline defaults into every test still fail when no override
+  // actually exercises a different value.
+  if (existsSync(integrationTestPath) && opts.likelyParams && opts.likelyParams.length > 0) {
+    const integrationSrc = readFileSync(integrationTestPath, 'utf8');
+    // Strip line comments before scanning so param names that only appear in
+    // commentary don't count as bindings. The exposed-but-not-verified
+    // annotation check is intentionally run against the un-stripped source.
+    const codeOnly = integrationSrc
+      .split('\n')
+      .map((line) => {
+        const commentIdx = line.indexOf('//');
+        return commentIdx >= 0 ? line.slice(0, commentIdx) : line;
+      })
+      .join('\n');
+    const uncovered: string[] = [];
+    for (const lp of opts.likelyParams) {
+      const escapedName = lp.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const valueRe = new RegExp(`\\b${escapedName}\\s*:\\s*([^,}\\n]+)`, 'g');
+      const distinctValues = new Set<string>();
+      for (const match of codeOnly.matchAll(valueRe)) {
+        const captured = match[1];
+        if (captured !== undefined) distinctValues.add(captured.trim());
+      }
+      const annotationRe = new RegExp(`//\\s*exposed-but-not-verified[^\\n]*\\b${escapedName}\\b`);
+      const isAnnotated = annotationRe.test(integrationSrc);
+      if (distinctValues.size < 2 && !isAnnotated) {
+        uncovered.push(lp.name);
+      }
+    }
+    if (uncovered.length > 0) {
+      failures.push(
+        `${uncovered.length} parameter(s) declared on the tool surface have no discriminating integration test (baseline + override with a different value) and no \`// exposed-but-not-verified\` annotation: ${uncovered.join(', ')}. Either add a per-parameter test that overrides the value and asserts the response is constrained, or annotate the parameter as explicitly unverified. See prompts/compile-agent.md "Per-parameter coverage tests".`,
+      );
+    }
+  }
+
   if (existsSync(parserPath) || existsSync(parserTestPath)) {
     const output = await runGeneratedArtifactTypecheck(toolDir);
     if (output.exitCode !== 0 || output.timedOut) {

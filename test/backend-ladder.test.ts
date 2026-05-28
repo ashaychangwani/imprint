@@ -11,7 +11,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
-import { resolveLadder, runWithLadder } from '../src/imprint/backend-ladder.ts';
+import {
+  resolveLadder,
+  runWithLadder,
+  runWorkflowWithLadder,
+} from '../src/imprint/backend-ladder.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import type { ToolResult, Workflow } from '../src/imprint/types.ts';
@@ -453,5 +457,138 @@ describe('runWithLadder — empty ladder', () => {
     await expect(runWithLadder([], tool, {}, root, makeStealthCache(tool))).rejects.toThrow(
       /empty ladder/,
     );
+  });
+});
+
+describe('runWorkflowWithLadder', () => {
+  // The synthetic ResolvedTool path: takes a workflow.json on disk and
+  // dispatches through the real `runWithLadder`. We use a local HTTP
+  // server to keep the test hermetic — the only thing we're really
+  // checking is that the helper wires workflow → ResolvedTool → ladder
+  // correctly (loadCredentialStore, dirname resolution, backends.json
+  // pickup). Backend escalation itself is covered by the tests above.
+  it('throws a clear error when workflow.json is missing', async () => {
+    await expect(
+      runWorkflowWithLadder({
+        workflowPath: pathJoin(root, 'nonexistent', 'workflow.json'),
+        params: {},
+      }),
+    ).rejects.toThrow(/workflow.json not found/);
+  });
+
+  it('runs a workflow against a real local HTTP server through the fetch rung', async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        const url = new URL(req.url);
+        if (url.pathname === '/api/echo') {
+          return new Response(JSON.stringify({ q: url.searchParams.get('q'), ok: true }), {
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response('not found', { status: 404 });
+      },
+    });
+    const port = server.port;
+    try {
+      const toolDir = pathJoin(root, 'echo-site', 'echo_tool');
+      mkdirSync(toolDir, { recursive: true });
+      const workflowPath = pathJoin(toolDir, 'workflow.json');
+      writeFileSync(
+        workflowPath,
+        JSON.stringify(
+          {
+            toolName: 'echo_tool',
+            intent: { description: 'Echo' },
+            parameters: [{ name: 'q', type: 'string', description: 'query' }],
+            requests: [
+              {
+                method: 'GET',
+                url: `http://127.0.0.1:${port}/api/echo?q=\${param.q}`,
+                headers: {},
+              },
+            ],
+            site: 'echo-site',
+          },
+          null,
+          2,
+        ),
+      );
+
+      const { result, usedBackend } = await runWorkflowWithLadder({
+        workflowPath,
+        params: { q: 'hello' },
+      });
+      expect(result.ok).toBe(true);
+      expect(usedBackend).toBe('fetch');
+      if (result.ok) {
+        expect(result.data).toEqual({ q: 'hello', ok: true });
+      }
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it('ladder is fixed to [fetch, stealth-fetch] regardless of a sibling backends.json', async () => {
+    // Compile-time integration tests run BEFORE `imprint compile-playbook`
+    // generates a playbook.yaml, so the playbook rung is intentionally
+    // excluded. The helper must also ignore any sibling backends.json
+    // (which is a runtime probe cache, not a compile-time concern) and
+    // always use the same two-rung ladder. This is a regression guard
+    // against drift toward runtime-coupled behavior.
+    //
+    // We prove it by: workflow whose fetch returns 200 (so the fetch
+    // rung wins) AND a backends.json that says "only try playbook"
+    // (which the helper should ignore). If the helper read backends.json,
+    // it would try playbook (which doesn't exist on disk), get a skip,
+    // and return a no-rungs-available error.
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(JSON.stringify({ ok: true }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    });
+    const port = server.port;
+    try {
+      const toolDir = pathJoin(root, 'mistrust-site', 'mistrust_tool');
+      mkdirSync(toolDir, { recursive: true });
+      const workflowPath = pathJoin(toolDir, 'workflow.json');
+      writeFileSync(
+        workflowPath,
+        JSON.stringify({
+          toolName: 'mistrust_tool',
+          intent: { description: 'Should still use fetch' },
+          parameters: [],
+          requests: [{ method: 'GET', url: `http://127.0.0.1:${port}/api/ok`, headers: {} }],
+          site: 'mistrust-site',
+        }),
+      );
+
+      // Adversarial backends.json: claims preferredOrder is playbook-only.
+      // Since this helper ignores backends.json, fetch must still be tried
+      // and win.
+      writeFileSync(
+        pathJoin(toolDir, 'backends.json'),
+        JSON.stringify({
+          probedAt: new Date().toISOString(),
+          imprintVersion: '0.1.0',
+          schemaVersion: 2,
+          preferredOrder: ['playbook'],
+          results: {},
+        }),
+      );
+
+      const { result, usedBackend, attempts } = await runWorkflowWithLadder({
+        workflowPath,
+        params: {},
+      });
+      expect(result.ok).toBe(true);
+      expect(usedBackend).toBe('fetch');
+      // Two-rung ladder advertised; only the first rung needed to run.
+      expect(attempts.map((a) => a.backend)).toEqual(['fetch']);
+    } finally {
+      server.stop(true);
+    }
   });
 });
