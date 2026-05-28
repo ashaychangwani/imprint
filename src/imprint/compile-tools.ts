@@ -1356,9 +1356,16 @@ export async function externalVerification(
       const combined = `${lastOutput.stdout}\n${lastOutput.stderr}`;
       const botSignatures = /PerimeterX|DataDome|Akamai|captcha|challenge|blocked|rate.?limit/i;
       const hasStatusBlock = /\b(403|429)\b/.test(combined);
+      const hasImprintBlock =
+        /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(combined) &&
+        /non-escalatable|giving up/.test(combined);
       if (hasStatusBlock && botSignatures.test(combined)) {
         warnings.push(
           `integration test failed with likely bot-detection or rate-limiting (tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
+        );
+      } else if (hasImprintBlock) {
+        warnings.push(
+          `integration test failed with infrastructure error (${combined.match(/\b(RATE_LIMITED|FORBIDDEN|NETWORK)\b/)?.[0] ?? 'unknown'}, tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
         );
       } else {
         failures.push(
