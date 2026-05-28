@@ -7,7 +7,7 @@
  * pipeline consumes unchanged.
  */
 
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { localSessionsDir } from './paths.ts';
 import { friendlySessionTimestamp } from './teach-state.ts';
@@ -34,10 +34,13 @@ interface SessionInfo {
 }
 
 export function listSiteSessions(site: string): SessionInfo[] {
-  const sessDir = localSessionsDir(site);
-  if (!existsSync(sessDir)) return [];
+  return listSessionsInDir(localSessionsDir(site));
+}
 
-  const files = readdirSync(sessDir).filter(
+export function listSessionsInDir(dir: string): SessionInfo[] {
+  if (!existsSync(dir)) return [];
+
+  const files = readdirSync(dir).filter(
     (f) =>
       f.endsWith('.json') &&
       !f.includes('.redacted') &&
@@ -47,7 +50,7 @@ export function listSiteSessions(site: string): SessionInfo[] {
 
   const infos: SessionInfo[] = [];
   for (const filename of files) {
-    const absPath = pathJoin(sessDir, filename);
+    const absPath = pathJoin(dir, filename);
     try {
       const raw = JSON.parse(readFileSync(absPath, 'utf8'));
       const session = SessionSchema.parse(raw);
@@ -190,6 +193,7 @@ export function mergeSessions(sessions: Session[]): Session {
 
 export function writeCombinedSession(site: string, combined: Session): string {
   const sessDir = localSessionsDir(site);
+  mkdirSync(sessDir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `combined-${timestamp}.json`;
   const absPath = pathJoin(sessDir, filename);

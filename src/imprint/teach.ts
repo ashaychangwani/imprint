@@ -9,7 +9,12 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join as pathJoin, resolve as pathResolve } from 'node:path';
+import {
+  basename as pathBasename,
+  dirname as pathDirname,
+  join as pathJoin,
+  resolve as pathResolve,
+} from 'node:path';
 import * as p from '@clack/prompts';
 import type { OnDeadlineReached } from './agent.ts';
 import {
@@ -52,7 +57,12 @@ import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import { loadCredentialStore } from './runtime.ts';
 import { isSensitiveCredentialKey, passwordLikeTokens } from './sensitive-keys.ts';
 import type { ClassifiedValue } from './session-diff.ts';
-import { listSiteSessions, mergeSessions, writeCombinedSession } from './session-merge.ts';
+import {
+  listSessionsInDir,
+  listSiteSessions,
+  mergeSessions,
+  writeCombinedSession,
+} from './session-merge.ts';
 import {
   TEACH_STEPS as STEPS,
   type TeachStep as Step,
@@ -521,21 +531,30 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       startedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
+  }
 
-    // ── 1b. Combine with past sessions (optional) ────────────────────
-    const originalSessionPath = sessionPath;
-    sessionPath = await promptSessionCombine({
-      site,
-      currentSessionPath: sessionPath,
-      noInteractive: opts.noInteractive ?? false,
-    });
-    if (sessionPath !== originalSessionPath) {
-      checkpoint(site, state, workflowKey, {
-        sessionPath: toRelative(site, sessionPath),
-        completedSteps: ['record'],
-        startedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+  // ── 1b. Combine with past sessions (optional) ──────────────────────
+  // Runs after recording OR when --from-session is provided. Skipped when
+  // resuming from a checkpoint (the checkpoint already stores the final
+  // session path, possibly combined from a previous run).
+  if (sessionPath && (startIdx <= STEPS.indexOf('record') || usingFromSession)) {
+    const isCombinedSession = pathBasename(sessionPath).startsWith('combined-');
+    if (!isCombinedSession) {
+      const originalSessionPath = sessionPath;
+      sessionPath = await combineAvailableSessions({
+        site,
+        currentSessionPath: sessionPath,
+        noInteractive: opts.noInteractive ?? false,
+        fromSession: usingFromSession,
       });
+      if (sessionPath !== originalSessionPath) {
+        checkpoint(site, state, workflowKey, {
+          sessionPath: toRelative(site, sessionPath),
+          completedSteps: ['record'],
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
     }
   }
 
@@ -2189,44 +2208,58 @@ async function offerSkillExport(opts: {
   }
 }
 
-// ─── Session combination (post-record, pre-redact) ────────────────────────
+// ─── Session combination (post-record or post-from-session, pre-redact) ──
 
-async function promptSessionCombine(opts: {
+async function combineAvailableSessions(opts: {
   site: string;
   currentSessionPath: string;
   noInteractive: boolean;
+  fromSession: boolean;
 }): Promise<string> {
-  if (opts.noInteractive) return opts.currentSessionPath;
-
-  const pastSessions = listSiteSessions(opts.site).filter(
-    (s) => s.absPath !== opts.currentSessionPath,
-  );
+  // Discover sibling sessions. For --from-session, look in the source
+  // directory (which may differ from the target site's sessions dir).
+  // For normal recordings, look in the site's sessions directory.
+  const pastSessions = opts.fromSession
+    ? listSessionsInDir(pathDirname(opts.currentSessionPath)).filter(
+        (s) => s.absPath !== opts.currentSessionPath,
+      )
+    : listSiteSessions(opts.site).filter((s) => s.absPath !== opts.currentSessionPath);
 
   if (pastSessions.length === 0) return opts.currentSessionPath;
 
-  const combine = await p.confirm({
-    message: `Found ${pastSessions.length} past recording session${pastSessions.length === 1 ? '' : 's'} for "${opts.site}". Combine with the new recording?`,
-    initialValue: false,
-  });
+  let selectedPaths: string[];
 
-  if (p.isCancel(combine) || !combine) return opts.currentSessionPath;
+  if (opts.noInteractive) {
+    // Auto-combine all available sessions
+    selectedPaths = pastSessions.map((s) => s.absPath);
+    p.log.info(
+      `Auto-combining ${pastSessions.length + 1} session(s) for "${opts.site}".`,
+    );
+  } else {
+    const combine = await p.confirm({
+      message: `Found ${pastSessions.length} past recording session${pastSessions.length === 1 ? '' : 's'}${opts.fromSession ? ' in the source directory' : ` for "${opts.site}"`}. Combine with the ${opts.fromSession ? 'provided' : 'new'} recording?`,
+      initialValue: true,
+    });
 
-  const selected = await p.multiselect({
-    message:
-      'Select sessions to combine with the new recording:\n  (press [space] to toggle, [enter] to submit)',
-    required: true,
-    initialValues: pastSessions.map((s) => s.absPath),
-    options: pastSessions.map((s) => ({
-      value: s.absPath,
-      label: `${s.friendlyTimestamp} — ${s.url}`,
-      hint: `${s.requestCount} requests, ${s.narrationCount} narrations`,
-    })),
-  });
+    if (p.isCancel(combine) || !combine) return opts.currentSessionPath;
 
-  if (p.isCancel(selected)) return opts.currentSessionPath;
+    const selected = await p.multiselect({
+      message:
+        'Select sessions to combine:\n  (press [space] to toggle, [enter] to submit)',
+      required: true,
+      initialValues: pastSessions.map((s) => s.absPath),
+      options: pastSessions.map((s) => ({
+        value: s.absPath,
+        label: `${s.friendlyTimestamp} — ${s.url}`,
+        hint: `${s.requestCount} requests, ${s.narrationCount} narrations`,
+      })),
+    });
 
-  const selectedPaths = selected as string[];
-  if (selectedPaths.length === 0) return opts.currentSessionPath;
+    if (p.isCancel(selected)) return opts.currentSessionPath;
+
+    selectedPaths = selected as string[];
+    if (selectedPaths.length === 0) return opts.currentSessionPath;
+  }
 
   const spinner = p.spinner();
   spinner.start('Combining sessions...');
