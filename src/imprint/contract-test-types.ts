@@ -23,7 +23,7 @@ export interface ContractTestCase {
 }
 
 export interface ContractAssertion {
-  /** Dot-notation accessor into result.data (e.g. "outbound_flights", "outbound_flights.0.price"). */
+  /** Dot-notation accessor into result.data (e.g. "items", "items.0.price"). */
   path: string;
   check:
     | 'exists'

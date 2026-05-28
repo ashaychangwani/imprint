@@ -502,10 +502,9 @@ function patchTestFile(testPath: string, testName: string, reason: string): bool
 
     const sanitizedReason = reason.replace(/\n/g, ' ').replace(/'/g, "\\'");
     const indent = (lines[testStart] || '').match(/^\s*/)?.[0] || '';
-    const commentLine = `${indent}// ADJUDICATED: ${sanitizedReason}`;
-    const skipLine = `${indent}test.skip('${escaped}', async () => {`;
+    const replacement = `${indent}// ADJUDICATED: ${sanitizedReason}\n${indent}test.skip('${escaped}', () => {});`;
 
-    lines[testStart] = `${commentLine}\n${skipLine}`;
+    lines.splice(testStart, testEnd - testStart + 1, replacement);
 
     writeFileSync(testPath, lines.join('\n'), 'utf8');
     log(`patched test "${testName}" with skip + comment`);

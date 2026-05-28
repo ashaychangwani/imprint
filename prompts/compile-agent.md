@@ -187,7 +187,7 @@ Follow these steps to compile the session:
 
     These tests are the only signal that each parameter actually reaches the API and affects the response. If a parameter is wired into a position the server ignores (an invented URL query param, a slot guessed wrong in a positional JSPB body), the test fails because the filtered response will look like the unfiltered one. Skipping a parameter means shipping it untested.
 
-    **Pick discriminating values.** A test that doesn't constrain anything is a false-pass. Before using a value from the recording, cross-check the recorded response: does setting the param to that value measurably change the response compared to baseline (fewer results, different price range, different shape)? If yes, use it. If no — e.g., the recording has `max_duration_minutes=540` but baseline flights are 85 minutes long so the filter is a no-op — derive a tighter value from the baseline response (e.g., the median duration) that actually splits the results, and use that.
+    **Pick discriminating values.** A test that doesn't constrain anything is a false-pass. Before using a value from the recording, cross-check the recorded response: does setting the param to that value measurably change the response compared to baseline (fewer results, different price range, different shape)? If yes, use it. If no — e.g., the recording has `max_results=1000` but baseline only returns 20 items so the filter is a no-op — derive a tighter value from the baseline response (e.g., a value below the median) that actually splits the results, and use that.
 
     If no discriminating value exists in the recording AND none can be derived from the baseline response (rare — e.g., a parameter that only affects authenticated views you haven't recorded), annotate the test explicitly:
 
@@ -200,10 +200,10 @@ Follow these steps to compile the session:
     The annotation satisfies the verifier coverage check but surfaces the gap in the verifier output so the user knows what's untested.
 
     ```typescript
-    test('stops=1 returns only nonstop flights', async () => {
+    test('max_price=50 constrains all results', async () => {
       const params: Record<string, string | number | boolean> = {
         /* same defaults as baseline, but override: */
-        stops: 1,
+        max_price: 50,
       };
       const credentials = (await loadCredentialStore(WORKFLOW.site)) ?? undefined;
       const { result } = await runWorkflowWithLadder({
@@ -213,10 +213,9 @@ Follow these steps to compile the session:
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const data = result.data as { flights: Array<{ stops: number }> };
-        // Every flight should be nonstop when stops=1
-        for (const f of data.flights ?? []) {
-          expect(f.stops).toBe(0);
+        const data = result.data as { items: Array<{ price: number }> };
+        for (const item of data.items ?? []) {
+          expect(item.price).toBeLessThanOrEqual(50);
         }
       }
     }, 30_000);
@@ -224,7 +223,7 @@ Follow these steps to compile the session:
 
     Write one test per parameter — do NOT batch unrelated params into a single test ("all four time-range params in one test" lets you skip dimensions silently and reduces the chance any one filter fails an assertion if it's broken). One param per test, one constraint per test, one assertion per constraint.
 
-    **Enum-like parameters.** When a parameter has more than two distinct values across `requestBodyDecoded` of the recorded requests (e.g., `trip_type` recorded with values `1`, `2`, AND `3` — round-trip, one-way, multi-city), write one test per distinct value rather than picking a single override. Cap at 5 distinct values per param to keep scope reasonable; if the recording has more, pick the 5 most semantically diverse. Each enum-value test still needs an assertion that the response is constrained to that value — e.g., `trip_type=3` should produce a multi-leg itinerary structure in the response, not just a copy of the baseline. Testing one value when three were exercised silently ships two unverified shapes (the `trip_type=3` collapsed-to-leg-1 bug in google-flights was exactly this: the recording had multi-city captures but only round-trip got a test).
+    **Enum-like parameters.** When a parameter has more than two distinct values across `requestBodyDecoded` of the recorded requests (e.g., `sort_by` recorded with values `price`, `duration`, AND `rating`), write one test per distinct value rather than picking a single override. Cap at 5 distinct values per param to keep scope reasonable; if the recording has more, pick the 5 most semantically diverse. Each enum-value test still needs an assertion that the response is constrained to that value — e.g., `sort_by=price` should produce results sorted by price, not just a copy of the baseline. Testing one value when three were exercised silently ships two unverified response shapes.
 
     **This file is ephemeral** like parser.test.ts — deleted after verification unless `--keep-test` is passed.
 

@@ -1044,6 +1044,41 @@ function normalizeTsconfigPath(value: string): string {
   return normalized.startsWith('.') ? normalized : `./${normalized}`;
 }
 
+/** Strip a line comment (`// ...`) while preserving `//` inside string literals. */
+function stripLineComment(line: string): string {
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  let escaped = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble && !inTemplate) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle && !inTemplate) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (ch === '`' && !inSingle && !inDouble) {
+      inTemplate = !inTemplate;
+      continue;
+    }
+    if (!inSingle && !inDouble && !inTemplate && ch === '/' && line[i + 1] === '/') {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
 // ─── Tool: run_tests ─────────────────────────────────────────────────────────
 
 function buildRunTestsTool(
@@ -1355,10 +1390,7 @@ export async function externalVerification(
     // annotation check is intentionally run against the un-stripped source.
     const codeOnly = integrationSrc
       .split('\n')
-      .map((line) => {
-        const commentIdx = line.indexOf('//');
-        return commentIdx >= 0 ? line.slice(0, commentIdx) : line;
-      })
+      .map((line) => stripLineComment(line))
       .join('\n');
     const uncovered: string[] = [];
     for (const lp of opts.likelyParams) {
