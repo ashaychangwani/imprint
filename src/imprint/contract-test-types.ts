@@ -51,6 +51,6 @@ export interface ContractTestFailure {
   assertion: ContractAssertion;
   actual: unknown;
   expected: unknown;
-  adjudication?: 'tool_broken' | 'test_wrong';
+  adjudication?: 'tool_broken' | 'test_wrong' | 'infra_failure';
   adjudicationReason?: string;
 }

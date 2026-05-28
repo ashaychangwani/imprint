@@ -429,13 +429,11 @@ export async function extractResult(
       // navigate, so we still fail loudly in that case. Whole-body
       // extraction (`extract === '*'`) is the contract that says "the
       // parser owns the bytes," so we pass them through.
-      const wholeBody = result.extract === '*' || result.extract === '';
-      if (!wholeBody) {
+      if (result.extract !== '*' && result.extract !== '') {
         throw new Error(`Result XHR body was not JSON (${last.url}): ${last.body.slice(0, 200)}`);
       }
     }
-    const wholeBody = result.extract === '*' || result.extract === '';
-    if (wholeBody) {
+    if (result.extract === '*' || result.extract === '') {
       return { [result.return_as]: parsed, source_url: last.url };
     }
     return { [result.return_as]: extractAt(parsed, result.extract), source_url: last.url };

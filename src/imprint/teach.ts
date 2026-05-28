@@ -1355,15 +1355,13 @@ async function compileSelectedCandidate(opts: {
   if (startIdx <= STEPS.indexOf('generate')) {
     const llmConfig = { provider: opts.providerName, model: opts.compileModel };
 
-    // Load session for contract test generator (runs in parallel with compile)
+    // Load session once for contract tests (spec generation + test execution)
+    const contractSession = plan.candidate
+      ? loadJsonFile(opts.sessionPath, SessionSchema, { notFound: 'session not found' }, 'session')
+      : null;
+
     let contractSpecPromise: Promise<unknown> = Promise.resolve(null);
-    if (plan.candidate) {
-      const contractSession = loadJsonFile(
-        opts.sessionPath,
-        SessionSchema,
-        { notFound: 'session not found' },
-        'session',
-      );
+    if (plan.candidate && contractSession) {
       contractSpecPromise = generateContractTestSpecs({
         candidate: plan.candidate,
         session: contractSession,
@@ -1398,13 +1396,7 @@ async function compileSelectedCandidate(opts: {
     });
 
     // Run contract tests against the compiled tool (specs were written during compile)
-    if (plan.candidate) {
-      const contractSession = loadJsonFile(
-        opts.sessionPath,
-        SessionSchema,
-        { notFound: 'session not found' },
-        'session',
-      );
+    if (plan.candidate && contractSession) {
       const contractResult = await runContractTests({
         toolDir: workflowDir,
         session: contractSession,

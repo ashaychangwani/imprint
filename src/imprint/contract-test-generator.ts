@@ -195,7 +195,7 @@ export function renderContractTestFile(spec: ContractTestSpec): string {
   ];
 
   for (const testCase of spec.cases) {
-    lines.push(`test('${escapeTestName(testCase.name)}', async () => {`);
+    lines.push(`test('${escapeForSingleQuotedString(testCase.name)}', async () => {`);
     lines.push(`  const data = await run(${JSON.stringify(testCase.params)});`);
 
     for (const assertion of testCase.assertions) {
@@ -211,8 +211,8 @@ export function renderContractTestFile(spec: ContractTestSpec): string {
   return lines.join('\n');
 }
 
-function escapeTestName(name: string): string {
-  return name.replace(/'/g, "\\'");
+function escapeForSingleQuotedString(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 function renderAssertion(assertion: {
@@ -221,7 +221,7 @@ function renderAssertion(assertion: {
   expected?: unknown;
   rationale: string;
 }): string {
-  const resolveCall = `resolve(data, '${assertion.path}')`;
+  const resolveCall = `resolve(data, '${escapeForSingleQuotedString(assertion.path)}')`;
 
   switch (assertion.check) {
     case 'exists':

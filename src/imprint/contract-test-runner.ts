@@ -102,7 +102,7 @@ export async function runContractTests(opts: {
             assertion: findAssertionForTest(spec, f.testName),
             actual: f.actual,
             expected: f.expected,
-            adjudication: 'test_wrong' as const,
+            adjudication: 'infra_failure' as const,
             adjudicationReason:
               'API rate-limited or blocked — infrastructure failure, not a tool bug',
           })),
@@ -151,8 +151,8 @@ export async function runContractTests(opts: {
 
         if (adjudication.verdict === 'test_wrong') {
           log(`test "${rawFailure.testName}": test expectation was wrong — ${adjudication.reason}`);
-          patchTestFile(contractTestPath, rawFailure.testName, adjudication.reason);
-          patchedAnyTests = true;
+          const patched = patchTestFile(contractTestPath, rawFailure.testName, adjudication.reason);
+          if (patched) patchedAnyTests = true;
         } else {
           log(`test "${rawFailure.testName}": tool is broken — ${adjudication.reason}`);
         }
@@ -451,27 +451,31 @@ function findAssertionForTest(spec: ContractTestSpec, testName: string): Contrac
   return assertion;
 }
 
-function patchTestFile(testPath: string, testName: string, reason: string): void {
+function patchTestFile(testPath: string, testName: string, reason: string): boolean {
   try {
     const content = readFileSync(testPath, 'utf8');
     const lines = content.split('\n');
 
+    // The generated test file escapes single quotes in test names, so we must
+    // search for both the raw name (from bun's output) and the escaped form.
+    const escaped = testName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const candidates = [testName, escaped];
+
     let testStart = -1;
     for (let i = 0; i < lines.length; i++) {
-      if (
-        lines[i]?.includes(`test('${testName}'`) ||
-        lines[i]?.includes(`test("${testName}"`) ||
-        lines[i]?.includes(`it('${testName}'`) ||
-        lines[i]?.includes(`it("${testName}"`)
-      ) {
-        testStart = i;
-        break;
+      const line = lines[i] ?? '';
+      for (const name of candidates) {
+        if (line.includes(`test('${name}'`) || line.includes(`test("${name}"`)) {
+          testStart = i;
+          break;
+        }
       }
+      if (testStart !== -1) break;
     }
 
     if (testStart === -1) {
       log(`could not find test "${testName}" to patch`);
-      return;
+      return false;
     }
 
     let depth = 0;
@@ -493,18 +497,21 @@ function patchTestFile(testPath: string, testName: string, reason: string): void
 
     if (testEnd === -1) {
       log(`could not find end of test "${testName}"`);
-      return;
+      return false;
     }
 
+    const sanitizedReason = reason.replace(/\n/g, ' ').replace(/'/g, "\\'");
     const indent = (lines[testStart] || '').match(/^\s*/)?.[0] || '';
-    const commentLine = `${indent}// ADJUDICATED: ${reason}`;
-    const skipLine = `${indent}test.skip('${testName}', async () => {`;
+    const commentLine = `${indent}// ADJUDICATED: ${sanitizedReason}`;
+    const skipLine = `${indent}test.skip('${escaped}', async () => {`;
 
     lines[testStart] = `${commentLine}\n${skipLine}`;
 
     writeFileSync(testPath, lines.join('\n'), 'utf8');
     log(`patched test "${testName}" with skip + comment`);
+    return true;
   } catch (err) {
     log(`failed to patch test "${testName}": ${err instanceof Error ? err.message : String(err)}`);
+    return false;
   }
 }
