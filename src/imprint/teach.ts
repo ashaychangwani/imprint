@@ -2232,9 +2232,7 @@ async function combineAvailableSessions(opts: {
   if (opts.noInteractive) {
     // Auto-combine all available sessions
     selectedPaths = pastSessions.map((s) => s.absPath);
-    p.log.info(
-      `Auto-combining ${pastSessions.length + 1} session(s) for "${opts.site}".`,
-    );
+    p.log.info(`Auto-combining ${pastSessions.length + 1} session(s) for "${opts.site}".`);
   } else {
     const combine = await p.confirm({
       message: `Found ${pastSessions.length} past recording session${pastSessions.length === 1 ? '' : 's'}${opts.fromSession ? ' in the source directory' : ` for "${opts.site}"`}. Combine with the ${opts.fromSession ? 'provided' : 'new'} recording?`,
@@ -2244,8 +2242,7 @@ async function combineAvailableSessions(opts: {
     if (p.isCancel(combine) || !combine) return opts.currentSessionPath;
 
     const selected = await p.multiselect({
-      message:
-        'Select sessions to combine:\n  (press [space] to toggle, [enter] to submit)',
+      message: 'Select sessions to combine:\n  (press [space] to toggle, [enter] to submit)',
       required: true,
       initialValues: pastSessions.map((s) => s.absPath),
       options: pastSessions.map((s) => ({
