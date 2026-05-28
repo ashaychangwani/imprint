@@ -190,6 +190,8 @@ export async function runContractTests(opts: {
         assertion: findAssertionForTest(spec, f.testName),
         actual: f.actual,
         expected: f.expected,
+        adjudication: 'tool_broken' as const,
+        adjudicationReason: 'still failing after max adjudication rounds',
       })),
       adjudicated: true,
     };
