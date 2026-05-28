@@ -330,7 +330,7 @@ export async function promptForTeachProvider(
 async function promptForModel(provider: ProviderName): Promise<string> {
   const { availableModelsForProvider } = await import('./llm.ts');
   const models = availableModelsForProvider(provider);
-  if (models.length <= 1) return models[0]?.model ?? 'claude-opus-4-7';
+  if (models.length <= 1) return models[0]?.model ?? 'claude-opus-4-8';
 
   const choice = await p.select({
     message: 'Which model should compile this workflow?',
