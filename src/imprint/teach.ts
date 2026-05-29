@@ -91,6 +91,15 @@ import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
 
 export { buildTeachStateFromSession, resolveTeachStatePath } from './teach-state.ts';
 
+/**
+ * How many compile agents run in parallel when more than one tool is selected.
+ * Kept at 2 (not 3): bursts of near-identical reverse-engineering requests in a
+ * short window raise the model's usage-policy safety-filter false-positive rate,
+ * so we trade a little wall-clock for fewer spurious refusals. Single-tool runs
+ * still use concurrency 1.
+ */
+const COMPILE_CONCURRENCY = 2;
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface TeachOptions {
@@ -951,7 +960,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         '',
         plans.length === 1
           ? 'An LLM agent will reverse-engineer the API response format,'
-          : `${plans.length} LLM compile agents will reverse-engineer selected tools with concurrency 3,`,
+          : `${plans.length} LLM compile agents will reverse-engineer selected tools with concurrency ${COMPILE_CONCURRENCY},`,
         'write the MCP server, and run thorough verification tests.',
         'Most complex tools take 10-15 minutes — please be patient.',
         `Timeout: ${timeoutDisplay} per tool. You can interrupt with Ctrl-C.`,
@@ -1178,7 +1187,7 @@ async function compileCandidatePlans(opts: {
    *  of getting a silent warning. */
   allTools?: boolean;
 }): Promise<TeachToolResult[]> {
-  const concurrency = opts.plans.length === 1 ? 1 : 3;
+  const concurrency = opts.plans.length === 1 ? 1 : COMPILE_CONCURRENCY;
   const mp = opts.plans.length > 1 ? new MultiProgress() : null;
 
   // Mutex for deadline prompts: concurrent compile agents can hit their
