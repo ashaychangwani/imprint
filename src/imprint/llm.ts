@@ -824,7 +824,7 @@ export function detectTeachProvider(): ProviderName {
 }
 
 function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider {
-  const model = opts.model ?? process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-7';
+  const model = opts.model ?? process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-8';
   const temperature = opts.temperature ?? 0;
   const maxTokens = opts.maxTokens ?? 8192;
 
@@ -865,11 +865,11 @@ export function preferredAgentModel(provider: ProviderName): string {
   switch (provider) {
     case 'anthropic-api':
     case 'claude-cli':
-      return 'claude-opus-4-7';
+      return 'claude-opus-4-8';
     case 'codex-cli':
       return 'gpt-5.5';
     case 'cursor-cli':
-      return 'claude-opus-4-7'; // best-effort; cursor passes through
+      return 'claude-opus-4-8'; // best-effort; cursor passes through
   }
 }
 
@@ -883,7 +883,8 @@ export function availableModelsForProvider(provider: ProviderName): ModelOption[
     case 'anthropic-api':
     case 'claude-cli':
       return [
-        { model: 'claude-opus-4-7', isDefault: true },
+        { model: 'claude-opus-4-8', isDefault: true },
+        { model: 'claude-opus-4-7', isDefault: false },
         { model: 'claude-sonnet-4-6', isDefault: false },
         { model: 'claude-haiku-4-5', isDefault: false },
         { model: 'claude-opus-4-6', isDefault: false },
@@ -908,7 +909,8 @@ export function availableModelsForProvider(provider: ProviderName): ModelOption[
       ];
     case 'cursor-cli':
       return [
-        { model: 'claude-opus-4-7', isDefault: true },
+        { model: 'claude-opus-4-8', isDefault: true },
+        { model: 'claude-opus-4-7', isDefault: false },
         { model: 'claude-sonnet-4-6', isDefault: false },
         { model: 'claude-haiku-4-5', isDefault: false },
         { model: 'gpt-5.5', isDefault: false },

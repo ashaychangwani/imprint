@@ -6,23 +6,29 @@
  * bootstrap can satisfy the missing state.
  */
 
-import { existsSync } from 'node:fs';
-import { resolve as pathResolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve as pathResolve } from 'node:path';
 import type { Page } from 'playwright';
 import { RuntimeCookieJar } from './cookie-jar.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
-import { type CredentialStore, loadCredentialStore, substituteString } from './runtime.ts';
+import {
+  type CredentialStore,
+  executeWorkflow,
+  loadCredentialStore,
+  substituteString,
+} from './runtime.ts';
 import { type StealthFetch, createStealthFetch } from './stealth-fetch.ts';
 import type { ResolvedTool } from './tool-loader.ts';
-import type {
-  BootstrapCapture,
-  ConcreteBackend,
-  ReplayBackend,
-  StateCapability,
-  StateMissingItem,
-  ToolResult,
-  Workflow,
+import {
+  type BootstrapCapture,
+  type ConcreteBackend,
+  type ReplayBackend,
+  type StateCapability,
+  type StateMissingItem,
+  type ToolResult,
+  type Workflow,
+  WorkflowSchema,
 } from './types.ts';
 
 interface LadderResult {
@@ -565,4 +571,64 @@ function pickBaseUrl(tool: ResolvedTool): string {
 function playbookPath(assetRoot: string, site: string, toolDir?: string): string {
   if (toolDir) return pathResolve(toolDir, 'playbook.yaml');
   return pathResolve(assetRoot, site, 'playbook.yaml');
+}
+
+/**
+ * Compile-time integration-test convenience: dispatch a request through
+ * `runWithLadder` using only a `workflow.json` path. Avoids requiring an
+ * emitted `index.ts` (which doesn't exist when integration.test.ts runs
+ * during compile, before `imprint emit`).
+ *
+ * **Ladder is intentionally fixed to `['fetch', 'stealth-fetch']`** —
+ * the playbook rung is excluded because `playbook.yaml` is compiled in
+ * a separate later step (`imprint compile-playbook`), so at integration-
+ * test time there is no playbook to fall back to. Even if a stale
+ * playbook from a prior compile exists on disk, exercising it here would
+ * conflate two independent verification surfaces and pull a slow
+ * Playwright bootstrap into every test run.
+ *
+ * Credentials are loaded by `executeWorkflow` from the credential store
+ * for the workflow's `site` by default; pass `credentials` explicitly to
+ * override (e.g., when a test wants to assert behavior under a known
+ * credential state).
+ *
+ * The test "passes" as long as ANY backend in the ladder returns ok —
+ * fetch OR stealth-fetch. Tools whose fetch path will be blocked at
+ * runtime are still verified end-to-end via stealth-fetch.
+ */
+export async function runWorkflowWithLadder(opts: {
+  workflowPath: string;
+  params: Record<string, string | number | boolean>;
+  /** Optional credential override; otherwise loaded from the credential
+   *  store by executeWorkflow. */
+  credentials?: CredentialStore;
+}): Promise<LadderResult> {
+  if (!existsSync(opts.workflowPath)) {
+    throw new Error(`runWorkflowWithLadder: workflow.json not found at ${opts.workflowPath}`);
+  }
+  const workflow = WorkflowSchema.parse(JSON.parse(readFileSync(opts.workflowPath, 'utf8')));
+  const toolDir = dirname(opts.workflowPath);
+  // assetRoot only matters for playbook-rung path resolution, which this
+  // ladder skips. Use a conventional value for completeness.
+  const assetRoot = pathResolve(toolDir, '..', '..');
+
+  const tool: ResolvedTool = {
+    site: workflow.site ?? '',
+    dir: toolDir,
+    workflow,
+    toolFn: async (params, fnOpts) => {
+      const fetchImpl =
+        (fnOpts as { fetchImpl?: typeof fetch } | undefined)?.fetchImpl ?? undefined;
+      return executeWorkflow({
+        workflow,
+        params: params as Record<string, string | number | boolean>,
+        credentials: opts.credentials,
+        workflowPath: opts.workflowPath,
+        fetchImpl,
+      });
+    },
+  };
+
+  const ladder: ConcreteBackend[] = ['fetch', 'stealth-fetch'];
+  return runWithLadder(ladder, tool, opts.params, assetRoot, new Map());
 }

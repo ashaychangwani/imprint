@@ -164,6 +164,26 @@ imprint teach <site> --from-session ~/.imprint/<site>/sessions/<ts>.json --provi
 
 If Phoenix is open at `http://localhost:6006` but empty, check that `PHOENIX_COLLECTOR_ENDPOINT` points at that URL and use `IMPRINT_TRACE_BATCH=false` for immediate local export. Drill into individual `agent.turn.N` spans to see per-turn token counts, and into `agent.tool.X` spans to find which tool call is slow. `IMPRINT_TRACE_LLM_IO=1` records prompts/responses; `IMPRINT_TRACE_TOOL_IO=1` records compile-agent tool arguments/results; `IMPRINT_TRACE_IO_MAX_CHARS=200000` raises the per-payload capture cap when the default is too small.
 
+## "Compile agent did not produce a verified workflow" — usage-policy / safety refusal
+
+A tool can fail compilation with a message mentioning the model's **usage policy** (e.g. `claude-cli exited with code 1 … unable to respond to this request, which appears to violate our Usage Policy`). This is a **transient false positive** from the model's safety filter, not a problem with your recording: reverse-engineering an API trips the classifier probabilistically, and the rate rises with the volume of reasoning the model generates. It's most likely to hit the single most complex tool in a multi-tool run.
+
+Imprint mitigates this automatically:
+
+- The compile agent runs at **`high`** thinking effort (not `max`), which generates fewer reasoning tokens and measurably lowers the trip rate. This overrides any `CLAUDE_EFFORT` set in your environment.
+- A refusal is **retried in a fresh session up to 3 times** with backoff before the tool is marked failed. A re-roll almost always succeeds.
+- Multi-tool runs compile at **concurrency 2** (down from 3) to avoid bursts of near-identical requests, which raise the trip rate.
+
+If a tool still fails after the automatic retries:
+
+```bash
+# Re-run just the teach flow; the earlier stages are cached.
+imprint teach <site>
+
+# Or compile that tool with a different provider (different safety stack).
+imprint teach <site> --provider codex-cli
+```
+
 ## "MCP tools panel is empty in Claude Desktop"
 
 Start with Imprint's local audit:

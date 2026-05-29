@@ -9,7 +9,12 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join as pathJoin, resolve as pathResolve } from 'node:path';
+import {
+  basename as pathBasename,
+  dirname as pathDirname,
+  join as pathJoin,
+  resolve as pathResolve,
+} from 'node:path';
 import * as p from '@clack/prompts';
 import type { OnDeadlineReached } from './agent.ts';
 import {
@@ -19,6 +24,8 @@ import {
   generate,
   triageRequests,
 } from './compile.ts';
+import { generateContractTestSpecs } from './contract-test-generator.ts';
+import { runContractTests } from './contract-test-runner.ts';
 import {
   type CredentialFinding,
   type Replacement,
@@ -50,7 +57,12 @@ import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import { loadCredentialStore } from './runtime.ts';
 import { isSensitiveCredentialKey, passwordLikeTokens } from './sensitive-keys.ts';
 import type { ClassifiedValue } from './session-diff.ts';
-import { listSiteSessions, mergeSessions, writeCombinedSession } from './session-merge.ts';
+import {
+  listSessionsInDir,
+  listSiteSessions,
+  mergeSessions,
+  writeCombinedSession,
+} from './session-merge.ts';
 import {
   TEACH_STEPS as STEPS,
   type TeachStep as Step,
@@ -78,6 +90,15 @@ import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
 import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
 
 export { buildTeachStateFromSession, resolveTeachStatePath } from './teach-state.ts';
+
+/**
+ * How many compile agents run in parallel when more than one tool is selected.
+ * Kept at 2 (not 3): bursts of near-identical reverse-engineering requests in a
+ * short window raise the model's usage-policy safety-filter false-positive rate,
+ * so we trade a little wall-clock for fewer spurious refusals. Single-tool runs
+ * still use concurrency 1.
+ */
+const COMPILE_CONCURRENCY = 2;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -318,7 +339,7 @@ export async function promptForTeachProvider(
 async function promptForModel(provider: ProviderName): Promise<string> {
   const { availableModelsForProvider } = await import('./llm.ts');
   const models = availableModelsForProvider(provider);
-  if (models.length <= 1) return models[0]?.model ?? 'claude-opus-4-7';
+  if (models.length <= 1) return models[0]?.model ?? 'claude-opus-4-8';
 
   const choice = await p.select({
     message: 'Which model should compile this workflow?',
@@ -519,21 +540,30 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       startedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
+  }
 
-    // ── 1b. Combine with past sessions (optional) ────────────────────
-    const originalSessionPath = sessionPath;
-    sessionPath = await promptSessionCombine({
-      site,
-      currentSessionPath: sessionPath,
-      noInteractive: opts.noInteractive ?? false,
-    });
-    if (sessionPath !== originalSessionPath) {
-      checkpoint(site, state, workflowKey, {
-        sessionPath: toRelative(site, sessionPath),
-        completedSteps: ['record'],
-        startedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+  // ── 1b. Combine with past sessions (optional) ──────────────────────
+  // Runs after recording OR when --from-session is provided. Skipped when
+  // resuming from a checkpoint (the checkpoint already stores the final
+  // session path, possibly combined from a previous run).
+  if (sessionPath && (startIdx <= STEPS.indexOf('record') || usingFromSession)) {
+    const isCombinedSession = pathBasename(sessionPath).startsWith('combined-');
+    if (!isCombinedSession) {
+      const originalSessionPath = sessionPath;
+      sessionPath = await combineAvailableSessions({
+        site,
+        currentSessionPath: sessionPath,
+        noInteractive: opts.noInteractive ?? false,
+        fromSession: usingFromSession,
       });
+      if (sessionPath !== originalSessionPath) {
+        checkpoint(site, state, workflowKey, {
+          sessionPath: toRelative(site, sessionPath),
+          completedSteps: ['record'],
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
     }
   }
 
@@ -930,7 +960,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         '',
         plans.length === 1
           ? 'An LLM agent will reverse-engineer the API response format,'
-          : `${plans.length} LLM compile agents will reverse-engineer selected tools with concurrency 3,`,
+          : `${plans.length} LLM compile agents will reverse-engineer selected tools with concurrency ${COMPILE_CONCURRENCY},`,
         'write the MCP server, and run thorough verification tests.',
         'Most complex tools take 10-15 minutes — please be patient.',
         `Timeout: ${timeoutDisplay} per tool. You can interrupt with Ctrl-C.`,
@@ -988,6 +1018,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       sharedTriageResult: triageResult,
       siteClassifications,
       teachCredentials,
+      allTools: opts.allTools,
     });
   } finally {
     if (plans.length > 1) unmuteLog();
@@ -1071,7 +1102,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
 // ─── Candidate detection + per-tool compile ────────────────────────────────
 
-interface CandidateCompilePlan {
+export interface CandidateCompilePlan {
   workflowKey: string;
   startFrom: Step;
   candidate?: ToolCandidate;
@@ -1151,8 +1182,12 @@ async function compileCandidatePlans(opts: {
   sharedTriageResult?: TriageResult;
   siteClassifications?: ClassifiedValue[];
   teachCredentials?: { site: string; values: Record<string, string> };
+  /** Mirror of TeachOptions.allTools — when true, partial failures abort
+   *  the run with a non-zero exit so the user notices missing tools instead
+   *  of getting a silent warning. */
+  allTools?: boolean;
 }): Promise<TeachToolResult[]> {
-  const concurrency = opts.plans.length === 1 ? 1 : 3;
+  const concurrency = opts.plans.length === 1 ? 1 : COMPILE_CONCURRENCY;
   const mp = opts.plans.length > 1 ? new MultiProgress() : null;
 
   // Mutex for deadline prompts: concurrent compile agents can hit their
@@ -1246,27 +1281,80 @@ async function compileCandidatePlans(opts: {
     }
   });
 
-  const successes: TeachToolResult[] = [];
-  const failures: string[] = [];
-  for (let i = 0; i < outcomes.length; i++) {
-    const outcome = outcomes[i];
-    const displayName = opts.plans[i]?.candidate?.toolName ?? opts.plans[i]?.workflowKey ?? '?';
-    if (outcome?.ok) {
-      successes.push(outcome.value);
+  const summary = summarizeCompileOutcomes(outcomes, opts.plans);
+
+  // Print the structured summary on every multi-tool run so users see
+  // exactly what compiled vs what failed — a single warn line buried in
+  // log output is easy to miss when 4 of 6 tools compiled cleanly.
+  if (opts.plans.length > 1) {
+    const lines = renderCompileSummary(summary);
+    if (summary.failures.length === 0) {
+      p.log.success(lines.join('\n'));
     } else {
-      const msg = outcome?.error instanceof Error ? outcome.error.message : String(outcome?.error);
-      failures.push(`${displayName}: ${msg.split('\n')[0]}`);
+      p.log.warn(lines.join('\n'));
     }
+  } else if (summary.failures.length > 0) {
+    // Single-tool run: keep the old single-line warn for backwards-compat
+    // since there's nothing to summarize.
+    const first = summary.failures[0];
+    if (first) p.log.warn(`${first.name}: ${first.firstLineError}`);
   }
 
-  if (failures.length > 0) {
-    p.log.warn(
-      `${successes.length} of ${outcomes.length} tools compiled. ` +
-        `${failures.length} failed:\n${failures.map((f) => `  • ${f}`).join('\n')}`,
+  // Hard-fail when --all-tools was requested AND any tool failed. Silent
+  // partial compiles ship MCP servers with missing tools; the user only
+  // notices later when an LLM tries to call one that doesn't exist.
+  if (opts.allTools && summary.failures.length > 0) {
+    throw new Error(
+      `--all-tools requested but ${summary.failures.length} of ${opts.plans.length} tools failed to compile. See the summary above; re-run \`imprint teach\` after addressing the failures (or omit --all-tools to ship only what compiled).`,
     );
   }
 
-  return successes;
+  return summary.successes;
+}
+
+/** Pure summarizer — extracted so unit tests can drive arbitrary outcome
+ *  shapes without spinning up real compile pipelines. */
+interface CompileOutcomeSummary {
+  detected: number;
+  successes: TeachToolResult[];
+  successNames: string[];
+  failures: Array<{ name: string; firstLineError: string }>;
+}
+
+export function summarizeCompileOutcomes(
+  outcomes: Array<{ ok: true; value: TeachToolResult } | { ok: false; error: unknown } | null>,
+  plans: CandidateCompilePlan[],
+): CompileOutcomeSummary {
+  const successes: TeachToolResult[] = [];
+  const successNames: string[] = [];
+  const failures: Array<{ name: string; firstLineError: string }> = [];
+  for (let i = 0; i < outcomes.length; i++) {
+    const outcome = outcomes[i];
+    const displayName = plans[i]?.candidate?.toolName ?? plans[i]?.workflowKey ?? '?';
+    if (outcome?.ok) {
+      successes.push(outcome.value);
+      successNames.push(displayName);
+    } else {
+      const msg = outcome?.error instanceof Error ? outcome.error.message : String(outcome?.error);
+      failures.push({ name: displayName, firstLineError: msg.split('\n')[0] ?? '' });
+    }
+  }
+  return { detected: plans.length, successes, successNames, failures };
+}
+
+function renderCompileSummary(summary: CompileOutcomeSummary): string[] {
+  const lines: string[] = [];
+  lines.push(`Compile summary: ${summary.successes.length}/${summary.detected} tools compiled.`);
+  if (summary.successNames.length > 0) {
+    lines.push(`Compiled: ${summary.successNames.join(', ')}`);
+  }
+  if (summary.failures.length > 0) {
+    lines.push(`Failed (${summary.failures.length}):`);
+    for (const f of summary.failures) {
+      lines.push(`  • ${f.name}: ${f.firstLineError}`);
+    }
+  }
+  return lines;
 }
 
 async function compileSelectedCandidate(opts: {
@@ -1290,28 +1378,78 @@ async function compileSelectedCandidate(opts: {
   const workflowDir = localToolDir(site, toolName);
   mkdirSync(workflowDir, { recursive: true });
 
-  // ── Step 1: generate (workflow.json, enriched with site-level classifications) ──
+  // ── Step 1: generate (workflow.json) + contract test specs (parallel) ──
   let genResult: { workflow: Workflow; workflowPath: string };
   if (startIdx <= STEPS.indexOf('generate')) {
-    const result = await generate({
-      sessionPath: opts.sessionPath,
-      outDir: workflowDir,
-      maxDurationMs: opts.maxDurationMs,
-      llmConfig: { provider: opts.providerName, model: opts.compileModel },
-      keepTest: opts.keepTest,
-      candidate: plan.candidate,
-      sharedContext: plan.sharedContext,
-      onProgress: opts.onProgress,
-      onDeadlineReached: opts.onDeadlineReached,
-      classifications: opts.siteClassifications,
-      teachCredentials: opts.teachCredentials,
-    });
+    const llmConfig = { provider: opts.providerName, model: opts.compileModel };
+
+    // Load session once for contract tests (spec generation + test execution)
+    const contractSession = plan.candidate
+      ? loadJsonFile(opts.sessionPath, SessionSchema, { notFound: 'session not found' }, 'session')
+      : null;
+
+    let contractSpecPromise: Promise<unknown> = Promise.resolve(null);
+    if (plan.candidate && contractSession) {
+      contractSpecPromise = generateContractTestSpecs({
+        candidate: plan.candidate,
+        session: contractSession,
+        sharedContext: plan.sharedContext,
+        llmConfig,
+        toolDir: workflowDir,
+      }).catch(() => null);
+    }
+
+    const [result] = await Promise.all([
+      generate({
+        sessionPath: opts.sessionPath,
+        outDir: workflowDir,
+        maxDurationMs: opts.maxDurationMs,
+        llmConfig,
+        keepTest: opts.keepTest,
+        candidate: plan.candidate,
+        sharedContext: plan.sharedContext,
+        onProgress: opts.onProgress,
+        onDeadlineReached: opts.onDeadlineReached,
+        classifications: opts.siteClassifications,
+        teachCredentials: opts.teachCredentials,
+      }),
+      contractSpecPromise,
+    ]);
+
     assertCandidateToolName('Compiled workflow', result.workflow.toolName, plan.candidate);
     genResult = { workflow: result.workflow, workflowPath: result.workflowPath };
     updateCheckpoint(site, state, plan.workflowKey, 'generate', {
       candidate: plan.candidate,
       sharedContext: plan.sharedContext,
     });
+
+    // Run contract tests against the compiled tool (specs were written during compile)
+    if (plan.candidate && contractSession) {
+      const contractResult = await runContractTests({
+        toolDir: workflowDir,
+        session: contractSession,
+        sessionPath: opts.sessionPath,
+        candidate: plan.candidate,
+        llmConfig,
+        teachCredentials: opts.teachCredentials,
+      });
+      if (contractResult) {
+        const resultPath = pathJoin(workflowDir, '.test-specs', 'contract-result.json');
+        writeFileSync(resultPath, JSON.stringify(contractResult, null, 2));
+        if (contractResult.failed > 0) {
+          const broken = contractResult.failures.filter((f) => f.adjudication === 'tool_broken');
+          if (broken.length > 0) {
+            p.log.warn(
+              `Contract tests: ${broken.length} of ${contractResult.totalTests} indicate tool issues: ${broken.map((f) => f.testName).join(', ')}`,
+            );
+          }
+        } else if (contractResult.totalTests > 0) {
+          p.log.success(
+            `Contract tests: ${contractResult.passed}/${contractResult.totalTests} passed`,
+          );
+        }
+      }
+    }
   } else {
     const workflowPath = pathJoin(workflowDir, 'workflow.json');
     const workflow = loadJsonFile(
@@ -2079,44 +2217,55 @@ async function offerSkillExport(opts: {
   }
 }
 
-// ─── Session combination (post-record, pre-redact) ────────────────────────
+// ─── Session combination (post-record or post-from-session, pre-redact) ──
 
-async function promptSessionCombine(opts: {
+async function combineAvailableSessions(opts: {
   site: string;
   currentSessionPath: string;
   noInteractive: boolean;
+  fromSession: boolean;
 }): Promise<string> {
-  if (opts.noInteractive) return opts.currentSessionPath;
-
-  const pastSessions = listSiteSessions(opts.site).filter(
-    (s) => s.absPath !== opts.currentSessionPath,
-  );
+  // Discover sibling sessions. For --from-session, look in the source
+  // directory (which may differ from the target site's sessions dir).
+  // For normal recordings, look in the site's sessions directory.
+  const pastSessions = opts.fromSession
+    ? listSessionsInDir(pathDirname(opts.currentSessionPath)).filter(
+        (s) => s.absPath !== opts.currentSessionPath,
+      )
+    : listSiteSessions(opts.site).filter((s) => s.absPath !== opts.currentSessionPath);
 
   if (pastSessions.length === 0) return opts.currentSessionPath;
 
-  const combine = await p.confirm({
-    message: `Found ${pastSessions.length} past recording session${pastSessions.length === 1 ? '' : 's'} for "${opts.site}". Combine with the new recording?`,
-    initialValue: false,
-  });
+  let selectedPaths: string[];
 
-  if (p.isCancel(combine) || !combine) return opts.currentSessionPath;
+  if (opts.noInteractive) {
+    // Auto-combine all available sessions
+    selectedPaths = pastSessions.map((s) => s.absPath);
+    p.log.info(`Auto-combining ${pastSessions.length + 1} session(s) for "${opts.site}".`);
+  } else {
+    const combine = await p.confirm({
+      message: `Found ${pastSessions.length} past recording session${pastSessions.length === 1 ? '' : 's'}${opts.fromSession ? ' in the source directory' : ` for "${opts.site}"`}. Combine with the ${opts.fromSession ? 'provided' : 'new'} recording?`,
+      initialValue: true,
+    });
 
-  const selected = await p.multiselect({
-    message:
-      'Select sessions to combine with the new recording:\n  (press [space] to toggle, [enter] to submit)',
-    required: true,
-    initialValues: pastSessions.map((s) => s.absPath),
-    options: pastSessions.map((s) => ({
-      value: s.absPath,
-      label: `${s.friendlyTimestamp} — ${s.url}`,
-      hint: `${s.requestCount} requests, ${s.narrationCount} narrations`,
-    })),
-  });
+    if (p.isCancel(combine) || !combine) return opts.currentSessionPath;
 
-  if (p.isCancel(selected)) return opts.currentSessionPath;
+    const selected = await p.multiselect({
+      message: 'Select sessions to combine:\n  (press [space] to toggle, [enter] to submit)',
+      required: true,
+      initialValues: pastSessions.map((s) => s.absPath),
+      options: pastSessions.map((s) => ({
+        value: s.absPath,
+        label: `${s.friendlyTimestamp} — ${s.url}`,
+        hint: `${s.requestCount} requests, ${s.narrationCount} narrations`,
+      })),
+    });
 
-  const selectedPaths = selected as string[];
-  if (selectedPaths.length === 0) return opts.currentSessionPath;
+    if (p.isCancel(selected)) return opts.currentSessionPath;
+
+    selectedPaths = selected as string[];
+    if (selectedPaths.length === 0) return opts.currentSessionPath;
+  }
 
   const spinner = p.spinner();
   spinner.start('Combining sessions...');

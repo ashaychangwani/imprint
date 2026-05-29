@@ -274,7 +274,7 @@ const TRIAGE_RESOURCE_TYPES = new Set(['XHR', 'Fetch', 'Document']);
 const HEADER_TRUNCATE_LIMIT = 200;
 // Per-request body cap for triage. Triage only needs enough body to distinguish
 // data-bearing POSTs (search/booking) from telemetry; full bodies on a busy
-// site can total >1MB and blow the 200K-token cap on `claude-opus-4-7`.
+// site can total >1MB and blow the 200K-token cap on `claude-opus-4-8`.
 const TRIAGE_BODY_LIMIT = 500;
 
 export interface TriageResult {

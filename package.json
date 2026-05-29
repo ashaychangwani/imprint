@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./runtime": "./src/imprint/runtime.ts",
-    "./types": "./src/imprint/types.ts"
+    "./types": "./src/imprint/types.ts",
+    "./backend-ladder": "./src/imprint/backend-ladder.ts"
   },
   "license": "MIT",
   "author": "Ashay Changwani",

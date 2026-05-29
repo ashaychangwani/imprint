@@ -1044,6 +1044,41 @@ function normalizeTsconfigPath(value: string): string {
   return normalized.startsWith('.') ? normalized : `./${normalized}`;
 }
 
+/** Strip a line comment (`// ...`) while preserving `//` inside string literals. */
+function stripLineComment(line: string): string {
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  let escaped = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble && !inTemplate) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle && !inTemplate) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (ch === '`' && !inSingle && !inDouble) {
+      inTemplate = !inTemplate;
+      continue;
+    }
+    if (!inSingle && !inDouble && !inTemplate && ch === '/' && line[i + 1] === '/') {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
 // ─── Tool: run_tests ─────────────────────────────────────────────────────────
 
 function buildRunTestsTool(
@@ -1321,15 +1356,68 @@ export async function externalVerification(
       const combined = `${lastOutput.stdout}\n${lastOutput.stderr}`;
       const botSignatures = /PerimeterX|DataDome|Akamai|captcha|challenge|blocked|rate.?limit/i;
       const hasStatusBlock = /\b(403|429)\b/.test(combined);
+      const hasImprintBlock =
+        /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(combined) &&
+        /non-escalatable|giving up/.test(combined);
       if (hasStatusBlock && botSignatures.test(combined)) {
         warnings.push(
           `integration test failed with likely bot-detection or rate-limiting (tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
+        );
+      } else if (hasImprintBlock) {
+        warnings.push(
+          `integration test failed with infrastructure error (${combined.match(/\b(RATE_LIMITED|FORBIDDEN|NETWORK)\b/)?.[0] ?? 'unknown'}, tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
         );
       } else {
         failures.push(
           `bun test integration.test.ts exited ${lastOutput.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
         );
       }
+    }
+  }
+
+  // Per-parameter coverage check — every parameter declared on the tool
+  // surface must appear in at least two distinct value bindings in
+  // integration.test.ts (baseline + at least one override), OR carry an
+  // explicit `// exposed-but-not-verified` annotation naming the parameter.
+  //
+  // This catches the structural failure mode that lets broken filters ship
+  // silently: an agent declares a parameter (because the recording exercised
+  // it), templates it into the workflow, but never writes a discriminating
+  // integration test. Without this check, the parameter passes through to
+  // the API but its server-side effect is unverified — the very class of
+  // bug that motivated this enforcement.
+  //
+  // We count *distinct values* rather than occurrences so that agents which
+  // inline baseline defaults into every test still fail when no override
+  // actually exercises a different value.
+  if (existsSync(integrationTestPath) && opts.likelyParams && opts.likelyParams.length > 0) {
+    const integrationSrc = readFileSync(integrationTestPath, 'utf8');
+    // Strip line comments before scanning so param names that only appear in
+    // commentary don't count as bindings. The exposed-but-not-verified
+    // annotation check is intentionally run against the un-stripped source.
+    const codeOnly = integrationSrc
+      .split('\n')
+      .map((line) => stripLineComment(line))
+      .join('\n');
+    const uncovered: string[] = [];
+    for (const lp of opts.likelyParams) {
+      const escapedName = lp.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const valueRe = new RegExp(`\\b${escapedName}\\s*:\\s*([^,}\\n]+)`, 'g');
+      const distinctValues = new Set<string>();
+      for (const match of codeOnly.matchAll(valueRe)) {
+        const captured = match[1];
+        if (captured !== undefined) distinctValues.add(captured.trim());
+      }
+      const annotationRe = new RegExp(`//\\s*exposed-but-not-verified[^\\n]*\\b${escapedName}\\b`);
+      const isAnnotated = annotationRe.test(integrationSrc);
+      if (distinctValues.size < 2 && !isAnnotated) {
+        uncovered.push(lp.name);
+      }
+    }
+    if (uncovered.length > 0) {
+      failures.push(
+        `${uncovered.length} parameter(s) declared on the tool surface have no discriminating integration test (baseline + override with a different value) and no \`// exposed-but-not-verified\` annotation: ${uncovered.join(', ')}. Either add a per-parameter test that overrides the value and asserts the response is constrained, or annotate the parameter as explicitly unverified. See prompts/compile-agent.md "Per-parameter coverage tests".`,
+      );
     }
   }
 

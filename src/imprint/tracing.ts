@@ -137,6 +137,7 @@ export function resolveTraceTokenCount(
 }
 
 const DEFAULT_MODEL_RATES: Record<string, { inputUsdPer1M: number; outputUsdPer1M: number }> = {
+  'claude-opus-4-8': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
   'claude-opus-4-7': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
   'claude-opus-4-6': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
   'claude-opus-4-5': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
