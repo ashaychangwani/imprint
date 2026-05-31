@@ -196,6 +196,34 @@ describe('redactBody (router)', () => {
   });
 });
 
+describe('redactBody — structured RPC envelopes', () => {
+  // Google batchexecute style: )]}' anti-XSSI guard + length-prefixed frame, where
+  // a wrb.fr row's element[2] is a doubly-encoded JSON string packed with bare
+  // numeric IDs. Flat-scanning this as text used to inject [REDACTED] mid-number
+  // and break the inner JSON; the envelope guard must leave it byte-identical.
+  const innerPayload = JSON.stringify([[null, [[1777892713752929, 16324447, 2805147253]]]]);
+  const frame = JSON.stringify([['wrb.fr', null, innerPayload]]);
+  const xssiBody = `)]}'\n\n${frame.length}\n${frame}`;
+
+  it('leaves an XSSI-guarded envelope untouched even with freeform on', () => {
+    const r = redactBody(xssiBody, 'application/json', undefined, undefined, true, undefined);
+    expect(r.freeformRedactions).toBe(0);
+    expect(r.redacted).toBe(xssiBody);
+    expect(r.redacted).not.toContain('[REDACTED]');
+    // The inner doubly-encoded payload still parses with its IDs intact.
+    const rows = JSON.parse(r.redacted.slice(r.redacted.indexOf('[')));
+    const inner = JSON.parse(rows[0][2]);
+    expect(inner[0][1][0][0]).toBe(1777892713752929);
+  });
+
+  it('leaves a length-prefixed (non-guarded) frame untouched', () => {
+    const body = `${frame.length}\n${frame}`;
+    const r = redactBody(body, 'application/json', undefined, undefined, true, undefined);
+    expect(r.freeformRedactions).toBe(0);
+    expect(r.redacted).toBe(body);
+  });
+});
+
 describe('redactSession', () => {
   const baseSession: Session = {
     site: 'test',
@@ -260,6 +288,46 @@ describe('redactSession', () => {
     expect(session.site).toBe('test');
     expect(session.url).toBe('https://example.com/');
     expect(session.requests.length).toBe(1);
+  });
+
+  it('redacts response bodies key-based only (no freeform), but still scans request bodies', () => {
+    const session: Session = {
+      ...baseSession,
+      requests: [
+        {
+          seq: 0,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note: 'reach me at alice@example.com' }),
+          resourceType: 'XHR',
+          response: {
+            status: 200,
+            headers: {},
+            mimeType: 'application/json',
+            body: JSON.stringify({
+              note: 'reach me at bob@example.com',
+              access_token: 'sk-secret-xyz',
+            }),
+          },
+        },
+      ],
+      cookieSnapshots: [],
+    };
+    const { session: out } = redactSession(session);
+    const req = out.requests[0];
+    expect(req).toBeDefined();
+    if (!req) return;
+
+    // Request side: user-entered PII is still value-pattern (freeform) redacted.
+    expect(req.body).not.toContain('alice@example.com');
+
+    // Response side: PII under a NON-sensitive key survives (freeform off),
+    // but a sensitive KEY is still redacted by key-based redaction.
+    const respParsed = JSON.parse(req.response?.body ?? '{}');
+    expect(respParsed.note).toContain('bob@example.com');
+    expect(respParsed.access_token).toMatch(/^\[REDACTED:v3:id=\d+:len=\d+\]$/);
   });
 
   it('rewrites credential values to ${credential.X} placeholders when given replacements', () => {

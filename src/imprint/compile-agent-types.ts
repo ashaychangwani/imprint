@@ -8,6 +8,21 @@
 
 import type { AgentProgress } from './agent.ts';
 
+/** Render a per-tool implementation plan (param→field mapping, request
+ *  construction, response parsing, shared-module imports, edge cases) into an
+ *  initial-message section the compile agent must follow. Shared verbatim by the
+ *  in-process loop and both CLI drivers. Generic — carries no site-specific
+ *  content; the plan itself is derived per-tool from the recording. */
+export function formatToolPlan(toolPlan: string | undefined): string {
+  const plan = toolPlan?.trim();
+  if (!plan) return '';
+  return `
+
+IMPLEMENTATION PLAN — a planning pass analyzed the recording for THIS tool and produced the plan below. Follow it. It maps each parameter to its recorded field, specifies how to construct the request(s) and parse the response, and names the shared modules to import. Deviate only where the recorded data plainly contradicts the plan; if you do, note the correction in a brief code comment.
+
+${plan}`;
+}
+
 export interface CompileAgentProgress extends AgentProgress {
   /** 1-based verification cycle. Cycle 1 is the initial agent run. Subsequent cycles
    *  happen when the agent claims done() but external verification fails. */

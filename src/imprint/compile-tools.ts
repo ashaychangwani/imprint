@@ -11,6 +11,13 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { dirname, join as pathJoin, relative as pathRelative } from 'node:path';
 import type { AgentTool } from './agent.ts';
 import { inferAppApiHosts } from './app-api-hosts.ts';
+import {
+  type AssignedSharedModule,
+  type SharedModuleManifestEntry,
+  planSliceForTool,
+  readBuildPlanFile,
+  resolveAssignedModules,
+} from './build-plan.ts';
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
@@ -36,7 +43,7 @@ export function buildCompileTools(
   const credEnv = context.teachCredentials
     ? { IMPRINT_TEACH_CREDENTIALS: JSON.stringify(context.teachCredentials) }
     : undefined;
-  return [
+  const tools = [
     buildReadSessionSummaryTool(session, context),
     buildReadRequestTool(session),
     buildReadResponseBodyTool(session),
@@ -46,6 +53,16 @@ export function buildCompileTools(
     buildRunBashTool(toolDir, credEnv),
     buildRunTestsTool(toolDir, sessionPath, credEnv),
   ];
+  if (context.buildPlanPath && context.candidate?.toolName) {
+    tools.push(
+      buildReadBuildPlanTool(
+        context.buildPlanPath,
+        context.candidate.toolName,
+        context.sharedModules,
+      ),
+    );
+  }
+  return tools;
 }
 
 interface CompileToolContext {
@@ -53,6 +70,56 @@ interface CompileToolContext {
   sharedContext?: SharedCompileContext;
   classifications?: ClassifiedValue[];
   teachCredentials?: { site: string; values: Record<string, string> };
+  /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). When
+   *  set, a read_build_plan tool is exposed and the verifier asserts the tool
+   *  imports the shared modules the plan assigned it. */
+  buildPlanPath?: string;
+  /** Shared-module build manifest (verified flags) for this site. */
+  sharedModules?: SharedModuleManifestEntry[];
+}
+
+// ─── Tool: read_build_plan ───────────────────────────────────────────────────
+
+function buildReadBuildPlanTool(
+  buildPlanPath: string,
+  toolName: string,
+  manifest?: SharedModuleManifestEntry[],
+): AgentTool {
+  return {
+    name: 'read_build_plan',
+    description:
+      "Read this tool's slice of the shared build plan: shared modules to import (instead of re-implementing), parser guidance, the parameter checklist, and the auth recipe to replicate inline.",
+    input_schema: { type: 'object', properties: {}, required: [] },
+    handler: async () => {
+      const plan = readBuildPlanFile(buildPlanPath);
+      if (!plan) return { result: 'No build plan available for this run.' };
+      const slice = planSliceForTool(plan, toolName);
+      if (!slice) return { result: `No build-plan slice for tool "${toolName}".` };
+      const assigned = resolveAssignedModules(plan, toolName, manifest).filter((m) => m.verified);
+      return {
+        result: JSON.stringify(
+          {
+            toolName,
+            sharedModulesToImport: assigned.map((m) => ({
+              importPath: m.importPath,
+              kind: m.kind,
+              purpose: m.purpose,
+              exportSignatures: m.exportSignatures,
+            })),
+            parserGuidance: slice.tool.parserGuidance,
+            paramChecklist: slice.tool.paramChecklist,
+            authRecipe: slice.tool.authRecipe,
+            note:
+              assigned.length > 0
+                ? 'Import the listed shared modules via their importPath (request-transform → set workflow.json "requestTransformModule"; parser-helper/types → import from parser.ts) instead of re-implementing their logic. The verifier fails this tool if an assigned module is not imported.'
+                : 'No shared modules assigned — build this tool self-contained.',
+          },
+          null,
+          2,
+        ),
+      };
+    },
+  };
 }
 
 // ─── Tool: read_session_summary ──────────────────────────────────────────────
@@ -943,7 +1010,7 @@ function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): Ag
   };
 }
 
-async function runCommand(
+export async function runCommand(
   command: string,
   cwd: string,
   timeoutMs: number,
@@ -997,19 +1064,25 @@ async function runCommand(
   });
 }
 
-async function runGeneratedArtifactTypecheck(
-  exampleDir: string,
+/** Typecheck a set of generated `.ts` artifacts in `dir` against the repo's
+ *  tsconfig (so `imprint/*` and bun globals resolve). Used by both the compile
+ *  verifier (parser.ts / request-transform.ts) and the prereq-module verifier
+ *  (`_shared/*.ts`). `*.test.ts` are excluded — they pull in bun:test globals
+ *  the strict config rejects. Exported for prereq-builder.ts. */
+export async function typecheckArtifacts(
+  dir: string,
+  includes: string[],
 ): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
-  const configPath = pathJoin(exampleDir, '.imprint-typecheck.tsconfig.json');
+  const configPath = pathJoin(dir, '.imprint-typecheck.tsconfig.json');
   const rootTsconfig = pathJoin(REPO_ROOT, 'tsconfig.json');
-  const extendsPath = normalizeTsconfigPath(pathRelative(exampleDir, rootTsconfig));
+  const extendsPath = normalizeTsconfigPath(pathRelative(dir, rootTsconfig));
 
   writeFileSync(
     configPath,
     JSON.stringify(
       {
         extends: extendsPath,
-        include: ['parser.ts', 'request-transform.ts'],
+        include: includes,
         exclude: ['*.test.ts'],
       },
       null,
@@ -1021,7 +1094,7 @@ async function runGeneratedArtifactTypecheck(
   try {
     const result = await runCommand(
       'bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json',
-      exampleDir,
+      dir,
       120000,
     );
     return JSON.parse(result.result) as {
@@ -1037,6 +1110,12 @@ async function runGeneratedArtifactTypecheck(
       // Best-effort cleanup only.
     }
   }
+}
+
+async function runGeneratedArtifactTypecheck(
+  exampleDir: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
+  return await typecheckArtifacts(exampleDir, ['parser.ts', 'request-transform.ts']);
 }
 
 function normalizeTsconfigPath(value: string): string {
@@ -1138,7 +1217,109 @@ function buildRunTestsTool(
   };
 }
 
+// ─── Test-quality helpers (shared with prereq-builder verification) ─────────
+
+/** Tautological assertions that prove nothing — rejected by every verifier so
+ *  an agent can't game the ≥3-expect gate with `expect(true).toBe(true)`. */
+const TRIVIAL_ASSERTION_PATTERNS: RegExp[] = [
+  /expect\s*\(\s*true\s*\)\.toBe\s*\(\s*true\s*\)/,
+  /expect\s*\(\s*false\s*\)\.toBe\s*\(\s*false\s*\)/,
+  /expect\s*\(\s*1\s*\)\.toBe\s*\(\s*1\s*\)/,
+  /expect\s*\(\s*0\s*\)\.toBe\s*\(\s*0\s*\)/,
+  /expect\s*\(\s*null\s*\)\.toBeNull/,
+  /expect\s*\(\s*undefined\s*\)\.toBeUndefined/,
+  /expect\s*\(\s*"[^"]*"\s*\)\.toBe\s*\(\s*"[^"]*"\s*\)/,
+  /expect\s*\(\s*'[^']*'\s*\)\.toBe\s*\(\s*'[^']*'\s*\)/,
+];
+
+export function countExpectCalls(src: string): number {
+  return (src.match(/expect\s*\(/g) ?? []).length;
+}
+
+export function hasTrivialAssertion(src: string): boolean {
+  return TRIVIAL_ASSERTION_PATTERNS.some((pattern) => pattern.test(src));
+}
+
+/** Assert the tool imports each verified shared module the plan assigned it.
+ *  request-transform → workflow.json.requestTransformModule must point at it;
+ *  parser-helper/types → parser.ts (or request-transform.ts) must import it. */
+function assertSharedModuleImports(
+  toolDir: string,
+  workflowPath: string,
+  assigned: AssignedSharedModule[],
+): string[] {
+  const failures: string[] = [];
+  const verified = assigned.filter((m) => m.verified);
+  if (verified.length === 0) return failures;
+
+  let workflowRaw: { requestTransformModule?: unknown } = {};
+  try {
+    workflowRaw = JSON.parse(readFileSync(workflowPath, 'utf8'));
+  } catch {
+    return failures; // workflow parse already flagged elsewhere
+  }
+  const requestTransformModule =
+    typeof workflowRaw.requestTransformModule === 'string'
+      ? workflowRaw.requestTransformModule
+      : '';
+
+  let sourceBlob = '';
+  for (const f of ['parser.ts', 'request-transform.ts']) {
+    const p = pathJoin(toolDir, f);
+    if (existsSync(p)) sourceBlob += `\n${readFileSync(p, 'utf8')}`;
+  }
+
+  for (const m of verified) {
+    if (m.kind === 'request-transform') {
+      if (!requestTransformModule.includes(m.importPath) && !sourceBlob.includes(m.importPath)) {
+        failures.push(
+          `the build plan assigns shared module ${m.path} (request-transform) to this tool, but workflow.json does not set "requestTransformModule": "${m.importPath}" and no artifact imports it. Reuse it instead of re-implementing the logic — see read_build_plan.`,
+        );
+      }
+    } else if (!sourceBlob.includes(m.importPath)) {
+      failures.push(
+        `the build plan assigns shared module ${m.path} (${m.kind}) to this tool, but no artifact imports "${m.importPath}". Import it from parser.ts (or request-transform.ts) instead of re-implementing it — see read_build_plan.`,
+      );
+    }
+  }
+  return failures;
+}
+
 // ─── External Verification ──────────────────────────────────────────────────
+
+/**
+ * Decide whether a failed integration test was blocked by anti-automation /
+ * bot defense (as opposed to a real workflow defect). Compile-time integration
+ * tests only reach the fetch + fetch-bootstrap rungs; many sites gate their
+ * APIs behind challenges (CAPTCHA interstitials, redirect-to-challenge pages,
+ * rate-based blocks) that only the runtime ladder's stealth-fetch + playbook
+ * rungs bypass. When the parser is already verified against the recorded
+ * response, such a block should be a non-blocking warning, not a hard failure —
+ * the tool works in production via the full ladder.
+ *
+ * Vendor-agnostic by design: matches the common defense families (Cloudflare,
+ * Akamai, DataDome, PerimeterX, hCaptcha/reCAPTCHA, generic "unusual traffic"
+ * interstitials) plus blocking HTTP statuses (403/429/503) and
+ * redirect-to-challenge (30x to a challenge/verify/captcha location).
+ * Not specialized to any single site.
+ */
+export function isBotDefenseFailure(output: string): boolean {
+  // Unambiguous challenge/interstitial signatures — sufficient on their own,
+  // regardless of HTTP status, because no legitimate API success emits them.
+  // Vendor-neutral: covers the common anti-bot families, not any one site.
+  const strong =
+    /unusual traffic|recaptcha|hcaptcha|h-captcha|are you (a )?(human|robot)|verify (you are|you'?re) (a )?human|px-captcha|datadome|perimeterx|cf[-_]chl|attention required|just a moment\s*(\.\.\.|…)?|enable javascript and cookies to continue/i;
+  if (strong.test(output)) return true;
+  // Weaker terms need a corroborating blocking status or a redirect to a
+  // challenge page so ordinary error text doesn't get a free pass.
+  const weak =
+    /captcha|challenge|access denied|forbidden|blocked|\bbot\b|rate.?limit|too many requests/i;
+  const blockingStatus = /\b(403|429|503)\b/.test(output);
+  const challengeRedirect =
+    /\b(30[1-8])\b/.test(output) &&
+    /captcha|challenge|verify|robot|denied|blocked|unusual/i.test(output);
+  return (blockingStatus || challengeRedirect) && weak.test(output);
+}
 
 export async function externalVerification(
   toolDir: string,
@@ -1148,6 +1329,9 @@ export async function externalVerification(
     expectedToolName?: string;
     likelyParams?: Array<{ name: string; type?: string; description?: string }>;
     candidateRequestSeqs?: number[];
+    /** Shared modules the build plan assigned to this tool. The verifier asserts
+     *  each verified module is actually imported (no silent re-implementation). */
+    assignedSharedModules?: AssignedSharedModule[];
   } = {},
 ): Promise<{ failures: string[]; warnings: string[] }> {
   const failures: string[] = [];
@@ -1272,6 +1456,17 @@ export async function externalVerification(
     }
   }
 
+  // Shared-module reuse: when the build plan assigned this tool a verified
+  // shared module, the tool's artifacts MUST import it rather than duplicating
+  // the logic. This is the anti-duplication gate for multi-tool teach runs.
+  if (
+    opts.assignedSharedModules &&
+    opts.assignedSharedModules.length > 0 &&
+    existsSync(workflowPath)
+  ) {
+    failures.push(...assertSharedModuleImports(toolDir, workflowPath, opts.assignedSharedModules));
+  }
+
   if (!existsSync(parserPath)) {
     failures.push('parser.ts was not written');
   } else {
@@ -1291,28 +1486,14 @@ export async function externalVerification(
     failures.push('parser.test.ts was not written');
   } else {
     const src = readFileSync(parserTestPath, 'utf8');
-    const expectMatches = src.match(/expect\s*\(/g) ?? [];
-    if (expectMatches.length < 3) {
-      failures.push(`parser.test.ts has only ${expectMatches.length} expect() calls; need ≥3`);
+    const expectCount = countExpectCalls(src);
+    if (expectCount < 3) {
+      failures.push(`parser.test.ts has only ${expectCount} expect() calls; need ≥3`);
     }
-
-    const trivialPatterns = [
-      /expect\s*\(\s*true\s*\)\.toBe\s*\(\s*true\s*\)/,
-      /expect\s*\(\s*false\s*\)\.toBe\s*\(\s*false\s*\)/,
-      /expect\s*\(\s*1\s*\)\.toBe\s*\(\s*1\s*\)/,
-      /expect\s*\(\s*0\s*\)\.toBe\s*\(\s*0\s*\)/,
-      /expect\s*\(\s*null\s*\)\.toBeNull/,
-      /expect\s*\(\s*undefined\s*\)\.toBeUndefined/,
-      /expect\s*\(\s*"[^"]*"\s*\)\.toBe\s*\(\s*"[^"]*"\s*\)/,
-      /expect\s*\(\s*'[^']*'\s*\)\.toBe\s*\(\s*'[^']*'\s*\)/,
-    ];
-    for (const pattern of trivialPatterns) {
-      if (pattern.test(src)) {
-        failures.push(
-          'parser.test.ts contains trivial tautological assertions like expect(true).toBe(true) — tests must reference real values',
-        );
-        break;
-      }
+    if (hasTrivialAssertion(src)) {
+      failures.push(
+        'parser.test.ts contains trivial tautological assertions like expect(true).toBe(true) — tests must reference real values',
+      );
     }
   }
 
@@ -1354,14 +1535,12 @@ export async function externalVerification(
     }
     if (!integrationPassed) {
       const combined = `${lastOutput.stdout}\n${lastOutput.stderr}`;
-      const botSignatures = /PerimeterX|DataDome|Akamai|captcha|challenge|blocked|rate.?limit/i;
-      const hasStatusBlock = /\b(403|429)\b/.test(combined);
       const hasImprintBlock =
         /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(combined) &&
         /non-escalatable|giving up/.test(combined);
-      if (hasStatusBlock && botSignatures.test(combined)) {
+      if (isBotDefenseFailure(combined)) {
         warnings.push(
-          `integration test failed with likely bot-detection or rate-limiting (tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
+          `integration test failed with likely bot-detection / anti-automation challenge (tried 3 times) — treating as non-blocking since parser verification passed. The runtime backend ladder (stealth-fetch + playbook) handles these defenses at call time even when the compile-time fetch rungs cannot.\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
         );
       } else if (hasImprintBlock) {
         warnings.push(

@@ -47,7 +47,9 @@ Both are auto-discovered by the cron daemon and the MCP server, which dispatch t
 ```
 src/imprint/
 │ ── Orchestration ──
-├── teach.ts             End-to-end pipeline: record → redact → [replay-and-diff ‖ triage → detect → select] → generate → compile-playbook → emit → register
+├── teach.ts             End-to-end pipeline: record → redact → [replay-and-diff ‖ triage → detect → select] → plan-prereqs → (per-tool: plan-tool → generate) → compile-playbook → emit → register
+├── teach-plan.ts        plan-prereqs step: build plan + level-parallel shared-module build before the per-tool fan-out (multi-tool only)
+├── tool-plan.ts         plan-tool step: per-tool implementation plan (param→field map, request/parse plan, module imports) injected into the compile agent
 ├── integrations.ts      Platform registration (Claude Code, Codex, Claude Desktop, OpenClaw, Hermes)
 │
 │ ── Capture ──
@@ -55,7 +57,7 @@ src/imprint/
 ├── session-writer.ts    JSONL writer + Session assembler
 ├── inject-listener.ts   Sentinel-prefixed DOM event capture (injected)
 ├── redact.ts            Credential / PII scrub
-├── freeform-redact.ts   Supplemental free-form PII/secret detection (113 patterns)
+├── freeform-redact.ts   Supplemental free-form PII/secret detection (105 patterns; request-side only, generic catch-alls excluded)
 ├── sensitive-keys.ts    Sensitive credential key lists for extraction + redaction
 ├── credential-extract.ts  Automatic login-pair detection + redaction mapping from sessions
 ├── check.ts             Sanity-check captured sessions
@@ -66,6 +68,8 @@ src/imprint/
 │
 │ ── Compile ──
 ├── compile.ts           LLM compiler entry points: generate() + compilePlaybook()
+├── build-plan.ts        Multi-tool build plan: BuildPlan schema + planner (shared modules, per-tool guidance, auth recipe)
+├── prereq-builder.ts    Builds + verifies shared `_shared/*.ts` modules (single-shot LLM → verifySharedModule loop)
 ├── compile-agent.ts     Agentic compile orchestrator (session → workflow.json + parser.ts)
 ├── compile-agent-types.ts  Shared types for compile agent (progress, result)
 ├── agent.ts             General-purpose tool-using agent loop + per-turn/per-tool tracing
@@ -94,6 +98,7 @@ src/imprint/
 │ ── Services ──
 ├── cron.ts              Polling daemon
 ├── mcp-server.ts        MCP stdio + Streamable HTTP
+├── audit.ts             Acceptance gate: headless-claude exercises every tool, imprint scores it deterministically
 ├── install.ts           Register/remove emitted local or example tools with MCP clients
 ├── probe-backends.ts    Try each backend at record time → backends.json
 ├── notify.ts            evaluateNotifyWhen + Pushover/ntfy delivery
@@ -189,11 +194,17 @@ The ladder escalates only when every required missing item is satisfiable by the
 ~/.imprint/<site>/<toolName>/
 ├── workflow.json               output of `imprint generate`
 ├── parser.ts                   API-response → structured output
-├── request-transform.ts        optional — URL signing / request mutation
+├── request-transform.ts        optional — URL signing / request mutation (may import ../_shared/*)
 ├── playbook.yaml               output of `imprint compile-playbook`
 ├── index.ts                    output of `imprint emit` (consumed by cron + MCP)
 ├── cron.json                   schedule + params + replayBackend + notifyWhen
 └── backends.json               output of `imprint probe-backends`
+
+~/.imprint/<site>/_shared/       (multi-tool only — shared modules reused across the site's tools)
+├── <name>.ts                   request-transform / parser-helper / types, imported via ../_shared/<name>.ts
+└── package.json + node_modules  toolchain for verifying the shared modules
+
+~/.imprint/<site>/.build-plan.json   plan sidecar (shared modules + per-tool guidance + auth recipe)
 
 ~/.imprint/<site>/sessions/      (local only — auth tokens / PII)
 ├── <ts>.jsonl                  raw streaming capture
@@ -215,9 +226,18 @@ Set `IMPRINT_TRACE=1` with `PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006` to
 
 ```
 cli.teach (AGENT)
+├─ teach.combine_sessions (CHAIN)          ← from-scratch: merge sibling recordings (session/request/narration counts)
+├─ teach.record (CHAIN)                    ← live capture (event count)
+├─ teach.redact (CHAIN)                    ← credential/PII scrub (redaction stats)
 ├─ compile.triage_requests (RETRIEVER)
 │   └─ llm.analyze (LLM)
 ├─ teach.detect_tool_candidates (AGENT)
+│   └─ llm.analyze (LLM)
+├─ teach.plan_prereqs (AGENT)              ← multi-tool: build plan + shared modules
+│   ├─ llm.analyze (LLM)                       (planner)
+│   └─ teach.build_shared_module (AGENT)       (plan-first + verify cycles; independent modules concurrent)
+│       └─ llm.analyze (LLM)
+├─ teach.plan_tool (AGENT)                 ← per-tool implementation plan (sibling of that tool's compile.generate)
 │   └─ llm.analyze (LLM)
 ├─ compile.generate (AGENT)
 │   ├─ agent.turn.1 (CHAIN)           ← per-turn token counts
@@ -232,7 +252,17 @@ cli.teach (AGENT)
     └─ llm.analyze (LLM)
 ```
 
+The `audit` verb traces its own tree, so a failing acceptance run is debuggable in isolation:
+
+```
+cli.audit (AGENT)
+└─ audit.session (AGENT)        ← imprint.audit.{score, correct, broken, infra, bad_params, graded, verdict}
+    └─ (headless claude drives the site's real mcp-server tools)
+```
+
 Each `agent.turn.N` span records per-turn input/output tokens and stop reason. Each `llm.message_with_tools` span records model, provider, token counts, and which tools the model called. Each `agent.tool.X` span records tool execution time, result size, and (when `IMPRINT_TRACE_TOOL_IO=1`) the input arguments and output.
+
+Stage spans carry their own end-attributes for fast triage: `teach.record` (`imprint.record.event_count`), `teach.redact` (`imprint.redact.*` counts), `teach.combine_sessions` (`imprint.combine.{session,request,narration}_count`), and `teach.plan_tool` (`imprint.tool_plan.chars` / `.skipped`). Opening the `cli.teach` trace lets you locate the failing stage by span status/attrs — a `teach.plan_prereqs` timeout, a `teach.build_shared_module` with `ok=false`, an empty `teach.plan_tool`, or a `compile.generate` that gave up.
 
 Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise; cost attributes are added when `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` are set.
 
@@ -241,6 +271,43 @@ Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts
 - `parser.test.ts` — `bun:test` suite that exercises `parser.extract()` against the load-bearing response body. Reads the redacted session via `process.env.IMPRINT_SESSION_PATH` set by the harness. Deleted after verification passes; pass `--keep-test` to `teach` / `generate` (or set `IMPRINT_KEEP_TEST=1`) to retain it for local debugging.
 - `integration.test.ts` — live API test that imports the generated tool and calls `executeWorkflow` with default params. Verifies the workflow produces real data (catches expired hardcoded tokens, missing URL signing). During `imprint teach`, the harness sets `IMPRINT_TEACH_CREDENTIALS` in the test subprocess so credentials extracted during redaction are available without requiring a separate `imprint credential set`. Also deleted after verification unless `--keep-test` or `IMPRINT_KEEP_TEST=1`.
 - `.compile-log.json`, `.compile-done.json`, `.compile-give-up.json` — agent loop transcript + sentinels (gitignored).
+
+## Multi-tool shared modules (plan-prereqs)
+
+When one recording compiles into **two or more** tools, `imprint teach` inserts a `plan-prereqs` step between candidate selection and the per-tool compile fan-out. Single-tool recordings skip it entirely (the path is unchanged). Set `IMPRINT_NO_BUILD_PLAN=1` to disable it and compile every tool independently.
+
+The step does two things, once per teach, before the fan-out:
+
+1. **Plan** (`build-plan.ts`, single-shot `llm.analyze` against `prompts/build-planning.md`) — produces a `BuildPlan`: the shared modules to create (`request-transform` signing, `parser-helper` decoders, shared `types`), per-tool guidance (load-bearing seqs, parser guidance, parameter checklist), and an `authRecipe` each tool replicates inline. The plan is persisted to `~/.imprint/<site>/.build-plan.json`.
+2. **Build prereqs** (`prereq-builder.ts`) — each shared module is built in two phases. First a **planning pass** (`prompts/prereq-planner.md`, one `llm.analyze`) decodes the recorded sources into a Markdown implementation plan — data shape, per-export algorithm, the exact `noUncheckedIndexedAccess` guards, test plan, risks — persisted to `_shared/<name>.plan.md`. That plan is then injected into an **implement → `verifySharedModule` → feedback loop** (up to 5 cycles, the same shape `compilePlaybook` uses, so it works on every provider) that writes `~/.imprint/<site>/_shared/<name>.ts` plus a test. Planning is best-effort (any failure degrades to implementing without a plan), skipped for `types` modules, and disabled by `IMPRINT_NO_PREREQ_PLAN=1`. Modules build **level-by-level**: those in the same dependency level (no `dependsOn` edge between them) build concurrently under a small cap, while a dependent waits for its dependency's level. `verifySharedModule` is the anti-cheat gate: the module must export what the plan declared, its test must pass with non-trivial assertions, it must typecheck (`tsc` under `strict` + `noUncheckedIndexedAccess`, a gate separate from the test), and a kind-specific ground-truth anchor must reproduce recorded behavior (e.g. a `request-transform` must re-sign a recorded URL to the captured value). Each failed cycle logs which gate blocked it (typecheck / test / anchor).
+
+Each per-tool compile agent then receives its plan slice via a new `read_build_plan` tool (threaded by file path through all three compile drivers — in-process, claude-cli, codex-cli) and **must import the assigned shared modules** rather than re-implementing them: `request-transform` → `workflow.json`'s `requestTransformModule: "../_shared/<name>.ts"`; `parser-helper`/`types` → an import in `parser.ts`. `externalVerification` enforces this — a tool that ignores an assigned (verified) module fails the gate.
+
+**Why auth is plan-carried, not a shared file.** Login is request data (request[0] + captures) embedded inline by `emit`, and the runtime has no sub-workflow include primitive, so a shared `_shared/auth.ts` cannot be composed. Instead the plan's `authRecipe` describes the exact login + `${state.X}` capture chain, and every tool replicates it inline identically.
+
+**Graceful degrade.** A shared module the builder cannot verify within its cycle budget is marked `verified: false` and pruned from every tool's `usesSharedModules` for that run; the import-assertion never fires on it, and those tools fall back to inlining the logic (today's behavior). A module's relative-path import (`../_shared/<name>.ts`) resolves at runtime because the runtime resolves `parserModule`/`requestTransformModule` relative to each tool's `workflow.json`, and the whole site directory (including `_shared/`) travels together on install/bundle.
+
+## Per-tool plan → execute (plan-tool)
+
+The overall shape is **plan + build shared modules once → for each tool, plan then execute**. After the global `plan-prereqs` step, each tool's compile is preceded by its own short planning pass (`tool-plan.ts`, one `llm.analyze` against `prompts/tool-planning.md`). Tools still compile concurrently; the plan→execute is sequential *within* a single tool.
+
+The per-tool plan is grounded in the recording for **that tool only**: the candidate (its parameters, request seqs, dependency seqs), its slice of the global build plan (`parserGuidance` / `paramChecklist` / `authRecipe` / assigned shared modules), and the compacted request/response context for the tool's seqs. The planner returns a concise Markdown plan covering param→recorded-field mapping, request construction (referencing the assigned `request-transform` module by import path), response parsing (exact JSON paths, referencing the assigned `parser-helper`), the shared modules to import, and edge cases. The plan is persisted to `~/.imprint/<site>/<toolName>/.tool-plan.md` and injected into the compile agent's initial message (via `formatToolPlan`, shared verbatim by all three drivers) so the compile follows it instead of re-deriving structure.
+
+It is **best-effort**: a 5-minute timeout, a missing prompt, or any error yields no plan and the compile proceeds exactly as before. Disable it with `IMPRINT_NO_TOOL_PLAN=1`. (The shared-module plan cap is the longer one — 10 minutes — since it analyzes the whole merged recording across all tools.)
+
+This replaced an earlier per-tool **contract-test feedback loop** (compile → run generated contract tests → feed `tool_broken` findings back → recompile). That loop did not measurably raise accuracy and added significant complexity, so it was removed in favor of the single plan→execute pass plus the post-hoc `imprint audit` gate (below). See [decisions.md](decisions.md).
+
+## Acceptance gate (`imprint audit`)
+
+`imprint audit <site>` exercises every generated tool against the site's **real** MCP server and scores it, so a from-scratch teach can be held to a hard accuracy bar (≥95% by default). `audit.ts`:
+
+1. Discovers the site's tools + schemas (the same `discoverTools` the MCP server uses) and points a **headless `claude` session** at `imprint mcp-server <site>` over stdio, with only that site's tools allowed.
+2. The auditor (system prompt `prompts/audit-agent.md`, fully site-agnostic) reads each tool's description + schema, invokes it with a realistic param set plus 1–2 edge cases (all derived only from the schema/description), judges each result, and classifies each invocation `correct` | `tool_broken` | `infra` | `bad_params`.
+3. It returns a single structured JSON report (zod-validated). **It never reports a score** — imprint recomputes the score deterministically (`computeAuditScore`) so a generous auditor can't talk the gate up.
+
+Scoring: `score = 100 × correct / (correct + broken)`. Only `correct` and `tool_broken` are graded; `infra` (anti-bot / rate-limit / 403/429 / network / timeout) and `bad_params` (the auditor's own mistake) are excluded from the denominator, so a blocked or misused tool isn't counted as a code bug. **Pass** requires both `score ≥ minScore` and at least `2 × toolCount` gradeable invocations (enough signal to trust the number). No gradeable invocations → **inconclusive** (re-run / the site blocked us, not a code failure). Exit codes distinguish the cases: `0` pass, `1` fail (logic bugs), `2` inconclusive. The full result (deterministic score + the raw model report) is persisted to `~/.imprint/<site>/.audit-report.json` and traced under `cli.audit` → `audit.session`.
+
+The harness is fully general — no per-site special-casing — and the no-overfit guardrail applies to every change: a fix must improve a *category* (e.g. RPC-envelope parsing), never a single site/URL/tool/field.
 
 ## Extending Imprint
 

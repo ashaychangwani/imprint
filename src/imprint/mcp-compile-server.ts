@@ -24,6 +24,12 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import {
+  type AssignedSharedModule,
+  type SharedModuleManifestEntry,
+  readBuildPlanFile,
+  resolveAssignedModules,
+} from './build-plan.ts';
 import { buildCompileTools, externalVerification } from './compile-tools.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
@@ -43,6 +49,10 @@ interface RunCompileMcpServerOptions {
   maxVerificationCycles?: number;
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
+  /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). */
+  buildPlanPath?: string;
+  /** Shared-module build manifest for this site (verified flags). */
+  sharedModules?: SharedModuleManifestEntry[];
 }
 
 const DONE_SENTINEL = '.compile-done.json';
@@ -67,11 +77,26 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     session = redactSession(session).session;
   }
 
-  // Build the 8 read/write tools (same as the in-process loop).
+  // Build the read/write tools (same as the in-process loop). When a build
+  // plan is present, buildCompileTools also exposes read_build_plan.
   const compileTools = buildCompileTools(session, opts.toolDir, opts.sessionPath, {
     candidate: opts.candidate,
     sharedContext: opts.sharedContext,
+    buildPlanPath: opts.buildPlanPath,
+    sharedModules: opts.sharedModules,
   });
+
+  // Resolve the shared modules the plan assigned this tool, so verification can
+  // assert they are imported (no silent re-implementation).
+  const assignedSharedModules: AssignedSharedModule[] | undefined =
+    opts.buildPlanPath && opts.candidate?.toolName
+      ? (() => {
+          const plan = readBuildPlanFile(opts.buildPlanPath);
+          return plan
+            ? resolveAssignedModules(plan, opts.candidate.toolName, opts.sharedModules)
+            : undefined;
+        })()
+      : undefined;
 
   // The custom done/give_up tools live alongside in MCP space.
   const doneTool: Tool = {
@@ -144,6 +169,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
           expectedToolName: opts.candidate?.toolName,
           likelyParams: opts.candidate?.likelyParams,
           candidateRequestSeqs: opts.candidate?.requestSeqs,
+          assignedSharedModules,
         },
       );
       if (warnings.length > 0) {

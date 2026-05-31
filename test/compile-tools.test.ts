@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
-import { buildCompileTools, externalVerification } from '../src/imprint/compile-tools.ts';
+import {
+  buildCompileTools,
+  externalVerification,
+  isBotDefenseFailure,
+} from '../src/imprint/compile-tools.ts';
 import type { Session } from '../src/imprint/types.ts';
 
 function makeSummaryRequest(seq: number, timestamp: number): Session['requests'][number] {
@@ -1120,4 +1124,203 @@ describe('buildInlineData form-encoded decoding', () => {
     expect(lbr).toBeDefined();
     expect(lbr.inlineData.requestBodyDecoded).toBeUndefined();
   });
+});
+
+describe('externalVerification — shared-module import assertion', () => {
+  function fixtureSession(site: string): Session {
+    return {
+      site,
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/search?q=alpha',
+          headers: {},
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ items: ['alpha'] }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+  }
+
+  function setupDir(
+    prefix: string,
+    site: string,
+    workflow: Record<string, unknown>,
+  ): {
+    dir: string;
+    sessionPath: string;
+    session: Session;
+  } {
+    const scratchRoot = pathJoin(import.meta.dir, '..', '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const dir = mkdtempSync(pathJoin(scratchRoot, prefix));
+    const session = fixtureSession(site);
+    const sessionPath = pathJoin(dir, 'session.json');
+    writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+    writeFileSync(pathJoin(dir, 'workflow.json'), JSON.stringify(workflow, null, 2), 'utf8');
+    return { dir, sessionPath, session };
+  }
+
+  const signModule = {
+    path: '_shared/sign.ts',
+    kind: 'request-transform' as const,
+    verified: true,
+    importPath: '../_shared/sign.ts',
+    exportSignatures: ['export function transform(method: string, url: string): string'],
+    purpose: 'sign URLs',
+  };
+
+  // Match the import-assertion message specifically — not unrelated failures
+  // (e.g. "parser.ts import failed") that also mention the module path.
+  function hasImportAssertion(failures: string[], modulePath: string): boolean {
+    return failures.some(
+      (f) => f.includes('build plan assigns shared module') && f.includes(modulePath),
+    );
+  }
+
+  it('fails when an assigned request-transform module is not wired into the workflow', async () => {
+    const { dir, sessionPath, session } = setupDir('share-rt-missing-', 'rt-missing', {
+      toolName: 'search_items',
+      intent: { description: 'Search' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/api/search?q=alpha', headers: {} }],
+      site: 'rt-missing',
+    });
+    try {
+      const { failures } = await externalVerification(dir, session, sessionPath, {
+        assignedSharedModules: [signModule],
+      });
+      expect(hasImportAssertion(failures, '_shared/sign.ts')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes the import assertion when requestTransformModule points at the shared module', async () => {
+    const { dir, sessionPath, session } = setupDir('share-rt-ok-', 'rt-ok', {
+      toolName: 'search_items',
+      intent: { description: 'Search' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/api/search?q=alpha', headers: {} }],
+      site: 'rt-ok',
+      requestTransformModule: '../_shared/sign.ts',
+    });
+    try {
+      const { failures } = await externalVerification(dir, session, sessionPath, {
+        assignedSharedModules: [signModule],
+      });
+      expect(hasImportAssertion(failures, '_shared/sign.ts')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('passes the import assertion when parser.ts imports an assigned parser-helper', async () => {
+    const { dir, sessionPath, session } = setupDir('share-ph-ok-', 'ph-ok', {
+      toolName: 'search_items',
+      intent: { description: 'Search' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/api/search?q=alpha', headers: {} }],
+      site: 'ph-ok',
+      parserModule: './parser.ts',
+    });
+    try {
+      writeFileSync(
+        pathJoin(dir, 'parser.ts'),
+        `import { decode } from '../_shared/decode.ts';\nexport function extract(d: unknown) { return decode(d); }\n`,
+        'utf8',
+      );
+      const { failures } = await externalVerification(dir, session, sessionPath, {
+        assignedSharedModules: [
+          {
+            path: '_shared/decode.ts',
+            kind: 'parser-helper',
+            verified: true,
+            importPath: '../_shared/decode.ts',
+            exportSignatures: ['export function decode(d: unknown): unknown'],
+            purpose: 'decode',
+          },
+        ],
+      });
+      expect(hasImportAssertion(failures, '_shared/decode.ts')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not assert imports for unverified shared modules', async () => {
+    const { dir, sessionPath, session } = setupDir('share-unverified-', 'unverified', {
+      toolName: 'search_items',
+      intent: { description: 'Search' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/api/search?q=alpha', headers: {} }],
+      site: 'unverified',
+    });
+    try {
+      const { failures } = await externalVerification(dir, session, sessionPath, {
+        assignedSharedModules: [{ ...signModule, verified: false }],
+      });
+      expect(hasImportAssertion(failures, '_shared/sign.ts')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('isBotDefenseFailure', () => {
+  // Generalized across bot-defense vendors — NOT specialized to any one site.
+  const blocked = [
+    [
+      '302 redirect to a challenge/verify page',
+      '302 Found\nlocation: https://example.com/challenge?reason=verify',
+    ],
+    [
+      '"unusual traffic" interstitial',
+      'Our systems have detected unusual traffic from your computer network.',
+    ],
+    ['Cloudflare "Just a moment"', '503 Service Unavailable\nJust a moment...\ncf-chl-bypass'],
+    ['Cloudflare Attention Required', 'Attention Required! | Cloudflare (Ray ID: 8ab...)'],
+    ['reCAPTCHA', 'Error: please complete the reCAPTCHA challenge to continue'],
+    ['hCaptcha', 'hcaptcha verification required'],
+    ['DataDome', '403 Forbidden\nx-datadome: protected'],
+    ['PerimeterX', '403 Forbidden — perimeterx px-captcha shown'],
+    ['Akamai 403 challenge', '403 Forbidden: bot challenge from Akamai'],
+    ['429 rate limit', '429 Too Many Requests — rate limit exceeded'],
+    ['generic access denied 403', '403 Forbidden: Access Denied'],
+  ] as const;
+  for (const [name, text] of blocked) {
+    it(`treats "${name}" as bot defense`, () => {
+      expect(isBotDefenseFailure(text)).toBe(true);
+    });
+  }
+
+  const notBlocked = [
+    [
+      'assertion failure',
+      'expect(result.flights.length).toBeGreaterThan(0)\n  Expected: > 0\n  Received: 0',
+    ],
+    ['400 bad params', '400 Bad Request: missing required parameter "origin"'],
+    ['plain empty result', 'workflow returned { flights: [] } — no data for these inputs'],
+    ['generic 500', '500 Internal Server Error'],
+    ['ordinary redirect, no challenge', '302 Found\nlocation: https://example.com/results?page=2'],
+  ] as const;
+  for (const [name, text] of notBlocked) {
+    it(`does NOT treat "${name}" as bot defense`, () => {
+      expect(isBotDefenseFailure(text)).toBe(false);
+    });
+  }
 });

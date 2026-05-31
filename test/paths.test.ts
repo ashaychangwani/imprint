@@ -4,6 +4,8 @@ import {
   defaultSessionJsonlPath,
   imprintHomeDir,
   localSessionsDir,
+  localSharedDir,
+  localSharedModulePath,
   localSiteDir,
   localToolDir,
   relativeToLocalSite,
@@ -74,6 +76,27 @@ describe('local imprint paths', () => {
     withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
       expect(() => localToolDir('southwest', '../escape')).toThrow(/Invalid tool name/);
       expect(() => localToolDir('southwest', 'a/b')).toThrow(/Invalid tool name/);
+    });
+  });
+
+  it('resolves the site-level shared module directory', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(localSharedDir('demo')).toBe(pathResolve('/tmp', 'imprint-home', 'demo', '_shared'));
+      expect(localSharedModulePath('demo', '_shared/sign.ts')).toBe(
+        pathResolve('/tmp', 'imprint-home', 'demo', '_shared', 'sign.ts'),
+      );
+      // Accepts a bare filename too.
+      expect(localSharedModulePath('demo', 'sign.ts')).toBe(
+        pathResolve('/tmp', 'imprint-home', 'demo', '_shared', 'sign.ts'),
+      );
+    });
+  });
+
+  it('rejects path traversal in shared module paths', () => {
+    withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
+      expect(() => localSharedModulePath('demo', '../escape.ts')).toThrow(/Invalid shared module/);
+      expect(() => localSharedModulePath('demo', '/etc/passwd')).toThrow(/Invalid shared module/);
+      expect(() => localSharedModulePath('demo', 'nested/dir.ts')).toThrow(/Invalid shared module/);
     });
   });
 });

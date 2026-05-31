@@ -71,7 +71,7 @@ Imprint generates replay artifacts:
 
 Both artifacts are written into the generated tool directory (`~/.imprint/<site>/<toolName>/`). `compile-playbook` uses that nested location by default so cron and MCP discovery can see the fallback without a custom `--out`.
 
-Credentials and PII are redacted automatically: credential values become `${credential.NAME}` placeholders, sensitive values become redaction markers that preserve equality within the artifact, and a supplemental free-form scan catches common emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, and webhook URLs before LLM compile.
+Credentials and PII are redacted automatically: credential values become `${credential.NAME}` placeholders, sensitive values become redaction markers that preserve equality within the artifact, and a supplemental free-form scan catches common emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, and webhook URLs before LLM compile. That free-form scan runs on request bodies, URLs, storage, and DOM/event details; response bodies are scrubbed by sensitive field name only, so structured server payloads (e.g. doubly-encoded RPC envelopes) stay intact.
 
 </td>
 <td width="34%">
@@ -158,6 +158,10 @@ To force a specific provider and skip the picker, pass `--provider <name>` to `t
 
 After selecting a provider, `teach` prompts for a **model** (e.g. `claude-opus-4-8` vs `claude-sonnet-4-6` for Anthropic, `gpt-5.4` vs `o3` for Codex). Override with `--model <name>`. Each tool compiles with a **20-minute timeout** by default — the compile agent writes the MCP server and runs thorough verification tests, so most complex tools take 10-15 minutes. Override with `--timeout <duration>` (e.g. `--timeout 30m`, `--timeout 1h`). To persist the generated tests after compilation, set `IMPRINT_KEEP_TEST=1` or pass `--keep-test`. To skip the replay-and-diff stage (the automated second pass that classifies ephemeral vs constant values), pass `--skip-replay` — faster, but may reduce workflow accuracy for sites with dynamic request parameters.
 
+When one recording yields **two or more** tools, `teach` first plans and builds **shared modules** (URL signing, response parsers, shared types) under `~/.imprint/<site>/_shared/` and verifies each one before the tools compile, so every tool reuses the same vetted code instead of re-deriving it. Set `IMPRINT_NO_BUILD_PLAN=1` to disable and compile each tool independently. Then, before each tool compiles, a short **per-tool planning pass** maps every parameter to its recorded field and fixes the request/parse plan, so the compile follows a vetted plan instead of re-deriving structure (disable with `IMPRINT_NO_TOOL_PLAN=1`).
+
+Once tools are generated, `imprint audit <site>` exercises every tool against the site's real MCP server and scores it deterministically (≥95% gate by default), so you can hold a fresh teach to a hard accuracy bar.
+
 <br>
 
 ## Local compile tracing
@@ -178,7 +182,7 @@ PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
 imprint teach namecheap-domains --from-session ~/.imprint/namecheap-domains/sessions/<ts>.json --provider codex-cli
 ```
 
-Traces show the full compile pipeline at every level of detail: each `agent.turn.N` span captures per-turn token counts; each `llm.message_with_tools` span records model, provider, input/output tokens, and stop reason; each `agent.tool.X` span times individual tool dispatches. Drill from `cli.teach` → `compile.generate` → `agent.turn.1` → tool calls to find exactly which turn or tool is spending tokens. Set `IMPRINT_TRACE_IO_MAX_CHARS` to raise or lower captured payload size. Set `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` to add estimated cost attributes.
+Traces show the full compile pipeline at every level of detail: the `cli.teach` root fans out into one span per stage (`teach.record`, `teach.redact`, `teach.combine_sessions`, `compile.triage_requests`, `teach.detect_tool_candidates`, `teach.plan_prereqs` → `teach.build_shared_module`, `teach.plan_tool`, `compile.generate`, `compile.playbook`) so any stage is debuggable in isolation; each `agent.turn.N` span captures per-turn token counts; each `llm.message_with_tools` span records model, provider, input/output tokens, and stop reason; each `agent.tool.X` span times individual tool dispatches. Drill from `cli.teach` → `compile.generate` → `agent.turn.1` → tool calls to find exactly which turn or tool is spending tokens. `imprint audit` traces its own `cli.audit` → `audit.session` tree with the deterministic score attributes. Set `IMPRINT_TRACE_IO_MAX_CHARS` to raise or lower captured payload size. Set `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` to add estimated cost attributes.
 
 <br>
 
@@ -286,7 +290,7 @@ imprint <command> --help    # per-command options
 | | Commands |
 |---|---|
 | **Pipeline** | `teach` · `record` · `redact` · `generate` · `compile-playbook` · `emit` |
-| **Runtime** | `cron` · `mcp-server` · `playbook` · `probe-backends` |
+| **Runtime** | `cron` · `mcp-server` · `playbook` · `probe-backends` · `audit` |
 | **Credentials** | `credential set` · `credential list` · `credential export` · `credential import` · `credential migrate` |
 | **Utilities** | `mcp` · `login` · `assemble` · `check` · `doctor` |
 

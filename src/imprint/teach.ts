@@ -17,6 +17,7 @@ import {
 } from 'node:path';
 import * as p from '@clack/prompts';
 import type { OnDeadlineReached } from './agent.ts';
+import { type SharedModuleManifestEntry, buildPlanSidecarPath } from './build-plan.ts';
 import {
   type CompileAgentProgress,
   type TriageResult,
@@ -24,8 +25,7 @@ import {
   generate,
   triageRequests,
 } from './compile.ts';
-import { generateContractTestSpecs } from './contract-test-generator.ts';
-import { runContractTests } from './contract-test-runner.ts';
+import { mapLimit, mapLimitSettled } from './concurrency.ts';
 import {
   type CredentialFinding,
   type Replacement,
@@ -63,6 +63,7 @@ import {
   mergeSessions,
   writeCombinedSession,
 } from './session-merge.ts';
+import { planAndBuildPrereqs } from './teach-plan.ts';
 import {
   TEACH_STEPS as STEPS,
   type TeachStep as Step,
@@ -86,6 +87,8 @@ import {
   detectToolCandidates,
   primaryToolCandidate,
 } from './tool-candidates.ts';
+import { planToolCompile } from './tool-plan.ts';
+import { setSpanAttributes, traced } from './tracing.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
 import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
 
@@ -526,12 +529,21 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     spinner.stop('Ready to record.');
     console.log('');
 
-    const recordResult = await record({
-      site: site,
-      url: startUrl,
-      persistProfile: opts.persistProfile,
-      signal: opts.signal,
-    });
+    const recordResult = await traced(
+      'teach.record',
+      'CHAIN',
+      { 'imprint.site': site, 'imprint.url': startUrl },
+      async (span) => {
+        const res = await record({
+          site: site,
+          url: startUrl,
+          persistProfile: opts.persistProfile,
+          signal: opts.signal,
+        });
+        setSpanAttributes(span, { 'imprint.record.event_count': res.count });
+        return res;
+      },
+    );
     sessionPath = recordResult.sessionPath;
 
     checkpoint(site, state, workflowKey, {
@@ -613,13 +625,32 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
 
     spinner.start('Redacting credentials...');
-    const pageMintedHeaders = detectPageMintedHeaders(session);
-    const { session: scrubbed, stats } = redactSession(session, {
-      replacements: confirmedReplacements,
-      keepHeaders: pageMintedHeaders,
-    });
     redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
-    writeFileSync(redactedPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
+    const { stats } = await traced(
+      'teach.redact',
+      'CHAIN',
+      { 'imprint.site': site },
+      async (span) => {
+        const pageMintedHeaders = detectPageMintedHeaders(session);
+        const redaction = redactSession(session, {
+          replacements: confirmedReplacements,
+          keepHeaders: pageMintedHeaders,
+        });
+        writeFileSync(
+          redactedPath as string,
+          `${JSON.stringify(redaction.session, null, 2)}\n`,
+          'utf8',
+        );
+        setSpanAttributes(span, {
+          'imprint.redact.totalRedactions': redaction.stats.totalRedactions,
+          'imprint.redact.requestsRedacted': redaction.stats.requestsRedacted,
+          'imprint.redact.cookiesRedacted': redaction.stats.cookiesRedacted,
+          'imprint.redact.placeholdersInjected': redaction.stats.placeholdersInjected,
+          'imprint.redact.freeformRedactions': redaction.stats.freeformRedactions,
+        });
+        return redaction;
+      },
+    );
     const placeholderNote =
       stats.placeholdersInjected > 0
         ? `, ${stats.placeholdersInjected} replaced with credential placeholders`
@@ -964,6 +995,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         'write the MCP server, and run thorough verification tests.',
         'Most complex tools take 10-15 minutes — please be patient.',
         `Timeout: ${timeoutDisplay} per tool. You can interrupt with Ctrl-C.`,
+        ...(plans.length > 1
+          ? [
+              '',
+              'Shared helper modules are planned + built once under _shared/ before',
+              'the tools compile, so each tool reuses them. Set IMPRINT_NO_BUILD_PLAN=1',
+              'to disable and compile every tool independently.',
+            ]
+          : []),
         '',
         'To persist the generated tests after compilation, set IMPRINT_KEEP_TEST=1',
         'or pass --keep-test.',
@@ -1002,6 +1041,62 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
   }
 
+  // ── plan-prereqs: plan + build shared modules once before the fan-out ──
+  // Only engages for ≥2 selected tools that are about to be (re)generated.
+  // Single-tool runs and resumes-past-generate are unchanged.
+  const selectedCandidates = plans.map((pl) => pl.candidate).filter((c): c is ToolCandidate => !!c);
+  const willGenerate = plans.some((pl) => STEPS.indexOf(pl.startFrom) <= STEPS.indexOf('generate'));
+  let buildPlanPath = '';
+  let sharedModulesManifest: SharedModuleManifestEntry[] = [];
+  if (selectedCandidates.length >= 2 && willGenerate && compileModel) {
+    const sidecar = buildPlanSidecarPath(site);
+    const firstWs = state.workflows[plans[0]?.workflowKey ?? ''];
+    const alreadyPlanned =
+      plans.every((pl) =>
+        state.workflows[pl.workflowKey]?.completedSteps.includes('plan-prereqs'),
+      ) && existsSync(sidecar);
+    if (alreadyPlanned && firstWs) {
+      // Resume past plan-prereqs — reuse the persisted plan + manifest.
+      buildPlanPath = sidecar;
+      sharedModulesManifest = firstWs.sharedModules ?? [];
+    } else {
+      spinner.start('Planning shared modules...');
+      try {
+        const prereq = await planAndBuildPrereqs({
+          site,
+          redactedSessionPath: compileSessionPath,
+          candidates: selectedCandidates,
+          sharedContext: plans[0]?.sharedContext,
+          siteClassifications,
+          providerName: compileProviderName,
+          model: compileModel,
+          onProgress: (msg) => spinner.message(msg),
+        });
+        buildPlanPath = prereq.buildPlanPath;
+        sharedModulesManifest = prereq.sharedModules;
+        const verified = sharedModulesManifest.filter((m) => m.verified).length;
+        spinner.stop(
+          buildPlanPath
+            ? `Build plan ready (${verified}/${sharedModulesManifest.length} shared module${sharedModulesManifest.length === 1 ? '' : 's'} verified).`
+            : 'Build plan skipped.',
+        );
+      } catch (err) {
+        spinner.stop('Build planning failed — compiling tools independently.');
+        p.log.warn(
+          `Build planning failed: ${err instanceof Error ? err.message : String(err)}\nTools will compile without shared modules.`,
+        );
+        buildPlanPath = '';
+        sharedModulesManifest = [];
+      }
+      for (const pl of plans) {
+        updateCheckpoint(site, state, pl.workflowKey, 'plan-prereqs', {
+          buildPlanPath: buildPlanPath ? toRelative(site, buildPlanPath) : undefined,
+          sharedModules: sharedModulesManifest,
+        });
+      }
+    }
+  }
+
   if (plans.length > 1) muteLog();
   let results: TeachToolResult[];
   try {
@@ -1019,6 +1114,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       siteClassifications,
       teachCredentials,
       allTools: opts.allTools,
+      buildPlanPath: buildPlanPath || undefined,
+      sharedModules: sharedModulesManifest.length > 0 ? sharedModulesManifest : undefined,
     });
   } finally {
     if (plans.length > 1) unmuteLog();
@@ -1186,6 +1283,10 @@ async function compileCandidatePlans(opts: {
    *  the run with a non-zero exit so the user notices missing tools instead
    *  of getting a silent warning. */
   allTools?: boolean;
+  /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). */
+  buildPlanPath?: string;
+  /** Shared-module build manifest (verified flags) for this site. */
+  sharedModules?: SharedModuleManifestEntry[];
 }): Promise<TeachToolResult[]> {
   const concurrency = opts.plans.length === 1 ? 1 : COMPILE_CONCURRENCY;
   const mp = opts.plans.length > 1 ? new MultiProgress() : null;
@@ -1371,6 +1472,8 @@ async function compileSelectedCandidate(opts: {
   sharedTriageResult?: TriageResult;
   siteClassifications?: ClassifiedValue[];
   teachCredentials?: { site: string; values: Record<string, string> };
+  buildPlanPath?: string;
+  sharedModules?: SharedModuleManifestEntry[];
 }): Promise<TeachToolResult> {
   const { plan, site, state } = opts;
   const startIdx = STEPS.indexOf(plan.startFrom);
@@ -1378,43 +1481,45 @@ async function compileSelectedCandidate(opts: {
   const workflowDir = localToolDir(site, toolName);
   mkdirSync(workflowDir, { recursive: true });
 
-  // ── Step 1: generate (workflow.json) + contract test specs (parallel) ──
-  let genResult: { workflow: Workflow; workflowPath: string };
+  // ── Step 1: plan THEN execute (workflow.json) ──
+  let genResult: { workflow: Workflow; workflowPath: string } | undefined;
   if (startIdx <= STEPS.indexOf('generate')) {
     const llmConfig = { provider: opts.providerName, model: opts.compileModel };
 
-    // Load session once for contract tests (spec generation + test execution)
-    const contractSession = plan.candidate
-      ? loadJsonFile(opts.sessionPath, SessionSchema, { notFound: 'session not found' }, 'session')
-      : null;
+    // Plan THEN execute: derive a per-tool implementation plan (param→field
+    // mapping, request construction, response parsing, shared-module imports),
+    // then run a single compile that follows it. Best-effort — a timeout or
+    // error yields no plan and the compile proceeds exactly as before.
+    const toolPlan = plan.candidate
+      ? await planToolCompile({
+          site,
+          toolName,
+          candidate: plan.candidate,
+          sharedContext: plan.sharedContext,
+          sessionPath: opts.sessionPath,
+          buildPlanPath: opts.buildPlanPath,
+          sharedModules: opts.sharedModules,
+          providerName: opts.providerName,
+          model: opts.compileModel,
+        })
+      : undefined;
 
-    let contractSpecPromise: Promise<unknown> = Promise.resolve(null);
-    if (plan.candidate && contractSession) {
-      contractSpecPromise = generateContractTestSpecs({
-        candidate: plan.candidate,
-        session: contractSession,
-        sharedContext: plan.sharedContext,
-        llmConfig,
-        toolDir: workflowDir,
-      }).catch(() => null);
-    }
-
-    const [result] = await Promise.all([
-      generate({
-        sessionPath: opts.sessionPath,
-        outDir: workflowDir,
-        maxDurationMs: opts.maxDurationMs,
-        llmConfig,
-        keepTest: opts.keepTest,
-        candidate: plan.candidate,
-        sharedContext: plan.sharedContext,
-        onProgress: opts.onProgress,
-        onDeadlineReached: opts.onDeadlineReached,
-        classifications: opts.siteClassifications,
-        teachCredentials: opts.teachCredentials,
-      }),
-      contractSpecPromise,
-    ]);
+    const result = await generate({
+      sessionPath: opts.sessionPath,
+      outDir: workflowDir,
+      maxDurationMs: opts.maxDurationMs,
+      llmConfig,
+      keepTest: opts.keepTest,
+      candidate: plan.candidate,
+      sharedContext: plan.sharedContext,
+      onProgress: opts.onProgress,
+      onDeadlineReached: opts.onDeadlineReached,
+      classifications: opts.siteClassifications,
+      teachCredentials: opts.teachCredentials,
+      buildPlanPath: opts.buildPlanPath,
+      sharedModules: opts.sharedModules,
+      toolPlan,
+    });
 
     assertCandidateToolName('Compiled workflow', result.workflow.toolName, plan.candidate);
     genResult = { workflow: result.workflow, workflowPath: result.workflowPath };
@@ -1422,34 +1527,6 @@ async function compileSelectedCandidate(opts: {
       candidate: plan.candidate,
       sharedContext: plan.sharedContext,
     });
-
-    // Run contract tests against the compiled tool (specs were written during compile)
-    if (plan.candidate && contractSession) {
-      const contractResult = await runContractTests({
-        toolDir: workflowDir,
-        session: contractSession,
-        sessionPath: opts.sessionPath,
-        candidate: plan.candidate,
-        llmConfig,
-        teachCredentials: opts.teachCredentials,
-      });
-      if (contractResult) {
-        const resultPath = pathJoin(workflowDir, '.test-specs', 'contract-result.json');
-        writeFileSync(resultPath, JSON.stringify(contractResult, null, 2));
-        if (contractResult.failed > 0) {
-          const broken = contractResult.failures.filter((f) => f.adjudication === 'tool_broken');
-          if (broken.length > 0) {
-            p.log.warn(
-              `Contract tests: ${broken.length} of ${contractResult.totalTests} indicate tool issues: ${broken.map((f) => f.testName).join(', ')}`,
-            );
-          }
-        } else if (contractResult.totalTests > 0) {
-          p.log.success(
-            `Contract tests: ${contractResult.passed}/${contractResult.totalTests} passed`,
-          );
-        }
-      }
-    }
   } else {
     const workflowPath = pathJoin(workflowDir, 'workflow.json');
     const workflow = loadJsonFile(
@@ -1459,6 +1536,9 @@ async function compileSelectedCandidate(opts: {
       'workflow.json',
     );
     genResult = { workflow, workflowPath };
+  }
+  if (!genResult) {
+    throw new Error(`generate step did not produce a workflow for "${toolName}".`);
   }
 
   // ── Step 2: compile-playbook (after generate — runtime artifact, not needed for dual-pass) ──
@@ -1600,55 +1680,9 @@ async function siteReplayAndDiff(
   }
 }
 
-export async function mapLimit<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  let firstError: unknown;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length && firstError === undefined) {
-      const index = next++;
-      const item = items[index];
-      if (item === undefined) continue;
-      try {
-        results[index] = await fn(item);
-      } catch (err) {
-        firstError ??= err;
-      }
-    }
-  });
-  await Promise.allSettled(workers);
-  if (firstError !== undefined) throw firstError;
-  return results;
-}
-
-type SettledResult<R> = { ok: true; value: R } | { ok: false; error: unknown };
-
-export async function mapLimitSettled<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>,
-): Promise<SettledResult<R>[]> {
-  const results = new Array<SettledResult<R>>(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next++;
-      const item = items[index];
-      if (item === undefined) continue;
-      try {
-        results[index] = { ok: true, value: await fn(item) };
-      } catch (err) {
-        results[index] = { ok: false, error: err };
-      }
-    }
-  });
-  await Promise.allSettled(workers);
-  return results;
-}
+// Bounded-concurrency fan-out helpers now live in concurrency.ts (so teach-plan.ts
+// can reuse them without an import cycle). Re-exported here for existing callers.
+export { mapLimit, mapLimitSettled };
 
 // ─── Credential capture (interactive) ───────────────────────────────────────
 
@@ -2290,8 +2324,21 @@ async function combineAvailableSessions(opts: {
     ),
   );
 
-  const combined = mergeSessions(sessions);
-  const combinedPath = writeCombinedSession(opts.site, combined);
+  const { combined, combinedPath } = await traced(
+    'teach.combine_sessions',
+    'CHAIN',
+    { 'imprint.site': opts.site },
+    async (span) => {
+      const merged = mergeSessions(sessions);
+      const path = writeCombinedSession(opts.site, merged);
+      setSpanAttributes(span, {
+        'imprint.combine.session_count': sessions.length,
+        'imprint.combine.request_count': merged.requests.length,
+        'imprint.combine.narration_count': merged.narration.length,
+      });
+      return { combined: merged, combinedPath: path };
+    },
+  );
 
   spinner.stop(
     `Combined ${sessions.length} sessions (${combined.requests.length} requests, ${combined.narration.length} narrations).`,

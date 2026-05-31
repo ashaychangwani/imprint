@@ -1,0 +1,63 @@
+You plan how a set of selected tools — all compiled from ONE browser recording of ONE site — should be built so they reuse shared code instead of each re-deriving the same logic.
+
+Return ONLY one JSON object. No markdown, no prose.
+
+## Input
+
+You receive:
+
+- `site`, `url`, `narration` — what the user was doing.
+- `selectedTools[]` — the tools that WILL be compiled: `{ toolName, description, expectedOutput, requestSeqs, dependencySeqs, likelyParams }`. You must emit exactly one `perTool` entry for each.
+- `sharedContext` — `{ loginRequestSeqs, credentialNames, tokenExtractionNotes, sharedHelperNotes }` from candidate detection.
+- `ephemeralValues[]` — values that differed across two independent replays (highest-confidence signal for signing tokens / per-call state): `{ classification, originalSeq, location, producerSeq, producerPath, suggestedStateName }`. `browser_minted` with a high-entropy query-param `location` is the canonical sign of client-side URL signing → a `request-transform` module.
+- `requests[]` — the load-bearing requests for the selected tools (identical requests across tools are collapsed; `repeatCount`/`repeatedSeqs` show that). When the SAME endpoint appears for multiple tools, that's a strong shared-module signal.
+
+## Output schema
+
+```
+{
+  "sharedModules": [
+    {
+      "path": "_shared/<name>.ts",                 // flat file under _shared/, .ts
+      "kind": "request-transform" | "parser-helper" | "types",
+      "purpose": "one line: what this module does and why it's shared",
+      "exportSignatures": ["export function signUrl(url: string): string"],
+      "spec": "precise contract the builder implements: inputs, outputs, edge cases, and which sourceSeqs prove the behavior",
+      "sourceSeqs": [number],                       // recorded request seqs that ground the implementation
+      "dependsOn": ["_shared/<other>.ts"]           // other shared modules this one imports (build order)
+    }
+  ],
+  "perTool": [
+    {
+      "toolName": "snake_case_tool_name",
+      "usesSharedModules": ["_shared/<name>.ts"],   // subset of sharedModules[].path
+      "loadBearingSeqs": [number],
+      "parserGuidance": "what the parser should extract and how shared helpers fit in",
+      "paramChecklist": ["param_name", ...],         // user-controllable inputs to template
+      "authRecipe": {
+        "required": true,
+        "loginRequestSeqs": [number],
+        "credentialNames": ["username", "password"],
+        "captures": [
+          { "name": "access_token", "source": "json", "locator": "$.token", "usedAs": "header:Authorization" }
+        ],
+        "notes": "how every tool replicates login inline (Imprint has no shared-auth runtime primitive)"
+      }
+    }
+  ]
+}
+```
+
+## Rules
+
+1. **Emit exactly one `perTool` entry per `selectedTools` entry**, using the same `toolName`. Do not invent or drop tools.
+2. **Only hoist a shared module when ≥2 selected tools genuinely share it.** Single-use logic stays inside that tool's own parser.ts / request-transform.ts — do NOT create a `_shared/` module for it.
+3. **`request-transform`** — URL signing or body construction shared across tools. Wire-up: the consuming tool sets `requestTransformModule: "../_shared/<name>.ts"`. Ground it in `ephemeralValues` (browser_minted, high-entropy query param) and `sourceSeqs`. The exported `transform(method, url, responses, params?)` returns the signed URL (or `{ url, body? }`).
+4. **`parser-helper`** — a decoder/normalizer ≥2 tools' parsers call (e.g. a shared JSPB walker, a shared field mapper). The consuming tool's parser.ts does `import { ... } from '../_shared/<name>.ts'`. Ground it in a captured response body (`sourceSeqs`).
+5. **`types`** — shared TypeScript interfaces used by ≥2 parsers. Type-only; no runtime behavior.
+6. **Auth is NEVER a shared module.** Login is request data, and the runtime cannot run a shared sub-workflow. Put the exact recipe in each tool's `authRecipe` (login seqs, credential names, captures with `${state.X}` wiring) and set `required: false` with empty arrays when a tool needs no login. Every authed tool replicates the same recipe inline.
+7. **`exportSignatures` must be real TypeScript signatures** the builder will implement and the verifier will check for. List every public export.
+8. **`spec` must be concrete enough to implement and test** — name the inputs, the exact output, and the `sourceSeqs` that prove it (e.g. "given the URL at seq 41 with the `sig` param stripped, regenerate `sig` to match the recorded value").
+9. **`dependsOn` only references other `sharedModules[].path`.** No cycles.
+10. **Be conservative.** Never invent a module without grounding `sourceSeqs`. If unsure whether two tools truly share logic, leave it per-tool (empty `sharedModules`, empty `usesSharedModules`). A wrong shared module forces every assigned tool to import code that doesn't fit. Fewer, well-grounded modules beat many speculative ones.
+11. `paramChecklist` mirrors the candidate's `likelyParams` names — the inputs each tool must template as `${param.NAME}`.

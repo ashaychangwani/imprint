@@ -73,10 +73,11 @@ const FREEFORM_POLICIES: PolicyName[] = [
   Policies.PGP_PRIVATE_KEY,
   Policies.PASSWORD_ASSIGNMENT,
   Policies.ENVIRONMENT_VARIABLE_SECRET,
-  Policies.GENERIC_PASSWORD,
-  Policies.GENERIC_TOKEN,
-  Policies.GENERIC_CREDENTIAL,
-  Policies.GENERIC_SECRET,
+  // NOTE: the GENERIC_* catch-alls (GENERIC_PASSWORD/TOKEN/CREDENTIAL/SECRET) are
+  // intentionally omitted — they match on value shape alone and fire on benign
+  // data (e.g. `id=1234567890`), corrupting/over-redacting structured payloads.
+  // Real secrets are still covered by the keyword-anchored and specific policies
+  // above and below (PASSWORD_ASSIGNMENT, OAUTH_*, private keys, cloud tokens, PII).
   Policies.OAUTH_CLIENT_SECRET,
   Policies.OAUTH_REFRESH_TOKEN,
   Policies.OAUTH_ACCESS_TOKEN,

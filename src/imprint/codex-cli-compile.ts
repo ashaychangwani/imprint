@@ -11,7 +11,15 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
+import {
+  type AssignedSharedModule,
+  type SharedModuleManifestEntry,
+  describeAssignedModules,
+  readBuildPlanFile,
+  resolveAssignedModules,
+} from './build-plan.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
+import { formatToolPlan } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
@@ -48,6 +56,12 @@ interface CompileViaCodexCliOptions {
   keepTest?: boolean;
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
+  /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). */
+  buildPlanPath?: string;
+  /** Shared-module build manifest for this site (verified flags). */
+  sharedModules?: SharedModuleManifestEntry[];
+  /** Per-tool implementation plan injected into the agent's initial message. */
+  toolPlan?: string;
 }
 
 interface CodexJsonEvent {
@@ -141,6 +155,8 @@ async function compileViaCodexCliImpl(
     opts.absoluteToolDir,
     ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
     ...(opts.sharedContext ? ['--shared-context-json', JSON.stringify(opts.sharedContext)] : []),
+    ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
+    ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
   ];
 
   let systemPrompt: string;
@@ -150,6 +166,7 @@ async function compileViaCodexCliImpl(
     return finalErrorResult(opts, `failed to read system prompt: ${errMsg(err)}`);
   }
 
+  const assignedSharedModules = resolveAssignedSharedModules(opts);
   const initialPrompt = `<system_instructions>
 ${systemPrompt}
 </system_instructions>
@@ -159,7 +176,8 @@ A new compile task is starting.
 Session path: ${sessionPathAbs}
 Tool directory: ${opts.absoluteToolDir}
 You will write artifacts into the tool directory.
-${formatCandidateContext(opts.candidate, opts.sharedContext)}
+${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModules)}
+${formatToolPlan(opts.toolPlan)}
 
 Use the imprint-compile MCP tools to inspect the session, write artifacts, run tests, and call done(). Begin by calling read_session_summary, then proceed per the system instructions.`;
 
@@ -692,9 +710,19 @@ function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): Com
   };
 }
 
+function resolveAssignedSharedModules(
+  opts: CompileViaCodexCliOptions,
+): AssignedSharedModule[] | undefined {
+  if (!opts.buildPlanPath || !opts.candidate?.toolName) return undefined;
+  const plan = readBuildPlanFile(opts.buildPlanPath);
+  if (!plan) return undefined;
+  return resolveAssignedModules(plan, opts.candidate.toolName, opts.sharedModules);
+}
+
 function formatCandidateContext(
   candidate: ToolCandidate | undefined,
   sharedContext: SharedCompileContext | undefined,
+  assignedSharedModules?: AssignedSharedModule[],
 ): string {
   if (!candidate && !sharedContext) return '';
   return `
@@ -704,7 +732,9 @@ ${candidate ? JSON.stringify(candidate, null, 2) : '(none)'}
 Shared compile context:
 ${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
 
-Compile only the selected candidate. Do not create tools for other actions in the recording.`;
+Compile only the selected candidate. Do not create tools for other actions in the recording.${
+    assignedSharedModules ? describeAssignedModules(assignedSharedModules) : ''
+  }`;
 }
 
 function errMsg(err: unknown): string {
