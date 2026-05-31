@@ -54,7 +54,7 @@ export const AuditReportSchema = z.object({
 
 export type AuditReport = z.infer<typeof AuditReportSchema>;
 
-export interface AuditScore {
+interface AuditScore {
   score: number;
   correct: number;
   broken: number;
@@ -117,7 +117,7 @@ export function computeAuditScore(
   return { score, correct, broken, infra, badParams, graded, verdict };
 }
 
-export interface RunAuditOptions {
+interface RunAuditOptions {
   site: string;
   minScore: number;
   outPath: string;
