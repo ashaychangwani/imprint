@@ -225,6 +225,60 @@ function moduleGraphHasCycle(modules: SharedModuleSpec[]): boolean {
   return false;
 }
 
+/** Kahn layering shared by topoLevels (shared modules) and topoLevelsForTools.
+ *  Groups items into dependency "levels": level 0 has no in-set dependency, each
+ *  later level's deps are satisfied by earlier levels. Items within a level are
+ *  mutually independent (safe to build/compile concurrently); no item precedes
+ *  one it depends on. Cycle-safe — any residual cycle members are appended as a
+ *  final level so nothing is silently dropped. Edges to ids outside `items`, and
+ *  self-edges, are ignored. */
+function kahnLevels<T>(
+  items: T[],
+  idOf: (item: T) => string,
+  depsOf: (item: T) => Iterable<string>,
+): T[][] {
+  const ids = new Set(items.map(idOf));
+  const byId = new Map(items.map((item) => [idOf(item), item]));
+  const indegree = new Map<string, number>();
+  const dependents = new Map<string, string[]>();
+  for (const item of items) {
+    const id = idOf(item);
+    const deps = [...depsOf(item)].filter((d) => d !== id && ids.has(d));
+    indegree.set(id, deps.length);
+    for (const dep of deps) {
+      const list = dependents.get(dep);
+      if (list) list.push(id);
+      else dependents.set(dep, [id]);
+    }
+  }
+
+  const levels: T[][] = [];
+  const placed = new Set<string>();
+  let frontier = items.filter((item) => (indegree.get(idOf(item)) ?? 0) === 0);
+  while (frontier.length > 0) {
+    levels.push(frontier);
+    for (const item of frontier) placed.add(idOf(item));
+    const next: T[] = [];
+    for (const item of frontier) {
+      for (const depId of dependents.get(idOf(item)) ?? []) {
+        const remaining = (indegree.get(depId) ?? 0) - 1;
+        indegree.set(depId, remaining);
+        if (remaining === 0) {
+          const dependent = byId.get(depId);
+          if (dependent) next.push(dependent);
+        }
+      }
+    }
+    frontier = next;
+  }
+
+  // Defensive: an unexpected cycle would leave members unplaced — append them so
+  // nothing is dropped (cycles are already rejected at parse time).
+  const leftover = items.filter((item) => !placed.has(idOf(item)));
+  if (leftover.length > 0) levels.push(leftover);
+  return levels;
+}
+
 /** Return the shared modules ordered so every module comes after its
  *  dependsOn targets. Throws on cycle (already rejected at parse time, but
  *  callers that build a plan by hand get a clear error). */
@@ -258,44 +312,11 @@ export function topoSortSharedModules(modules: SharedModuleSpec[]): SharedModule
  *  cycle members are appended as a final level so no module is silently dropped.
  *  Flattening the result yields a valid topological order (cf. topoSortSharedModules). */
 export function topoLevels(modules: SharedModuleSpec[]): SharedModuleSpec[][] {
-  const byPath = new Map(modules.map((m) => [m.path, m]));
-  const indegree = new Map<string, number>();
-  const dependents = new Map<string, string[]>();
-  for (const m of modules) {
-    const deps = m.dependsOn.filter((d) => byPath.has(d));
-    indegree.set(m.path, deps.length);
-    for (const dep of deps) {
-      const list = dependents.get(dep);
-      if (list) list.push(m.path);
-      else dependents.set(dep, [m.path]);
-    }
-  }
-
-  const levels: SharedModuleSpec[][] = [];
-  const placed = new Set<string>();
-  let frontier = modules.filter((m) => (indegree.get(m.path) ?? 0) === 0);
-  while (frontier.length > 0) {
-    levels.push(frontier);
-    for (const m of frontier) placed.add(m.path);
-    const next: SharedModuleSpec[] = [];
-    for (const m of frontier) {
-      for (const depPath of dependents.get(m.path) ?? []) {
-        const remaining = (indegree.get(depPath) ?? 0) - 1;
-        indegree.set(depPath, remaining);
-        if (remaining === 0) {
-          const mod = byPath.get(depPath);
-          if (mod) next.push(mod);
-        }
-      }
-    }
-    frontier = next;
-  }
-
-  // Defensive: an unexpected cycle would leave members unplaced — append them so
-  // the build still attempts every module (matches topoSortSharedModules' intent).
-  const leftover = modules.filter((m) => !placed.has(m.path));
-  if (leftover.length > 0) levels.push(leftover);
-  return levels;
+  return kahnLevels(
+    modules,
+    (m) => m.path,
+    (m) => m.dependsOn,
+  );
 }
 
 interface BuildPlanSlice {
@@ -384,12 +405,39 @@ export function resolveTokenParams(
 
 /** The fields a tool's parser MUST emit for sibling consumers (producer side).
  *  Threaded into `externalVerification` so the gate fails a producer that does
- *  not emit a declared field. Empty when the plan declared none. */
-export function resolveEmittedTokens(
+ *  not emit a declared field. Empty when the plan declared none. Internal —
+ *  reached through `resolvePlanSliceFromFile`. */
+function resolveEmittedTokens(
   plan: BuildPlan,
   toolName: string,
 ): Array<{ field: string; shape: string }> {
   return plan.perTool.find((t) => t.toolName === toolName)?.emitsTokens ?? [];
+}
+
+/** Read a build-plan sidecar and project it to one tool's slice in the shape
+ *  every compile driver needs: the shared modules it must import (with verified
+ *  flags from `manifest`) plus the producer/consumer token-contract arrays.
+ *  Returns empty values when no plan path / tool name is supplied or the sidecar
+ *  is missing/invalid — so a driver with no build plan behaves exactly as before.
+ *  Shared by the in-process loop, the MCP compile server, and both CLI drivers. */
+export function resolvePlanSliceFromFile(
+  buildPlanPath: string | undefined,
+  toolName: string | undefined,
+  manifest?: SharedModuleManifestEntry[],
+): {
+  assignedSharedModules: AssignedSharedModule[] | undefined;
+  tokenParams: Array<{ param: string; sourceTool: string; sourceField: string }>;
+  emittedTokens: Array<{ field: string; shape: string }>;
+} {
+  const plan = buildPlanPath && toolName ? readBuildPlanFile(buildPlanPath) : null;
+  if (!plan || !toolName) {
+    return { assignedSharedModules: undefined, tokenParams: [], emittedTokens: [] };
+  }
+  return {
+    assignedSharedModules: resolveAssignedModules(plan, toolName, manifest),
+    tokenParams: resolveTokenParams(plan, toolName),
+    emittedTokens: resolveEmittedTokens(plan, toolName),
+  };
 }
 
 /** Order tools producer-before-consumer for the compile fan-out: edge
@@ -401,48 +449,11 @@ export function topoLevelsForTools<T extends { toolName: string }>(
   tools: T[],
   plan: BuildPlan | null,
 ): T[][] {
-  const names = new Set(tools.map((t) => t.toolName));
-  const deps = new Map<string, Set<string>>();
-  for (const t of tools) {
-    const producers = new Set<string>();
-    for (const tp of plan ? resolveTokenParams(plan, t.toolName) : []) {
-      if (tp.sourceTool !== t.toolName && names.has(tp.sourceTool)) producers.add(tp.sourceTool);
-    }
-    deps.set(t.toolName, producers);
-  }
-  const indegree = new Map<string, number>();
-  const dependents = new Map<string, string[]>();
-  for (const t of tools) {
-    indegree.set(t.toolName, deps.get(t.toolName)?.size ?? 0);
-    for (const producer of deps.get(t.toolName) ?? []) {
-      const list = dependents.get(producer);
-      if (list) list.push(t.toolName);
-      else dependents.set(producer, [t.toolName]);
-    }
-  }
-  const byName = new Map(tools.map((t) => [t.toolName, t]));
-  const levels: T[][] = [];
-  const placed = new Set<string>();
-  let frontier = tools.filter((t) => (indegree.get(t.toolName) ?? 0) === 0);
-  while (frontier.length > 0) {
-    levels.push(frontier);
-    for (const t of frontier) placed.add(t.toolName);
-    const next: T[] = [];
-    for (const t of frontier) {
-      for (const dependent of dependents.get(t.toolName) ?? []) {
-        const remaining = (indegree.get(dependent) ?? 0) - 1;
-        indegree.set(dependent, remaining);
-        if (remaining === 0) {
-          const tool = byName.get(dependent);
-          if (tool) next.push(tool);
-        }
-      }
-    }
-    frontier = next;
-  }
-  const leftover = tools.filter((t) => !placed.has(t.toolName));
-  if (leftover.length > 0) levels.push(leftover);
-  return levels;
+  return kahnLevels(
+    tools,
+    (t) => t.toolName,
+    (t) => (plan ? resolveTokenParams(plan, t.toolName).map((tp) => tp.sourceTool) : []),
+  );
 }
 
 /** Load a build plan from an explicit file path (the sidecar threaded into the

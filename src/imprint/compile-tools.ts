@@ -1132,12 +1132,6 @@ export async function typecheckArtifacts(
   }
 }
 
-async function runGeneratedArtifactTypecheck(
-  exampleDir: string,
-): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
-  return await typecheckArtifacts(exampleDir, ['parser.ts', 'request-transform.ts']);
-}
-
 function normalizeTsconfigPath(value: string): string {
   const normalized = value.replace(/\\/g, '/');
   return normalized.startsWith('.') ? normalized : `./${normalized}`;
@@ -1489,6 +1483,17 @@ export function detectTokenSources(opts: {
  *  (`../<producer>/workflow.json`) rather than only this tool's own workflow? */
 const SIBLING_WORKFLOW_RE = /\.\.\/[A-Za-z0-9_]+\/workflow\.json/;
 
+/** The `sourcedFrom` stamp for a token param — `{tool, field}` when both the
+ *  producer tool and field are known, else undefined. */
+function sourcedFromOf(ts: {
+  sourceTool?: string;
+  sourceField?: string;
+}): { tool: string; field: string } | undefined {
+  return ts.sourceTool && ts.sourceField
+    ? { tool: ts.sourceTool, field: ts.sourceField }
+    : undefined;
+}
+
 /**
  * Pure per-parameter coverage classifier (Fix C/D + chained-token verification).
  * Decides, for each exposed parameter, whether it was behaviorally verified — a
@@ -1538,10 +1543,7 @@ export function classifyParamCoverage(opts: {
     // value from the producer's sibling workflow.
     const ts = tokenByName.get(lp.name);
     if (ts) {
-      const sourcedFrom =
-        ts.sourceTool && ts.sourceField
-          ? { tool: ts.sourceTool, field: ts.sourceField }
-          : undefined;
+      const sourcedFrom = sourcedFromOf(ts);
       if (passedLive) {
         const chained =
           !!block &&
@@ -1976,10 +1978,7 @@ export async function externalVerification(
           name: ts.param,
           verified: false,
           reason: 'waived-chain',
-          sourcedFrom:
-            ts.sourceTool && ts.sourceField
-              ? { tool: ts.sourceTool, field: ts.sourceField }
-              : undefined,
+          sourcedFrom: sourcedFromOf(ts),
         });
         warnings.push(
           `producer tool "${ts.sourceTool}" for token param "${ts.param}" is unavailable (did not compile) — the producer→consumer chain is left unverified (waived-chain).`,
@@ -2052,7 +2051,7 @@ export async function externalVerification(
   }
 
   if (existsSync(parserPath) || existsSync(parserTestPath)) {
-    const output = await runGeneratedArtifactTypecheck(toolDir);
+    const output = await typecheckArtifacts(toolDir, ['parser.ts', 'request-transform.ts']);
     if (output.exitCode !== 0 || output.timedOut) {
       failures.push(
         `generated TypeScript artifacts failed typecheck (bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json) exited ${output.exitCode}${output.timedOut ? ' after timing out' : ''}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,

@@ -16,19 +16,11 @@ import {
   giveUpTool,
   runAgentLoop,
 } from './agent.ts';
-import {
-  type AssignedSharedModule,
-  type SharedModuleManifestEntry,
-  describeAssignedModules,
-  readBuildPlanFile,
-  resolveAssignedModules,
-  resolveEmittedTokens,
-  resolveTokenParams,
-} from './build-plan.ts';
+import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import { compileViaClaudeCli } from './claude-cli-compile.ts';
 import { compileViaCodexCli } from './codex-cli-compile.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
-import { formatToolPlan } from './compile-agent-types.ts';
+import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import {
   applyParamVerification,
   buildCompileTools,
@@ -112,23 +104,14 @@ interface CompileAgentOptions {
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
   const startTime = Date.now();
-  // Resolve the shared modules the plan assigned this tool, so the in-process
-  // verifier can assert they are imported. (CLI drivers compute this in the MCP
-  // server from buildPlanPath instead.)
-  const buildPlan =
-    opts.buildPlanPath && opts.candidate?.toolName ? readBuildPlanFile(opts.buildPlanPath) : null;
-  const assignedSharedModules: AssignedSharedModule[] | undefined =
-    buildPlan && opts.candidate?.toolName
-      ? resolveAssignedModules(buildPlan, opts.candidate.toolName, opts.sharedModules)
-      : undefined;
-  const tokenParams =
-    buildPlan && opts.candidate?.toolName
-      ? resolveTokenParams(buildPlan, opts.candidate.toolName)
-      : [];
-  const emittedTokens =
-    buildPlan && opts.candidate?.toolName
-      ? resolveEmittedTokens(buildPlan, opts.candidate.toolName)
-      : [];
+  // Resolve the shared modules + token contracts the plan assigned this tool, so
+  // the in-process verifier can assert modules are imported and require a chained
+  // test for each producer-sourced token param.
+  const { assignedSharedModules, tokenParams, emittedTokens } = resolvePlanSliceFromFile(
+    opts.buildPlanPath,
+    opts.candidate?.toolName,
+    opts.sharedModules,
+  );
 
   // 1. Load + validate the session
   let session: Session = loadJsonFile(
@@ -443,22 +426,4 @@ function buildMessageFromOutcome(result: AgentResult): string {
     default:
       return 'Unknown outcome';
   }
-}
-
-function formatCandidateContext(
-  candidate: ToolCandidate | undefined,
-  sharedContext: SharedCompileContext | undefined,
-  assignedSharedModules?: AssignedSharedModule[],
-): string {
-  if (!candidate && !sharedContext) return '';
-  return `
-Selected candidate context:
-${candidate ? JSON.stringify(candidate, null, 2) : '(none)'}
-
-Shared compile context:
-${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
-
-Compile only the selected candidate. Do not create tools for other actions in the recording.${
-    assignedSharedModules ? describeAssignedModules(assignedSharedModules) : ''
-  }`;
 }

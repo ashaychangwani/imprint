@@ -11,15 +11,9 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
-import {
-  type AssignedSharedModule,
-  type SharedModuleManifestEntry,
-  describeAssignedModules,
-  readBuildPlanFile,
-  resolveAssignedModules,
-} from './build-plan.ts';
+import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
-import { formatToolPlan } from './compile-agent-types.ts';
+import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
@@ -166,7 +160,11 @@ async function compileViaCodexCliImpl(
     return finalErrorResult(opts, `failed to read system prompt: ${errMsg(err)}`);
   }
 
-  const assignedSharedModules = resolveAssignedSharedModules(opts);
+  const { assignedSharedModules } = resolvePlanSliceFromFile(
+    opts.buildPlanPath,
+    opts.candidate?.toolName,
+    opts.sharedModules,
+  );
   const initialPrompt = `<system_instructions>
 ${systemPrompt}
 </system_instructions>
@@ -708,33 +706,6 @@ function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): Com
     cacheReadInputTokens: 0,
     cacheCreationInputTokens: 0,
   };
-}
-
-function resolveAssignedSharedModules(
-  opts: CompileViaCodexCliOptions,
-): AssignedSharedModule[] | undefined {
-  if (!opts.buildPlanPath || !opts.candidate?.toolName) return undefined;
-  const plan = readBuildPlanFile(opts.buildPlanPath);
-  if (!plan) return undefined;
-  return resolveAssignedModules(plan, opts.candidate.toolName, opts.sharedModules);
-}
-
-function formatCandidateContext(
-  candidate: ToolCandidate | undefined,
-  sharedContext: SharedCompileContext | undefined,
-  assignedSharedModules?: AssignedSharedModule[],
-): string {
-  if (!candidate && !sharedContext) return '';
-  return `
-Selected candidate context:
-${candidate ? JSON.stringify(candidate, null, 2) : '(none)'}
-
-Shared compile context:
-${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
-
-Compile only the selected candidate. Do not create tools for other actions in the recording.${
-    assignedSharedModules ? describeAssignedModules(assignedSharedModules) : ''
-  }`;
 }
 
 function errMsg(err: unknown): string {

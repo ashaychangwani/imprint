@@ -24,14 +24,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import {
-  type AssignedSharedModule,
-  type SharedModuleManifestEntry,
-  readBuildPlanFile,
-  resolveAssignedModules,
-  resolveEmittedTokens,
-  resolveTokenParams,
-} from './build-plan.ts';
+import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import {
   applyParamVerification,
   buildCompileTools,
@@ -95,20 +88,11 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
   // Resolve the shared modules + producer→consumer token contracts the plan
   // assigned this tool, so verification can assert modules are imported and
   // require a chained test for each producer-sourced token param.
-  const buildPlan =
-    opts.buildPlanPath && opts.candidate?.toolName ? readBuildPlanFile(opts.buildPlanPath) : null;
-  const assignedSharedModules: AssignedSharedModule[] | undefined =
-    buildPlan && opts.candidate?.toolName
-      ? resolveAssignedModules(buildPlan, opts.candidate.toolName, opts.sharedModules)
-      : undefined;
-  const tokenParams =
-    buildPlan && opts.candidate?.toolName
-      ? resolveTokenParams(buildPlan, opts.candidate.toolName)
-      : [];
-  const emittedTokens =
-    buildPlan && opts.candidate?.toolName
-      ? resolveEmittedTokens(buildPlan, opts.candidate.toolName)
-      : [];
+  const { assignedSharedModules, tokenParams, emittedTokens } = resolvePlanSliceFromFile(
+    opts.buildPlanPath,
+    opts.candidate?.toolName,
+    opts.sharedModules,
+  );
 
   // The custom done/give_up tools live alongside in MCP space.
   const doneTool: Tool = {

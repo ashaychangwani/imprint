@@ -313,14 +313,12 @@ export async function verifySharedModule(
     }
   }
 
-  // 2. Test quality + run (relaxed for type-only modules).
-  if (typesOnly) {
-    // No behavior to test.
-  } else if (!existsSync(testPath)) {
+  // 2. Test quality + run (skipped for type-only modules — no behavior to test).
+  if (!typesOnly && !existsSync(testPath)) {
     failures.push(
       `${testBase} was not written — a shared module needs a test proving its behavior against recorded data`,
     );
-  } else {
+  } else if (!typesOnly) {
     const testSrc = readFileSync(testPath, 'utf8');
     const expectCount = countExpectCalls(testSrc);
     if (expectCount < 3) {
@@ -370,6 +368,12 @@ export async function verifySharedModule(
   return { failures, warnings };
 }
 
+/** The recorded request seqs an anchor checks against: the module's declared
+ *  sourceSeqs, or all requests when it declared none. */
+function resolveSeqs(module: SharedModuleSpec, session: Session): number[] {
+  return module.sourceSeqs.length > 0 ? module.sourceSeqs : session.requests.map((r) => r.seq);
+}
+
 /** Re-sign a recorded URL and check the module reproduces the signing param.
  *  A throw / non-string / dropped-path result is a hard failure; an inability
  *  to reproduce any recorded param is a warning (the signer may legitimately
@@ -392,8 +396,7 @@ async function anchorRequestTransform(
     };
   }
 
-  const seqs =
-    module.sourceSeqs.length > 0 ? module.sourceSeqs : session.requests.map((r) => r.seq);
+  const seqs = resolveSeqs(module, session);
   let attempted = false;
   let anyCallSucceeded = false;
   for (const seq of seqs) {
@@ -469,8 +472,7 @@ async function anchorParserHelper(
     .filter((f): f is AnyFn => typeof f === 'function');
   if (fns.length === 0) return null;
 
-  const seqs =
-    module.sourceSeqs.length > 0 ? module.sourceSeqs : session.requests.map((r) => r.seq);
+  const seqs = resolveSeqs(module, session);
 
   // Fixture-sanity gate (defense-in-depth): if every recorded source body is
   // neither valid JSON nor a recognized RPC envelope, the ground truth itself is
