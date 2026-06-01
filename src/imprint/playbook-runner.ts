@@ -155,8 +155,9 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     // bug, which over-attributes drift to defects. Map known
     // transient-shape errors to NETWORK so they count as `infra`
     // (re-runnable) rather than `tool_broken` (permanent defect).
-    const isTransient =
-      /No locator matched|Timeout \d+ms exceeded|forResponse|waiting for/i.test(errStr);
+    const isTransient = /No locator matched|Timeout \d+ms exceeded|forResponse|waiting for/i.test(
+      errStr,
+    );
     return {
       ok: false,
       error: isTransient ? 'NETWORK' : 'BAD_RESPONSE',
