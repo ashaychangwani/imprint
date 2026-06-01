@@ -122,13 +122,30 @@ export async function runWithLadder(
           result = await tool.toolFn(params, { fetchImpl: sf.fetchImpl });
           break;
         }
-        case 'playbook':
+        case 'playbook': {
+          // Inject workflow.json's declared parameter defaults into the
+          // params map before handing off to runPlaybook. The fetch /
+          // stealth-fetch / fetch-bootstrap rungs all go through
+          // executeWorkflow (runtime.ts) which already injects defaults,
+          // but runPlaybook is a separate path with its own parameter
+          // validation (playbook-runner.ts:185-201) that throws
+          // "Missing required parameter" on absent values regardless of
+          // whether the workflow declared a default. Pre-merging
+          // defaults here keeps all four rungs consistent — if the
+          // workflow says a param has a default, every rung honors it.
+          const paramsWithDefaults: typeof params = { ...params };
+          for (const p of tool.workflow.parameters) {
+            if (!(p.name in paramsWithDefaults) && p.default !== undefined) {
+              paramsWithDefaults[p.name] = p.default;
+            }
+          }
           result = await runPlaybook({
             playbook: playbookPath(assetRoot, tool.site, tool.dir),
-            params,
+            params: paramsWithDefaults,
             site: tool.site,
           });
           break;
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
