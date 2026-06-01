@@ -12,7 +12,7 @@ import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { substituteString } from './runtime.ts';
-import { getStealthChromium } from './stealth-chromium.ts';
+import { getStealthChromium, getStealthExecutablePath } from './stealth-chromium.ts';
 import type {
   Locator,
   Playbook,
@@ -76,7 +76,13 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
       };
     }
     try {
-      browser = await chromium.launch({ headless: !opts.headed });
+      // Use the same full Chrome binary as `imprint record` — NOT
+      // chrome-headless-shell, which Akamai detects at the binary level
+      // regardless of stealth-plugin JS patches.
+      browser = await chromium.launch({
+        headless: !opts.headed,
+        executablePath: getStealthExecutablePath(),
+      });
     } catch (err) {
       return {
         ok: false,

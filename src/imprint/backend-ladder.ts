@@ -18,7 +18,7 @@ import {
   loadCredentialStore,
   substituteString,
 } from './runtime.ts';
-import { getStealthChromium } from './stealth-chromium.ts';
+import { getStealthChromium, getStealthExecutablePath } from './stealth-chromium.ts';
 import {
   type BootstrapArgs,
   type StealthFetch,
@@ -328,7 +328,12 @@ async function runFetchBootstrap(
   const chromium = await getStealthChromium();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
-    browser = await chromium.launch({ headless: true });
+    // Use the same binary as `imprint record` (Playwright's bundled
+    // "Google Chrome for Testing" or system Chrome) — NOT
+    // chrome-headless-shell. Akamai/Cloudflare/PerimeterX detect
+    // chrome-headless-shell at the binary level regardless of how
+    // thoroughly we patch JS-level fingerprints.
+    browser = await chromium.launch({ headless: true, executablePath: getStealthExecutablePath() });
     const context = await browser.newContext();
     if (credentials.cookies.length > 0) {
       await context.addCookies(

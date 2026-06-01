@@ -15,7 +15,7 @@ import { join as pathJoin } from 'node:path';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright';
 import { createLog } from './log.ts';
 import type { CapturedReplayRequest } from './session-diff.ts';
-import { getStealthChromium } from './stealth-chromium.ts';
+import { getStealthChromium, getStealthExecutablePath } from './stealth-chromium.ts';
 import type { CapturedEvent, Session } from './types.ts';
 
 const log = createLog('replay-capture');
@@ -70,7 +70,10 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
 
   try {
     replayLog(`launching browser (headed=${!!opts.headed})`);
-    browser = await chromium.launch({ headless: !opts.headed });
+    browser = await chromium.launch({
+      headless: !opts.headed,
+      executablePath: getStealthExecutablePath(),
+    });
   } catch (err) {
     replayLog(`browser launch failed: ${errMsg(err)}`);
     return { ok: false, requests: [], error: `Could not launch Chromium: ${errMsg(err)}` };
