@@ -6,6 +6,7 @@ import {
   llmSpanAttributes,
   resolveTraceTokenCount,
   setSpanAttributes,
+  totalPromptTokens,
   traceLlmIoEnabled,
   traceLlmMessages,
   traced,
@@ -17,6 +18,16 @@ interface AnalyzeResult {
   text: string;
   inputTokens: number | null;
   outputTokens: number | null;
+  /**
+   * Prompt-cache token counts, when the provider reports them. `inputTokens` is
+   * the *uncached* input only (the Anthropic/CLI `usage.input_tokens`); the bulk
+   * of a cache-hit call lives here. Threaded through so `llm.analyze` cost is
+   * cache-aware (cache reads bill at 0.1×, writes at 1.25×) instead of charging
+   * the whole prompt at the full input rate. Null/undefined for providers that
+   * don't expose usage (codex-cli, cursor-cli).
+   */
+  cacheReadInputTokens?: number | null;
+  cacheCreationInputTokens?: number | null;
   durationMs: number;
   stopReason: string | null;
 }
@@ -129,6 +140,8 @@ class AnthropicApiProvider implements LLMProvider {
           text,
           inputTokens: response.usage.input_tokens,
           outputTokens: response.usage.output_tokens,
+          cacheReadInputTokens: response.usage.cache_read_input_tokens ?? null,
+          cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? null,
           durationMs: Date.now() - t0,
           stopReason: response.stop_reason ?? null,
         };
@@ -256,7 +269,15 @@ class ClaudeCliProvider implements LLMProvider {
           );
         }
 
-        let parsed: { result?: string; usage?: { input_tokens?: number; output_tokens?: number } };
+        let parsed: {
+          result?: string;
+          usage?: {
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_read_input_tokens?: number;
+            cache_creation_input_tokens?: number;
+          };
+        };
         try {
           parsed = JSON.parse(stdout);
         } catch (parseErr) {
@@ -273,6 +294,8 @@ class ClaudeCliProvider implements LLMProvider {
           text: parsed.result,
           inputTokens: parsed.usage?.input_tokens ?? null,
           outputTokens: parsed.usage?.output_tokens ?? null,
+          cacheReadInputTokens: parsed.usage?.cache_read_input_tokens ?? null,
+          cacheCreationInputTokens: parsed.usage?.cache_creation_input_tokens ?? null,
           durationMs: Date.now() - t0,
           stopReason: null,
         };
@@ -437,7 +460,20 @@ async function traceAnalyze(
     },
     async (span) => {
       const result = await fn();
-      const inputTokens = resolveTraceTokenCount(result.inputTokens, details?.inputText);
+      // Providers report `inputTokens` as the *uncached* input only; the cached
+      // portion lives in the cache fields. `llmCostAttributes` expects the TOTAL
+      // prompt tokens (it derives uncached = total − cacheRead − cacheWrite), so
+      // sum them here. A real total is also large enough to clear the
+      // resolveTraceTokenCount sanity check, so cache-hit calls stop falling back
+      // to the chars/4 estimate.
+      const cacheReadTokens = result.cacheReadInputTokens ?? undefined;
+      const cacheWriteTokens = result.cacheCreationInputTokens ?? undefined;
+      const totalInputTokens = totalPromptTokens(
+        result.inputTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+      );
+      const inputTokens = resolveTraceTokenCount(totalInputTokens, details?.inputText);
       const outputTokens = resolveTraceTokenCount(result.outputTokens, result.text);
       setSpanAttributes(span, {
         ...llmSpanAttributes({
@@ -445,6 +481,8 @@ async function traceAnalyze(
           model,
           inputTokens: inputTokens.tokens,
           outputTokens: outputTokens.tokens,
+          cacheReadTokens,
+          cacheWriteTokens,
           tokenCountsEstimated:
             inputTokens.source === 'estimated' || outputTokens.source === 'estimated',
           inputTokenSource: inputTokens.source,

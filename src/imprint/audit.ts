@@ -21,7 +21,7 @@ import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
 import { discoverTools } from './tool-loader.ts';
-import { setSpanAttributes, traced } from './tracing.ts';
+import { llmSpanAttributes, setSpanAttributes, totalPromptTokens, traced } from './tracing.ts';
 
 const log = createLog('audit');
 
@@ -61,7 +61,10 @@ interface AuditScore {
   infra: number;
   badParams: number;
   graded: number;
-  verdict: 'pass' | 'fail' | 'inconclusive';
+  /** `timeout` is set by `runAudit` (not `computeAuditScore`) when the session
+   *  was killed by the deadline guard — a cut-off run is never a trustworthy
+   *  pass, even if the partial verdicts would have scored one. */
+  verdict: 'pass' | 'fail' | 'inconclusive' | 'timeout';
 }
 
 /**
@@ -206,7 +209,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         }
       }
 
-      const report = await driveAudit({
+      const drive = await driveAudit({
         site: opts.site,
         model,
         timeoutMs,
@@ -216,7 +219,35 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         tokenDeps,
       });
 
-      const score = computeAuditScore(report, opts.minScore);
+      const score = computeAuditScore(drive.report, opts.minScore);
+      // A run the deadline guard had to kill never finished, so it can't be a
+      // trustworthy pass — override to a distinct, loud verdict (was silently
+      // degrading to graded-0 "inconclusive").
+      if (drive.timedOut) score.verdict = 'timeout';
+
+      // Persist the auditor transcript next to the report so a stuck/killed run
+      // can be inspected after the fact.
+      let transcriptPath: string | undefined;
+      if (drive.transcript) {
+        transcriptPath = pathJoin(dirname(opts.outPath), '.audit-transcript.txt');
+        try {
+          mkdirSync(dirname(transcriptPath), { recursive: true });
+          writeFileSync(transcriptPath, `${drive.transcript}\n`, 'utf8');
+        } catch (err) {
+          log(`failed to persist audit transcript to ${transcriptPath}: ${errMsg(err)}`);
+          transcriptPath = undefined;
+        }
+      }
+
+      // TOTAL prompt (uncached + cache) for the cost calc; the cache split is
+      // passed to llmSpanAttributes separately. Always a number here
+      // (drive.inputTokens is non-null), so the cost-suppression happens via the
+      // `|| undefined` at the call site below.
+      const totalInputTokens = totalPromptTokens(
+        drive.inputTokens,
+        drive.cacheReadInputTokens,
+        drive.cacheCreationInputTokens,
+      );
       setSpanAttributes(span, {
         'imprint.audit.score': score.score,
         'imprint.audit.correct': score.correct,
@@ -226,16 +257,37 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         'imprint.audit.graded': score.graded,
         'imprint.audit.tool_count': toolCount,
         'imprint.audit.verdict': score.verdict,
+        'imprint.audit.timed_out': drive.timedOut,
+        'imprint.audit.turns': drive.turns,
+        ...(drive.totalCostUsd != null ? { 'imprint.audit.cost_usd': drive.totalCostUsd } : {}),
+        ...llmSpanAttributes({
+          provider: 'claude-cli',
+          model,
+          // `|| undefined`: when no usage was captured (e.g. spawn failure → 0
+          // tokens), suppress a bogus $0 cost instead of emitting it.
+          inputTokens: totalInputTokens || undefined,
+          outputTokens: drive.outputTokens || undefined,
+          cacheReadTokens: drive.cacheReadInputTokens || undefined,
+          cacheWriteTokens: drive.cacheCreationInputTokens || undefined,
+        }),
       });
 
       // Persist the full result (deterministic score + the raw model report).
       const persisted = {
         ...score,
-        report,
+        report: drive.report,
         site: opts.site,
         toolCount,
-        ungradeableTools: ungradeableToolNames(report),
+        ungradeableTools: ungradeableToolNames(drive.report),
         minScore: opts.minScore,
+        timedOut: drive.timedOut,
+        turns: drive.turns,
+        costUsd: drive.totalCostUsd,
+        inputTokens: drive.inputTokens,
+        outputTokens: drive.outputTokens,
+        cacheReadInputTokens: drive.cacheReadInputTokens,
+        cacheCreationInputTokens: drive.cacheCreationInputTokens,
+        transcriptPath,
       };
       try {
         mkdirSync(dirname(opts.outPath), { recursive: true });
@@ -247,7 +299,12 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       if (opts.json) {
         console.log(JSON.stringify(persisted, null, 2));
       } else {
-        printSummary(opts, score, toolCount);
+        printSummary(opts, score, toolCount, {
+          timedOut: drive.timedOut,
+          timeoutMs,
+          transcriptPath,
+          costUsd: drive.totalCostUsd,
+        });
       }
 
       return score;
@@ -290,6 +347,38 @@ interface DriveAuditOptions {
   tokenDeps: TokenDep[];
 }
 
+interface DriveAuditResult {
+  report: AuditReport;
+  /** False when no report parsed (empty report substituted). */
+  reportRecovered: boolean;
+  timedOut: boolean;
+  turns: number;
+  /** Full assistant transcript for diagnosis (empty if the session never spoke). */
+  transcript: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  /** Authoritative cost from the claude CLI's `result` event, when reported. */
+  totalCostUsd: number | null;
+}
+
+/** A DriveAuditResult with no session data — spawn failure or an empty run. */
+function emptyDriveAuditResult(): DriveAuditResult {
+  return {
+    report: AuditReportSchema.parse({}),
+    reportRecovered: false,
+    timedOut: false,
+    turns: 0,
+    transcript: '',
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    totalCostUsd: null,
+  };
+}
+
 /**
  * Spawn a headless `claude` session against the site's real MCP server, drive
  * it to completion, and recover the structured report from the final assistant
@@ -298,7 +387,7 @@ interface DriveAuditOptions {
  * the last balanced top-level object) and validate it. Any unrecoverable report
  * degrades to an empty (→ inconclusive) report rather than crashing the gate.
  */
-async function driveAudit(opts: DriveAuditOptions): Promise<AuditReport> {
+async function driveAudit(opts: DriveAuditOptions): Promise<DriveAuditResult> {
   // Distinct from the persistent `imprint-<site>` server that `imprint teach`
   // registers with Claude Code: a same-named inline server collides and claude
   // marks ours "disabled" (even under --strict-mcp-config), leaving the auditor
@@ -374,29 +463,75 @@ When you are done, end your final message with exactly one fenced \`\`\`json blo
     });
   } catch (err) {
     log(`failed to spawn claude: ${errMsg(err)}`);
-    return AuditReportSchema.parse({});
+    return emptyDriveAuditResult();
   }
 
-  const assistantText = await collectAssistantText(child, opts.timeoutMs);
-  const report = extractReport(assistantText);
+  const session = await collectAssistantText(child, opts.timeoutMs);
+  const report = extractReport(session.text);
   if (!report) {
-    log('no valid audit report recovered from the auditor — treating as inconclusive');
-    return AuditReportSchema.parse({});
+    log(
+      session.timedOut
+        ? 'audit hit the deadline before producing a report — treating as timeout'
+        : 'no valid audit report recovered from the auditor — treating as inconclusive',
+    );
   }
-  return report;
+  return {
+    report: report ?? AuditReportSchema.parse({}),
+    reportRecovered: report !== undefined,
+    timedOut: session.timedOut,
+    turns: session.turns,
+    transcript: session.transcript,
+    inputTokens: session.inputTokens,
+    outputTokens: session.outputTokens,
+    cacheReadInputTokens: session.cacheReadInputTokens,
+    cacheCreationInputTokens: session.cacheCreationInputTokens,
+    totalCostUsd: session.totalCostUsd,
+  };
 }
 
-/** Drain the stream-json events, accumulating assistant text, and resolve when
- *  the child exits. Enforces the wall-clock timeout by killing the child. */
-async function collectAssistantText(child: ChildProcess, timeoutMs: number): Promise<string> {
+/** Everything recovered from one audit session: the text to extract the report
+ *  from, a full transcript for diagnosis, token/cost usage, and whether the
+ *  deadline guard had to kill the child. */
+interface AuditSessionResult {
+  /** Report-extraction source: the terminal result event, or the concatenated
+   *  assistant text if the run was cut off before producing one. */
+  text: string;
+  /** Full assistant reasoning across every turn, persisted for diagnosis. */
+  transcript: string;
+  timedOut: boolean;
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  totalCostUsd: number | null;
+}
+
+/** Drain the stream-json events, accumulating assistant text + token/cost usage,
+ *  and resolve when the child exits. Enforces the wall-clock timeout by killing
+ *  the child; reports `timedOut` so a cut-off run is a loud, distinct outcome
+ *  rather than a silent empty (→ inconclusive) report. */
+async function collectAssistantText(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<AuditSessionResult> {
   const chunks: string[] = [];
   let resultText = '';
   let stdoutBuf = '';
   let killed = false;
+  let turns = 0;
+  // Accumulated per-event so a killed run still reports partial usage; the
+  // terminal `result` event (when present) overwrites with the authoritative
+  // cumulative totals. Mirrors the compile path (claude-cli-compile.ts).
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadInputTokens = 0;
+  let cacheCreationInputTokens = 0;
+  let totalCostUsd: number | null = null;
 
   const timer = setTimeout(() => {
     killed = true;
-    log(`audit exceeded ${Math.round(timeoutMs / 60_000)} minute deadline, terminating claude`);
+    log(`audit exceeded ${formatDeadline(timeoutMs)} deadline, terminating claude`);
     try {
       child.kill('SIGTERM');
       setTimeout(() => {
@@ -423,15 +558,36 @@ async function collectAssistantText(child: ChildProcess, timeoutMs: number): Pro
         continue;
       }
 
+      // Token accounting from any event that carries usage (event-level or on
+      // the nested assistant message).
+      const eu = evt.usage;
+      const mu = evt.message?.usage;
+      inputTokens += (eu?.input_tokens ?? 0) + (mu?.input_tokens ?? 0);
+      outputTokens += (eu?.output_tokens ?? 0) + (mu?.output_tokens ?? 0);
+      cacheReadInputTokens +=
+        (eu?.cache_read_input_tokens ?? 0) + (mu?.cache_read_input_tokens ?? 0);
+      cacheCreationInputTokens +=
+        (eu?.cache_creation_input_tokens ?? 0) + (mu?.cache_creation_input_tokens ?? 0);
+
       if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
+        turns++;
         for (const block of evt.message.content) {
           if (block && block.type === 'text' && typeof block.text === 'string') {
             chunks.push(block.text);
           }
         }
-      } else if (evt.type === 'result' && typeof evt.result === 'string') {
-        // The terminal result event carries the final assistant message verbatim.
-        resultText = evt.result;
+      } else if (evt.type === 'result') {
+        // The terminal result event carries the final assistant message verbatim
+        // plus the authoritative cumulative usage + cost.
+        if (typeof evt.result === 'string') resultText = evt.result;
+        if (evt.usage) {
+          inputTokens = evt.usage.input_tokens ?? inputTokens;
+          outputTokens = evt.usage.output_tokens ?? outputTokens;
+          cacheReadInputTokens = evt.usage.cache_read_input_tokens ?? cacheReadInputTokens;
+          cacheCreationInputTokens =
+            evt.usage.cache_creation_input_tokens ?? cacheCreationInputTokens;
+        }
+        if (typeof evt.total_cost_usd === 'number') totalCostUsd = evt.total_cost_usd;
       }
     }
   });
@@ -450,16 +606,37 @@ async function collectAssistantText(child: ChildProcess, timeoutMs: number): Pro
   clearTimeout(timer);
   if (killed) log('audit session was terminated by the deadline guard');
 
-  // Prefer the terminal result event (the complete final message); fall back to
-  // the concatenated streamed assistant text if the result event was absent.
-  return resultText || chunks.join('\n');
+  return {
+    // Prefer the terminal result event (the complete final message); fall back to
+    // the concatenated streamed assistant text if the result event was absent.
+    text: resultText || chunks.join('\n'),
+    transcript: chunks.join('\n\n'),
+    timedOut: killed,
+    turns,
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    totalCostUsd,
+  };
+}
+
+interface StreamUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 }
 
 interface StreamJsonEvent {
   type: string;
   message?: {
     content?: Array<{ type?: string; text?: string }>;
+    usage?: StreamUsage;
   };
+  /** Final cumulative usage + cost ride on the terminal `result` event. */
+  usage?: StreamUsage;
+  total_cost_usd?: number;
   result?: string;
 }
 
@@ -530,7 +707,17 @@ function balancedObjects(text: string): string[] {
   return out;
 }
 
-function printSummary(opts: RunAuditOptions, score: AuditScore, toolCount: number): void {
+function printSummary(
+  opts: RunAuditOptions,
+  score: AuditScore,
+  toolCount: number,
+  extra: {
+    timedOut: boolean;
+    timeoutMs: number;
+    transcriptPath?: string;
+    costUsd?: number | null;
+  },
+): void {
   const pct = score.graded === 0 ? 'n/a' : `${score.score.toFixed(1)}%`;
   console.log(`[imprint] audit "${opts.site}" — ${score.verdict.toUpperCase()}`);
   console.log(
@@ -539,14 +726,32 @@ function printSummary(opts: RunAuditOptions, score: AuditScore, toolCount: numbe
   console.log(
     `[imprint]   graded ${score.graded} of ${score.correct + score.broken + score.infra + score.badParams} invocation(s) across ${toolCount} tool(s) — excluded: ${score.infra} infra, ${score.badParams} bad_params`,
   );
-  if (score.verdict === 'inconclusive') {
+  if (extra.costUsd != null) {
+    console.log(`[imprint]   cost ≈ $${extra.costUsd.toFixed(2)}`);
+  }
+  if (score.verdict === 'timeout') {
+    console.log(
+      `[imprint]   audit was killed at the ${formatDeadline(extra.timeoutMs)} deadline before finishing — partial results only. Re-run with a longer --timeout, or inspect the transcript to see where it stalled.`,
+    );
+  } else if (score.verdict === 'inconclusive') {
     console.log(
       '[imprint]   no gradeable invocations (likely anti-bot / network) — re-run; this is not a code failure.',
     );
+  }
+  if (extra.transcriptPath) {
+    console.log(`[imprint]   transcript → ${extra.transcriptPath}`);
   }
   console.log(`[imprint]   report → ${opts.outPath}`);
 }
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Human-readable deadline, e.g. "20-minute" or "25-second" (sub-minute timeouts
+ *  shouldn't round to "0-minute"). */
+function formatDeadline(timeoutMs: number): string {
+  return timeoutMs < 60_000
+    ? `${Math.round(timeoutMs / 1000)}-second`
+    : `${Math.round(timeoutMs / 60_000)}-minute`;
 }
