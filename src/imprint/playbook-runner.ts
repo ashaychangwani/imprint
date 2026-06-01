@@ -238,11 +238,19 @@ async function executeStep(
     case 'type': {
       const locator = await firstMatching(page, step.locators, params, timeoutMs);
       const value = subst(step.value, params);
-      if (step.clear === false) {
-        await locator.pressSequentially(value, { timeout: timeoutMs });
-      } else {
-        await locator.fill(value, { timeout: timeoutMs });
+      // Always use pressSequentially so each keystroke fires real input /
+      // keydown / keyup events. React-style frameworks bind to synthetic
+      // events that `locator.fill()` doesn't trigger — typing into an
+      // autocomplete or debounced search field with `fill()` updates the
+      // input visually but the framework's onChange handler never runs,
+      // so the dropdown / XHR / next-step locator times out. The cost is
+      // a small per-character delay (~10ms internal), negligible against
+      // page-load latency. Honor `step.clear !== false` (the default
+      // before this change) by clearing first.
+      if (step.clear !== false) {
+        await locator.fill('', { timeout: timeoutMs });
       }
+      await locator.pressSequentially(value, { timeout: timeoutMs });
       await applyWait(page, step.wait_for, locator, timeoutMs);
       return;
     }
