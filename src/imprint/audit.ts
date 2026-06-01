@@ -219,16 +219,33 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       const rawScore = computeAuditScore(report, opts.minScore);
 
       // Cross-reference compile-time live verification with the audit grade.
-      // A tool that shipped with `liveVerified: false` (integration test was
-      // waived for anti-bot / infra) AND that the auditor also could not
-      // grade has zero live signal anywhere — neither compile-time nor audit
-      // -time produced a verified call. Downgrade `pass` to `inconclusive`
-      // for these "flying blind" tools so the gate is honest about coverage.
+      // A tool that shipped with `liveVerified: false` (waived at compile)
+      // AND that the audit also could not exercise is suspect — but the
+      // *reason* the audit couldn't exercise matters. Two cases:
+      //   (a) Every audit invocation was `infra` (the runtime path
+      //       actually returned NETWORK/timeout). That's a real "flying
+      //       blind" signal — the tool may be broken at runtime and we
+      //       have no proof either way. Downgrade pass → inconclusive.
+      //   (b) Every audit invocation was `bad_params` (the auditor
+      //       couldn't construct a valid call — e.g., missing producer
+      //       chain in the connected toolset). That's the auditor's own
+      //       coverage limit, NOT a tool defect. A perfect score on the
+      //       tools the auditor COULD exercise is still strong evidence
+      //       of framework quality. Don't downgrade for this.
       const ungradeableNames = ungradeableToolNames(report);
-      const unverifiedAndUngradeable = tools
+      const flyingBlindTools = tools
         .filter((t) => t.workflow.liveVerified === false)
         .map((t) => t.workflow.toolName)
-        .filter((name) => ungradeableNames.includes(name));
+        .filter((name) => ungradeableNames.includes(name))
+        .filter((name) => {
+          // Only downgrade for tools whose audit invocations include
+          // genuine infra failures (or were never even attempted).
+          // Chain-missing bad_params alone is not a downgrade signal.
+          const tool = report.tools.find((t) => t.name === name);
+          if (!tool || tool.invocations.length === 0) return true;
+          return tool.invocations.some((i) => i.verdict === 'infra');
+        });
+      const unverifiedAndUngradeable = flyingBlindTools;
       const verdict =
         rawScore.verdict === 'pass' && unverifiedAndUngradeable.length > 0
           ? 'inconclusive'
