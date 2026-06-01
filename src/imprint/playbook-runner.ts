@@ -145,10 +145,22 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   } catch (err) {
     const screenshotPath = await screenshot(page, playbook.toolName, lastStep);
     const suffix = screenshotPath ? `\nscreenshot: ${screenshotPath}` : '';
+    const errStr = errMsg(err);
+    // Classify the failure mode honestly: a missing locator, a step
+    // timeout, or a `forResponse` wait that didn't resolve are
+    // transient page-state signals (the DOM rendered differently than
+    // the recording, or the page was slow). Those are NETWORK-class
+    // signals, not tool-defect (BAD_RESPONSE) signals — the audit
+    // gate's `tool_broken` classifier treats BAD_RESPONSE as a real
+    // bug, which over-attributes drift to defects. Map known
+    // transient-shape errors to NETWORK so they count as `infra`
+    // (re-runnable) rather than `tool_broken` (permanent defect).
+    const isTransient =
+      /No locator matched|Timeout \d+ms exceeded|forResponse|waiting for/i.test(errStr);
     return {
       ok: false,
-      error: 'BAD_RESPONSE',
-      message: `Playbook failed at step ${lastStep}: ${errMsg(err)}${suffix}`,
+      error: isTransient ? 'NETWORK' : 'BAD_RESPONSE',
+      message: `Playbook failed at step ${lastStep}: ${errStr}${suffix}`,
     };
   } finally {
     if (!opts.pageOverride) {

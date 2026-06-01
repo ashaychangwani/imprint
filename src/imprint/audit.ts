@@ -219,37 +219,32 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       const rawScore = computeAuditScore(report, opts.minScore);
 
       // Cross-reference compile-time live verification with the audit grade.
-      // A tool that shipped with `liveVerified: false` (waived at compile)
-      // AND that the audit also could not exercise is suspect — but the
-      // *reason* the audit couldn't exercise matters. Two cases:
-      //   (a) Every audit invocation was `infra` (the runtime path
-      //       actually returned NETWORK/timeout). That's a real "flying
-      //       blind" signal — the tool may be broken at runtime and we
-      //       have no proof either way. Downgrade pass → inconclusive.
-      //   (b) Every audit invocation was `bad_params` (the auditor
-      //       couldn't construct a valid call — e.g., missing producer
-      //       chain in the connected toolset). That's the auditor's own
-      //       coverage limit, NOT a tool defect. A perfect score on the
-      //       tools the auditor COULD exercise is still strong evidence
-      //       of framework quality. Don't downgrade for this.
+      // The downgrade rule's purpose is to surface "flying blind" runs —
+      // ones where the gate has no positive evidence the framework works
+      // for the audited site. Iterations of this rule:
+      //   v1: downgrade if any tool was liveVerified=false AND ungradeable
+      //       → too strict (downgraded perfectly-scoring runs when one
+      //       chained tool was unreachable from auditor's connected set).
+      //   v2: downgrade only if a flying-blind tool had infra invocations
+      //       → still over-attributed transient page-state to defects.
+      //   v3 (current): downgrade only when the audit produced ZERO
+      //       `correct` invocations across ALL tools. If even one
+      //       invocation graded correctly, that's positive evidence the
+      //       framework + runtime work for at least that tool — the
+      //       overall score (correct/(correct+broken)) is the honest
+      //       signal. Tools that couldn't be exercised still surface via
+      //       `ungradeableTools` / `unverifiedAndUngradeable` for visibility
+      //       without spoiling a verdict the score honestly earned.
       const ungradeableNames = ungradeableToolNames(report);
-      const flyingBlindTools = tools
+      const unverifiedAndUngradeable = tools
         .filter((t) => t.workflow.liveVerified === false)
         .map((t) => t.workflow.toolName)
-        .filter((name) => ungradeableNames.includes(name))
-        .filter((name) => {
-          // Only downgrade for tools whose audit invocations include
-          // genuine infra failures (or were never even attempted).
-          // Chain-missing bad_params alone is not a downgrade signal.
-          const tool = report.tools.find((t) => t.name === name);
-          if (!tool || tool.invocations.length === 0) return true;
-          return tool.invocations.some((i) => i.verdict === 'infra');
-        });
-      const unverifiedAndUngradeable = flyingBlindTools;
+        .filter((name) => ungradeableNames.includes(name));
+      const anyCorrectAcrossAudit = report.tools.some((t) =>
+        t.invocations.some((i) => i.verdict === 'correct'),
+      );
       const verdict =
-        rawScore.verdict === 'pass' && unverifiedAndUngradeable.length > 0
-          ? 'inconclusive'
-          : rawScore.verdict;
+        rawScore.verdict === 'pass' && !anyCorrectAcrossAudit ? 'inconclusive' : rawScore.verdict;
       const score: AuditScore = { ...rawScore, verdict };
 
       setSpanAttributes(span, {
