@@ -393,18 +393,18 @@ When you are done, end your final message with exactly one fenced \`\`\`json blo
       cwd: REPO_ROOT,
       // Claude CLI's default MCP_TOOL_TIMEOUT is 60s. The audit-time MCP
       // server's tool calls walk the backend ladder for each invocation —
-      // fetch (30s timeout) → stealth-fetch (30s) → playbook (up to 30s)
-      // — easily exceeding 60s on sites where the API rungs tarpit and
-      // playbook is the only working rung. When the per-tool timeout
-      // fires, claude returns `-32000: Connection closed` to the auditor,
-      // every invocation looks like infra failure, and the auditor never
-      // produces a useful grade. Bumped to 30 min to match the compile
-      // side (where bun-test verification can take that long when every
-      // ladder rung tarpits per-assertion). Connection-startup timeout
-      // stays at 60s. Honor user-set env for fast networks.
+      // fetch (30s) → fetch-bootstrap (30s) → stealth-fetch (30s) →
+      // playbook (5–30s), worst case ~2 min. Bump to 5 min (covers
+      // realistic worst case with margin) but NOT to 30 min like the
+      // compile side: the compile MCP needs that long because `done` runs
+      // bun-test verification inline, but the audit MCP doesn't — each
+      // audit tool call is just a single workflow execution. A longer
+      // timeout here would burn the audit's overall 30-min deadline
+      // on a handful of hanging calls (compiled tools that hang on bad
+      // inputs) before the auditor finishes grading. Honor user-set env.
       env: {
         ...process.env,
-        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '1800000',
+        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '300000',
         MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? '60000',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
