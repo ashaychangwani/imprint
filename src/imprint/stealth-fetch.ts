@@ -343,11 +343,23 @@ function mergeCookieHeader(browserCookie: string, runtimeCookie: string | undefi
  * the Playwright bootstrap.
  */
 export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenCache> {
-  const { chromium } = await import('playwright');
+  // Use the same stealth-patched chromium + full Chrome binary that
+  // runFetchBootstrap and runPlaybook use. The original implementation
+  // imported vanilla `playwright` with no executablePath, which defaults
+  // to chrome-headless-shell — a separate stripped-down binary that
+  // Akamai / Cloudflare / PerimeterX detect at the binary / TLS layer
+  // and RST the HTTP/2 stream immediately (verified empirically against
+  // www.costcotravel.com). Using the same binary as `imprint record`
+  // (Playwright's bundled "Google Chrome for Testing") makes Akamai
+  // accept the navigation and mint clean bot-cookies, just like the
+  // recording session did.
+  const { getStealthChromium, getStealthExecutablePath } = await import('./stealth-chromium.ts');
+  const chromium = await getStealthChromium();
   let browser: Browser | undefined;
   try {
     browser = await chromium.launch({
       headless: !args.headed,
+      executablePath: getStealthExecutablePath(),
       args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
     });
 

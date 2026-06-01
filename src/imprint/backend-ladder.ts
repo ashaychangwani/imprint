@@ -652,11 +652,24 @@ function pickBaseUrl(tool: ResolvedTool): string {
       `Workflow ${tool.workflow.toolName} has no requests — stealth-fetch needs at least one request URL.\n→ re-record the session; recording probably stopped before any XHR fired.`,
     );
   }
-  const m = firstRequest.url.match(/^(https?:\/\/[^/]+)/);
-  if (m?.[1]) return m[1];
-  throw new Error(
-    `Could not derive bootstrap origin from URL: ${firstRequest.url}\n→ check workflow.json — the first request URL must start with https://<domain>.`,
-  );
+  // Strip query string but KEEP the path. Anti-bot services like Akamai
+  // can apply different protection profiles per URL path: navigating to
+  // the bare origin (e.g. https://www.costcotravel.com/) may trip a
+  // stricter challenge that RSTs the HTTP/2 stream, whereas the
+  // recorded landing path (e.g. /Rental-Cars) is exactly the URL the
+  // user reached during recording, so Akamai's bot-cookie minting
+  // behavior is known to work for it. URL resolution inside stealth-fetch
+  // uses `new URL(baseUrl).origin` regardless, so the path is only used
+  // for the bootstrap navigation target and Referer header — both of
+  // which are correct with the path included.
+  try {
+    const u = new URL(firstRequest.url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    throw new Error(
+      `Could not parse bootstrap URL: ${firstRequest.url}\n→ check workflow.json — the first request URL must be absolute (https://...).`,
+    );
+  }
 }
 
 function playbookPath(assetRoot: string, site: string, toolDir?: string): string {
