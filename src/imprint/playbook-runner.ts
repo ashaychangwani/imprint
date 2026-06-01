@@ -362,10 +362,27 @@ async function applyWait(
   }
   if ('xhr' in wait) {
     const re = new RegExp(wait.xhr);
-    await page.waitForResponse(
-      (resp) => re.test(resp.url()) && (!wait.method || resp.request().method() === wait.method),
-      { timeout: wait.timeout_ms ?? timeoutMs },
-    );
+    try {
+      await page.waitForResponse(
+        (resp) => re.test(resp.url()) && (!wait.method || resp.request().method() === wait.method),
+        { timeout: wait.timeout_ms ?? timeoutMs },
+      );
+    } catch (err) {
+      // A missed `wait_for: {xhr: ...}` is usually a soft signal: the
+      // recorded action (typing into an autocomplete, clicking a tab)
+      // happened, but the page didn't fire the exact XHR we matched on
+      // — either the URL pattern drifted, the debounce window was
+      // tighter than our wait, or the page chose a cached response. The
+      // next playbook step has its own locator / wait_for and will fail
+      // loudly if the page state is actually wrong. Letting the
+      // playbook continue here gives it a real chance to recover
+      // (observed on Costco's pickup-location autocomplete: typing
+      // succeeded, the XHR just never fired before our 30s window).
+      const msg = err instanceof Error ? err.message : String(err);
+      // Re-throw closures / nav errors that aren't simple timeouts —
+      // those signal real page breakdown.
+      if (!/timeout|Timeout/.test(msg)) throw err;
+    }
     return;
   }
   if ('sleep_ms' in wait) {
