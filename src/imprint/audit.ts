@@ -391,7 +391,22 @@ When you are done, end your final message with exactly one fenced \`\`\`json blo
   try {
     child = spawn('claude', args, {
       cwd: REPO_ROOT,
-      env: process.env,
+      // Claude CLI's default MCP_TOOL_TIMEOUT is 60s. The audit-time MCP
+      // server's tool calls walk the backend ladder for each invocation —
+      // fetch (30s timeout) → stealth-fetch (30s) → playbook (up to 30s)
+      // — easily exceeding 60s on sites where the API rungs tarpit and
+      // playbook is the only working rung. When the per-tool timeout
+      // fires, claude returns `-32000: Connection closed` to the auditor,
+      // every invocation looks like infra failure, and the auditor never
+      // produces a useful grade. Bump per-tool timeout to 10 min (covers
+      // worst-case ladder cost) and connection-startup timeout to 60s
+      // (matches compile-side defaults). Honor user-set env so an
+      // operator on a fast network can tighten without editing source.
+      env: {
+        ...process.env,
+        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '600000',
+        MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? '60000',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (err) {
