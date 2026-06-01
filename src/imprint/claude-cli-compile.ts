@@ -329,7 +329,24 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
   try {
     child = spawn('claude', args, {
       cwd: REPO_ROOT,
-      env: process.env,
+      // Claude CLI's default MCP_TOOL_TIMEOUT is 60s. The compile MCP
+      // server's `done` tool runs external verification inline — bun test
+      // (up to 60s × 3 retries for the integration suite + 120s for the
+      // parser suite) plus typechecking. That easily exceeds 60s and the
+      // MCP client kills the in-flight tool call, returning `-32000:
+      // Connection closed` to the agent. The wrapper then sees no `done`
+      // sentinel and reports the run as "compile agent did not produce a
+      // verified workflow" — a misleading message hiding a pure timeout.
+      // Bump the per-tool timeout to 10 min (covers the worst-case
+      // verification budget) and the connection-startup timeout to 60s
+      // (Playwright bootstrap inside generated tools is slow on cold
+      // start). Honor user-set env so an operator on a faster network can
+      // tighten these without editing source.
+      env: {
+        ...process.env,
+        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '600000',
+        MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? '60000',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (err) {
