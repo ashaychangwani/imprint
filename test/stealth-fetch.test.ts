@@ -243,3 +243,73 @@ describe('fetchImpl', () => {
     expect(observed[4]).toBe('plain-string');
   });
 });
+
+describe('Header defaults vs caller overrides', () => {
+  // Capture the final init.headers the underlying fetch sees so we can
+  // assert on what stealth-fetch actually puts on the wire.
+  function makeHeaderCapturingSf(): {
+    sf: StealthFetch;
+    seen: Array<Record<string, string>>;
+  } {
+    const seen: Array<Record<string, string>> = [];
+    const sf = createStealthFetch(
+      { baseUrl: 'https://example.com' },
+      {
+        bootstrap: async (): Promise<TokenCache> => ({
+          cookies: [],
+          sensorHeaders: {},
+          bootstrappedAt: Date.now(),
+        }),
+        underlyingFetch: async (_url, init) => {
+          seen.push((init.headers ?? {}) as Record<string, string>);
+          return { status: 200, ok: true, body: '{}', headers: {} };
+        },
+      },
+    );
+    return { sf, seen };
+  }
+
+  // Header keys reach fetchWithRetry already lowercased (the public
+  // fetchImpl wrapper normalizes via `new Headers().forEach`), so we assert
+  // on lowercase keys throughout.
+
+  it('omits content-type on body-less GETs (real browsers do not send it)', async () => {
+    // Regression: the JSON Content-Type used to land unconditionally, which
+    // is a small but real anti-bot tell on HTML bootstrap GETs against
+    // Akamai-protected sites (Costco). A GET with no body must not carry a
+    // Content-Type at all.
+    const { sf, seen } = makeHeaderCapturingSf();
+    await sf.fetchImpl('https://example.com/Rental-Cars');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toHaveProperty('content-type');
+    expect(seen[0]).not.toHaveProperty('Content-Type');
+  });
+
+  it('applies content-type: application/json default on POST with body', async () => {
+    const { sf, seen } = makeHeaderCapturingSf();
+    await sf.fetchImpl('https://example.com/api/x', { method: 'POST', body: '{"k":1}' });
+    expect(seen[0]?.['content-type']).toBe('application/json');
+  });
+
+  it('lets the caller override content-type on a POST', async () => {
+    const { sf, seen } = makeHeaderCapturingSf();
+    await sf.fetchImpl('https://example.com/api/x', {
+      method: 'POST',
+      body: 'a=1&b=2',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    expect(seen[0]?.['content-type']).toBe('application/x-www-form-urlencoded');
+    // The duplicate-case bug pre-fix would leave both `Content-Type` and
+    // `content-type` in the headers; assert it doesn't anymore.
+    expect(seen[0]).not.toHaveProperty('Content-Type');
+  });
+
+  it('lets the caller override accept (e.g. text/html on a bootstrap GET)', async () => {
+    const { sf, seen } = makeHeaderCapturingSf();
+    await sf.fetchImpl('https://example.com/Rental-Cars', {
+      headers: { Accept: 'text/html,application/xhtml+xml' },
+    });
+    expect(seen[0]?.accept).toBe('text/html,application/xhtml+xml');
+    expect(seen[0]).not.toHaveProperty('Accept');
+  });
+});

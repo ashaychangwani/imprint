@@ -209,6 +209,18 @@ const BootstrapCaptureSchema = z.discriminatedUnion('source', [
     selector: z.string(),
     timeoutMs: z.number().int().positive().optional(),
   }),
+  /** Read the value of a header from the bootstrap GET's own HTTP response.
+   *  Use this when the token (CSRF, anti-replay, page nonce, etc.) is
+   *  returned in a response header — not embedded in the HTML body — which
+   *  no `html_regex` or `dom_*` capture can ever match. Mirrors the shape
+   *  of `RequestCaptureSchema.source = 'response_header'` so the agent
+   *  documents one consistent rule across request- and bootstrap-scoped
+   *  captures. */
+  CaptureCommonSchema.extend({
+    source: z.literal('response_header'),
+    header: z.string(),
+    mode: z.enum(['first', 'last', 'all']).optional().default('last'),
+  }),
 ]);
 export type BootstrapCapture = z.infer<typeof BootstrapCaptureSchema>;
 

@@ -352,17 +352,31 @@ async function runFetchBootstrap(
       if (['image', 'media', 'font'].includes(type)) return route.abort();
       return route.continue();
     });
-    await page.goto(bootstrapUrl, {
+    const navResponse = await page.goto(bootstrapUrl, {
       waitUntil: tool.workflow.bootstrap.waitUntil ?? 'domcontentloaded',
       timeout: tool.workflow.bootstrap.timeoutMs ?? 30_000,
     });
     if (tool.workflow.bootstrap.waitMs) await page.waitForTimeout(tool.workflow.bootstrap.waitMs);
 
     const html = await page.content();
+    // Lower-case the bootstrap response's headers so `response_header`
+    // captures can look up by case-insensitive name. `allHeaders()` already
+    // returns lowercase keys per the HTTP/2 spec Playwright follows, but
+    // we normalize defensively in case the navigation returned null
+    // (`page.goto` returns null for some same-document navigations).
+    const responseHeaders: Record<string, string> = {};
+    if (navResponse) {
+      try {
+        const raw = await navResponse.allHeaders();
+        for (const [k, v] of Object.entries(raw)) responseHeaders[k.toLowerCase()] = v;
+      } catch {
+        // best-effort — non-fatal; response_header captures will simply miss.
+      }
+    }
     for (const capture of tool.workflow.bootstrap.captures ?? []) {
       let value: unknown;
       try {
-        value = await evaluateBootstrapCapture(capture, page, html);
+        value = await evaluateBootstrapCapture(capture, page, html, responseHeaders);
       } catch (err) {
         if (capture.required === false) continue;
         return bootstrapCaptureMissingResult(
@@ -503,12 +517,33 @@ function remediationForBootstrapCapabilities(capabilities: StateCapability[]): s
     : 'Run through fetch-bootstrap, or update workflow.bootstrap so Imprint can mint browser state before API replay.';
 }
 
-async function evaluateBootstrapCapture(
+// Exported for tests so the per-source logic (regex, DOM, storage, header)
+// can be unit-asserted without launching real Chromium. Internal callers
+// use it the same way; the export is just a visibility relaxation.
+export async function evaluateBootstrapCapture(
   capture: BootstrapCapture,
   page: Page,
   html: string,
+  responseHeaders: Record<string, string>,
 ): Promise<unknown> {
   switch (capture.source) {
+    case 'response_header': {
+      const raw = responseHeaders[capture.header.toLowerCase()];
+      if (raw === undefined) return undefined;
+      // Playwright's `allHeaders()` joins multi-valued headers with ", ".
+      // Most uses (CSRF, single-valued anti-replay tokens) want the whole
+      // string; mode 'first'/'last' splits when the value actually carries
+      // a comma-list. Keep the default conservative: return raw.
+      if (capture.mode === 'first' || capture.mode === 'last') {
+        const parts = raw
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean);
+        if (parts.length === 0) return undefined;
+        return capture.mode === 'first' ? parts[0] : parts[parts.length - 1];
+      }
+      return raw;
+    }
     case 'html_regex': {
       const match = html.match(new RegExp(capture.pattern));
       return match?.[capture.group ?? 1];

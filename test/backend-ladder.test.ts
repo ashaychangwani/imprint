@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
+  evaluateBootstrapCapture,
   resolveLadder,
   runWithLadder,
   runWorkflowWithLadder,
@@ -658,5 +659,68 @@ describe('runWorkflowWithLadder', () => {
     } finally {
       server.stop(true);
     }
+  });
+});
+
+describe('evaluateBootstrapCapture — response_header source (Fix C)', () => {
+  // Pure unit tests on the per-source switch. No real Chromium — `page` and
+  // `html` are unused for header captures, so a stub Page cast is fine.
+  const stubPage = {} as unknown as import('playwright').Page;
+
+  it('reads a header value by case-insensitive name', async () => {
+    const value = await evaluateBootstrapCapture(
+      {
+        name: 'csrf',
+        source: 'response_header',
+        header: 'X-Csrf-Token',
+        mode: 'last',
+        required: true,
+        capability: 'browser_bootstrap',
+      },
+      stubPage,
+      '<irrelevant html/>',
+      { 'x-csrf-token': 'abc123def456' },
+    );
+    expect(value).toBe('abc123def456');
+  });
+
+  it('returns undefined when the header is absent', async () => {
+    const value = await evaluateBootstrapCapture(
+      {
+        name: 'csrf',
+        source: 'response_header',
+        header: 'X-Csrf-Token',
+        mode: 'last',
+        required: false,
+        capability: 'browser_bootstrap',
+      },
+      stubPage,
+      '',
+      { 'some-other-header': 'noise' },
+    );
+    expect(value).toBeUndefined();
+  });
+
+  it('splits comma-joined multi-valued headers per mode', async () => {
+    // Playwright's allHeaders() joins multi-valued headers with ", " — pin
+    // the split contract so mode: 'first'/'last' do the right thing on
+    // Set-Cookie-style chains.
+    const base = {
+      name: 'tok' as const,
+      source: 'response_header' as const,
+      header: 'X-Multi',
+      required: true,
+      capability: 'browser_bootstrap' as const,
+    };
+    const headers = { 'x-multi': 'aaa, bbb, ccc' };
+    expect(await evaluateBootstrapCapture({ ...base, mode: 'first' }, stubPage, '', headers)).toBe(
+      'aaa',
+    );
+    expect(await evaluateBootstrapCapture({ ...base, mode: 'last' }, stubPage, '', headers)).toBe(
+      'ccc',
+    );
+    expect(await evaluateBootstrapCapture({ ...base, mode: 'all' }, stubPage, '', headers)).toBe(
+      'aaa, bbb, ccc',
+    );
   });
 });

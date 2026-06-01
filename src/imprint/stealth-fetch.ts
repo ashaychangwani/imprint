@@ -183,23 +183,35 @@ export function createStealthFetch(
       const t = tokens;
       if (!t) throw new Error('No tokens (bootstrap failed?)');
       const { headers: initHeaders, cookieHeader } = splitCookieHeader(init?.headers ?? {});
+      // Defaults that yield to the caller's initHeaders (and the workflow's
+      // recorded headers that flow through them). Keys are lowercase to
+      // match what the public `fetchImpl` wrapper normalizes everything to
+      // (via `new Headers().forEach`) — a mixed-case merge would silently
+      // duplicate both `Accept` and `accept` in the final headers and the
+      // caller's override would never actually win.
+      //
+      // Content-Type intentionally depends on whether the request actually
+      // has a body — sending Content-Type: application/json on a body-less
+      // GET is anti-bot suspicious (real browsers don't do it) and was
+      // contributing to Akamai tarpits on HTML bootstrap GETs from this rung.
+      const hasBody = init?.body !== undefined && init?.body !== null;
+      const defaultHeaders: Record<string, string> = {
+        'user-agent': opts.userAgent,
+        accept: 'application/json, text/javascript, */*; q=0.01',
+        cookie: mergeCookieHeader(
+          t.cookies.map((c) => `${c.name}=${c.value}`).join('; '),
+          cookieHeader,
+        ),
+        origin: new URL(fullUrl).origin,
+        referer: opts.baseUrl,
+        ...t.sensorHeaders,
+      };
+      if (hasBody) defaultHeaders['content-type'] = 'application/json';
       const result = await underlyingFetchFn(
         fullUrl,
         {
           method: init?.method ?? 'GET',
-          headers: {
-            'User-Agent': opts.userAgent,
-            Accept: 'application/json, text/javascript, */*; q=0.01',
-            'Content-Type': 'application/json',
-            Cookie: mergeCookieHeader(
-              t.cookies.map((c) => `${c.name}=${c.value}`).join('; '),
-              cookieHeader,
-            ),
-            Origin: new URL(fullUrl).origin,
-            Referer: opts.baseUrl,
-            ...t.sensorHeaders,
-            ...initHeaders,
-          },
+          headers: { ...defaultHeaders, ...initHeaders },
           body: init?.body,
         },
         t,
