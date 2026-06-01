@@ -318,6 +318,17 @@ function suggestStateName(location: string): string {
     .toLowerCase();
 }
 
+/** Whether a value looks like an opaque token/id (vs human text, a city name, a
+ *  date). Gates provenance-tagging of stable values so an incidental constant
+ *  (a UI label, the echoed query) isn't treated as a server-provided token.
+ *  Shared with the build-plan token detector. */
+export function looksLikeToken(v: string): boolean {
+  if (v.length < 12) return false;
+  if (/\s/.test(v)) return false; // multi-word / free text
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return false; // dates
+  return /[:|_-]/.test(v) || /\d/.test(v);
+}
+
 // ─── Main diff ──────────────────────────────────────────────────────────────
 
 export function diffTriagedSessions(
@@ -327,6 +338,12 @@ export function diffTriagedSessions(
   const pairs = alignRequests(original.requests, replay.requests);
   const pairedOrigSeqs = new Set(pairs.map((p) => p.originalSeq));
   const pairedReplaySeqs = new Set(pairs.map((p) => p.replaySeq));
+  // `searchPriorResponses` over the replay returns a producer in REPLAY-seq
+  // space, but `originalSeq` and every downstream consumer (capture hints,
+  // build-plan token detection, the planner) work in ORIGINAL-seq space — so a
+  // replay producer must be translated back via the alignment pairs.
+  const replayToOriginal = new Map(pairs.map((p) => [p.replaySeq, p.originalSeq]));
+  const toOriginalSeq = (replaySeq: number): number => replayToOriginal.get(replaySeq) ?? replaySeq;
 
   const classifications: ClassifiedValue[] = [];
 
@@ -347,17 +364,28 @@ export function diffTriagedSessions(
       if (v2Value === undefined) continue; // field only in run 1
 
       if (v1.value === v2Value) {
+        // Stable across runs. Normally a constant — but an OPAQUE stable value
+        // that also appears in a PRIOR response is a server-PROVIDED token (e.g.
+        // a per-entity id minted by a sibling search tool). The same-flow replay
+        // can't expose it by variance (same entity → same token), so recover its
+        // provenance from the original responses (already original-seq space).
+        // A cross-tool consumer then sources it as a param instead of hardcoding.
+        const provider = looksLikeToken(v1.value)
+          ? searchPriorResponses(v1.value, original.requests, pair.originalSeq)
+          : null;
         classifications.push({
           classification: 'constant',
           location: v1.location,
           originalSeq: pair.originalSeq,
           value1: v1.value,
           value2: v2Value,
+          ...(provider ? { producerSeq: provider.seq, producerPath: provider.path } : {}),
         });
         continue;
       }
 
-      // Value differs — check if it came from a prior response in run 2
+      // Value differs — check if it came from a prior response in run 2,
+      // translating the replay producer back to original-seq space.
       const producer = searchPriorResponses(v2Value, replay.requests, pair.replaySeq);
 
       if (producer) {
@@ -368,7 +396,7 @@ export function diffTriagedSessions(
           originalSeq: pair.originalSeq,
           value1: v1.value,
           value2: v2Value,
-          producerSeq: producer.seq,
+          producerSeq: toOriginalSeq(producer.seq),
           producerPath: producer.path,
           suggestedStateName: name || undefined,
         });

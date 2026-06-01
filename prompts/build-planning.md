@@ -1,4 +1,4 @@
-You plan how a set of selected tools — all compiled from ONE browser recording of ONE site — should be built so they reuse shared code instead of each re-deriving the same logic.
+You plan how a set of selected tools — all compiled from one site's recording(s), where one or more captures of that site are merged into a single session — should be built so they reuse shared code instead of each re-deriving the same logic.
 
 Return ONLY one JSON object. No markdown, no prose.
 
@@ -6,7 +6,7 @@ Return ONLY one JSON object. No markdown, no prose.
 
 You receive:
 
-- `site`, `url`, `narration` — what the user was doing.
+- `site`, `url`, `narration` — what the user was doing. When several captures were merged, `narration` includes `[Recording from <timestamp>] <url>` boundary lines marking where each capture begins (the same logical request may then appear once per capture, often with a different entity/token).
 - `selectedTools[]` — the tools that WILL be compiled: `{ toolName, description, expectedOutput, requestSeqs, dependencySeqs, likelyParams }`. You must emit exactly one `perTool` entry for each.
 - `sharedContext` — `{ loginRequestSeqs, credentialNames, tokenExtractionNotes, sharedHelperNotes }` from candidate detection.
 - `ephemeralValues[]` — values that differed across two independent replays (highest-confidence signal for signing tokens / per-call state): `{ classification, originalSeq, location, producerSeq, producerPath, suggestedStateName }`. `browser_minted` with a high-entropy query-param `location` is the canonical sign of client-side URL signing → a `request-transform` module.

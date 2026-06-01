@@ -616,11 +616,19 @@ describe('deriveTokenContractHints', () => {
     expect(hints).toEqual([]);
   });
 
-  it('ignores non-server_derived classifications and missing producers', () => {
+  it('ignores values without producer provenance (e.g. browser_minted)', () => {
+    // Real browser_minted values carry no producerSeq, so they're excluded.
     expect(
       deriveTokenContractHints({
         selectedTools: tools,
-        ephemeralValues: [{ ...edge, classification: 'browser_minted' }],
+        ephemeralValues: [
+          {
+            ...edge,
+            classification: 'browser_minted',
+            producerSeq: undefined,
+            producerPath: undefined,
+          },
+        ],
       }),
     ).toEqual([]);
     expect(
@@ -629,6 +637,18 @@ describe('deriveTokenContractHints', () => {
         ephemeralValues: [{ ...edge, producerSeq: undefined, producerPath: undefined }],
       }),
     ).toEqual([]);
+  });
+
+  it('detects a stable constant token tagged with producer provenance', () => {
+    // A per-entity token is `constant` under same-flow replay but carries
+    // recovered provenance — it must be treated as a cross-tool token too.
+    const hints = deriveTokenContractHints({
+      selectedTools: tools,
+      ephemeralValues: [{ ...edge, classification: 'constant' }],
+    });
+    expect(hints).toHaveLength(1);
+    expect(hints[0]?.producerTool).toBe('search_hotels');
+    expect(hints[0]?.consumerParam).toBe('hotel_id');
   });
 });
 

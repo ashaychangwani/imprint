@@ -18,7 +18,7 @@ import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
 import { localSiteDir } from './paths.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
-import type { ClassifiedValue } from './session-diff.ts';
+import { type ClassifiedValue, looksLikeToken } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import type { Session } from './types.ts';
@@ -516,21 +516,6 @@ function toIdentifier(raw: string): string {
   return cleaned || 'token';
 }
 
-/** Whether a value looks like an opaque token/id rather than human-typed text (a
- *  city name, a date, a search query). Gates deterministic detection so an echoed
- *  search query ("Chicago Loop") — classified `server_derived` because the
- *  autocomplete reflected it back — is NOT mistaken for a produced token. Stricter
- *  than the compile-time `looksOpaque` (which is value-matched, so lower-risk):
- *  here a false positive pollutes the plan, so require a digit or a token
- *  separator — place names have neither. Kept local to avoid a build-plan →
- *  compile-tools import cycle. */
-function looksLikeToken(v: string): boolean {
-  if (v.length < 12) return false;
-  if (/\s/.test(v)) return false; // multi-word / free text
-  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return false; // dates
-  return /[:|_-]/.test(v) || /\d/.test(v);
-}
-
 /** Derive a consumer param name from a classification `location`
  *  ("url_param:hotel_id" → "hotel_id", "body:$.hotel.id" → "id"). Returns '' for
  *  `header:` locations — header tokens are session/anti-bot state handled by the
@@ -602,7 +587,9 @@ export function deriveTokenContractHints(payload: {
   const seen = new Set<string>();
   const out: TokenContractHint[] = [];
   for (const ev of payload.ephemeralValues) {
-    if (ev.classification !== 'server_derived') continue;
+    // Any value with recovered producer provenance — `server_derived` (varied
+    // across runs) OR a stable `constant` whose opaque value was found in a
+    // sibling response — is a cross-tool token candidate.
     if (ev.producerSeq == null || !ev.producerPath) continue;
     if (!ev.value || !looksLikeToken(ev.value)) continue; // skip echoed query text, etc.
     const consumerTool = soleOwner(ev.originalSeq);
@@ -833,7 +820,9 @@ export function buildBuildPlanPayload(opts: {
   );
 
   const ephemeralValues = (classifications ?? [])
-    .filter((c) => c.classification !== 'constant')
+    // Non-constant values, plus stable constants that carry recovered producer
+    // provenance (server-provided per-entity tokens) — both are signals for the planner.
+    .filter((c) => c.classification !== 'constant' || c.producerSeq != null)
     .map((c) => ({
       classification: c.classification,
       originalSeq: c.originalSeq,
@@ -863,8 +852,10 @@ export function buildBuildPlanPayload(opts: {
     // the payload's `ephemeralValues` stays slim (no raw value sent to the planner).
     tokenContractHints: deriveTokenContractHints({
       selectedTools,
+      // Any classification carrying producer provenance — server_derived OR a
+      // stable constant whose opaque value was found in a sibling response.
       ephemeralValues: (classifications ?? [])
-        .filter((c) => c.classification === 'server_derived')
+        .filter((c) => c.producerSeq != null)
         .map((c) => ({
           classification: c.classification,
           originalSeq: c.originalSeq,
