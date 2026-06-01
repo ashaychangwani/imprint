@@ -79,7 +79,7 @@ function seedLocalSite(imprint: string): void {
 }
 
 describe('mcp maintenance status', () => {
-  it('reports complete, incomplete, missing-session, orphan-session, and stale-registration states', () => {
+  it('reports complete, incomplete, missing-session, and stale-registration states', () => {
     withTemp(({ home, cwd, imprint }) => {
       seedLocalSite(imprint);
       writeFile(
@@ -103,18 +103,32 @@ describe('mcp maintenance status', () => {
       expect(status.sites.find((s) => s.site === 'demo')?.tools[0]?.complete).toBe(true);
       expect(status.issues.map((i) => i.kind)).toContain('incomplete');
       expect(status.issues.map((i) => i.kind)).toContain('missing-session');
-      expect(status.issues.map((i) => i.kind)).toContain('orphan-session');
       expect(status.issues.map((i) => i.kind)).toContain('stale-registration');
-      expect(status.sites.find((s) => s.site === 'demo')?.orphanSessions).toContain(
-        pathJoin(imprint, 'demo', 'sessions', 'orphan.jsonl'),
-      );
-      expect(status.sites.find((s) => s.site === 'demo')?.orphanSessions).not.toContain(
-        pathJoin(imprint, 'demo', 'sessions', 'one.jsonl'),
-      );
 
       const json = JSON.parse(JSON.stringify(status)) as typeof status;
       expect(Array.isArray(json.registrations)).toBe(true);
       expect(Array.isArray(json.issues)).toBe(true);
+    });
+  });
+
+  it('never treats untracked recordings as an issue and leaves them on disk', () => {
+    withTemp(({ home, cwd, imprint }) => {
+      seedLocalSite(imprint);
+
+      const status = scanMcpStatus({ homeDir: home, cwd, imprintHome: imprint });
+
+      // Orphan recordings (untracked sessions) are out of scope for `imprint mcp`:
+      // the recording is the irreplaceable source artifact, never a cleanup target.
+      // No orphan inventory or issue is surfaced anywhere in the status payload.
+      const orphanJsonl = pathJoin(imprint, 'demo', 'sessions', 'orphan.jsonl');
+      const orphanJson = pathJoin(imprint, 'demo', 'sessions', 'orphan.json');
+      expect(status.issues.some((i) => i.path === orphanJsonl || i.path === orphanJson)).toBe(
+        false,
+      );
+      expect(JSON.stringify(status)).not.toContain('orphan');
+      // The recordings are untouched on disk.
+      expect(existsSync(orphanJsonl)).toBe(true);
+      expect(existsSync(orphanJson)).toBe(true);
     });
   });
 });
