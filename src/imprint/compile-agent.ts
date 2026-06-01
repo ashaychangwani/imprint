@@ -22,6 +22,7 @@ import { compileViaCodexCli } from './codex-cli-compile.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import {
+  applyLiveVerification,
   applyParamVerification,
   buildCompileTools,
   externalVerification,
@@ -331,7 +332,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     // Perform external verification
-    const { failures, warnings, paramVerification } = await externalVerification(
+    const { failures, warnings, paramVerification, liveVerification } = await externalVerification(
       absoluteToolDir,
       session,
       sessionPathAbs,
@@ -351,7 +352,10 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
 
     if (failures.length === 0) {
       // Success (possibly with warnings). Persist per-parameter verified flags
-      // into workflow.json and fold any "live-unverified" note into the warnings.
+      // and the live-verification stamp into workflow.json so downstream
+      // (audit, teach summary) can see which tools shipped without a passing
+      // live call.
+      applyLiveVerification(absoluteToolDir, liveVerification);
       const paramWarnings = applyParamVerification(absoluteToolDir, paramVerification);
       const allWarnings = [...warnings, ...paramWarnings];
       if (paramWarnings.length > 0) {

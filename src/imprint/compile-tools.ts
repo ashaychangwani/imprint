@@ -1658,6 +1658,43 @@ export function applyParamVerification(
   ];
 }
 
+/**
+ * Stamp the integration-test waiver outcome onto workflow.json. When a tool's
+ * integration test couldn't produce live data (anti-bot block or every-rung
+ * NETWORK exhaustion), we ship anyway — but the workflow records
+ * `liveVerified: false` plus the structured waiver reason so the audit gate
+ * and the teach summary can flag it instead of silently treating it as
+ * verified. Best-effort: a write failure never blocks a tool that already
+ * passed parser + schema verification.
+ */
+export function applyLiveVerification(
+  toolDir: string,
+  liveVerification:
+    | { kind: 'waived-bot' | 'waived-infra'; firstError: string; exhaustedBackends: string[] }
+    | undefined,
+): void {
+  const workflowPath = pathJoin(toolDir, 'workflow.json');
+  if (!existsSync(workflowPath)) return;
+  let workflow: Record<string, unknown>;
+  try {
+    workflow = JSON.parse(readFileSync(workflowPath, 'utf8'));
+  } catch {
+    return;
+  }
+  if (liveVerification) {
+    workflow.liveVerified = false;
+    workflow.liveVerifiedWaiver = liveVerification;
+  } else {
+    workflow.liveVerified = true;
+    workflow.liveVerifiedWaiver = undefined;
+  }
+  try {
+    writeFileSync(workflowPath, `${JSON.stringify(workflow, null, 2)}\n`, 'utf8');
+  } catch {
+    // best-effort — non-fatal
+  }
+}
+
 export async function externalVerification(
   toolDir: string,
   session: Session,
@@ -1680,10 +1717,25 @@ export async function externalVerification(
      *  (e.g. the plan says `hotel_id` but the parser emits `propertyToken`). */
     emittedTokens?: Array<{ field: string; shape: string }>;
   } = {},
-): Promise<{ failures: string[]; warnings: string[]; paramVerification: ParamVerification[] }> {
+): Promise<{
+  failures: string[];
+  warnings: string[];
+  paramVerification: ParamVerification[];
+  /** Set when the integration test was waived rather than passing live — the
+   *  caller should stamp this onto workflow.json so audit/teach can surface
+   *  the unverified state instead of silently treating the tool as live. */
+  liveVerification?: {
+    kind: 'waived-bot' | 'waived-infra';
+    firstError: string;
+    exhaustedBackends: string[];
+  };
+}> {
   const failures: string[] = [];
   const warnings: string[] = [];
   const paramVerification: ParamVerification[] = [];
+  let liveVerification:
+    | { kind: 'waived-bot' | 'waived-infra'; firstError: string; exhaustedBackends: string[] }
+    | undefined;
 
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   const parserPath = pathJoin(toolDir, 'parser.ts');
@@ -1901,18 +1953,42 @@ export async function externalVerification(
       integrationOutcome = 'passed';
     } else {
       const combined = `${run.stdout}\n${run.stderr}`;
+      // After backend-ladder.ts:171 was changed to escalate NETWORK across
+      // rungs, a NETWORK in the test output means every rung in the integration
+      // ladder was tried and failed — the new "every backend escalated" log
+      // is the unambiguous signal. AUTH_EXPIRED/RATE_LIMITED still trip the
+      // older "non-escalatable" path. "giving up" is stealth-fetch's
+      // two-403-in-a-row exhaustion marker.
       const hasImprintBlock =
         /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(combined) &&
-        /non-escalatable|giving up/.test(combined);
+        /non-escalatable|giving up|every backend escalated/.test(combined);
+      // Extract attempted backend names from the bun-test output so we can
+      // record which rungs were actually tried before waiving. Best-effort —
+      // the ladder logs "[imprint backend] trying <name>…" per attempt.
+      const exhaustedBackends = Array.from(
+        new Set(
+          Array.from(combined.matchAll(/\[imprint backend\] trying ([a-z-]+)…/g)).map(
+            (m) => m[1] as string,
+          ),
+        ),
+      );
+      const firstErrorMatch = combined.match(/\b(NETWORK|FORBIDDEN|RATE_LIMITED)\b[^\n]{0,200}/);
+      const firstError = firstErrorMatch?.[0]?.trim() ?? 'unknown';
       if (isBotDefenseFailure(combined)) {
         integrationOutcome = 'waived-bot';
+        liveVerification = { kind: 'waived-bot', firstError, exhaustedBackends };
         warnings.push(
-          `integration test failed with likely bot-detection / anti-automation challenge (tried 3 times) — treating as non-blocking since parser verification passed. The runtime backend ladder (stealth-fetch + playbook) handles these defenses at call time even when the compile-time fetch rungs cannot.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+          `integration test failed with likely bot-detection / anti-automation challenge (tried 3 times). Stamping liveVerified=false on workflow.json — the runtime will fall through to the playbook last-ditch rung, which is a degraded path. Audit and teach will surface this tool as unverified.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
         );
       } else if (hasImprintBlock) {
         integrationOutcome = 'waived-infra';
+        liveVerification = { kind: 'waived-infra', firstError, exhaustedBackends };
         warnings.push(
-          `integration test failed with infrastructure error (${combined.match(/\b(RATE_LIMITED|FORBIDDEN|NETWORK)\b/)?.[0] ?? 'unknown'}, tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+          `integration test failed with infrastructure error (${
+            combined.match(/\b(RATE_LIMITED|FORBIDDEN|NETWORK)\b/)?.[0] ?? 'unknown'
+          }, tried 3 times). Every rung in the ladder was exhausted (${
+            exhaustedBackends.join(', ') || 'unknown'
+          }). Stamping liveVerified=false on workflow.json — audit and teach will surface this tool as unverified.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
         );
       } else {
         integrationOutcome = 'failed';
@@ -2102,5 +2178,5 @@ export async function externalVerification(
     }
   }
 
-  return { failures, warnings, paramVerification };
+  return { failures, warnings, paramVerification, liveVerification };
 }

@@ -262,6 +262,27 @@ export const WorkflowSchema = z.object({
    *  The optional 4th arg `params` carries the resolved workflow parameters
    *  so the transform can construct request bodies programmatically. */
   requestTransformModule: z.string().optional(),
+  /** Did this tool's integration test produce live data at compile time?
+   *
+   *  - `liveVerified: true` (default when present) — the integration test
+   *    passed at one of the API/stealth-fetch rungs of the ladder.
+   *  - `liveVerified: false` — the test failed and was waived (anti-bot
+   *    block or transient infra), so the tool shipped without a passing
+   *    live call. Downstream consumers (audit gate, teach summary) treat
+   *    this as a flying-blind signal — the runtime playbook fallback is
+   *    the only remaining path, and it is a last-ditch one. `liveVerified`
+   *    is absent on tools predating this field; absent is treated as
+   *    "unknown" by readers, which is more honest than defaulting true. */
+  liveVerified: z.boolean().optional(),
+  /** Structured reason a waiver was applied. Only present when
+   *  `liveVerified === false`. */
+  liveVerifiedWaiver: z
+    .object({
+      kind: z.enum(['waived-bot', 'waived-infra']),
+      firstError: z.string(),
+      exhaustedBackends: z.array(z.string()),
+    })
+    .optional(),
 });
 export type Workflow = z.infer<typeof WorkflowSchema>;
 

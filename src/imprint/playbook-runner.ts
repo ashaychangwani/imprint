@@ -12,6 +12,7 @@ import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { substituteString } from './runtime.ts';
+import { getStealthChromium } from './stealth-chromium.ts';
 import type {
   Locator,
   Playbook,
@@ -64,30 +65,15 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   if (opts.pageOverride) {
     page = opts.pageOverride;
   } else {
-    // playwright-extra + stealth plugin patches navigator.webdriver,
-    // plugin enumeration, WebGL vendor strings, etc. Vanilla headless
-    // Playwright eats a 403 from any decent enterprise site (verified:
-    // Southwest 403 → 200 with stealth).
     let chromium: typeof import('playwright').chromium;
     try {
-      const pwExtra = await import('playwright-extra');
-      const stealthMod = await import('puppeteer-extra-plugin-stealth');
-      const stealthFactory =
-        (stealthMod as { default?: () => unknown }).default ??
-        (stealthMod as unknown as () => unknown);
-      pwExtra.chromium.use(stealthFactory() as never);
-      chromium = pwExtra.chromium as unknown as typeof import('playwright').chromium;
-    } catch {
-      try {
-        const pw = await import('playwright');
-        chromium = pw.chromium;
-      } catch (innerErr) {
-        return {
-          ok: false,
-          error: 'UNKNOWN',
-          message: `Playwright not available: ${errMsg(innerErr)}. Run: bunx playwright install chromium`,
-        };
-      }
+      chromium = await getStealthChromium();
+    } catch (innerErr) {
+      return {
+        ok: false,
+        error: 'UNKNOWN',
+        message: `Playwright not available: ${errMsg(innerErr)}. Run: bunx playwright install chromium`,
+      };
     }
     try {
       browser = await chromium.launch({ headless: !opts.headed });

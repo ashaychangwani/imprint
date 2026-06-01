@@ -216,7 +216,25 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         tokenDeps,
       });
 
-      const score = computeAuditScore(report, opts.minScore);
+      const rawScore = computeAuditScore(report, opts.minScore);
+
+      // Cross-reference compile-time live verification with the audit grade.
+      // A tool that shipped with `liveVerified: false` (integration test was
+      // waived for anti-bot / infra) AND that the auditor also could not
+      // grade has zero live signal anywhere — neither compile-time nor audit
+      // -time produced a verified call. Downgrade `pass` to `inconclusive`
+      // for these "flying blind" tools so the gate is honest about coverage.
+      const ungradeableNames = ungradeableToolNames(report);
+      const unverifiedAndUngradeable = tools
+        .filter((t) => t.workflow.liveVerified === false)
+        .map((t) => t.workflow.toolName)
+        .filter((name) => ungradeableNames.includes(name));
+      const verdict =
+        rawScore.verdict === 'pass' && unverifiedAndUngradeable.length > 0
+          ? 'inconclusive'
+          : rawScore.verdict;
+      const score: AuditScore = { ...rawScore, verdict };
+
       setSpanAttributes(span, {
         'imprint.audit.score': score.score,
         'imprint.audit.correct': score.correct,
@@ -226,6 +244,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         'imprint.audit.graded': score.graded,
         'imprint.audit.tool_count': toolCount,
         'imprint.audit.verdict': score.verdict,
+        'imprint.audit.unverified_and_ungradeable_count': unverifiedAndUngradeable.length,
       });
 
       // Persist the full result (deterministic score + the raw model report).
@@ -234,7 +253,10 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         report,
         site: opts.site,
         toolCount,
-        ungradeableTools: ungradeableToolNames(report),
+        ungradeableTools: ungradeableNames,
+        /** Tools that shipped without live verification at compile time AND
+         *  could not be graded at audit time — zero live signal anywhere. */
+        unverifiedAndUngradeable,
         minScore: opts.minScore,
       };
       try {
@@ -247,7 +269,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       if (opts.json) {
         console.log(JSON.stringify(persisted, null, 2));
       } else {
-        printSummary(opts, score, toolCount);
+        printSummary(opts, score, toolCount, unverifiedAndUngradeable);
       }
 
       return score;
@@ -530,7 +552,12 @@ function balancedObjects(text: string): string[] {
   return out;
 }
 
-function printSummary(opts: RunAuditOptions, score: AuditScore, toolCount: number): void {
+function printSummary(
+  opts: RunAuditOptions,
+  score: AuditScore,
+  toolCount: number,
+  unverifiedAndUngradeable: string[] = [],
+): void {
   const pct = score.graded === 0 ? 'n/a' : `${score.score.toFixed(1)}%`;
   console.log(`[imprint] audit "${opts.site}" — ${score.verdict.toUpperCase()}`);
   console.log(
@@ -539,10 +566,21 @@ function printSummary(opts: RunAuditOptions, score: AuditScore, toolCount: numbe
   console.log(
     `[imprint]   graded ${score.graded} of ${score.correct + score.broken + score.infra + score.badParams} invocation(s) across ${toolCount} tool(s) — excluded: ${score.infra} infra, ${score.badParams} bad_params`,
   );
-  if (score.verdict === 'inconclusive') {
+  if (unverifiedAndUngradeable.length > 0) {
     console.log(
-      '[imprint]   no gradeable invocations (likely anti-bot / network) — re-run; this is not a code failure.',
+      `[imprint]   ${unverifiedAndUngradeable.length} tool(s) flying blind (no live verification at compile, no graded calls at audit): ${unverifiedAndUngradeable.join(', ')}`,
     );
+  }
+  if (score.verdict === 'inconclusive') {
+    if (unverifiedAndUngradeable.length > 0) {
+      console.log(
+        '[imprint]   verdict downgraded to inconclusive because at least one tool has zero live signal anywhere.',
+      );
+    } else {
+      console.log(
+        '[imprint]   no gradeable invocations (likely anti-bot / network) — re-run; this is not a code failure.',
+      );
+    }
   }
   console.log(`[imprint]   report → ${opts.outPath}`);
 }

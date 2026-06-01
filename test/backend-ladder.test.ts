@@ -193,6 +193,74 @@ describe('runWithLadder — auto escalation', () => {
     expect(r.attempts[0]).toMatchObject({ backend: 'fetch', outcome: 'failed' });
   });
 
+  it('does NOT escalate on RATE_LIMITED — backoff is the answer, not a different transport', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'RATE_LIMITED', message: 'too many requests' },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('alpha', behavior);
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
+    if (r.result.ok) throw new Error('expected failure');
+    expect(r.result.error).toBe('RATE_LIMITED');
+    expect(r.usedBackend).toBe('fetch');
+    expect(behavior.calls.stealth).toBe(0);
+    expect(r.attempts).toHaveLength(1);
+    expect(r.attempts[0]).toMatchObject({ backend: 'fetch', outcome: 'failed' });
+  });
+
+  it('escalates fetch → stealth-fetch on NETWORK (likely anti-bot tarpit)', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'NETWORK', message: 'Request timed out after 30000ms' },
+      stealthResult: { ok: true, data: { rescued: true } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('alpha', behavior);
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
+    expect(r.result.ok).toBe(true);
+    expect(r.usedBackend).toBe('stealth-fetch');
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(1);
+    expect(r.attempts).toHaveLength(2);
+    expect(r.attempts[0]).toMatchObject({ backend: 'fetch', outcome: 'escalate' });
+    expect(r.attempts[1]).toMatchObject({ backend: 'stealth-fetch', outcome: 'ok' });
+  });
+
+  it('returns the last NETWORK error when every rung in the ladder times out', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'NETWORK', message: 'fetch timed out' },
+      stealthResult: { ok: false, error: 'NETWORK', message: 'stealth-fetch timed out' },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('alpha', behavior);
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
+    if (r.result.ok) throw new Error('expected failure');
+    expect(r.result.error).toBe('NETWORK');
+    expect(r.result.message).toContain('stealth-fetch timed out');
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(1);
+    expect(r.attempts).toHaveLength(2);
+    expect(r.attempts[0]).toMatchObject({ backend: 'fetch', outcome: 'escalate' });
+    expect(r.attempts[1]).toMatchObject({ backend: 'stealth-fetch', outcome: 'escalate' });
+  });
+
   it('does not escalate STATE_MISSING to stealth-fetch because it cannot fill state placeholders', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: {

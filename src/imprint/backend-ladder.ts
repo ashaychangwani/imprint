@@ -18,6 +18,7 @@ import {
   loadCredentialStore,
   substituteString,
 } from './runtime.ts';
+import { getStealthChromium } from './stealth-chromium.ts';
 import {
   type BootstrapArgs,
   type StealthFetch,
@@ -168,8 +169,25 @@ export async function runWithLadder(
       }
     }
 
-    // Non-FORBIDDEN errors don't escalate — different backend can't fix
-    // AUTH_EXPIRED, NETWORK, RATE_LIMITED.
+    // NETWORK escalates: a long timeout is usually anti-bot tarpitting
+    // (Akamai/Cloudflare/PerimeterX hang the connection rather than 403),
+    // and a different transport (stealth-fetch's minted token cookies, or
+    // playbook's full stealth browser) can fix it. Real DNS/connectivity
+    // failures die in milliseconds at every rung, so the cost ceiling is
+    // bounded by the per-rung timeout × ladder length.
+    if (result.error === 'NETWORK') {
+      attempts.push({
+        backend,
+        outcome: 'escalate',
+        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        durationMs,
+      });
+      log(`${backend}: NETWORK in ${durationMs}ms — escalating to next rung`);
+      continue;
+    }
+
+    // AUTH_EXPIRED needs a re-login; RATE_LIMITED needs backoff. Neither
+    // is fixed by switching transport.
     attempts.push({
       backend,
       outcome: 'failed',
@@ -286,7 +304,11 @@ async function runFetchBootstrap(
   };
   const bootstrapUrl = substituteString(tool.workflow.bootstrap.url, params, credentials, []);
   const initialState: Record<string, unknown> = {};
-  const { chromium } = await import('playwright');
+  // Stealth-patched chromium so anti-bot services (Akamai, Cloudflare,
+  // PerimeterX) don't tarpit the bootstrap navigation. Vanilla headless
+  // Playwright leaks `navigator.webdriver` and other telltales and dies
+  // with a 30s NETWORK timeout against any decent enterprise site.
+  const chromium = await getStealthChromium();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
     browser = await chromium.launch({ headless: true });

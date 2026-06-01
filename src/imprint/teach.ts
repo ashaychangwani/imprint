@@ -1193,8 +1193,27 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // longer needed once every tool has compiled.
   clearCachedToken(localSiteDir(site));
 
+  // Surface any tools that shipped without a passing live integration test
+  // (waived during compile due to anti-bot / infra). These rely on the runtime
+  // playbook last-ditch path, which is a degraded fallback — operators should
+  // know rather than discover at audit/runtime.
+  const unverified = results.filter((r) => r.workflow.liveVerified === false);
+  if (unverified.length > 0) {
+    for (const r of unverified) {
+      const waiver = r.workflow.liveVerifiedWaiver;
+      const reason = waiver
+        ? `${waiver.kind} (exhausted: ${waiver.exhaustedBackends.join(', ') || 'n/a'}; first error: ${waiver.firstError})`
+        : 'reason not recorded';
+      p.log.warn(
+        `tool "${r.workflow.toolName}" shipped without live verification: ${reason}\n  → runtime callers fall through to the playbook last-ditch rung; treat this tool as unverified until audit confirms it.`,
+      );
+    }
+  }
+
   p.outro(
-    `Done! ${results.length} tool${results.length === 1 ? '' : 's'} ready: ${results.map((r) => r.workflow.toolName).join(', ')}`,
+    `Done! ${results.length} tool${results.length === 1 ? '' : 's'} ready: ${results.map((r) => r.workflow.toolName).join(', ')}${
+      unverified.length > 0 ? ` (${unverified.length} unverified — see warnings above)` : ''
+    }`,
   );
 
   return {
