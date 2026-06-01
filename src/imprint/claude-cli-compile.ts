@@ -332,19 +332,21 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       // Claude CLI's default MCP_TOOL_TIMEOUT is 60s. The compile MCP
       // server's `done` tool runs external verification inline — bun test
       // (up to 60s × 3 retries for the integration suite + 120s for the
-      // parser suite) plus typechecking. That easily exceeds 60s and the
-      // MCP client kills the in-flight tool call, returning `-32000:
-      // Connection closed` to the agent. The wrapper then sees no `done`
-      // sentinel and reports the run as "compile agent did not produce a
-      // verified workflow" — a misleading message hiding a pure timeout.
-      // Bump the per-tool timeout to 10 min (covers the worst-case
-      // verification budget) and the connection-startup timeout to 60s
-      // (Playwright bootstrap inside generated tools is slow on cold
-      // start). Honor user-set env so an operator on a faster network can
-      // tighten these without editing source.
+      // parser suite) plus typechecking. On bot-protected sites where the
+      // integration test escalates fetch → fetch-bootstrap → stealth-fetch
+      // for every assertion, a single bun test pass can run 30s × 3
+      // rungs × N tests = 10-15 min before the outer wrapper kills it,
+      // and 3 retries push the total well past 30 min. A 10-min cap was
+      // not enough — set 30 min so the worst-case verification can
+      // actually complete and the agent receives the failure feedback
+      // (and ships with `liveVerified: false` via the waiver path)
+      // rather than getting `-32000: Connection closed` mid-call and
+      // wasting the rest of its turn budget. Honor user-set env so an
+      // operator on a fast network can tighten without editing source.
+      // Connection-startup timeout stays at 60s for cold Playwright boot.
       env: {
         ...process.env,
-        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '600000',
+        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '1800000',
         MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? '60000',
       },
       stdio: ['ignore', 'pipe', 'pipe'],

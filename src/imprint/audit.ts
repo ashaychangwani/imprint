@@ -398,13 +398,13 @@ When you are done, end your final message with exactly one fenced \`\`\`json blo
       // playbook is the only working rung. When the per-tool timeout
       // fires, claude returns `-32000: Connection closed` to the auditor,
       // every invocation looks like infra failure, and the auditor never
-      // produces a useful grade. Bump per-tool timeout to 10 min (covers
-      // worst-case ladder cost) and connection-startup timeout to 60s
-      // (matches compile-side defaults). Honor user-set env so an
-      // operator on a fast network can tighten without editing source.
+      // produces a useful grade. Bumped to 30 min to match the compile
+      // side (where bun-test verification can take that long when every
+      // ladder rung tarpits per-assertion). Connection-startup timeout
+      // stays at 60s. Honor user-set env for fast networks.
       env: {
         ...process.env,
-        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '600000',
+        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '1800000',
         MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? '60000',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
