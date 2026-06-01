@@ -446,6 +446,8 @@ You may call `give_up` only in these cases:
 
 2. **Response body wasn't captured.** The session has no body for the load-bearing request (mimeType is missing, bodySize is 0, read_response_body returns empty). Recommend the user re-record the session with a higher body-size limit.
 
+   **Truncation is NOT the same as missing.** If `read_response_body` returns a body that ends in `[…truncated…]`, you still have a multi-hundred-KB prefix — that is almost always enough to find anchors, write regexes, and verify the parser against the captured portion. Do NOT call `give_up` because a page was truncated. Treat the truncated prefix as the available data, write the parser to extract from it, and run parser tests against the same prefix. Only escalate to `give_up` if the prefix is so small (e.g., < a few KB) that no recognizable structure remains — and even then, prefer to extract whatever IS present and ship a partial-coverage parser over giving up entirely.
+
 3. **Response is genuinely empty by design.** The workflow is fire-and-forget (e.g., a logging endpoint, a tracking pixel). The user's intent was to send the request, not to extract data from the response.
 
 4. **Authentication is fundamentally broken.** Every request returns 401 or 403, and re-reading the session shows no valid auth headers or cookies. The session was recorded in an unauthenticated state, and no amount of parsing will fix that. Recommend the user run `imprint login <site>` and re-record.
