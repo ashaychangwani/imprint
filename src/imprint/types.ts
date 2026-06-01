@@ -113,6 +113,27 @@ const WorkflowParameterSchema = z.object({
   description: z.string(),
   /** Optional with this default if set. */
   default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  /** Whether a `param:<name>` integration test verified this parameter's effect
+   *  against live data at compile time. `false` means it ships unverified (the
+   *  live differential was waived by anti-bot, or explicitly annotated
+   *  exposed-but-not-verified) and is exercised at runtime via the backend
+   *  ladder. Undefined on tools compiled before this gate (treated as verified
+   *  for back-compat). Not surfaced in the user-facing MCP schema. */
+  verified: z.boolean().optional(),
+  /** Why the parameter is unverified (e.g. `waived-bot`, `waived-infra`,
+   *  `annotated`, `waived-chain`). Undefined when `verified` is true/undefined. */
+  verifyNote: z.string().optional(),
+  /** Set when this parameter is an opaque token/id minted by a sibling tool — the
+   *  consumer takes a value produced by `tool`'s `field` output. Surfaced in the
+   *  MCP param description so the orchestrating LLM calls `tool` first and reuses
+   *  the value; used by the compile gate to require a chained verification test and
+   *  by `imprint audit` to chain producer→consumer instead of fabricating a token. */
+  sourcedFrom: z
+    .object({
+      tool: z.string(),
+      field: z.string(),
+    })
+    .optional(),
 });
 export type WorkflowParameter = z.infer<typeof WorkflowParameterSchema>;
 

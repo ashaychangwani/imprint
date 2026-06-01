@@ -43,6 +43,8 @@ Follow these steps to compile the session:
 
    **Parameter checklist (`likelyParams`).** When `selectedCandidate` includes a `likelyParams` array, it contains the candidate detector's analysis of which inputs the user controlled — based on the narration and request patterns. Treat this as your **parameter extraction checklist**: every entry should become a `${param.NAME}` in workflow.json unless you can document a structural reason it cannot be templated. Parameters that appear as `null`, `[]`, or absent in the recorded request body are still valid — they represent filters or options the user interacted with during recording but did not apply in the final request state. Do not skip them.
 
+   **Shared modules (multi-tool runs).** If your initial context lists "Assigned shared modules" — or `read_build_plan` is available — call `read_build_plan` first. It returns prebuilt, verified helper modules under `../_shared/` that you MUST reuse instead of re-deriving their logic. For a `request-transform` module set `"requestTransformModule": "../_shared/<name>.ts"` in workflow.json; for a `parser-helper`/`types` module `import` it in `parser.ts` (e.g. `import { decode } from '../_shared/decode.ts'`). The read_build_plan slice also carries `parserGuidance`, a `paramChecklist`, and an `authRecipe` — when `authRecipe.required` is true, replicate the exact login request + `${state.X}` captures it describes inline as request[0] of your workflow (the runtime has no shared-auth primitive, so each tool logs in itself, but the recipe keeps every tool consistent). You cannot write files under `_shared/` — those modules are already built; just import them. The verifier fails this tool if an assigned module is not imported.
+
    **Dual-pass value classifications.** When `stateHints` includes entries with `type: “dual_pass_value_classification”`, these values were verified to differ across two independent executions of the same workflow with identical user inputs. They are the highest-confidence signal for ephemeral state — treat them seriously, but reason about them rather than following blindly:
 
    - **`server_derived`**: The value differed and was found in a prior response. The hint includes `producerSeq` and `producerPath` telling you exactly where to capture from. Add a `captures` entry on the producer request and reference via `${state.NAME}`.
@@ -111,6 +113,7 @@ Follow these steps to compile the session:
    - For JSON-keyed APIs: traverse the object, pull out the fields the user cares about, return a clean object
    - For JSPB: use `search_response_body` to find anchors (airport codes, dates, prices, airline names from narration), inspect the structure around those offsets, hypothesize the array indices, write extraction logic
    - Return a named-field object, not the raw input — the goal is to make the data usable by an AI agent without further parsing
+   - **Drop content-less records.** Some APIs signal "no match" not with an empty array but with a single placeholder record whose identifying fields are all empty/null (the recording, which only has hits, never shows this). When you map a list, filter out any record whose key identifying fields (id/code/name/the primary label your tool returns) are all empty or null — that is the API's no-match sentinel, not a result. A content-less record must never reach the output; an all-empty mapped row is always wrong.
 
 9. **Write parser.test.ts.** Create a `bun:test` suite:
    - **Load the response body from the redacted session at runtime via `process.env.IMPRINT_SESSION_PATH`.** The harness sets that env var to the absolute path of the redacted session file when it spawns `bun test`. Do NOT write a fixture file. Do NOT inline the response body as a string literal. The boilerplate looks like:
@@ -137,6 +140,18 @@ Follow these steps to compile the session:
    - Call `extract(raw)` and assert on the result.
    - Assertions must reference real values from the narration: `expect(result.flights.length).toBeGreaterThan(0)`, `expect(result.flights.some(f => f.origin === 'SFO')).toBe(true)`, `expect(result.flights[0].price).toBeGreaterThan(0)`.
    - Aim for at least 5 assertions — more is better.
+   - **Empty-result contract (required test).** `extract()` MUST return a clean empty collection for a no-match / empty upstream response — an empty array, or the success shape with its items array empty / count 0 — and NEVER a single placeholder record full of nulls. The recording has no zero-result example, so verify it with a synthetic case: add exactly one test whose title begins `synthetic:empty-result` that constructs an empty version of the response (same top-level shape as the recorded success, but with the items array empty / results null / count 0) and asserts the parser yields empty, not a phantom row:
+     ```typescript
+     test('synthetic:empty-result returns an empty list, not a phantom record', () => {
+       // Same top-level shape as the recorded success response, but no items.
+       const emptyResponse = { /* …e.g. results: [], count: 0 … */ };
+       const out = extract(emptyResponse as never);
+       const items = (out as { items?: unknown[] }).items ?? [];
+       expect(Array.isArray(items)).toBe(true);
+       expect(items.length).toBe(0);
+     });
+     ```
+     Match the assertion to your tool's actual success shape (the collection field you return). For a single-object tool, assert that a no-match response yields an empty / empty-object result rather than a record of nulls. The verifier requires this `synthetic:empty-result` test to be present AND to pass.
 
    The session under `sessions/` is gitignored (auth tokens / PII risk) and the test file is deleted after verification passes — together that means the test is local-and-ephemeral by design. Don't try to persist the response body to disk to dodge the env var.
 
@@ -185,6 +200,8 @@ Follow these steps to compile the session:
 
     **Per-parameter coverage tests.** Beyond the baseline test above, you must write one integration test for **every parameter that has a non-default value in any captured request** (visible in `inlineData.requestBodyDecoded` or via `read_request`). Walk every recorded request, decode its body, and enumerate the set of `(paramName, nonDefaultValue)` tuples. Each tuple is a coverage unit — write a test that overrides that param and asserts a constraint on the response.
 
+    **Title each per-parameter test `param:<name> …`** — begin the title with the literal token `param:` followed by the exact parameter name (e.g. `test('param:max_price=50 constrains all results', …)`). The verifier determines coverage by which `param:<name>` tests **actually ran green against live data**, not by scanning the source: a test that is merely present but did not pass — or a whole suite that was waived by anti-bot — does NOT count as coverage. Each per-parameter test MUST call `runWorkflowWithLadder` with the override value (a test that asserts a constant without calling the workflow is rejected).
+
     These tests are the only signal that each parameter actually reaches the API and affects the response. If a parameter is wired into a position the server ignores (an invented URL query param, a slot guessed wrong in a positional JSPB body), the test fails because the filtered response will look like the unfiltered one. Skipping a parameter means shipping it untested.
 
     **Pick discriminating values.** A test that doesn't constrain anything is a false-pass. Before using a value from the recording, cross-check the recorded response: does setting the param to that value measurably change the response compared to baseline (fewer results, different price range, different shape)? If yes, use it. If no — e.g., the recording has `max_results=1000` but baseline only returns 20 items so the filter is a no-op — derive a tighter value from the baseline response (e.g., a value below the median) that actually splits the results, and use that.
@@ -197,10 +214,10 @@ Follow these steps to compile the session:
     // the API, but its effect on the response is unverified.
     ```
 
-    The annotation satisfies the verifier coverage check but surfaces the gap in the verifier output so the user knows what's untested.
+    The annotation prevents the missing-coverage check from BLOCKING compile — but it does NOT mark the parameter verified. The parameter ships flagged `verified:false` in `workflow.json`, the gap is surfaced in the verifier output, and the audit harness is told to probe it specifically. Use the annotation only when you genuinely cannot derive a discriminating value — never as a shortcut to skip writing a real test.
 
     ```typescript
-    test('max_price=50 constrains all results', async () => {
+    test('param:max_price=50 constrains all results', async () => {
       const params: Record<string, string | number | boolean> = {
         /* same defaults as baseline, but override: */
         max_price: 50,
@@ -223,7 +240,43 @@ Follow these steps to compile the session:
 
     Write one test per parameter — do NOT batch unrelated params into a single test ("all four time-range params in one test" lets you skip dimensions silently and reduces the chance any one filter fails an assertion if it's broken). One param per test, one constraint per test, one assertion per constraint.
 
-    **Enum-like parameters.** When a parameter has more than two distinct values across `requestBodyDecoded` of the recorded requests (e.g., `sort_by` recorded with values `price`, `duration`, AND `rating`), write one test per distinct value rather than picking a single override. Cap at 5 distinct values per param to keep scope reasonable; if the recording has more, pick the 5 most semantically diverse. Each enum-value test still needs an assertion that the response is constrained to that value — e.g., `sort_by=price` should produce results sorted by price, not just a copy of the baseline. Testing one value when three were exercised silently ships two unverified response shapes.
+    **Enum-like parameters.** When a parameter has more than two distinct values across `requestBodyDecoded` of the recorded requests (e.g., `sort_by` recorded with values `price`, `duration`, AND `rating`), write one test per distinct value rather than picking a single override (title each `param:<name>=<value> …`, e.g. `param:sort_by=price …`). Cap at 5 distinct values per param to keep scope reasonable; if the recording has more, pick the 5 most semantically diverse. Each enum-value test still needs an assertion that the response is constrained to that value — e.g., `sort_by=price` should produce results sorted by price, not just a copy of the baseline. Testing one value when three were exercised silently ships two unverified response shapes.
+
+    **Producer-sourced (chained) token parameters.** Some parameters are opaque tokens/ids a user never types — their value is minted by a SIBLING tool in this same site (e.g. a `search_*` tool returns per-item ids that a `get_*_details` tool consumes). The build plan flags these two ways and you must honor both:
+
+    - **If THIS tool is the PRODUCER** (your `read_build_plan` slice lists `emitsTokens`): your parser MUST emit each listed `field` in the exact `shape` the consumer needs — the FULL value (e.g. a pipe-joined composite of id + context), never a bare fragment the consumer cannot use. A consumer's correctness depends on getting the complete value from you.
+
+    - **If THIS tool is the CONSUMER** (your slice lists `tokenParams` as `{param, sourceTool, sourceField}`): the recorded value for that param is stale and tool-specific, so a test that reuses it proves nothing. Write the `param:<param>` test to mint a FRESH value by calling the producer, then feed it here:
+
+      ```typescript
+      test('param:<param> uses a fresh token minted by <sourceTool>', async () => {
+        const credentials = (await loadCredentialStore(WORKFLOW.site)) ?? undefined;
+        // 1. Mint a fresh value from the producer tool's live output.
+        const producer = await runWorkflowWithLadder({
+          workflowPath: new URL('../<sourceTool>/workflow.json', import.meta.url).pathname,
+          params: { /* realistic producer params */ },
+          credentials,
+        });
+        // Rethrow so a producer anti-bot/infra block WAIVES this suite (it does
+        // not falsely pass): the verifier treats a vendor-block message as waived.
+        if (!producer.result.ok) throw new Error(`producer <sourceTool> failed: ${JSON.stringify(producer.result)}`);
+        const fresh = (producer.result.data as any).<sourceField>; // or items[0].<sourceField>
+        expect(fresh).toBeTruthy();
+        // 2. Feed the FRESH value into this tool and assert a real, non-empty result.
+        const { result } = await runWorkflowWithLadder({
+          workflowPath: WORKFLOW_PATH,
+          params: { /* baseline */ , <param>: fresh },
+          credentials,
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          const data = result.data as { items?: unknown[] };
+          expect((data.items ?? []).length).toBeGreaterThan(0);
+        }
+      }, 60_000);
+      ```
+
+      The verifier REQUIRES this chained shape for a producer-sourced param: a `param:<param>` test that calls only this tool's own `WORKFLOW_PATH` (reusing the recorded constant) is rejected as **unchained**. If the fresh value yields an empty/failed result, the producer/consumer contract is broken — **fix the PRODUCER to emit the full value this tool consumes** (or fix how this tool unpacks it); never paper over it with the recorded constant.
 
     **This file is ephemeral** like parser.test.ts — deleted after verification unless `--keep-test` is passed.
 
@@ -236,11 +289,17 @@ Follow these steps to compile the session:
     - Repeat until all tests pass
 
     **Escalation rules for integration test failures:**
-    - If the integration test returns 403/429 with bot-detection signatures (PerimeterX, DataDome, Akamai, CAPTCHA), try at most **4 different approaches** (e.g., add bootstrap, try stealth-fetch). If all fail, **call `done` immediately** — the verification harness retries 3 times and will handle transient blocks. Do not spend more turns on bot-detection workarounds.
+    - If the integration test is blocked by anti-automation / bot defense, try at most **4 different approaches** (e.g., add bootstrap, try stealth-fetch). If all fail, **call `done` immediately** — the verification harness retries 3 times and treats bot-detection as a non-blocking warning since your parser is already verified against the recorded response, and the runtime ladder's stealth-fetch + playbook rungs bypass these defenses at call time. Do not spend more turns on bot-detection workarounds, and do NOT `give_up`. Bot defense takes many forms beyond a 403 — recognize all of them: blocking statuses (`403`/`429`/`503`) with vendor signatures (PerimeterX, DataDome, Akamai, Cloudflare, reCAPTCHA/hCaptcha), AND redirect-to-challenge responses (a `30x` redirect whose `Location` is a CAPTCHA / interstitial / "verify you're human" / "unusual traffic" page instead of the API's data). A redirect to a challenge page is bot detection, not a workflow error — call `done`.
     - If the integration test returns 400 or assertion failures on response shape, the workflow is wrong — fix it.
     - If the integration test returns 401, check if the workflow needs a login chain or credential capture.
 
-13. **Claim completion.** When parser tests pass, call `done`. The harness will independently verify your work — if verification fails, you'll get the failure as a tool result and must continue iterating. **Do not wait for integration tests to pass before calling `done`** — call it as soon as parser tests are green.
+13. **Verify parameter fidelity before finishing.** A generated tool must NEVER advertise a parameter it does not actually apply. Before you call `done`, for EACH exposed parameter that should influence the request (filters, options, dates, toggles, mode/variant selectors):
+    - Locate at least one recorded request where that parameter has a non-default / distinguishing value. Set the parameter to that recorded value, construct the request, and confirm the constructed request reproduces the recorded request's encoding of that parameter — same field, same array position, same value/type. This is a **static check against the recorded session**, not a live API call: use `read_request`, `read_response_body`, `search_response_body`, `run_bash`, and `run_tests` to compare what you build against what the recording shows.
+    - **When a shared request-transform (or any shared helper) constructs the request, pass parameters using the EXACT names and types that helper consumes.** Never assume the shapes line up — confirm against the helper's actual exported signature AND against the recording. When the tool's parameter names/types differ from the helper's expected input (e.g. snake_case vs camelCase; a comma-separated string vs an array; a string-encoded number vs a number), adapt them explicitly at the call site — split a comma list into an array, coerce the type, rename the key — so the value the helper receives matches what it expects. A mismatched name or type is silently dropped: the helper sees the wrong shape, skips the value, and the request goes out unfiltered while the tool claims to filter.
+    - **Never hardcode a single recorded variant of the request when the tool exposes a parameter meant to vary it.** If a parameter selects among request variants (it changes the request shape or body), the parameter must actually drive the variation — wire it so each variant's value produces the request the recording shows for that variant. Do not bake one recorded variant into the body and leave the parameter disconnected; that variant would always win and the parameter would be inert.
+    - **If a parameter's effect cannot be reproduced from the recorded data** — you cannot locate its encoding, or the recording never demonstrates it — after honest effort do NOT silently ship it as if it worked. Add the `// exposed-but-not-verified` annotation to its coverage test so it ships flagged `verified:false` (templated and reaching the API, but with its effect unconfirmed). It stays on the tool surface — keep + mark, never silently drop — and the gap is surfaced to the operator and the audit harness. (Distinct from `likelyParams` that the recording shows in a `null`/`[]` position — those have a confirmed insertion point and are verified normally; this is for parameters with no confirmable encoding at all.)
+
+14. **Claim completion.** When parser tests pass, call `done`. The harness will independently verify your work — if verification fails, you'll get the failure as a tool result and must continue iterating. **Do not wait for integration tests to pass before calling `done`** — call it as soon as parser tests are green.
 
 ## Efficiency Rules
 
@@ -373,6 +432,8 @@ Assertions must reference real values derived from the narration or response str
 
 8. **Do not ignore `likelyParams` from the candidate detector.** If `selectedCandidate.likelyParams` lists a parameter but the recorded request has `null` or `[]` in that position, it means the user didn't apply that filter/constraint during recording — NOT that the parameter doesn't exist. Template it anyway as an optional parameter with a default meaning "unfiltered." Then mark it in `integration.test.ts` with `// exposed-but-not-verified: not exercised in recording` so the verifier and downstream readers know the parameter is templated but its server-side effect is untested. Do not silently expose unexercised parameters — every declared parameter must either have a discriminating integration test or carry the annotation.
 
+9. **Do not advertise a parameter you do not actually apply.** Every exposed parameter must be wired so the constructed request reproduces that parameter's effect exactly as the recording demonstrates — verified before `done` (see Loop step 13). Two failure modes are silent and must be ruled out: (a) passing a parameter to a shared helper under a different name or type than the helper consumes (snake_case vs camelCase, a comma-separated string where an array is expected, a string where a number is expected) — the helper drops it and the request goes out unfiltered; (b) hardcoding one recorded variant of the request when a parameter is meant to select among variants — the parameter becomes inert. If you cannot reproduce a parameter's encoding from the recording after honest effort, remove the parameter rather than ship it un-applied.
+
 ## When `give_up` is Appropriate (Narrow)
 
 You may call `give_up` only in these cases:
@@ -385,7 +446,7 @@ You may call `give_up` only in these cases:
 
 4. **Authentication is fundamentally broken.** Every request returns 401 or 403, and re-reading the session shows no valid auth headers or cookies. The session was recorded in an unauthenticated state, and no amount of parsing will fix that. Recommend the user run `imprint login <site>` and re-record.
 
-5. **Bot detection blocks the live API after multiple bypass attempts.** If the integration test consistently returns 403 with bot-detection signatures (PerimeterX, DataDome, Akamai, CAPTCHA) and you've tried 4+ different approaches (bootstrap, stealth-fetch, different headers) without success, give up. The workflow and parser are likely correct — the endpoint requires browser-level interaction that fetch-based replay cannot provide. Recommend the user add a playbook-based backend for this site.
+5. **Bot detection is NOT a reason to `give_up`.** If the integration test is consistently blocked by anti-automation defense (a blocking status like 403/429/503 with vendor signatures, OR a redirect to a CAPTCHA/interstitial/"verify you're human" page) and your parser already passes against the recorded response, call **`done`** — NOT `give_up`. The harness treats bot-detection as a non-blocking warning and ships the verified tool; the runtime ladder's stealth-fetch + playbook rungs bypass these defenses at call time. Calling `give_up` here would throw away a correct, working tool.
 
 In all cases, the `give_up` call must include a `what_was_tried` field listing concrete approaches and why each failed. "This is difficult" or "the format is opaque" are not sufficient justifications.
 
@@ -404,6 +465,7 @@ The goal is a working tool, not a perfect tool. You can always refine later. Get
 | Tool | Purpose |
 |---|---|
 | `read_session_summary` | Returns site, narration, request count, list of load-bearing requests with seq+url+status+mimeType+bodySize |
+| `read_build_plan` | (multi-tool runs only) Returns this tool's plan slice: shared modules to import, parser guidance, parameter checklist, the auth recipe to replicate inline, and the opaque-token contract (`emitsTokens` you must produce for siblings, `tokenParams` you consume from siblings) |
 | `read_request` | Full request including request body for a given seq |
 | `read_response_body` | Response body for a given seq (paginated for large bodies via offset/length) |
 | `search_response_body` | Find substrings in a response body and return matching offsets+context (essential for anchoring on known values inside opaque JSPB) |
@@ -425,6 +487,7 @@ When you call `done`, the harness independently verifies your work:
 5. **Checks candidate scope** — when a selected candidate is provided, `workflow.toolName` must exactly match that candidate's `toolName`
 6. **Checks likelyParams coverage** — when the selected candidate includes `likelyParams`, every parameter must be templated as `${param.NAME}` in at least one request's URL, body, or headers. Parameters that exist in the `parameters` array but aren't referenced in any request will fail this check — they must be wired into the actual API call.
 7. **Runs integration test** — `bun test integration.test.ts` must exit 0. This makes a live API call and verifies the workflow returns real data. If it fails, the workflow has hardcoded/expired values or missing URL signing.
+8. **Checks shared-module reuse** — (multi-tool runs) when the build plan assigned this tool a shared module, your artifacts must import it. A `request-transform` module must be wired as `workflow.json`'s `"requestTransformModule": "../_shared/<name>.ts"`; a `parser-helper`/`types` module must be imported in `parser.ts`. Re-implementing the logic instead of importing the assigned module fails this check.
 
 If any check fails, you get the failure as a tool result and must continue working. You cannot fake completion.
 

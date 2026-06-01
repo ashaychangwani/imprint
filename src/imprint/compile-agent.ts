@@ -16,10 +16,16 @@ import {
   giveUpTool,
   runAgentLoop,
 } from './agent.ts';
+import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import { compileViaClaudeCli } from './claude-cli-compile.ts';
 import { compileViaCodexCli } from './codex-cli-compile.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
-import { buildCompileTools, externalVerification } from './compile-tools.ts';
+import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
+import {
+  applyParamVerification,
+  buildCompileTools,
+  externalVerification,
+} from './compile-tools.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import {
   type LLMOptions,
@@ -84,12 +90,28 @@ interface CompileAgentOptions {
   classifications?: ClassifiedValue[];
   /** Credential values extracted during teach, passed to integration tests via env var. */
   teachCredentials?: { site: string; values: Record<string, string> };
+  /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). */
+  buildPlanPath?: string;
+  /** Shared-module build manifest for this site (verified flags). */
+  sharedModules?: SharedModuleManifestEntry[];
   /** Called when wall-clock deadline is reached; return ms to extend or null to time out. */
   onDeadlineReached?: OnDeadlineReached;
+  /** Per-tool implementation plan (param→field mapping, request construction,
+   *  response parsing, shared-module imports). Injected into the agent's initial
+   *  message so the compile follows it. Generic — not tied to any site. */
+  toolPlan?: string;
 }
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
   const startTime = Date.now();
+  // Resolve the shared modules + token contracts the plan assigned this tool, so
+  // the in-process verifier can assert modules are imported and require a chained
+  // test for each producer-sourced token param.
+  const { assignedSharedModules, tokenParams, emittedTokens } = resolvePlanSliceFromFile(
+    opts.buildPlanPath,
+    opts.candidate?.toolName,
+    opts.sharedModules,
+  );
 
   // 1. Load + validate the session
   let session: Session = loadJsonFile(
@@ -181,6 +203,8 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
       sharedContext: opts.sharedContext,
       classifications: opts.classifications,
       teachCredentials: opts.teachCredentials,
+      buildPlanPath: opts.buildPlanPath,
+      sharedModules: opts.sharedModules,
     }),
     doneTool(),
     giveUpTool(),
@@ -192,7 +216,8 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
 Session path: ${sessionPathAbs}
 Tool directory: ${absoluteToolDir}
 You will write artifacts into the tool directory.
-${formatCandidateContext(opts.candidate, opts.sharedContext)}
+${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModules)}
+${formatToolPlan(opts.toolPlan)}
 
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
 
@@ -221,6 +246,9 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         keepTest: opts.keepTest,
         candidate: opts.candidate,
         sharedContext: opts.sharedContext,
+        buildPlanPath: opts.buildPlanPath,
+        sharedModules: opts.sharedModules,
+        toolPlan: opts.toolPlan,
       });
     }
     if (resolvedProvider.name === 'codex-cli') {
@@ -235,6 +263,9 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         keepTest: opts.keepTest,
         candidate: opts.candidate,
         sharedContext: opts.sharedContext,
+        buildPlanPath: opts.buildPlanPath,
+        sharedModules: opts.sharedModules,
+        toolPlan: opts.toolPlan,
       });
     }
     if (!isToolUseProvider(resolvedProvider)) {
@@ -300,7 +331,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     // Perform external verification
-    const { failures, warnings } = await externalVerification(
+    const { failures, warnings, paramVerification } = await externalVerification(
       absoluteToolDir,
       session,
       sessionPathAbs,
@@ -308,6 +339,9 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         expectedToolName: opts.candidate?.toolName,
         likelyParams: opts.candidate?.likelyParams,
         candidateRequestSeqs: opts.candidate?.requestSeqs,
+        assignedSharedModules,
+        tokenParams,
+        emittedTokens,
       },
     );
 
@@ -316,10 +350,16 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     if (failures.length === 0) {
-      // Success (possibly with warnings)
+      // Success (possibly with warnings). Persist per-parameter verified flags
+      // into workflow.json and fold any "live-unverified" note into the warnings.
+      const paramWarnings = applyParamVerification(absoluteToolDir, paramVerification);
+      const allWarnings = [...warnings, ...paramWarnings];
+      if (paramWarnings.length > 0) {
+        log(`parameter verification:\n${paramWarnings.join('\n')}`);
+      }
       message = result.doneSummary ?? 'Task completed';
-      if (warnings.length > 0) {
-        message += `\n\nWarnings:\n${warnings.join('\n')}`;
+      if (allWarnings.length > 0) {
+        message += `\n\nWarnings:\n${allWarnings.join('\n')}`;
       }
       if (!opts.keepTest) {
         for (const f of ['parser.test.ts', 'integration.test.ts']) {
@@ -386,19 +426,4 @@ function buildMessageFromOutcome(result: AgentResult): string {
     default:
       return 'Unknown outcome';
   }
-}
-
-function formatCandidateContext(
-  candidate: ToolCandidate | undefined,
-  sharedContext: SharedCompileContext | undefined,
-): string {
-  if (!candidate && !sharedContext) return '';
-  return `
-Selected candidate context:
-${candidate ? JSON.stringify(candidate, null, 2) : '(none)'}
-
-Shared compile context:
-${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
-
-Compile only the selected candidate. Do not create tools for other actions in the recording.`;
 }

@@ -215,11 +215,19 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
       opts.onProgress?.(i + 1, replayableEvents.length, captured.length);
     }
 
-    // Allow final network requests to settle
+    // Allow final network requests to settle, but never block forever: on a
+    // large recording a single hung response-body read can stall allSettled
+    // indefinitely (there is no outer timeout on the replay stage). Cap the
+    // wait and proceed with whatever bodies are ready — replay-diff is
+    // best-effort, so partial captures are acceptable.
+    const SETTLE_TIMEOUT_MS = 15_000;
     replayLog('waiting for networkidle...');
-    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: SETTLE_TIMEOUT_MS }).catch(() => {});
     await page.waitForTimeout(1000);
-    await Promise.allSettled(pendingReads);
+    await Promise.race([
+      Promise.allSettled(pendingReads),
+      new Promise<void>((resolve) => setTimeout(resolve, SETTLE_TIMEOUT_MS)),
+    ]);
     captured.sort((a, b) => a.seq - b.seq);
 
     replayLog(`replay complete: captured ${captured.length} requests total`);

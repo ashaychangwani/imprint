@@ -29,7 +29,9 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
 import type { OnDeadlineReached } from './agent.ts';
+import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
+import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
@@ -96,6 +98,12 @@ interface CompileViaClaudeCliOptions {
   keepTest?: boolean;
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
+  /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). */
+  buildPlanPath?: string;
+  /** Shared-module build manifest for this site (verified flags). */
+  sharedModules?: SharedModuleManifestEntry[];
+  /** Per-tool implementation plan injected into the agent's initial message. */
+  toolPlan?: string;
 }
 
 interface StreamJsonEvent {
@@ -236,17 +244,27 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
           ...(opts.sharedContext
             ? ['--shared-context-json', JSON.stringify(opts.sharedContext)]
             : []),
+          ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
+          ...(opts.sharedModules
+            ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)]
+            : []),
         ],
       },
     },
   };
 
+  const { assignedSharedModules } = resolvePlanSliceFromFile(
+    opts.buildPlanPath,
+    opts.candidate?.toolName,
+    opts.sharedModules,
+  );
   const initialPrompt = `A new compile task is starting.
 
 Session path: ${sessionPathAbs}
 Tool directory: ${opts.absoluteToolDir}
 You will write artifacts into the tool directory.
-${formatCandidateContext(opts.candidate, opts.sharedContext)}
+${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModules)}
+${formatToolPlan(opts.toolPlan)}
 
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
 
@@ -281,6 +299,8 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     `mcp__${MCP_SERVER_NAME}__run_bash`,
     '--allowedTools',
     `mcp__${MCP_SERVER_NAME}__run_tests`,
+    '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__read_build_plan`,
     '--allowedTools',
     `mcp__${MCP_SERVER_NAME}__done`,
     '--allowedTools',
@@ -682,21 +702,6 @@ function finalErrorResult(opts: CompileViaClaudeCliOptions, message: string): Co
     cacheReadInputTokens: 0,
     cacheCreationInputTokens: 0,
   };
-}
-
-function formatCandidateContext(
-  candidate: ToolCandidate | undefined,
-  sharedContext: SharedCompileContext | undefined,
-): string {
-  if (!candidate && !sharedContext) return '';
-  return `
-Selected candidate context:
-${candidate ? JSON.stringify(candidate, null, 2) : '(none)'}
-
-Shared compile context:
-${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
-
-Compile only the selected candidate. Do not create tools for other actions in the recording.`;
 }
 
 function errMsg(err: unknown): string {

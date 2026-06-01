@@ -8,9 +8,16 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join as pathJoin, relative as pathRelative } from 'node:path';
+import { basename, dirname, join as pathJoin, relative as pathRelative } from 'node:path';
 import type { AgentTool } from './agent.ts';
 import { inferAppApiHosts } from './app-api-hosts.ts';
+import {
+  type AssignedSharedModule,
+  type SharedModuleManifestEntry,
+  planSliceForTool,
+  readBuildPlanFile,
+  resolveAssignedModules,
+} from './build-plan.ts';
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
@@ -36,7 +43,7 @@ export function buildCompileTools(
   const credEnv = context.teachCredentials
     ? { IMPRINT_TEACH_CREDENTIALS: JSON.stringify(context.teachCredentials) }
     : undefined;
-  return [
+  const tools = [
     buildReadSessionSummaryTool(session, context),
     buildReadRequestTool(session),
     buildReadResponseBodyTool(session),
@@ -46,6 +53,16 @@ export function buildCompileTools(
     buildRunBashTool(toolDir, credEnv),
     buildRunTestsTool(toolDir, sessionPath, credEnv),
   ];
+  if (context.buildPlanPath && context.candidate?.toolName) {
+    tools.push(
+      buildReadBuildPlanTool(
+        context.buildPlanPath,
+        context.candidate.toolName,
+        context.sharedModules,
+      ),
+    );
+  }
+  return tools;
 }
 
 interface CompileToolContext {
@@ -53,6 +70,76 @@ interface CompileToolContext {
   sharedContext?: SharedCompileContext;
   classifications?: ClassifiedValue[];
   teachCredentials?: { site: string; values: Record<string, string> };
+  /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). When
+   *  set, a read_build_plan tool is exposed and the verifier asserts the tool
+   *  imports the shared modules the plan assigned it. */
+  buildPlanPath?: string;
+  /** Shared-module build manifest (verified flags) for this site. */
+  sharedModules?: SharedModuleManifestEntry[];
+}
+
+// ─── Tool: read_build_plan ───────────────────────────────────────────────────
+
+function buildReadBuildPlanTool(
+  buildPlanPath: string,
+  toolName: string,
+  manifest?: SharedModuleManifestEntry[],
+): AgentTool {
+  return {
+    name: 'read_build_plan',
+    description:
+      "Read this tool's slice of the shared build plan: shared modules to import (instead of re-implementing), parser guidance, the parameter checklist, the auth recipe to replicate inline, and the opaque-token contract (fields this tool must EMIT for siblings, and params it CONSUMES from siblings).",
+    input_schema: { type: 'object', properties: {}, required: [] },
+    handler: async () => {
+      const plan = readBuildPlanFile(buildPlanPath);
+      if (!plan) return { result: 'No build plan available for this run.' };
+      const slice = planSliceForTool(plan, toolName);
+      if (!slice) return { result: `No build-plan slice for tool "${toolName}".` };
+      const assigned = resolveAssignedModules(plan, toolName, manifest).filter((m) => m.verified);
+      const emitsTokens = slice.tool.emitsTokens ?? [];
+      const tokenParams = slice.tool.tokenParams ?? [];
+      const tokenNotes: string[] = [];
+      if (emitsTokens.length > 0) {
+        tokenNotes.push(
+          `PRODUCER CONTRACT: your parser MUST emit ${emitsTokens
+            .map((e) => `\`${e.field}\``)
+            .join(
+              ', ',
+            )} in each result item, in the exact shape described (the FULL value a sibling consumer needs — never a bare fragment). Sibling tools mint their input from these fields; the verifier fails this tool if a declared field is missing from the parser output.`,
+        );
+      }
+      for (const tp of tokenParams) {
+        tokenNotes.push(
+          `CONSUMER CONTRACT: param \`${tp.param}\` is an opaque token minted by the \`${tp.sourceTool}\` tool's \`${tp.sourceField}\` output. Write a CHAINED \`param:${tp.param}\` integration test that calls \`runWorkflowWithLadder\` on \`../${tp.sourceTool}/workflow.json\`, reads \`${tp.sourceField}\` from its result, and passes THAT fresh value (not the recorded constant) into this tool — then asserts the response is non-empty. On producer bot/infra error, rethrow so the suite waives.`,
+        );
+      }
+      return {
+        result: JSON.stringify(
+          {
+            toolName,
+            sharedModulesToImport: assigned.map((m) => ({
+              importPath: m.importPath,
+              kind: m.kind,
+              purpose: m.purpose,
+              exportSignatures: m.exportSignatures,
+            })),
+            parserGuidance: slice.tool.parserGuidance,
+            paramChecklist: slice.tool.paramChecklist,
+            authRecipe: slice.tool.authRecipe,
+            emitsTokens,
+            tokenParams,
+            note:
+              assigned.length > 0
+                ? 'Import the listed shared modules via their importPath (request-transform → set workflow.json "requestTransformModule"; parser-helper/types → import from parser.ts) instead of re-implementing their logic. The verifier fails this tool if an assigned module is not imported.'
+                : 'No shared modules assigned — build this tool self-contained.',
+            tokenContract: tokenNotes.length > 0 ? tokenNotes : undefined,
+          },
+          null,
+          2,
+        ),
+      };
+    },
+  };
 }
 
 // ─── Tool: read_session_summary ──────────────────────────────────────────────
@@ -943,7 +1030,7 @@ function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): Ag
   };
 }
 
-async function runCommand(
+export async function runCommand(
   command: string,
   cwd: string,
   timeoutMs: number,
@@ -997,19 +1084,25 @@ async function runCommand(
   });
 }
 
-async function runGeneratedArtifactTypecheck(
-  exampleDir: string,
+/** Typecheck a set of generated `.ts` artifacts in `dir` against the repo's
+ *  tsconfig (so `imprint/*` and bun globals resolve). Used by both the compile
+ *  verifier (parser.ts / request-transform.ts) and the prereq-module verifier
+ *  (`_shared/*.ts`). `*.test.ts` are excluded — they pull in bun:test globals
+ *  the strict config rejects. Exported for prereq-builder.ts. */
+export async function typecheckArtifacts(
+  dir: string,
+  includes: string[],
 ): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
-  const configPath = pathJoin(exampleDir, '.imprint-typecheck.tsconfig.json');
+  const configPath = pathJoin(dir, '.imprint-typecheck.tsconfig.json');
   const rootTsconfig = pathJoin(REPO_ROOT, 'tsconfig.json');
-  const extendsPath = normalizeTsconfigPath(pathRelative(exampleDir, rootTsconfig));
+  const extendsPath = normalizeTsconfigPath(pathRelative(dir, rootTsconfig));
 
   writeFileSync(
     configPath,
     JSON.stringify(
       {
         extends: extendsPath,
-        include: ['parser.ts', 'request-transform.ts'],
+        include: includes,
         exclude: ['*.test.ts'],
       },
       null,
@@ -1021,7 +1114,7 @@ async function runGeneratedArtifactTypecheck(
   try {
     const result = await runCommand(
       'bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json',
-      exampleDir,
+      dir,
       120000,
     );
     return JSON.parse(result.result) as {
@@ -1042,41 +1135,6 @@ async function runGeneratedArtifactTypecheck(
 function normalizeTsconfigPath(value: string): string {
   const normalized = value.replace(/\\/g, '/');
   return normalized.startsWith('.') ? normalized : `./${normalized}`;
-}
-
-/** Strip a line comment (`// ...`) while preserving `//` inside string literals. */
-function stripLineComment(line: string): string {
-  let inSingle = false;
-  let inDouble = false;
-  let inTemplate = false;
-  let escaped = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (ch === "'" && !inDouble && !inTemplate) {
-      inSingle = !inSingle;
-      continue;
-    }
-    if (ch === '"' && !inSingle && !inTemplate) {
-      inDouble = !inDouble;
-      continue;
-    }
-    if (ch === '`' && !inSingle && !inDouble) {
-      inTemplate = !inTemplate;
-      continue;
-    }
-    if (!inSingle && !inDouble && !inTemplate && ch === '/' && line[i + 1] === '/') {
-      return line.slice(0, i);
-    }
-  }
-  return line;
 }
 
 // ─── Tool: run_tests ─────────────────────────────────────────────────────────
@@ -1138,7 +1196,467 @@ function buildRunTestsTool(
   };
 }
 
+// ─── Test-quality helpers (shared with prereq-builder verification) ─────────
+
+/** Tautological assertions that prove nothing — rejected by every verifier so
+ *  an agent can't game the ≥3-expect gate with `expect(true).toBe(true)`. */
+const TRIVIAL_ASSERTION_PATTERNS: RegExp[] = [
+  /expect\s*\(\s*true\s*\)\.toBe\s*\(\s*true\s*\)/,
+  /expect\s*\(\s*false\s*\)\.toBe\s*\(\s*false\s*\)/,
+  /expect\s*\(\s*1\s*\)\.toBe\s*\(\s*1\s*\)/,
+  /expect\s*\(\s*0\s*\)\.toBe\s*\(\s*0\s*\)/,
+  /expect\s*\(\s*null\s*\)\.toBeNull/,
+  /expect\s*\(\s*undefined\s*\)\.toBeUndefined/,
+  /expect\s*\(\s*"[^"]*"\s*\)\.toBe\s*\(\s*"[^"]*"\s*\)/,
+  /expect\s*\(\s*'[^']*'\s*\)\.toBe\s*\(\s*'[^']*'\s*\)/,
+];
+
+export function countExpectCalls(src: string): number {
+  return (src.match(/expect\s*\(/g) ?? []).length;
+}
+
+export function hasTrivialAssertion(src: string): boolean {
+  return TRIVIAL_ASSERTION_PATTERNS.some((pattern) => pattern.test(src));
+}
+
+/** Assert the tool imports each verified shared module the plan assigned it.
+ *  request-transform → workflow.json.requestTransformModule must point at it;
+ *  parser-helper/types → parser.ts (or request-transform.ts) must import it. */
+function assertSharedModuleImports(
+  toolDir: string,
+  workflowPath: string,
+  assigned: AssignedSharedModule[],
+): string[] {
+  const failures: string[] = [];
+  const verified = assigned.filter((m) => m.verified);
+  if (verified.length === 0) return failures;
+
+  let workflowRaw: { requestTransformModule?: unknown } = {};
+  try {
+    workflowRaw = JSON.parse(readFileSync(workflowPath, 'utf8'));
+  } catch {
+    return failures; // workflow parse already flagged elsewhere
+  }
+  const requestTransformModule =
+    typeof workflowRaw.requestTransformModule === 'string'
+      ? workflowRaw.requestTransformModule
+      : '';
+
+  let sourceBlob = '';
+  for (const f of ['parser.ts', 'request-transform.ts']) {
+    const p = pathJoin(toolDir, f);
+    if (existsSync(p)) sourceBlob += `\n${readFileSync(p, 'utf8')}`;
+  }
+
+  for (const m of verified) {
+    if (m.kind === 'request-transform') {
+      if (!requestTransformModule.includes(m.importPath) && !sourceBlob.includes(m.importPath)) {
+        failures.push(
+          `the build plan assigns shared module ${m.path} (request-transform) to this tool, but workflow.json does not set "requestTransformModule": "${m.importPath}" and no artifact imports it. Reuse it instead of re-implementing the logic — see read_build_plan.`,
+        );
+      }
+    } else if (!sourceBlob.includes(m.importPath)) {
+      failures.push(
+        `the build plan assigns shared module ${m.path} (${m.kind}) to this tool, but no artifact imports "${m.importPath}". Import it from parser.ts (or request-transform.ts) instead of re-implementing it — see read_build_plan.`,
+      );
+    }
+  }
+  return failures;
+}
+
 // ─── External Verification ──────────────────────────────────────────────────
+
+/**
+ * Decide whether a failed integration test was blocked by anti-automation /
+ * bot defense (as opposed to a real workflow defect). Compile-time integration
+ * tests only reach the fetch + fetch-bootstrap rungs; many sites gate their
+ * APIs behind challenges (CAPTCHA interstitials, redirect-to-challenge pages,
+ * rate-based blocks) that only the runtime ladder's stealth-fetch + playbook
+ * rungs bypass. When the parser is already verified against the recorded
+ * response, such a block should be a non-blocking warning, not a hard failure —
+ * the tool works in production via the full ladder.
+ *
+ * Vendor-agnostic by design: matches the common defense families (Cloudflare,
+ * Akamai, DataDome, PerimeterX, hCaptcha/reCAPTCHA, generic "unusual traffic"
+ * interstitials) plus blocking HTTP statuses (403/429/503) and
+ * redirect-to-challenge (30x to a challenge/verify/captcha location).
+ * Not specialized to any single site.
+ */
+export function isBotDefenseFailure(output: string): boolean {
+  // Unambiguous challenge/interstitial signatures — sufficient on their own,
+  // regardless of HTTP status, because no legitimate API success emits them.
+  // Vendor-neutral: covers the common anti-bot families, not any one site.
+  const strong =
+    /unusual traffic|recaptcha|hcaptcha|h-captcha|are you (a )?(human|robot)|verify (you are|you'?re) (a )?human|px-captcha|datadome|perimeterx|cf[-_]chl|attention required|just a moment\s*(\.\.\.|…)?|enable javascript and cookies to continue/i;
+  if (strong.test(output)) return true;
+  // Weaker terms need a corroborating blocking status or a redirect to a
+  // challenge page so ordinary error text doesn't get a free pass.
+  const weak =
+    /captcha|challenge|access denied|forbidden|blocked|\bbot\b|rate.?limit|too many requests/i;
+  const blockingStatus = /\b(403|429|503)\b/.test(output);
+  const challengeRedirect =
+    /\b(30[1-8])\b/.test(output) &&
+    /captcha|challenge|verify|robot|denied|blocked|unusual/i.test(output);
+  return (blockingStatus || challengeRedirect) && weak.test(output);
+}
+
+function unescapeXml(s: string): string {
+  return s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * Parse a JUnit XML report (from `bun test --reporter=junit`) into the sets of
+ * passed and failed test *names*. The default bun reporter does not print
+ * per-test names in non-TTY mode, so the JUnit report is the reliable way to
+ * know which individual tests actually ran green. A self-closed
+ * `<testcase .../>` passed; a `<testcase>` with a `<failure>`/`<error>` child
+ * failed.
+ */
+export function parseJUnitResults(xml: string): { passed: Set<string>; failed: Set<string> } {
+  const passed = new Set<string>();
+  const failed = new Set<string>();
+  if (!xml) return { passed, failed };
+  const re = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
+  for (const m of xml.matchAll(re)) {
+    const attrs = m[1] ?? '';
+    const nameMatch = attrs.match(/\bname="([^"]*)"/);
+    if (!nameMatch?.[1]) continue;
+    const name = unescapeXml(nameMatch[1]);
+    const selfClosed = m[2] === '/>';
+    const didFail = !selfClosed && /<(failure|error)\b/.test(m[3] ?? '');
+    if (didFail) failed.add(name);
+    else passed.add(name);
+  }
+  return { passed, failed };
+}
+
+interface BunTestRun {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  /** Per-test names recovered from the JUnit report. */
+  passed: Set<string>;
+  failed: Set<string>;
+}
+
+/** Per-exposed-parameter verification outcome. `verified` is true only when a
+ *  `param:<name>` integration test actually ran green against live data. */
+interface ParamVerification {
+  name: string;
+  verified: boolean;
+  /** Why an exposed param is unverified. Undefined when `verified` is true.
+   *  - `waived-bot` / `waived-infra`: the live suite was waived (anti-bot /
+   *    infra), so the param's effect could not be confirmed at compile time;
+   *    it is exercised at runtime via the stealth-fetch / playbook ladder.
+   *  - `annotated`: the agent marked it `// exposed-but-not-verified`.
+   *  - `waived-chain`: the param is a producer-sourced token but the producer
+   *    tool could not be run at compile time (anti-bot / not compiled), so the
+   *    chain could not be verified. */
+  reason?: 'waived-bot' | 'waived-infra' | 'annotated' | 'waived-chain';
+  /** For a producer-sourced token param, the sibling tool + output field its
+   *  value comes from. Stamped into workflow.json (`param.sourcedFrom`) so the
+   *  MCP description tells the orchestrating LLM where to mint it and the audit
+   *  harness chains producer→consumer instead of fabricating a token. */
+  sourcedFrom?: { tool: string; field: string };
+}
+
+/** A parameter the gate knows is an opaque token/id minted by a sibling tool.
+ *  `sourceTool`/`sourceField` are known when the build plan declared the contract;
+ *  a mechanically-detected source (its recorded value appears in a sibling tool's
+ *  response) may carry only the param name. Either way the param REQUIRES a
+ *  chained `param:<name>` test that mints a fresh value from the producer. */
+interface TokenSource {
+  param: string;
+  sourceTool?: string;
+  sourceField?: string;
+}
+
+/**
+ * Run a single `bun test <file>` and recover both the raw output (for
+ * bot-defense / infra detection and error surfacing) and the per-test pass/fail
+ * names via a JUnit report written to a transient file in the tool dir.
+ */
+async function runBunTestWithResults(
+  testPath: string,
+  toolDir: string,
+  timeoutMs: number,
+  env: Record<string, string> = {},
+): Promise<BunTestRun> {
+  const junitPath = pathJoin(toolDir, `.imprint-junit-${basename(testPath)}.xml`);
+  try {
+    if (existsSync(junitPath)) unlinkSync(junitPath);
+  } catch {
+    // best-effort
+  }
+  const result = await runCommand(
+    `bun test ${testPath} --reporter=junit --reporter-outfile=${junitPath}`,
+    toolDir,
+    timeoutMs,
+    env,
+  );
+  const output = JSON.parse(result.result) as { stdout: string; stderr: string; exitCode: number };
+  let xml = '';
+  try {
+    if (existsSync(junitPath)) xml = readFileSync(junitPath, 'utf8');
+  } catch {
+    // missing/partial report → empty sets, handled by callers
+  }
+  try {
+    if (existsSync(junitPath)) unlinkSync(junitPath);
+  } catch {
+    // best-effort
+  }
+  const { passed, failed } = parseJUnitResults(xml);
+  return {
+    stdout: output.stdout,
+    stderr: output.stderr,
+    exitCode: output.exitCode,
+    passed,
+    failed,
+  };
+}
+
+interface TestBlock {
+  title: string;
+  body: string;
+}
+
+/** Split a test file into `test(...)` / `it(...)` blocks (title + source from
+ *  that test's start to the next test's start). Good enough to check whether a
+ *  named per-parameter test's body actually calls the workflow. */
+export function extractTestBlocks(src: string): TestBlock[] {
+  const re = /\b(?:test|it)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g;
+  const starts: Array<{ index: number; title: string }> = [];
+  for (const m of src.matchAll(re)) {
+    starts.push({ index: m.index ?? 0, title: m[2] ?? '' });
+  }
+  const blocks: TestBlock[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i];
+    if (!start) continue;
+    const end = i + 1 < starts.length ? (starts[i + 1]?.index ?? src.length) : src.length;
+    blocks.push({ title: start.title, body: src.slice(start.index, end) });
+  }
+  return blocks;
+}
+
+/** Whether a recorded value looks like an opaque token/id (vs free text, a city
+ *  name, a date) — used to gate mechanical producer-source detection. */
+function looksOpaque(v: string): boolean {
+  if (v.length < 12) return false;
+  if (/\s/.test(v)) return false; // multi-word / free text
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return false; // dates
+  return /[:|_-]/.test(v) || /\d/.test(v) || v.length >= 16;
+}
+
+/**
+ * Mechanical producer-source detector (secondary signal to the build plan's
+ * declared `tokenParams`). A parameter is producer-sourced when its recorded
+ * value — or a `|`/`:`-split segment of a composite — appears verbatim in a
+ * SIBLING tool's recorded response. Returns the param name (and the producing
+ * tool name when the sibling response carried one). Advisory: it never marks a
+ * param verified; it only forces the chained-test requirement so an undeclared
+ * cross-tool token can't ship with a tautological recorded-value test.
+ */
+export function detectTokenSources(opts: {
+  likelyParams: Array<{ name: string }>;
+  recordedParamValues: Map<string, string>;
+  siblingResponses: Array<{ toolName?: string; body: string }>;
+}): TokenSource[] {
+  const out: TokenSource[] = [];
+  for (const lp of opts.likelyParams) {
+    const val = opts.recordedParamValues.get(lp.name);
+    if (!val || !looksOpaque(val)) continue;
+    const needles = [val, ...val.split(/[|:]/).filter((s) => looksOpaque(s))];
+    const hit = opts.siblingResponses.find((r) => needles.some((n) => r.body.includes(n)));
+    if (hit) out.push({ param: lp.name, sourceTool: hit.toolName });
+  }
+  return out;
+}
+
+/** Does a test block mint a fresh value by calling a SIBLING tool's workflow
+ *  (`../<producer>/workflow.json`) rather than only this tool's own workflow? */
+const SIBLING_WORKFLOW_RE = /\.\.\/[A-Za-z0-9_]+\/workflow\.json/;
+
+/** The `sourcedFrom` stamp for a token param — `{tool, field}` when both the
+ *  producer tool and field are known, else undefined. */
+function sourcedFromOf(ts: {
+  sourceTool?: string;
+  sourceField?: string;
+}): { tool: string; field: string } | undefined {
+  return ts.sourceTool && ts.sourceField
+    ? { tool: ts.sourceTool, field: ts.sourceField }
+    : undefined;
+}
+
+/**
+ * Pure per-parameter coverage classifier (Fix C/D + chained-token verification).
+ * Decides, for each exposed parameter, whether it was behaviorally verified — a
+ * `param:<name>` integration test that actually ran green (in `passedTests`) AND
+ * calls the workflow — and otherwise why it is unverified. Never drops a param
+ * (keep+mark policy):
+ *  - covered-live → `{ verified: true }`
+ *  - suite waived by anti-bot/infra and not covered → `{ verified: false, reason: 'waived-*' }`
+ *  - annotated `// exposed-but-not-verified` and not covered → `{ verified: false, reason: 'annotated' }`
+ *  - else (suite ran, no test, no annotation) → `uncovered` (blocking)
+ *  - passed but the test never calls runWorkflowWithLadder → `tautological` (blocking)
+ *
+ * A **producer-sourced token param** (in `tokenSources`) is held to a stricter
+ * bar: its `param:<name>` test must mint a FRESH value by calling the producer's
+ * sibling workflow (`../<tool>/workflow.json`), not reuse the recorded constant.
+ *  - chained pass → `{ verified: true, sourcedFrom }`
+ *  - passed but not chained (the recorded-value tautology) → `unchained` (blocking)
+ *  - suite waived (producer anti-bot) → `{ verified: false, reason: 'waived-chain' }`
+ *  - else → `unchained` (blocking)
+ */
+export function classifyParamCoverage(opts: {
+  likelyParams: Array<{ name: string }>;
+  integrationSrc: string;
+  passedTests: Set<string>;
+  integrationOutcome: 'passed' | 'waived-bot' | 'waived-infra' | 'failed' | 'absent';
+  tokenSources?: TokenSource[];
+}): {
+  paramVerification: ParamVerification[];
+  uncovered: string[];
+  tautological: string[];
+  unchained: string[];
+} {
+  const paramVerification: ParamVerification[] = [];
+  const uncovered: string[] = [];
+  const tautological: string[] = [];
+  const unchained: string[] = [];
+  const tokenByName = new Map((opts.tokenSources ?? []).map((t) => [t.param, t]));
+  const blocks = extractTestBlocks(opts.integrationSrc);
+  const waived =
+    opts.integrationOutcome === 'waived-bot' || opts.integrationOutcome === 'waived-infra';
+  for (const lp of opts.likelyParams) {
+    const token = `param:${lp.name}`;
+    const passedLive = [...opts.passedTests].some((n) => n.includes(token));
+    const block = blocks.find((b) => b.title.includes(token));
+
+    // Producer-sourced token param: requires a chained test that mints a fresh
+    // value from the producer's sibling workflow.
+    const ts = tokenByName.get(lp.name);
+    if (ts) {
+      const sourcedFrom = sourcedFromOf(ts);
+      if (passedLive) {
+        const chained =
+          !!block &&
+          /runWorkflowWithLadder\s*\(/.test(block.body) &&
+          SIBLING_WORKFLOW_RE.test(block.body);
+        if (chained) {
+          paramVerification.push({ name: lp.name, verified: true, sourcedFrom });
+        } else {
+          unchained.push(lp.name);
+        }
+      } else if (waived) {
+        paramVerification.push({
+          name: lp.name,
+          verified: false,
+          reason: 'waived-chain',
+          sourcedFrom,
+        });
+      } else {
+        unchained.push(lp.name);
+      }
+      continue;
+    }
+
+    const annotationRe = new RegExp(
+      `//\\s*exposed-but-not-verified[^\\n]*\\b${lp.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+    );
+    const isAnnotated = annotationRe.test(opts.integrationSrc);
+
+    if (passedLive) {
+      // Anti-tautology: a passing per-param test must actually exercise the live
+      // workflow, not assert a constant.
+      if (block && !/runWorkflowWithLadder\s*\(/.test(block.body)) {
+        tautological.push(lp.name);
+      } else {
+        paramVerification.push({ name: lp.name, verified: true });
+      }
+      continue;
+    }
+
+    if (waived) {
+      paramVerification.push({
+        name: lp.name,
+        verified: false,
+        reason: opts.integrationOutcome as 'waived-bot' | 'waived-infra',
+      });
+      continue;
+    }
+    if (isAnnotated) {
+      paramVerification.push({ name: lp.name, verified: false, reason: 'annotated' });
+      continue;
+    }
+    uncovered.push(lp.name);
+  }
+  return { paramVerification, uncovered, tautological, unchained };
+}
+
+/**
+ * Fix D: on successful verification, persist each exposed parameter's
+ * `verified` / `verifyNote` into workflow.json so the audit harness and
+ * operators can see which params were not behaviorally verified at compile time
+ * (per the keep+mark policy — nothing is dropped). Returns a consolidated
+ * warning line for any unverified params (empty when all verified). Best-effort:
+ * a write failure never blocks a tool that already passed verification.
+ */
+export function applyParamVerification(
+  toolDir: string,
+  paramVerification: ParamVerification[],
+): string[] {
+  if (paramVerification.length === 0) return [];
+  const workflowPath = pathJoin(toolDir, 'workflow.json');
+  if (!existsSync(workflowPath)) return [];
+  let workflow: {
+    parameters?: Array<{
+      name: string;
+      verified?: boolean;
+      verifyNote?: string;
+      sourcedFrom?: { tool: string; field: string };
+    }>;
+  };
+  try {
+    workflow = JSON.parse(readFileSync(workflowPath, 'utf8'));
+  } catch {
+    return [];
+  }
+  const byName = new Map(paramVerification.map((p) => [p.name, p]));
+  for (const param of workflow.parameters ?? []) {
+    const pv = byName.get(param.name);
+    if (!pv) continue;
+    if (pv.verified) {
+      param.verified = true;
+      param.verifyNote = undefined;
+    } else {
+      param.verified = false;
+      param.verifyNote = pv.reason;
+    }
+    // Stamp the producer-source contract so the MCP description (mcp-server.ts)
+    // tells the orchestrating LLM where to mint the token and `imprint audit`
+    // chains producer→consumer instead of fabricating it.
+    if (pv.sourcedFrom) param.sourcedFrom = pv.sourcedFrom;
+  }
+  try {
+    writeFileSync(workflowPath, `${JSON.stringify(workflow, null, 2)}\n`, 'utf8');
+  } catch {
+    // best-effort — the tool is already verified; this is only metadata.
+  }
+  const unverified = paramVerification.filter((p) => !p.verified);
+  if (unverified.length === 0) return [];
+  return [
+    `${unverified.length} parameter(s) live-unverified at compile time (${unverified
+      .map((p) => `${p.name}: ${p.reason ?? 'unverified'}`)
+      .join(', ')}) — exercised at runtime via the stealth-fetch / playbook ladder.`,
+  ];
+}
 
 export async function externalVerification(
   toolDir: string,
@@ -1148,10 +1666,24 @@ export async function externalVerification(
     expectedToolName?: string;
     likelyParams?: Array<{ name: string; type?: string; description?: string }>;
     candidateRequestSeqs?: number[];
+    /** Shared modules the build plan assigned to this tool. The verifier asserts
+     *  each verified module is actually imported (no silent re-implementation). */
+    assignedSharedModules?: AssignedSharedModule[];
+    /** Producer→consumer token contracts the build plan declared for this tool:
+     *  each `param` is minted by `sourceTool`'s `sourceField` output. Such params
+     *  require a chained `param:<name>` test (mint a fresh value from the producer)
+     *  and are stamped with `sourcedFrom` on success. */
+    tokenParams?: Array<{ param: string; sourceTool: string; sourceField: string }>;
+    /** Fields the build plan requires THIS tool's parser to emit for sibling
+     *  consumers (producer side). The verifier fails the tool if a declared field
+     *  is not emitted, so the producer/consumer field name can't silently diverge
+     *  (e.g. the plan says `hotel_id` but the parser emits `propertyToken`). */
+    emittedTokens?: Array<{ field: string; shape: string }>;
   } = {},
-): Promise<{ failures: string[]; warnings: string[] }> {
+): Promise<{ failures: string[]; warnings: string[]; paramVerification: ParamVerification[] }> {
   const failures: string[] = [];
   const warnings: string[] = [];
+  const paramVerification: ParamVerification[] = [];
 
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   const parserPath = pathJoin(toolDir, 'parser.ts');
@@ -1272,6 +1804,17 @@ export async function externalVerification(
     }
   }
 
+  // Shared-module reuse: when the build plan assigned this tool a verified
+  // shared module, the tool's artifacts MUST import it rather than duplicating
+  // the logic. This is the anti-duplication gate for multi-tool teach runs.
+  if (
+    opts.assignedSharedModules &&
+    opts.assignedSharedModules.length > 0 &&
+    existsSync(workflowPath)
+  ) {
+    failures.push(...assertSharedModuleImports(toolDir, workflowPath, opts.assignedSharedModules));
+  }
+
   if (!existsSync(parserPath)) {
     failures.push('parser.ts was not written');
   } else {
@@ -1291,138 +1834,224 @@ export async function externalVerification(
     failures.push('parser.test.ts was not written');
   } else {
     const src = readFileSync(parserTestPath, 'utf8');
-    const expectMatches = src.match(/expect\s*\(/g) ?? [];
-    if (expectMatches.length < 3) {
-      failures.push(`parser.test.ts has only ${expectMatches.length} expect() calls; need ≥3`);
+    const expectCount = countExpectCalls(src);
+    if (expectCount < 3) {
+      failures.push(`parser.test.ts has only ${expectCount} expect() calls; need ≥3`);
     }
-
-    const trivialPatterns = [
-      /expect\s*\(\s*true\s*\)\.toBe\s*\(\s*true\s*\)/,
-      /expect\s*\(\s*false\s*\)\.toBe\s*\(\s*false\s*\)/,
-      /expect\s*\(\s*1\s*\)\.toBe\s*\(\s*1\s*\)/,
-      /expect\s*\(\s*0\s*\)\.toBe\s*\(\s*0\s*\)/,
-      /expect\s*\(\s*null\s*\)\.toBeNull/,
-      /expect\s*\(\s*undefined\s*\)\.toBeUndefined/,
-      /expect\s*\(\s*"[^"]*"\s*\)\.toBe\s*\(\s*"[^"]*"\s*\)/,
-      /expect\s*\(\s*'[^']*'\s*\)\.toBe\s*\(\s*'[^']*'\s*\)/,
-    ];
-    for (const pattern of trivialPatterns) {
-      if (pattern.test(src)) {
-        failures.push(
-          'parser.test.ts contains trivial tautological assertions like expect(true).toBe(true) — tests must reference real values',
-        );
-        break;
-      }
-    }
-  }
-
-  if (existsSync(parserTestPath)) {
-    const result = await runCommand(`bun test ${parserTestPath}`, toolDir, 120000, {
-      [SESSION_PATH_ENV]: sessionPath,
-    });
-    const output = JSON.parse(result.result) as {
-      stdout: string;
-      stderr: string;
-      exitCode: number;
-    };
-    if (output.exitCode !== 0) {
+    if (hasTrivialAssertion(src)) {
       failures.push(
-        `bun test parser.test.ts exited ${output.exitCode}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,
+        'parser.test.ts contains trivial tautological assertions like expect(true).toBe(true) — tests must reference real values',
+      );
+    }
+    // Fix E: the zero/empty-result contract. The recording has no no-match
+    // response, so the only way to verify empty-handling is a synthetic case.
+    if (!src.includes('synthetic:empty-result')) {
+      failures.push(
+        'parser.test.ts is missing the required `synthetic:empty-result` test — add a test titled `synthetic:empty-result …` that feeds extract() a no-match / empty-items response and asserts it returns a clean empty collection (length 0), never a single all-null placeholder record. See prompts/compile-agent.md.',
       );
     }
   }
 
+  if (existsSync(parserTestPath)) {
+    const run = await runBunTestWithResults(parserTestPath, toolDir, 120000, {
+      [SESSION_PATH_ENV]: sessionPath,
+    });
+    if (run.exitCode !== 0) {
+      failures.push(
+        `bun test parser.test.ts exited ${run.exitCode}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+      );
+    }
+    // The synthetic empty-result test must actually RUN GREEN, not merely be
+    // present in source — a failed/absent synthetic test leaves empty-handling
+    // unverified (R1: phantom all-null record on a zero-result input).
+    const ranAnyTest = run.passed.size + run.failed.size > 0;
+    const syntheticPassed = [...run.passed].some((n) => n.includes('synthetic:empty-result'));
+    if (ranAnyTest && !syntheticPassed) {
+      failures.push(
+        'the `synthetic:empty-result` parser test did not pass — extract() must return a clean empty collection for a no-match/empty response (not a phantom record). Fix the parser or the test.',
+      );
+    }
+  }
+
+  // Run the live integration suite and classify the outcome. The per-param
+  // coverage check below trusts the test *runner* (which named tests actually
+  // ran green) rather than a static source scan, so a suite that was waived by
+  // anti-bot can no longer be counted as "covered".
   const integrationTestPath = pathJoin(toolDir, 'integration.test.ts');
+  let integrationOutcome: 'passed' | 'waived-bot' | 'waived-infra' | 'failed' | 'absent' = 'absent';
+  let integrationPassedTests = new Set<string>();
   if (!existsSync(integrationTestPath)) {
     failures.push(
       'integration.test.ts was not written — the tool must include a live API test that calls the workflow and verifies it returns real data',
     );
   } else {
-    let integrationPassed = false;
-    let lastOutput = { stdout: '', stderr: '', exitCode: 1 };
+    let run: BunTestRun = {
+      stdout: '',
+      stderr: '',
+      exitCode: 1,
+      passed: new Set(),
+      failed: new Set(),
+    };
     for (let attempt = 0; attempt < 3; attempt++) {
-      const result = await runCommand(`bun test ${integrationTestPath}`, toolDir, 60000);
-      lastOutput = JSON.parse(result.result) as {
-        stdout: string;
-        stderr: string;
-        exitCode: number;
-      };
-      if (lastOutput.exitCode === 0) {
-        integrationPassed = true;
-        break;
-      }
+      run = await runBunTestWithResults(integrationTestPath, toolDir, 60000);
+      if (run.exitCode === 0) break;
     }
-    if (!integrationPassed) {
-      const combined = `${lastOutput.stdout}\n${lastOutput.stderr}`;
-      const botSignatures = /PerimeterX|DataDome|Akamai|captcha|challenge|blocked|rate.?limit/i;
-      const hasStatusBlock = /\b(403|429)\b/.test(combined);
+    integrationPassedTests = run.passed;
+    if (run.exitCode === 0) {
+      integrationOutcome = 'passed';
+    } else {
+      const combined = `${run.stdout}\n${run.stderr}`;
       const hasImprintBlock =
         /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(combined) &&
         /non-escalatable|giving up/.test(combined);
-      if (hasStatusBlock && botSignatures.test(combined)) {
+      if (isBotDefenseFailure(combined)) {
+        integrationOutcome = 'waived-bot';
         warnings.push(
-          `integration test failed with likely bot-detection or rate-limiting (tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
+          `integration test failed with likely bot-detection / anti-automation challenge (tried 3 times) — treating as non-blocking since parser verification passed. The runtime backend ladder (stealth-fetch + playbook) handles these defenses at call time even when the compile-time fetch rungs cannot.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
         );
       } else if (hasImprintBlock) {
+        integrationOutcome = 'waived-infra';
         warnings.push(
-          `integration test failed with infrastructure error (${combined.match(/\b(RATE_LIMITED|FORBIDDEN|NETWORK)\b/)?.[0] ?? 'unknown'}, tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
+          `integration test failed with infrastructure error (${combined.match(/\b(RATE_LIMITED|FORBIDDEN|NETWORK)\b/)?.[0] ?? 'unknown'}, tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
         );
       } else {
+        integrationOutcome = 'failed';
         failures.push(
-          `bun test integration.test.ts exited ${lastOutput.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${lastOutput.stdout}\nstderr:\n${lastOutput.stderr}`,
+          `bun test integration.test.ts exited ${run.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
         );
       }
     }
   }
 
-  // Per-parameter coverage check — every parameter declared on the tool
-  // surface must appear in at least two distinct value bindings in
-  // integration.test.ts (baseline + at least one override), OR carry an
-  // explicit `// exposed-but-not-verified` annotation naming the parameter.
-  //
-  // This catches the structural failure mode that lets broken filters ship
-  // silently: an agent declares a parameter (because the recording exercised
-  // it), templates it into the workflow, but never writes a discriminating
-  // integration test. Without this check, the parameter passes through to
-  // the API but its server-side effect is unverified — the very class of
-  // bug that motivated this enforcement.
-  //
-  // We count *distinct values* rather than occurrences so that agents which
-  // inline baseline defaults into every test still fail when no override
-  // actually exercises a different value.
+  // Per-parameter coverage (Fix C/D). Each exposed parameter must have a
+  // `param:<name>` integration test that actually RAN GREEN against live data —
+  // a static source scan is not enough, because a waived suite never exercised
+  // the param (R2: a filter wired to a field the server ignores looks "covered"
+  // by source but does nothing). Per the keep+mark policy we never drop a param;
+  // each is recorded in `paramVerification` as verified or not (with a reason),
+  // and only a genuinely-uncovered param on a suite that DID run blocks compile.
   if (existsSync(integrationTestPath) && opts.likelyParams && opts.likelyParams.length > 0) {
     const integrationSrc = readFileSync(integrationTestPath, 'utf8');
-    // Strip line comments before scanning so param names that only appear in
-    // commentary don't count as bindings. The exposed-but-not-verified
-    // annotation check is intentionally run against the un-stripped source.
-    const codeOnly = integrationSrc
-      .split('\n')
-      .map((line) => stripLineComment(line))
-      .join('\n');
-    const uncovered: string[] = [];
-    for (const lp of opts.likelyParams) {
-      const escapedName = lp.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const valueRe = new RegExp(`\\b${escapedName}\\s*:\\s*([^,}\\n]+)`, 'g');
-      const distinctValues = new Set<string>();
-      for (const match of codeOnly.matchAll(valueRe)) {
-        const captured = match[1];
-        if (captured !== undefined) distinctValues.add(captured.trim());
+
+    // Producer-sourced token params: union of build-plan-declared contracts and
+    // mechanical detection (the recorded value appears in a SIBLING tool's
+    // recorded response). Declared entries win — they carry the producer tool +
+    // field used for stamping `sourcedFrom` and the MCP description.
+    const recordedParamValues = new Map<string, string>();
+    try {
+      const wf = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
+        parameters?: Array<{ name: string; default?: unknown }>;
+      };
+      for (const p of wf.parameters ?? []) {
+        if (typeof p.default === 'string') recordedParamValues.set(p.name, p.default);
       }
-      const annotationRe = new RegExp(`//\\s*exposed-but-not-verified[^\\n]*\\b${escapedName}\\b`);
-      const isAnnotated = annotationRe.test(integrationSrc);
-      if (distinctValues.size < 2 && !isAnnotated) {
-        uncovered.push(lp.name);
+    } catch {
+      // best-effort — defaults are only a detection hint
+    }
+    const candidateSet = new Set(opts.candidateRequestSeqs ?? []);
+    const siblingResponses = session.requests
+      .filter((r) => !candidateSet.has(r.seq) && r.response?.body)
+      .map((r) => ({ body: r.response?.body ?? '' }));
+    const detected = detectTokenSources({
+      likelyParams: opts.likelyParams,
+      recordedParamValues,
+      siblingResponses,
+    });
+    const tokenByName = new Map<string, TokenSource>();
+    for (const d of detected) tokenByName.set(d.param, d);
+    for (const d of opts.tokenParams ?? []) {
+      tokenByName.set(d.param, {
+        param: d.param,
+        sourceTool: d.sourceTool,
+        sourceField: d.sourceField,
+      });
+    }
+
+    // Missing-producer guard: if a declared producer did not compile, the chain
+    // cannot be exercised — waive (verified:false, keep+mark) rather than block
+    // the consumer on something out of its control.
+    const tokenSources: TokenSource[] = [];
+    const waivedChain: ParamVerification[] = [];
+    for (const ts of tokenByName.values()) {
+      if (ts.sourceTool && !existsSync(pathJoin(toolDir, '..', ts.sourceTool, 'workflow.json'))) {
+        waivedChain.push({
+          name: ts.param,
+          verified: false,
+          reason: 'waived-chain',
+          sourcedFrom: sourcedFromOf(ts),
+        });
+        warnings.push(
+          `producer tool "${ts.sourceTool}" for token param "${ts.param}" is unavailable (did not compile) — the producer→consumer chain is left unverified (waived-chain).`,
+        );
+      } else {
+        tokenSources.push(ts);
       }
     }
-    if (uncovered.length > 0) {
+
+    const waivedNames = new Set(waivedChain.map((w) => w.name));
+    const coverage = classifyParamCoverage({
+      likelyParams: opts.likelyParams.filter((lp) => !waivedNames.has(lp.name)),
+      integrationSrc,
+      passedTests: integrationPassedTests,
+      integrationOutcome,
+      tokenSources,
+    });
+    paramVerification.push(...coverage.paramVerification, ...waivedChain);
+    if (coverage.tautological.length > 0) {
       failures.push(
-        `${uncovered.length} parameter(s) declared on the tool surface have no discriminating integration test (baseline + override with a different value) and no \`// exposed-but-not-verified\` annotation: ${uncovered.join(', ')}. Either add a per-parameter test that overrides the value and asserts the response is constrained, or annotate the parameter as explicitly unverified. See prompts/compile-agent.md "Per-parameter coverage tests".`,
+        `${coverage.tautological.length} parameter(s) have a passing \`param:<name>\` test that never calls runWorkflowWithLadder, so it does not exercise the live workflow: ${coverage.tautological.join(', ')}. Each per-parameter test must call the workflow with the override value and assert the response is constrained by it.`,
+      );
+    }
+    if (coverage.uncovered.length > 0) {
+      failures.push(
+        `${coverage.uncovered.length} parameter(s) have no passing \`param:<name>\` integration test and no \`// exposed-but-not-verified\` annotation: ${coverage.uncovered.join(', ')}. Add a test titled \`param:<name> …\` that overrides the value, calls runWorkflowWithLadder, and asserts the response is constrained — or annotate the parameter as explicitly unverified. See prompts/compile-agent.md "Per-parameter coverage tests".`,
+      );
+    }
+    if (coverage.unchained.length > 0) {
+      const details = coverage.unchained
+        .map((name) => {
+          const ts = tokenSources.find((t) => t.param === name);
+          return ts?.sourceTool && ts.sourceField
+            ? `\`${name}\` (mint from \`../${ts.sourceTool}/workflow.json\` → read field \`${ts.sourceField}\`)`
+            : `\`${name}\``;
+        })
+        .join(', ');
+      failures.push(
+        `${coverage.unchained.length} producer-sourced token param(s) lack a CHAINED \`param:<name>\` test that mints a FRESH value from the producer tool: ${details}. Each test must call runWorkflowWithLadder on the named producer's \`workflow.json\`, read the named field from its result, and pass THAT value (not the recorded constant) into this tool — then assert the response is non-empty. If the producer only emits a bare fragment, fix the PRODUCER to emit the full value this tool consumes. See prompts/compile-agent.md "Producer-sourced token parameters".`,
+      );
+    }
+  }
+
+  // Producer-side token contract: the build plan requires this tool to emit
+  // certain fields for sibling consumers. Fail if the parser doesn't reference a
+  // declared field by name — otherwise the producer/consumer field name silently
+  // diverges (plan says `hotel_id`, parser emits `propertyToken`) and the
+  // consumer's chained test can never extract it.
+  if ((opts.emittedTokens?.length ?? 0) > 0 && existsSync(parserPath)) {
+    const parserSrc = readFileSync(parserPath, 'utf8');
+    const missing = (opts.emittedTokens ?? [])
+      .map((e) => e.field)
+      .filter(
+        (field) =>
+          !new RegExp(`\\b${field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(parserSrc),
+      );
+    if (missing.length > 0) {
+      failures.push(
+        `the build plan requires this tool's parser to emit ${missing
+          .map((f) => `\`${f}\``)
+          .join(', ')} so sibling consumer tools can use ${
+          missing.length === 1 ? 'it' : 'them'
+        } as an input token, but parser.ts does not emit ${
+          missing.length === 1 ? 'that field' : 'those fields'
+        }. Emit ${
+          missing.length === 1 ? 'it' : 'each'
+        } in every result item under the EXACT field name (the full value a consumer needs, never a bare fragment) — see read_build_plan "emitsTokens".`,
       );
     }
   }
 
   if (existsSync(parserPath) || existsSync(parserTestPath)) {
-    const output = await runGeneratedArtifactTypecheck(toolDir);
+    const output = await typecheckArtifacts(toolDir, ['parser.ts', 'request-transform.ts']);
     if (output.exitCode !== 0 || output.timedOut) {
       failures.push(
         `generated TypeScript artifacts failed typecheck (bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json) exited ${output.exitCode}${output.timedOut ? ' after timing out' : ''}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,
@@ -1473,5 +2102,5 @@ export async function externalVerification(
     }
   }
 
-  return { failures, warnings };
+  return { failures, warnings, paramVerification };
 }

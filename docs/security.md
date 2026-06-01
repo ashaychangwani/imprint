@@ -11,6 +11,8 @@ Recording produces:
 | `<ts>.jsonl` | Full request bodies, response bodies, headers (incl. `Authorization`, `Cookie`, `Set-Cookie`), cookie snapshots, storage snapshots | `~/.imprint/<site>/sessions/` |
 | `<ts>.json` | Same, assembled | `~/.imprint/<site>/sessions/` |
 
+A `teach`/`generate` compile also writes one short-lived artifact: `~/.imprint/<site>/.stealth-token.json` — a freshly-minted stealth-fetch token (anti-bot cookies + sensor headers) shared across the compile-time `bun test` processes so they don't each re-bootstrap headless Chromium. It is transient (ignored once older than 10 minutes), best-effort removed when the teach run ends, and lives outside the repo. It holds a live session token, so treat it like the rest of `~/.imprint/<site>/` — local-sensitive, never committed.
+
 Sessions are **not** redacted on disk by default. `imprint generate` and `imprint compile-playbook` auto-redact in memory before LLM calls — if the session does not already contain `[REDACTED:` markers, the pipeline runs the full redaction pass and logs the count. If auto-redaction produces zero redactions on a session that contains auth-like requests, treat it as suspicious and run `imprint redact` manually to audit. `imprint redact` writes a reviewable redacted artifact you can audit or share.
 
 MCP cleanup is conservative around recordings. `imprint mcp delete <site>` removes external MCP registrations only; `--local tool` removes generated tool directories but keeps sessions; `--local site` is the explicit option that removes the site directory and its recordings. Reversible disables for clients without native disable support write `<IMPRINT_HOME>/.mcp-disabled.json`; treat that file as local-sensitive too because it preserves the full MCP server definition, including any `env` values from the client config.
@@ -30,7 +32,8 @@ imprint redact ~/.imprint/<site>/sessions/<ts>.json
 What gets scrubbed:
 - Values of any field whose name matches the [SENSITIVE_KEYS](../src/imprint/redact.ts) list (passwords, tokens, API keys, session IDs, CSRF tokens, common patron-ID patterns, etc.) — replaced with redaction markers. New redacted artifacts use equality-preserving markers such as `[REDACTED:v3:id=7:len=24]`; old `[REDACTED:N]` markers remain accepted but do not preserve equality hints.
 - Cookie and `Set-Cookie` values are redacted structure-aware: cookie names and safe attributes remain visible, while values become equality markers. This lets the compiler see that an earlier response cookie became a later request header without exposing the cookie value.
-- Common free-form PII and secrets in text-like response bodies, JSON string values, URL path segments, captured storage, and captured DOM / WebSocket event details. This supplemental scan catches emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, webhook URLs, package-registry tokens, and common secret assignments.
+- Common free-form PII and secrets in text-like **request** bodies, JSON string values, URL path segments, captured storage, and captured DOM / WebSocket event details. This supplemental scan catches emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, webhook URLs, and package-registry tokens, plus keyword-anchored secret assignments (`password=…`, `*_SECRET=…`, OAuth secrets). The generic value-shape catch-alls were intentionally removed because they over-matched benign data (e.g. long numeric IDs).
+- **Response bodies are redacted by sensitive field name only** — there is no free-form value scan on responses. This keeps redaction focused on the real secrets in a recording (post-login cookies and user-entered PII, both captured elsewhere) and, critically, avoids corrupting structured RPC envelopes (e.g. Google `batchexecute`) whose payloads are doubly-encoded JSON and would be broken by flat-text scrubbing.
 
 Equality marker IDs are scoped to one redacted artifact. They contain no hash of the original secret, are not stable across redaction runs, and are never valid runtime placeholders. Generated workflows should reference semantic capture names such as `${state.csrf}`, never marker IDs.
 
@@ -40,6 +43,7 @@ This is a best-effort tool — we deliberately undersell it. It will NOT catch:
 
 - **Custom field names** a site invents that don't match the `SENSITIVE_KEYS` patterns.
 - **Contextual or site-specific secrets** that do not match either the structured key list or the supplemental free-form patterns.
+- **Free-form PII echoed inside response bodies** — responses are scrubbed by field name only, so a secret a server returns under an unrecognized key (or inside an RPC envelope) is not value-scanned. Audit manually if a site returns sensitive data in responses.
 - **Non-standard encodings** (compressed bodies, encrypted blobs, unusual base64 packing, or values split across fields).
 - **WebSocket frame content beyond the captured preview**.
 

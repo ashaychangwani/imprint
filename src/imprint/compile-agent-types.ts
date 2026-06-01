@@ -7,6 +7,44 @@
  */
 
 import type { AgentProgress } from './agent.ts';
+import { type AssignedSharedModule, describeAssignedModules } from './build-plan.ts';
+import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
+
+/** Render a per-tool implementation plan (param→field mapping, request
+ *  construction, response parsing, shared-module imports, edge cases) into an
+ *  initial-message section the compile agent must follow. Shared verbatim by the
+ *  in-process loop and both CLI drivers. Generic — carries no site-specific
+ *  content; the plan itself is derived per-tool from the recording. */
+export function formatToolPlan(toolPlan: string | undefined): string {
+  const plan = toolPlan?.trim();
+  if (!plan) return '';
+  return `
+
+IMPLEMENTATION PLAN — a planning pass analyzed the recording for THIS tool and produced the plan below. Follow it. It maps each parameter to its recorded field, specifies how to construct the request(s) and parse the response, and names the shared modules to import. Deviate only where the recorded data plainly contradicts the plan; if you do, note the correction in a brief code comment.
+
+${plan}`;
+}
+
+/** Render the selected candidate + shared compile context (and any assigned
+ *  shared modules) into the compile agent's initial message. Shared verbatim by
+ *  the in-process loop and both CLI drivers. */
+export function formatCandidateContext(
+  candidate: ToolCandidate | undefined,
+  sharedContext: SharedCompileContext | undefined,
+  assignedSharedModules?: AssignedSharedModule[],
+): string {
+  if (!candidate && !sharedContext) return '';
+  return `
+Selected candidate context:
+${candidate ? JSON.stringify(candidate, null, 2) : '(none)'}
+
+Shared compile context:
+${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
+
+Compile only the selected candidate. Do not create tools for other actions in the recording.${
+    assignedSharedModules ? describeAssignedModules(assignedSharedModules) : ''
+  }`;
+}
 
 export interface CompileAgentProgress extends AgentProgress {
   /** 1-based verification cycle. Cycle 1 is the initial agent run. Subsequent cycles

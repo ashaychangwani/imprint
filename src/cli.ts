@@ -66,6 +66,7 @@ RUN
   mcp-server <site>        Serve one site's tools as MCP (stdio default).
   cron <site>              Polling daemon for ~/.imprint/<site>/<toolName>/cron.json.
   playbook <site>          Run a playbook directly (debugging).
+  audit <site>             Exercise every generated tool and score it (≥95% gate).
 
 OTHER
   doctor                   Check that the environment is set up correctly.
@@ -351,6 +352,35 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--port <num>', description: 'Port for HTTP transport (default 8765).' },
     ],
     example: 'imprint mcp-server southwest',
+  },
+  audit: {
+    summary:
+      "Drive a headless agent against a site's MCP tools, exercise each one, and compute a deterministic accuracy score. Verdicts come from the agent; the score is computed by imprint.",
+    usage: [
+      'imprint audit <site> [--min-score <n>] [--out <path>] [--model <name>] [--timeout <duration>] [--json]',
+    ],
+    flags: [
+      {
+        name: '--min-score <n>',
+        description: 'Pass threshold as a percentage of gradeable invocations (default 95).',
+      },
+      {
+        name: '--out <path>',
+        description:
+          'Where to write the JSON report (default ~/.imprint/<site>/.audit-report.json).',
+      },
+      {
+        name: '--model <name>',
+        description: 'Override the auditor model (default Opus via claude-cli).',
+      },
+      {
+        name: '--timeout <duration>',
+        description:
+          'Audit-session wall-clock cap. Accepts 20m, 1h, 300s, or plain ms. Default 20m.',
+      },
+      { name: '--json', description: 'Print the machine-readable report to stdout.' },
+    ],
+    example: 'imprint audit google-flights --min-score 95',
   },
   mcp: {
     summary:
@@ -916,6 +946,69 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
 
+    case 'audit': {
+      const site = requirePositional(argv, 'audit', 'a <site> argument');
+      if (site === null) return 2;
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          'min-score': { type: 'string' },
+          out: { type: 'string' },
+          model: { type: 'string' },
+          timeout: { type: 'string' },
+          json: { type: 'boolean' },
+        },
+        allowPositionals: false,
+      });
+
+      let minScore = 95;
+      if (values['min-score'] !== undefined) {
+        const parsed = Number(values['min-score']);
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+          console.error(
+            `error: invalid --min-score "${values['min-score']}"\n→ use a number between 0 and 100`,
+          );
+          return 2;
+        }
+        minScore = parsed;
+      }
+
+      let auditTimeoutMs: number | undefined;
+      if (values.timeout) {
+        auditTimeoutMs = parseDuration(values.timeout) ?? undefined;
+        if (auditTimeoutMs === undefined) {
+          console.error(
+            `error: invalid --timeout "${values.timeout}"\n→ use format: 20m, 1h, 300s, or plain milliseconds`,
+          );
+          return 2;
+        }
+      }
+
+      const { runAudit } = await import('./imprint/audit.ts');
+      const { localAuditReportPath } = await import('./imprint/paths.ts');
+      const outPath = values.out ?? localAuditReportPath(site);
+      const score = await traced(
+        'cli.audit',
+        'AGENT',
+        {
+          'imprint.site': site,
+          'imprint.min_score': minScore,
+          'imprint.model': values.model ?? 'auto',
+        },
+        () =>
+          runAudit({
+            site,
+            minScore,
+            outPath,
+            model: values.model,
+            timeoutMs: auditTimeoutMs,
+            json: values.json,
+          }),
+      );
+      // Exit codes distinguish "fix the code" from "the site blocked us".
+      return score.verdict === 'pass' ? 0 : score.verdict === 'fail' ? 1 : 2;
+    }
+
     case 'cron': {
       const site = requirePositional(argv, 'cron', 'a <site> argument');
       if (site === null) return 2;
@@ -1195,6 +1288,8 @@ async function main(argv: string[]): Promise<number> {
           'example-dir': { type: 'string' },
           'candidate-json': { type: 'string' },
           'shared-context-json': { type: 'string' },
+          'build-plan-path': { type: 'string' },
+          'shared-modules-json': { type: 'string' },
         },
         allowPositionals: false,
       });
@@ -1209,17 +1304,23 @@ async function main(argv: string[]): Promise<number> {
       const { ToolCandidateSchema, SharedCompileContextSchema } = await import(
         './imprint/tool-candidates.ts'
       );
+      const { SharedModuleManifestSchema } = await import('./imprint/build-plan.ts');
       const candidate = values['candidate-json']
         ? ToolCandidateSchema.parse(JSON.parse(values['candidate-json']))
         : undefined;
       const sharedContext = values['shared-context-json']
         ? SharedCompileContextSchema.parse(JSON.parse(values['shared-context-json']))
         : undefined;
+      const sharedModules = values['shared-modules-json']
+        ? SharedModuleManifestSchema.parse(JSON.parse(values['shared-modules-json']))
+        : undefined;
       await runCompileMcpServer({
         sessionPath: values['session-path'],
         toolDir,
         candidate,
         sharedContext,
+        buildPlanPath: values['build-plan-path'],
+        sharedModules,
       });
       return 0;
     }

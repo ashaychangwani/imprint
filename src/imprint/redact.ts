@@ -22,6 +22,22 @@ const USER_INTERACTION_TYPES = new Set(['click', 'input', 'change', 'submit']);
 const MULTI_VALUE_HEADERS = new Set(['cookie', 'set-cookie']);
 
 /**
+ * Detect a structured RPC envelope (XSSI-guarded or length-prefixed) whose body
+ * is NOT top-level JSON but carries doubly-encoded JSON as string payloads —
+ * e.g. Google `batchexecute` (`)]}'` guard + `<len>\n[...]` frames). Running the
+ * flat-text freeform scanner over such a body injects `[REDACTED]` into bare
+ * numeric IDs/coordinates inside the inner JSON and makes it unparseable, so the
+ * freeform fallback must skip these. The structure-aware key-based redaction
+ * still applies to any clean-JSON bodies; this only gates the flat-text scan.
+ */
+export function looksLikeRpcEnvelope(body: string): boolean {
+  const head = body.slice(0, 64).trimStart();
+  if (head.startsWith(")]}'")) return true; // anti-XSSI guard: )]}' and )]}',
+  if (/^\d{1,9}\r?\n\[/.test(head)) return true; // length-prefixed frame: 219006\n[
+  return false;
+}
+
+/**
  * Detect sensitive headers whose values are page-minted constants — baked
  * into the site's JavaScript, not per-user secrets. The recording starts
  * from a clean browser with no cookies or stored state, so any sensitive
@@ -179,7 +195,12 @@ export function redactJsonBody(
             const visited = visit(inner, [...pathSoFar, k]);
             out[k] = JSON.stringify(visited);
           } catch {
-            const r = freeform ? redactFreeformText(v) : { redacted: v, redactionsCount: 0 };
+            // Nested string that isn't parseable JSON: scan it as free text,
+            // unless it's a structured RPC envelope (flat-scanning corrupts it).
+            const r =
+              freeform && !looksLikeRpcEnvelope(v)
+                ? redactFreeformText(v)
+                : { redacted: v, redactionsCount: 0 };
             freeformCount += r.redactionsCount;
             out[k] = r.redacted;
           }
@@ -228,6 +249,9 @@ export function redactBody(
   } catch {
     const formR = redactFormBody(body, formPlaceholders, markerContext);
     if (formR.redactionsCount > 0 || formR.placeholdersInjected > 0 || !freeform) return formR;
+    // A structured RPC envelope (XSSI/length-prefixed) is not flat text —
+    // flat-scanning it would corrupt the doubly-encoded JSON payloads it carries.
+    if (looksLikeRpcEnvelope(body)) return formR;
     const freeformR = redactFreeformText(body);
     return {
       redacted: freeformR.redacted,
@@ -437,7 +461,11 @@ export function redactSession(
           response.mimeType,
           undefined,
           undefined,
-          useFreeform,
+          // Responses are key-based only: never value-pattern (freeform) scan a
+          // server body. Keeps redaction focused on real secrets (post-login
+          // cookies + user-entered PII) and avoids corrupting structured RPC
+          // envelopes whose payloads are doubly-encoded JSON.
+          false,
           markerContext,
         );
         respBody = respBodyR.redacted;

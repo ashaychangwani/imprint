@@ -19,6 +19,7 @@ import {
 import { dirname, join as pathJoin } from 'node:path';
 import type { OnDeadlineReached } from './agent.ts';
 import { inferAppApiHosts } from './app-api-hosts.ts';
+import type { SharedModuleManifestEntry } from './build-plan.ts';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonArray, resolveProvider } from './llm.ts';
@@ -82,6 +83,14 @@ interface GenerateOptions extends CompileOptions {
   classifications?: ClassifiedValue[];
   /** Credential values extracted during teach, passed to integration tests via env var. */
   teachCredentials?: { site: string; values: Record<string, string> };
+  /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). */
+  buildPlanPath?: string;
+  /** Shared-module build manifest for this site (verified flags). */
+  sharedModules?: SharedModuleManifestEntry[];
+  /** Per-tool implementation plan (param→field mapping, request construction,
+   *  response parsing, shared-module imports). Injected into the agent's initial
+   *  message so the compile follows it. */
+  toolPlan?: string;
 }
 
 interface GenerateResult {
@@ -122,6 +131,9 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         sharedContext: opts.sharedContext,
         classifications: opts.classifications,
         teachCredentials: opts.teachCredentials,
+        buildPlanPath: opts.buildPlanPath,
+        sharedModules: opts.sharedModules,
+        toolPlan: opts.toolPlan,
       });
 
       setSpanAttributes(span, {

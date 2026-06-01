@@ -22,6 +22,7 @@ import {
   join as pathJoin,
   resolve as pathResolve,
 } from 'node:path';
+import type { SharedModuleManifestEntry } from './build-plan.ts';
 import {
   localSessionsDir,
   localSiteDir,
@@ -36,6 +37,7 @@ export const TEACH_STEPS = [
   'replay-and-diff',
   'triage',
   'detect-candidates',
+  'plan-prereqs',
   'generate',
   'compile-playbook',
   'emit',
@@ -55,6 +57,14 @@ export interface WorkflowState {
   updatedAt: string;
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
+  /** Site-relative path to the multi-tool build plan sidecar (.build-plan.json),
+   *  set at the plan-prereqs step. Threaded into the per-tool compile drivers so
+   *  each agent reads its slice via the read_build_plan tool. */
+  buildPlanPath?: string;
+  /** Shared modules built + verified before the per-tool fan-out. The verifier
+   *  asserts a tool imports the modules the plan assigned it; entries with
+   *  `verified: false` are excluded from that assertion. */
+  sharedModules?: SharedModuleManifestEntry[];
   /** Non-fatal flags raised by upstream stages that downstream stages (and
    *  the user) should know about. Currently used by the redact stage to
    *  record `'credentials_not_paired'` when a password-shaped body field
