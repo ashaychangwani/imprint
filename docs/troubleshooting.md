@@ -264,7 +264,7 @@ Start with Imprint's local audit:
 imprint mcp status
 ```
 
-It reports external registrations, generated tools under `IMPRINT_HOME`, incomplete `teach` checkpoints, missing session recordings, orphan sessions, and stale MCP entries that point at sites with no complete generated tool.
+It reports external registrations, generated tools under `IMPRINT_HOME`, incomplete `teach` checkpoints, missing session recordings, and stale MCP entries that point at sites with no complete generated tool. It never reports or deletes raw recordings — those are your source of truth.
 
 Common causes:
 

@@ -27,10 +27,11 @@ It also scans `IMPRINT_HOME` for generated tools, `.teach-state.json`, raw and r
 | `complete` | A generated tool directory has an `index.ts`. |
 | `incomplete` | A `teach` workflow lacks `emit`/`register` completion, or has no matching generated tool. |
 | `missing-session` | `.teach-state.json` references a raw or redacted session file that is gone. |
-| `orphan-session` | A session file exists but no `teach` workflow references it. |
 | `stale-registration` | An external MCP registration points at `imprint mcp-server <site>`, but there is no complete generated tool for that site. |
 
-Each issue includes a next-step hint. In interactive mode, choose `Fix an issue` to apply the exact matching cleanup action instead of selecting a registration or site manually. The fix prompt is a multi-select: toggle individual issues with `space`, or pick `Select all issues` to fix everything in one pass. Orphan-session deletions still ask once for confirmation before removing recordings.
+Each issue includes a next-step hint. In interactive mode, choose `Fix an issue` to apply the exact matching cleanup action instead of selecting a registration or site manually. The fix prompt is a multi-select: toggle individual issues with `space`, or pick `Select all issues` to fix everything in one pass.
+
+`imprint mcp` never lists or deletes raw recordings. The recording is Imprint's source of truth, so untracked session files are out of scope for this command — only the explicit whole-site delete (below) removes recordings, and only when you opt into it.
 
 Use JSON output for scripts:
 
