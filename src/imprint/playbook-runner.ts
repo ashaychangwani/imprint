@@ -238,15 +238,32 @@ async function executeStep(
     case 'type': {
       const locator = await firstMatching(page, step.locators, params, timeoutMs);
       const value = subst(step.value, params);
-      // Always use pressSequentially so each keystroke fires real input /
-      // keydown / keyup events. React-style frameworks bind to synthetic
-      // events that `locator.fill()` doesn't trigger — typing into an
-      // autocomplete or debounced search field with `fill()` updates the
-      // input visually but the framework's onChange handler never runs,
-      // so the dropdown / XHR / next-step locator times out. The cost is
-      // a small per-character delay (~10ms internal), negligible against
-      // page-load latency. Honor `step.clear !== false` (the default
-      // before this change) by clearing first.
+      // Detect element type so we dispatch the right action. `type` on a
+      // <select> means "choose the option whose value/label matches" —
+      // a recording can capture either action shape, and the audit-time
+      // tool may also call type with a value that happens to land on a
+      // select. Without this branch, fill()/pressSequentially() throw
+      // "Element is not an input/textarea" and the whole playbook
+      // aborts.
+      const tagName = await locator.evaluate((el) => el.tagName.toLowerCase());
+      if (tagName === 'select') {
+        // Try value first, fall back to label — match Playwright's own
+        // selectOption semantics.
+        try {
+          await locator.selectOption({ value }, { timeout: timeoutMs });
+        } catch {
+          await locator.selectOption({ label: value }, { timeout: timeoutMs });
+        }
+        await applyWait(page, step.wait_for, locator, timeoutMs);
+        return;
+      }
+      // Inputs / textareas: pressSequentially fires real input / keydown
+      // / keyup events. React-style frameworks bind to synthetic events
+      // that locator.fill() doesn't trigger — typing into an autocomplete
+      // or debounced search field with fill() updates the input visually
+      // but the framework's onChange handler never runs, so the dropdown
+      // / XHR / next-step locator times out. The ~10ms-per-char internal
+      // delay is negligible against page-load latency.
       if (step.clear !== false) {
         await locator.fill('', { timeout: timeoutMs });
       }
