@@ -3,6 +3,7 @@ import {
   estimateTokensFromText,
   llmSpanAttributes,
   resolveTraceTokenCount,
+  totalPromptTokens,
   traceBatchEnabled,
   traceInputOutputAttributes,
   traceIoMaxChars,
@@ -150,6 +151,12 @@ describe('LLM trace usage and cost attributes', () => {
   });
 
   it('falls back to built-in model rates when env vars are not set', () => {
+    // claude-opus-4-8 is the current default agent model; a missing entry here
+    // is what made the analysis script silently fall back to sonnet rates.
+    expect(traceLlmCostRates('claude-cli', 'claude-opus-4-8')).toEqual({
+      inputUsdPer1M: 5,
+      outputUsdPer1M: 25,
+    });
     expect(traceLlmCostRates('claude-cli', 'claude-opus-4-7')).toEqual({
       inputUsdPer1M: 5,
       outputUsdPer1M: 25,
@@ -226,5 +233,50 @@ describe('LLM trace usage and cost attributes', () => {
     expect(attrs['imprint.llm.tokens_estimated']).toBe(true);
     expect(attrs['imprint.llm.input_tokens_source']).toBe('estimated');
     expect(attrs['imprint.llm.output_tokens_source']).toBe('provider');
+  });
+
+  it('sums total prompt tokens from the uncached + cache split', () => {
+    // Providers report input_tokens as uncached-only; the total prompt is
+    // uncached + cache_read + cache_write.
+    expect(totalPromptTokens(152, 354_298, 49_253)).toBe(403_703);
+    // Missing cache counts default to 0.
+    expect(totalPromptTokens(100, undefined, undefined)).toBe(100);
+    expect(totalPromptTokens(100, null, null)).toBe(100);
+    // Unknown uncached count → null (caller estimates from text instead).
+    expect(totalPromptTokens(null, 354_298, 49_253)).toBeNull();
+    expect(totalPromptTokens(undefined, 1, 2)).toBeNull();
+  });
+
+  it('charges cache reads at the discounted rate for the analyze path (opus-4-8)', () => {
+    // Real numbers from a playbook-compilation llm.analyze call: 152 uncached,
+    // 354,298 cache_read, 49,253 cache_write, 7,034 output. The analyze path now
+    // feeds llmSpanAttributes the TOTAL prompt + the cache split (as traceAnalyze
+    // does), so the cached bulk bills at 0.1x rather than the full input rate.
+    const uncached = 152;
+    const cacheRead = 354_298;
+    const cacheWrite = 49_253;
+    const output = 7_034;
+    const attrs = llmSpanAttributes({
+      provider: 'claude-cli',
+      model: 'claude-opus-4-8',
+      inputTokens: totalPromptTokens(uncached, cacheRead, cacheWrite) ?? undefined,
+      outputTokens: output,
+      cacheReadTokens: cacheRead,
+      cacheWriteTokens: cacheWrite,
+    });
+
+    // token_count.prompt reflects the TOTAL prompt, not the uncached delta.
+    expect(attrs['llm.token_count.prompt']).toBe(uncached + cacheRead + cacheWrite);
+
+    // prompt = uncached@$5/M + cacheRead@$0.5/M + cacheWrite@$6.25/M
+    const expectedPrompt =
+      (uncached / 1e6) * 5 + (cacheRead / 1e6) * 0.5 + (cacheWrite / 1e6) * 6.25;
+    expect(attrs['llm.cost.prompt'] as number).toBeCloseTo(expectedPrompt, 4);
+    expect(attrs['llm.cost.completion'] as number).toBeCloseTo((output / 1e6) * 25, 4);
+
+    // Regression guard: the old cache-blind path billed the whole prompt at the
+    // full input rate — far higher than the cache-aware figure.
+    const cacheBlindPrompt = ((uncached + cacheRead + cacheWrite) / 1e6) * 5;
+    expect(attrs['llm.cost.prompt'] as number).toBeLessThan(cacheBlindPrompt / 3);
   });
 });

@@ -218,12 +218,13 @@ imprint audit <site> --min-score 90  # relax the threshold
 imprint audit <site> --json          # full machine-readable report to stdout
 ```
 
-It prints `PASS` / `FAIL` / `INCONCLUSIVE` and writes the full report (score + the raw auditor verdicts) to `~/.imprint/<site>/.audit-report.json`. **Exit codes distinguish the cases:** `0` pass, `1` fail (genuine logic bugs), `2` inconclusive.
+It prints `PASS` / `FAIL` / `INCONCLUSIVE` / `TIMEOUT` and writes the full report (score + the raw auditor verdicts, plus token/cost usage) to `~/.imprint/<site>/.audit-report.json`. **Exit codes distinguish the cases:** `0` pass, `1` fail (genuine logic bugs), `2` inconclusive, `3` timeout. The summary also reports the auditor's approximate cost.
 
 Interpreting the verdict:
 
 - **FAIL** — the score is below the threshold (`tool_broken` invocations the auditor judged as not behaving as advertised). Open `.audit-report.json` and read the `reason` on each `tool_broken` invocation, or open the `audit.session` span in Phoenix (`imprint.audit.{score,correct,broken,infra,bad_params,graded,verdict}`) and inspect the tool calls. Fix the tool (regenerate, or correct its parser/workflow) and re-audit.
 - **INCONCLUSIVE** — there were **no gradeable invocations**: every call was classified `infra` (anti-bot / rate-limit / 403/429 / network / timeout). This is **not a code failure** — the site blocked the auditor. Re-run (often from a different network), or accept that the site can't be audited automatically. Spot-check the `infra` verdicts in the trace to make sure a real bug wasn't mislabeled.
+- **TIMEOUT** — the auditor was killed at the wall-clock deadline before producing a report (`imprint.audit.timed_out=true` on the span). A cut-off run is never a trustworthy pass, so it's flagged distinctly rather than degrading to a silent inconclusive. The auditor's transcript is saved to `~/.imprint/<site>/.audit-transcript.txt` — read it to see where it stalled (e.g. retrying a rate-limited tool). Re-run with a longer `--timeout` (e.g. `--timeout 45m`), or fix whatever is making the run hang.
 - **PASS** — `score ≥ min-score` AND at least `max(2, gradeableTools)` gradeable invocations, where `gradeableTools` counts only tools that produced ≥1 gradeable call. The floor ensures the number is backed by enough signal — at least one verified call per gradeable tool. A tool the auditor could never exercise (e.g. it needs an opaque token it cannot synthesize) is listed under `ungradeableTools` in the report and no longer inflates the floor. (The floor is one gradeable call per gradeable tool, not two: the auditor often burns a slot per tool on `bad_params`/`infra`, so demanding two clean reads per tool false-failed otherwise-perfect runs.)
 
 Note `infra` and `bad_params` (the auditor's own parameter mistakes) are excluded from the score denominator, so a blocked or misused tool is never counted as a code bug.

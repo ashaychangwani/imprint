@@ -1005,8 +1005,14 @@ async function main(argv: string[]): Promise<number> {
             json: values.json,
           }),
       );
-      // Exit codes distinguish "fix the code" from "the site blocked us".
-      return score.verdict === 'pass' ? 0 : score.verdict === 'fail' ? 1 : 2;
+      // Exit codes distinguish the outcomes: 0 pass, 1 fail (fix the code),
+      // 2 inconclusive (the site blocked us), 3 timeout (audit didn't finish).
+      // (if-chain rather than switch: a `case '<word>':` here would be misread as
+      // a CLI verb by the verb/help drift-guard test.)
+      if (score.verdict === 'pass') return 0;
+      if (score.verdict === 'fail') return 1;
+      if (score.verdict === 'timeout') return 3;
+      return 2;
     }
 
     case 'cron': {
