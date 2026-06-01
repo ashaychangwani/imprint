@@ -74,26 +74,35 @@ interface AuditScore {
  * - `score = 100 * correct / graded` (0 when nothing was gradeable).
  * - Verdict: no gradeable invocations → `inconclusive` (re-run / site blocked
  *   us, not a code fail). Otherwise `pass` requires both `score >= minScore`
- *   AND at least `2 * toolCount` gradeable invocations (enough signal to trust
- *   the number); anything else is `fail`.
+ *   AND at least `max(2, gradeableTools)` gradeable invocations, where
+ *   `gradeableTools` is the number of tools that produced ≥1 gradeable
+ *   invocation. Scaling the signal floor to *gradeable* tools (not all tools)
+ *   means a tool the auditor can never exercise — e.g. one that needs an opaque
+ *   token it cannot synthesize — no longer inflates the bar and sinks an
+ *   otherwise-perfect run; such tools surface separately as `ungradeableTools`.
+ *   The floor is one gradeable call per gradeable tool (not two): the auditor
+ *   often burns a slot per tool on `bad_params`/`infra` (its own mistake or a
+ *   transient block), so demanding two clean reads per tool false-fails an
+ *   otherwise-perfect run. One verified read per tool plus `score >= minScore`
+ *   is the honest floor; real defects still fail on score, not on this count.
  */
-export function computeAuditScore(
-  report: AuditReport,
-  toolCount: number,
-  minScore: number,
-): AuditScore {
+export function computeAuditScore(report: AuditReport, minScore: number): AuditScore {
   let correct = 0;
   let broken = 0;
   let infra = 0;
   let badParams = 0;
+  let gradeableTools = 0;
   for (const tool of report.tools) {
+    let toolGradeable = 0;
     for (const inv of tool.invocations) {
       switch (inv.verdict) {
         case 'correct':
           correct++;
+          toolGradeable++;
           break;
         case 'tool_broken':
           broken++;
+          toolGradeable++;
           break;
         case 'infra':
           infra++;
@@ -103,18 +112,31 @@ export function computeAuditScore(
           break;
       }
     }
+    if (toolGradeable > 0) gradeableTools++;
   }
   const graded = correct + broken;
   const score = graded === 0 ? 0 : (100 * correct) / graded;
+  const minGraded = Math.max(2, gradeableTools);
   let verdict: AuditScore['verdict'];
   if (graded === 0) {
     verdict = 'inconclusive';
-  } else if (score >= minScore && graded >= 2 * toolCount) {
+  } else if (score >= minScore && graded >= minGraded) {
     verdict = 'pass';
   } else {
     verdict = 'fail';
   }
   return { score, correct, broken, infra, badParams, graded, verdict };
+}
+
+/** Tools the auditor could never grade (every invocation was infra/bad_params,
+ *  or it ran none). Surfaced in the report so an un-exercisable tool is visible
+ *  rather than silently excluded from the score. */
+export function ungradeableToolNames(report: AuditReport): string[] {
+  return report.tools
+    .filter(
+      (t) => !t.invocations.some((i) => i.verdict === 'correct' || i.verdict === 'tool_broken'),
+    )
+    .map((t) => t.name);
 }
 
 interface RunAuditOptions {
@@ -156,15 +178,45 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       const toolNames = tools.map((t) => t.workflow.toolName);
       log(`auditing ${toolCount} tool(s) for site "${opts.site}": ${toolNames.join(', ')}`);
 
+      // Parameters that shipped live-unverified at compile time (Fix D). Tell the
+      // auditor to probe them especially — these are the most likely to be broken
+      // (the compile-time differential could not confirm their effect).
+      const unverifiedParams: Array<{ tool: string; params: string[] }> = [];
+      for (const t of tools) {
+        const params = (t.workflow.parameters ?? [])
+          .filter((p) => p.verified === false)
+          .map((p) => p.name);
+        if (params.length > 0) unverifiedParams.push({ tool: t.workflow.toolName, params });
+      }
+
+      // Producer→consumer token contracts (sourcedFrom). Tell the auditor to chain
+      // (call the producer, read the named field, feed the consumer) rather than
+      // fabricate an opaque token — otherwise a correct chained tool false-fails.
+      const tokenDeps: TokenDep[] = [];
+      for (const t of tools) {
+        for (const p of t.workflow.parameters ?? []) {
+          if (p.sourcedFrom) {
+            tokenDeps.push({
+              tool: t.workflow.toolName,
+              param: p.name,
+              sourceTool: p.sourcedFrom.tool,
+              sourceField: p.sourcedFrom.field,
+            });
+          }
+        }
+      }
+
       const report = await driveAudit({
         site: opts.site,
         model,
         timeoutMs,
         systemPromptPath,
         toolNames,
+        unverifiedParams,
+        tokenDeps,
       });
 
-      const score = computeAuditScore(report, toolCount, opts.minScore);
+      const score = computeAuditScore(report, opts.minScore);
       setSpanAttributes(span, {
         'imprint.audit.score': score.score,
         'imprint.audit.correct': score.correct,
@@ -182,6 +234,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         report,
         site: opts.site,
         toolCount,
+        ungradeableTools: ungradeableToolNames(report),
         minScore: opts.minScore,
       };
       try {
@@ -202,12 +255,39 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
   );
 }
 
+/** A consumer param whose value is minted by a sibling producer tool's output
+ *  field (from `workflow.json` `param.sourcedFrom`). */
+interface TokenDep {
+  tool: string;
+  param: string;
+  sourceTool: string;
+  sourceField: string;
+}
+
+/** Build the auditor instruction for producer-sourced token params: chain the
+ *  producer first, read its field, feed the consumer — never fabricate. Pure so
+ *  it can be unit-tested without spawning the audit session. */
+export function buildTokenDepNote(tokenDeps: TokenDep[]): string {
+  if (tokenDeps.length === 0) return '';
+  const lines = tokenDeps.map(
+    (d) =>
+      `- ${d.tool}(${d.param}) ← first call ${d.sourceTool}, then pass its \`${d.sourceField}\` output value`,
+  );
+  return `\n\nSome parameters are opaque tokens/ids minted by ANOTHER tool — you cannot fabricate them. For each below, call the producer tool first, read the named output field from its result, and pass that exact value to the consumer (reuse it across calls; no need to re-fetch each time):\n${lines.join(
+    '\n',
+  )}\nIf you cannot obtain such a value because the producer is blocked, classify the consumer call \`bad_params\`, never \`tool_broken\`.`;
+}
+
 interface DriveAuditOptions {
   site: string;
   model: string;
   timeoutMs: number;
   systemPromptPath: string;
   toolNames: string[];
+  /** Per-tool params that shipped live-unverified at compile time. */
+  unverifiedParams: Array<{ tool: string; params: string[] }>;
+  /** Producer→consumer token contracts (param.sourcedFrom) so the auditor chains. */
+  tokenDeps: TokenDep[];
 }
 
 /**
@@ -239,9 +319,20 @@ async function driveAudit(opts: DriveAuditOptions): Promise<AuditReport> {
     allowedToolArgs.push('--allowedTools', `mcp__${serverName}__${name}`);
   }
 
+  const unverifiedNote =
+    opts.unverifiedParams.length > 0
+      ? `\n\nThese parameters shipped WITHOUT a passing compile-time verification (their effect could not be confirmed against live data): ${opts.unverifiedParams
+          .map((u) => `${u.tool}(${u.params.join(', ')})`)
+          .join(
+            '; ',
+          )}. Probe them especially — call the tool with and without each one and check the response actually changes. Classify a param that has no effect as \`tool_broken\`.`
+      : '';
+
   const initialPrompt = `Audit every MCP tool connected to you for the site "${opts.site}".
 
 There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set plus one or two edge cases (all derived only from the schema and description), judge each result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt.
+
+IMPORTANT: Call tools strictly sequentially — issue exactly one tool call, wait for its result, then issue the next. Never issue tool calls in parallel or batch them in one turn. Many target sites share an anti-bot defense across endpoints, so a parallel burst trips a site-wide rate-limit (HTTP 429) that then poisons every later call. If a call returns a 429 / rate-limit / anti-bot result, classify it \`infra\` and pause before the next call.${unverifiedNote}${buildTokenDepNote(opts.tokenDeps)}
 
 When you are done, end your final message with exactly one fenced \`\`\`json block containing the full report and nothing after it.`;
 

@@ -17,7 +17,12 @@ import {
 } from 'node:path';
 import * as p from '@clack/prompts';
 import type { OnDeadlineReached } from './agent.ts';
-import { type SharedModuleManifestEntry, buildPlanSidecarPath } from './build-plan.ts';
+import {
+  type SharedModuleManifestEntry,
+  buildPlanSidecarPath,
+  readBuildPlanFile,
+  topoLevelsForTools,
+} from './build-plan.ts';
 import {
   type CompileAgentProgress,
   type TriageResult,
@@ -63,6 +68,7 @@ import {
   mergeSessions,
   writeCombinedSession,
 } from './session-merge.ts';
+import { clearCachedToken } from './stealth-token-cache.ts';
 import { planAndBuildPrereqs } from './teach-plan.ts';
 import {
   TEACH_STEPS as STEPS,
@@ -1182,6 +1188,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     updateCheckpoint(site, state, result.workflow.toolName, 'register');
   }
 
+  // Drop the transient compile-time stealth token (shared across this site's
+  // per-tool `bun test` processes). It holds a live session token and is no
+  // longer needed once every tool has compiled.
+  clearCachedToken(localSiteDir(site));
+
   p.outro(
     `Done! ${results.length} tool${results.length === 1 ? '' : 's'} ready: ${results.map((r) => r.workflow.toolName).join(', ')}`,
   );
@@ -1297,7 +1308,7 @@ async function compileCandidatePlans(opts: {
   // input from the first, causing it to auto-resolve as cancelled.
   let promptLock: Promise<void> = Promise.resolve();
 
-  const outcomes = await mapLimitSettled(opts.plans, concurrency, async (plan) => {
+  const compileOne = async (plan: CandidateCompilePlan) => {
     const displayName = plan.candidate?.toolName ?? plan.workflowKey;
     let lastActivity = '';
     const onProgress = (progress: CompileAgentProgress): void => {
@@ -1380,7 +1391,34 @@ async function compileCandidatePlans(opts: {
       }
       throw err;
     }
-  });
+  };
+
+  // Compile producer tools before their consumers so a consumer's chained
+  // verification test can mint a fresh token from the producer's live workflow.
+  // With no token contracts declared, every tool lands in a single level — the
+  // behavior is identical to the prior single concurrent fan-out.
+  type CompileOutcome = { ok: true; value: TeachToolResult } | { ok: false; error: unknown };
+  const buildPlan = opts.buildPlanPath ? readBuildPlanFile(opts.buildPlanPath) : null;
+  const levels = topoLevelsForTools(
+    opts.plans.map((plan) => ({ toolName: plan.candidate?.toolName ?? plan.workflowKey, plan })),
+    buildPlan,
+  );
+  const outcomeByKey = new Map<string, CompileOutcome>();
+  for (const level of levels) {
+    const levelPlans = level.map((k) => k.plan);
+    const levelOutcomes = await mapLimitSettled(levelPlans, concurrency, compileOne);
+    levelPlans.forEach((plan, i) => {
+      const outcome = levelOutcomes[i];
+      if (outcome) outcomeByKey.set(plan.workflowKey, outcome);
+    });
+  }
+  const outcomes: CompileOutcome[] = opts.plans.map(
+    (plan) =>
+      outcomeByKey.get(plan.workflowKey) ?? {
+        ok: false,
+        error: new Error(`no compile outcome recorded for ${plan.workflowKey}`),
+      },
+  );
 
   const summary = summarizeCompileOutcomes(outcomes, opts.plans);
 

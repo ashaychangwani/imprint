@@ -29,8 +29,14 @@ import {
   type SharedModuleManifestEntry,
   readBuildPlanFile,
   resolveAssignedModules,
+  resolveEmittedTokens,
+  resolveTokenParams,
 } from './build-plan.ts';
-import { buildCompileTools, externalVerification } from './compile-tools.ts';
+import {
+  applyParamVerification,
+  buildCompileTools,
+  externalVerification,
+} from './compile-tools.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { redactSession } from './redact.ts';
@@ -86,17 +92,23 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     sharedModules: opts.sharedModules,
   });
 
-  // Resolve the shared modules the plan assigned this tool, so verification can
-  // assert they are imported (no silent re-implementation).
+  // Resolve the shared modules + producer→consumer token contracts the plan
+  // assigned this tool, so verification can assert modules are imported and
+  // require a chained test for each producer-sourced token param.
+  const buildPlan =
+    opts.buildPlanPath && opts.candidate?.toolName ? readBuildPlanFile(opts.buildPlanPath) : null;
   const assignedSharedModules: AssignedSharedModule[] | undefined =
-    opts.buildPlanPath && opts.candidate?.toolName
-      ? (() => {
-          const plan = readBuildPlanFile(opts.buildPlanPath);
-          return plan
-            ? resolveAssignedModules(plan, opts.candidate.toolName, opts.sharedModules)
-            : undefined;
-        })()
+    buildPlan && opts.candidate?.toolName
+      ? resolveAssignedModules(buildPlan, opts.candidate.toolName, opts.sharedModules)
       : undefined;
+  const tokenParams =
+    buildPlan && opts.candidate?.toolName
+      ? resolveTokenParams(buildPlan, opts.candidate.toolName)
+      : [];
+  const emittedTokens =
+    buildPlan && opts.candidate?.toolName
+      ? resolveEmittedTokens(buildPlan, opts.candidate.toolName)
+      : [];
 
   // The custom done/give_up tools live alongside in MCP space.
   const doneTool: Tool = {
@@ -161,7 +173,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     if (name === 'done') {
       const summary = (args as { summary?: string }).summary ?? 'Task completed';
       log(`done() called: ${summary}`);
-      const { failures, warnings } = await externalVerification(
+      const { failures, warnings, paramVerification } = await externalVerification(
         opts.toolDir,
         session,
         opts.sessionPath,
@@ -170,17 +182,26 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
           likelyParams: opts.candidate?.likelyParams,
           candidateRequestSeqs: opts.candidate?.requestSeqs,
           assignedSharedModules,
+          tokenParams,
+          emittedTokens,
         },
       );
       if (warnings.length > 0) {
         log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
       }
       if (failures.length === 0) {
+        // Persist per-parameter verified flags into workflow.json and fold any
+        // "live-unverified" note into the recorded warnings (Fix D).
+        const paramWarnings = applyParamVerification(opts.toolDir, paramVerification);
+        if (paramWarnings.length > 0) {
+          log(`parameter verification:\n${paramWarnings.join('\n')}`);
+        }
+        const allWarnings = [...warnings, ...paramWarnings];
         const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
         writeFileSync(
           sentinel,
           JSON.stringify(
-            { summary, verification: 'passed', warnings, timestamp: Date.now() },
+            { summary, verification: 'passed', warnings: allWarnings, timestamp: Date.now() },
             null,
             2,
           ),

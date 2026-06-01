@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type BuildPlan,
+  type TokenContractHint,
   buildBuildPlanPayload,
+  deriveTokenContractHints,
   describeAssignedModules,
   planSliceForTool,
+  reconcileTokenContracts,
   resolveAssignedModules,
+  resolveTokenParams,
   sharedModuleImportPath,
   topoLevels,
+  topoLevelsForTools,
   topoSortSharedModules,
   validateBuildPlan,
 } from '../src/imprint/build-plan.ts';
@@ -14,7 +19,9 @@ import type { ToolCandidate } from '../src/imprint/tool-candidates.ts';
 import type { Session } from '../src/imprint/types.ts';
 
 function basePlan(): BuildPlan {
-  return {
+  // Route through validateBuildPlan so schema defaults (e.g. emitsTokens/
+  // tokenParams) are applied and the fixture stays robust to new optional fields.
+  return validateBuildPlan({
     sharedModules: [
       {
         path: '_shared/sign.ts',
@@ -56,7 +63,7 @@ function basePlan(): BuildPlan {
         },
       },
     ],
-  };
+  });
 }
 
 function mod0(plan: BuildPlan): BuildPlan['sharedModules'][number] {
@@ -381,5 +388,409 @@ describe('buildBuildPlanPayload', () => {
     });
     expect(payload.ephemeralValues).toHaveLength(1);
     expect(payload.ephemeralValues[0]?.classification).toBe('browser_minted');
+  });
+});
+
+describe('opaque-token contract (emitsTokens / tokenParams)', () => {
+  function plan(perTool: unknown[]): unknown {
+    return { sharedModules: [], perTool };
+  }
+  const producer = {
+    toolName: 'search_hotels',
+    emitsTokens: [{ field: 'hotel_id', shape: 'composite ftid|area' }],
+  };
+
+  it('accepts a valid producer→consumer token contract', () => {
+    const built = validateBuildPlan(
+      plan([
+        producer,
+        {
+          toolName: 'get_hotel_offers',
+          tokenParams: [
+            { param: 'hotel_id', sourceTool: 'search_hotels', sourceField: 'hotel_id' },
+          ],
+        },
+      ]),
+    );
+    expect(resolveTokenParams(built, 'get_hotel_offers')).toEqual([
+      { param: 'hotel_id', sourceTool: 'search_hotels', sourceField: 'hotel_id' },
+    ]);
+    expect(resolveTokenParams(built, 'search_hotels')).toEqual([]);
+  });
+
+  it('rejects a tokenParam pointing at an unknown producer tool', () => {
+    expect(() =>
+      validateBuildPlan(
+        plan([
+          {
+            toolName: 'get_hotel_offers',
+            tokenParams: [{ param: 'hotel_id', sourceTool: 'nope', sourceField: 'hotel_id' }],
+          },
+        ]),
+      ),
+    ).toThrow(/unknown producer tool/);
+  });
+
+  it('rejects a tokenParam that sources from its own tool', () => {
+    expect(() =>
+      validateBuildPlan(
+        plan([
+          {
+            toolName: 'get_hotel_offers',
+            emitsTokens: [{ field: 'hotel_id', shape: '' }],
+            tokenParams: [
+              { param: 'hotel_id', sourceTool: 'get_hotel_offers', sourceField: 'hotel_id' },
+            ],
+          },
+        ]),
+      ),
+    ).toThrow(/cannot source from its own tool/);
+  });
+
+  it('rejects a consumed field the producer does not declare in emitsTokens', () => {
+    expect(() =>
+      validateBuildPlan(
+        plan([
+          { toolName: 'search_hotels' }, // declares no emitsTokens
+          {
+            toolName: 'get_hotel_offers',
+            tokenParams: [
+              { param: 'hotel_id', sourceTool: 'search_hotels', sourceField: 'hotel_id' },
+            ],
+          },
+        ]),
+      ),
+    ).toThrow(/does not declare emitted field/);
+  });
+});
+
+describe('topoLevelsForTools', () => {
+  function chainedPlan(): BuildPlan {
+    return validateBuildPlan({
+      sharedModules: [],
+      perTool: [
+        { toolName: 'search_hotels', emitsTokens: [{ field: 'hotel_id', shape: 'c' }] },
+        {
+          toolName: 'get_hotel_offers',
+          tokenParams: [
+            { param: 'hotel_id', sourceTool: 'search_hotels', sourceField: 'hotel_id' },
+          ],
+        },
+      ],
+    });
+  }
+
+  it('orders the producer in an earlier level than its consumer', () => {
+    const tools = [{ toolName: 'get_hotel_offers' }, { toolName: 'search_hotels' }];
+    const levels = topoLevelsForTools(tools, chainedPlan());
+    expect(levels.map((l) => l.map((t) => t.toolName))).toEqual([
+      ['search_hotels'],
+      ['get_hotel_offers'],
+    ]);
+  });
+
+  it('keeps independent tools in a single level (no token contracts)', () => {
+    const tools = [{ toolName: 'a' }, { toolName: 'b' }, { toolName: 'c' }];
+    const levels = topoLevelsForTools(tools, null);
+    expect(levels).toHaveLength(1);
+    expect(levels[0]?.map((t) => t.toolName)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('appends a residual token-param cycle as a final level without dropping tools', () => {
+    const cyclic = validateBuildPlan({
+      sharedModules: [],
+      perTool: [
+        {
+          toolName: 'a',
+          emitsTokens: [{ field: 'fa', shape: '' }],
+          tokenParams: [{ param: 'pa', sourceTool: 'b', sourceField: 'fb' }],
+        },
+        {
+          toolName: 'b',
+          emitsTokens: [{ field: 'fb', shape: '' }],
+          tokenParams: [{ param: 'pb', sourceTool: 'a', sourceField: 'fa' }],
+        },
+        { toolName: 'c' }, // independent
+      ],
+    });
+    const tools = [{ toolName: 'a' }, { toolName: 'b' }, { toolName: 'c' }];
+    const levels = topoLevelsForTools(tools, cyclic);
+    // The independent tool resolves first; the a↔b cycle is appended last.
+    expect(levels.map((l) => l.map((t) => t.toolName))).toEqual([['c'], ['a', 'b']]);
+    // Every tool is placed exactly once — none dropped, no infinite loop.
+    expect(
+      levels
+        .flat()
+        .map((t) => t.toolName)
+        .sort(),
+    ).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('deriveTokenContractHints', () => {
+  const tools = [
+    { toolName: 'search_hotels', requestSeqs: [10, 11], likelyParams: [] },
+    { toolName: 'get_hotel_offers', requestSeqs: [20], likelyParams: [{ name: 'hotel_id' }] },
+  ];
+  const edge = {
+    classification: 'server_derived',
+    originalSeq: 20,
+    location: 'url_param:hotel_id',
+    producerSeq: 11,
+    producerPath: '$.results[0].detailToken',
+    value: 'ChcI78-luoXdhoaIARoKL20vMDJ2cGdnMRAB', // opaque token
+  };
+
+  it('detects a grounded cross-tool edge (server_derived, different owner tools)', () => {
+    const hints = deriveTokenContractHints({ selectedTools: tools, ephemeralValues: [edge] });
+    expect(hints).toEqual([
+      {
+        consumerTool: 'get_hotel_offers',
+        consumerParam: 'hotel_id',
+        consumerLocation: 'url_param:hotel_id',
+        producerTool: 'search_hotels',
+        producerField: 'detailToken',
+        producerPath: '$.results[0].detailToken',
+        nameable: true,
+      },
+    ]);
+  });
+
+  it('skips human-typed text mistaken as server_derived (echoed search query)', () => {
+    // The autocomplete reflects the typed query back, so the diff flags `q` as
+    // server_derived — but "Chicago Loop" is not a token and must not become a
+    // cross-tool contract.
+    const hints = deriveTokenContractHints({
+      selectedTools: [
+        { toolName: 'suggest_places', requestSeqs: [11], likelyParams: [] },
+        { toolName: 'search_hotels', requestSeqs: [20], likelyParams: [{ name: 'q' }] },
+      ],
+      ephemeralValues: [{ ...edge, location: 'url_param:q', value: 'Chicago Loop' }],
+    });
+    expect(hints).toEqual([]);
+  });
+
+  it('flags an opaque JSPB body path as not nameable', () => {
+    const hints = deriveTokenContractHints({
+      selectedTools: tools,
+      ephemeralValues: [{ ...edge, location: 'body[0][10][8][0][0][0]' }],
+    });
+    expect(hints).toHaveLength(1);
+    expect(hints[0]?.nameable).toBe(false);
+  });
+
+  it('reconciles the derived param name to a matching likelyParam (case-insensitive)', () => {
+    const t = [
+      { toolName: 'search_hotels', requestSeqs: [11], likelyParams: [] },
+      { toolName: 'get_hotel_offers', requestSeqs: [20], likelyParams: [{ name: 'hotelId' }] },
+    ];
+    const hints = deriveTokenContractHints({
+      selectedTools: t,
+      ephemeralValues: [{ ...edge, location: 'url_param:hotelid' }],
+    });
+    expect(hints[0]?.consumerParam).toBe('hotelId');
+  });
+
+  it('skips header locations (session/anti-bot tokens, out of scope)', () => {
+    const hints = deriveTokenContractHints({
+      selectedTools: tools,
+      ephemeralValues: [{ ...edge, location: 'header:x-csrf-token' }],
+    });
+    expect(hints).toEqual([]);
+  });
+
+  it('skips intra-tool values (producer and consumer are the same tool)', () => {
+    const hints = deriveTokenContractHints({
+      selectedTools: tools,
+      ephemeralValues: [{ ...edge, originalSeq: 11 }], // both seqs owned by search_hotels
+    });
+    expect(hints).toEqual([]);
+  });
+
+  it('skips ambiguous seqs owned by more than one tool', () => {
+    const shared = [
+      { toolName: 'search_hotels', requestSeqs: [11], likelyParams: [] },
+      { toolName: 'get_hotel_offers', requestSeqs: [11, 20], likelyParams: [] }, // 11 shared
+    ];
+    const hints = deriveTokenContractHints({ selectedTools: shared, ephemeralValues: [edge] });
+    expect(hints).toEqual([]);
+  });
+
+  it('ignores non-server_derived classifications and missing producers', () => {
+    expect(
+      deriveTokenContractHints({
+        selectedTools: tools,
+        ephemeralValues: [{ ...edge, classification: 'browser_minted' }],
+      }),
+    ).toEqual([]);
+    expect(
+      deriveTokenContractHints({
+        selectedTools: tools,
+        ephemeralValues: [{ ...edge, producerSeq: undefined, producerPath: undefined }],
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe('reconcileTokenContracts', () => {
+  const hint: TokenContractHint = {
+    consumerTool: 'get_hotel_offers',
+    consumerParam: 'hotel_id',
+    consumerLocation: 'url_param:hotel_id',
+    producerTool: 'search_hotels',
+    producerField: 'detailToken',
+    producerPath: '$.results[0].detailToken',
+    nameable: true,
+  };
+  const selected = new Set(['search_hotels', 'get_hotel_offers']);
+
+  it('injects a missing contract that then passes validation', () => {
+    const parsed = {
+      sharedModules: [],
+      perTool: [
+        { toolName: 'search_hotels', authRecipe: {} },
+        { toolName: 'get_hotel_offers', authRecipe: {} },
+      ],
+    };
+    const res = reconcileTokenContracts(parsed, [hint], selected);
+    expect(res.injected).toBe(1);
+    expect(res.repaired).toBe(0);
+    const built = validateBuildPlan(parsed, ['search_hotels', 'get_hotel_offers']);
+    // Injection names the producer field after the clean consumer param.
+    expect(resolveTokenParams(built, 'get_hotel_offers')).toEqual([
+      { param: 'hotel_id', sourceTool: 'search_hotels', sourceField: 'hotel_id' },
+    ]);
+    expect(
+      built.perTool.find((t) => t.toolName === 'search_hotels')?.emitsTokens.map((e) => e.field),
+    ).toContain('hotel_id');
+  });
+
+  it('does NOT duplicate a contract the planner already declared under another param name', () => {
+    // Real-data regression: the planner correctly declared `property_token` ←
+    // search_hotels, but the diff also surfaces the same edge at an opaque JSPB
+    // slot (param "0"). The edge is already covered, so nothing is injected.
+    const parsed = {
+      sharedModules: [],
+      perTool: [
+        {
+          toolName: 'search_hotels',
+          authRecipe: {},
+          emitsTokens: [{ field: 'property_token', shape: 'composite' }],
+        },
+        {
+          toolName: 'get_hotel_offers',
+          authRecipe: {},
+          tokenParams: [
+            { param: 'property_token', sourceTool: 'search_hotels', sourceField: 'property_token' },
+          ],
+        },
+      ],
+    };
+    const jspbHint: TokenContractHint = {
+      ...hint,
+      consumerParam: '0',
+      consumerLocation: 'body[0][10][8][0][0][0]',
+      producerField: 'body_substring',
+      nameable: false,
+    };
+    const res = reconcileTokenContracts(parsed, [jspbHint], selected);
+    expect(res).toEqual({ injected: 0, repaired: 0, warnings: [] });
+    expect(
+      resolveTokenParams(validateBuildPlan(parsed, [...selected]), 'get_hotel_offers'),
+    ).toEqual([
+      { param: 'property_token', sourceTool: 'search_hotels', sourceField: 'property_token' },
+    ]);
+  });
+
+  it('warns but does not inject an unnameable (opaque-path) missed edge', () => {
+    const parsed = {
+      sharedModules: [],
+      perTool: [
+        { toolName: 'search_hotels', authRecipe: {} },
+        { toolName: 'get_hotel_offers', authRecipe: {} },
+      ],
+    };
+    const jspbHint: TokenContractHint = {
+      ...hint,
+      consumerParam: '0',
+      consumerLocation: 'body[0][10][8][0][0][0]',
+      nameable: false,
+    };
+    const res = reconcileTokenContracts(parsed, [jspbHint], selected);
+    expect(res.injected).toBe(0);
+    expect(res.repaired).toBe(0);
+    expect(res.warnings).toHaveLength(1);
+    expect(
+      resolveTokenParams(validateBuildPlan(parsed, [...selected]), 'get_hotel_offers'),
+    ).toEqual([]);
+  });
+
+  it('repairs a half-declared contract (consumer tokenParam, no producer emitsTokens)', () => {
+    const parsed = {
+      sharedModules: [],
+      perTool: [
+        { toolName: 'search_hotels', authRecipe: {} }, // forgot emitsTokens — would fail superRefine
+        {
+          toolName: 'get_hotel_offers',
+          authRecipe: {},
+          tokenParams: [
+            { param: 'hotel_id', sourceTool: 'search_hotels', sourceField: 'detailToken' },
+          ],
+        },
+      ],
+    };
+    const res = reconcileTokenContracts(parsed, [hint], selected);
+    expect(res.repaired).toBe(1);
+    expect(res.injected).toBe(0);
+    // Validation would have thrown before the repair; now it succeeds.
+    const built = validateBuildPlan(parsed, ['search_hotels', 'get_hotel_offers']);
+    expect(
+      built.perTool.find((t) => t.toolName === 'search_hotels')?.emitsTokens.map((e) => e.field),
+    ).toContain('detailToken');
+  });
+
+  it('is a no-op when the contract is already fully declared', () => {
+    const parsed = {
+      sharedModules: [],
+      perTool: [
+        {
+          toolName: 'search_hotels',
+          authRecipe: {},
+          emitsTokens: [{ field: 'detailToken', shape: 'composite' }],
+        },
+        {
+          toolName: 'get_hotel_offers',
+          authRecipe: {},
+          tokenParams: [
+            { param: 'hotel_id', sourceTool: 'search_hotels', sourceField: 'detailToken' },
+          ],
+        },
+      ],
+    };
+    expect(reconcileTokenContracts(parsed, [hint], selected)).toEqual({
+      injected: 0,
+      repaired: 0,
+      warnings: [],
+    });
+  });
+
+  it('does nothing when there are no detected edges (single-tool / non-chained sites)', () => {
+    const parsed = { sharedModules: [], perTool: [{ toolName: 'x', authRecipe: {} }] };
+    const before = JSON.stringify(parsed);
+    expect(reconcileTokenContracts(parsed, [], new Set(['x']))).toEqual({
+      injected: 0,
+      repaired: 0,
+      warnings: [],
+    });
+    expect(JSON.stringify(parsed)).toBe(before);
+  });
+
+  it('skips an edge whose endpoint is not a selected tool', () => {
+    const parsed = {
+      sharedModules: [],
+      perTool: [{ toolName: 'get_hotel_offers', authRecipe: {} }],
+    };
+    const res = reconcileTokenContracts(parsed, [hint], new Set(['get_hotel_offers']));
+    expect(res).toEqual({ injected: 0, repaired: 0, warnings: [] });
   });
 });

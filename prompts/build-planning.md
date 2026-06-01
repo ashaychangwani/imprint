@@ -10,6 +10,7 @@ You receive:
 - `selectedTools[]` — the tools that WILL be compiled: `{ toolName, description, expectedOutput, requestSeqs, dependencySeqs, likelyParams }`. You must emit exactly one `perTool` entry for each.
 - `sharedContext` — `{ loginRequestSeqs, credentialNames, tokenExtractionNotes, sharedHelperNotes }` from candidate detection.
 - `ephemeralValues[]` — values that differed across two independent replays (highest-confidence signal for signing tokens / per-call state): `{ classification, originalSeq, location, producerSeq, producerPath, suggestedStateName }`. `browser_minted` with a high-entropy query-param `location` is the canonical sign of client-side URL signing → a `request-transform` module.
+- `tokenContractHints[]` — producer→consumer opaque-token edges DETECTED DETERMINISTICALLY from the dual-pass diff: `{ consumerTool, consumerParam, consumerLocation, producerTool, producerField, producerPath }`. Each is a grounded `server_derived` value `consumerTool` sends that was produced in `producerTool`'s response. These are pre-computed for you and are AUTHORITATIVE — you MUST declare each as a `tokenParams` (consumer) + `emitsTokens` (producer) contract per rule 12. Refine the rough `consumerParam`/`producerField` names and the `shape` from the recording, but do not drop an edge. (Any edge you miss is reconciled in deterministically, but declaring it yourself lets you pick the right `shape`.)
 - `requests[]` — the load-bearing requests for the selected tools (identical requests across tools are collapsed; `repeatCount`/`repeatedSeqs` show that). When the SAME endpoint appears for multiple tools, that's a strong shared-module signal.
 
 ## Output schema
@@ -42,7 +43,13 @@ You receive:
           { "name": "access_token", "source": "json", "locator": "$.token", "usedAs": "header:Authorization" }
         ],
         "notes": "how every tool replicates login inline (Imprint has no shared-auth runtime primitive)"
-      }
+      },
+      "emitsTokens": [
+        { "field": "item_id", "shape": "composite '<ftid>|<areaId>|<areaName>|<areaToken>' the detail tool needs" }
+      ],
+      "tokenParams": [
+        { "param": "item_id", "sourceTool": "search_x", "sourceField": "item_id" }
+      ]
     }
   ]
 }
@@ -61,3 +68,7 @@ You receive:
 9. **`dependsOn` only references other `sharedModules[].path`.** No cycles.
 10. **Be conservative.** Never invent a module without grounding `sourceSeqs`. If unsure whether two tools truly share logic, leave it per-tool (empty `sharedModules`, empty `usesSharedModules`). A wrong shared module forces every assigned tool to import code that doesn't fit. Fewer, well-grounded modules beat many speculative ones.
 11. `paramChecklist` mirrors the candidate's `likelyParams` names — the inputs each tool must template as `${param.NAME}`.
+12. **Opaque-token chains (`emitsTokens` / `tokenParams`).** When one tool's param is an opaque id/token a user cannot type — its value is minted by ANOTHER selected tool's response (a `search_*` → `get_*_details` chain) — model it as a cross-tool contract instead of bundling the context into an opaque blob. Start from `tokenContractHints[]` (each entry is a pre-detected edge you MUST declare), and also catch any the diff missed (`ephemeralValues` with a `server_derived` `producerSeq` belonging to a different tool's `requestSeqs`, or a `dependencySeqs` link):
+    - On the CONSUMER, add `tokenParams: [{ param, sourceTool, sourceField }]` — the param's value comes from `sourceTool`'s `sourceField` output, used as-is.
+    - On the PRODUCER (`sourceTool`), add `emitsTokens: [{ field, shape }]` so its parser emits that exact `field` in the full `shape` the consumer needs (e.g. a composite of id + area context), NOT a bare fragment.
+    - The consumer param's `sourceTool` must be another selected tool (not itself), and `sourceField` must appear in that producer's `emitsTokens`. Leave both arrays empty when there is no cross-tool token. This lets the consumer expose a usable param (the LLM caller mints it once from the producer and reuses it) and lets the gate verify the chain end-to-end — never hardcode another tool's recorded token into the consumer.

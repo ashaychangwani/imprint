@@ -74,7 +74,7 @@ export interface StealthFetch {
   close(): Promise<void>;
 }
 
-interface BootstrapArgs {
+export interface BootstrapArgs {
   baseUrl: string;
   probeUrl?: string;
   userAgent: string;
@@ -143,7 +143,7 @@ export function createStealthFetch(
     maxTokenAgeSeconds: o.maxTokenAgeSeconds ?? 600,
     maxConsecutiveFailures: o.maxConsecutiveFailures ?? 3,
   };
-  const bootstrapFn = internals?.bootstrap ?? defaultBootstrap;
+  const bootstrapFn = internals?.bootstrap ?? bootstrapStealthToken;
   const underlyingFetchFn = internals?.underlyingFetch ?? defaultUnderlyingFetch;
 
   let tokens: TokenCache | null = null;
@@ -325,8 +325,12 @@ function mergeCookieHeader(browserCookie: string, runtimeCookie: string | undefi
  * `baseUrl`, lets the bot-detection JS run, captures the resulting
  * cookies + sensor-injected headers via a route interceptor on a probe
  * request, closes the browser. Returns a fresh TokenCache.
+ *
+ * Exported so the compile-time token cache (stealth-token-cache.ts) can mint a
+ * token to persist + share across `bun test` processes without re-implementing
+ * the Playwright bootstrap.
  */
-async function defaultBootstrap(args: BootstrapArgs): Promise<TokenCache> {
+export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenCache> {
   const { chromium } = await import('playwright');
   let browser: Browser | undefined;
   try {

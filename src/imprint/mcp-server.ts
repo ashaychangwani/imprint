@@ -66,11 +66,17 @@ function buildToolDescription(w: ResolvedTool['workflow']): string {
 
 /** MCP advertises tool input as JSON Schema; build it directly from
  *  workflow parameters rather than going through Zod. */
-function buildJsonSchema(parameters: WorkflowParameter[]): Tool['inputSchema'] {
+export function buildJsonSchema(parameters: WorkflowParameter[]): Tool['inputSchema'] {
   const properties: Record<string, { type: string; description: string }> = {};
   const required: string[] = [];
   for (const p of parameters) {
-    properties[p.name] = { type: p.type, description: p.description };
+    // Producer-sourced token params: tell the orchestrating LLM where to mint the
+    // value so it calls the producer once and reuses it, rather than fabricating
+    // an opaque token (which the tool would reject).
+    const description = p.sourcedFrom
+      ? `${p.description} Obtain this value from the \`${p.sourcedFrom.tool}\` tool's \`${p.sourcedFrom.field}\` output — call \`${p.sourcedFrom.tool}\` first and reuse the value across calls (no need to re-fetch each time).`
+      : p.description;
+    properties[p.name] = { type: p.type, description };
     if (p.default === undefined) required.push(p.name);
   }
   return {

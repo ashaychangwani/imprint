@@ -113,6 +113,7 @@ Follow these steps to compile the session:
    - For JSON-keyed APIs: traverse the object, pull out the fields the user cares about, return a clean object
    - For JSPB: use `search_response_body` to find anchors (airport codes, dates, prices, airline names from narration), inspect the structure around those offsets, hypothesize the array indices, write extraction logic
    - Return a named-field object, not the raw input — the goal is to make the data usable by an AI agent without further parsing
+   - **Drop content-less records.** Some APIs signal "no match" not with an empty array but with a single placeholder record whose identifying fields are all empty/null (the recording, which only has hits, never shows this). When you map a list, filter out any record whose key identifying fields (id/code/name/the primary label your tool returns) are all empty or null — that is the API's no-match sentinel, not a result. A content-less record must never reach the output; an all-empty mapped row is always wrong.
 
 9. **Write parser.test.ts.** Create a `bun:test` suite:
    - **Load the response body from the redacted session at runtime via `process.env.IMPRINT_SESSION_PATH`.** The harness sets that env var to the absolute path of the redacted session file when it spawns `bun test`. Do NOT write a fixture file. Do NOT inline the response body as a string literal. The boilerplate looks like:
@@ -139,6 +140,18 @@ Follow these steps to compile the session:
    - Call `extract(raw)` and assert on the result.
    - Assertions must reference real values from the narration: `expect(result.flights.length).toBeGreaterThan(0)`, `expect(result.flights.some(f => f.origin === 'SFO')).toBe(true)`, `expect(result.flights[0].price).toBeGreaterThan(0)`.
    - Aim for at least 5 assertions — more is better.
+   - **Empty-result contract (required test).** `extract()` MUST return a clean empty collection for a no-match / empty upstream response — an empty array, or the success shape with its items array empty / count 0 — and NEVER a single placeholder record full of nulls. The recording has no zero-result example, so verify it with a synthetic case: add exactly one test whose title begins `synthetic:empty-result` that constructs an empty version of the response (same top-level shape as the recorded success, but with the items array empty / results null / count 0) and asserts the parser yields empty, not a phantom row:
+     ```typescript
+     test('synthetic:empty-result returns an empty list, not a phantom record', () => {
+       // Same top-level shape as the recorded success response, but no items.
+       const emptyResponse = { /* …e.g. results: [], count: 0 … */ };
+       const out = extract(emptyResponse as never);
+       const items = (out as { items?: unknown[] }).items ?? [];
+       expect(Array.isArray(items)).toBe(true);
+       expect(items.length).toBe(0);
+     });
+     ```
+     Match the assertion to your tool's actual success shape (the collection field you return). For a single-object tool, assert that a no-match response yields an empty / empty-object result rather than a record of nulls. The verifier requires this `synthetic:empty-result` test to be present AND to pass.
 
    The session under `sessions/` is gitignored (auth tokens / PII risk) and the test file is deleted after verification passes — together that means the test is local-and-ephemeral by design. Don't try to persist the response body to disk to dodge the env var.
 
@@ -187,6 +200,8 @@ Follow these steps to compile the session:
 
     **Per-parameter coverage tests.** Beyond the baseline test above, you must write one integration test for **every parameter that has a non-default value in any captured request** (visible in `inlineData.requestBodyDecoded` or via `read_request`). Walk every recorded request, decode its body, and enumerate the set of `(paramName, nonDefaultValue)` tuples. Each tuple is a coverage unit — write a test that overrides that param and asserts a constraint on the response.
 
+    **Title each per-parameter test `param:<name> …`** — begin the title with the literal token `param:` followed by the exact parameter name (e.g. `test('param:max_price=50 constrains all results', …)`). The verifier determines coverage by which `param:<name>` tests **actually ran green against live data**, not by scanning the source: a test that is merely present but did not pass — or a whole suite that was waived by anti-bot — does NOT count as coverage. Each per-parameter test MUST call `runWorkflowWithLadder` with the override value (a test that asserts a constant without calling the workflow is rejected).
+
     These tests are the only signal that each parameter actually reaches the API and affects the response. If a parameter is wired into a position the server ignores (an invented URL query param, a slot guessed wrong in a positional JSPB body), the test fails because the filtered response will look like the unfiltered one. Skipping a parameter means shipping it untested.
 
     **Pick discriminating values.** A test that doesn't constrain anything is a false-pass. Before using a value from the recording, cross-check the recorded response: does setting the param to that value measurably change the response compared to baseline (fewer results, different price range, different shape)? If yes, use it. If no — e.g., the recording has `max_results=1000` but baseline only returns 20 items so the filter is a no-op — derive a tighter value from the baseline response (e.g., a value below the median) that actually splits the results, and use that.
@@ -199,10 +214,10 @@ Follow these steps to compile the session:
     // the API, but its effect on the response is unverified.
     ```
 
-    The annotation satisfies the verifier coverage check but surfaces the gap in the verifier output so the user knows what's untested.
+    The annotation prevents the missing-coverage check from BLOCKING compile — but it does NOT mark the parameter verified. The parameter ships flagged `verified:false` in `workflow.json`, the gap is surfaced in the verifier output, and the audit harness is told to probe it specifically. Use the annotation only when you genuinely cannot derive a discriminating value — never as a shortcut to skip writing a real test.
 
     ```typescript
-    test('max_price=50 constrains all results', async () => {
+    test('param:max_price=50 constrains all results', async () => {
       const params: Record<string, string | number | boolean> = {
         /* same defaults as baseline, but override: */
         max_price: 50,
@@ -225,7 +240,43 @@ Follow these steps to compile the session:
 
     Write one test per parameter — do NOT batch unrelated params into a single test ("all four time-range params in one test" lets you skip dimensions silently and reduces the chance any one filter fails an assertion if it's broken). One param per test, one constraint per test, one assertion per constraint.
 
-    **Enum-like parameters.** When a parameter has more than two distinct values across `requestBodyDecoded` of the recorded requests (e.g., `sort_by` recorded with values `price`, `duration`, AND `rating`), write one test per distinct value rather than picking a single override. Cap at 5 distinct values per param to keep scope reasonable; if the recording has more, pick the 5 most semantically diverse. Each enum-value test still needs an assertion that the response is constrained to that value — e.g., `sort_by=price` should produce results sorted by price, not just a copy of the baseline. Testing one value when three were exercised silently ships two unverified response shapes.
+    **Enum-like parameters.** When a parameter has more than two distinct values across `requestBodyDecoded` of the recorded requests (e.g., `sort_by` recorded with values `price`, `duration`, AND `rating`), write one test per distinct value rather than picking a single override (title each `param:<name>=<value> …`, e.g. `param:sort_by=price …`). Cap at 5 distinct values per param to keep scope reasonable; if the recording has more, pick the 5 most semantically diverse. Each enum-value test still needs an assertion that the response is constrained to that value — e.g., `sort_by=price` should produce results sorted by price, not just a copy of the baseline. Testing one value when three were exercised silently ships two unverified response shapes.
+
+    **Producer-sourced (chained) token parameters.** Some parameters are opaque tokens/ids a user never types — their value is minted by a SIBLING tool in this same site (e.g. a `search_*` tool returns per-item ids that a `get_*_details` tool consumes). The build plan flags these two ways and you must honor both:
+
+    - **If THIS tool is the PRODUCER** (your `read_build_plan` slice lists `emitsTokens`): your parser MUST emit each listed `field` in the exact `shape` the consumer needs — the FULL value (e.g. a pipe-joined composite of id + context), never a bare fragment the consumer cannot use. A consumer's correctness depends on getting the complete value from you.
+
+    - **If THIS tool is the CONSUMER** (your slice lists `tokenParams` as `{param, sourceTool, sourceField}`): the recorded value for that param is stale and tool-specific, so a test that reuses it proves nothing. Write the `param:<param>` test to mint a FRESH value by calling the producer, then feed it here:
+
+      ```typescript
+      test('param:<param> uses a fresh token minted by <sourceTool>', async () => {
+        const credentials = (await loadCredentialStore(WORKFLOW.site)) ?? undefined;
+        // 1. Mint a fresh value from the producer tool's live output.
+        const producer = await runWorkflowWithLadder({
+          workflowPath: new URL('../<sourceTool>/workflow.json', import.meta.url).pathname,
+          params: { /* realistic producer params */ },
+          credentials,
+        });
+        // Rethrow so a producer anti-bot/infra block WAIVES this suite (it does
+        // not falsely pass): the verifier treats a vendor-block message as waived.
+        if (!producer.result.ok) throw new Error(`producer <sourceTool> failed: ${JSON.stringify(producer.result)}`);
+        const fresh = (producer.result.data as any).<sourceField>; // or items[0].<sourceField>
+        expect(fresh).toBeTruthy();
+        // 2. Feed the FRESH value into this tool and assert a real, non-empty result.
+        const { result } = await runWorkflowWithLadder({
+          workflowPath: WORKFLOW_PATH,
+          params: { /* baseline */ , <param>: fresh },
+          credentials,
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          const data = result.data as { items?: unknown[] };
+          expect((data.items ?? []).length).toBeGreaterThan(0);
+        }
+      }, 60_000);
+      ```
+
+      The verifier REQUIRES this chained shape for a producer-sourced param: a `param:<param>` test that calls only this tool's own `WORKFLOW_PATH` (reusing the recorded constant) is rejected as **unchained**. If the fresh value yields an empty/failed result, the producer/consumer contract is broken — **fix the PRODUCER to emit the full value this tool consumes** (or fix how this tool unpacks it); never paper over it with the recorded constant.
 
     **This file is ephemeral** like parser.test.ts — deleted after verification unless `--keep-test` is passed.
 
@@ -246,7 +297,7 @@ Follow these steps to compile the session:
     - Locate at least one recorded request where that parameter has a non-default / distinguishing value. Set the parameter to that recorded value, construct the request, and confirm the constructed request reproduces the recorded request's encoding of that parameter — same field, same array position, same value/type. This is a **static check against the recorded session**, not a live API call: use `read_request`, `read_response_body`, `search_response_body`, `run_bash`, and `run_tests` to compare what you build against what the recording shows.
     - **When a shared request-transform (or any shared helper) constructs the request, pass parameters using the EXACT names and types that helper consumes.** Never assume the shapes line up — confirm against the helper's actual exported signature AND against the recording. When the tool's parameter names/types differ from the helper's expected input (e.g. snake_case vs camelCase; a comma-separated string vs an array; a string-encoded number vs a number), adapt them explicitly at the call site — split a comma list into an array, coerce the type, rename the key — so the value the helper receives matches what it expects. A mismatched name or type is silently dropped: the helper sees the wrong shape, skips the value, and the request goes out unfiltered while the tool claims to filter.
     - **Never hardcode a single recorded variant of the request when the tool exposes a parameter meant to vary it.** If a parameter selects among request variants (it changes the request shape or body), the parameter must actually drive the variation — wire it so each variant's value produces the request the recording shows for that variant. Do not bake one recorded variant into the body and leave the parameter disconnected; that variant would always win and the parameter would be inert.
-    - **If a parameter's effect cannot be reproduced from the recorded data** — you cannot locate its encoding, or the recording never demonstrates it — after honest effort **REMOVE that parameter** from `workflow.json` and from any parser usage. A narrower tool that does exactly what it advertises is required; a tool that advertises an un-applied parameter is a defect. (Distinct from `likelyParams` that the recording shows in a `null`/`[]` position — those have a confirmed insertion point and stay; this is for parameters with no confirmable encoding at all.)
+    - **If a parameter's effect cannot be reproduced from the recorded data** — you cannot locate its encoding, or the recording never demonstrates it — after honest effort do NOT silently ship it as if it worked. Add the `// exposed-but-not-verified` annotation to its coverage test so it ships flagged `verified:false` (templated and reaching the API, but with its effect unconfirmed). It stays on the tool surface — keep + mark, never silently drop — and the gap is surfaced to the operator and the audit harness. (Distinct from `likelyParams` that the recording shows in a `null`/`[]` position — those have a confirmed insertion point and are verified normally; this is for parameters with no confirmable encoding at all.)
 
 14. **Claim completion.** When parser tests pass, call `done`. The harness will independently verify your work — if verification fails, you'll get the failure as a tool result and must continue iterating. **Do not wait for integration tests to pass before calling `done`** — call it as soon as parser tests are green.
 
@@ -414,7 +465,7 @@ The goal is a working tool, not a perfect tool. You can always refine later. Get
 | Tool | Purpose |
 |---|---|
 | `read_session_summary` | Returns site, narration, request count, list of load-bearing requests with seq+url+status+mimeType+bodySize |
-| `read_build_plan` | (multi-tool runs only) Returns this tool's plan slice: shared modules to import, parser guidance, parameter checklist, and the auth recipe to replicate inline |
+| `read_build_plan` | (multi-tool runs only) Returns this tool's plan slice: shared modules to import, parser guidance, parameter checklist, the auth recipe to replicate inline, and the opaque-token contract (`emitsTokens` you must produce for siblings, `tokenParams` you consume from siblings) |
 | `read_request` | Full request including request body for a given seq |
 | `read_response_body` | Response body for a given seq (paginated for large bodies via offset/length) |
 | `search_response_body` | Find substrings in a response body and return matching offsets+context (essential for anchoring on known values inside opaque JSPB) |

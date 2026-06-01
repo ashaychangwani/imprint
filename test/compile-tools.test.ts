@@ -3,8 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import {
   buildCompileTools,
+  classifyParamCoverage,
+  detectTokenSources,
   externalVerification,
+  extractTestBlocks,
   isBotDefenseFailure,
+  parseJUnitResults,
 } from '../src/imprint/compile-tools.ts';
 import type { Session } from '../src/imprint/types.ts';
 
@@ -574,6 +578,61 @@ describe('extract', () => {
     }
   });
 
+  it('fails a producer whose parser does not emit a declared emitsTokens field', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-emits-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+    const session: Session = {
+      site: 'emits-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          { toolName: 'search_hotels', intent: { description: 'x' }, requests: [], site: 'x' },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+      // Parser emits `propertyToken`, but the contract requires `hotel_id`.
+      writeFileSync(
+        pathJoin(exampleDir, 'parser.ts'),
+        'export function extract(b: { items: string[] }) {\n  return { propertyToken: b.items[0] };\n}\n',
+        'utf8',
+      );
+
+      const misses = await externalVerification(exampleDir, session, sessionPath, {
+        emittedTokens: [{ field: 'hotel_id', shape: 'composite' }],
+      });
+      expect(misses.failures.some((f) => f.includes('hotel_id') && f.includes('emit'))).toBe(true);
+
+      // When the parser DOES emit the field, the producer gate passes.
+      writeFileSync(
+        pathJoin(exampleDir, 'parser.ts'),
+        'export function extract(b: { items: string[] }) {\n  return { hotel_id: b.items[0] };\n}\n',
+        'utf8',
+      );
+      const hits = await externalVerification(exampleDir, session, sessionPath, {
+        emittedTokens: [{ field: 'hotel_id', shape: 'composite' }],
+      });
+      expect(hits.failures.some((f) => f.includes('parser.ts does not emit'))).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails when likelyParams are in parameters but not referenced in requests', async () => {
     const repoRoot = pathJoin(import.meta.dir, '..');
     const scratchRoot = pathJoin(repoRoot, '.context');
@@ -885,14 +944,11 @@ describe('extract', () => {
     }
   });
 
-  it('flags declared params that integration.test.ts does not exercise with a distinct value', async () => {
-    // Per-parameter coverage check: a parameter declared on the tool surface
-    // must appear with at least two distinct values in integration.test.ts
-    // (baseline + override) or carry a `// exposed-but-not-verified`
-    // annotation. This is the structural enforcement that catches "broken
-    // filter ships untested" — e.g., google-flights' max_duration_minutes
-    // bug, where the param was declared and templated but no test ever set
-    // it to a discriminating value.
+  it('flags declared params with no passing param:<name> test (suite ran, none annotated)', async () => {
+    // Per-parameter coverage check (Fix C/D): a parameter is covered only by a
+    // `param:<name>` integration test that ACTUALLY RAN GREEN. The fixture's
+    // integration suite passes offline but has no `param:` tests, so every
+    // non-annotated param is uncovered (blocking); the annotated one is allowed.
     const repoRoot = pathJoin(import.meta.dir, '..');
     const scratchRoot = pathJoin(repoRoot, '.context');
     mkdirSync(scratchRoot, { recursive: true });
@@ -991,20 +1047,274 @@ test('override query', async () => {
       });
 
       const coverageFailure = failures.find((f) =>
-        f.includes('have no discriminating integration test'),
+        f.includes('no passing `param:<name>` integration test'),
       );
       expect(coverageFailure).toBeDefined();
-      // query has two distinct values → covered, not flagged
-      expect(coverageFailure ?? '').not.toContain('query');
-      // sort appears only as 'price' in both tests → 1 distinct value → uncovered
+      // No param:<name> tests exist → every non-annotated param is uncovered.
+      expect(coverageFailure ?? '').toContain('query');
       expect(coverageFailure ?? '').toContain('sort');
-      // max_price not mentioned at all → uncovered
       expect(coverageFailure ?? '').toContain('max_price');
       // discount_code annotated → allowed, not flagged
       expect(coverageFailure ?? '').not.toContain('discount_code');
     } finally {
       rmSync(exampleDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('classifyParamCoverage', () => {
+  const integrationSrc = `import { expect, test } from 'bun:test';
+import { runWorkflowWithLadder } from 'imprint/backend-ladder';
+
+test('baseline', async () => {
+  const { result } = await runWorkflowWithLadder({ workflowPath: WP, params: {} });
+  expect(result.ok).toBe(true);
+});
+
+test('param:query=apple constrains results', async () => {
+  const { result } = await runWorkflowWithLadder({ workflowPath: WP, params: { query: 'apple' } });
+  expect(result.ok).toBe(true);
+});
+
+test('param:fake passes without calling the workflow', async () => {
+  expect(1).toBe(1);
+});
+
+// exposed-but-not-verified: discount_code has no discriminating value.
+test('param:discount_code is annotated', async () => {
+  expect(1).toBe(1);
+});
+`;
+
+  it('marks a param covered when its param:<name> test ran green and calls the workflow', () => {
+    const { paramVerification, uncovered, tautological } = classifyParamCoverage({
+      likelyParams: [{ name: 'query' }],
+      integrationSrc,
+      passedTests: new Set(['param:query=apple constrains results']),
+      integrationOutcome: 'passed',
+    });
+    expect(paramVerification).toEqual([{ name: 'query', verified: true }]);
+    expect(uncovered).toEqual([]);
+    expect(tautological).toEqual([]);
+  });
+
+  it('flags a passing param test that never calls runWorkflowWithLadder as tautological', () => {
+    const { tautological, paramVerification } = classifyParamCoverage({
+      likelyParams: [{ name: 'fake' }],
+      integrationSrc,
+      passedTests: new Set(['param:fake passes without calling the workflow']),
+      integrationOutcome: 'passed',
+    });
+    expect(tautological).toEqual(['fake']);
+    expect(paramVerification).toEqual([]);
+  });
+
+  it('marks params unverified (not blocking) when the suite was waived by anti-bot', () => {
+    const { paramVerification, uncovered } = classifyParamCoverage({
+      likelyParams: [{ name: 'query' }, { name: 'sort' }],
+      integrationSrc,
+      passedTests: new Set(),
+      integrationOutcome: 'waived-bot',
+    });
+    expect(uncovered).toEqual([]);
+    expect(paramVerification).toEqual([
+      { name: 'query', verified: false, reason: 'waived-bot' },
+      { name: 'sort', verified: false, reason: 'waived-bot' },
+    ]);
+  });
+
+  it('marks an annotated param unverified (not blocking) when the suite ran green', () => {
+    const { paramVerification, uncovered } = classifyParamCoverage({
+      likelyParams: [{ name: 'discount_code' }],
+      integrationSrc,
+      passedTests: new Set(),
+      integrationOutcome: 'passed',
+    });
+    expect(uncovered).toEqual([]);
+    expect(paramVerification).toEqual([
+      { name: 'discount_code', verified: false, reason: 'annotated' },
+    ]);
+  });
+
+  it('blocks an uncovered, unannotated param when the suite ran green', () => {
+    const { uncovered, paramVerification } = classifyParamCoverage({
+      likelyParams: [{ name: 'sort' }],
+      integrationSrc,
+      passedTests: new Set(['baseline']),
+      integrationOutcome: 'passed',
+    });
+    expect(uncovered).toEqual(['sort']);
+    expect(paramVerification).toEqual([]);
+  });
+
+  it('leaves unchained empty for non-token params', () => {
+    const { unchained } = classifyParamCoverage({
+      likelyParams: [{ name: 'query' }],
+      integrationSrc,
+      passedTests: new Set(['param:query=apple constrains results']),
+      integrationOutcome: 'passed',
+    });
+    expect(unchained).toEqual([]);
+  });
+
+  // ── Producer-sourced token params (chained verification) ──
+  const chainedSrc = `import { runWorkflowWithLadder } from 'imprint/backend-ladder';
+
+test('param:hotel_id uses a fresh token minted by search_hotels', async () => {
+  const producer = await runWorkflowWithLadder({ workflowPath: new URL('../search_hotels/workflow.json', import.meta.url).pathname, params: {} });
+  const fresh = (producer.result.data as any).hotel_id;
+  const { result } = await runWorkflowWithLadder({ workflowPath: WP, params: { hotel_id: fresh } });
+  expect(result.ok).toBe(true);
+});
+`;
+  // Same title, but the test only calls this tool's own workflow (the tautology).
+  const tautologicalChainSrc = `import { runWorkflowWithLadder } from 'imprint/backend-ladder';
+
+test('param:hotel_id selects the hotel', async () => {
+  const { result } = await runWorkflowWithLadder({ workflowPath: WP, params: { hotel_id: 'RECORDED_COMPOSITE' } });
+  expect(result.ok).toBe(true);
+});
+`;
+  const tokenSources = [
+    { param: 'hotel_id', sourceTool: 'search_hotels', sourceField: 'hotel_id' },
+  ];
+
+  it('verifies a token param via a chained test that mints from the producer sibling', () => {
+    const { paramVerification, unchained } = classifyParamCoverage({
+      likelyParams: [{ name: 'hotel_id' }],
+      integrationSrc: chainedSrc,
+      passedTests: new Set(['param:hotel_id uses a fresh token minted by search_hotels']),
+      integrationOutcome: 'passed',
+      tokenSources,
+    });
+    expect(unchained).toEqual([]);
+    expect(paramVerification).toEqual([
+      {
+        name: 'hotel_id',
+        verified: true,
+        sourcedFrom: { tool: 'search_hotels', field: 'hotel_id' },
+      },
+    ]);
+  });
+
+  it('flags a token param as unchained when its passing test reuses the recorded constant', () => {
+    const { unchained, paramVerification } = classifyParamCoverage({
+      likelyParams: [{ name: 'hotel_id' }],
+      integrationSrc: tautologicalChainSrc,
+      passedTests: new Set(['param:hotel_id selects the hotel']),
+      integrationOutcome: 'passed',
+      tokenSources,
+    });
+    expect(unchained).toEqual(['hotel_id']);
+    expect(paramVerification).toEqual([]);
+  });
+
+  it('waives a token param (non-blocking) when the producer suite was anti-bot blocked', () => {
+    const { unchained, paramVerification } = classifyParamCoverage({
+      likelyParams: [{ name: 'hotel_id' }],
+      integrationSrc: chainedSrc,
+      passedTests: new Set(),
+      integrationOutcome: 'waived-bot',
+      tokenSources,
+    });
+    expect(unchained).toEqual([]);
+    expect(paramVerification).toEqual([
+      {
+        name: 'hotel_id',
+        verified: false,
+        reason: 'waived-chain',
+        sourcedFrom: { tool: 'search_hotels', field: 'hotel_id' },
+      },
+    ]);
+  });
+
+  it('blocks a token param with no chained test on a green suite', () => {
+    const { unchained, paramVerification } = classifyParamCoverage({
+      likelyParams: [{ name: 'hotel_id' }],
+      integrationSrc: chainedSrc,
+      passedTests: new Set(['some other test']),
+      integrationOutcome: 'passed',
+      tokenSources,
+    });
+    expect(unchained).toEqual(['hotel_id']);
+    expect(paramVerification).toEqual([]);
+  });
+});
+
+describe('detectTokenSources', () => {
+  it('flags a param whose recorded value appears in a sibling response', () => {
+    const out = detectTokenSources({
+      likelyParams: [{ name: 'offer_token' }],
+      recordedParamValues: new Map([['offer_token', 'fixture-token-0001']]),
+      siblingResponses: [{ toolName: 'search_x', body: '{"items":[{"t":"fixture-token-0001"}]}' }],
+    });
+    expect(out).toEqual([{ param: 'offer_token', sourceTool: 'search_x' }]);
+  });
+
+  it('matches a composite segment when the producer emits only a fragment', () => {
+    const out = detectTokenSources({
+      likelyParams: [{ name: 'hotel_id' }],
+      recordedParamValues: new Map([
+        ['hotel_id', '0x880e2cbb24a58c1f:0x469c0c8118eb74b2|/m/0gz469'],
+      ]),
+      siblingResponses: [{ body: '{"ftid":"0x880e2cbb24a58c1f:0x469c0c8118eb74b2"}' }],
+    });
+    expect(out.map((t) => t.param)).toEqual(['hotel_id']);
+  });
+
+  it('ignores low-entropy / free-text values and non-matches', () => {
+    expect(
+      detectTokenSources({
+        likelyParams: [{ name: 'sort' }, { name: 'city' }, { name: 'tok' }],
+        recordedParamValues: new Map([
+          ['sort', 'price'],
+          ['city', 'Chicago Loop'],
+          ['tok', 'ABCDEF0123456789'],
+        ]),
+        siblingResponses: [{ body: '{"results":["price","Chicago Loop"]}' }],
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe('parseJUnitResults', () => {
+  it('separates passed (self-closed) from failed (with <failure>) testcases', () => {
+    const xml = `<?xml version="1.0"?>
+<testsuites>
+  <testsuite name="s">
+    <testcase name="param:query=apple constrains results" classname="s" />
+    <testcase name="baseline &gt; ok" classname="s"></testcase>
+    <testcase name="param:sort fails" classname="s">
+      <failure message="expected true">at line 5</failure>
+    </testcase>
+  </testsuite>
+</testsuites>`;
+    const { passed, failed } = parseJUnitResults(xml);
+    expect(passed.has('param:query=apple constrains results')).toBe(true);
+    expect(passed.has('baseline > ok')).toBe(true); // XML entity unescaped
+    expect(failed.has('param:sort fails')).toBe(true);
+    expect(passed.has('param:sort fails')).toBe(false);
+  });
+
+  it('returns empty sets for empty/missing input', () => {
+    const { passed, failed } = parseJUnitResults('');
+    expect(passed.size).toBe(0);
+    expect(failed.size).toBe(0);
+  });
+});
+
+describe('extractTestBlocks', () => {
+  it('captures each test title and its body up to the next test', () => {
+    const src = `test('param:a does x', async () => {
+  await runWorkflowWithLadder({ params: { a: 1 } });
+});
+test('param:b does y', () => {
+  expect(1).toBe(1);
+});`;
+    const blocks = extractTestBlocks(src);
+    expect(blocks.map((b) => b.title)).toEqual(['param:a does x', 'param:b does y']);
+    expect(blocks[0]?.body.includes('runWorkflowWithLadder')).toBe(true);
+    expect(blocks[1]?.body.includes('runWorkflowWithLadder')).toBe(false);
   });
 });
 

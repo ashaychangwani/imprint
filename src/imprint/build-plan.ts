@@ -72,6 +72,25 @@ const AuthRecipeSchema = z
   })
   .default({});
 
+/** A field this tool's parser MUST emit so a sibling consumer tool can use it as
+ *  an input param (producer side of an opaque-token chain). `shape` describes the
+ *  exact form the consumer needs (e.g. a pipe-joined composite), so the producer
+ *  emits the full value rather than a bare fragment. */
+const EmittedTokenSchema = z.object({
+  field: z.string().min(1),
+  shape: z.string().default(''),
+});
+
+/** An input param whose value is an opaque token/id minted by a sibling tool
+ *  (consumer side). The consumer takes `sourceTool`'s `sourceField` output as-is;
+ *  the gate requires a chained verification test and the MCP description tells the
+ *  orchestrating LLM to call `sourceTool` first and reuse the value. */
+const TokenParamSchema = z.object({
+  param: z.string().min(1),
+  sourceTool: z.string().min(1),
+  sourceField: z.string().min(1),
+});
+
 const PerToolPlanSchema = z.object({
   toolName: z.string().regex(/^[a-z][a-z0-9_]*$/),
   usesSharedModules: z.array(z.string()).default([]),
@@ -79,6 +98,11 @@ const PerToolPlanSchema = z.object({
   parserGuidance: z.string().default(''),
   paramChecklist: z.array(z.string()).default([]),
   authRecipe: AuthRecipeSchema,
+  /** Opaque-token chain — producer side: fields this tool's parser must emit for
+   *  sibling consumers. */
+  emitsTokens: z.array(EmittedTokenSchema).default([]),
+  /** Opaque-token chain — consumer side: params minted by a sibling producer. */
+  tokenParams: z.array(TokenParamSchema).default([]),
 });
 type PerToolPlan = z.infer<typeof PerToolPlanSchema>;
 
@@ -133,6 +157,34 @@ export const BuildPlanSchema = z
             code: z.ZodIssueCode.custom,
             path: ['perTool', i, 'usesSharedModules', j],
             message: `tool "${t.toolName}" references unknown shared module "${used}"`,
+          });
+        }
+      }
+    }
+    // Opaque-token chain validation: each consumer's tokenParam must point at a
+    // real sibling producer that declares the consumed field in `emitsTokens`.
+    const emittedByTool = new Map(
+      value.perTool.map((t) => [t.toolName, new Set(t.emitsTokens.map((e) => e.field))]),
+    );
+    for (const [i, t] of value.perTool.entries()) {
+      for (const [j, tp] of t.tokenParams.entries()) {
+        if (tp.sourceTool === t.toolName) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['perTool', i, 'tokenParams', j, 'sourceTool'],
+            message: `tokenParam "${tp.param}" cannot source from its own tool "${t.toolName}"`,
+          });
+        } else if (!toolNames.has(tp.sourceTool)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['perTool', i, 'tokenParams', j, 'sourceTool'],
+            message: `tokenParam "${tp.param}" references unknown producer tool "${tp.sourceTool}"`,
+          });
+        } else if (!emittedByTool.get(tp.sourceTool)?.has(tp.sourceField)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['perTool', i, 'tokenParams', j, 'sourceField'],
+            message: `producer "${tp.sourceTool}" does not declare emitted field "${tp.sourceField}" (add it to that tool's emitsTokens)`,
           });
         }
       }
@@ -320,6 +372,79 @@ ${lines.join('\n')}
 For a request-transform module, set "requestTransformModule": "<importPath>" in workflow.json. For a parser-helper/types module, import it in parser.ts. The verifier fails this tool if an assigned module is not imported.`;
 }
 
+/** The producer→consumer token contracts the build plan declared for a tool
+ *  (consumer side). Threaded into `externalVerification` so the gate requires a
+ *  chained test and stamps `sourcedFrom`. Empty when the plan declared none. */
+export function resolveTokenParams(
+  plan: BuildPlan,
+  toolName: string,
+): Array<{ param: string; sourceTool: string; sourceField: string }> {
+  return plan.perTool.find((t) => t.toolName === toolName)?.tokenParams ?? [];
+}
+
+/** The fields a tool's parser MUST emit for sibling consumers (producer side).
+ *  Threaded into `externalVerification` so the gate fails a producer that does
+ *  not emit a declared field. Empty when the plan declared none. */
+export function resolveEmittedTokens(
+  plan: BuildPlan,
+  toolName: string,
+): Array<{ field: string; shape: string }> {
+  return plan.perTool.find((t) => t.toolName === toolName)?.emitsTokens ?? [];
+}
+
+/** Order tools producer-before-consumer for the compile fan-out: edge
+ *  consumer → its tokenParams' sourceTool. Returns Kahn levels (tools within a
+ *  level are independent and may compile concurrently). Cycle-safe — any residual
+ *  cycle members are appended as a final level (matches `topoLevels`). A consumer
+ *  whose producer compiles first can run its chained verification test live. */
+export function topoLevelsForTools<T extends { toolName: string }>(
+  tools: T[],
+  plan: BuildPlan | null,
+): T[][] {
+  const names = new Set(tools.map((t) => t.toolName));
+  const deps = new Map<string, Set<string>>();
+  for (const t of tools) {
+    const producers = new Set<string>();
+    for (const tp of plan ? resolveTokenParams(plan, t.toolName) : []) {
+      if (tp.sourceTool !== t.toolName && names.has(tp.sourceTool)) producers.add(tp.sourceTool);
+    }
+    deps.set(t.toolName, producers);
+  }
+  const indegree = new Map<string, number>();
+  const dependents = new Map<string, string[]>();
+  for (const t of tools) {
+    indegree.set(t.toolName, deps.get(t.toolName)?.size ?? 0);
+    for (const producer of deps.get(t.toolName) ?? []) {
+      const list = dependents.get(producer);
+      if (list) list.push(t.toolName);
+      else dependents.set(producer, [t.toolName]);
+    }
+  }
+  const byName = new Map(tools.map((t) => [t.toolName, t]));
+  const levels: T[][] = [];
+  const placed = new Set<string>();
+  let frontier = tools.filter((t) => (indegree.get(t.toolName) ?? 0) === 0);
+  while (frontier.length > 0) {
+    levels.push(frontier);
+    for (const t of frontier) placed.add(t.toolName);
+    const next: T[] = [];
+    for (const t of frontier) {
+      for (const dependent of dependents.get(t.toolName) ?? []) {
+        const remaining = (indegree.get(dependent) ?? 0) - 1;
+        indegree.set(dependent, remaining);
+        if (remaining === 0) {
+          const tool = byName.get(dependent);
+          if (tool) next.push(tool);
+        }
+      }
+    }
+    frontier = next;
+  }
+  const leftover = tools.filter((t) => !placed.has(t.toolName));
+  if (leftover.length > 0) levels.push(leftover);
+  return levels;
+}
+
 /** Load a build plan from an explicit file path (the sidecar threaded into the
  *  compile drivers). Returns null on missing/invalid file. */
 export function readBuildPlanFile(path: string): BuildPlan | null {
@@ -357,6 +482,265 @@ export function validateBuildPlan(
     }
   }
   return plan;
+}
+
+// ─── Deterministic cross-tool token detection ────────────────────────────────
+
+/** A grounded producer→consumer opaque-token edge derived DETERMINISTICALLY from
+ *  the dual-pass classifications — not LLM inference. The consumer sends, at
+ *  `consumerLocation`, a value the diff classified `server_derived` from
+ *  `producerPath` in a response owned by a DIFFERENT selected tool. Fed to the
+ *  planner as a grounded hint and used to reconcile the returned plan so a
+ *  planner shortcut cannot silently drop (or half-declare) the contract. */
+export interface TokenContractHint {
+  consumerTool: string;
+  /** Param name derived from `consumerLocation` (reconciled to a `likelyParams`
+   *  name when one matches case-insensitively). */
+  consumerParam: string;
+  consumerLocation: string;
+  producerTool: string;
+  /** Output field name derived from `producerPath`. */
+  producerField: string;
+  producerPath: string;
+  /** Whether the consumer slot maps to a clean, nameable param (a real query/body
+   *  key or a known `likelyParams` name) rather than an opaque JSPB index path.
+   *  Only nameable edges are auto-injected when the planner misses them; unnamed
+   *  ones are left to the compile-time chained-test gate to enforce. */
+  nameable: boolean;
+}
+
+/** Sanitize a raw path/param segment into a safe identifier. General — no
+ *  site-specific shapes. */
+function toIdentifier(raw: string): string {
+  const cleaned = raw.replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+  return cleaned || 'token';
+}
+
+/** Whether a value looks like an opaque token/id rather than human-typed text (a
+ *  city name, a date, a search query). Gates deterministic detection so an echoed
+ *  search query ("Chicago Loop") — classified `server_derived` because the
+ *  autocomplete reflected it back — is NOT mistaken for a produced token. Stricter
+ *  than the compile-time `looksOpaque` (which is value-matched, so lower-risk):
+ *  here a false positive pollutes the plan, so require a digit or a token
+ *  separator — place names have neither. Kept local to avoid a build-plan →
+ *  compile-tools import cycle. */
+function looksLikeToken(v: string): boolean {
+  if (v.length < 12) return false;
+  if (/\s/.test(v)) return false; // multi-word / free text
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return false; // dates
+  return /[:|_-]/.test(v) || /\d/.test(v);
+}
+
+/** Derive a consumer param name from a classification `location`
+ *  ("url_param:hotel_id" → "hotel_id", "body:$.hotel.id" → "id"). Returns '' for
+ *  `header:` locations — header tokens are session/anti-bot state handled by the
+ *  bootstrap ladder, NOT cross-tool entity params (out of scope here). */
+function paramNameFromLocation(location: string): string {
+  const idx = location.indexOf(':');
+  const kind = (idx >= 0 ? location.slice(0, idx) : '').toLowerCase();
+  if (kind === 'header') return '';
+  const rest = (idx >= 0 ? location.slice(idx + 1) : location).replace(/^\$\.?/, '');
+  const seg =
+    rest
+      .split(/[.[\]]/)
+      .filter(Boolean)
+      .pop() ?? rest;
+  return toIdentifier(seg);
+}
+
+/** Derive a producer output field name from a `producerPath`
+ *  ("$.results[0].detailToken" → "detailToken"); skips pure-numeric indices. */
+function fieldNameFromPath(path: string): string {
+  const seg = path
+    .replace(/^\$\.?/, '')
+    .split(/[.[\]]/)
+    .filter((s) => s && !/^\d+$/.test(s))
+    .pop();
+  return toIdentifier(seg ?? 'token');
+}
+
+/**
+ * Deterministically detect cross-tool opaque-token edges from the dual-pass
+ * classifications. A `server_derived` value SENT by one tool (the sole owner of
+ * `originalSeq`) but PRODUCED in a response owned by a DIFFERENT tool (the sole
+ * owner of `producerSeq`) is a producer→consumer token. Pure; grounds the
+ * contract in the recording instead of leaving detection to the planner LLM
+ * (whose shortcut on exactly this is the defect this feature fixes). Conservative
+ * by design: a seq owned by >1 tool (a shared request) is ambiguous and skipped;
+ * `header:` locations (session/anti-bot tokens) are out of scope and skipped.
+ */
+export function deriveTokenContractHints(payload: {
+  selectedTools: Array<{
+    toolName: string;
+    requestSeqs: number[];
+    likelyParams?: Array<{ name: string }>;
+  }>;
+  ephemeralValues: Array<{
+    classification: string;
+    originalSeq: number;
+    location: string;
+    producerSeq?: number;
+    producerPath?: string;
+    value?: string;
+  }>;
+}): TokenContractHint[] {
+  const ownersBySeq = new Map<number, Set<string>>();
+  for (const t of payload.selectedTools) {
+    for (const s of t.requestSeqs) {
+      const set = ownersBySeq.get(s);
+      if (set) set.add(t.toolName);
+      else ownersBySeq.set(s, new Set([t.toolName]));
+    }
+  }
+  const soleOwner = (seq: number): string | undefined => {
+    const set = ownersBySeq.get(seq);
+    return set && set.size === 1 ? [...set][0] : undefined;
+  };
+  const paramsByTool = new Map(
+    payload.selectedTools.map((t) => [t.toolName, (t.likelyParams ?? []).map((p) => p.name)]),
+  );
+  const seen = new Set<string>();
+  const out: TokenContractHint[] = [];
+  for (const ev of payload.ephemeralValues) {
+    if (ev.classification !== 'server_derived') continue;
+    if (ev.producerSeq == null || !ev.producerPath) continue;
+    if (!ev.value || !looksLikeToken(ev.value)) continue; // skip echoed query text, etc.
+    const consumerTool = soleOwner(ev.originalSeq);
+    const producerTool = soleOwner(ev.producerSeq);
+    if (!consumerTool || !producerTool || consumerTool === producerTool) continue;
+    let param = paramNameFromLocation(ev.location);
+    if (!param) continue;
+    // Reconcile to an actual exposed param name when one matches case-insensitively.
+    const known = paramsByTool.get(consumerTool) ?? [];
+    if (!known.includes(param)) {
+      const ci = known.find((n) => n.toLowerCase() === param.toLowerCase());
+      if (ci) param = ci;
+    }
+    // Nameable = a real param the consumer exposes, or a clean identifier-shaped
+    // key — NOT an opaque JSPB index path (e.g. "body[0][10]" -> "0").
+    const nameable = known.includes(param) || /^[A-Za-z][A-Za-z0-9_]*$/.test(param);
+    const producerField = fieldNameFromPath(ev.producerPath);
+    const key = `${consumerTool} ${param} ${producerTool} ${producerField}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      consumerTool,
+      consumerParam: param,
+      consumerLocation: ev.location,
+      producerTool,
+      producerField,
+      producerPath: ev.producerPath,
+      nameable,
+    });
+  }
+  return out;
+}
+
+/** Loose perTool shape for reconciling a freshly-parsed planner plan in place,
+ *  before zod applies defaults + the cross-tool superRefine. */
+interface LoosePerToolPlan {
+  toolName: string;
+  authRecipe?: unknown;
+  emitsTokens?: Array<{ field: string; shape?: string }>;
+  tokenParams?: Array<{ param: string; sourceTool: string; sourceField: string }>;
+}
+
+/**
+ * Reconcile a parsed planner plan against the deterministically-detected token
+ * edges, IN PLACE, before validation. Edge-centric (one decision per
+ * consumer→producer pair) so the planner's own naming/shape always wins:
+ *  - if the consumer already declares ANY `tokenParam` sourced from that producer,
+ *    the edge is covered — only ensure the producer emits each referenced
+ *    `sourceField` (repairs a half-declared contract `superRefine` would reject);
+ *  - else if the consumer already binds that param name to a different producer,
+ *    trust the planner and warn;
+ *  - else if the edge is confidently nameable, inject the full contract (consumer
+ *    `tokenParam` + producer `emitsTokens`) so a planner shortcut can't drop it;
+ *  - else (an opaque JSPB slot we can't safely name) warn and leave enforcement to
+ *    the compile-time chained-test gate.
+ * Returns counts + warnings for logging. No-op when `hints` is empty (so
+ * single-tool / non-chained sites behave exactly as before).
+ */
+export function reconcileTokenContracts(
+  parsed: unknown,
+  hints: TokenContractHint[],
+  selectedToolNames: Set<string>,
+): { injected: number; repaired: number; warnings: string[] } {
+  const result = { injected: 0, repaired: 0, warnings: [] as string[] };
+  if (hints.length === 0 || typeof parsed !== 'object' || parsed === null) return result;
+  const obj = parsed as { perTool?: LoosePerToolPlan[] };
+  if (!Array.isArray(obj.perTool)) obj.perTool = [];
+  const byName = new Map<string, LoosePerToolPlan>();
+  for (const t of obj.perTool) {
+    if (t && typeof t.toolName === 'string') byName.set(t.toolName, t);
+  }
+  const ensure = (name: string): LoosePerToolPlan => {
+    let e = byName.get(name);
+    if (!e) {
+      e = { toolName: name, authRecipe: {} };
+      obj.perTool?.push(e);
+      byName.set(name, e);
+    }
+    return e;
+  };
+  const shapeNote = (h: TokenContractHint) =>
+    `value consumed by ${h.consumerTool}.${h.consumerParam} (recorded at ${h.producerPath})`;
+  // One decision per consumer→producer edge; prefer a nameable hint for naming.
+  const edges = new Map<string, TokenContractHint>();
+  for (const h of hints) {
+    if (!selectedToolNames.has(h.consumerTool) || !selectedToolNames.has(h.producerTool)) continue;
+    const key = `${h.consumerTool}|${h.producerTool}`;
+    const prev = edges.get(key);
+    if (!prev || (h.nameable && !prev.nameable)) edges.set(key, h);
+  }
+  for (const h of edges.values()) {
+    const consumer = ensure(h.consumerTool);
+    const producer = ensure(h.producerTool);
+    if (!Array.isArray(consumer.tokenParams)) consumer.tokenParams = [];
+    if (!Array.isArray(producer.emitsTokens)) producer.emitsTokens = [];
+    const fromProducer = consumer.tokenParams.filter(
+      (tp) => tp && tp.sourceTool === h.producerTool,
+    );
+    if (fromProducer.length > 0) {
+      // Edge covered by the planner — repair any field the producer forgot to emit
+      // (a half-declared contract `superRefine` would otherwise reject).
+      for (const tp of fromProducer) {
+        if (tp.sourceField && !producer.emitsTokens.some((e) => e && e.field === tp.sourceField)) {
+          producer.emitsTokens.push({ field: tp.sourceField, shape: shapeNote(h) });
+          result.repaired++;
+        }
+      }
+      continue;
+    }
+    if (consumer.tokenParams.some((tp) => tp && tp.param === h.consumerParam)) {
+      // The planner already binds this param to a different producer — trust it.
+      result.warnings.push(
+        `${h.consumerTool}.${h.consumerParam} also looks sourced from ${h.producerTool}; keeping the planner's binding`,
+      );
+      continue;
+    }
+    if (!h.nameable) {
+      // An opaque JSPB slot we can't safely name — let the compile-time
+      // chained-test gate enforce it (block) instead of injecting a junk contract.
+      result.warnings.push(
+        `detected ${h.consumerTool} <- ${h.producerTool} (recorded at ${h.producerPath}) but the consumer slot is an opaque path; leaving enforcement to the compile-time chained-test gate`,
+      );
+      continue;
+    }
+    // Inject a best-effort contract for a confidently-nameable missed edge. Name
+    // the producer field after the clean consumer param (same logical value).
+    const field = h.consumerParam;
+    if (!producer.emitsTokens.some((e) => e && e.field === field)) {
+      producer.emitsTokens.push({ field, shape: shapeNote(h) });
+    }
+    consumer.tokenParams.push({
+      param: h.consumerParam,
+      sourceTool: h.producerTool,
+      sourceField: field,
+    });
+    result.injected++;
+  }
+  return result;
 }
 
 // ─── Planner payload ────────────────────────────────────────────────────────
@@ -402,6 +786,10 @@ interface BuildPlanPayload {
     producerPath?: string;
     suggestedStateName?: string;
   }>;
+  /** Producer→consumer opaque-token edges detected deterministically from the
+   *  dual-pass diff (see `deriveTokenContractHints`). Fed to the planner as
+   *  grounded contracts to declare. */
+  tokenContractHints: TokenContractHint[];
   requests: BuildPlanRequestPayload[];
 }
 
@@ -455,20 +843,37 @@ export function buildBuildPlanPayload(opts: {
       suggestedStateName: c.suggestedStateName,
     }));
 
+  const selectedTools = candidates.map((c) => ({
+    toolName: c.toolName,
+    description: c.description,
+    expectedOutput: c.expectedOutput,
+    requestSeqs: c.requestSeqs,
+    dependencySeqs: c.dependencySeqs,
+    likelyParams: c.likelyParams,
+  }));
+
   return {
     site: session.site,
     url: session.url,
     narration: session.narration.map((n) => ({ timestamp: n.timestamp, text: n.text })),
     sharedContext,
-    selectedTools: candidates.map((c) => ({
-      toolName: c.toolName,
-      description: c.description,
-      expectedOutput: c.expectedOutput,
-      requestSeqs: c.requestSeqs,
-      dependencySeqs: c.dependencySeqs,
-      likelyParams: c.likelyParams,
-    })),
+    selectedTools,
     ephemeralValues,
+    // Detect from the FULL classifications (incl. the value, for the opacity gate);
+    // the payload's `ephemeralValues` stays slim (no raw value sent to the planner).
+    tokenContractHints: deriveTokenContractHints({
+      selectedTools,
+      ephemeralValues: (classifications ?? [])
+        .filter((c) => c.classification === 'server_derived')
+        .map((c) => ({
+          classification: c.classification,
+          originalSeq: c.originalSeq,
+          location: c.location,
+          producerSeq: c.producerSeq,
+          producerPath: c.producerPath,
+          value: c.value1,
+        })),
+    }),
     requests,
   };
 }
@@ -536,7 +941,7 @@ export async function generateBuildPlan(opts: {
         'imprint.plan.timeout_ms': opts.timeoutMs ?? 0,
       });
       log(
-        `planning ${opts.candidates.length} tool(s): ${payload.requests.length} request(s), ${payload.ephemeralValues.length} ephemeral value(s), ${payload.narration.length} narration line(s); ${Math.round(payloadJson.length / 1024)} KB payload + ${Math.round(systemPrompt.length / 1024)} KB prompt → ${opts.llmConfig?.provider ?? 'auto'}/${opts.llmConfig?.model ?? 'default'}${opts.timeoutMs ? ` (timeout ${Math.round(opts.timeoutMs / 1000)}s)` : ''}`,
+        `planning ${opts.candidates.length} tool(s): ${payload.requests.length} request(s), ${payload.ephemeralValues.length} ephemeral value(s), ${payload.tokenContractHints.length} token edge(s), ${payload.narration.length} narration line(s); ${Math.round(payloadJson.length / 1024)} KB payload + ${Math.round(systemPrompt.length / 1024)} KB prompt → ${opts.llmConfig?.provider ?? 'auto'}/${opts.llmConfig?.model ?? 'default'}${opts.timeoutMs ? ` (timeout ${Math.round(opts.timeoutMs / 1000)}s)` : ''}`,
       );
 
       const llm = resolveProvider(opts.llmConfig ?? {});
@@ -579,8 +984,23 @@ export async function generateBuildPlan(opts: {
         );
       }
 
+      // Deterministic safety net: reconcile the planner's plan against the
+      // grounded token edges before validation, so a planner shortcut can't drop
+      // or half-declare a cross-tool contract (the original defect this fixes).
+      const selectedNames = new Set(opts.candidates.map((c) => c.toolName));
+      const reconciled = reconcileTokenContracts(parsed, payload.tokenContractHints, selectedNames);
+      if (reconciled.injected > 0 || reconciled.repaired > 0) {
+        log(
+          `token contracts: ${payload.tokenContractHints.length} edge(s) detected → injected ${reconciled.injected}, repaired ${reconciled.repaired}`,
+        );
+      }
+      for (const w of reconciled.warnings) log(`token contract: ${w}`);
+
       const plan = validateBuildPlan(parsed, opts.candidates);
       setSpanAttributes(span, {
+        'imprint.plan.token_edge_count': payload.tokenContractHints.length,
+        'imprint.plan.token_injected': reconciled.injected,
+        'imprint.plan.token_repaired': reconciled.repaired,
         'imprint.plan.shared_module_count': plan.sharedModules.length,
         'imprint.plan.tool_count': plan.perTool.length,
         'imprint.plan.duration_ms': result.durationMs,

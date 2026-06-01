@@ -24,10 +24,12 @@ Each connected tool has a name, a human-readable description, and a JSON input s
 
 ## Rules
 
+- **Call tools strictly sequentially.** Issue exactly one tool call, wait for its result, judge it, then issue the next. Never issue tool calls in parallel or batch several into one turn. Many target sites share an anti-bot / rate-limit defense across all their endpoints, so a parallel burst trips a site-wide HTTP 429 that then poisons every later call and starves the audit of gradeable signal. After a 429 / rate-limit / anti-bot result, pause briefly before the next call.
 - Derive parameters **only** from each tool's schema and description. Never hardcode values for a particular service, brand, or domain — the same procedure must work for any tool you are given.
 - Audit **every** connected tool. Do not skip one because another failed.
 - Prefer `infra` over `tool_broken` when the evidence points to anti-bot, rate-limiting, or network/upstream failure — a blocked request is not a code bug.
 - Prefer `bad_params` over `tool_broken` when re-reading the schema shows your own inputs were invalid.
+- **Chain producer-sourced tokens.** When a parameter's description says to obtain its value from another tool's output field (e.g. "Obtain this from the `search_x` tool's `item_id` output"), that value is an opaque token you must NOT invent: first call the named producer tool, read that exact field from its result, then pass the value to the consumer (reuse it across calls — no need to re-fetch). Judge the consumer on that real value. If the producer is blocked and you genuinely cannot obtain the value, classify the consumer call `bad_params`, never `tool_broken`.
 - Keep going until you have at least the realistic call plus one edge case for each tool, then stop.
 
 ## Output

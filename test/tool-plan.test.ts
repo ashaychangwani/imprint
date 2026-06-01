@@ -117,6 +117,8 @@ describe('buildToolPlanPayload', () => {
             captures: [],
             notes: '',
           },
+          emitsTokens: [],
+          tokenParams: [],
         },
       ],
     };

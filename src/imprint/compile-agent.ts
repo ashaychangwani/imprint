@@ -22,12 +22,18 @@ import {
   describeAssignedModules,
   readBuildPlanFile,
   resolveAssignedModules,
+  resolveEmittedTokens,
+  resolveTokenParams,
 } from './build-plan.ts';
 import { compileViaClaudeCli } from './claude-cli-compile.ts';
 import { compileViaCodexCli } from './codex-cli-compile.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { formatToolPlan } from './compile-agent-types.ts';
-import { buildCompileTools, externalVerification } from './compile-tools.ts';
+import {
+  applyParamVerification,
+  buildCompileTools,
+  externalVerification,
+} from './compile-tools.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import {
   type LLMOptions,
@@ -109,15 +115,20 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
   // Resolve the shared modules the plan assigned this tool, so the in-process
   // verifier can assert they are imported. (CLI drivers compute this in the MCP
   // server from buildPlanPath instead.)
+  const buildPlan =
+    opts.buildPlanPath && opts.candidate?.toolName ? readBuildPlanFile(opts.buildPlanPath) : null;
   const assignedSharedModules: AssignedSharedModule[] | undefined =
-    opts.buildPlanPath && opts.candidate?.toolName
-      ? (() => {
-          const plan = readBuildPlanFile(opts.buildPlanPath);
-          return plan
-            ? resolveAssignedModules(plan, opts.candidate.toolName, opts.sharedModules)
-            : undefined;
-        })()
+    buildPlan && opts.candidate?.toolName
+      ? resolveAssignedModules(buildPlan, opts.candidate.toolName, opts.sharedModules)
       : undefined;
+  const tokenParams =
+    buildPlan && opts.candidate?.toolName
+      ? resolveTokenParams(buildPlan, opts.candidate.toolName)
+      : [];
+  const emittedTokens =
+    buildPlan && opts.candidate?.toolName
+      ? resolveEmittedTokens(buildPlan, opts.candidate.toolName)
+      : [];
 
   // 1. Load + validate the session
   let session: Session = loadJsonFile(
@@ -337,7 +348,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     // Perform external verification
-    const { failures, warnings } = await externalVerification(
+    const { failures, warnings, paramVerification } = await externalVerification(
       absoluteToolDir,
       session,
       sessionPathAbs,
@@ -346,6 +357,8 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         likelyParams: opts.candidate?.likelyParams,
         candidateRequestSeqs: opts.candidate?.requestSeqs,
         assignedSharedModules,
+        tokenParams,
+        emittedTokens,
       },
     );
 
@@ -354,10 +367,16 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     if (failures.length === 0) {
-      // Success (possibly with warnings)
+      // Success (possibly with warnings). Persist per-parameter verified flags
+      // into workflow.json and fold any "live-unverified" note into the warnings.
+      const paramWarnings = applyParamVerification(absoluteToolDir, paramVerification);
+      const allWarnings = [...warnings, ...paramWarnings];
+      if (paramWarnings.length > 0) {
+        log(`parameter verification:\n${paramWarnings.join('\n')}`);
+      }
       message = result.doneSummary ?? 'Task completed';
-      if (warnings.length > 0) {
-        message += `\n\nWarnings:\n${warnings.join('\n')}`;
+      if (allWarnings.length > 0) {
+        message += `\n\nWarnings:\n${allWarnings.join('\n')}`;
       }
       if (!opts.keepTest) {
         for (const f of ['parser.test.ts', 'integration.test.ts']) {

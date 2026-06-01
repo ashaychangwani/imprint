@@ -18,7 +18,14 @@ import {
   loadCredentialStore,
   substituteString,
 } from './runtime.ts';
-import { type StealthFetch, createStealthFetch } from './stealth-fetch.ts';
+import {
+  type BootstrapArgs,
+  type StealthFetch,
+  type TokenCache,
+  bootstrapStealthToken,
+  createStealthFetch,
+} from './stealth-fetch.ts';
+import { loadCachedToken, saveCachedToken } from './stealth-token-cache.ts';
 import type { ResolvedTool } from './tool-loader.ts';
 import {
   type BootstrapCapture,
@@ -46,6 +53,11 @@ interface LadderResult {
 const log = createLog('backend');
 
 const DEFAULT_LADDER: ConcreteBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
+
+/** Freshness window for the file-backed compile-time stealth token. Matches
+ *  stealth-fetch's in-process `maxTokenAgeSeconds` default so a reused token is
+ *  not immediately considered stale by `createStealthFetch`. */
+const STEALTH_TOKEN_MAX_AGE_SECONDS = 600;
 
 /** Expand a replayBackend choice into a concrete ladder. 'auto' prefers
  *  the probed order (if any), else the default. Explicit choice → single rung. */
@@ -630,5 +642,33 @@ export async function runWorkflowWithLadder(opts: {
   };
 
   const ladder: ConcreteBackend[] = ['fetch', 'stealth-fetch'];
-  return runWithLadder(ladder, tool, opts.params, assetRoot, new Map());
+
+  // Share one stealth token across this site's compile-time test processes.
+  // Each `bun test` is a fresh process and would otherwise mint a new ~12s
+  // headless bootstrap; the resulting burst against one origin trips anti-bot
+  // and forces the integration test to be waived. Pre-seed the ladder's stealth
+  // cache with a fetcher whose bootstrap is file-backed (keyed by the site asset
+  // dir). On any failure to derive a base URL, fall back to the default lazy
+  // bootstrap inside runWithLadder.
+  const stealthCache = new Map<string, StealthFetch>();
+  try {
+    const siteDir = pathResolve(toolDir, '..');
+    const baseUrl = pickBaseUrl(tool);
+    const cachingBootstrap = async (args: BootstrapArgs): Promise<TokenCache> => {
+      const cached = loadCachedToken(siteDir, STEALTH_TOKEN_MAX_AGE_SECONDS);
+      if (cached) {
+        log(`reusing cached stealth token for ${tool.site || siteDir}`);
+        return cached;
+      }
+      const token = await bootstrapStealthToken(args);
+      saveCachedToken(siteDir, token);
+      return token;
+    };
+    stealthCache.set(tool.site, createStealthFetch({ baseUrl }, { bootstrap: cachingBootstrap }));
+  } catch {
+    // No usable base URL → leave the cache empty; runWithLadder/ensureStealthFetch
+    // will lazily bootstrap (same behavior as before this optimization).
+  }
+
+  return runWithLadder(ladder, tool, opts.params, assetRoot, stealthCache);
 }
