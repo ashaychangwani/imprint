@@ -436,12 +436,20 @@ When you are done, end your final message with exactly one fenced \`\`\`json blo
 }
 
 /** Drain the stream-json events, accumulating assistant text, and resolve when
- *  the child exits. Enforces the wall-clock timeout by killing the child. */
+ *  the child exits. Enforces the wall-clock timeout by killing the child.
+ *  Emits a one-line-per-event progress log to stderr so operators can `tail -f`
+ *  the audit log file and see live what the auditor is doing — without this
+ *  the audit is a 30-minute black box. */
 async function collectAssistantText(child: ChildProcess, timeoutMs: number): Promise<string> {
   const chunks: string[] = [];
   let resultText = '';
   let stdoutBuf = '';
   let killed = false;
+  const t0 = Date.now();
+  const elapsedStr = (): string => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
 
   const timer = setTimeout(() => {
     killed = true;
@@ -472,15 +480,42 @@ async function collectAssistantText(child: ChildProcess, timeoutMs: number): Pro
         continue;
       }
 
+      // Live progress signal: one log line per tool_use / tool_result /
+      // text-snippet event with [elapsed]. Lets `tail -f` show what the
+      // auditor is doing in real time instead of waiting 30-60 min for
+      // the final report.
       if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
         for (const block of evt.message.content) {
-          if (block && block.type === 'text' && typeof block.text === 'string') {
+          if (!block) continue;
+          if (block.type === 'text' && typeof block.text === 'string') {
             chunks.push(block.text);
+            const preview = block.text.replace(/\s+/g, ' ').slice(0, 120);
+            log(`[${elapsedStr()}] assistant: ${preview}`);
+          } else if (block.type === 'tool_use' && typeof block.name === 'string') {
+            const inputPreview = block.input ? JSON.stringify(block.input).slice(0, 120) : '';
+            log(
+              `[${elapsedStr()}] tool_use: ${block.name}${inputPreview ? ` ${inputPreview}` : ''}`,
+            );
+          }
+        }
+      } else if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
+        for (const block of evt.message.content) {
+          if (!block) continue;
+          if (block.type === 'tool_result') {
+            const raw = Array.isArray(block.content)
+              ? (block.content[0]?.text ?? '')
+              : typeof block.content === 'string'
+                ? block.content
+                : '';
+            const preview = String(raw).replace(/\s+/g, ' ').slice(0, 140);
+            const errMark = block.is_error ? ' (error)' : '';
+            log(`[${elapsedStr()}] tool_result${errMark}: ${preview}`);
           }
         }
       } else if (evt.type === 'result' && typeof evt.result === 'string') {
         // The terminal result event carries the final assistant message verbatim.
         resultText = evt.result;
+        log(`[${elapsedStr()}] result event received (${evt.result.length} chars)`);
       }
     }
   });
@@ -507,7 +542,15 @@ async function collectAssistantText(child: ChildProcess, timeoutMs: number): Pro
 interface StreamJsonEvent {
   type: string;
   message?: {
-    content?: Array<{ type?: string; text?: string }>;
+    content?: Array<{
+      type?: string;
+      text?: string;
+      name?: string;
+      input?: unknown;
+      tool_use_id?: string;
+      content?: unknown;
+      is_error?: boolean;
+    }>;
   };
   result?: string;
 }
