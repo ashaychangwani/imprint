@@ -70,6 +70,21 @@ export DISPLAY=:0           # or let imprint auto-start Xvfb when headed
 
 `launchChromium` auto-starts Xvfb (`Xvfb :NN -screen 0 1920x1080x24`) when a **headed** launch finds no `$DISPLAY`. `imprint doctor` reports this as **"Display (headed replay)"** — advisory only, since the default headless path needs no display and sites that replay on the plain `fetch` rung never launch a browser at all. macOS/Windows need nothing.
 
+## Anti-bot returns "empty results" on a cloud/datacenter IP — use `IMPRINT_PROXY`
+
+Distinct from a 403/tarpit: a behavioral anti-bot service (Akamai et al.) can return a **200 with an empty body** (e.g. a search that yields `count: 0` for an obviously-valid query) even though the request succeeded. The dominant cause is the **egress IP reputation** — requests from **AWS / GCP / Azure / VPN datacenter IPs** are heavily penalized and "empty-shelled" regardless of how trusted the browser session is. (Check your egress with `curl -s https://ipinfo.io/json`; an `org` like "Amazon" / "Google Cloud" means datacenter.) The recorded *workflow* is fine — the IP is the problem, and no amount of token-minting overcomes a datacenter IP.
+
+Fix: route imprint's outbound traffic — the trusted cdp-browser bootstrap **and** every plain-fetch replay — through a **residential** proxy, so the egress IP earns trust:
+
+```bash
+export IMPRINT_PROXY="http://USER:PASS@residential-proxy.example.com:8000"   # or socks5://host:port
+imprint teach <site> …      # bootstrap + replay now egress through the proxy
+imprint audit <site> …
+imprint mcp-server <site>    # runtime tool calls too
+```
+
+`IMPRINT_PROXY` applies uniformly to `launchChromium` (Chrome `--proxy-server`), the cross-origin in-page fallback, the `fetch-bootstrap` replay, and the plain `fetch` rung — so the jar is minted and replayed from the **same** IP (a mismatch makes Akamai drop the jar). Chrome's `--proxy-server` ignores inline credentials; use an IP-authenticated residential proxy, or one that needs no auth. A residential proxy also means you record **once** and replay across runs/IPs without re-recording — the proxy is the stable trusted egress.
+
 ## "FORBIDDEN" / 403 from a real site
 
 The site is blocking API replay or needs browser-minted state. Three escalating fixes:

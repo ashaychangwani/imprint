@@ -29,7 +29,7 @@
  */
 
 import CDP from 'chrome-remote-interface';
-import { launchChromium } from './chromium.ts';
+import { launchChromium, proxyUrl } from './chromium.ts';
 import { createLog } from './log.ts';
 
 const log = createLog('cdp-browser');
@@ -378,12 +378,16 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         outHeaders.cookie = cookieHeader;
       }
       log(`cross-origin ${method} ${requestOrigin} via plain fetch`);
+      // Route the cross-origin plain fetch through the SAME proxy as the browser
+      // (Bun fetch `proxy` opt) so its egress IP matches the in-page traffic.
+      const proxy = proxyUrl();
       return globalThis.fetch(fullUrl, {
         method,
         headers: outHeaders,
         body: body ?? undefined,
         signal: init?.signal ?? undefined,
-      });
+        ...(proxy ? { proxy } : {}),
+      } as RequestInit);
     }
 
     // Execute the fetch INSIDE the trusted page. credentials:'include' so the

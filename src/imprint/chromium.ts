@@ -27,6 +27,39 @@ interface LaunchOptions {
    *  on close(). Ignored on macOS/Windows (they use the native window server)
    *  and for headless launches (which need no display). */
   display?: string;
+  /** Upstream proxy for ALL of this Chrome's traffic, e.g.
+   *  "http://host:port" or "socks5://host:port". Use to egress the trusted
+   *  bootstrap + in-page requests through a RESIDENTIAL IP — Akamai (and most
+   *  bot defenses) heavily penalize datacenter/cloud egress, so minting a
+   *  high-trust `_abck` from an AWS/GCP box needs a residential proxy here.
+   *  Defaults to `proxyUrl()` (IMPRINT_PROXY env). Note: Chrome's
+   *  `--proxy-server` takes no inline credentials; use an IP-authed proxy or a
+   *  scheme://host:port URL (auth is handled separately if needed). */
+  proxy?: string;
+}
+
+/** The configured upstream proxy (IMPRINT_PROXY), or undefined. Centralized so
+ *  the browser launch and every plain-fetch replay path egress through the SAME
+ *  IP — otherwise a jar minted via the proxy would be replayed from the box's
+ *  (datacenter) IP and Akamai would drop it on the mismatch. */
+export function proxyUrl(): string | undefined {
+  const p = process.env.IMPRINT_PROXY?.trim();
+  return p && p.length > 0 ? p : undefined;
+}
+
+/** Strip inline credentials for Chrome's `--proxy-server` (which rejects them),
+ *  keeping scheme://host:port. Returns null if unparseable. */
+export function chromeProxyArg(proxy: string): string | null {
+  if (proxy.includes('://')) {
+    try {
+      const u = new URL(proxy);
+      return `${u.protocol}//${u.host}`;
+    } catch {
+      return null;
+    }
+  }
+  // Plain host:port (new URL would misparse the host as a scheme).
+  return /^[\w.-]+:\d+$/.test(proxy) ? proxy : null;
 }
 
 interface LaunchedChromium {
@@ -254,6 +287,16 @@ export async function launchChromium(opts: LaunchOptions = {}): Promise<Launched
     '--use-mock-keychain',
   ];
   if (opts.headless) args.push('--headless=new');
+  const proxy = opts.proxy ?? proxyUrl();
+  if (proxy) {
+    const arg = chromeProxyArg(proxy);
+    if (arg) {
+      args.push(`--proxy-server=${arg}`);
+      // Route ALL hosts through the proxy (don't let Chrome bypass any) so the
+      // egress IP is uniform; without this Chrome may direct-connect some hosts.
+      args.push('--proxy-bypass-list=<-loopback>');
+    }
+  }
   if (opts.extraArgs) args.push(...opts.extraArgs);
   args.push(opts.url ?? 'about:blank');
 

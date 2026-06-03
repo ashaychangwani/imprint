@@ -30,6 +30,7 @@ import {
   saveJar,
   seedJarFromRecording,
 } from './cdp-jar-cache.ts';
+import { proxyUrl } from './chromium.ts';
 import { RuntimeCookieJar } from './cookie-jar.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
@@ -181,9 +182,13 @@ export async function runWithLadder(
     let result: ToolResult;
     try {
       switch (backend) {
-        case 'fetch':
-          result = await tool.toolFn(params);
+        case 'fetch': {
+          // Egress the plain `fetch` rung through IMPRINT_PROXY when set, so even
+          // the first rung (and GET-only tools) use the residential proxy IP.
+          const proxyFetch = makeProxyFetch();
+          result = await tool.toolFn(params, proxyFetch ? { fetchImpl: proxyFetch } : undefined);
           break;
+        }
         case 'fetch-bootstrap':
           result = await runFetchBootstrap(tool, params);
           break;
@@ -498,13 +503,40 @@ async function getOrMintCdpJar(
 /** Replay transport for the bootstrap-then-fetch path: PLAIN fetch that presents
  *  the jar's exact UA (Akamai drops the jar on a UA mismatch). Cookies are
  *  attached by executeWorkflow's RuntimeCookieJar from bootstrappedCredentials,
- *  so this only forces the UA. */
+ *  so this only forces the UA. Egresses through IMPRINT_PROXY when set, so the
+ *  replay's IP matches the (proxied) browser that minted the jar — else Akamai
+ *  drops the jar on the IP mismatch. */
 function makeJarUaFetch(ua: string): typeof fetch {
+  const proxy = proxyUrl();
   return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers ?? {});
     if (ua) headers.set('user-agent', ua);
-    return globalThis.fetch(input as Parameters<typeof fetch>[0], { ...init, headers });
+    return globalThis.fetch(
+      input as Parameters<typeof fetch>[0],
+      {
+        ...init,
+        headers,
+        ...(proxy ? { proxy } : {}),
+      } as RequestInit,
+    );
   }) as typeof fetch;
+}
+
+/** Plain proxied fetch for the `fetch` rung so even the first (no-jar) rung
+ *  egresses through IMPRINT_PROXY — keeps the egress IP uniform across rungs and
+ *  lets GET-only tools (e.g. location lookups) succeed from the residential
+ *  proxy. No-op (returns global fetch) when no proxy is configured. */
+function makeProxyFetch(): typeof fetch | undefined {
+  const proxy = proxyUrl();
+  if (!proxy) return undefined;
+  return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+    globalThis.fetch(
+      input as Parameters<typeof fetch>[0],
+      {
+        ...init,
+        proxy,
+      } as RequestInit,
+    )) as typeof fetch;
 }
 
 /** A replay error that means the JAR is bad (clear it + re-mint), as opposed to a
