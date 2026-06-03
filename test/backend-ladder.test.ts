@@ -512,7 +512,11 @@ result:
     if (!playbookAttempt) throw new Error('expected 3rd attempt');
     expect(playbookAttempt.backend).toBe('playbook');
     expect(['ok', 'failed', 'escalate']).toContain(playbookAttempt.outcome);
-  });
+    // This rung launches a REAL Playwright Chromium (navigate about:blank, wait
+    // for a never-matching XHR), so on a cold CI runner it legitimately exceeds
+    // the 5s default — give it a generous timeout to de-flake (passes in <1s
+    // locally; the assertion is just that playbook was ATTEMPTED).
+  }, 30000);
 
   it('reaches stealth-fetch before playbook for state missing that stealth-bootstrap can mint', async () => {
     const siteDir = pathResolve(root, 'stateful', 'search_stateful');
