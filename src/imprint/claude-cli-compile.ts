@@ -329,7 +329,26 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
   try {
     child = spawn('claude', args, {
       cwd: REPO_ROOT,
-      env: process.env,
+      // Claude CLI's default MCP_TOOL_TIMEOUT is 60s. The compile MCP
+      // server's `done` tool runs external verification inline — bun test
+      // (up to 60s × 3 retries for the integration suite + 120s for the
+      // parser suite) plus typechecking. On bot-protected sites where the
+      // integration test escalates fetch → fetch-bootstrap → stealth-fetch
+      // for every assertion, a single bun test pass can run 30s × 3
+      // rungs × N tests = 10-15 min before the outer wrapper kills it,
+      // and 3 retries push the total well past 30 min. A 10-min cap was
+      // not enough — set 30 min so the worst-case verification can
+      // actually complete and the agent receives the failure feedback
+      // (and ships with `liveVerified: false` via the waiver path)
+      // rather than getting `-32000: Connection closed` mid-call and
+      // wasting the rest of its turn budget. Honor user-set env so an
+      // operator on a fast network can tighten without editing source.
+      // Connection-startup timeout stays at 60s for cold Playwright boot.
+      env: {
+        ...process.env,
+        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '1800000',
+        MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? '60000',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (err) {

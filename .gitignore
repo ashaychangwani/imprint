@@ -14,6 +14,10 @@ dist/
 # Captured sessions (may contain auth tokens, PII)
 **/sessions/
 
+# Live session credential caches (validated _abck jar, stealth tokens) — NEVER commit
+**/.cdp-jar.json
+**/.stealth-token.json
+
 # Teach pipeline state (local, not shareable)
 .teach-state.json
 

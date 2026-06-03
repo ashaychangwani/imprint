@@ -219,20 +219,32 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       const rawScore = computeAuditScore(report, opts.minScore);
 
       // Cross-reference compile-time live verification with the audit grade.
-      // A tool that shipped with `liveVerified: false` (integration test was
-      // waived for anti-bot / infra) AND that the auditor also could not
-      // grade has zero live signal anywhere — neither compile-time nor audit
-      // -time produced a verified call. Downgrade `pass` to `inconclusive`
-      // for these "flying blind" tools so the gate is honest about coverage.
+      // The downgrade rule's purpose is to surface "flying blind" runs —
+      // ones where the gate has no positive evidence the framework works
+      // for the audited site. Iterations of this rule:
+      //   v1: downgrade if any tool was liveVerified=false AND ungradeable
+      //       → too strict (downgraded perfectly-scoring runs when one
+      //       chained tool was unreachable from auditor's connected set).
+      //   v2: downgrade only if a flying-blind tool had infra invocations
+      //       → still over-attributed transient page-state to defects.
+      //   v3 (current): downgrade only when the audit produced ZERO
+      //       `correct` invocations across ALL tools. If even one
+      //       invocation graded correctly, that's positive evidence the
+      //       framework + runtime work for at least that tool — the
+      //       overall score (correct/(correct+broken)) is the honest
+      //       signal. Tools that couldn't be exercised still surface via
+      //       `ungradeableTools` / `unverifiedAndUngradeable` for visibility
+      //       without spoiling a verdict the score honestly earned.
       const ungradeableNames = ungradeableToolNames(report);
       const unverifiedAndUngradeable = tools
         .filter((t) => t.workflow.liveVerified === false)
         .map((t) => t.workflow.toolName)
         .filter((name) => ungradeableNames.includes(name));
+      const anyCorrectAcrossAudit = report.tools.some((t) =>
+        t.invocations.some((i) => i.verdict === 'correct'),
+      );
       const verdict =
-        rawScore.verdict === 'pass' && unverifiedAndUngradeable.length > 0
-          ? 'inconclusive'
-          : rawScore.verdict;
+        rawScore.verdict === 'pass' && !anyCorrectAcrossAudit ? 'inconclusive' : rawScore.verdict;
       const score: AuditScore = { ...rawScore, verdict };
 
       setSpanAttributes(span, {
@@ -347,12 +359,14 @@ async function driveAudit(opts: DriveAuditOptions): Promise<AuditReport> {
           .map((u) => `${u.tool}(${u.params.join(', ')})`)
           .join(
             '; ',
-          )}. Probe them especially — call the tool with and without each one and check the response actually changes. Classify a param that has no effect as \`tool_broken\`.`
+          )}. Where the tool is a cheap read not behind an anti-bot/rate defense, probe them — call with and without each one and check the response changes; classify a param with no effect as \`tool_broken\`. But do NOT per-param-probe a state-changing or bot-defended tool (see the ONE-invocation rule above): the probe burst would tarpit the whole audit. For those, the single realistic invocation stands and the unverified params simply remain unverified — that is expected, not a failure.`
       : '';
 
   const initialPrompt = `Audit every MCP tool connected to you for the site "${opts.site}".
 
-There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set plus one or two edge cases (all derived only from the schema and description), judge each result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt.
+There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set, judge the result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt. You MAY add one or two edge-case invocations ONLY for tools that are cheap reads not behind an anti-bot/rate defense.
+
+ANTI-BOT / STATE-CHANGING TOOLS — ONE invocation only. If a tool drives a state-changing call (a search/booking .act-style POST) or its origin is bot-defended (the first call is slow/tarpitted, or returns 403/429/challenge/anti-bot), do EXACTLY ONE realistic invocation for that tool and move on — do NOT add edge cases. Repeated state-changing calls trip the site's per-IP rate defense, which then tarpits EVERY later call across all tools and ruins the whole audit. One clean read per such tool is enough to grade it; extra probes only convert a passing audit into a tarpitted one.
 
 IMPORTANT: Call tools strictly sequentially — issue exactly one tool call, wait for its result, then issue the next. Never issue tool calls in parallel or batch them in one turn. Many target sites share an anti-bot defense across endpoints, so a parallel burst trips a site-wide rate-limit (HTTP 429) that then poisons every later call. If a call returns a 429 / rate-limit / anti-bot result, classify it \`infra\` and pause before the next call.${unverifiedNote}${buildTokenDepNote(opts.tokenDeps)}
 
@@ -391,7 +405,22 @@ When you are done, end your final message with exactly one fenced \`\`\`json blo
   try {
     child = spawn('claude', args, {
       cwd: REPO_ROOT,
-      env: process.env,
+      // Claude CLI's default MCP_TOOL_TIMEOUT is 60s. The audit-time MCP
+      // server's tool calls walk the backend ladder for each invocation —
+      // fetch (30s) → fetch-bootstrap (30s) → stealth-fetch (30s) →
+      // playbook (5–30s), worst case ~2 min. Bump to 5 min (covers
+      // realistic worst case with margin) but NOT to 30 min like the
+      // compile side: the compile MCP needs that long because `done` runs
+      // bun-test verification inline, but the audit MCP doesn't — each
+      // audit tool call is just a single workflow execution. A longer
+      // timeout here would burn the audit's overall 30-min deadline
+      // on a handful of hanging calls (compiled tools that hang on bad
+      // inputs) before the auditor finishes grading. Honor user-set env.
+      env: {
+        ...process.env,
+        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '300000',
+        MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? '60000',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (err) {
@@ -409,12 +438,20 @@ When you are done, end your final message with exactly one fenced \`\`\`json blo
 }
 
 /** Drain the stream-json events, accumulating assistant text, and resolve when
- *  the child exits. Enforces the wall-clock timeout by killing the child. */
+ *  the child exits. Enforces the wall-clock timeout by killing the child.
+ *  Emits a one-line-per-event progress log to stderr so operators can `tail -f`
+ *  the audit log file and see live what the auditor is doing — without this
+ *  the audit is a 30-minute black box. */
 async function collectAssistantText(child: ChildProcess, timeoutMs: number): Promise<string> {
   const chunks: string[] = [];
   let resultText = '';
   let stdoutBuf = '';
   let killed = false;
+  const t0 = Date.now();
+  const elapsedStr = (): string => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
 
   const timer = setTimeout(() => {
     killed = true;
@@ -445,15 +482,42 @@ async function collectAssistantText(child: ChildProcess, timeoutMs: number): Pro
         continue;
       }
 
+      // Live progress signal: one log line per tool_use / tool_result /
+      // text-snippet event with [elapsed]. Lets `tail -f` show what the
+      // auditor is doing in real time instead of waiting 30-60 min for
+      // the final report.
       if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
         for (const block of evt.message.content) {
-          if (block && block.type === 'text' && typeof block.text === 'string') {
+          if (!block) continue;
+          if (block.type === 'text' && typeof block.text === 'string') {
             chunks.push(block.text);
+            const preview = block.text.replace(/\s+/g, ' ').slice(0, 120);
+            log(`[${elapsedStr()}] assistant: ${preview}`);
+          } else if (block.type === 'tool_use' && typeof block.name === 'string') {
+            const inputPreview = block.input ? JSON.stringify(block.input).slice(0, 120) : '';
+            log(
+              `[${elapsedStr()}] tool_use: ${block.name}${inputPreview ? ` ${inputPreview}` : ''}`,
+            );
+          }
+        }
+      } else if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
+        for (const block of evt.message.content) {
+          if (!block) continue;
+          if (block.type === 'tool_result') {
+            const raw = Array.isArray(block.content)
+              ? (block.content[0]?.text ?? '')
+              : typeof block.content === 'string'
+                ? block.content
+                : '';
+            const preview = String(raw).replace(/\s+/g, ' ').slice(0, 140);
+            const errMark = block.is_error ? ' (error)' : '';
+            log(`[${elapsedStr()}] tool_result${errMark}: ${preview}`);
           }
         }
       } else if (evt.type === 'result' && typeof evt.result === 'string') {
         // The terminal result event carries the final assistant message verbatim.
         resultText = evt.result;
+        log(`[${elapsedStr()}] result event received (${evt.result.length} chars)`);
       }
     }
   });
@@ -480,7 +544,15 @@ async function collectAssistantText(child: ChildProcess, timeoutMs: number): Pro
 interface StreamJsonEvent {
   type: string;
   message?: {
-    content?: Array<{ type?: string; text?: string }>;
+    content?: Array<{
+      type?: string;
+      text?: string;
+      name?: string;
+      input?: unknown;
+      tool_use_id?: string;
+      content?: unknown;
+      is_error?: boolean;
+    }>;
   };
   result?: string;
 }

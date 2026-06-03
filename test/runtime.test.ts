@@ -142,6 +142,73 @@ describe('executeWorkflow', () => {
     expect(r.data).toBe('<html><body>Hello</body></html>');
   });
 
+  it('substitutes parameter.default when the caller omits the param', async () => {
+    // Regression: runtime used to treat `default` as a presence-sentinel only.
+    // `${param.q}` would still throw STATE_MISSING because the substitution
+    // layer reads from the working params map directly. Defaults must merge
+    // in so a sibling tool can call us with only its own params and let our
+    // declared defaults fill in the rest.
+    const workflowWithDefault: Workflow = {
+      ...baseWorkflow,
+      parameters: [{ name: 'q', type: 'string', description: 'query', default: 'fallback' }],
+    };
+    let observedUrl = '';
+    const fetchMock = (async (input: string | URL | Request) => {
+      observedUrl = typeof input === 'string' ? input : input.toString();
+      return new Response('{"ok":1}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    const r = await executeWorkflow({
+      workflow: workflowWithDefault,
+      params: {},
+      credentials: STORE,
+      fetchImpl: fetchMock,
+    });
+    expect(r.ok).toBe(true);
+    expect(observedUrl).toBe('https://api.example.com/search?q=fallback');
+  });
+
+  it('lets explicitly-passed params win over parameter.default', async () => {
+    const workflowWithDefault: Workflow = {
+      ...baseWorkflow,
+      parameters: [{ name: 'q', type: 'string', description: 'query', default: 'fallback' }],
+    };
+    let observedUrl = '';
+    const fetchMock = (async (input: string | URL | Request) => {
+      observedUrl = typeof input === 'string' ? input : input.toString();
+      return new Response('{"ok":1}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    const r = await executeWorkflow({
+      workflow: workflowWithDefault,
+      params: { q: 'explicit' },
+      credentials: STORE,
+      fetchImpl: fetchMock,
+    });
+    expect(r.ok).toBe(true);
+    expect(observedUrl).toBe('https://api.example.com/search?q=explicit');
+  });
+
+  it('still rejects a missing required param (no default declared)', async () => {
+    // Regression guard for the validation path the default-injection edit
+    // sits next to — make sure a required-with-no-default param still fails
+    // loud rather than silently substituting empty.
+    const fetchMock = (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+    const r = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: {},
+      credentials: STORE,
+      fetchImpl: fetchMock,
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.message).toContain('Missing required parameter: q');
+  });
+
   it('classifies 401 as AUTH_EXPIRED with a helpful remediation', async () => {
     const fetchMock = (async () =>
       new Response('session expired', { status: 401 })) as unknown as typeof fetch;

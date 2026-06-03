@@ -2,7 +2,11 @@ import { describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import type { SharedModuleSpec } from '../src/imprint/build-plan.ts';
-import { summarizeFailures, verifySharedModule } from '../src/imprint/prereq-builder.ts';
+import {
+  importModuleFresh,
+  summarizeFailures,
+  verifySharedModule,
+} from '../src/imprint/prereq-builder.ts';
 import type { Session } from '../src/imprint/types.ts';
 
 function scratchDir(prefix: string): string {
@@ -40,6 +44,31 @@ function writeSession(dir: string, session: Session): string {
   writeFileSync(p, JSON.stringify(session, null, 2), 'utf8');
   return p;
 }
+
+describe('importModuleFresh', () => {
+  it('sees edits to the same module path within one process (defeats bun stale .ts cache)', async () => {
+    const dir = scratchDir('prereq-fresh-');
+    try {
+      const p = pathJoin(dir, 'mod.ts');
+      writeFileSync(p, 'export const foo = 1;\n', 'utf8');
+      const m1 = await importModuleFresh(p);
+      expect(Object.keys(m1)).toEqual(['foo']);
+      // Simulate the compile agent adding the `transform` export in a later
+      // verify cycle. A plain `import(path?t=...)` would return the stale m1
+      // here (bun ignores the query for local .ts), wrongly pruning the fixed
+      // module; importModuleFresh must observe the new export.
+      writeFileSync(
+        p,
+        'export const foo = 1;\nexport function transform() { return "x"; }\n',
+        'utf8',
+      );
+      const m2 = await importModuleFresh(p);
+      expect(typeof m2.transform).toBe('function');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('verifySharedModule', () => {
   it('fails when the module file was not written', async () => {

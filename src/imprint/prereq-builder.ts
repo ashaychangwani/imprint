@@ -12,8 +12,8 @@
  * anchor must reproduce the recorded behavior.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join as pathJoin } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname as pathDirname, join as pathJoin } from 'node:path';
 import type { SharedModuleSpec } from './build-plan.ts';
 import {
   countExpectCalls,
@@ -33,6 +33,37 @@ const DEFAULT_MAX_CYCLES = 5;
 const SOURCE_BODY_LIMIT = 12_000;
 const MIN_SIGNING_VALUE_LEN = 8;
 const log = createLog('prereq-builder');
+
+let verifyCopyCounter = 0;
+
+/** Import a freshly-written module, defeating bun's stale `.ts` import cache.
+ *
+ *  Bun keys its transpiled-module cache by file PATH and ignores the `?t=`
+ *  query cache-buster for local `.ts` files, so within the long-lived teach
+ *  process a re-import after the compile agent edits a module returns the
+ *  STALE first-loaded version. That silently breaks per-cycle verification: a
+ *  request-transform the agent fixed across cycles still looks like it never
+ *  exported `transform`, so a valid signing module fails all cycles and gets
+ *  pruned — forcing every tool to re-implement it. (The `bun test` step is
+ *  immune because it runs in a fresh subprocess; that's why the test could
+ *  pass while the in-process anchor wrongly failed.)
+ *
+ *  Copying to a unique sibling filename in the SAME directory forces a fresh
+ *  load while keeping the module's relative imports to sibling shared modules
+ *  resolvable. The leading dot + explicit cleanup keep the temp copy out of
+ *  test/typecheck globs. */
+export async function importModuleFresh(modulePath: string): Promise<Record<string, unknown>> {
+  const uniq = pathJoin(
+    pathDirname(modulePath),
+    `.verify-${Date.now()}-${process.pid}-${verifyCopyCounter++}.ts`,
+  );
+  copyFileSync(modulePath, uniq);
+  try {
+    return (await import(`file://${uniq}`)) as Record<string, unknown>;
+  } finally {
+    rmSync(uniq, { force: true });
+  }
+}
 
 // biome-ignore lint/suspicious/noExplicitAny: dynamically-imported user code
 type AnyFn = (...args: any[]) => unknown;
@@ -297,7 +328,7 @@ export async function verifySharedModule(
   // 1. Runtime import + exported-symbol checks (skipped for type-only modules).
   if (!typesOnly) {
     try {
-      const mod = await import(`file://${modulePath}?t=${Date.now()}`);
+      const mod = await importModuleFresh(modulePath);
       for (const sig of module.exportSignatures) {
         if (isTypeSignature(sig)) continue;
         const sym = exportedSymbolName(sig);
@@ -385,7 +416,7 @@ async function anchorRequestTransform(
 ): Promise<{ failure?: string; warning?: string }> {
   let transform: unknown;
   try {
-    const mod = await import(`file://${modulePath}?t=${Date.now()}`);
+    const mod = await importModuleFresh(modulePath);
     transform = mod.transform;
   } catch {
     return {}; // import failure already recorded by the caller
@@ -460,7 +491,7 @@ async function anchorParserHelper(
 ): Promise<string | null> {
   let mod: Record<string, unknown>;
   try {
-    mod = (await import(`file://${modulePath}?t=${Date.now()}`)) as Record<string, unknown>;
+    mod = await importModuleFresh(modulePath);
   } catch {
     return null;
   }

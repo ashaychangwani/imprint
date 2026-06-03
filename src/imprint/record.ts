@@ -187,7 +187,16 @@ export async function record(opts: RecordOptions): Promise<RecordResult> {
         const body = bodyResp.base64Encoded
           ? Buffer.from(bodyResp.body, 'base64').toString('utf8')
           : bodyResp.body;
-        const MAX = 256 * 1024;
+        // Body cap for the on-disk session. Server-rendered HTML pages on
+        // travel/booking sites routinely run 250-500KB (Costco's rental-car
+        // results page is ~262KB). The previous 256KB cap silently chopped
+        // such pages and the compile agent saw the `[…truncated…]` marker
+        // as a hard data-quality block (even when only a few bytes were
+        // lost, leaving plenty of structure to parse). 2MB covers the
+        // ~99th percentile of full-page renders without bloating most
+        // sessions — `Network.getResponseBody` still streams to memory,
+        // so very large bodies remain capped to protect process memory.
+        const MAX = 2 * 1024 * 1024;
         const truncated = body.length > MAX ? `${body.slice(0, MAX)}\n[…truncated…]` : body;
         writer.requestBody(captured.seq, truncated);
       } catch (err) {

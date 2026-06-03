@@ -12,10 +12,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
+  __resetCompileWinningBackendForTest,
+  __setCdpBrowserFetchFactoryForTest,
+  __setCdpJarMinterForTest,
+  effectiveAutoLadder,
+  evaluateBootstrapCapture,
+  prefersCdpReplayFirst,
+  renderWorkflowRequests,
   resolveLadder,
   runWithLadder,
   runWorkflowWithLadder,
 } from '../src/imprint/backend-ladder.ts';
+import type { MintedJar } from '../src/imprint/cdp-browser-fetch.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import type { ToolResult, Workflow } from '../src/imprint/types.ts';
@@ -24,10 +32,31 @@ let root: string;
 
 beforeEach(() => {
   root = mkdtempSync(pathJoin(tmpdir(), 'imprint-ladder-'));
+  // fetch-bootstrap now always-splices into the auto ladder and its real mint
+  // launches Chrome. Stub the jar mint to null so unit tests exercise the
+  // ladder's escalation logic without a real browser (mint-fail → escalate).
+  __setCdpJarMinterForTest(async () => null);
+  // The cdp-replay rung is spliced after fetch-bootstrap and launches real
+  // Chrome. Stub its factory so the rung fails fast (mintJar throws → runCdpReplay
+  // returns NETWORK → escalate) instead of launching a browser in unit tests.
+  __setCdpBrowserFetchFactoryForTest(() => ({
+    fetchImpl: (async () => {
+      throw new Error('cdp-replay disabled in tests');
+    }) as unknown as typeof fetch,
+    ensureBootstrapped: async () => [],
+    mintJar: async () => {
+      throw new Error('cdp-replay disabled in tests');
+    },
+    close: async () => {},
+  }));
+  // Disable the compile-path .act rate gate so tests don't sleep between calls.
+  process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '0';
 });
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
+  __setCdpJarMinterForTest(null);
+  __setCdpBrowserFetchFactoryForTest(null);
 });
 
 /**
@@ -156,6 +185,7 @@ describe('runWithLadder — auto escalation', () => {
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
     expect(r.result.ok).toBe(true);
     expect(r.usedBackend).toBe('stealth-fetch');
@@ -184,6 +214,7 @@ describe('runWithLadder — auto escalation', () => {
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
     expect(r.usedBackend).toBe('fetch');
     if (r.result.ok) throw new Error('expected failure');
@@ -205,6 +236,7 @@ describe('runWithLadder — auto escalation', () => {
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
     if (r.result.ok) throw new Error('expected failure');
     expect(r.result.error).toBe('RATE_LIMITED');
@@ -227,6 +259,7 @@ describe('runWithLadder — auto escalation', () => {
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
     expect(r.result.ok).toBe(true);
     expect(r.usedBackend).toBe('stealth-fetch');
@@ -250,6 +283,7 @@ describe('runWithLadder — auto escalation', () => {
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
     if (r.result.ok) throw new Error('expected failure');
     expect(r.result.error).toBe('NETWORK');
@@ -261,7 +295,7 @@ describe('runWithLadder — auto escalation', () => {
     expect(r.attempts[1]).toMatchObject({ backend: 'stealth-fetch', outcome: 'escalate' });
   });
 
-  it('does not escalate STATE_MISSING to stealth-fetch because it cannot fill state placeholders', async () => {
+  it('escalates STATE_MISSING(stealth_bootstrap) to stealth-fetch because its first step IS a stealth-browser bootstrap', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: {
         ok: false,
@@ -288,12 +322,13 @@ describe('runWithLadder — auto escalation', () => {
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
 
-    expect(r.result.ok).toBe(false);
-    expect(r.usedBackend).toBe('fetch');
+    expect(r.result.ok).toBe(true);
+    expect(r.usedBackend).toBe('stealth-fetch');
     expect(behavior.calls.fetch).toBe(1);
-    expect(behavior.calls.stealth).toBe(0);
+    expect(behavior.calls.stealth).toBe(1);
   });
 
   it('does not escalate STATE_MISSING when the next backend cannot satisfy it', async () => {
@@ -322,6 +357,7 @@ describe('runWithLadder — auto escalation', () => {
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
 
     expect(r.usedBackend).toBe('fetch');
@@ -329,7 +365,7 @@ describe('runWithLadder — auto escalation', () => {
     expect(behavior.calls.stealth).toBe(0);
   });
 
-  it('does not claim stealth-fetch can satisfy missing state captures by itself', async () => {
+  it('escalates fetch-bootstrap failure to stealth-fetch because stealth-fetch can mint browser/stealth state', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: {
         ok: false,
@@ -364,6 +400,7 @@ describe('runWithLadder — auto escalation', () => {
       ],
     };
 
+    // No skipBootstrapSplice: this asserts the auto-ladder splices fetch-bootstrap.
     const r = await runWithLadder(
       ['fetch', 'stealth-fetch'],
       tool,
@@ -372,13 +409,17 @@ describe('runWithLadder — auto escalation', () => {
       makeStealthCache(tool),
     );
 
-    expect(r.result.ok).toBe(false);
-    expect(r.usedBackend).toBe('fetch-bootstrap');
+    expect(r.result.ok).toBe(true);
+    expect(r.usedBackend).toBe('stealth-fetch');
     expect(behavior.calls.fetch).toBe(1);
-    expect(behavior.calls.stealth).toBe(0);
-    expect(r.attempts.map((attempt) => [attempt.backend, attempt.outcome])).toEqual([
-      ['fetch', 'escalate'],
-      ['fetch-bootstrap', 'failed'],
+    expect(behavior.calls.stealth).toBe(1);
+    // cdp-replay is spliced between fetch-bootstrap and stealth-fetch; here it
+    // fails fast (stubbed) and the ladder continues on to stealth-fetch.
+    expect(r.attempts.map((attempt) => attempt.backend)).toEqual([
+      'fetch',
+      'fetch-bootstrap',
+      'cdp-replay',
+      'stealth-fetch',
     ]);
   });
 
@@ -395,6 +436,7 @@ describe('runWithLadder — auto escalation', () => {
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
     expect(r.result.ok).toBe(false);
     if (r.result.ok) return;
@@ -405,24 +447,28 @@ describe('runWithLadder — auto escalation', () => {
     expect(behavior.calls.stealth).toBe(1);
   });
 
-  it('skips playbook rung when no playbook.yaml exists', async () => {
+  it('skips playbook rung when no playbook.yaml AND no replayable URL exists', async () => {
+    // The playbook rung now ALSO runs the cdp-browser (trusted real-Chrome)
+    // replay, which needs only a parseable workflow URL. So it's only truly
+    // "unavailable" when there's no playbook.yaml AND no replayable URL — i.e.
+    // a workflow with no requests.
     const behavior: FakeToolBehavior = {
       fetchResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
       stealthResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    // assetRoot/alpha/playbook.yaml does NOT exist
+    tool.workflow.requests = []; // no requests → cdp-browser replay impossible
     const r = await runWithLadder(
       ['fetch', 'stealth-fetch', 'playbook'],
       tool,
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
     expect(r.attempts).toHaveLength(3);
     expect(r.attempts[2]).toMatchObject({ backend: 'playbook', outcome: 'unavailable' });
-    // Last actual result is the second escalated FORBIDDEN
     expect(r.result.ok).toBe(false);
   });
 
@@ -457,6 +503,7 @@ result:
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
     // Playbook will fail too (no real browser, navigates about:blank, no
     // matching XHR) — but it WAS attempted.
@@ -465,9 +512,13 @@ result:
     if (!playbookAttempt) throw new Error('expected 3rd attempt');
     expect(playbookAttempt.backend).toBe('playbook');
     expect(['ok', 'failed', 'escalate']).toContain(playbookAttempt.outcome);
-  });
+    // This rung launches a REAL Playwright Chromium (navigate about:blank, wait
+    // for a never-matching XHR), so on a cold CI runner it legitimately exceeds
+    // the 5s default — give it a generous timeout to de-flake (passes in <1s
+    // locally; the assertion is just that playbook was ATTEMPTED).
+  }, 30000);
 
-  it('skips stealth-fetch and reaches playbook for state missing that only DOM replay can bypass', async () => {
+  it('reaches stealth-fetch before playbook for state missing that stealth-bootstrap can mint', async () => {
     const siteDir = pathResolve(root, 'stateful', 'search_stateful');
     mkdirSync(siteDir, { recursive: true });
     writeFileSync(
@@ -512,10 +563,89 @@ result:
       {},
       root,
       makeStealthCache(tool),
+      { skipBootstrapSplice: true },
     );
 
-    expect(behavior.calls.stealth).toBe(0);
-    expect(r.attempts.map((attempt) => attempt.backend)).toEqual(['fetch', 'playbook']);
+    expect(behavior.calls.stealth).toBe(1);
+    expect(r.usedBackend).toBe('stealth-fetch');
+    expect(r.attempts.map((attempt) => attempt.backend)).toEqual(['fetch', 'stealth-fetch']);
+  });
+});
+
+describe('runWithLadder — stealth honors workflow bootstrap', () => {
+  it('mints ${state} (cookie + html_regex) from the same stealth session and passes it to the workflow', async () => {
+    let receivedState: Record<string, unknown> | undefined;
+    const workflow: Workflow = {
+      toolName: 'tool_bs',
+      intent: { description: 'bootstrap tool' },
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://bs.example.com/api/act',
+          headers: { 'X-Csrf': '${state.csrf}', 'X-Nonce': '${state.nonce}' },
+        },
+      ],
+      site: 'bs',
+      bootstrap: {
+        url: 'https://bs.example.com/page',
+        captures: [
+          {
+            source: 'cookie',
+            name: 'csrf',
+            cookie: 'Csrf-token',
+            required: true,
+            capability: 'browser_bootstrap',
+            allowHttpOnlyProjection: false,
+          },
+          {
+            source: 'html_regex',
+            name: 'nonce',
+            pattern: 'nonce="([0-9]+)"',
+            group: 1,
+            required: true,
+            capability: 'browser_bootstrap',
+          },
+        ],
+      },
+    };
+    const tool: ResolvedTool = {
+      site: 'bs',
+      dir: '',
+      workflow,
+      toolFn: async (_input, opts) => {
+        if (opts?.fetchImpl) {
+          receivedState = opts.initialState as Record<string, unknown>;
+          return { ok: true, data: { ok: 1 } };
+        }
+        return { ok: false, error: 'UNKNOWN', message: 'fetch path not expected' };
+      },
+    };
+    // Stealth fetch whose bootstrap returns the csrf cookie + bootstrap HTML —
+    // exactly what a real Chrome navigation of the bootstrap page would mint.
+    const cache = new Map<string, StealthFetch>();
+    cache.set(
+      'bs',
+      createStealthFetch(
+        { baseUrl: 'https://bs.example.com', bootstrapUrl: 'https://bs.example.com/page' },
+        {
+          bootstrap: async () => ({
+            cookies: [{ name: 'Csrf-token', value: 'tok-abc' }],
+            sensorHeaders: {},
+            bootstrappedAt: Date.now(),
+            bootstrapHtml: '<div nonce="42"></div>',
+            bootstrapResponseHeaders: {},
+          }),
+        },
+      ),
+    );
+    const r = await runWithLadder(['stealth-fetch'], tool, {}, root, cache);
+    expect(r.result.ok).toBe(true);
+    expect(r.usedBackend).toBe('stealth-fetch');
+    // The csrf cookie and the html_regex nonce both resolved from the stealth
+    // bootstrap session and were threaded into the workflow as ${state.X}.
+    expect(receivedState?.csrf).toBe('tok-abc');
+    expect(receivedState?.nonce).toBe('42');
   });
 });
 
@@ -658,5 +788,336 @@ describe('runWorkflowWithLadder', () => {
     } finally {
       server.stop(true);
     }
+  });
+
+  it('memoizes the winning backend across calls without breaking the fetch path', async () => {
+    __resetCompileWinningBackendForTest();
+    let hits = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        hits++;
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+    const port = server.port;
+    try {
+      const toolDir = pathJoin(root, 'memo-site', 'memo_tool');
+      mkdirSync(toolDir, { recursive: true });
+      const workflowPath = pathJoin(toolDir, 'workflow.json');
+      writeFileSync(
+        workflowPath,
+        JSON.stringify({
+          toolName: 'memo_tool',
+          intent: { description: 'Memo' },
+          parameters: [],
+          requests: [{ method: 'GET', url: `http://127.0.0.1:${port}/x`, headers: {} }],
+          site: 'memo-site',
+        }),
+      );
+      // First call: fetch wins → memoized. Second call: memo=fetch is already
+      // the first rung, so behavior is identical (regression guard — the memo
+      // must never break a fetch-winning tool).
+      const a = await runWorkflowWithLadder({ workflowPath, params: {} });
+      const b = await runWorkflowWithLadder({ workflowPath, params: {} });
+      expect(a.usedBackend).toBe('fetch');
+      expect(b.usedBackend).toBe('fetch');
+      expect(a.attempts.map((x) => x.backend)).toEqual(['fetch']);
+      expect(b.attempts.map((x) => x.backend)).toEqual(['fetch']);
+      expect(hits).toBe(2);
+    } finally {
+      server.stop(true);
+      __resetCompileWinningBackendForTest();
+    }
+  });
+});
+
+describe('evaluateBootstrapCapture — response_header source (Fix C)', () => {
+  // Pure unit tests on the per-source switch. No real Chromium — `page` and
+  // `html` are unused for header captures, so a stub Page cast is fine.
+  const stubPage = {} as unknown as import('playwright').Page;
+
+  it('reads a header value by case-insensitive name', async () => {
+    const value = await evaluateBootstrapCapture(
+      {
+        name: 'csrf',
+        source: 'response_header',
+        header: 'X-Csrf-Token',
+        mode: 'last',
+        required: true,
+        capability: 'browser_bootstrap',
+      },
+      stubPage,
+      '<irrelevant html/>',
+      { 'x-csrf-token': 'abc123def456' },
+    );
+    expect(value).toBe('abc123def456');
+  });
+
+  it('returns undefined when the header is absent', async () => {
+    const value = await evaluateBootstrapCapture(
+      {
+        name: 'csrf',
+        source: 'response_header',
+        header: 'X-Csrf-Token',
+        mode: 'last',
+        required: false,
+        capability: 'browser_bootstrap',
+      },
+      stubPage,
+      '',
+      { 'some-other-header': 'noise' },
+    );
+    expect(value).toBeUndefined();
+  });
+
+  it('splits comma-joined multi-valued headers per mode', async () => {
+    // Playwright's allHeaders() joins multi-valued headers with ", " — pin
+    // the split contract so mode: 'first'/'last' do the right thing on
+    // Set-Cookie-style chains.
+    const base = {
+      name: 'tok' as const,
+      source: 'response_header' as const,
+      header: 'X-Multi',
+      required: true,
+      capability: 'browser_bootstrap' as const,
+    };
+    const headers = { 'x-multi': 'aaa, bbb, ccc' };
+    expect(await evaluateBootstrapCapture({ ...base, mode: 'first' }, stubPage, '', headers)).toBe(
+      'aaa',
+    );
+    expect(await evaluateBootstrapCapture({ ...base, mode: 'last' }, stubPage, '', headers)).toBe(
+      'ccc',
+    );
+    expect(await evaluateBootstrapCapture({ ...base, mode: 'all' }, stubPage, '', headers)).toBe(
+      'aaa, bbb, ccc',
+    );
+  });
+});
+
+describe('renderWorkflowRequests — offline param verification', () => {
+  it('renders a param into the request body without network (deterministic diff)', async () => {
+    const wf: Workflow = {
+      toolName: 'render_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [{ name: 'city', type: 'string', description: 'c', default: 'sf' }],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://api.example.com/search',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'city=${param.city}&country=US',
+        },
+      ],
+    };
+    const over = await renderWorkflowRequests({ workflow: wf, params: { city: 'reno' } });
+    const base = await renderWorkflowRequests({ workflow: wf, params: { city: 'sf' } });
+    expect(over.requests).toHaveLength(1);
+    expect(over.requests[0]?.body).toContain('city=reno');
+    expect(base.requests[0]?.body).toContain('city=sf');
+    // Overriding the param changes the field — the static coverage signal.
+    expect(over.requests[0]?.body).not.toBe(base.requests[0]?.body);
+  });
+
+  it('resolves a capture from the supplied recorded response (offline chain)', async () => {
+    const wf: Workflow = {
+      toolName: 'chain_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [{ name: 'q', type: 'string', description: 'q', default: 'a' }],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/page',
+          headers: {},
+          captures: [
+            {
+              name: 'tok',
+              required: true,
+              capability: 'ordinary_http',
+              source: 'text_regex',
+              pattern: 'TOKEN=([0-9a-f]+)',
+              group: 1,
+            },
+          ],
+        },
+        {
+          method: 'POST',
+          url: 'https://example.com/act',
+          headers: { 'X-Tok': '${state.tok}' },
+          body: 'q=${param.q}',
+        },
+      ],
+    };
+    const { requests } = await renderWorkflowRequests({
+      workflow: wf,
+      params: { q: 'hello' },
+      recordedResponseFor: (_m, u) =>
+        u.includes('/page') ? { status: 200, body: '<x>TOKEN=deadbeef</x>' } : undefined,
+    });
+    const act = requests.find((r) => r.url.includes('/act'));
+    // The capture resolved from the recorded response, fully offline.
+    expect(act?.headers['X-Tok'] ?? act?.headers['x-tok']).toBe('deadbeef');
+    expect(act?.body).toContain('q=hello');
+  });
+});
+
+describe('fetch-bootstrap happy path (cdp jar minted → plain-fetch replay)', () => {
+  it('threads the minted jar cookies into credentials and the jar UA into the replay fetch', async () => {
+    const jar: MintedJar = {
+      cookies: [
+        { name: '_abck', value: 'X~0~Y', domain: '.alpha.example.com', path: '/' },
+        { name: 'sess', value: 's', domain: '.alpha.example.com', path: '/' },
+      ],
+      ua: 'JarUA/148',
+      html: '',
+      bootstrapEpoch: 1_700_000_000_000,
+      abckFlag: '0',
+    };
+    __setCdpJarMinterForTest(async () => jar);
+
+    let captured:
+      | {
+          credentials?: { cookies?: Array<{ name: string; value: string }> };
+          fetchImpl?: typeof fetch;
+        }
+      | undefined;
+    const tool: ResolvedTool = {
+      site: 'alpha',
+      dir: pathJoin(root, 'alpha', 'tool'),
+      workflow: {
+        toolName: 'tool_alpha',
+        intent: { description: 'x' },
+        parameters: [],
+        requests: [{ method: 'GET', url: 'https://alpha.example.com/api/x', headers: {} }],
+        site: 'alpha',
+      },
+      toolFn: async (_p, opts) => {
+        const o = opts as typeof captured;
+        if (o?.fetchImpl) {
+          captured = o;
+          return { ok: true, data: { via: 'jar' } };
+        }
+        // plain fetch rung → fail so the ladder escalates to fetch-bootstrap
+        return { ok: false, error: 'FORBIDDEN', message: 'akamai' };
+      },
+    };
+
+    const r = await runWithLadder(
+      ['fetch', 'fetch-bootstrap'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+    );
+    expect(r.usedBackend).toBe('fetch-bootstrap');
+    expect(r.result.ok).toBe(true);
+    // jar cookies were threaded into the replay credentials
+    expect(
+      captured?.credentials?.cookies?.some((c) => c.name === '_abck' && c.value === 'X~0~Y'),
+    ).toBe(true);
+
+    // the replay fetchImpl forces the jar's exact UA on the wire
+    const origFetch = globalThis.fetch;
+    let sentUa = '';
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      sentUa = new Headers(init?.headers).get('user-agent') ?? '';
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+    try {
+      await captured?.fetchImpl?.('https://alpha.example.com/x');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+    expect(sentUa).toBe('JarUA/148');
+  });
+});
+
+describe('effectiveAutoLadder + prefersCdpReplayFirst (Fix 4 — cdp-replay rung)', () => {
+  function wf(partial: Partial<Workflow>): Workflow {
+    return {
+      toolName: 't',
+      intent: { description: 'd' },
+      parameters: [],
+      site: 's',
+      requests: [],
+      ...partial,
+    } as Workflow;
+  }
+
+  it('splices fetch-bootstrap then cdp-replay after fetch in auto mode', () => {
+    const out = effectiveAutoLadder(['fetch', 'stealth-fetch', 'playbook'], wf({}));
+    expect(out).toEqual(['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']);
+  });
+
+  it('does not duplicate fetch-bootstrap/cdp-replay if already present', () => {
+    const out = effectiveAutoLadder(
+      ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'],
+      wf({}),
+    );
+    expect(out).toEqual(['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch']);
+  });
+
+  it('leaves a single-rung ladder untouched', () => {
+    expect(effectiveAutoLadder(['stealth-fetch'], wf({}))).toEqual(['stealth-fetch']);
+  });
+
+  it('prefersCdpReplayFirst: true for ≥2 mutating requests + a bootstrap block', () => {
+    const w = wf({
+      bootstrap: { url: 'https://x/boot' },
+      requests: [
+        { method: 'POST', url: 'https://x/a.act', headers: {} },
+        { method: 'POST', url: 'https://x/b.act', headers: {} },
+      ],
+    });
+    expect(prefersCdpReplayFirst(w)).toBe(true);
+    // …and it is front-loaded so doomed fetch rungs don't pre-burn the IP budget.
+    expect(effectiveAutoLadder(['fetch', 'stealth-fetch'], w)).toEqual([
+      'cdp-replay',
+      'fetch',
+      'fetch-bootstrap',
+      'stealth-fetch',
+    ]);
+  });
+
+  it('prefersCdpReplayFirst: true for ≥2 mutating requests that reference ${state.X} (no bootstrap)', () => {
+    const w = wf({
+      requests: [
+        { method: 'POST', url: 'https://x/a', headers: { 'X-Csrf': '${state.csrf}' } },
+        { method: 'POST', url: 'https://x/b', headers: {} },
+      ],
+    });
+    expect(prefersCdpReplayFirst(w)).toBe(true);
+  });
+
+  it('prefersCdpReplayFirst: false for a single state-changing request', () => {
+    const w = wf({
+      bootstrap: { url: 'https://x/boot' },
+      requests: [
+        { method: 'POST', url: 'https://x/a.act', headers: {} },
+        { method: 'GET', url: 'https://x/results', headers: {} },
+      ],
+    });
+    expect(prefersCdpReplayFirst(w)).toBe(false);
+    // normal fetch-first order (cdp-replay still available as a later escalation)
+    expect(effectiveAutoLadder(['fetch', 'stealth-fetch'], w)).toEqual([
+      'fetch',
+      'fetch-bootstrap',
+      'cdp-replay',
+      'stealth-fetch',
+    ]);
+  });
+
+  it('prefersCdpReplayFirst: false for a plain multi-POST REST API (no bootstrap, no ${state.X})', () => {
+    const w = wf({
+      requests: [
+        { method: 'POST', url: 'https://api/x', headers: {} },
+        { method: 'POST', url: 'https://api/y', headers: {} },
+      ],
+    });
+    expect(prefersCdpReplayFirst(w)).toBe(false);
   });
 });

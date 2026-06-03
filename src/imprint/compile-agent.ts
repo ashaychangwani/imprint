@@ -340,6 +340,10 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         expectedToolName: opts.candidate?.toolName,
         likelyParams: opts.candidate?.likelyParams,
         candidateRequestSeqs: opts.candidate?.requestSeqs,
+        // Widen Fix B's variation pool to the dependency requests (e.g. a
+        // bootstrap GET) so a session token that varies only across dependency
+        // seqs and is then frozen as a literal in the tool's request is caught.
+        dependencyRequestSeqs: opts.candidate?.dependencySeqs,
         assignedSharedModules,
         tokenParams,
         emittedTokens,
