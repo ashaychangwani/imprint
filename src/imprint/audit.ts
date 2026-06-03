@@ -359,12 +359,14 @@ async function driveAudit(opts: DriveAuditOptions): Promise<AuditReport> {
           .map((u) => `${u.tool}(${u.params.join(', ')})`)
           .join(
             '; ',
-          )}. Probe them especially — call the tool with and without each one and check the response actually changes. Classify a param that has no effect as \`tool_broken\`.`
+          )}. Where the tool is a cheap read not behind an anti-bot/rate defense, probe them — call with and without each one and check the response changes; classify a param with no effect as \`tool_broken\`. But do NOT per-param-probe a state-changing or bot-defended tool (see the ONE-invocation rule above): the probe burst would tarpit the whole audit. For those, the single realistic invocation stands and the unverified params simply remain unverified — that is expected, not a failure.`
       : '';
 
   const initialPrompt = `Audit every MCP tool connected to you for the site "${opts.site}".
 
-There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set plus one or two edge cases (all derived only from the schema and description), judge each result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt.
+There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set, judge the result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt. You MAY add one or two edge-case invocations ONLY for tools that are cheap reads not behind an anti-bot/rate defense.
+
+ANTI-BOT / STATE-CHANGING TOOLS — ONE invocation only. If a tool drives a state-changing call (a search/booking .act-style POST) or its origin is bot-defended (the first call is slow/tarpitted, or returns 403/429/challenge/anti-bot), do EXACTLY ONE realistic invocation for that tool and move on — do NOT add edge cases. Repeated state-changing calls trip the site's per-IP rate defense, which then tarpits EVERY later call across all tools and ruins the whole audit. One clean read per such tool is enough to grade it; extra probes only convert a passing audit into a tarpitted one.
 
 IMPORTANT: Call tools strictly sequentially — issue exactly one tool call, wait for its result, then issue the next. Never issue tool calls in parallel or batch them in one turn. Many target sites share an anti-bot defense across endpoints, so a parallel burst trips a site-wide rate-limit (HTTP 429) that then poisons every later call. If a call returns a 429 / rate-limit / anti-bot result, classify it \`infra\` and pause before the next call.${unverifiedNote}${buildTokenDepNote(opts.tokenDeps)}
 
