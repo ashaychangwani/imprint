@@ -313,3 +313,80 @@ describe('Header defaults vs caller overrides', () => {
     expect(seen[0]).not.toHaveProperty('Accept');
   });
 });
+
+describe('UA + client-hint consistency', () => {
+  // The bug this guards: a hardcoded UA (Chrome/131) paired with the live
+  // binary's client hints (Chrome/148) is a contradiction no real browser
+  // emits — a textbook anti-bot tell. The bootstrap now captures the browser's
+  // real navigator.userAgent + sec-ch-ua and reuses them on the wire.
+  function makeSf(
+    token: Partial<TokenCache>,
+    optionUserAgent?: string,
+  ): { sf: StealthFetch; seen: Array<Record<string, string>> } {
+    const seen: Array<Record<string, string>> = [];
+    const sf = createStealthFetch(
+      {
+        baseUrl: 'https://example.com',
+        ...(optionUserAgent ? { userAgent: optionUserAgent } : {}),
+      },
+      {
+        bootstrap: async (): Promise<TokenCache> => ({
+          cookies: [],
+          sensorHeaders: {},
+          bootstrappedAt: Date.now(),
+          ...token,
+        }),
+        underlyingFetch: async (_url, init) => {
+          seen.push((init.headers ?? {}) as Record<string, string>);
+          return { status: 200, ok: true, body: '{}', headers: {} };
+        },
+      },
+    );
+    return { sf, seen };
+  }
+
+  it('reuses the UA captured during bootstrap on the wire', async () => {
+    const capturedUA =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
+    const { sf, seen } = makeSf({ userAgent: capturedUA });
+    await sf.fetchImpl('https://example.com/api/x');
+    expect(seen[0]?.['user-agent']).toBe(capturedUA);
+  });
+
+  it('attaches captured client hints consistent with the UA', async () => {
+    const { sf, seen } = makeSf({
+      userAgent: 'UA/148',
+      clientHints: {
+        'sec-ch-ua': '"Chromium";v="148", "Google Chrome";v="148"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"macOS"',
+      },
+    });
+    await sf.fetchImpl('https://example.com/api/x');
+    expect(seen[0]?.['sec-ch-ua']).toBe('"Chromium";v="148", "Google Chrome";v="148"');
+    expect(seen[0]?.['sec-ch-ua-platform']).toBe('"macOS"');
+  });
+
+  it('falls back to DEFAULT_UA when bootstrap captured none', async () => {
+    const { sf, seen } = makeSf({});
+    await sf.fetchImpl('https://example.com/api/x');
+    // The current floor is Chrome/148; assert it is not the stale 131 we removed.
+    expect(seen[0]?.['user-agent']).toContain('Chrome/148');
+    expect(seen[0]?.['user-agent']).not.toContain('Chrome/131');
+  });
+
+  it('an explicit UA override wins and suppresses captured client hints', async () => {
+    // A forced UA does not change the browser's native client hints, so pairing
+    // captured hints with an override would reintroduce the contradiction.
+    const { sf, seen } = makeSf(
+      {
+        userAgent: 'native/148',
+        clientHints: { 'sec-ch-ua': '"Chromium";v="148"', 'sec-ch-ua-platform': '"macOS"' },
+      },
+      'forced/99',
+    );
+    await sf.fetchImpl('https://example.com/api/x');
+    expect(seen[0]?.['user-agent']).toBe('forced/99');
+    expect(seen[0]).not.toHaveProperty('sec-ch-ua');
+  });
+});

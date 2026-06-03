@@ -21,6 +21,12 @@ interface LaunchOptions {
   userDataDir?: string;
   /** Extra Chromium flags (advanced). */
   extraArgs?: string[];
+  /** X display for HEADED Chrome on Linux (e.g. ":0", ":99"). Defaults to
+   *  `process.env.DISPLAY`; if that's also empty AND we're launching headed on
+   *  Linux, a virtual framebuffer (Xvfb) is started automatically and torn down
+   *  on close(). Ignored on macOS/Windows (they use the native window server)
+   *  and for headless launches (which need no display). */
+  display?: string;
 }
 
 interface LaunchedChromium {
@@ -128,6 +134,76 @@ export function findChromium(): string {
   );
 }
 
+interface XvfbHandle {
+  display: string;
+  close(): Promise<void>;
+}
+
+const XVFB_HINT =
+  'The trusted-browser replay needs a display. Install Xvfb (Debian/Ubuntu: ' +
+  '`apt-get install xvfb`), or run with an existing display: `DISPLAY=:0 imprint …`. ' +
+  'Run `imprint doctor` to check.';
+
+function xvfbErrorMessage(err: unknown): string {
+  const code = (err as { code?: string } | null)?.code;
+  if (code === 'ENOENT') return `Xvfb not found on PATH.\n${XVFB_HINT}`;
+  return `Failed to start Xvfb: ${err instanceof Error ? err.message : String(err)}\n${XVFB_HINT}`;
+}
+
+/**
+ * Spawn a virtual X framebuffer so HEADED Chrome can run on a Linux server with
+ * no physical display. Headed real Chrome (not `--headless`) is the only config
+ * some behavioral anti-bot services trust — it has a real GPU/compositor and
+ * real window geometry, none of which a headless build exposes. Xvfb is
+ * transparent to Chrome: same window + GPU code path, just no monitor. Picks a
+ * free `:NN` display, waits for its socket, and returns a teardown handle.
+ */
+async function startXvfb(): Promise<XvfbHandle> {
+  // Pick a display number whose socket doesn't already exist.
+  let displayNum = 99;
+  for (; displayNum < 120; displayNum++) {
+    if (!existsSync(`/tmp/.X11-unix/X${displayNum}`)) break;
+  }
+  const display = `:${displayNum}`;
+  const proc = spawn('Xvfb', [display, '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'], {
+    stdio: ['ignore', 'ignore', isDebug() ? 'pipe' : 'ignore'],
+    detached: false,
+  });
+  let spawnError: unknown;
+  proc.on('error', (err) => {
+    spawnError = err;
+  });
+  if (isDebug()) proc.stderr?.on('data', (chunk) => process.stderr.write(chunk));
+
+  const teardown = async (): Promise<void> => {
+    if (proc.exitCode === null && proc.signalCode === null) {
+      proc.kill('SIGTERM');
+      await Promise.race([
+        new Promise<void>((resolve) => proc.once('exit', () => resolve())),
+        sleep(1000),
+      ]);
+      if (proc.exitCode === null) proc.kill('SIGKILL');
+    }
+  };
+
+  // Wait for the X socket to appear (or the process to fail).
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (spawnError) throw new Error(xvfbErrorMessage(spawnError));
+    if (proc.exitCode !== null) {
+      throw new Error(
+        `Xvfb exited early (code ${proc.exitCode}) — could not start a virtual display.\n${XVFB_HINT}`,
+      );
+    }
+    if (existsSync(`/tmp/.X11-unix/X${displayNum}`)) {
+      return { display, close: teardown };
+    }
+    await sleep(100);
+  }
+  await teardown();
+  throw new Error(`Xvfb did not create display ${display} within 5s.\n${XVFB_HINT}`);
+}
+
 async function pickFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -181,9 +257,23 @@ export async function launchChromium(opts: LaunchOptions = {}): Promise<Launched
   if (opts.extraArgs) args.push(...opts.extraArgs);
   args.push(opts.url ?? 'about:blank');
 
+  // Resolve a display for HEADED Chrome. macOS/Windows use the native window
+  // server, so DISPLAY is meaningless there — this only applies on Linux. An
+  // existing physical/forwarded display ($DISPLAY, or an explicit opts.display)
+  // is used as-is; on a headless Linux server with none, spin up a virtual
+  // framebuffer so the trusted headed-Chrome replay still works. A headless
+  // launch needs no display.
+  let xvfb: XvfbHandle | undefined;
+  let display = opts.display ?? process.env.DISPLAY;
+  if (process.platform === 'linux' && !opts.headless && !display) {
+    xvfb = await startXvfb();
+    display = xvfb.display;
+  }
+
   const child = spawn(exe, args, {
     stdio: ['ignore', 'ignore', 'pipe'],
     detached: false,
+    env: display ? { ...process.env, DISPLAY: display } : process.env,
   });
 
   // Chromium is noisy — only surface stderr under IMPRINT_DEBUG.
@@ -205,6 +295,8 @@ export async function launchChromium(opts: LaunchOptions = {}): Promise<Launched
       ]);
       if (child.exitCode === null) child.kill('SIGKILL');
     }
+    // Tear down the virtual display we started for this launch (if any).
+    await xvfb?.close().catch(() => {});
   };
 
   return { process: child, port, userDataDir, ready, close };
