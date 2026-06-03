@@ -289,26 +289,64 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     }
     // Give the sensor JS time to start.
     await sleep(3000);
-    // Drive interaction until _abck validates (or budget expires).
+    // Drive HUMAN-LIKE interaction until _abck validates (or budget expires).
+    // Akamai's bmak grades the behavioral SHAPE of trusted input, not just that
+    // it exists: a robotic linear lattice + a programmatic `window.scrollBy`
+    // (which is isTrusted=FALSE — a real bot tell) score low. Instead we move the
+    // cursor along Bezier paths with variable velocity + sub-pixel jitter, scroll
+    // via a TRUSTED CDP mouseWheel, and emit occasional key events — all through
+    // CDP Input (isTrusted=true). Note: this raises the behavioral score that
+    // sits ON TOP of IP reputation; it does NOT overcome a datacenter egress
+    // (Akamai serves a 200 empty-shell to a datacenter ASN regardless), which is
+    // what IMPRINT_PROXY (residential egress) is for.
     const start = Date.now();
     let i = 0;
     let status = '?';
+    let pos = { x: rand(120, 1100), y: rand(120, 600) };
     while (Date.now() - start < abckWaitMs) {
       try {
-        await Input.dispatchMouseEvent({
-          type: 'mouseMoved',
-          x: 80 + ((i * 137) % 1200),
-          y: 120 + ((i * 89) % 640),
-        });
+        const target = { x: rand(60, 1200), y: rand(80, 680) };
+        for (const p of bezierPoints(pos, target, Math.round(rand(8, 20)))) {
+          await Input.dispatchMouseEvent({
+            type: 'mouseMoved',
+            x: Math.round(p.x),
+            y: Math.round(p.y),
+            timestamp: Date.now() / 1000,
+          });
+          await sleep(rand(8, 28)); // variable velocity, not a fixed cadence
+        }
+        pos = target;
         if (i % 3 === 0) {
-          await Runtime.evaluate({
-            expression: `window.scrollBy(0, ${100 + (i % 5) * 40})`,
+          // TRUSTED wheel scroll via CDP Input (replaces the isTrusted=false
+          // programmatic window.scrollBy).
+          await Input.dispatchMouseEvent({
+            type: 'mouseWheel',
+            x: Math.round(pos.x),
+            y: Math.round(pos.y),
+            deltaX: 0,
+            deltaY: rand(80, 260),
+          });
+        }
+        if (i % 5 === 2) {
+          // A keystroke broadens the behavioral feature vector beyond mouse-only.
+          await Input.dispatchKeyEvent({
+            type: 'keyDown',
+            key: 'ArrowDown',
+            code: 'ArrowDown',
+            windowsVirtualKeyCode: 40,
+          });
+          await sleep(rand(30, 90));
+          await Input.dispatchKeyEvent({
+            type: 'keyUp',
+            key: 'ArrowDown',
+            code: 'ArrowDown',
+            windowsVirtualKeyCode: 40,
           });
         }
       } catch {
         // non-fatal
       }
-      await sleep(700);
+      await sleep(rand(180, 520)); // non-uniform dwell between interaction bursts
       const abck = await getCookie(client, '_abck');
       status = abck?.split('~')[1] ?? '?';
       if (abckIsValidated(abck)) break;
@@ -506,6 +544,37 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Uniform random in [min, max). Used to humanize interaction timing/geometry —
+ *  bmak flags fixed cadences and uniform step sizes as synthetic. */
+function rand(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
+
+/** Cubic-Bezier cursor path from `from` to `to` with control points pulled to
+ *  one side and per-point sub-pixel jitter, so the move has curvature +
+ *  variable spacing like a real hand (vs a teleporting linear lattice). Pure
+ *  geometry — returns the intermediate points to feed to Input.dispatchMouseEvent. */
+function bezierPoints(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  steps: number,
+): Array<{ x: number; y: number }> {
+  const c1x = from.x + (to.x - from.x) * rand(0.2, 0.4) + rand(-60, 60);
+  const c1y = from.y + (to.y - from.y) * rand(0.2, 0.4) + rand(-60, 60);
+  const c2x = from.x + (to.x - from.x) * rand(0.6, 0.8) + rand(-60, 60);
+  const c2y = from.y + (to.y - from.y) * rand(0.6, 0.8) + rand(-60, 60);
+  const pts: Array<{ x: number; y: number }> = [];
+  const n = Math.max(2, steps);
+  for (let s = 1; s <= n; s++) {
+    const t = s / n;
+    const u = 1 - t;
+    const x = u * u * u * from.x + 3 * u * u * t * c1x + 3 * u * t * t * c2x + t * t * t * to.x;
+    const y = u * u * u * from.y + 3 * u * u * t * c1y + 3 * u * t * t * c2y + t * t * t * to.y;
+    pts.push({ x: x + rand(-1.5, 1.5), y: y + rand(-1.5, 1.5) });
+  }
+  return pts;
 }
 
 /** CDP Network.setCookie wants 'Strict' | 'Lax' | 'None'; recordings store the
