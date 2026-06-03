@@ -15,6 +15,7 @@ import { join as pathJoin } from 'node:path';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright';
 import { createLog } from './log.ts';
 import type { CapturedReplayRequest } from './session-diff.ts';
+import { getStealthChromium, getStealthExecutablePath } from './stealth-chromium.ts';
 import type { CapturedEvent, Session } from './types.ts';
 
 const log = createLog('replay-capture');
@@ -62,25 +63,17 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
 
   let chromium: typeof import('playwright').chromium;
   try {
-    const pwExtra = await import('playwright-extra');
-    const stealthMod = await import('puppeteer-extra-plugin-stealth');
-    const stealthFactory =
-      (stealthMod as { default?: () => unknown }).default ??
-      (stealthMod as unknown as () => unknown);
-    pwExtra.chromium.use(stealthFactory() as never);
-    chromium = pwExtra.chromium as unknown as typeof import('playwright').chromium;
-  } catch {
-    try {
-      const pw = await import('playwright');
-      chromium = pw.chromium;
-    } catch (innerErr) {
-      return { ok: false, requests: [], error: `Playwright not available: ${errMsg(innerErr)}` };
-    }
+    chromium = await getStealthChromium();
+  } catch (innerErr) {
+    return { ok: false, requests: [], error: `Playwright not available: ${errMsg(innerErr)}` };
   }
 
   try {
     replayLog(`launching browser (headed=${!!opts.headed})`);
-    browser = await chromium.launch({ headless: !opts.headed });
+    browser = await chromium.launch({
+      headless: !opts.headed,
+      executablePath: getStealthExecutablePath(),
+    });
   } catch (err) {
     replayLog(`browser launch failed: ${errMsg(err)}`);
     return { ok: false, requests: [], error: `Could not launch Chromium: ${errMsg(err)}` };

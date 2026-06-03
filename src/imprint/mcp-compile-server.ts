@@ -26,6 +26,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import {
+  applyLiveVerification,
   applyParamVerification,
   buildCompileTools,
   externalVerification,
@@ -157,25 +158,26 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     if (name === 'done') {
       const summary = (args as { summary?: string }).summary ?? 'Task completed';
       log(`done() called: ${summary}`);
-      const { failures, warnings, paramVerification } = await externalVerification(
-        opts.toolDir,
-        session,
-        opts.sessionPath,
-        {
+      const { failures, warnings, paramVerification, liveVerification } =
+        await externalVerification(opts.toolDir, session, opts.sessionPath, {
           expectedToolName: opts.candidate?.toolName,
           likelyParams: opts.candidate?.likelyParams,
           candidateRequestSeqs: opts.candidate?.requestSeqs,
+          // Widen Fix B's variation pool to dependency requests so a token that
+          // varies only across them and is frozen as a literal in the tool's
+          // request is caught (the cross-request session-token leak case).
+          dependencyRequestSeqs: opts.candidate?.dependencySeqs,
           assignedSharedModules,
           tokenParams,
           emittedTokens,
-        },
-      );
+        });
       if (warnings.length > 0) {
         log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
       }
       if (failures.length === 0) {
-        // Persist per-parameter verified flags into workflow.json and fold any
-        // "live-unverified" note into the recorded warnings (Fix D).
+        // Persist per-parameter verified flags + the live-verification stamp
+        // onto workflow.json. Audit and teach read the stamp.
+        applyLiveVerification(opts.toolDir, liveVerification);
         const paramWarnings = applyParamVerification(opts.toolDir, paramVerification);
         if (paramWarnings.length > 0) {
           log(`parameter verification:\n${paramWarnings.join('\n')}`);

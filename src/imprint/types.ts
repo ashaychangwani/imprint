@@ -209,6 +209,18 @@ const BootstrapCaptureSchema = z.discriminatedUnion('source', [
     selector: z.string(),
     timeoutMs: z.number().int().positive().optional(),
   }),
+  /** Read the value of a header from the bootstrap GET's own HTTP response.
+   *  Use this when the token (CSRF, anti-replay, page nonce, etc.) is
+   *  returned in a response header — not embedded in the HTML body — which
+   *  no `html_regex` or `dom_*` capture can ever match. Mirrors the shape
+   *  of `RequestCaptureSchema.source = 'response_header'` so the agent
+   *  documents one consistent rule across request- and bootstrap-scoped
+   *  captures. */
+  CaptureCommonSchema.extend({
+    source: z.literal('response_header'),
+    header: z.string(),
+    mode: z.enum(['first', 'last', 'all']).optional().default('last'),
+  }),
 ]);
 export type BootstrapCapture = z.infer<typeof BootstrapCaptureSchema>;
 
@@ -262,6 +274,27 @@ export const WorkflowSchema = z.object({
    *  The optional 4th arg `params` carries the resolved workflow parameters
    *  so the transform can construct request bodies programmatically. */
   requestTransformModule: z.string().optional(),
+  /** Did this tool's integration test produce live data at compile time?
+   *
+   *  - `liveVerified: true` (default when present) — the integration test
+   *    passed at one of the API/stealth-fetch rungs of the ladder.
+   *  - `liveVerified: false` — the test failed and was waived (anti-bot
+   *    block or transient infra), so the tool shipped without a passing
+   *    live call. Downstream consumers (audit gate, teach summary) treat
+   *    this as a flying-blind signal — the runtime playbook fallback is
+   *    the only remaining path, and it is a last-ditch one. `liveVerified`
+   *    is absent on tools predating this field; absent is treated as
+   *    "unknown" by readers, which is more honest than defaulting true. */
+  liveVerified: z.boolean().optional(),
+  /** Structured reason a waiver was applied. Only present when
+   *  `liveVerified === false`. */
+  liveVerifiedWaiver: z
+    .object({
+      kind: z.enum(['waived-bot', 'waived-infra']),
+      firstError: z.string(),
+      exhaustedBackends: z.array(z.string()),
+    })
+    .optional(),
 });
 export type Workflow = z.infer<typeof WorkflowSchema>;
 
@@ -320,12 +353,16 @@ const NotifyWhenSchema = z.discriminatedUnion('type', [
 export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
 
 /** fetch (plain API replay) → gated fetch-bootstrap (browser state init +
- *  API replay) → stealth-fetch (bot-defense state + API replay) → playbook
- *  (full DOM walk). 'auto' only inserts fetch-bootstrap for declared or
- *  satisfiable browser-minted state. */
+ *  API replay) → cdp-replay (API requests run IN a live trusted Chrome page so
+ *  a protected POST's invalidated _abck is auto-re-validated by the page's bmak
+ *  sensor between calls — the only way to sustain multiple sensitive .act POSTs)
+ *  → stealth-fetch (bot-defense state + API replay) → playbook (full DOM walk).
+ *  'auto' only inserts fetch-bootstrap / cdp-replay for declared or satisfiable
+ *  browser-minted state. */
 const ReplayBackendSchema = z.enum([
   'fetch',
   'fetch-bootstrap',
+  'cdp-replay',
   'stealth-fetch',
   'playbook',
   'auto',

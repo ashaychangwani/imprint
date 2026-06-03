@@ -243,3 +243,150 @@ describe('fetchImpl', () => {
     expect(observed[4]).toBe('plain-string');
   });
 });
+
+describe('Header defaults vs caller overrides', () => {
+  // Capture the final init.headers the underlying fetch sees so we can
+  // assert on what stealth-fetch actually puts on the wire.
+  function makeHeaderCapturingSf(): {
+    sf: StealthFetch;
+    seen: Array<Record<string, string>>;
+  } {
+    const seen: Array<Record<string, string>> = [];
+    const sf = createStealthFetch(
+      { baseUrl: 'https://example.com' },
+      {
+        bootstrap: async (): Promise<TokenCache> => ({
+          cookies: [],
+          sensorHeaders: {},
+          bootstrappedAt: Date.now(),
+        }),
+        underlyingFetch: async (_url, init) => {
+          seen.push((init.headers ?? {}) as Record<string, string>);
+          return { status: 200, ok: true, body: '{}', headers: {} };
+        },
+      },
+    );
+    return { sf, seen };
+  }
+
+  // Header keys reach fetchWithRetry already lowercased (the public
+  // fetchImpl wrapper normalizes via `new Headers().forEach`), so we assert
+  // on lowercase keys throughout.
+
+  it('omits content-type on body-less GETs (real browsers do not send it)', async () => {
+    // Regression: the JSON Content-Type used to land unconditionally, which
+    // is a small but real anti-bot tell on HTML bootstrap GETs against
+    // Akamai-protected sites (Costco). A GET with no body must not carry a
+    // Content-Type at all.
+    const { sf, seen } = makeHeaderCapturingSf();
+    await sf.fetchImpl('https://example.com/Rental-Cars');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toHaveProperty('content-type');
+    expect(seen[0]).not.toHaveProperty('Content-Type');
+  });
+
+  it('applies content-type: application/json default on POST with body', async () => {
+    const { sf, seen } = makeHeaderCapturingSf();
+    await sf.fetchImpl('https://example.com/api/x', { method: 'POST', body: '{"k":1}' });
+    expect(seen[0]?.['content-type']).toBe('application/json');
+  });
+
+  it('lets the caller override content-type on a POST', async () => {
+    const { sf, seen } = makeHeaderCapturingSf();
+    await sf.fetchImpl('https://example.com/api/x', {
+      method: 'POST',
+      body: 'a=1&b=2',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    expect(seen[0]?.['content-type']).toBe('application/x-www-form-urlencoded');
+    // The duplicate-case bug pre-fix would leave both `Content-Type` and
+    // `content-type` in the headers; assert it doesn't anymore.
+    expect(seen[0]).not.toHaveProperty('Content-Type');
+  });
+
+  it('lets the caller override accept (e.g. text/html on a bootstrap GET)', async () => {
+    const { sf, seen } = makeHeaderCapturingSf();
+    await sf.fetchImpl('https://example.com/Rental-Cars', {
+      headers: { Accept: 'text/html,application/xhtml+xml' },
+    });
+    expect(seen[0]?.accept).toBe('text/html,application/xhtml+xml');
+    expect(seen[0]).not.toHaveProperty('Accept');
+  });
+});
+
+describe('UA + client-hint consistency', () => {
+  // The bug this guards: a hardcoded UA (Chrome/131) paired with the live
+  // binary's client hints (Chrome/148) is a contradiction no real browser
+  // emits — a textbook anti-bot tell. The bootstrap now captures the browser's
+  // real navigator.userAgent + sec-ch-ua and reuses them on the wire.
+  function makeSf(
+    token: Partial<TokenCache>,
+    optionUserAgent?: string,
+  ): { sf: StealthFetch; seen: Array<Record<string, string>> } {
+    const seen: Array<Record<string, string>> = [];
+    const sf = createStealthFetch(
+      {
+        baseUrl: 'https://example.com',
+        ...(optionUserAgent ? { userAgent: optionUserAgent } : {}),
+      },
+      {
+        bootstrap: async (): Promise<TokenCache> => ({
+          cookies: [],
+          sensorHeaders: {},
+          bootstrappedAt: Date.now(),
+          ...token,
+        }),
+        underlyingFetch: async (_url, init) => {
+          seen.push((init.headers ?? {}) as Record<string, string>);
+          return { status: 200, ok: true, body: '{}', headers: {} };
+        },
+      },
+    );
+    return { sf, seen };
+  }
+
+  it('reuses the UA captured during bootstrap on the wire', async () => {
+    const capturedUA =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
+    const { sf, seen } = makeSf({ userAgent: capturedUA });
+    await sf.fetchImpl('https://example.com/api/x');
+    expect(seen[0]?.['user-agent']).toBe(capturedUA);
+  });
+
+  it('attaches captured client hints consistent with the UA', async () => {
+    const { sf, seen } = makeSf({
+      userAgent: 'UA/148',
+      clientHints: {
+        'sec-ch-ua': '"Chromium";v="148", "Google Chrome";v="148"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"macOS"',
+      },
+    });
+    await sf.fetchImpl('https://example.com/api/x');
+    expect(seen[0]?.['sec-ch-ua']).toBe('"Chromium";v="148", "Google Chrome";v="148"');
+    expect(seen[0]?.['sec-ch-ua-platform']).toBe('"macOS"');
+  });
+
+  it('falls back to DEFAULT_UA when bootstrap captured none', async () => {
+    const { sf, seen } = makeSf({});
+    await sf.fetchImpl('https://example.com/api/x');
+    // The current floor is Chrome/148; assert it is not the stale 131 we removed.
+    expect(seen[0]?.['user-agent']).toContain('Chrome/148');
+    expect(seen[0]?.['user-agent']).not.toContain('Chrome/131');
+  });
+
+  it('an explicit UA override wins and suppresses captured client hints', async () => {
+    // A forced UA does not change the browser's native client hints, so pairing
+    // captured hints with an override would reintroduce the contradiction.
+    const { sf, seen } = makeSf(
+      {
+        userAgent: 'native/148',
+        clientHints: { 'sec-ch-ua': '"Chromium";v="148"', 'sec-ch-ua-platform': '"macOS"' },
+      },
+      'forced/99',
+    );
+    await sf.fetchImpl('https://example.com/api/x');
+    expect(seen[0]?.['user-agent']).toBe('forced/99');
+    expect(seen[0]).not.toHaveProperty('sec-ch-ua');
+  });
+});

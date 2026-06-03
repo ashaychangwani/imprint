@@ -113,14 +113,23 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     (await loadCredentialStore(opts.workflow.site)) ??
     emptyStore(opts.workflow.site);
 
-  // Validate required parameters are present.
+  // Validate required parameters are present and merge declared defaults
+  // into the working params map. Without the merge, `parameter.default` would
+  // be a presence-sentinel only — the substitution layer at
+  // `resolvePlaceholder` would still throw STATE_MISSING because it reads
+  // from this map directly. The schema declares `default` as a real value
+  // (string | number | boolean), so honor it.
+  const params: Record<string, string | number | boolean> = { ...opts.params };
   for (const p of opts.workflow.parameters) {
-    if (!(p.name in opts.params) && p.default === undefined) {
-      return {
-        ok: false,
-        error: 'UNKNOWN',
-        message: `Missing required parameter: ${p.name} (${p.description})`,
-      };
+    if (!(p.name in params)) {
+      if (p.default === undefined) {
+        return {
+          ok: false,
+          error: 'UNKNOWN',
+          message: `Missing required parameter: ${p.name} (${p.description})`,
+        };
+      }
+      params[p.name] = p.default;
     }
   }
 
@@ -163,7 +172,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     if (!req) continue;
 
     const subbedResult = substituteRequest(req, {
-      params: opts.params,
+      params,
       credentials: liveCredentials,
       responseSlots,
       state,
@@ -180,7 +189,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           subbed.method,
           subbed.url,
           responseSlots.map((s) => s.raw),
-          opts.params,
+          params,
         );
         if (typeof transformResult === 'string') {
           subbed.url = transformResult;
@@ -312,7 +321,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         };
       }
       finalData = mod.extract(finalData, {
-        params: opts.params,
+        params,
         responses: responseSlots.map((s) => s.raw),
       });
     } catch (err) {

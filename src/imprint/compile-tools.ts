@@ -23,7 +23,13 @@ import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
-import { type CapturedRequest, type Session, WorkflowSchema } from './types.ts';
+import {
+  type BootstrapCapture,
+  type CapturedRequest,
+  type RequestCapture,
+  type Session,
+  WorkflowSchema,
+} from './types.ts';
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 
@@ -1658,6 +1664,459 @@ export function applyParamVerification(
   ];
 }
 
+/**
+ * Stamp the integration-test waiver outcome onto workflow.json. When a tool's
+ * integration test couldn't produce live data (anti-bot block or every-rung
+ * NETWORK exhaustion), we ship anyway — but the workflow records
+ * `liveVerified: false` plus the structured waiver reason so the audit gate
+ * and the teach summary can flag it instead of silently treating it as
+ * verified. Best-effort: a write failure never blocks a tool that already
+ * passed parser + schema verification.
+ */
+export function applyLiveVerification(
+  toolDir: string,
+  liveVerification:
+    | { kind: 'waived-bot' | 'waived-infra'; firstError: string; exhaustedBackends: string[] }
+    | undefined,
+): void {
+  const workflowPath = pathJoin(toolDir, 'workflow.json');
+  if (!existsSync(workflowPath)) return;
+  let workflow: Record<string, unknown>;
+  try {
+    workflow = JSON.parse(readFileSync(workflowPath, 'utf8'));
+  } catch {
+    return;
+  }
+  if (liveVerification) {
+    workflow.liveVerified = false;
+    workflow.liveVerifiedWaiver = liveVerification;
+  } else {
+    workflow.liveVerified = true;
+    workflow.liveVerifiedWaiver = undefined;
+  }
+  try {
+    writeFileSync(workflowPath, `${JSON.stringify(workflow, null, 2)}\n`, 'utf8');
+  } catch {
+    // best-effort — non-fatal
+  }
+}
+
+/** Strip `${...}` placeholders and query string from a workflow URL so it can
+ *  be compared against a recorded request URL by (origin + path). Returns null
+ *  when the URL is unparseable even after stripping. */
+function normalizeUrlForMatch(rawUrl: string): { origin: string; path: string } | null {
+  // Replace placeholders with a stable token, then try to parse. If the URL
+  // still has a placeholder in the host/scheme it will fail — fine, caller
+  // falls back to substring matching.
+  const stripped = rawUrl.replace(/\$\{[^}]+\}/g, 'X');
+  try {
+    const u = new URL(stripped);
+    return { origin: u.origin, path: u.pathname };
+  } catch {
+    return null;
+  }
+}
+
+/** Find recorded requests whose (method, origin+path) matches the workflow
+ *  request. Used by capture-cross-reference and hardcoded-body checks. */
+function findRecordedMatches(
+  session: Session,
+  method: string,
+  url: string,
+  restrictToSeqs?: Set<number>,
+): CapturedRequest[] {
+  const norm = normalizeUrlForMatch(url);
+  if (!norm) return [];
+  const upperMethod = method.toUpperCase();
+  return session.requests.filter((r) => {
+    if (restrictToSeqs && !restrictToSeqs.has(r.seq)) return false;
+    if (r.method.toUpperCase() !== upperMethod) return false;
+    const rNorm = normalizeUrlForMatch(r.url);
+    if (!rNorm) return false;
+    return rNorm.origin === norm.origin && rNorm.path === norm.path;
+  });
+}
+
+/** Case-insensitive header lookup against a `Record<string, string>` (which
+ *  records preserve as they were captured — Chrome's DevTools protocol does not
+ *  normalize). */
+function headerValue(headers: Record<string, string>, name: string): string | undefined {
+  const lower = name.toLowerCase();
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === lower) return v;
+  }
+  return undefined;
+}
+
+/** Set-Cookie can appear multiple times; the captured shape is best-effort.
+ *  Returns true if any Set-Cookie header in `headers` defines a cookie named
+ *  `cookieName`. */
+function setCookieDefines(headers: Record<string, string>, cookieName: string): boolean {
+  const raw = headerValue(headers, 'set-cookie');
+  if (!raw) return false;
+  // Multiple cookies may be joined with newlines or commas; split conservatively.
+  const cookies = raw.split(/\n|,(?=\s*[A-Za-z_])/);
+  for (const c of cookies) {
+    const eq = c.indexOf('=');
+    if (eq < 0) continue;
+    if (c.slice(0, eq).trim() === cookieName) return true;
+  }
+  return false;
+}
+
+/** Fix A — cross-reference each declared `required` capture against the
+ *  recording. The verifier rejects done() if the declared source doesn't
+ *  actually carry the value, so the agent can no longer ship a workflow whose
+ *  capture recipe will silently fail at runtime. General — not specific to
+ *  any one capture source or site. */
+function crossReferenceCaptures(
+  workflow: ReturnType<typeof WorkflowSchema.parse>,
+  session: Session,
+  candidateRequestSeqs?: number[],
+): { failures: string[]; failedCaptureNames: Set<string> } {
+  const failures: string[] = [];
+  const failedCaptureNames = new Set<string>();
+  const restrictSet = candidateRequestSeqs ? new Set(candidateRequestSeqs) : undefined;
+
+  // Bootstrap captures
+  if (workflow.bootstrap?.captures) {
+    for (const cap of workflow.bootstrap.captures) {
+      if (cap.required === false) continue;
+      const matches = findRecordedMatches(session, 'GET', workflow.bootstrap.url, restrictSet);
+      // Bootstrap URL might not be in candidateRequestSeqs (dependency); retry
+      // without the restriction so we can still cross-reference.
+      const recorded = matches[0] ?? findRecordedMatches(session, 'GET', workflow.bootstrap.url)[0];
+      if (!recorded) {
+        // Out of scope; do not fail — we can't prove anything.
+        continue;
+      }
+      const fail = validateCaptureAgainstRecording(cap, recorded, 'bootstrap GET');
+      if (fail) {
+        failures.push(fail);
+        failedCaptureNames.add(cap.name);
+      }
+    }
+  }
+
+  // Per-request captures
+  for (const [i, req] of workflow.requests.entries()) {
+    if (!req.captures) continue;
+    for (const cap of req.captures) {
+      if (cap.required === false) continue;
+      const matches = findRecordedMatches(session, req.method, req.url, restrictSet);
+      const recorded = matches[0] ?? findRecordedMatches(session, req.method, req.url)[0];
+      if (!recorded) continue;
+      const fail = validateCaptureAgainstRecording(
+        cap,
+        recorded,
+        `request[${i}] ${req.method} ${req.url}`,
+      );
+      if (fail) {
+        failures.push(fail);
+        failedCaptureNames.add(cap.name);
+      }
+    }
+  }
+
+  return { failures, failedCaptureNames };
+}
+
+/** Fix 2 — cross-reference every capture that a request actually DEPENDS ON
+ *  (referenced via `${state.X}` in a header/body/url) against the recording,
+ *  regardless of the capture's `required` flag. Fix A only checks `required`
+ *  captures and only against the capture's own URL response; that misses the
+ *  common anti-bot shape where a `required:false` html_regex capture (csrf /
+ *  csp-nonce) is scraped from a bootstrap page that isn't itself in the
+ *  recording, yet a request hard-references `${state.csrf_token}` in a header.
+ *  At runtime that reference STATE_MISSINGs the whole workflow. This check
+ *  rejects done() so the agent must fix the pattern (or source).
+ *
+ *  Scope: html_regex / text_regex captures (robustly checkable by testing the
+ *  pattern against every recorded same-origin HTML document body). Other
+ *  sources referenced-but-not-required are left to Fix A / the integration test.
+ *  General — not specific to any site or token. */
+export function crossReferenceReferencedStateCaptures(
+  workflow: ReturnType<typeof WorkflowSchema.parse>,
+  session: Session,
+): { failures: string[]; failedCaptureNames: Set<string> } {
+  const failures: string[] = [];
+  const failedCaptureNames = new Set<string>();
+
+  // 1) Collect every ${state.X} name referenced across request url/headers/body.
+  const referenced = new Set<string>();
+  const stateRefRe = /\$\{state\.([A-Za-z0-9_]+)\}/g;
+  const scan = (s: string | undefined): void => {
+    if (!s) return;
+    for (const m of s.matchAll(stateRefRe)) {
+      const name = m[1];
+      if (name) referenced.add(name);
+    }
+  };
+  for (const req of workflow.requests) {
+    scan(req.url);
+    scan(req.body);
+    for (const hv of Object.values(req.headers ?? {})) scan(hv);
+  }
+  if (referenced.size === 0) return { failures, failedCaptureNames };
+
+  // 2) Index captures by name (bootstrap + per-request).
+  const capByName = new Map<string, BootstrapCapture | RequestCapture>();
+  for (const cap of workflow.bootstrap?.captures ?? []) capByName.set(cap.name, cap);
+  for (const req of workflow.requests) {
+    for (const cap of req.captures ?? []) capByName.set(cap.name, cap);
+  }
+
+  // 3) Gather recorded HTML document bodies, preferring the bootstrap origin but
+  //    falling back to all HTML bodies (the bootstrap page itself may be absent
+  //    from the recording — e.g. costco's /Rental-Cars).
+  let targetOrigin: string | undefined;
+  try {
+    if (workflow.bootstrap?.url) targetOrigin = new URL(workflow.bootstrap.url).origin;
+  } catch {
+    /* leave undefined */
+  }
+  const isHtmlDoc = (r: CapturedRequest): boolean => {
+    const mime = r.response?.mimeType ?? '';
+    return (
+      (mime.includes('text/html') || r.resourceType === 'Document') &&
+      typeof r.response?.body === 'string' &&
+      r.response.body.length > 0
+    );
+  };
+  const sameOrigin = (r: CapturedRequest): boolean => {
+    if (!targetOrigin) return true;
+    try {
+      return new URL(r.url).origin === targetOrigin;
+    } catch {
+      return false;
+    }
+  };
+  let htmlBodies = session.requests
+    .filter((r) => isHtmlDoc(r) && sameOrigin(r))
+    .map((r) => r.response?.body ?? '');
+  if (htmlBodies.length === 0) {
+    htmlBodies = session.requests.filter(isHtmlDoc).map((r) => r.response?.body ?? '');
+  }
+
+  // 4) For each referenced state name produced by an html_regex/text_regex
+  //    capture, assert the pattern matches at least one recorded HTML body.
+  for (const name of referenced) {
+    const cap = capByName.get(name);
+    if (!cap) continue; // may be seeded by the fetch-bootstrap jar — not statically known
+    if (cap.source !== 'html_regex' && cap.source !== 'text_regex') continue;
+    if (failedCaptureNames.has(name)) continue;
+    let re: RegExp;
+    try {
+      re = new RegExp(cap.pattern);
+    } catch (err) {
+      failures.push(
+        `capture "${name}" (referenced via \${state.${name}} in a request) has an invalid regex /${cap.pattern}/: ${err instanceof Error ? err.message : String(err)}.`,
+      );
+      failedCaptureNames.add(name);
+      continue;
+    }
+    if (htmlBodies.length === 0) continue; // no recorded HTML to check against
+    const matches = htmlBodies.some((body) => re.test(body));
+    if (!matches) {
+      failures.push(
+        `capture "${name}" (source "${cap.source}") is referenced via \${state.${name}} in a request, but its pattern /${cap.pattern}/ does not match ANY recorded HTML page body for this site. At runtime \${state.${name}} resolves to nothing → the request fails with STATE_MISSING. Fix the pattern to match the token as it actually appears in the recorded page (inspect the recorded HTML), or change the capture source. (required:${cap.required === false ? 'false' : 'true'} does not exempt this — the request hard-references the value.)`,
+      );
+      failedCaptureNames.add(name);
+    }
+  }
+
+  return { failures, failedCaptureNames };
+}
+
+/** Check one capture against the recorded request it should be reading from.
+ *  Returns a failure message or null. */
+function validateCaptureAgainstRecording(
+  cap: BootstrapCapture | RequestCapture,
+  recorded: CapturedRequest,
+  context: string,
+): string | null {
+  const respHeaders = recorded.response?.headers ?? {};
+  const respBody = recorded.response?.body ?? '';
+  const fix = (suggestion: string) =>
+    `capture "${cap.name}" on ${context}: declared source "${cap.source}" did not produce a value in the recording (seq=${recorded.seq}). ${suggestion}`;
+
+  switch (cap.source) {
+    case 'response_header': {
+      const v = headerValue(respHeaders, cap.header);
+      if (v && v.length > 0) return null;
+      return fix(
+        `The recorded response has no "${cap.header}" header. Inspect the recorded response headers for a header that actually carries this value, or switch to source: 'html_regex' / 'cookie' / 'dom_*' if the value lives elsewhere.`,
+      );
+    }
+    case 'cookie': {
+      if (setCookieDefines(respHeaders, cap.cookie)) return null;
+      return fix(
+        `The recorded response Set-Cookie does not define cookie "${cap.cookie}". Check the recorded response headers and pick the correct cookie name, or switch source if the value isn't in a cookie.`,
+      );
+    }
+    case 'html_regex':
+    case 'text_regex': {
+      try {
+        const re = new RegExp(cap.pattern);
+        if (re.test(respBody)) return null;
+      } catch (err) {
+        return fix(
+          `Pattern is not a valid regex: ${err instanceof Error ? err.message : String(err)}.`,
+        );
+      }
+      return fix(
+        `Pattern /${cap.pattern}/ does not match the recorded response body. The token may live in a different location — check response headers (use source: 'response_header'), Set-Cookie (use source: 'cookie'), or revise the pattern.`,
+      );
+    }
+    case 'json': {
+      // 'json' captures use a path expression; static validation is fragile.
+      // Skip — the integration test surfaces failures.
+      return null;
+    }
+    default:
+      // dom_attribute, dom_text, local_storage, session_storage — not statically
+      // verifiable from a HAR-style recording.
+      return null;
+  }
+}
+
+/** Fix B — detect request body fields hardcoded to the recording's first
+ *  invocation value when the recording proves the field is user input (varies
+ *  across multiple recorded invocations of the same endpoint). The verifier
+ *  rejects done() so the agent must expose the field as `${param.X}` (or use a
+ *  requestTransformModule). General — not specific to any one site. */
+function detectHardcodedSessionValues(
+  workflow: ReturnType<typeof WorkflowSchema.parse>,
+  session: Session,
+  candidateRequestSeqs?: number[],
+  dependencyRequestSeqs?: number[],
+): string[] {
+  // Skip the whole check when the workflow uses a requestTransformModule:
+  // that module is the agent's declared escape hatch for programmatic body
+  // construction (e.g. _uid generators, position-dependent encoding), and
+  // any literal we see in workflow.json's body field may be overridden at
+  // runtime by the transform. Trying to second-guess transform behavior
+  // statically is the wrong layer.
+  if (workflow.requestTransformModule) return [];
+
+  const failures: string[] = [];
+  const allowedSeqs = new Set<number>([
+    ...(candidateRequestSeqs ?? []),
+    ...(dependencyRequestSeqs ?? []),
+  ]);
+  const restrictSet = allowedSeqs.size > 0 ? allowedSeqs : undefined;
+
+  for (const [i, req] of workflow.requests.entries()) {
+    if (!req.body || req.body.length === 0) continue;
+
+    const matches = findRecordedMatches(session, req.method, req.url, restrictSet);
+    if (matches.length < 2) continue;
+    const firstMatch = matches[0];
+    if (!firstMatch) continue;
+
+    // Determine body parser based on the recorded Content-Type (workflow may
+    // have stripped headers).
+    const recordedCt =
+      headerValue(firstMatch.headers, 'content-type') ?? req.headers['Content-Type'] ?? '';
+
+    const parsed = matches
+      .map((m) => parseBodyForFieldExtraction(m.body ?? '', recordedCt))
+      .filter((p): p is Record<string, string> => p !== null);
+    if (parsed.length < 2) continue;
+
+    // Collect distinct values per field
+    const valuesByField = new Map<string, Set<string>>();
+    for (const map of parsed) {
+      for (const [k, v] of Object.entries(map)) {
+        if (!valuesByField.has(k)) valuesByField.set(k, new Set());
+        valuesByField.get(k)?.add(v);
+      }
+    }
+
+    const varying: Array<{ field: string; values: string[] }> = [];
+    for (const [field, set] of valuesByField) {
+      if (set.size < 2) continue;
+      varying.push({ field, values: [...set].slice(0, 4) });
+    }
+    if (varying.length === 0) continue;
+
+    // For each varying field, check whether the workflow body has the first
+    // recorded value as a literal substring AND no template placeholder for it.
+    const workflowParsed = parseBodyForFieldExtraction(req.body, recordedCt);
+    if (!workflowParsed) continue;
+
+    const offenders: Array<{ field: string; literal: string; distinctValues: string[] }> = [];
+    for (const { field, values } of varying) {
+      const wfValue = workflowParsed[field];
+      if (wfValue === undefined) continue;
+      // If the workflow value contains ANY placeholder, it's templated → OK.
+      if (/\$\{(param|state|credential|response)\.[A-Za-z0-9_[\]]+\}/.test(wfValue)) continue;
+      // The workflow value is a literal. Compare against the first recorded
+      // value — if equal, this is a frozen-session-value bug. (Equality vs
+      // just-non-templated avoids false positives where the agent picked a
+      // sensible default different from any recorded seq.)
+      if (values.includes(wfValue)) {
+        offenders.push({ field, literal: wfValue, distinctValues: values });
+      }
+    }
+
+    if (offenders.length > 0) {
+      const lines = offenders.map(
+        (o) =>
+          `    ${o.field}=${JSON.stringify(o.literal)} — recorded values across seqs: [${o.distinctValues
+            .map((v) => JSON.stringify(v))
+            .join(', ')}]`,
+      );
+      failures.push(
+        `request[${i}] ${req.method} ${req.url} body has ${offenders.length} field(s) frozen to one recorded user's session — the recording proves these are user input:\n${lines.join('\n')}\nReplace each with \${param.NAME} and add the parameter to workflow.parameters, OR move body construction into a requestTransformModule.`,
+      );
+    }
+  }
+
+  return failures;
+}
+
+/** Parse a request body into a flat field→value map for variation analysis.
+ *  Supports form-urlencoded and (top-level) JSON. Returns null for shapes the
+ *  check can't reason about. */
+function parseBodyForFieldExtraction(
+  body: string,
+  contentType: string,
+): Record<string, string> | null {
+  const ct = contentType.toLowerCase();
+  if (
+    ct.includes('application/x-www-form-urlencoded') ||
+    (!ct && body.includes('=') && body.includes('&'))
+  ) {
+    const out: Record<string, string> = {};
+    for (const pair of body.split('&')) {
+      const eq = pair.indexOf('=');
+      if (eq < 0) continue;
+      const k = decodeURIComponent(pair.slice(0, eq).replace(/\+/g, ' '));
+      const v = decodeURIComponent(pair.slice(eq + 1).replace(/\+/g, ' '));
+      out[k] = v;
+    }
+    return out;
+  }
+  if (ct.includes('application/json') || (ct === '' && body.trim().startsWith('{'))) {
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+            out[k] = String(v);
+          }
+        }
+        return out;
+      }
+    } catch {
+      // not parseable
+    }
+  }
+  return null;
+}
+
 export async function externalVerification(
   toolDir: string,
   session: Session,
@@ -1679,11 +2138,39 @@ export async function externalVerification(
      *  is not emitted, so the producer/consumer field name can't silently diverge
      *  (e.g. the plan says `hotel_id` but the parser emits `propertyToken`). */
     emittedTokens?: Array<{ field: string; shape: string }>;
+    /** Build-plan-declared dependency seqs (e.g. bootstrap GET seq, producer
+     *  search seq) used by the hardcoded-body check to widen its variation
+     *  pool beyond the tool's own load-bearing seqs. */
+    dependencyRequestSeqs?: number[];
   } = {},
-): Promise<{ failures: string[]; warnings: string[]; paramVerification: ParamVerification[] }> {
+): Promise<{
+  failures: string[];
+  warnings: string[];
+  paramVerification: ParamVerification[];
+  /** Set when the integration test was waived rather than passing live — the
+   *  caller should stamp this onto workflow.json so audit/teach can surface
+   *  the unverified state instead of silently treating the tool as live. */
+  liveVerification?: {
+    kind: 'waived-bot' | 'waived-infra';
+    firstError: string;
+    exhaustedBackends: string[];
+  };
+}> {
   const failures: string[] = [];
   const warnings: string[] = [];
   const paramVerification: ParamVerification[] = [];
+  let liveVerification:
+    | { kind: 'waived-bot' | 'waived-infra'; firstError: string; exhaustedBackends: string[] }
+    | undefined;
+  // Captures Fix A flagged as having a wrong source. Surfaced into the
+  // waiver classification (Fix C) so a STATE_MISSING traced to one of these
+  // captures cannot silently become `waived-infra`.
+  let failedCaptureNames = new Set<string>();
+  // Fix 3 — when a request-referenced ${state.X} capture provably can't resolve
+  // (Fix 2 below), the live integration call is GUARANTEED to STATE_MISSING, so
+  // firing it is pure waste that also burns the per-IP anti-bot rate budget.
+  // Skip the live test in that case and make the agent fix the capture first.
+  let referencedStateBroken = false;
 
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   const parserPath = pathJoin(toolDir, 'parser.ts');
@@ -1707,6 +2194,38 @@ export async function externalVerification(
           `workflow.json contains \${env.X} placeholders (${envMatches.join(', ')}). These require manual environment setup and break portability. If the value appeared in the recorded session, hardcode it as a literal string instead.`,
         );
       }
+
+      // Fix A — cross-reference every required capture against the recording.
+      // A capture that declares `response_header` but reads from a recorded
+      // response with no such header (or `html_regex` whose pattern doesn't
+      // match the recorded body, etc.) will silently return null at runtime;
+      // we reject it at compile so the agent picks a source that works.
+      const crossRef = crossReferenceCaptures(workflow, session, opts.candidateRequestSeqs);
+      failures.push(...crossRef.failures);
+      failedCaptureNames = crossRef.failedCaptureNames;
+
+      // Fix 2 — cross-reference captures that a request DEPENDS ON via
+      // `${state.X}` (e.g. an anti-bot csrf/csp-nonce html_regex capture whose
+      // bootstrap page isn't in the recording) against every recorded HTML body,
+      // regardless of `required`. Catches the silent STATE_MISSING that ships a
+      // .act tool which can never resolve its csrf header at runtime.
+      const stateRef = crossReferenceReferencedStateCaptures(workflow, session);
+      failures.push(...stateRef.failures);
+      for (const n of stateRef.failedCaptureNames) failedCaptureNames.add(n);
+      if (stateRef.failedCaptureNames.size > 0) referencedStateBroken = true;
+
+      // Fix B — flag request body fields hardcoded to one recorded user's
+      // session when the recording proves those fields are user input
+      // (varying values across multiple recorded invocations of the same
+      // endpoint). Skipped when the tool uses a requestTransformModule.
+      failures.push(
+        ...detectHardcodedSessionValues(
+          workflow,
+          session,
+          opts.candidateRequestSeqs,
+          opts.dependencyRequestSeqs,
+        ),
+      );
 
       if (opts.likelyParams && opts.likelyParams.length > 0) {
         // Build the set of query param keys from the original recorded URLs
@@ -1884,6 +2403,16 @@ export async function externalVerification(
     failures.push(
       'integration.test.ts was not written — the tool must include a live API test that calls the workflow and verifies it returns real data',
     );
+  } else if (referencedStateBroken) {
+    // A request hard-references a ${state.X} whose html_regex capture provably
+    // does not match the recorded page (Fix 2 already pushed the actionable
+    // failure). The live call WOULD STATE_MISSING — running it can't pass and
+    // would only spend a live anti-bot .act and deepen the per-IP rate flag.
+    // Skip it; the agent must fix the capture, then the next cycle verifies live.
+    integrationOutcome = 'failed';
+    warnings.push(
+      'skipped the live integration test: a request references a ${state.X} capture (e.g. csrf/csp-nonce) whose pattern does not match the recorded page, so the live call is guaranteed to fail with STATE_MISSING. Fix the capture pattern/source (see the failure above) — the next verification cycle will run the live test once it can succeed. This avoids burning a doomed anti-bot .act call.',
+    );
   } else {
     let run: BunTestRun = {
       stdout: '',
@@ -1895,24 +2424,99 @@ export async function externalVerification(
     for (let attempt = 0; attempt < 3; attempt++) {
       run = await runBunTestWithResults(integrationTestPath, toolDir, 60000);
       if (run.exitCode === 0) break;
+      // A bot-defense / anti-bot ladder-exhaustion failure will NOT clear on a
+      // retry — re-running only fires more state-changing .act calls and deepens
+      // the per-IP rate flag. One attempt is enough to classify it; stop early.
+      const out = `${run.stdout}\n${run.stderr}`;
+      const ladderExhausted =
+        /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(out) &&
+        /non-escalatable|giving up|every backend escalated/.test(out);
+      if (isBotDefenseFailure(out) || ladderExhausted) break;
     }
     integrationPassedTests = run.passed;
     if (run.exitCode === 0) {
       integrationOutcome = 'passed';
     } else {
       const combined = `${run.stdout}\n${run.stderr}`;
+      // After backend-ladder.ts:171 was changed to escalate NETWORK across
+      // rungs, a NETWORK in the test output means every rung in the integration
+      // ladder was tried and failed — the new "every backend escalated" log
+      // is the unambiguous signal. AUTH_EXPIRED/RATE_LIMITED still trip the
+      // older "non-escalatable" path. "giving up" is stealth-fetch's
+      // two-403-in-a-row exhaustion marker.
       const hasImprintBlock =
         /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(combined) &&
-        /non-escalatable|giving up/.test(combined);
-      if (isBotDefenseFailure(combined)) {
+        /non-escalatable|giving up|every backend escalated/.test(combined);
+      // Extract attempted backend names from the bun-test output so we can
+      // record which rungs were actually tried before waiving. Best-effort —
+      // the ladder logs "[imprint backend] trying <name>…" per attempt.
+      const exhaustedBackends = Array.from(
+        new Set(
+          Array.from(combined.matchAll(/\[imprint backend\] trying ([a-z-]+)…/g)).map(
+            (m) => m[1] as string,
+          ),
+        ),
+      );
+      const firstErrorMatch = combined.match(/\b(NETWORK|FORBIDDEN|RATE_LIMITED)\b[^\n]{0,200}/);
+      const firstError = firstErrorMatch?.[0]?.trim() ?? 'unknown';
+      // Fix C — a STATE_MISSING traced to a declared capture is a workflow
+      // correctness error, not infra. The runtime is telling us the recipe is
+      // wrong; waiving it would silently ship a broken workflow. Detect by
+      // matching the runtime's STATE_MISSING capture-failure string. When
+      // Fix A's check already flagged the same capture name we ALSO redirect
+      // to `failed`; the independent regex path catches the case where Fix A
+      // matched a different (or no) seq but runtime still reached the bad
+      // capture.
+      const captureFailMatch = combined.match(/STATE_MISSING:\s*Required capture\s+"([^"]+)"/i);
+      const captureFailFromKnown =
+        captureFailMatch !== null && failedCaptureNames.has(captureFailMatch[1] ?? '');
+      const captureFailUnconditional = captureFailMatch !== null;
+      if (captureFailUnconditional) {
+        integrationOutcome = 'failed';
+        const capName = captureFailMatch[1];
+        // If the failing capture is a `response_header` on a REPLAYED workflow
+        // request, the cause is almost always the replay asymmetry: programmatic
+        // fetch reliably receives the response BODY and Set-Cookie, but anti-bot
+        // edges withhold browser-only response headers from non-browser requests.
+        // Steer the agent to the source that survives replay. General — applies to
+        // any site whose token also appears in the body / a cookie.
+        let sourceHint = '';
+        try {
+          const wf = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
+            requests?: Array<{ captures?: Array<{ name: string; source: string }> }>;
+            bootstrap?: { captures?: Array<{ name: string; source: string }> };
+          };
+          const reqCap = (wf.requests ?? [])
+            .flatMap((r) => r.captures ?? [])
+            .find((c) => c.name === capName);
+          if (reqCap?.source === 'response_header') {
+            sourceHint = ` The capture uses source: 'response_header' on a replayed request. Programmatic replay does NOT receive browser-only response headers that anti-bot edges withhold — but it DOES receive the response body and Set-Cookie. If this token also appears in the HTML body, switch to source: 'text_regex' (read it from the body); if it is set as a cookie, switch to source: 'cookie'. Reserve 'response_header' for a workflow.bootstrap capture (a real Chrome navigation), not a replayed request.`;
+          }
+        } catch {
+          // best-effort hint only
+        }
+        failures.push(
+          `integration test failed because a declared capture did not produce a value at runtime: capture "${capName}" returned null${
+            captureFailFromKnown
+              ? ' (matches a capture flagged by the compile-time cross-reference check)'
+              : ''
+          }. This is a workflow-correctness error, not infra — fix the capture source/path in workflow.json so it actually reads from the recorded location.${sourceHint}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        );
+      } else if (isBotDefenseFailure(combined)) {
         integrationOutcome = 'waived-bot';
+        liveVerification = { kind: 'waived-bot', firstError, exhaustedBackends };
         warnings.push(
-          `integration test failed with likely bot-detection / anti-automation challenge (tried 3 times) — treating as non-blocking since parser verification passed. The runtime backend ladder (stealth-fetch + playbook) handles these defenses at call time even when the compile-time fetch rungs cannot.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+          `integration test failed with likely bot-detection / anti-automation challenge (tried 3 times). Stamping liveVerified=false on workflow.json — the runtime will fall through to the playbook last-ditch rung, which is a degraded path. Audit and teach will surface this tool as unverified.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
         );
       } else if (hasImprintBlock) {
         integrationOutcome = 'waived-infra';
+        liveVerification = { kind: 'waived-infra', firstError, exhaustedBackends };
         warnings.push(
-          `integration test failed with infrastructure error (${combined.match(/\b(RATE_LIMITED|FORBIDDEN|NETWORK)\b/)?.[0] ?? 'unknown'}, tried 3 times) — treating as non-blocking since parser verification passed.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+          `integration test failed with infrastructure error (${
+            combined.match(/\b(RATE_LIMITED|FORBIDDEN|NETWORK)\b/)?.[0] ?? 'unknown'
+          }, tried 3 times). Every rung in the ladder was exhausted (${
+            exhaustedBackends.join(', ') || 'unknown'
+          }). Stamping liveVerified=false on workflow.json — audit and teach will surface this tool as unverified.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
         );
       } else {
         integrationOutcome = 'failed';
@@ -1930,7 +2534,12 @@ export async function externalVerification(
   // by source but does nothing). Per the keep+mark policy we never drop a param;
   // each is recorded in `paramVerification` as verified or not (with a reason),
   // and only a genuinely-uncovered param on a suite that DID run blocks compile.
-  if (existsSync(integrationTestPath) && opts.likelyParams && opts.likelyParams.length > 0) {
+  if (
+    !referencedStateBroken &&
+    existsSync(integrationTestPath) &&
+    opts.likelyParams &&
+    opts.likelyParams.length > 0
+  ) {
     const integrationSrc = readFileSync(integrationTestPath, 'utf8');
 
     // Producer-sourced token params: union of build-plan-declared contracts and
@@ -2102,5 +2711,5 @@ export async function externalVerification(
     }
   }
 
-  return { failures, warnings, paramVerification };
+  return { failures, warnings, paramVerification, liveVerification };
 }

@@ -1,6 +1,7 @@
 /** `imprint doctor` — check that the environment can actually run imprint.
  *  Reports pass/fail per prerequisite plus a one-line fix when failed. */
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join as pathJoin } from 'node:path';
@@ -20,6 +21,7 @@ export function doctor(): CheckResult[] {
     checkBun(),
     checkChromium(),
     checkPlaywrightChromium(),
+    checkVirtualDisplay(),
     checkLLMProvider(),
     checkPushOptional(),
     checkClaudeCode(),
@@ -84,6 +86,43 @@ function checkPlaywrightChromium(): CheckResult {
     ok: false,
     detail: 'no chromium-* install under ~/Library/Caches/ms-playwright or ~/.cache/ms-playwright',
     fix: 'run: bunx playwright install chromium  (needed for stealth-fetch + playbook)',
+  };
+}
+
+function hasXvfbBinary(): boolean {
+  try {
+    return spawnSync('sh', ['-c', 'command -v Xvfb'], { stdio: 'ignore' }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** The trusted-browser replay (playbook rung's cdp-browser transport) runs Chrome
+ *  HEADLESS by default and needs NO display — the `HeadlessChrome` UA token is
+ *  stripped so anti-bot services don't edge-block it. A display only matters as a
+ *  fallback on a GPU-less Linux host, where headless WebGL reports SwiftShader and
+ *  the replay must run HEADED under Xvfb (launchChromium auto-starts it when a
+ *  headed launch finds no `$DISPLAY`). macOS/Windows need nothing. Advisory only. */
+function checkVirtualDisplay(): CheckResult {
+  const name = 'Display (headed replay)';
+  if (process.platform !== 'linux') {
+    return { name, ok: true, detail: `${process.platform}: native window server (no Xvfb needed)` };
+  }
+  const display = process.env.DISPLAY;
+  if (display) return { name, ok: true, detail: `$DISPLAY=${display}` };
+  if (hasXvfbBinary()) {
+    return {
+      name,
+      ok: true,
+      detail: 'no $DISPLAY; Xvfb present — headed-replay fallback available for GPU-less hosts',
+    };
+  }
+  return {
+    name,
+    ok: true, // advisory — default replay is headless; Xvfb is only a GPU-less fallback
+    detail:
+      'Linux, no $DISPLAY and no Xvfb — default replay is headless (fine); install Xvfb only if a GPU-less host gets bot-flagged',
+    fix: 'GPU-less host bot-flagged? install the headed-replay fallback: apt-get install xvfb (or export DISPLAY=:0)',
   };
 }
 

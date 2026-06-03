@@ -87,7 +87,7 @@ export function generatePasteSnippet(opts: {
 
   switch (platform) {
     case 'claude-code':
-      return `Add the ${toolName} tool: run \`${shellCmd}\` to register ${descLower}. Parameters: ${paramList}. The backend ladder handles browser/API state and bot detection automatically (fetch → gated fetch-bootstrap → stealth-fetch → playbook).`;
+      return `Add the ${toolName} tool: run \`${shellCmd}\` to register ${descLower}. Parameters: ${paramList}. The backend ladder handles browser/API state and bot detection automatically (fetch → gated fetch-bootstrap → cdp-replay → stealth-fetch → playbook).`;
 
     case 'codex':
       return `Add the ${toolName} tool: run \`${shellCmd}\` to register ${descLower}. Parameters: ${paramList}.`;
@@ -352,7 +352,7 @@ ${yamlStringify(p, { lineWidth: 0 }).trim()}
   // Backend ladder explanation.
   const backendBlock = `## Backend Ladder
 
-The MCP server automatically escalates from fetch API replay to gated fetch-bootstrap when browser-minted state is declared, then stealth-fetch for bot-defense state, then playbook for full DOM replay.
+The MCP server automatically escalates from fetch API replay to gated fetch-bootstrap when browser-minted state is declared, then cdp-replay (API requests run inside a live trusted Chrome so a protected POST refreshes its anti-bot token between calls), then stealth-fetch for bot-defense state, then playbook for full DOM replay.
 Bot detection is handled transparently.`;
 
   // Scheduling block (optional).

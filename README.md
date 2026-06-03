@@ -219,6 +219,8 @@ See [MCP Maintenance](docs/mcp-maintenance.md) for status classifications, suppo
 
 Teach on your laptop, ship the skill to a remote agent (OpenClaw, Hermes, a server-side cron host, ...). Skill folders committed to git contain **zero plaintext credentials** — only placeholders like `${credential.NAME}` / `${state.NAME}` and a `credentials.manifest.json` listing the secrets or durable storage keys the receiver must provision.
 
+> **Headless server?** Sites behind behavioral anti-bot defenses replay through a real Chrome run **headless** — no display needed (Imprint strips the `HeadlessChrome` UA token that would otherwise give it away). The only exception is a **GPU-less Linux host**, where headless WebGL can be fingerprinted; there, install `xvfb` (`apt-get install xvfb`) and Imprint runs the replay headed in a virtual display. `imprint doctor` flags this; see [troubleshooting](docs/troubleshooting.md#running-on-a-headless-server-anti-bot-sites).
+
 For credentials, use the **encrypted bundle** flow when you can't (or don't want to) re-type passwords on the receiving machine:
 
 ```bash

@@ -12,6 +12,7 @@ import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { substituteString } from './runtime.ts';
+import { getStealthChromium, getStealthExecutablePath } from './stealth-chromium.ts';
 import type {
   Locator,
   Playbook,
@@ -64,33 +65,24 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   if (opts.pageOverride) {
     page = opts.pageOverride;
   } else {
-    // playwright-extra + stealth plugin patches navigator.webdriver,
-    // plugin enumeration, WebGL vendor strings, etc. Vanilla headless
-    // Playwright eats a 403 from any decent enterprise site (verified:
-    // Southwest 403 → 200 with stealth).
     let chromium: typeof import('playwright').chromium;
     try {
-      const pwExtra = await import('playwright-extra');
-      const stealthMod = await import('puppeteer-extra-plugin-stealth');
-      const stealthFactory =
-        (stealthMod as { default?: () => unknown }).default ??
-        (stealthMod as unknown as () => unknown);
-      pwExtra.chromium.use(stealthFactory() as never);
-      chromium = pwExtra.chromium as unknown as typeof import('playwright').chromium;
-    } catch {
-      try {
-        const pw = await import('playwright');
-        chromium = pw.chromium;
-      } catch (innerErr) {
-        return {
-          ok: false,
-          error: 'UNKNOWN',
-          message: `Playwright not available: ${errMsg(innerErr)}. Run: bunx playwright install chromium`,
-        };
-      }
+      chromium = await getStealthChromium();
+    } catch (innerErr) {
+      return {
+        ok: false,
+        error: 'UNKNOWN',
+        message: `Playwright not available: ${errMsg(innerErr)}. Run: bunx playwright install chromium`,
+      };
     }
     try {
-      browser = await chromium.launch({ headless: !opts.headed });
+      // Use the same full Chrome binary as `imprint record` — NOT
+      // chrome-headless-shell, which Akamai detects at the binary level
+      // regardless of stealth-plugin JS patches.
+      browser = await chromium.launch({
+        headless: !opts.headed,
+        executablePath: getStealthExecutablePath(),
+      });
     } catch (err) {
       return {
         ok: false,
@@ -159,10 +151,23 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   } catch (err) {
     const screenshotPath = await screenshot(page, playbook.toolName, lastStep);
     const suffix = screenshotPath ? `\nscreenshot: ${screenshotPath}` : '';
+    const errStr = errMsg(err);
+    // Classify the failure mode honestly: a missing locator, a step
+    // timeout, or a `forResponse` wait that didn't resolve are
+    // transient page-state signals (the DOM rendered differently than
+    // the recording, or the page was slow). Those are NETWORK-class
+    // signals, not tool-defect (BAD_RESPONSE) signals — the audit
+    // gate's `tool_broken` classifier treats BAD_RESPONSE as a real
+    // bug, which over-attributes drift to defects. Map known
+    // transient-shape errors to NETWORK so they count as `infra`
+    // (re-runnable) rather than `tool_broken` (permanent defect).
+    const isTransient = /No locator matched|Timeout \d+ms exceeded|forResponse|waiting for/i.test(
+      errStr,
+    );
     return {
       ok: false,
-      error: 'BAD_RESPONSE',
-      message: `Playbook failed at step ${lastStep}: ${errMsg(err)}${suffix}`,
+      error: isTransient ? 'NETWORK' : 'BAD_RESPONSE',
+      message: `Playbook failed at step ${lastStep}: ${errStr}${suffix}`,
     };
   } finally {
     if (!opts.pageOverride) {
@@ -252,11 +257,36 @@ async function executeStep(
     case 'type': {
       const locator = await firstMatching(page, step.locators, params, timeoutMs);
       const value = subst(step.value, params);
-      if (step.clear === false) {
-        await locator.pressSequentially(value, { timeout: timeoutMs });
-      } else {
-        await locator.fill(value, { timeout: timeoutMs });
+      // Detect element type so we dispatch the right action. `type` on a
+      // <select> means "choose the option whose value/label matches" —
+      // a recording can capture either action shape, and the audit-time
+      // tool may also call type with a value that happens to land on a
+      // select. Without this branch, fill()/pressSequentially() throw
+      // "Element is not an input/textarea" and the whole playbook
+      // aborts.
+      const tagName = await locator.evaluate((el) => el.tagName.toLowerCase());
+      if (tagName === 'select') {
+        // Try value first, fall back to label — match Playwright's own
+        // selectOption semantics.
+        try {
+          await locator.selectOption({ value }, { timeout: timeoutMs });
+        } catch {
+          await locator.selectOption({ label: value }, { timeout: timeoutMs });
+        }
+        await applyWait(page, step.wait_for, locator, timeoutMs);
+        return;
       }
+      // Inputs / textareas: pressSequentially fires real input / keydown
+      // / keyup events. React-style frameworks bind to synthetic events
+      // that locator.fill() doesn't trigger — typing into an autocomplete
+      // or debounced search field with fill() updates the input visually
+      // but the framework's onChange handler never runs, so the dropdown
+      // / XHR / next-step locator times out. The ~10ms-per-char internal
+      // delay is negligible against page-load latency.
+      if (step.clear !== false) {
+        await locator.fill('', { timeout: timeoutMs });
+      }
+      await locator.pressSequentially(value, { timeout: timeoutMs });
       await applyWait(page, step.wait_for, locator, timeoutMs);
       return;
     }
@@ -376,10 +406,27 @@ async function applyWait(
   }
   if ('xhr' in wait) {
     const re = new RegExp(wait.xhr);
-    await page.waitForResponse(
-      (resp) => re.test(resp.url()) && (!wait.method || resp.request().method() === wait.method),
-      { timeout: wait.timeout_ms ?? timeoutMs },
-    );
+    try {
+      await page.waitForResponse(
+        (resp) => re.test(resp.url()) && (!wait.method || resp.request().method() === wait.method),
+        { timeout: wait.timeout_ms ?? timeoutMs },
+      );
+    } catch (err) {
+      // A missed `wait_for: {xhr: ...}` is usually a soft signal: the
+      // recorded action (typing into an autocomplete, clicking a tab)
+      // happened, but the page didn't fire the exact XHR we matched on
+      // — either the URL pattern drifted, the debounce window was
+      // tighter than our wait, or the page chose a cached response. The
+      // next playbook step has its own locator / wait_for and will fail
+      // loudly if the page state is actually wrong. Letting the
+      // playbook continue here gives it a real chance to recover
+      // (observed on Costco's pickup-location autocomplete: typing
+      // succeeded, the XHR just never fired before our 30s window).
+      const msg = err instanceof Error ? err.message : String(err);
+      // Re-throw closures / nav errors that aren't simple timeouts —
+      // those signal real page breakdown.
+      if (!/timeout|Timeout/.test(msg)) throw err;
+    }
     return;
   }
   if ('sleep_ms' in wait) {

@@ -242,6 +242,7 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
   if (
     ladder.includes('fetch') ||
     ladder.includes('fetch-bootstrap') ||
+    ladder.includes('cdp-replay') ||
     ladder.includes('stealth-fetch')
   ) {
     const validator = buildZodValidator(tool.workflow.parameters);
