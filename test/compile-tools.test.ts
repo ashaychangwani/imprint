@@ -4,13 +4,14 @@ import { join as pathJoin } from 'node:path';
 import {
   buildCompileTools,
   classifyParamCoverage,
+  crossReferenceReferencedStateCaptures,
   detectTokenSources,
   externalVerification,
   extractTestBlocks,
   isBotDefenseFailure,
   parseJUnitResults,
 } from '../src/imprint/compile-tools.ts';
-import type { Session } from '../src/imprint/types.ts';
+import { type Session, WorkflowSchema } from '../src/imprint/types.ts';
 
 function makeSummaryRequest(seq: number, timestamp: number): Session['requests'][number] {
   return {
@@ -1060,6 +1061,202 @@ test('override query', async () => {
       rmSync(exampleDir, { recursive: true, force: true });
     }
   });
+
+  it('Fix A: rejects a response_header capture when the recorded response has no such header', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-fixA-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    // The recording's /bootstrap response embeds the token in HTML body but
+    // does NOT return it as a response header. A workflow that declares
+    // response_header: 'X-Csrf-Token' will fail at runtime; the verifier
+    // must reject done() at compile.
+    const session: Session = {
+      site: 'fixA-fixture',
+      startedAt: '2026-06-01T00:00:00.000Z',
+      url: 'https://example.com/bootstrap',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 10,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/bootstrap',
+          headers: {},
+          resourceType: 'Document',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+            mimeType: 'text/html',
+            body: '<html><script>var token="abc123";</script></html>',
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'fix_a_tool',
+            intent: { description: 'fixture' },
+            parameters: [],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/bootstrap',
+                headers: {},
+                captures: [
+                  {
+                    source: 'response_header',
+                    name: 'csrf_token',
+                    header: 'X-Csrf-Token',
+                    required: true,
+                  },
+                ],
+              },
+            ],
+            site: 'fixA-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+      const { failures } = await externalVerification(exampleDir, session, sessionPath, {
+        candidateRequestSeqs: [10],
+      });
+      const captureFailure = failures.find(
+        (f) => f.includes('csrf_token') && f.includes('response_header'),
+      );
+      expect(captureFailure).toBeDefined();
+      expect(captureFailure ?? '').toContain('no "X-Csrf-Token" header');
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it("Fix B: rejects a workflow body that freezes one recorded user's session into a varying field", async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-fixB-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    // Two recorded POSTs to the same endpoint differ in pickupDate. The
+    // recording therefore proves pickupDate is user input; freezing it as
+    // a literal in workflow.json must be rejected.
+    const session: Session = {
+      site: 'fixB-fixture',
+      startedAt: '2026-06-01T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 100,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/search.act',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'pickupDate=06/01/2026&pickupCity=Santa Clara-CA&country=US&fromHomePage=true',
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: 'ok' },
+        },
+        {
+          seq: 200,
+          timestamp: 200,
+          method: 'POST',
+          url: 'https://example.com/search.act',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'pickupDate=07/15/2026&pickupCity=Reno-NV&country=US&fromHomePage=true',
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: 'ok' },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      // Frozen-body case
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'fix_b_tool',
+            intent: { description: 'fixture' },
+            parameters: [{ name: 'car_token', type: 'string', description: 'unused' }],
+            requests: [
+              {
+                method: 'POST',
+                url: 'https://example.com/search.act',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'pickupDate=06/01/2026&pickupCity=Santa Clara-CA&country=US&fromHomePage=true',
+              },
+            ],
+            site: 'fixB-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+      const frozen = await externalVerification(exampleDir, session, sessionPath, {
+        candidateRequestSeqs: [100, 200],
+      });
+      const frozenFailure = frozen.failures.find((f) => f.includes('frozen to one recorded'));
+      expect(frozenFailure).toBeDefined();
+      // Should name BOTH varying fields, not the constant ones
+      expect(frozenFailure ?? '').toContain('pickupDate');
+      expect(frozenFailure ?? '').toContain('pickupCity');
+      expect(frozenFailure ?? '').not.toContain('country');
+      expect(frozenFailure ?? '').not.toContain('fromHomePage');
+
+      // Inverse: templated body → no Fix B failure
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'fix_b_tool',
+            intent: { description: 'fixture' },
+            parameters: [
+              { name: 'pickup_date', type: 'string', description: '' },
+              { name: 'pickup_city', type: 'string', description: '' },
+            ],
+            requests: [
+              {
+                method: 'POST',
+                url: 'https://example.com/search.act',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'pickupDate=${param.pickup_date}&pickupCity=${param.pickup_city}&country=US&fromHomePage=true',
+              },
+            ],
+            site: 'fixB-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+      const templated = await externalVerification(exampleDir, session, sessionPath, {
+        candidateRequestSeqs: [100, 200],
+      });
+      expect(templated.failures.some((f) => f.includes('frozen to one recorded'))).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('classifyParamCoverage', () => {
@@ -1633,4 +1830,137 @@ describe('isBotDefenseFailure', () => {
       expect(isBotDefenseFailure(text)).toBe(false);
     });
   }
+});
+
+describe('crossReferenceReferencedStateCaptures (Fix 2)', () => {
+  // The recorded landing page embeds csrf the way costco actually does, plus a
+  // csp-nonce. The bootstrap page (/Rental-Cars) is intentionally ABSENT from
+  // the recording — only "/" carries the tokens — to mirror the real case.
+  const PAGE_HTML =
+    '<html><head><script nonce="aabbccddeeff00112233445566778899"></script>' +
+    'mUtil.createSecureCookie("Csrf-token", "ef8ae77dfa9d8ae29c20673743826a43ef8ae77dfa9d8ae29c20673743826a43ef8ae77dfa9d8ae29c20673743826a43ef8ae77d");' +
+    '</head><body>ok</body></html>';
+
+  function sessionWithLandingPage(): Session {
+    return {
+      site: 'costco-car-rental',
+      startedAt: '2026-06-02T00:00:00.000Z',
+      url: 'https://www.costcotravel.com/',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 0,
+          timestamp: 10,
+          method: 'GET',
+          url: 'https://www.costcotravel.com/',
+          headers: {},
+          resourceType: 'Document',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'text/html;charset=UTF-8' },
+            mimeType: 'text/html;charset=UTF-8',
+            body: PAGE_HTML,
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+  }
+
+  function workflowWithCsrf(csrfPattern: string) {
+    return WorkflowSchema.parse({
+      toolName: 'search_rental_cars',
+      intent: { description: 'search rental cars' },
+      parameters: [],
+      site: 'costco-car-rental',
+      bootstrap: {
+        url: 'https://www.costcotravel.com/Rental-Cars',
+        captures: [
+          {
+            source: 'html_regex',
+            name: 'csp_nonce',
+            pattern: 'nonce="([0-9a-f]{32})"',
+            required: false,
+          },
+          { source: 'html_regex', name: 'csrf_token', pattern: csrfPattern, required: false },
+        ],
+      },
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://www.costcotravel.com/rentalCarSearch.act',
+          headers: {
+            'X-Csrf-Token': '${state.csrf_token}',
+            'X-Csp-Nonce': '${state.csp_nonce}',
+          },
+          body: 'pickupCity=SJC',
+        },
+      ],
+    });
+  }
+
+  it('REJECTS a csrf html_regex that does not match the recorded page (the actual costco bug)', () => {
+    // The agent's shipped pattern: the ", " separator after "Csrf-token" defeats it.
+    const badPattern = '[Cc]srf[^"\']{0,24}[\'"]([0-9a-f]{48,})[\'"]';
+    const { failures, failedCaptureNames } = crossReferenceReferencedStateCaptures(
+      workflowWithCsrf(badPattern),
+      sessionWithLandingPage(),
+    );
+    expect(failedCaptureNames.has('csrf_token')).toBe(true);
+    expect(failures.join('\n')).toContain('csrf_token');
+    expect(failures.join('\n')).toContain('STATE_MISSING');
+    // csp_nonce DOES match → must NOT be flagged.
+    expect(failedCaptureNames.has('csp_nonce')).toBe(false);
+  });
+
+  it('PASSES when the csrf pattern matches the recorded createSecureCookie form', () => {
+    const goodPattern = 'createSecureCookie\\("Csrf-token",\\s*"([0-9a-f]{48,})"';
+    const { failures, failedCaptureNames } = crossReferenceReferencedStateCaptures(
+      workflowWithCsrf(goodPattern),
+      sessionWithLandingPage(),
+    );
+    expect(failures).toHaveLength(0);
+    expect(failedCaptureNames.size).toBe(0);
+  });
+
+  it('rejection holds even though required:false (a request hard-references the value)', () => {
+    // Guard: the capture is required:false; Fix A would skip it. Fix 2 must not.
+    const badPattern = 'NOPE_NO_MATCH_([0-9a-f]{99})';
+    const { failedCaptureNames } = crossReferenceReferencedStateCaptures(
+      workflowWithCsrf(badPattern),
+      sessionWithLandingPage(),
+    );
+    expect(failedCaptureNames.has('csrf_token')).toBe(true);
+  });
+
+  it('flags an invalid regex pattern referenced by a request', () => {
+    const { failures } = crossReferenceReferencedStateCaptures(
+      workflowWithCsrf('([unclosed'),
+      sessionWithLandingPage(),
+    );
+    expect(failures.join('\n')).toContain('invalid regex');
+  });
+
+  it('does not flag when no request references the capture (${state.X} unused)', () => {
+    const wf = WorkflowSchema.parse({
+      toolName: 't',
+      intent: { description: 'd' },
+      parameters: [],
+      site: 'costco-car-rental',
+      bootstrap: {
+        url: 'https://www.costcotravel.com/Rental-Cars',
+        captures: [
+          { source: 'html_regex', name: 'csrf_token', pattern: 'NOPE([0-9]+)', required: false },
+        ],
+      },
+      requests: [
+        { method: 'GET', url: 'https://www.costcotravel.com/x', headers: {} }, // no ${state.csrf_token}
+      ],
+    });
+    const { failures } = crossReferenceReferencedStateCaptures(wf, sessionWithLandingPage());
+    expect(failures).toHaveLength(0);
+  });
 });

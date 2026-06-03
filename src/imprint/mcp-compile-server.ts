@@ -163,6 +163,10 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
           expectedToolName: opts.candidate?.toolName,
           likelyParams: opts.candidate?.likelyParams,
           candidateRequestSeqs: opts.candidate?.requestSeqs,
+          // Widen Fix B's variation pool to dependency requests so a token that
+          // varies only across them and is frozen as a literal in the tool's
+          // request is caught (the cross-request session-token leak case).
+          dependencyRequestSeqs: opts.candidate?.dependencySeqs,
           assignedSharedModules,
           tokenParams,
           emittedTokens,
