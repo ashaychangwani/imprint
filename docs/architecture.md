@@ -37,6 +37,7 @@ Both are auto-discovered by the cron daemon and the MCP server, which dispatch t
    │  imprint cron <site>     ┌─►  backend ladder            │
    │  imprint mcp-server      │      fetch ─STATE_MISSING→    │
    │  imprint playbook        │      fetch-bootstrap ─→       │
+   │                          │      cdp-replay ─→            │
    │                          │      stealth-fetch ─→         │
    │                          │      playbook                 │
    └──────────────────────────┴───────────────────────────────┘
@@ -92,8 +93,9 @@ src/imprint/
 │
 │ ── Backend ladder ──
 ├── backend-ladder.ts    runWithLadder + resolveLadder
-├── stealth-fetch.ts     Headless Chromium → mint sensor tokens → native fetch
+├── stealth-fetch.ts     Bootstrap Chromium → capture sensor tokens + live UA/client-hints → native fetch
 ├── stealth-token-cache.ts  Per-site stealth token shared across compile-time bun-test processes
+├── cdp-browser-fetch.ts  Record-faithful transport: real HEADED Chrome (launchChromium+CDP) runs each request in-page
 ├── playbook-runner.ts   Playwright + stealth + locator priority + DOM walk
 │
 │ ── Services ──
@@ -129,11 +131,14 @@ src/imprint/
 | Backend | Per-call cost | Defeats |
 |---|---|---|
 | `fetch` | ~200ms | Plain APIs, persisted cookies, in-flight HTTP captures |
-| `fetch-bootstrap` | Chromium bootstrap + native API replay | Workflows where the page only needs to mint cookies, CSRF, storage, or DOM-derived state |
+| `fetch-bootstrap` | Chromium bootstrap (cached jar, ~90 min) + native API replay | Workflows where the page only needs to mint cookies, CSRF, storage, or DOM-derived state, then replay via plain fetch (handles a **single** anti-bot POST) |
+| `cdp-replay` | Real Chrome held open for the workflow | Multi-step state-changing anti-bot flows (a sequence of `*.act` POSTs) where each protected POST self-invalidates `_abck` |
 | `stealth-fetch` | ~12s bootstrap (one-time) + ~1s | Akamai, Cloudflare, DataDome (token tier) |
 | `playbook` | ~9.4s | Universal — also handles form-fills, autocompletes, multi-page |
 
-`auto` mode walks the ladder. `fetch-bootstrap` is gated: it is inserted only when `workflow.bootstrap` exists, when a capture declares `browser_bootstrap` / `stealth_bootstrap`, or when `fetch` returns a `STATE_MISSING` result that the browser backend can satisfy. `stealth-fetch` supplies bot-defense cookies/headers to API replay; it does not fill `${state.NAME}` placeholders by itself. The probe-backends cache (`~/.imprint/<site>/<toolName>/backends.json`) reorders the ladder so cron + MCP start with the cheapest known-working backend; v2 caches include canonical workflow and capability hashes so stale caches are ignored. For multi-tool sites, `cron` and `probe-backends` require `--tool <toolName>` unless the provided `--config` / `--out` path is inside the target tool directory.
+`auto` mode walks the ladder. `fetch-bootstrap` is always spliced after `fetch` (it only **runs** when `fetch` escalates, so a healthy plain-API site never pays for it); `cdp-replay` is spliced after `fetch-bootstrap`. `stealth-fetch` supplies bot-defense cookies/headers to API replay; it does not fill `${state.NAME}` placeholders by itself.
+
+The **`cdp-replay`** rung is the record-faithful trusted-browser transport for the API path (`cdp-browser-fetch.ts`): a real Chrome launched as `imprint record` does (`launchChromium` + raw CDP, no automation flags) stays **open** for the whole workflow and runs each **same-origin** request *in-page* via `fetch(..., {credentials:'include'})`, while cross-origin requests (e.g. an `api.*` subdomain, which CORS would block in-page and which usually aren't behind the same wall) fall through to a plain fetch. This is the only transport that **sustains a sequence** of behavioral-anti-bot-protected POSTs: a sensitive `*.act` POST invalidates Akamai's `_abck` (`~0~`→`~0~-1~-1~`), and only the live page's bmak sensor re-posts the telemetry that re-validates it before the next call — so `fetch-bootstrap`'s plain-fetch replay dies after ~1–2 POSTs while cdp-replay carries the full search→agency→details chain. It runs **headless by default** — the only headless edge-tell, the `HeadlessChrome` UA token, is stripped via a CDP UA override before navigating — and validates the sensor cookie via synthetic mouse/scroll before replaying. Because the doomed cheaper rungs' tarpitted attempts themselves burn the per-IP rate budget, for workflows with **≥2 mutating requests behind an anti-bot signal** (a `bootstrap` block or `${state.X}`-referencing requests) `cdp-replay` is reordered to run **first** (`prefersCdpReplayFirst`). Headless needs no display; the `headed`+Xvfb path is a fallback for GPU-less Linux hosts where headless WebGL would report SwiftShader (see [troubleshooting](troubleshooting.md#running-on-a-headless-server-anti-bot-sites)). The same rung is also in the **compile-time** verification ladder, so anti-bot multi-step state-changing tools (whose live baseline `fetch`/`fetch-bootstrap`/`stealth-fetch` can't sustain) verify and ship instead of failing compile. The `playbook` rung is the DOM-walk last resort (needs a compiled `playbook.yaml`). The probe-backends cache (`~/.imprint/<site>/<toolName>/backends.json`) reorders the ladder so cron + MCP start with the cheapest known-working backend; v2 caches include canonical workflow and capability hashes so stale caches are ignored. For multi-tool sites, `cron` and `probe-backends` require `--tool <toolName>` unless the provided `--config` / `--out` path is inside the target tool directory.
 
 ## State-aware API replay
 

@@ -57,6 +57,19 @@ bunx playwright install chromium
 
 Same as above — ensure Playwright's Chromium is installed.
 
+## Running on a headless server (anti-bot sites)
+
+The trusted-browser replay (the `playbook` rung's primary mechanism) launches a real Chrome **headless** — no window, no display required. The one thing a behavioral anti-bot service (Akamai, etc.) edge-detects on a headless Chrome is the `HeadlessChrome` token its User-Agent carries even under `--headless=new`; `imprint` strips that token via a CDP UA override **before** navigating, after which the headless session is indistinguishable from a headed one (verified: the sensor cookie validates and state-changing POSTs return 200). So on a normal server with a GPU, **nothing extra is needed** — it just works headless.
+
+The remaining edge case is a **GPU-less Linux host**: headless WebGL there falls back to the `SwiftShader` software rasterizer, which a sensor *can* fingerprint. If you hit that, run the replay **headed under a virtual framebuffer** instead:
+
+```bash
+apt-get install xvfb        # Debian/Ubuntu
+export DISPLAY=:0           # or let imprint auto-start Xvfb when headed
+```
+
+`launchChromium` auto-starts Xvfb (`Xvfb :NN -screen 0 1920x1080x24`) when a **headed** launch finds no `$DISPLAY`. `imprint doctor` reports this as **"Display (headed replay)"** — advisory only, since the default headless path needs no display and sites that replay on the plain `fetch` rung never launch a browser at all. macOS/Windows need nothing.
+
 ## "FORBIDDEN" / 403 from a real site
 
 The site is blocking API replay or needs browser-minted state. Three escalating fixes:
