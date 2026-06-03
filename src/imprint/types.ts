@@ -353,12 +353,16 @@ const NotifyWhenSchema = z.discriminatedUnion('type', [
 export type NotifyWhen = z.infer<typeof NotifyWhenSchema>;
 
 /** fetch (plain API replay) → gated fetch-bootstrap (browser state init +
- *  API replay) → stealth-fetch (bot-defense state + API replay) → playbook
- *  (full DOM walk). 'auto' only inserts fetch-bootstrap for declared or
- *  satisfiable browser-minted state. */
+ *  API replay) → cdp-replay (API requests run IN a live trusted Chrome page so
+ *  a protected POST's invalidated _abck is auto-re-validated by the page's bmak
+ *  sensor between calls — the only way to sustain multiple sensitive .act POSTs)
+ *  → stealth-fetch (bot-defense state + API replay) → playbook (full DOM walk).
+ *  'auto' only inserts fetch-bootstrap / cdp-replay for declared or satisfiable
+ *  browser-minted state. */
 const ReplayBackendSchema = z.enum([
   'fetch',
   'fetch-bootstrap',
+  'cdp-replay',
   'stealth-fetch',
   'playbook',
   'auto',
