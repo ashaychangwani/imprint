@@ -1099,16 +1099,19 @@ export async function runWorkflowWithLadder(opts: {
   // and playbook.yaml doesn't exist at tool-compile time. The per-tool memo below
   // makes only the FIRST call pay the doomed `fetch` timeout; siblings start at
   // the winning rung (and the cdp jar is cached across them — bounding .act volume).
-  // cdp-replay sits after fetch-bootstrap: it runs the .act sequence inside a
-  // live Chrome (bmak re-validates _abck between protected POSTs) so multi-step
-  // state-changing tools (compare/details) get a real compile-time baseline that
-  // plain-fetch replay can't produce. For those multi-POST anti-bot tools it runs
-  // FIRST (prefersCdpReplayFirst) so the doomed fetch/fetch-bootstrap attempts
-  // don't pre-burn the per-IP .act budget.
-  let ladder: ConcreteBackend[] = ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
-  if (prefersCdpReplayFirst(workflow)) {
-    ladder = ['cdp-replay', ...ladder.filter((b) => b !== 'cdp-replay')];
-  }
+  //
+  // NOTE: cdp-replay is deliberately NOT in the compile ladder. It launches a
+  // real Chrome PER call, and the compile path runs the live integration suite
+  // as many short-lived `bun test` subprocesses (retries × per-param tests),
+  // each re-walking the ladder from scratch (the winning-backend memo is
+  // process-scoped and a fresh subprocess can't see it) — so cdp-replay here
+  // spawns (and orphans) a Chrome per call, piling up dozens of browsers that
+  // thrash the host and never converge. Compile verifies via the cached-jar
+  // PLAIN-fetch rung (fetch-bootstrap mints Chrome ONCE, cached to disk); a
+  // multi-step .act tool that plain-fetch can't sustain ships liveVerified=false
+  // and is verified at AUDIT/runtime instead, where the production ladder runs
+  // cdp-replay exactly once per tool (bounded, properly closed).
+  let ladder: ConcreteBackend[] = ['fetch', 'fetch-bootstrap', 'stealth-fetch'];
 
   // Compile-time speedup: on an anti-bot site, `fetch` (and `fetch-bootstrap`)
   // are doomed — each costs a full ~30s timeout before the ladder escalates to

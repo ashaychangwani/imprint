@@ -1769,7 +1769,7 @@ function setCookieDefines(headers: Record<string, string>, cookieName: string): 
  *  actually carry the value, so the agent can no longer ship a workflow whose
  *  capture recipe will silently fail at runtime. General — not specific to
  *  any one capture source or site. */
-export function crossReferenceCaptures(
+function crossReferenceCaptures(
   workflow: ReturnType<typeof WorkflowSchema.parse>,
   session: Session,
   candidateRequestSeqs?: number[],
@@ -1985,7 +1985,7 @@ function validateCaptureAgainstRecording(
  *  across multiple recorded invocations of the same endpoint). The verifier
  *  rejects done() so the agent must expose the field as `${param.X}` (or use a
  *  requestTransformModule). General — not specific to any one site. */
-export function detectHardcodedSessionValues(
+function detectHardcodedSessionValues(
   workflow: ReturnType<typeof WorkflowSchema.parse>,
   session: Session,
   candidateRequestSeqs?: number[],

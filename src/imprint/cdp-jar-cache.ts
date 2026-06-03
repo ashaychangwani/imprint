@@ -41,7 +41,7 @@ export const JAR_MAX_AGE_SECONDS = 5400;
  *  recording must stay seedable for the whole compile (the real Akamai TTL is
  *  ~2h, so values up to ~6900s are still safe). Clamped to the ~2h hard ceiling
  *  so a typo can't push past the real cookie expiry. Read per-call. */
-export function jarMaxAgeSeconds(): number {
+function jarMaxAgeSeconds(): number {
   const raw = Number(process.env.IMPRINT_JAR_MAX_AGE_SECONDS);
   if (Number.isFinite(raw) && raw > 0) return Math.min(raw, 7200);
   return JAR_MAX_AGE_SECONDS;
