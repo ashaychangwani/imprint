@@ -28,7 +28,6 @@ import * as p from '@clack/prompts';
 import YAML from 'yaml';
 import { imprintHomeDir, localSiteDir } from './paths.ts';
 import {
-  type TeachState,
   type WorkflowState,
   loadTeachState,
   resolveTeachStatePath,
@@ -38,7 +37,7 @@ import {
 
 type McpClient = 'claude-code' | 'codex' | 'claude-desktop' | 'openclaw' | 'hermes';
 type LocalDeleteMode = 'none' | 'tool' | 'site';
-type IssueKind = 'incomplete' | 'missing-session' | 'orphan-session' | 'stale-registration';
+type IssueKind = 'incomplete' | 'missing-session' | 'stale-registration';
 
 const CLIENTS: McpClient[] = ['claude-code', 'codex', 'claude-desktop', 'openclaw', 'hermes'];
 const DISABLED_STORE_VERSION = 1;
@@ -100,7 +99,6 @@ interface LocalSiteStatus {
   dir: string;
   tools: LocalToolStatus[];
   workflows: LocalWorkflowStatus[];
-  orphanSessions: string[];
 }
 
 interface McpIssue {
@@ -393,22 +391,6 @@ async function runInteractiveIssueFix(status: McpStatus, ctx: MaintenanceContext
     return;
   }
 
-  const orphanIssues = indices
-    .map((i) => status.issues[i])
-    .filter(
-      (issue): issue is McpIssue => !!issue && issue.kind === 'orphan-session' && !!issue.path,
-    );
-
-  let deleteOrphans = true;
-  if (orphanIssues.length > 0) {
-    const confirm = await p.confirm({
-      message: `Delete ${orphanIssues.length} orphan session file${orphanIssues.length === 1 ? '' : 's'}?`,
-      initialValue: false,
-    });
-    if (p.isCancel(confirm)) return;
-    deleteOrphans = confirm === true;
-  }
-
   const aggregate: MutationResult = { changed: [], skipped: [] };
   for (const index of indices) {
     const issue = status.issues[index];
@@ -416,17 +398,12 @@ async function runInteractiveIssueFix(status: McpStatus, ctx: MaintenanceContext
       appendMutation(aggregate, { changed: [], skipped: ['selection disappeared'] });
       continue;
     }
-    appendMutation(aggregate, fixIssue(issue, status, ctx, { deleteOrphans }));
+    appendMutation(aggregate, fixIssue(issue, status, ctx));
   }
   reportMutation(aggregate);
 }
 
-function fixIssue(
-  issue: McpIssue,
-  status: McpStatus,
-  ctx: MaintenanceContext,
-  opts: { deleteOrphans: boolean },
-): MutationResult {
+function fixIssue(issue: McpIssue, status: McpStatus, ctx: MaintenanceContext): MutationResult {
   if (issue.kind === 'stale-registration') {
     const reg = status.registrations.find(
       (r) =>
@@ -446,13 +423,6 @@ function fixIssue(
     return pruneSingleTeachWorkflow(issue.site, issue.workflow);
   }
 
-  if (issue.kind === 'orphan-session' && issue.path) {
-    if (!opts.deleteOrphans) {
-      return { changed: [], skipped: [`kept orphan session ${issue.path}`] };
-    }
-    return deleteOrphanSessionFile(issue.path);
-  }
-
   return { changed: [], skipped: [`no automatic fix for ${issue.kind}`] };
 }
 
@@ -463,7 +433,7 @@ async function runInteractiveLocalDelete(status: McpStatus): Promise<void> {
       const complete = s.tools.filter((t) => t.complete).length;
       return {
         value: s.site,
-        label: `${s.site} (${complete} complete tool${complete === 1 ? '' : 's'}, ${s.orphanSessions.length} orphan session${s.orphanSessions.length === 1 ? '' : 's'})`,
+        label: `${s.site} (${complete} complete tool${complete === 1 ? '' : 's'})`,
       };
     }),
   });
@@ -686,7 +656,7 @@ function formatMcpStatus(status: McpStatus): string {
       const incomplete = s.workflows.filter((w) => w.incomplete).length;
       const missing = s.workflows.filter((w) => w.missingSession).length;
       lines.push(
-        `  ${s.site}: ${complete} complete tool${complete === 1 ? '' : 's'}, ${incomplete} incomplete workflow${incomplete === 1 ? '' : 's'}, ${missing} missing-session issue${missing === 1 ? '' : 's'}, ${s.orphanSessions.length} orphan session${s.orphanSessions.length === 1 ? '' : 's'}`,
+        `  ${s.site}: ${complete} complete tool${complete === 1 ? '' : 's'}, ${incomplete} incomplete workflow${incomplete === 1 ? '' : 's'}, ${missing} missing-session issue${missing === 1 ? '' : 's'}`,
       );
     }
   }
@@ -714,8 +684,6 @@ function issueFixHint(issue: McpIssue): string | null {
       return `choose "Fix an issue" or run: imprint mcp prune-state --site ${issue.site} --incomplete --yes`;
     case 'missing-session':
       return `choose "Fix an issue" or run: imprint mcp prune-state --site ${issue.site} --missing-session --yes`;
-    case 'orphan-session':
-      return 'choose "Fix an issue" to delete this recording, or keep it if you still need it';
   }
   return null;
 }
@@ -737,12 +705,12 @@ function scanLocalSites(ctx: MaintenanceContext): LocalSiteStatus[] {
     if (entry === 'node_modules' || entry.startsWith('.')) continue;
     const dir = pathJoin(ctx.imprintHome, entry);
     if (!safeIsDir(dir)) continue;
-    sites.push(scanLocalSite(ctx, entry, dir));
+    sites.push(scanLocalSite(entry, dir));
   }
   return sites;
 }
 
-function scanLocalSite(ctx: MaintenanceContext, site: string, dir: string): LocalSiteStatus {
+function scanLocalSite(site: string, dir: string): LocalSiteStatus {
   const tools: LocalToolStatus[] = [];
   for (const entry of readdirSync(dir).sort()) {
     if (entry === 'sessions' || entry === '_shared' || entry.startsWith('.')) continue;
@@ -764,12 +732,8 @@ function scanLocalSite(ctx: MaintenanceContext, site: string, dir: string): Loca
   const workflows = Object.entries(state.workflows)
     .map(([name, ws]) => workflowStatus(site, name, ws, tools))
     .sort((a, b) => a.name.localeCompare(b.name));
-  const referenced = referencedSessionPaths(site, state);
-  const orphanSessions = discoverSessionFiles(pathJoin(dir, 'sessions')).filter(
-    (session) => !isReferencedSessionFile(site, session, ctx, referenced),
-  );
 
-  return { site, dir, tools, workflows, orphanSessions };
+  return { site, dir, tools, workflows };
 }
 
 function workflowStatus(
@@ -813,47 +777,6 @@ function workflowJsonToolName(toolDir: string): string | null {
   }
 }
 
-function referencedSessionPaths(site: string, state: TeachState): Set<string> {
-  const out = new Set<string>();
-  for (const ws of Object.values(state.workflows)) {
-    for (const stored of [ws.sessionPath, ws.redactedPath, ws.triagedPath]) {
-      if (!stored) continue;
-      out.add(stored);
-      const resolved = resolveTeachStatePath(site, stored);
-      if (resolved) out.add(resolved);
-    }
-  }
-  return out;
-}
-
-function discoverSessionFiles(sessionDir: string): string[] {
-  if (!existsSync(sessionDir)) return [];
-  return readdirSync(sessionDir)
-    .filter((f) => (f.endsWith('.json') || f.endsWith('.jsonl')) && !f.includes('.triaged'))
-    .map((f) => pathJoin(sessionDir, f))
-    .sort();
-}
-
-function isReferencedSessionFile(
-  site: string,
-  absolutePath: string,
-  ctx: MaintenanceContext,
-  referenced: Set<string>,
-): boolean {
-  const candidates = [absolutePath, relativeToSite(site, absolutePath, ctx)];
-  if (absolutePath.endsWith('.jsonl')) {
-    const jsonPath = absolutePath.replace(/\.jsonl$/, '.json');
-    candidates.push(jsonPath, relativeToSite(site, jsonPath, ctx));
-  }
-  return candidates.some((candidate) => referenced.has(candidate));
-}
-
-function relativeToSite(site: string, absolutePath: string, ctx: MaintenanceContext): string {
-  const siteDir = pathJoin(ctx.imprintHome, site);
-  const prefix = `${siteDir}/`;
-  return absolutePath.startsWith(prefix) ? absolutePath.slice(prefix.length) : absolutePath;
-}
-
 function collectIssues(opts: {
   registrations: McpRegistration[];
   sites: LocalSiteStatus[];
@@ -880,14 +803,6 @@ function collectIssues(opts: {
           message: `${site.site}/${wf.name} is incomplete (${wf.completedSteps.join(', ') || 'no completed steps'})`,
         });
       }
-    }
-    for (const session of site.orphanSessions) {
-      issues.push({
-        kind: 'orphan-session',
-        site: site.site,
-        message: `${site.site} has an untracked session ${session}`,
-        path: session,
-      });
     }
   }
 
@@ -1174,7 +1089,7 @@ function pruneTeachState(
   for (const site of sites) {
     const statePath = teachStatePath(site);
     if (!existsSync(statePath)) continue;
-    const status = scanLocalSite(ctx, site, localSiteDir(site));
+    const status = scanLocalSite(site, localSiteDir(site));
     const remove = new Set(
       status.workflows
         .filter(
@@ -1206,13 +1121,6 @@ function pruneSingleTeachWorkflow(site: string, workflow: string): MutationResul
   delete state.workflows[workflow];
   saveTeachState(site, state);
   return { changed: [`pruned teach-state entry ${site}/${workflow}`], skipped: [] };
-}
-
-function deleteOrphanSessionFile(path: string): MutationResult {
-  if (!existsSync(path))
-    return { changed: [], skipped: [`orphan session ${path} no longer exists`] };
-  rmSync(path, { force: true });
-  return { changed: [`deleted orphan session ${path}`], skipped: [] };
 }
 
 function matchesTarget(

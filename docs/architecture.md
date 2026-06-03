@@ -262,15 +262,17 @@ The `audit` verb traces its own tree, so a failing acceptance run is debuggable 
 
 ```
 cli.audit (AGENT)
-└─ audit.session (AGENT)        ← imprint.audit.{score, correct, broken, infra, bad_params, graded, verdict}
+└─ audit.session (AGENT)        ← imprint.audit.{score, correct, broken, infra, bad_params, graded, verdict, timed_out, turns, cost_usd} + llm.cost.*
     └─ (headless claude drives the site's real mcp-server tools)
 ```
+
+The `audit.session` span also carries the auditor's token/cost usage (parsed from the headless claude stream): `imprint.audit.cost_usd` is the CLI-reported figure and `llm.cost.*` is the token-based estimate. When the deadline guard kills the run, `imprint.audit.timed_out=true` and the verdict is `timeout` (see [troubleshooting](troubleshooting.md#audit)); the auditor's transcript is written next to the report for diagnosis.
 
 Each `agent.turn.N` span records per-turn input/output tokens and stop reason. Each `llm.message_with_tools` span records model, provider, token counts, and which tools the model called. Each `agent.tool.X` span records tool execution time, result size, and (when `IMPRINT_TRACE_TOOL_IO=1`) the input arguments and output.
 
 Stage spans carry their own end-attributes for fast triage: `teach.record` (`imprint.record.event_count`), `teach.redact` (`imprint.redact.*` counts), `teach.combine_sessions` (`imprint.combine.{session,request,narration}_count`), and `teach.plan_tool` (`imprint.tool_plan.chars` / `.skipped`). Opening the `cli.teach` trace lets you locate the failing stage by span status/attrs — a `teach.plan_prereqs` timeout, a `teach.build_shared_module` with `ok=false`, an empty `teach.plan_tool`, or a `compile.generate` that gave up.
 
-Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise; cost attributes are added when `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` are set.
+Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise — including the prompt-cache split (`cache_read`/`cache_creation`), so cost reflects the discounted cache-read rate (0.1×) and the cache-write premium (1.25×) rather than billing the whole prompt at the full input rate. Cost attributes are added whenever the model's rates are known — from the built-in rate table (`DEFAULT_MODEL_RATES` in `tracing.ts`) or from `IMPRINT_TRACE_INPUT_USD_PER_1M` / `IMPRINT_TRACE_OUTPUT_USD_PER_1M` overrides. `scripts/analyze-phoenix.ts` reads these emitted `llm.cost.*` attributes (it does not recompute), so its per-stage and trace totals always match the app's pricing.
 
 **Ephemeral artifacts** the compile-agent writes during a run but does not persist:
 

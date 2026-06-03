@@ -136,6 +136,27 @@ export function resolveTraceTokenCount(
   return { source: 'missing' };
 }
 
+/**
+ * Total prompt tokens = uncached input + cache reads + cache writes.
+ *
+ * Providers (Anthropic API and the claude CLI alike) report `usage.input_tokens`
+ * as the *uncached* portion only — the cached bulk lives in the separate cache
+ * counts. `llmCostAttributes` expects `inputTokens` to be the TOTAL (it
+ * re-derives uncached by subtracting the cache split), and `llm.token_count.prompt`
+ * should likewise reflect the whole prompt. So every capture boundary normalizes
+ * here instead of feeding the bare uncached count (which billed the cached bulk
+ * at the full input rate, or mislabeled the token count). Returns null when the
+ * uncached count itself is unknown.
+ */
+export function totalPromptTokens(
+  uncachedInputTokens: number | null | undefined,
+  cacheReadTokens: number | null | undefined,
+  cacheWriteTokens: number | null | undefined,
+): number | null {
+  if (uncachedInputTokens == null) return null;
+  return uncachedInputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
+}
+
 const DEFAULT_MODEL_RATES: Record<string, { inputUsdPer1M: number; outputUsdPer1M: number }> = {
   'claude-opus-4-8': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
   'claude-opus-4-7': { inputUsdPer1M: 5, outputUsdPer1M: 25 },

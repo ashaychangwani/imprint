@@ -41,6 +41,7 @@ import {
   llmSpanAttributes,
   setSpanAttributes,
   startTraceSpan,
+  totalPromptTokens,
   traceJsonInputOutputAttributes,
   traceLlmIoEnabled,
   traced,
@@ -161,7 +162,14 @@ export async function compileViaClaudeCli(
         ...llmSpanAttributes({
           provider: 'claude-cli',
           model: preferredAgentModel('claude-cli'),
-          inputTokens: result.inputTokens,
+          // TOTAL prompt (uncached + cache); the cache split is passed separately
+          // for cost. `result.inputTokens` alone is the uncached delta (often a
+          // few hundred), which would mislabel `llm.token_count.prompt`.
+          inputTokens: totalPromptTokens(
+            result.inputTokens,
+            result.cacheReadInputTokens,
+            result.cacheCreationInputTokens,
+          ),
           outputTokens: result.outputTokens,
           cacheReadTokens: result.cacheReadInputTokens,
           cacheWriteTokens: result.cacheCreationInputTokens,
