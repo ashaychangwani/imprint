@@ -20,6 +20,12 @@ import {
 } from './build-plan.ts';
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
+import {
+  endpointsForSeqs,
+  groundEvent,
+  groundingForEvents,
+  inputProvenance,
+} from './param-grounding.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
@@ -52,6 +58,7 @@ export function buildCompileTools(
   const tools = [
     buildReadSessionSummaryTool(session, context),
     buildReadRequestTool(session),
+    buildDiffRequestForEventTool(session, context),
     buildReadResponseBodyTool(session),
     buildSearchResponseBodyTool(session),
     buildWriteFileTool(toolDir),
@@ -154,7 +161,7 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
   return {
     name: 'read_session_summary',
     description:
-      'Get a high-level summary of the session including narration, selected candidate scope, load-bearing requests with inline data, and capture hints.',
+      'Get a high-level summary of the session including narration, selected candidate scope, load-bearing requests with inline data, capture hints, and parameter-grounding hints (for each recorded UI toggle, the exact request positions that changed — use these to ground each likelyParam instead of eyeballing one request).',
     input_schema: {
       type: 'object',
       properties: {},
@@ -171,6 +178,47 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
         ...(context.sharedContext?.loginRequestSeqs ?? []),
       ]);
       const preserveSeqs = new Set([...selectedRequestSeqs, ...dependencySeqs]);
+
+      // Event-correlated differential grounding hints: for each UI event the
+      // candidate detector flagged, diff the request it triggered against the
+      // prior equivalent request and report what changed. This is where a
+      // filter/sort/option param's encoding actually lives — the agent maps
+      // each diff to its likelyParam instead of eyeballing one request and
+      // giving up (which previously shipped groundable params verified:false).
+      const paramGroundingHints =
+        (context.candidate?.eventSeqs?.length ?? 0)
+          ? groundingForEvents(
+              session,
+              context.candidate?.eventSeqs ?? [],
+              endpointsForSeqs(session, [...preserveSeqs]),
+            ).map((g) => ({
+              event: g.label || `event seq ${g.eventSeq}`,
+              eventSeq: g.eventSeq,
+              changedRequestSeq: g.triggeredSeq,
+              vsRequestSeq: g.priorSeq,
+              changes: g.changes.map((c) => `${c.path}: ${c.before} -> ${c.after}`),
+            }))
+          : [];
+
+      // Input-value provenance: positions in a load-bearing request whose value
+      // is an opaque id minted by an earlier response (not the user's text). The
+      // agent must CHAIN+CAPTURE these, not freeze them or substitute raw param
+      // text — e.g. a location resolved to a KG mid; text-only would geo-default.
+      // Scan the candidate's full seq set (capped), not just the representative
+      // one: the representative may be a first text-only request whose response
+      // mints the id, with the id only appearing in a later sibling request.
+      const provenanceSeqs = [...new Set([...selectedRequestSeqs, ...allCandidateSeqs])]
+        .sort((a, b) => a - b)
+        .slice(0, 30);
+      const inputProvenanceHints = inputProvenance(session, provenanceSeqs).map((p) => ({
+        path: p.path,
+        example: p.valueSample,
+        inRequestSeq: p.requestSeq,
+        mintedByResponseSeq: p.sourceSeq,
+        mintedByEndpoint: p.sourceEndpoint,
+        selfChain: p.selfChain,
+      }));
+
       const summaryRequests = identifySummaryRequests(session, preserveSeqs);
       const loadBearingRequests = compactRequestContexts(
         summaryRequests.map((r) => ({
@@ -217,6 +265,8 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
         requestCount: session.requests.length,
         stateHints,
         captureHints: captureHints.length > 0 ? captureHints : undefined,
+        paramGroundingHints: paramGroundingHints.length > 0 ? paramGroundingHints : undefined,
+        inputProvenanceHints: inputProvenanceHints.length > 0 ? inputProvenanceHints : undefined,
         loadBearingRequests,
       };
 
@@ -762,6 +812,56 @@ function buildReadRequestTool(session: Session): AgentTool {
       };
 
       return { result: JSON.stringify(summary, null, 2) };
+    },
+  };
+}
+
+// ─── Tool: diff_request_for_event ────────────────────────────────────────────
+
+function buildDiffRequestForEventTool(session: Session, context: CompileToolContext): AgentTool {
+  return {
+    name: 'diff_request_for_event',
+    description:
+      "For a recorded UI event seq (a filter/sort/option toggle from selectedCandidate.eventSeqs), return the request it triggered diffed against the prior equivalent request. The changed positions are exactly where that interaction's parameter is encoded — use this to ground a param's encoding when paramGroundingHints does not already cover it. Returns the changed JSON paths (path: before -> after).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        eventSeq: {
+          type: 'number',
+          description: 'Event sequence number (from selectedCandidate.eventSeqs)',
+        },
+      },
+      required: ['eventSeq'],
+    },
+    handler: async (input: unknown) => {
+      const { eventSeq } = input as { eventSeq: number };
+      const reqSeqs = [
+        ...((context.candidate?.representativeSeqs?.length ?? 0) > 0
+          ? (context.candidate?.representativeSeqs ?? [])
+          : (context.candidate?.requestSeqs ?? [])),
+        ...(context.candidate?.dependencySeqs ?? []),
+      ];
+      const endpoints = endpointsForSeqs(session, reqSeqs);
+      const g = groundEvent(session, eventSeq, endpoints.size > 0 ? endpoints : undefined);
+      if (!g.triggeredSeq) {
+        return {
+          result: `Event ${eventSeq} triggered no comparable request within the window — it may be a client-side-only interaction (no server param), or its request was telemetry. If a filter/sort visibly changed results with no new request, it is applied client-side and cannot be reproduced via request replay.`,
+        };
+      }
+      return {
+        result: JSON.stringify(
+          {
+            event: g.label,
+            eventSeq: g.eventSeq,
+            changedRequestSeq: g.triggeredSeq,
+            vsRequestSeq: g.priorSeq,
+            endpoint: g.endpoint,
+            changes: g.changes.map((c) => `${c.path}: ${c.before} -> ${c.after}`),
+          },
+          null,
+          2,
+        ),
+      };
     },
   };
 }
