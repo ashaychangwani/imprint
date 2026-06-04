@@ -277,6 +277,7 @@ export function buildReadSessionSummaryTool(
           mimeType: r.response?.mimeType,
           bodySize: r.response?.body?.length,
           responseBodyDigest: requestContextDigest(r.response?.body),
+          ...(r.destructive ? { destructive: true } : {}),
           ...(preserveSeqs.has(r.seq) ? { inlineData: buildInlineData(r) } : {}),
         })),
         compileSummaryRequestGroupKey,
@@ -773,6 +774,7 @@ interface CompileSummaryRequestContext {
   mimeType?: string;
   bodySize?: number;
   responseBodyDigest?: string;
+  destructive?: boolean;
   repeatCount?: number;
   repeatedSeqs?: number[];
   lastTimestamp?: number;
@@ -786,6 +788,7 @@ function compileSummaryRequestGroupKey(request: CompileSummaryRequestContext): u
     request.mimeType,
     request.bodySize,
     request.responseBodyDigest,
+    request.destructive,
   ];
 }
 
@@ -1247,7 +1250,10 @@ export function buildRunBashTool(toolDir: string, credEnv?: Record<string, strin
 
       const cappedTimeout = Math.min(timeoutSec, 300) * 1000;
 
-      return await runCommand(command, toolDir, cappedTimeout, credEnv);
+      return await runCommand(command, toolDir, cappedTimeout, {
+        IMPRINT_DRY_RUN_DESTRUCTIVE: '1',
+        ...credEnv,
+      });
     },
   };
 }
@@ -2929,6 +2935,11 @@ export async function externalVerification(
   // firing it is pure waste that also burns the per-IP anti-bot rate budget.
   // Skip the live test in that case and make the agent fix the capture first.
   let referencedStateBroken = false;
+  // When the session has destructive requests but the workflow doesn't flag
+  // them, the runtime dry-run guard (req.destructive && env) won't trigger —
+  // the integration test would issue the destructive request live. Skip the
+  // live test and make the agent propagate the flag first.
+  let destructiveFlagsMissing = false;
 
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   const parserPath = pathJoin(toolDir, 'parser.ts');
@@ -3148,6 +3159,35 @@ export async function externalVerification(
     failures.push(...assertSharedModuleImports(toolDir, workflowPath, opts.assignedSharedModules));
   }
 
+  // Destructive-flag propagation: the runtime dry-run guard checks
+  // `req.destructive && IMPRINT_DRY_RUN_DESTRUCTIVE` — both conditions are
+  // required. If the session has destructive requests but the workflow doesn't
+  // flag them, the env var alone won't prevent a live destructive call during
+  // the integration test. Block the integration test until the agent propagates
+  // the flag.
+  if (existsSync(workflowPath) && opts.candidateRequestSeqs) {
+    const candidateSet = new Set(opts.candidateRequestSeqs);
+    const sessionDestructiveSeqs = session.requests
+      .filter((r) => r.destructive && candidateSet.has(r.seq))
+      .map((r) => r.seq);
+    if (sessionDestructiveSeqs.length > 0) {
+      try {
+        const wf = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
+          requests?: Array<{ destructive?: boolean }>;
+        };
+        const wfHasDestructive = (wf.requests ?? []).some((r) => r.destructive);
+        if (!wfHasDestructive) {
+          destructiveFlagsMissing = true;
+          failures.push(
+            `the session marks ${sessionDestructiveSeqs.length} request(s) as destructive (seqs: ${sessionDestructiveSeqs.join(', ')}), but workflow.json has no requests with "destructive": true. The runtime dry-run guard requires this flag on the workflow request — without it, the integration test would issue the destructive request live. Set "destructive": true on the matching workflow request(s).`,
+          );
+        }
+      } catch {
+        /* workflow parse already checked above */
+      }
+    }
+  }
+
   if (!existsSync(parserPath)) {
     failures.push('parser.ts was not written');
   } else {
@@ -3227,6 +3267,16 @@ export async function externalVerification(
     warnings.push(
       'skipped the live integration test: a request references a ${state.X} capture (e.g. csrf/csp-nonce) whose pattern does not match the recorded page, so the live call is guaranteed to fail with STATE_MISSING. Fix the capture pattern/source (see the failure above) — the next verification cycle will run the live test once it can succeed. This avoids burning a doomed anti-bot .act call.',
     );
+  } else if (destructiveFlagsMissing) {
+    // The session has destructive requests but workflow.json doesn't flag them.
+    // The runtime guard checks req.destructive && env — without the flag on the
+    // workflow request, the env var is inert and the integration test would
+    // issue the destructive request live. Skip it until the agent propagates
+    // the flag (the failure above tells it how).
+    integrationOutcome = 'failed';
+    warnings.push(
+      'skipped the live integration test: the session has destructive requests that are not flagged in workflow.json. Without "destructive": true on the workflow request, the runtime dry-run guard cannot prevent a live destructive call. Fix workflow.json first (see the failure above).',
+    );
   } else {
     // Scale the verifier's live-test timeout to the suite size: the baseline plus
     // one live `runWorkflowWithLadder` per param, each gated by the ~25s compile
@@ -3245,7 +3295,9 @@ export async function externalVerification(
       failed: new Set(),
     };
     for (let attempt = 0; attempt < 3; attempt++) {
-      run = await runBunTestWithResults(integrationTestPath, toolDir, verifierTimeoutMs);
+      run = await runBunTestWithResults(integrationTestPath, toolDir, verifierTimeoutMs, {
+        IMPRINT_DRY_RUN_DESTRUCTIVE: '1',
+      });
       if (run.exitCode === 0) break;
       // A timeout, bot-defense, or ladder-exhaustion failure will NOT clear on a
       // retry — re-running only fires more state-changing calls and deepens the
