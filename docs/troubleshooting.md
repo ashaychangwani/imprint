@@ -200,17 +200,15 @@ If Phoenix is open at `http://localhost:6006` but empty, check that `PHOENIX_COL
 
 ## "Build plan skipped" — the shared-module planner timed out
 
-In a multi-tool run you may see `Planning shared modules…` followed by `build planning failed or timed out (build planner exceeded 600s timeout) — proceeding with independent per-tool compilation (no shared modules)`. This is **non-fatal**: every tool still compiles, just without shared `_shared/*` modules (each inlines the logic). The planner is a single LLM call bounded at 600s (10 minutes) — it analyzes the whole merged recording across all tools, so it gets the longer cap; the per-tool plan (below) is the 5-minute one.
-
-The planner logs what it sent, so you can see *why* it was slow — look for:
+In a multi-tool run the planning spinner steps through `Planning shared modules` → `calling planner LLM` as it works. If the single planner call can't finish in time, the spinner stops with `Build plan skipped.` followed by a warning line:
 
 ```
-[imprint build-plan] planning 3 tool(s): 30 request(s), 1657 ephemeral value(s), 4 narration line(s); 412 KB payload + 9 KB prompt → claude-cli/claude-opus-4-8 (timeout 600s)
-[imprint build-plan] calling planner LLM…
-[imprint build-plan] planner LLM timed out after 600s: build planner exceeded 600s timeout
+▲  Build planning failed or timed out (build planner exceeded 600s timeout) — compiling tools independently (no shared modules).
 ```
 
-A large **ephemeral value count** or **payload KB** is the usual cause. Under Phoenix tracing (above), the `teach.plan_prereqs` span carries `imprint.plan.payload_chars`, `imprint.plan.ephemeral_count`, `imprint.plan.request_count`, and — on timeout — `imprint.plan.timed_out=true` with `imprint.plan.llm_elapsed_ms`; these are set *before* the call, so even a timed-out session exports a useful (errored) span. To skip shared-module planning entirely and compile every tool independently, set `IMPRINT_NO_BUILD_PLAN=1`.
+This is **non-fatal**: every tool still compiles, just without shared `_shared/*` modules (each inlines the logic). The planner is a single LLM call bounded at 600s (10 minutes) — it analyzes the whole merged recording across all tools, so it gets the longer cap; the per-tool plan (below) is the 5-minute one.
+
+To see *why* it was slow, turn on Phoenix tracing (above): the `teach.plan_prereqs` span carries `imprint.plan.payload_chars`, `imprint.plan.ephemeral_count`, `imprint.plan.request_count`, and — on timeout — `imprint.plan.timed_out=true` with `imprint.plan.llm_elapsed_ms`. These are set *before* the call, so even a timed-out session exports a useful (errored) span; a large **ephemeral value count** or **payload KB** is the usual cause. (The same input-size summary also flashes in the spinner as `planning N tool(s): … KB payload …` while the planner runs.) To skip shared-module planning entirely and compile every tool independently, set `IMPRINT_NO_BUILD_PLAN=1`.
 
 ## A tool compiled but seems to ignore the per-tool plan
 

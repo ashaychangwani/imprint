@@ -531,7 +531,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   if (startIdx <= STEPS.indexOf('record')) {
     const startUrl = await resolveStartUrl(opts);
 
-    spinner.start('Recording...');
+    spinner.start('Recording');
     spinner.stop('Ready to record.');
     console.log('');
 
@@ -630,7 +630,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       }
     }
 
-    spinner.start('Redacting credentials...');
+    spinner.start('Redacting credentials');
     redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
     const { stats } = await traced(
       'teach.redact',
@@ -815,7 +815,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           const model = await getModel();
           mp.pause();
           mp.clear();
-          spinner.start('Triaging requests...');
+          spinner.start('Triaging requests');
           localTriageResult = await triageRequests(triageSession, {
             provider: providerName,
             model,
@@ -849,7 +849,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         const model = await getModel();
         mp.pause();
         mp.clear();
-        spinner.start('Detecting candidate tools...');
+        spinner.start('Detecting candidate tools');
         const detection = await detectTeachCandidates({
           sessionPath: compileSessionPath,
           providerName,
@@ -925,7 +925,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       await new Promise((r) => setTimeout(r, 0));
       const showedSpinner = !replaySettled;
       if (showedSpinner) {
-        spinner.start('Waiting for replay to finish...');
+        spinner.start('Waiting for replay to finish');
       }
       siteClassifications = await replayPromise;
       if (showedSpinner) {
@@ -1066,7 +1066,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       buildPlanPath = sidecar;
       sharedModulesManifest = firstWs.sharedModules ?? [];
     } else {
-      spinner.start('Planning shared modules...');
+      // Mute raw `[imprint …]` logs from the planning subtree (build-plan,
+      // teach-plan, prereq-builder) while the spinner is live — progress flows
+      // through onProgress → spinner.message instead, matching the replay and
+      // compile phases. The skip/timeout reason is surfaced cleanly below.
+      muteLog();
+      spinner.start('Planning shared modules');
       try {
         const prereq = await planAndBuildPrereqs({
           site,
@@ -1086,6 +1091,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
             ? `Build plan ready (${verified}/${sharedModulesManifest.length} shared module${sharedModulesManifest.length === 1 ? '' : 's'} verified).`
             : 'Build plan skipped.',
         );
+        if (prereq.skippedReason) p.log.warn(prereq.skippedReason);
       } catch (err) {
         spinner.stop('Build planning failed — compiling tools independently.');
         p.log.warn(
@@ -1093,6 +1099,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         );
         buildPlanPath = '';
         sharedModulesManifest = [];
+      } finally {
+        unmuteLog();
       }
       for (const pl of plans) {
         updateCheckpoint(site, state, pl.workflowKey, 'plan-prereqs', {
@@ -1365,7 +1373,7 @@ async function compileCandidatePlans(opts: {
             if (mp) {
               mp.resume();
             } else {
-              opts.spinner.start(`Compiling ${displayName}...`);
+              opts.spinner.start(`Compiling ${displayName}`);
             }
             if (p.isCancel(extend) || !extend) return null;
             return 10 * 60 * 1000;
@@ -1375,7 +1383,7 @@ async function compileCandidatePlans(opts: {
         }
       : undefined;
 
-    if (!mp) opts.spinner.start(`Compiling ${displayName}...`);
+    if (!mp) opts.spinner.start(`Compiling ${displayName}`);
     try {
       const result = await compileSelectedCandidate({
         ...opts,
@@ -2359,7 +2367,7 @@ async function combineAvailableSessions(opts: {
   }
 
   const spinner = p.spinner();
-  spinner.start('Combining sessions...');
+  spinner.start('Combining sessions');
 
   const sessions: Session[] = [];
   for (const path of selectedPaths) {
