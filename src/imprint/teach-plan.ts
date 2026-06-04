@@ -54,6 +54,10 @@ interface PlanAndBuildPrereqsResult {
   sharedModules: SharedModuleManifestEntry[];
   /** The plan that was used (after pruning unverified modules), if any. */
   plan?: BuildPlan;
+  /** Set when planning was attempted but failed/timed out, so the caller can
+   *  surface the reason in the TUI (not raw stderr). Absent on success and when
+   *  planning was deliberately skipped (disabled / <2 tools). */
+  skippedReason?: string;
 }
 
 function buildPlanDisabled(): boolean {
@@ -94,7 +98,7 @@ export async function planAndBuildPrereqs(opts: {
   //    hung LLM provider (or a malformed plan) must never wedge or abort the
   //    whole multi-tool teach. On any failure we degrade to independent per-tool
   //    compilation (the pre-feature behavior) instead of shared modules.
-  opts.onProgress?.('Planning shared modules…');
+  opts.onProgress?.('Planning shared modules');
   let generated: Awaited<ReturnType<typeof generateBuildPlan>>;
   try {
     generated = await generateBuildPlan({
@@ -104,12 +108,14 @@ export async function planAndBuildPrereqs(opts: {
       classifications: opts.siteClassifications,
       llmConfig: { provider: opts.providerName, model: opts.model },
       timeoutMs: PLANNER_TIMEOUT_MS,
+      onProgress: opts.onProgress,
     });
   } catch (err) {
-    log(
-      `build planning failed or timed out (${err instanceof Error ? err.message : String(err)}) — proceeding with independent per-tool compilation (no shared modules)`,
-    );
-    return { buildPlanPath: '', sharedModules: [] };
+    return {
+      buildPlanPath: '',
+      sharedModules: [],
+      skippedReason: `Build planning failed or timed out (${err instanceof Error ? err.message : String(err)}) — compiling tools independently (no shared modules).`,
+    };
   }
   const plan: BuildPlan = {
     sharedModules: generated.sharedModules,
@@ -142,7 +148,7 @@ export async function planAndBuildPrereqs(opts: {
   const builtSpecs: SharedModuleSpec[] = [];
   for (const level of levels) {
     const results = await mapLimit(level, SHARED_BUILD_CONCURRENCY, (module) => {
-      opts.onProgress?.(`Building ${module.path}…`);
+      opts.onProgress?.(`Building ${module.path}`);
       return buildSharedModule({
         site: opts.site,
         module,

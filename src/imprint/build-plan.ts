@@ -911,7 +911,14 @@ export async function generateBuildPlan(opts: {
    *  `imprint.plan.timed_out` + ERROR and a TimeoutError is thrown for the caller
    *  to degrade. Omit/0 to wait indefinitely. */
   timeoutMs?: number;
+  /** Optional sink for progress narration. When provided (e.g. the teach
+   *  spinner), planner progress flows here instead of raw stderr so it stays
+   *  inside the TUI; standalone/test callers fall back to the module logger. */
+  onProgress?: (msg: string) => void;
 }): Promise<GenerateBuildPlanResult> {
+  const narrate = (msg: string): void => {
+    (opts.onProgress ?? log)(msg);
+  };
   return await traced(
     'teach.plan_prereqs',
     'AGENT',
@@ -942,13 +949,13 @@ export async function generateBuildPlan(opts: {
         'imprint.plan.prompt_chars': systemPrompt.length,
         'imprint.plan.timeout_ms': opts.timeoutMs ?? 0,
       });
-      log(
+      narrate(
         `planning ${opts.candidates.length} tool(s): ${payload.requests.length} request(s), ${payload.ephemeralValues.length} ephemeral value(s), ${payload.tokenContractHints.length} token edge(s), ${payload.narration.length} narration line(s); ${Math.round(payloadJson.length / 1024)} KB payload + ${Math.round(systemPrompt.length / 1024)} KB prompt → ${opts.llmConfig?.provider ?? 'auto'}/${opts.llmConfig?.model ?? 'default'}${opts.timeoutMs ? ` (timeout ${Math.round(opts.timeoutMs / 1000)}s)` : ''}`,
       );
 
       const llm = resolveProvider(opts.llmConfig ?? {});
       const llmStart = Date.now();
-      log('calling planner LLM…');
+      narrate('calling planner LLM');
       let result: Awaited<ReturnType<typeof llm.analyze>>;
       try {
         const call = llm.analyze(systemPrompt, payload);
@@ -962,12 +969,12 @@ export async function generateBuildPlan(opts: {
           'imprint.plan.timed_out': timedOut,
           'imprint.plan.llm_elapsed_ms': elapsedMs,
         });
-        log(
+        narrate(
           `planner LLM ${timedOut ? 'timed out' : 'failed'} after ${Math.round(elapsedMs / 1000)}s: ${err instanceof Error ? err.message : String(err)}`,
         );
         throw err;
       }
-      log(
+      narrate(
         `planner LLM returned in ${Math.round((Date.now() - llmStart) / 1000)}s (in=${result.inputTokens ?? '?'}, out=${result.outputTokens ?? '?'} tokens, ${result.text.length} chars)`,
       );
       const objectText = extractJsonObject(result.text);
@@ -992,11 +999,11 @@ export async function generateBuildPlan(opts: {
       const selectedNames = new Set(opts.candidates.map((c) => c.toolName));
       const reconciled = reconcileTokenContracts(parsed, payload.tokenContractHints, selectedNames);
       if (reconciled.injected > 0 || reconciled.repaired > 0) {
-        log(
+        narrate(
           `token contracts: ${payload.tokenContractHints.length} edge(s) detected → injected ${reconciled.injected}, repaired ${reconciled.repaired}`,
         );
       }
-      for (const w of reconciled.warnings) log(`token contract: ${w}`);
+      for (const w of reconciled.warnings) narrate(`token contract: ${w}`);
 
       const plan = validateBuildPlan(parsed, opts.candidates);
       setSpanAttributes(span, {
