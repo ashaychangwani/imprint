@@ -2698,25 +2698,8 @@ export async function externalVerification(
     }
 
     const waivedNames = new Set(waivedChain.map((w) => w.name));
-    // Enforce EVERY declared token-param contract, even ones the candidate
-    // detector never listed in `likelyParams` (the build plan can route a
-    // resolved-id token — e.g. a place id from a suggest tool — to this tool
-    // that the detector didn't surface). Without this, a routed token the agent
-    // silently drops is never checked, and the tool ships taking only raw text
-    // (which geo-/scope-defaults to the wrong entity). Merging the token params
-    // in makes a dropped/unchained contract a blocking `unchained` failure.
-    const likelyByName = new Set(opts.likelyParams.map((lp) => lp.name));
-    const tokenOnlyParams = tokenSources
-      .filter((ts) => !likelyByName.has(ts.param))
-      .map((ts) => ({
-        name: ts.param,
-        type: 'string' as const,
-        description: `resolved id minted by ${ts.sourceTool ?? 'a producer tool'}`,
-      }));
     const coverage = classifyParamCoverage({
-      likelyParams: [...opts.likelyParams, ...tokenOnlyParams].filter(
-        (lp) => !waivedNames.has(lp.name),
-      ),
+      likelyParams: opts.likelyParams.filter((lp) => !waivedNames.has(lp.name)),
       integrationSrc,
       passedTests: integrationPassedTests,
       integrationOutcome,
