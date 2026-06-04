@@ -22,7 +22,7 @@ import { inferAppApiHosts } from './app-api-hosts.ts';
 import type { SharedModuleManifestEntry } from './build-plan.ts';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
-import { type LLMOptions, extractJsonArray, resolveProvider } from './llm.ts';
+import { type LLMOptions, extractJsonArray, extractJsonObject, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir, localSiteDir, localToolDir } from './paths.ts';
@@ -292,6 +292,11 @@ const TRIAGE_BODY_LIMIT = 500;
 export interface TriageResult {
   session: Session;
   selectedSeqs: number[];
+  /** Subset of selectedSeqs whose requests are irreversible/destructive if
+   *  re-issued (place order, charge, send, delete). Used to skip them during
+   *  replay and to flag the compiled tool so compile-verify + audit don't
+   *  trigger the real action. */
+  destructiveSeqs: number[];
   consideredCount: number;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -386,39 +391,68 @@ export async function triageRequests(
       const llm = resolveProvider(llmConfig ?? {});
       const result = await llm.analyze(systemPrompt, triagePayload);
 
-      const arrayText = extractJsonArray(result.text);
-      if (!arrayText) {
-        throw new Error(
-          `Triage LLM did not return a JSON array.\nRaw response:\n${result.text.slice(0, 1000)}`,
-        );
+      // Triage returns either the new object form
+      // `{ "keep": [seq…], "destructive": [seq…] }` or, for backward-compat, a
+      // bare `[seq…]` array (treated as keep-only). `destructive` ⊆ keep.
+      const isNumArray = (v: unknown): v is number[] =>
+        Array.isArray(v) && v.every((s) => typeof s === 'number');
+      let keepSeqs: number[] | undefined;
+      let destructiveSeqs: number[] = [];
+
+      const objText = extractJsonObject(result.text);
+      if (objText) {
+        try {
+          const o = JSON.parse(objText) as { keep?: unknown; destructive?: unknown };
+          if (isNumArray(o.keep)) {
+            keepSeqs = o.keep;
+            if (isNumArray(o.destructive)) destructiveSeqs = o.destructive;
+          }
+        } catch {
+          // fall through to the bare-array form
+        }
       }
 
-      let seqs: unknown;
-      try {
-        seqs = JSON.parse(arrayText);
-      } catch (err) {
-        throw new Error(
-          `Triage response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${arrayText.slice(0, 500)}`,
-        );
+      if (keepSeqs === undefined) {
+        const arrayText = extractJsonArray(result.text);
+        if (!arrayText) {
+          throw new Error(
+            `Triage LLM did not return JSON (expected {keep,destructive} or [seq…]).\nRaw response:\n${result.text.slice(0, 1000)}`,
+          );
+        }
+        let seqs: unknown;
+        try {
+          seqs = JSON.parse(arrayText);
+        } catch (err) {
+          throw new Error(
+            `Triage response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${arrayText.slice(0, 500)}`,
+          );
+        }
+        if (!isNumArray(seqs)) {
+          throw new Error(
+            `Triage response is not an array of numbers.\nParsed: ${JSON.stringify(seqs).slice(0, 500)}`,
+          );
+        }
+        keepSeqs = seqs;
       }
 
-      if (!Array.isArray(seqs) || !seqs.every((s) => typeof s === 'number')) {
-        throw new Error(
-          `Triage response is not an array of numbers.\nParsed: ${JSON.stringify(seqs).slice(0, 500)}`,
-        );
-      }
-
-      const selectedSet = new Set([...(seqs as number[]), ...preserveSeqs]);
+      const selectedSet = new Set([...keepSeqs, ...preserveSeqs]);
+      // Destructive ⊆ kept; preserve-seqs (login etc.) are never destructive.
+      const destructiveSet = new Set(destructiveSeqs.filter((s) => selectedSet.has(s)));
       const triaged: Session = {
         ...session,
-        requests: session.requests.filter((r) => selectedSet.has(r.seq)),
+        requests: session.requests
+          .filter((r) => selectedSet.has(r.seq))
+          .map((r) => (destructiveSet.has(r.seq) ? { ...r, destructive: true } : r)),
       };
 
-      log(`triage selected ${selectedSet.size} requests out of ${candidates.length} candidates`);
+      log(
+        `triage selected ${selectedSet.size} requests out of ${candidates.length} candidates (${destructiveSet.size} destructive)`,
+      );
 
       setSpanAttributes(span, {
         'imprint.requests_compacted': metadata.length,
         'imprint.requests_selected': selectedSet.size,
+        'imprint.requests_destructive': destructiveSet.size,
         'imprint.triage.duration_ms': result.durationMs,
         'imprint.triage.input_tokens': result.inputTokens,
         'imprint.triage.output_tokens': result.outputTokens,
@@ -427,6 +461,7 @@ export async function triageRequests(
       return {
         session: triaged,
         selectedSeqs: [...selectedSet],
+        destructiveSeqs: [...destructiveSet],
         consideredCount: candidates.length,
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
@@ -593,9 +628,15 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
       ...(opts.sharedContext?.loginRequestSeqs ?? []),
     ]);
     const finalSeqs = new Set([...opts.preTriagedSession.selectedSeqs, ...preserveSeqs]);
+    // Carry the shared triage's destructive classification onto this session so
+    // compile flags the matching workflow request (this path filters the raw
+    // session, which has no flags of its own).
+    const destructiveSet = new Set(opts.preTriagedSession.destructiveSeqs ?? []);
     session = {
       ...session,
-      requests: session.requests.filter((r) => finalSeqs.has(r.seq)),
+      requests: session.requests
+        .filter((r) => finalSeqs.has(r.seq))
+        .map((r) => (destructiveSet.has(r.seq) ? { ...r, destructive: true } : r)),
     };
     log('using shared triage result (skipping per-tool triage LLM call)');
     triageTokens = {
