@@ -293,9 +293,9 @@ interface InputProvenance {
 /** An opaque, machine-minted identifier — not human-typed text. Vendor-agnostic:
  *  keyed on structure (no whitespace, long enough, mixes character classes or is
  *  a delimited handle), not on any specific id format. Excludes free text
- *  ("chicago loop", "Budget"), ISO dates, and bare counts so they never trip it,
- *  while still catching namespaced handles ("/m/0gz469", "ns/abc123"), hex ids
- *  ("0x88..."), UUIDs, place tokens, and base64-ish session handles. */
+ *  (multi-word phrases, single dictionary words), ISO dates, and bare counts so
+ *  they never trip it, while still catching namespaced handles ("ns/abc123"),
+ *  hex ids, UUIDs, and base64-ish session handles. */
 function isIdLike(v: string): boolean {
   if (/\s/.test(v)) return false; // free text has spaces
   if (v.length < 6) return false; // too short to be an opaque handle

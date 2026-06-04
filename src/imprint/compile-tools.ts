@@ -203,7 +203,8 @@ function buildReadSessionSummaryTool(session: Session, context: CompileToolConte
       // Input-value provenance: positions in a load-bearing request whose value
       // is an opaque id minted by an earlier response (not the user's text). The
       // agent must CHAIN+CAPTURE these, not freeze them or substitute raw param
-      // text — e.g. a location resolved to a KG mid; text-only would geo-default.
+      // text — substituting raw text where a resolved id belongs makes the
+      // backend ignore the input and fall back to a default scope.
       // Scan the candidate's full seq set (capped), not just the representative
       // one: the representative may be a first text-only request whose response
       // mints the id, with the id only appearing in a later sibling request.
