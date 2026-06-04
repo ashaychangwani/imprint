@@ -40,9 +40,26 @@ const InvocationSchema = z.object({
   reason: z.string().default(''),
 });
 
+/** Per-parameter differential verdict. The auditor calls the tool once at a
+ *  baseline, then once with ONLY this parameter changed to a value expected to
+ *  alter the result, and compares:
+ *   - `works`       — the result changed as the description promises.
+ *   - `no_op`       — the result was unchanged → the parameter is inert.
+ *   - `broken`      — the result changed wrongly (corrupted/emptied/nonsense).
+ *   - `untestable`  — no distinct valid value could be constructed, or the tool
+ *                     is state-changing / bot-defended so probing is unsafe.
+ *  `works` grades correct; `no_op`/`broken` grade as defects ("no-op is not a
+ *  free pass"); `untestable` is surfaced but not scored. */
+const ParameterAuditSchema = z.object({
+  name: z.string(),
+  verdict: z.enum(['works', 'no_op', 'broken', 'untestable']),
+  reason: z.string().default(''),
+});
+
 const ToolAuditSchema = z.object({
   name: z.string(),
   invocations: z.array(InvocationSchema).default([]),
+  parameters: z.array(ParameterAuditSchema).default([]),
 });
 
 /** The single JSON object the auditor returns. Scoring is NOT taken from the
@@ -61,6 +78,12 @@ interface AuditScore {
   infra: number;
   badParams: number;
   graded: number;
+  /** Per-parameter differential tallies (folded into correct/broken/graded
+   *  above; broken out here for the report). `untestable` is surfaced only. */
+  paramsWorking: number;
+  paramsNoOp: number;
+  paramsBroken: number;
+  paramsUntestable: number;
   /** `timeout` is set by `runAudit` (not `computeAuditScore`) when the session
    *  was killed by the deadline guard — a cut-off run is never a trustworthy
    *  pass, even if the partial verdicts would have scored one. */
@@ -70,10 +93,13 @@ interface AuditScore {
 /**
  * Pure, deterministic scoring over the model's verdicts.
  *
- * - `correct` / `tool_broken` are the only graded verdicts; `graded` is their
- *   sum and the score's denominator. `infra` (anti-bot / rate-limit / network /
- *   timeout) and `bad_params` (the auditor's own mistake) are excluded so a
- *   blocked or misused tool isn't counted as a code bug.
+ * - `correct` / `tool_broken` invocation verdicts grade core tool behavior; the
+ *   per-parameter differential verdicts grade each advertised parameter and fold
+ *   into the SAME accumulator: `works` → correct, `no_op`/`broken` → broken
+ *   ("no-op is not a free pass"), `untestable` → surfaced but not scored.
+ *   `graded` is correct + broken (invocations + params). `infra` (anti-bot /
+ *   rate-limit / network / timeout) and `bad_params` (the auditor's own mistake)
+ *   are excluded so a blocked or misused tool isn't counted as a code bug.
  * - `score = 100 * correct / graded` (0 when nothing was gradeable).
  * - Verdict: no gradeable invocations → `inconclusive` (re-run / site blocked
  *   us, not a code fail). Otherwise `pass` requires both `score >= minScore`
@@ -94,6 +120,10 @@ export function computeAuditScore(report: AuditReport, minScore: number): AuditS
   let broken = 0;
   let infra = 0;
   let badParams = 0;
+  let paramsWorking = 0;
+  let paramsNoOp = 0;
+  let paramsBroken = 0;
+  let paramsUntestable = 0;
   let gradeableTools = 0;
   for (const tool of report.tools) {
     let toolGradeable = 0;
@@ -115,6 +145,28 @@ export function computeAuditScore(report: AuditReport, minScore: number): AuditS
           break;
       }
     }
+    for (const param of tool.parameters) {
+      switch (param.verdict) {
+        case 'works':
+          paramsWorking++;
+          correct++;
+          toolGradeable++;
+          break;
+        case 'no_op':
+          paramsNoOp++;
+          broken++;
+          toolGradeable++;
+          break;
+        case 'broken':
+          paramsBroken++;
+          broken++;
+          toolGradeable++;
+          break;
+        case 'untestable':
+          paramsUntestable++;
+          break;
+      }
+    }
     if (toolGradeable > 0) gradeableTools++;
   }
   const graded = correct + broken;
@@ -128,7 +180,19 @@ export function computeAuditScore(report: AuditReport, minScore: number): AuditS
   } else {
     verdict = 'fail';
   }
-  return { score, correct, broken, infra, badParams, graded, verdict };
+  return {
+    score,
+    correct,
+    broken,
+    infra,
+    badParams,
+    graded,
+    paramsWorking,
+    paramsNoOp,
+    paramsBroken,
+    paramsUntestable,
+    verdict,
+  };
 }
 
 /** Tools the auditor could never grade (every invocation was infra/bad_params,
@@ -140,6 +204,23 @@ export function ungradeableToolNames(report: AuditReport): string[] {
       (t) => !t.invocations.some((i) => i.verdict === 'correct' || i.verdict === 'tool_broken'),
     )
     .map((t) => t.name);
+}
+
+/** Advertised parameters the auditor could not differentially test (opaque enum
+ *  with no constructible value, or a state-changing/bot-defended tool). Surfaced
+ *  so an unverifiable parameter is visible rather than silently passing. */
+export function untestableParams(
+  report: AuditReport,
+): Array<{ tool: string; name: string; reason: string }> {
+  const out: Array<{ tool: string; name: string; reason: string }> = [];
+  for (const tool of report.tools) {
+    for (const param of tool.parameters) {
+      if (param.verdict === 'untestable') {
+        out.push({ tool: tool.name, name: param.name, reason: param.reason });
+      }
+    }
+  }
+  return out;
 }
 
 interface RunAuditOptions {
@@ -239,6 +320,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       //       `ungradeableTools` / `unverifiedAndUngradeable` for visibility
       //       without spoiling a verdict the score honestly earned.
       const ungradeableNames = ungradeableToolNames(drive.report);
+      const untestableParamList = untestableParams(drive.report);
       const unverifiedAndUngradeable = tools
         .filter((t) => t.workflow.liveVerified === false)
         .map((t) => t.workflow.toolName)
@@ -285,6 +367,10 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         'imprint.audit.infra': score.infra,
         'imprint.audit.bad_params': score.badParams,
         'imprint.audit.graded': score.graded,
+        'imprint.audit.params_working': score.paramsWorking,
+        'imprint.audit.params_no_op': score.paramsNoOp,
+        'imprint.audit.params_broken': score.paramsBroken,
+        'imprint.audit.params_untestable': score.paramsUntestable,
         'imprint.audit.tool_count': toolCount,
         'imprint.audit.verdict': score.verdict,
         'imprint.audit.unverified_and_ungradeable_count': unverifiedAndUngradeable.length,
@@ -310,6 +396,8 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         site: opts.site,
         toolCount,
         ungradeableTools: ungradeableNames,
+        /** Advertised parameters the auditor could not differentially test. */
+        untestableParams: untestableParamList,
         /** Tools that shipped without live verification at compile time AND
          *  could not be graded at audit time — zero live signal anywhere. */
         unverifiedAndUngradeable,
@@ -339,6 +427,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
           transcriptPath,
           costUsd: drive.totalCostUsd,
           unverifiedAndUngradeable,
+          report: drive.report,
         });
       }
 
@@ -445,11 +534,11 @@ async function driveAudit(opts: DriveAuditOptions): Promise<DriveAuditResult> {
 
   const unverifiedNote =
     opts.unverifiedParams.length > 0
-      ? `\n\nThese parameters shipped WITHOUT a passing compile-time verification (their effect could not be confirmed against live data): ${opts.unverifiedParams
+      ? `\n\nThese parameters shipped WITHOUT a passing compile-time verification, so they are the HIGHEST priority for your per-parameter differential pass: ${opts.unverifiedParams
           .map((u) => `${u.tool}(${u.params.join(', ')})`)
           .join(
             '; ',
-          )}. Where the tool is a cheap read not behind an anti-bot/rate defense, probe them — call with and without each one and check the response changes; classify a param with no effect as \`tool_broken\`. But do NOT per-param-probe a state-changing or bot-defended tool (see the ONE-invocation rule above): the probe burst would tarpit the whole audit. For those, the single realistic invocation stands and the unverified params simply remain unverified — that is expected, not a failure.`
+          )}. Give each one a \`parameters\` verdict (works / no_op / broken / untestable) like any other — do not let an unverified parameter pass without a differential test. (Per the ONE-invocation rule, a state-changing or bot-defended tool is the exception: mark its parameters \`untestable\` rather than probing.)`
       : '';
 
   const initialPrompt = `Audit every MCP tool connected to you for the site "${opts.site}".
@@ -814,6 +903,7 @@ function printSummary(
     transcriptPath?: string;
     costUsd?: number | null;
     unverifiedAndUngradeable: string[];
+    report: AuditReport;
   },
 ): void {
   const pct = score.graded === 0 ? 'n/a' : `${score.score.toFixed(1)}%`;
@@ -824,6 +914,27 @@ function printSummary(
   console.log(
     `[imprint]   graded ${score.graded} of ${score.correct + score.broken + score.infra + score.badParams} invocation(s) across ${toolCount} tool(s) — excluded: ${score.infra} infra, ${score.badParams} bad_params`,
   );
+  const paramsTested = score.paramsWorking + score.paramsNoOp + score.paramsBroken;
+  if (paramsTested + score.paramsUntestable > 0) {
+    console.log(
+      `[imprint]   parameters: ${score.paramsWorking}/${paramsTested} working — ${score.paramsNoOp} no-op, ${score.paramsBroken} broken, ${score.paramsUntestable} untestable`,
+    );
+    // Per the "no-op/untested isn't a free pass" rule: list every parameter that
+    // did not cleanly work, with the auditor's evidence, so the operator sees
+    // exactly which advertised parameters don't function.
+    for (const tool of extra.report.tools) {
+      const flagged = tool.parameters.filter((p) => p.verdict !== 'works');
+      if (flagged.length === 0) continue;
+      const working = tool.parameters.filter((p) => p.verdict === 'works').length;
+      console.log(`[imprint]     ${tool.name} (${working}/${tool.parameters.length} working):`);
+      for (const p of flagged) {
+        const mark = p.verdict === 'untestable' ? '⚪' : '✗';
+        console.log(
+          `[imprint]       ${mark} ${p.name} — ${p.verdict}: ${p.reason || '(no reason)'}`,
+        );
+      }
+    }
+  }
   if (extra.costUsd != null) {
     console.log(`[imprint]   cost ≈ $${extra.costUsd.toFixed(2)}`);
   }
