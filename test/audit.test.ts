@@ -6,6 +6,7 @@ import {
   computeAuditScore,
   extractReport,
   ungradeableToolNames,
+  untestableParams,
 } from '../src/imprint/audit.ts';
 
 /** Build a report from a flat list of verdicts spread across one tool. */
@@ -184,6 +185,107 @@ describe('computeAuditScore', () => {
     expect(score.score).toBe(100);
     expect(score.verdict).toBe('pass');
   });
+
+  it('folds parameter verdicts into the score: works=correct, no_op/broken=defect', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [{ params: {}, ok: true, verdict: 'correct', reason: '' }],
+          parameters: [
+            { name: 'a', verdict: 'works', reason: 'filtered' },
+            { name: 'b', verdict: 'works', reason: 'sorted' },
+            { name: 'c', verdict: 'no_op', reason: 'unchanged' },
+            { name: 'd', verdict: 'broken', reason: 'collapsed to 67' },
+          ],
+        },
+      ],
+    });
+    const score = computeAuditScore(report, 95);
+    // 1 correct invocation + 2 works params = 3 correct; 2 defect params = 2 broken.
+    expect(score.correct).toBe(3);
+    expect(score.broken).toBe(2);
+    expect(score.graded).toBe(5);
+    expect(score.paramsWorking).toBe(2);
+    expect(score.paramsNoOp).toBe(1);
+    expect(score.paramsBroken).toBe(1);
+    expect(score.score).toBe(60);
+    expect(score.verdict).toBe('fail');
+  });
+
+  it('excludes untestable parameters from the denominator (surfaced only)', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [
+            { params: {}, ok: true, verdict: 'correct', reason: '' },
+            { params: {}, ok: true, verdict: 'correct', reason: '' },
+          ],
+          parameters: [
+            { name: 'a', verdict: 'works', reason: '' },
+            { name: 'b', verdict: 'untestable', reason: 'opaque enum' },
+          ],
+        },
+      ],
+    });
+    const score = computeAuditScore(report, 95);
+    // 2 correct inv + 1 works = 3 correct; untestable excluded → graded 3.
+    expect(score.correct).toBe(3);
+    expect(score.graded).toBe(3);
+    expect(score.paramsUntestable).toBe(1);
+    expect(score.score).toBe(100);
+    expect(score.verdict).toBe('pass');
+  });
+
+  it('counts a tool gradeable via parameters alone toward the signal floor', () => {
+    // No gradeable invocation, but a works param makes the tool gradeable.
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [{ params: {}, ok: false, verdict: 'infra', reason: '' }],
+          parameters: [
+            { name: 'a', verdict: 'works', reason: '' },
+            { name: 'b', verdict: 'works', reason: '' },
+          ],
+        },
+      ],
+    });
+    const score = computeAuditScore(report, 95);
+    // floor = max(2, gradeableTools=1) = 2; graded 2 clears it.
+    expect(score.correct).toBe(2);
+    expect(score.graded).toBe(2);
+    expect(score.score).toBe(100);
+    expect(score.verdict).toBe('pass');
+  });
+});
+
+describe('untestableParams', () => {
+  it('lists every untestable parameter with its tool and reason', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [],
+          parameters: [
+            { name: 'a', verdict: 'works', reason: '' },
+            { name: 'brands', verdict: 'untestable', reason: 'no enum exposed' },
+          ],
+        },
+        {
+          name: 'book',
+          invocations: [],
+          parameters: [{ name: 'seat', verdict: 'untestable', reason: 'state-changing tool' }],
+        },
+      ],
+    });
+    const out = untestableParams(report);
+    expect(out).toEqual([
+      { tool: 'search', name: 'brands', reason: 'no enum exposed' },
+      { tool: 'book', name: 'seat', reason: 'state-changing tool' },
+    ]);
+  });
 });
 
 describe('ungradeableToolNames', () => {
@@ -220,6 +322,35 @@ describe('AuditReportSchema', () => {
     expect(parsed.notes).toBe('');
     expect(parsed.tools[0]?.invocations[0]?.params).toEqual({});
     expect(parsed.tools[0]?.invocations[0]?.reason).toBe('');
+    // parameters omitted entirely → defaults to [] (back-compat with old reports)
+    expect(parsed.tools[0]?.parameters).toEqual([]);
+  });
+
+  it('parses a parameters array and defaults each reason', () => {
+    const parsed = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search_x',
+          invocations: [{ ok: true, verdict: 'correct' }],
+          parameters: [{ name: 'sort', verdict: 'no_op' }],
+        },
+      ],
+    });
+    expect(parsed.tools[0]?.parameters[0]?.verdict).toBe('no_op');
+    expect(parsed.tools[0]?.parameters[0]?.reason).toBe('');
+  });
+
+  it('rejects an invalid parameter verdict value', () => {
+    const result = AuditReportSchema.safeParse({
+      tools: [
+        {
+          name: 'search_x',
+          invocations: [],
+          parameters: [{ name: 'sort', verdict: 'kinda_works' }],
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
   });
 
   it('defaults tools and invocations to empty arrays', () => {
