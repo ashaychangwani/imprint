@@ -266,12 +266,13 @@ export function endpointsForSeqs(session: Session, seqs: number[]): Set<string> 
 //
 // The grounding above covers params the user *toggled* (filters/sort). It does
 // not cover a primary param whose value is an opaque id the request can't carry
-// as plain text — e.g. a place/location resolved to a Knowledge-Graph mid, an
-// account id, a session-scoped object handle. The compile agent historically
-// shipped these as the raw param text, which the backend silently ignores
-// (Google geo-defaults a text-only location to the caller's IP city). The id was
+// as plain text — e.g. an entity/object handle, an account id, a place/geo id, a
+// category token. The compile agent historically shipped these as the raw param
+// text, which the backend silently ignores and falls back to a default (an
+// unfiltered/global result set, or a server-chosen default scope). The id was
 // never the user's text; it was *minted by an earlier response* and chained into
-// the request. That cross-request data-flow is the signal this detects.
+// the request. That cross-request data-flow is the signal this detects — keyed
+// on structure, not any vendor's id format.
 
 interface InputProvenance {
   /** JSON path into the decoded request body where the minted value sits. */
@@ -289,15 +290,22 @@ interface InputProvenance {
   selfChain: boolean;
 }
 
-/** An opaque, machine-minted identifier — not human-typed text. Excludes plain
- *  words (no spaces required, must mix classes / match a known id shape) so a
- *  free-text param like "chicago loop" never trips it. */
+/** An opaque, machine-minted identifier — not human-typed text. Vendor-agnostic:
+ *  keyed on structure (no whitespace, long enough, mixes character classes or is
+ *  a delimited handle), not on any specific id format. Excludes free text
+ *  ("chicago loop", "Budget"), ISO dates, and bare counts so they never trip it,
+ *  while still catching namespaced handles ("/m/0gz469", "ns/abc123"), hex ids
+ *  ("0x88..."), UUIDs, place tokens, and base64-ish session handles. */
 function isIdLike(v: string): boolean {
-  return (
-    /^\/(m|g)\/[\w-]+$/.test(v) || // Google Knowledge-Graph mid (/m/..., /g/...)
-    /^0x[0-9a-f]{6,}/i.test(v) || // hex feature id (ftid)
-    (/^[A-Za-z0-9_:.-]{10,}$/.test(v) && /[A-Za-z]/.test(v) && /\d/.test(v)) // long opaque token
-  );
+  if (/\s/.test(v)) return false; // free text has spaces
+  if (v.length < 6) return false; // too short to be an opaque handle
+  if (/^\d{4}-\d{2}-\d{2}([T ]|$)/.test(v)) return false; // ISO date / datetime
+  const hasLetter = /[A-Za-z]/.test(v);
+  const hasDigit = /\d/.test(v);
+  const hasIdPunct = /[/:_.+=~-]/.test(v); // namespaced / delimited handle
+  // Opaque if it mixes letters+digits (a token), or is a delimited handle that
+  // still carries an alphanumeric payload. A bare word or a pure number is not.
+  return (hasLetter && hasDigit) || (hasIdPunct && (hasLetter || hasDigit));
 }
 
 function responseBodyOf(req: CapturedRequest): string | undefined {

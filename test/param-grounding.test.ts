@@ -134,4 +134,34 @@ describe('inputProvenance', () => {
     const p = inputProvenance(chainSession, [10]);
     expect(p).toHaveLength(0);
   });
+
+  // Generalization guards: the id-like test is structural (vendor-agnostic), not
+  // a list of known id formats. It must still exclude values that merely happen
+  // to be echoed from a response — ISO dates and plain words — and must catch a
+  // generic opaque handle (UUID) with no Google-specific shape.
+  function chainOf(value: string): Session {
+    return {
+      ...session,
+      requests: [
+        reqWithResp(10, freq(['q', null]), `)]}'\n[["wrb.fr",null,"[[\\"${value}\\"]]"]]`),
+        reqWithResp(30, freq(['q', [value]]), '{}'),
+      ],
+      events: [],
+    } as unknown as Session;
+  }
+
+  it('does not flag a chained ISO date (not an opaque id)', () => {
+    expect(inputProvenance(chainOf('2026-07-03'), [30])).toHaveLength(0);
+  });
+
+  it('does not flag a chained plain word like a brand name', () => {
+    expect(inputProvenance(chainOf('Budget'), [30])).toHaveLength(0);
+  });
+
+  it('flags a generic UUID handle (structural, no vendor-specific shape)', () => {
+    const p = inputProvenance(chainOf('550e8400-e29b-41d4-a716-446655440000'), [30]);
+    expect(p).toHaveLength(1);
+    expect(p[0]?.valueSample).toBe('550e8400-e29b-41d4-a716-446655440000');
+    expect(p[0]?.selfChain).toBe(true);
+  });
 });
