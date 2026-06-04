@@ -21,14 +21,14 @@
 
 import type { CapturedRequest, Session } from './types.ts';
 
-export interface GroundingChange {
+interface GroundingChange {
   /** JSON path into the decoded request body, e.g. "[1][4][3]". */
   path: string;
   before: string;
   after: string;
 }
 
-export interface EventGrounding {
+interface EventGrounding {
   eventSeq: number;
   /** Human label from the event detail (button text / aria-label / id). */
   label: string;
@@ -122,7 +122,7 @@ export function structuralDiff(
 
 /** A stable key grouping "comparable" requests: the batchexecute rpcid when
  *  present, else METHOD + URL path (query stripped). */
-export function endpointKey(req: CapturedRequest): string {
+function endpointKey(req: CapturedRequest): string {
   const url = req.url ?? '';
   const rpc = /[?&]rpcids=([^&]+)/.exec(url);
   if (rpc) return `rpc:${decodeURIComponent(rpc[1] ?? '')}`;
@@ -273,7 +273,7 @@ export function endpointsForSeqs(session: Session, seqs: number[]): Set<string> 
 // never the user's text; it was *minted by an earlier response* and chained into
 // the request. That cross-request data-flow is the signal this detects.
 
-export interface InputProvenance {
+interface InputProvenance {
   /** JSON path into the decoded request body where the minted value sits. */
   path: string;
   /** Example resolved value (truncated). Varies per call — the PATH is the signal. */
