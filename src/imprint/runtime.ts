@@ -224,28 +224,42 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
     let resp: Response;
-    try {
-      resp = await fetchFn(subbed.url, {
-        method: subbed.method,
-        headers: subbed.headers,
-        body: subbed.body,
-        signal: controller.signal,
-        redirect: 'follow',
-      });
-    } catch (err) {
+    if (req.destructive && process.env.IMPRINT_DRY_RUN_DESTRUCTIVE === '1') {
+      // Destructive-action kill-switch for teach compile-verify + audit only
+      // (these contexts set IMPRINT_DRY_RUN_DESTRUCTIVE; production never does).
+      // A request flagged `destructive` (place order, charge, delete) is NOT
+      // issued — return a synthetic 200 so the tool completes structurally
+      // without triggering the real, irreversible side effect. Production runs
+      // it for real, since that is the tool's purpose.
       clearTimeout(timeoutHandle);
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('aborted') || msg.includes('AbortError')) {
-        return {
-          ok: false,
-          error: 'NETWORK',
-          message: `Request ${i} timed out after ${timeoutMs}ms`,
-          remediation: 'Retry, or increase the timeout if the endpoint is slow.',
-        };
+      resp = new Response(JSON.stringify({ imprintDryRun: true, skipped: 'destructive' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    } else {
+      try {
+        resp = await fetchFn(subbed.url, {
+          method: subbed.method,
+          headers: subbed.headers,
+          body: subbed.body,
+          signal: controller.signal,
+          redirect: 'follow',
+        });
+      } catch (err) {
+        clearTimeout(timeoutHandle);
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('aborted') || msg.includes('AbortError')) {
+          return {
+            ok: false,
+            error: 'NETWORK',
+            message: `Request ${i} timed out after ${timeoutMs}ms`,
+            remediation: 'Retry, or increase the timeout if the endpoint is slow.',
+          };
+        }
+        return { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` };
       }
-      return { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` };
+      clearTimeout(timeoutHandle);
     }
-    clearTimeout(timeoutHandle);
 
     if (resp.status === 401) {
       const text = await safeText(resp);
