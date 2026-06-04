@@ -911,10 +911,14 @@ function printSummary(
   console.log(
     `[imprint]   score ${pct} (${score.correct} correct / ${score.broken} broken; threshold ${opts.minScore}%)`,
   );
-  console.log(
-    `[imprint]   graded ${score.graded} of ${score.correct + score.broken + score.infra + score.badParams} invocation(s) across ${toolCount} tool(s) — excluded: ${score.infra} infra, ${score.badParams} bad_params`,
-  );
+  // `score.correct`/`score.broken` now blend invocation and parameter verdicts;
+  // split them back out so this line counts only actual tool calls.
   const paramsTested = score.paramsWorking + score.paramsNoOp + score.paramsBroken;
+  const invGraded = score.graded - paramsTested;
+  const invTotal = invGraded + score.infra + score.badParams;
+  console.log(
+    `[imprint]   graded ${score.graded} unit(s) = ${invGraded}/${invTotal} invocation(s) + ${paramsTested} parameter(s) across ${toolCount} tool(s) — excluded: ${score.infra} infra, ${score.badParams} bad_params, ${score.paramsUntestable} untestable param(s)`,
+  );
   if (paramsTested + score.paramsUntestable > 0) {
     console.log(
       `[imprint]   parameters: ${score.paramsWorking}/${paramsTested} working — ${score.paramsNoOp} no-op, ${score.paramsBroken} broken, ${score.paramsUntestable} untestable`,
@@ -926,7 +930,9 @@ function printSummary(
       const flagged = tool.parameters.filter((p) => p.verdict !== 'works');
       if (flagged.length === 0) continue;
       const working = tool.parameters.filter((p) => p.verdict === 'works').length;
-      console.log(`[imprint]     ${tool.name} (${working}/${tool.parameters.length} working):`);
+      // Denominator excludes untestable params, matching the top-level line.
+      const tested = tool.parameters.filter((p) => p.verdict !== 'untestable').length;
+      console.log(`[imprint]     ${tool.name} (${working}/${tested} working):`);
       for (const p of flagged) {
         const mark = p.verdict === 'untestable' ? '⚪' : '✗';
         console.log(
