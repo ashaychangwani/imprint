@@ -53,7 +53,7 @@ import {
   isTeachCompatibleProvider,
 } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
-import { muteLog, unmuteLog } from './log.ts';
+import { createLog, muteLog, unmuteLog } from './log.ts';
 import { MultiProgress } from './multi-progress.ts';
 import { localSiteDir, localToolDir } from './paths.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
@@ -108,6 +108,9 @@ export { buildTeachStateFromSession, resolveTeachStatePath } from './teach-state
  * still use concurrency 1.
  */
 const COMPILE_CONCURRENCY = 2;
+
+/** Module logger — suppressed during teach's spinner phases via muteLog(). */
+const log = createLog('teach');
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -1111,7 +1114,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
   }
 
-  if (plans.length > 1) muteLog();
+  // Mute raw `[imprint …]` logs from the compile subtree while the spinner /
+  // MultiProgress is live. This covers single-tool runs too: they drive the
+  // shared spinner and would otherwise leak compile.ts diagnostics into it,
+  // just as concurrent multi-tool runs would interleave their logs.
+  muteLog();
   let results: TeachToolResult[];
   try {
     results = await compileCandidatePlans({
@@ -1132,7 +1139,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       sharedModules: sharedModulesManifest.length > 0 ? sharedModulesManifest : undefined,
     });
   } finally {
-    if (plans.length > 1) unmuteLog();
+    unmuteLog();
   }
 
   if (results.length === 0) {
@@ -2492,9 +2499,7 @@ async function writeQuickBackendsCache(workflowDir: string, workflow: Workflow):
         },
       };
       writeFileSync(backendsPath, `${JSON.stringify(cache, null, 2)}\n`);
-      process.stderr.write(
-        `[imprint teach] backend probe: fetch blocked → wrote ${backendsPath}\n`,
-      );
+      log(`backend probe: fetch blocked → wrote ${backendsPath}`);
     }
   } catch {
     // Fetch failed (timeout, network error) — don't write cache, let runtime discover
