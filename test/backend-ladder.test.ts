@@ -14,8 +14,8 @@ import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
-  __setProbeTimeoutMsForTest,
   __setCdpJarMinterForTest,
+  __setProbeTimeoutMsForTest,
   effectiveAutoLadder,
   evaluateBootstrapCapture,
   pickBaseUrl,
@@ -1154,7 +1154,9 @@ describe('effectiveAutoLadder + prefersCdpReplayFirst (Fix 4 — cdp-replay rung
 });
 
 describe('pickBaseUrl', () => {
-  function toolWith(requests: Array<{ method: string; url: string; headers?: Record<string, string> }>): ResolvedTool {
+  function toolWith(
+    requests: Array<{ method: string; url: string; headers?: Record<string, string> }>,
+  ): ResolvedTool {
     return {
       site: 'test',
       dir: '/tmp/test',
@@ -1171,7 +1173,11 @@ describe('pickBaseUrl', () => {
 
   it('uses Referer header when available', () => {
     const tool = toolWith([
-      { method: 'POST', url: 'https://example.com/api/data', headers: { Referer: 'https://example.com/app/page' } },
+      {
+        method: 'POST',
+        url: 'https://example.com/api/data',
+        headers: { Referer: 'https://example.com/app/page' },
+      },
     ]);
     expect(pickBaseUrl(tool)).toBe('https://example.com/app/page');
   });
@@ -1196,7 +1202,11 @@ describe('pickBaseUrl', () => {
   it('prefers Referer from a later request over skipping logic', () => {
     const tool = toolWith([
       { method: 'GET', url: 'https://example.com/version.json' },
-      { method: 'POST', url: 'https://example.com/api/data', headers: { Referer: 'https://example.com/booking/page' } },
+      {
+        method: 'POST',
+        url: 'https://example.com/api/data',
+        headers: { Referer: 'https://example.com/booking/page' },
+      },
     ]);
     expect(pickBaseUrl(tool)).toBe('https://example.com/booking/page');
   });
@@ -1210,9 +1220,7 @@ describe('pickBaseUrl', () => {
   });
 
   it('uses origin for single API request with no Referer', () => {
-    const tool = toolWith([
-      { method: 'POST', url: 'https://example.com/api/booking/search?q=1' },
-    ]);
+    const tool = toolWith([{ method: 'POST', url: 'https://example.com/api/booking/search?q=1' }]);
     expect(pickBaseUrl(tool)).toBe('https://example.com');
   });
 

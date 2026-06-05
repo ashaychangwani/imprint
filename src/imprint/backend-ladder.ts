@@ -1096,7 +1096,7 @@ export function pickBaseUrl(tool: ResolvedTool): string {
   // safest bootstrap target. The homepage loads the full SPA shell
   // with Akamai/Cloudflare/DataDome sensor scripts, minting a valid
   // _abck cookie that covers all paths under that origin.
-  const firstUrl = requests[0]!.url;
+  const firstUrl = requests[0]?.url;
   try {
     const u = new URL(firstUrl);
     return u.origin;
@@ -1294,7 +1294,10 @@ export async function runWorkflowWithLadder(opts: {
 
     type ProbeEntry = { backend: ConcreteBackend; result: LadderResult; durationMs: number };
     const winners = settled
-      .filter((s): s is PromiseFulfilledResult<ProbeEntry> => s.status === 'fulfilled' && s.value.result.result.ok)
+      .filter(
+        (s): s is PromiseFulfilledResult<ProbeEntry> =>
+          s.status === 'fulfilled' && s.value.result.result.ok,
+      )
       .map((s) => s.value)
       .sort((a, b) => a.durationMs - b.durationMs);
 
@@ -1330,10 +1333,10 @@ export async function runWorkflowWithLadder(opts: {
   // wrap around so every rung remains reachable. The winner is tried first
   // (the optimization), but if it fails the remaining rungs catch it.
   const idx = ladder.indexOf(memoWinner);
-  const memoLadder = idx > 0
-    ? [...ladder.slice(idx), ...ladder.slice(0, idx)]
-    : ladder;
-  log(`compile memo: ${memoKey} previously succeeded via ${memoWinner}; ladder: ${memoLadder.join(' → ')}`);
+  const memoLadder = idx > 0 ? [...ladder.slice(idx), ...ladder.slice(0, idx)] : ladder;
+  log(
+    `compile memo: ${memoKey} previously succeeded via ${memoWinner}; ladder: ${memoLadder.join(' → ')}`,
+  );
   const result = await runWithLadder(memoLadder, tool, opts.params, assetRoot, stealthCache, {
     skipBootstrapSplice: true,
     cdpPool,
