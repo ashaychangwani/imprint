@@ -55,15 +55,20 @@ export class MultiProgress {
   }
 
   private redraw(): void {
+    const cols = process.stderr.columns || 80;
     let buf = '';
     if (this.renderedCount > 0) {
       buf += `\x1b[${this.renderedCount}F`;
     }
     buf += '\x1b[J';
+    let physicalLines = 0;
     for (const [, msg] of this.lines) {
-      buf += `│  ${msg}\n`;
+      const line = `│  ${msg}`;
+      const truncated = line.length >= cols ? line.slice(0, cols - 1) : line;
+      buf += `${truncated}\n`;
+      physicalLines += 1;
     }
     process.stderr.write(buf);
-    this.renderedCount = this.lines.size;
+    this.renderedCount = physicalLines;
   }
 }
