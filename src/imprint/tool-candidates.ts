@@ -182,24 +182,54 @@ export async function detectToolCandidates(
         `detecting candidate tools from ${payload.events.length} event(s), ${payload.requests.length} request(s)…`,
       );
       const llm = resolveProvider(llmConfig ?? {});
-      const result = await llm.analyze(systemPrompt, payload);
-      const objectText = extractJsonObject(result.text);
-      if (!objectText) {
-        throw new Error(
-          `Candidate detector did not return a JSON object.\nRaw response:\n${result.text.slice(0, 1000)}`,
+      const runOnce = async (): Promise<{
+        detection: ToolCandidateDetection;
+        result: Awaited<ReturnType<typeof llm.analyze>>;
+      }> => {
+        const result = await llm.analyze(systemPrompt, payload);
+        const objectText = extractJsonObject(result.text);
+        if (!objectText) {
+          throw new Error(
+            `Candidate detector did not return a JSON object.\nRaw response:\n${result.text.slice(0, 1000)}`,
+          );
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(objectText);
+        } catch (err) {
+          throw new Error(
+            `Candidate detector response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${objectText.slice(0, 1000)}`,
+          );
+        }
+        return { detection: validateToolCandidateDetection(parsed), result };
+      };
+
+      let { detection, result } = await runOnce();
+
+      // Anti-collapse guard: a single candidate from a session that hit multiple
+      // distinct endpoint families is almost always under-segmentation (the
+      // detector folded separate tools — e.g. search vs pricing vs autocomplete —
+      // into one). This is pure LLM variance; re-run once and keep the richer
+      // segmentation. Targeted so genuinely single-tool sites don't pay for it.
+      if (detection.candidates.length === 1 && distinctEndpointFamilies(payload) >= 2) {
+        log(
+          'detector returned 1 candidate but the session spans ≥2 endpoint families — re-running once to guard against under-segmentation…',
         );
+        try {
+          const retry = await runOnce();
+          if (retry.detection.candidates.length > detection.candidates.length) {
+            log(`retry segmented into ${retry.detection.candidates.length} candidates; using it`);
+            ({ detection, result } = retry);
+          } else {
+            log('retry did not segment further; keeping the original detection');
+          }
+        } catch (err) {
+          log(
+            `retry failed (${err instanceof Error ? err.message : String(err)}); keeping original`,
+          );
+        }
       }
 
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(objectText);
-      } catch (err) {
-        throw new Error(
-          `Candidate detector response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${objectText.slice(0, 1000)}`,
-        );
-      }
-
-      const detection = validateToolCandidateDetection(parsed);
       setSpanAttributes(span, {
         'imprint.candidate_count': detection.candidates.length,
         'imprint.primary_tool_name': detection.candidates.find((c) => c.primary)?.toolName,
@@ -372,6 +402,33 @@ function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
   ];
 }
 
+/** Telemetry / beacon endpoints. These fire constantly during any real session
+ *  and are never the load-bearing request behind a user intent. Left in the
+ *  candidate payload they add noise that pushes the detector to under-segment,
+ *  and — worse — the detector can anchor a candidate's `requestSeqs` on one
+ *  (e.g. Google's `/log`), sending compile to reverse-engineer a beacon. Excluded
+ *  entirely. The boundary lookahead keeps `/login`, `/catalog`, etc. safe. */
+const TELEMETRY_PATH =
+  /\/(log|gen_204|jserror|ping|beacon|csi|batchlog|metrics|stats|collect|analytics|adsct|pagead|ccm)(?=$|[/?])/i;
+
+/** Count distinct endpoint families (batchexecute rpcid, else METHOD+path) that
+ *  carry a non-trivial number of requests. ≥2 means the session genuinely hit
+ *  multiple backends — a single detected candidate there signals under-
+ *  segmentation. */
+function distinctEndpointFamilies(payload: ToolCandidatePayload): number {
+  const counts = new Map<string, number>();
+  for (const r of payload.requests) {
+    const url = safeUrl(r.url);
+    if (!url) continue;
+    const rpc = /[?&]rpcids?=([^&]+)/.exec(url.search)?.[1];
+    const key = rpc ? `rpc:${decodeURIComponent(rpc)}` : `${r.method} ${url.pathname}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  let families = 0;
+  for (const c of counts.values()) if (c >= 3) families++;
+  return families;
+}
+
 function isCandidateRequest(
   request: CapturedRequest,
   startRoot: string | null,
@@ -380,6 +437,7 @@ function isCandidateRequest(
   if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
   const url = safeUrl(request.url);
   if (!url) return false;
+  if (TELEMETRY_PATH.test(url.pathname)) return false;
   if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) {
     return appApiHosts.has(url.hostname);
   }

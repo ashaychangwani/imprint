@@ -56,6 +56,56 @@ describe('tool candidate payload', () => {
     expect(payload.requests[1]?.likelyLoginOrAuth).toBe(false);
   });
 
+  it('excludes same-site telemetry/beacon endpoints (/log, /gen_204) from the payload', () => {
+    const telemetrySession: Session = {
+      ...session,
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://www.example.com/log?format=json&hasfast=true',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 204, headers: {}, body: '' },
+        },
+        {
+          seq: 2,
+          timestamp: 200,
+          method: 'GET',
+          url: 'https://www.example.com/gen_204?foo=bar',
+          headers: {},
+          resourceType: 'XHR',
+          response: { status: 204, headers: {}, body: '' },
+        },
+        {
+          seq: 3,
+          timestamp: 300,
+          method: 'GET',
+          url: 'https://www.example.com/search?q=test',
+          headers: {},
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: '{"items":[]}' },
+        },
+        {
+          seq: 4,
+          timestamp: 400,
+          method: 'GET',
+          url: 'https://www.example.com/login', // must NOT be excluded by the /log rule
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{}' },
+        },
+      ],
+    };
+    const payload = buildToolCandidatePayload(telemetrySession);
+    const seqs = payload.requests.map((r) => r.seq);
+    expect(seqs).toContain(3); // real search kept
+    expect(seqs).toContain(4); // /login kept (word-boundary guard)
+    expect(seqs).not.toContain(1); // /log dropped
+    expect(seqs).not.toContain(2); // /gen_204 dropped
+  });
+
   it('keeps cross-domain auth setup requests while dropping unrelated third parties', () => {
     const crossDomainAuthSession: Session = {
       ...session,
