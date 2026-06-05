@@ -786,8 +786,14 @@ async function runCdpReplay(
       } catch {
         // best-effort
       }
-    } else if (ownsSession) {
-      await cf.close();
+    } else {
+      if (ownsSession) {
+        await cf.close();
+      } else if (cdpPool) {
+        cdpPool.delete(poolKey);
+        log('cdp-replay: evicted degraded session from pool');
+        await cf.close();
+      }
     }
 
     return result;
@@ -1319,11 +1325,7 @@ export async function runWorkflowWithLadder(opts: {
       return best.result;
     }
 
-    // All failed — log full diagnostics so the compile agent can act on them
     log(`parallel probe: all backends failed\n  ${digest.join('\n  ')}`);
-    const last = settled[settled.length - 1];
-    if (last?.status === 'fulfilled') return last.value.result;
-    // All threw — return a synthetic error
     return {
       result: {
         ok: false as const,

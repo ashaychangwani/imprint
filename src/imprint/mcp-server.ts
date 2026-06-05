@@ -167,18 +167,17 @@ function buildServer(
       if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
         const prev = cdpIdleTimers.get(tool.site);
         if (prev) clearTimeout(prev);
-        cdpIdleTimers.set(
-          tool.site,
-          setTimeout(() => {
-            const cf = cdpPool.get(tool.site);
-            if (cf) {
-              log(`closing idle CDP session for ${tool.site}`);
-              cf.close().catch(() => {});
-              cdpPool.delete(tool.site);
-              cdpIdleTimers.delete(tool.site);
-            }
-          }, CDP_IDLE_TIMEOUT_MS),
-        );
+        const timer = setTimeout(() => {
+          const cf = cdpPool.get(tool.site);
+          if (cf) {
+            log(`closing idle CDP session for ${tool.site}`);
+            cf.close().catch(() => {});
+            cdpPool.delete(tool.site);
+            cdpIdleTimers.delete(tool.site);
+          }
+        }, CDP_IDLE_TIMEOUT_MS);
+        timer.unref();
+        cdpIdleTimers.set(tool.site, timer);
       }
       if (!result.ok) {
         const text = formatToolError(result);
