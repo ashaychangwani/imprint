@@ -90,6 +90,77 @@ export function __setProbeTimeoutMsForTest(ms: number | null): void {
   probeTimeoutMsForTest = ms;
 }
 
+/** Backend preference for the compile parallel-probe winner, LOWER = preferred.
+ *  `fetch` first (cheapest, no browser). Among the browser-backed rungs prefer
+ *  `cdp-replay` over `stealth-fetch`: cdp-replay's cold start is a one-time cost
+ *  (the pool keeps Chrome warm so later calls are ~2-5s) and it is the more
+ *  anti-bot-robust path (real Chrome re-validating its sensor between calls), so
+ *  it shouldn't lose the probe just because stealth's FIRST call clocked faster. */
+const BACKEND_PROBE_RANK: Record<string, number> = {
+  fetch: 0,
+  'cdp-replay': 1,
+  'stealth-fetch': 2,
+};
+
+/** Pick the parallel-probe winner among backends that returned real data: prefer
+ *  by `BACKEND_PROBE_RANK` (fetch < cdp-replay < stealth-fetch), with first-call
+ *  duration only as a tiebreak — so when both browser backends succeed, the
+ *  warm-poolable cdp-replay wins instead of stealth's faster cold call. Pure +
+ *  exported for unit testing. */
+export function pickProbeWinner<T extends { backend: ConcreteBackend; durationMs: number }>(
+  winners: T[],
+): T | undefined {
+  return [...winners].sort((a, b) => {
+    const ra = BACKEND_PROBE_RANK[a.backend] ?? 9;
+    const rb = BACKEND_PROBE_RANK[b.backend] ?? 9;
+    return ra !== rb ? ra - rb : a.durationMs - b.durationMs;
+  })[0];
+}
+
+/** Process-global CDP pool for the compile/test path (`runWorkflowWithLadder`).
+ *  cdp-replay stores its live Chrome here on success so subsequent calls within
+ *  the same `bun test` process reuse it (~2-5s vs ~33s cold start) — the same
+ *  mechanism as the runtime pool in mcp-server.ts. An idle timer (re)armed after
+ *  every call closes each browser shortly after the LAST call, so the host
+ *  process drains and exits cleanly (no leak, no hang) without a per-call drain.
+ *  Per-process: concurrent compile lanes are separate `bun test` processes, so
+ *  this is never shared across lanes; never consulted by production replay. */
+const compileCdpPool = new Map<string, CdpBrowserFetch>();
+const compileCdpIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const COMPILE_CDP_IDLE_MS = 15_000;
+
+/** Cancel pending idle-closes — called when a new call is about to reuse the pool. */
+function clearCompileCdpIdle(): void {
+  for (const t of compileCdpIdleTimers.values()) clearTimeout(t);
+  compileCdpIdleTimers.clear();
+}
+
+/** (Re)arm an idle-close timer for every pooled browser. If no further call
+ *  reuses the pool within COMPILE_CDP_IDLE_MS, the browser is closed + evicted so
+ *  the event loop drains and the process exits. The timer is intentionally NOT
+ *  unref'd: closing the browser is what lets the process exit, so the teardown
+ *  must be guaranteed to fire. */
+function armCompileCdpIdleClose(): void {
+  clearCompileCdpIdle();
+  for (const [site, cf] of compileCdpPool) {
+    const timer = setTimeout(() => {
+      compileCdpPool.delete(site);
+      compileCdpIdleTimers.delete(site);
+      // Close releases the websocket + Chrome child handles so the event loop
+      // drains and the host process exits (mirrors mcp-server's idle close).
+      void cf.close().catch(() => {});
+    }, COMPILE_CDP_IDLE_MS);
+    compileCdpIdleTimers.set(site, timer);
+  }
+}
+
+/** Test isolation: cancel idle timers + drop pooled browsers (best-effort close). */
+export function __resetCompileCdpPoolForTest(): void {
+  clearCompileCdpIdle();
+  for (const cf of compileCdpPool.values()) void cf.close().catch(() => {});
+  compileCdpPool.clear();
+}
+
 /** Freshness window for the file-backed compile-time stealth token. Matches
  *  stealth-fetch's in-process `maxTokenAgeSeconds` default so a reused token is
  *  not immediately considered stale by `createStealthFetch`. */
@@ -317,12 +388,19 @@ export async function runWithLadder(
       attempts,
     };
   }
+  const lastBackend = effectiveLadder[effectiveLadder.length - 1] ?? 'fetch';
+  // Be accurate about ladder size: the parallel probe calls this with SINGLE-rung
+  // ladders, so "every backend escalated" was misleading (it described one rung,
+  // e.g. fetch-only, as if the whole ladder gave up — and fooled the integration
+  // classifier). Only say "all rungs" when there really was more than one.
   log(
-    `every backend escalated; returning last error from ${effectiveLadder[effectiveLadder.length - 1]}`,
+    effectiveLadder.length === 1
+      ? `${lastBackend}: exhausted (no fallback rung in this ladder); returning its error`
+      : `ladder exhausted: all ${effectiveLadder.length} rungs escalated (${effectiveLadder.join(' → ')}); returning last error from ${lastBackend}`,
   );
   return {
     result: lastResult,
-    usedBackend: effectiveLadder[effectiveLadder.length - 1] ?? 'fetch',
+    usedBackend: lastBackend,
     attempts,
   };
 }
@@ -1234,130 +1312,147 @@ export async function runWorkflowWithLadder(opts: {
     // will lazily bootstrap (same behavior as before this optimization).
   }
 
-  // Process-scoped CDP pool for compile-time: keeps Chrome alive across calls
-  // within the same `bun test` process so cdp-replay is ~2-5s after the first
-  // ~35s cold start (same mechanism as the runtime pool in mcp-server.ts).
-  const cdpPool = new Map<string, CdpBrowserFetch>();
+  // Reuse the process-global compile CDP pool so cdp-replay stays warm (~2-5s)
+  // across this `bun test` process's calls; cancel any pending idle-close now
+  // that we're about to use it again. The pool is torn down by an idle timer
+  // (armed in `finally`) shortly after the LAST call — see compileCdpPool.
+  const cdpPool = compileCdpPool;
+  clearCompileCdpIdle();
 
   try {
-    await paceCompileRequest(new URL(pickBaseUrl(tool)).origin);
-  } catch {
-    // no parseable base URL → nothing to pace
-  }
-
-  // ── First call: parallel probe (45s deadline) ───────────────────────────
-  // Race non-overlapping backends so a tarpitted rung doesn't block a
-  // faster one. fetch-bootstrap is excluded: it launches Chrome to the
-  // same origin as cdp-replay, and two simultaneous Chromes trip Akamai's
-  // concurrent-session detection. cdp-replay is strictly better when both
-  // need Chrome; if fetch wins, fetch-bootstrap is unnecessary anyway.
-  //
-  // Uses Promise.allSettled (NOT Promise.any) deliberately: a fast OK from
-  // a lower rung (e.g. fetch returning a cached/stale 200) may not be the
-  // best result — we need all backends to settle so we can pick the
-  // fastest *correct* one. The tradeoff is wall-clock: the probe blocks
-  // until the slowest backend resolves (or hits the deadline). cdp-replay
-  // is slow on its first cold start (~33s) but subsequent calls reuse the
-  // CDP pool and complete in ~2-5s — so the first probe pays the cost but
-  // all later calls benefit from having discovered the right rung.
-  //
-  // The compile agent's integration tests MUST use a timeout >= 60s (the
-  // compile-agent.md prompt recommends this) so the test process survives
-  // the full probe duration. A 30s test timeout kills the probe before
-  // cdp-replay can finish its cold start.
-  //
-  // Each bun-test subprocess is a fresh process (memo empty), so the
-  // compile agent's iteration loop re-probes after every workflow change —
-  // no premature lock-in.
-  if (!memoWinner) {
-    const PROBE_TIMEOUT_MS = probeTimeoutMsForTest ?? 45_000;
-    const probeBackends: ConcreteBackend[] = ['fetch', 'cdp-replay', 'stealth-fetch'];
-
-    const settled = await Promise.allSettled(
-      probeBackends.map(async (b) => {
-        const t0 = Date.now();
-        const r = await Promise.race([
-          runWithLadder([b], tool, opts.params, assetRoot, stealthCache, {
-            skipBootstrapSplice: true,
-            cdpPool,
-          }),
-          sleepMs(PROBE_TIMEOUT_MS).then(
-            () =>
-              ({
-                result: { ok: false, error: 'NETWORK', message: 'probe deadline exceeded' },
-                usedBackend: b,
-                attempts: [],
-              }) as LadderResult,
-          ),
-        ]);
-        return { backend: b, result: r, durationMs: Date.now() - t0 };
-      }),
-    );
-
-    const digest = settled.map((s, i) => {
-      const b = probeBackends[i];
-      if (s.status === 'rejected')
-        return `${b}: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`.slice(
-          0,
-          120,
-        );
-      const { result: lr, durationMs } = s.value;
-      return lr.result.ok
-        ? `${b}: OK in ${durationMs}ms`
-        : `${b}: ${lr.result.error} — ${lr.result.message.slice(0, 200)} (${durationMs}ms)`;
-    });
-
-    type ProbeEntry = { backend: ConcreteBackend; result: LadderResult; durationMs: number };
-    const winners = settled
-      .filter(
-        (s): s is PromiseFulfilledResult<ProbeEntry> =>
-          s.status === 'fulfilled' && s.value.result.result.ok,
-      )
-      .map((s) => s.value)
-      .sort((a, b) => a.durationMs - b.durationMs);
-
-    const best = winners[0];
-    if (best) {
-      compileWinningBackend.set(memoKey, best.backend);
-      log(
-        `parallel probe: winner=${best.backend} (${best.durationMs}ms)\n  ${digest.join('\n  ')}`,
-      );
-      return best.result;
+    try {
+      await paceCompileRequest(new URL(pickBaseUrl(tool)).origin);
+    } catch {
+      // no parseable base URL → nothing to pace
     }
 
-    log(`parallel probe: all backends failed\n  ${digest.join('\n  ')}`);
-    return {
-      result: {
-        ok: false as const,
-        error: 'NETWORK' as const,
-        message: `All backends failed during parallel probe: ${digest.join('; ')}`,
-      },
-      usedBackend: ladder[ladder.length - 1] ?? 'fetch',
-      attempts: [],
-    };
-  }
+    // ── First call: parallel probe (45s deadline) ───────────────────────────
+    // Race non-overlapping backends so a tarpitted rung doesn't block a
+    // faster one. fetch-bootstrap is excluded: it launches Chrome to the
+    // same origin as cdp-replay, and two simultaneous Chromes trip Akamai's
+    // concurrent-session detection. cdp-replay is strictly better when both
+    // need Chrome; if fetch wins, fetch-bootstrap is unnecessary anyway.
+    //
+    // Uses Promise.allSettled (NOT Promise.any) deliberately: a fast OK from
+    // a lower rung (e.g. fetch returning a cached/stale 200) may not be the
+    // best result — we need all backends to settle so we can pick the
+    // fastest *correct* one. The tradeoff is wall-clock: the probe blocks
+    // until the slowest backend resolves (or hits the deadline). cdp-replay
+    // is slow on its first cold start (~33s) but subsequent calls reuse the
+    // CDP pool and complete in ~2-5s — so the first probe pays the cost but
+    // all later calls benefit from having discovered the right rung.
+    //
+    // The compile agent's integration tests MUST use a timeout >= 60s (the
+    // compile-agent.md prompt recommends this) so the test process survives
+    // the full probe duration. A 30s test timeout kills the probe before
+    // cdp-replay can finish its cold start.
+    //
+    // Each bun-test subprocess is a fresh process (memo empty), so the
+    // compile agent's iteration loop re-probes after every workflow change —
+    // no premature lock-in.
+    if (!memoWinner) {
+      const PROBE_TIMEOUT_MS = probeTimeoutMsForTest ?? 45_000;
+      const probeBackends: ConcreteBackend[] = ['fetch', 'cdp-replay', 'stealth-fetch'];
 
-  // ── Memo hit: start at the memoized winner, keep all later rungs ─────
-  // Previous logic sliced earlier rungs away (`ladder.slice(idx)`), which
-  // dropped cdp-replay as a fallback when stealth-fetch (the last rung)
-  // was the winner. Now: reorder the ladder to start at the winner and
-  // wrap around so every rung remains reachable. The winner is tried first
-  // (the optimization), but if it fails the remaining rungs catch it.
-  const idx = ladder.indexOf(memoWinner);
-  const memoLadder = idx > 0 ? [...ladder.slice(idx), ...ladder.slice(0, idx)] : ladder;
-  log(
-    `compile memo: ${memoKey} previously succeeded via ${memoWinner}; ladder: ${memoLadder.join(' → ')}`,
-  );
-  const result = await runWithLadder(memoLadder, tool, opts.params, assetRoot, stealthCache, {
-    skipBootstrapSplice: true,
-    cdpPool,
-  });
-  if (result.result.ok) {
-    compileWinningBackend.set(memoKey, result.usedBackend);
-  } else {
-    compileWinningBackend.delete(memoKey);
+      const settled = await Promise.allSettled(
+        probeBackends.map(async (b) => {
+          const t0 = Date.now();
+          // Keep a handle to the real backend run (the race's non-timeout arm) so a
+          // backend that LOSES the deadline race — still launching Chrome in the
+          // background — gets settled and its pooled browser drained, not leaked,
+          // once the probe returns.
+          const inner = runWithLadder([b], tool, opts.params, assetRoot, stealthCache, {
+            skipBootstrapSplice: true,
+            cdpPool,
+          });
+          // A backend that finishes AFTER the probe returned (it lost the race but
+          // is still cold-starting Chrome) pools its browser late — arm the idle
+          // close so it's torn down rather than left lingering.
+          void inner.finally(() => armCompileCdpIdleClose());
+          const r = await Promise.race([
+            inner,
+            sleepMs(PROBE_TIMEOUT_MS).then(
+              () =>
+                ({
+                  result: { ok: false, error: 'NETWORK', message: 'probe deadline exceeded' },
+                  usedBackend: b,
+                  attempts: [],
+                }) as LadderResult,
+            ),
+          ]);
+          return { backend: b, result: r, durationMs: Date.now() - t0 };
+        }),
+      );
+
+      const digest = settled.map((s, i) => {
+        const b = probeBackends[i];
+        if (s.status === 'rejected')
+          return `${b}: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`.slice(
+            0,
+            120,
+          );
+        const { result: lr, durationMs } = s.value;
+        return lr.result.ok
+          ? `${b}: OK in ${durationMs}ms`
+          : `${b}: ${lr.result.error} — ${lr.result.message.slice(0, 200)} (${durationMs}ms)`;
+      });
+
+      type ProbeEntry = { backend: ConcreteBackend; result: LadderResult; durationMs: number };
+      const winners = settled
+        .filter(
+          (s): s is PromiseFulfilledResult<ProbeEntry> =>
+            s.status === 'fulfilled' && s.value.result.result.ok,
+        )
+        .map((s) => s.value);
+
+      const best = pickProbeWinner(winners);
+      if (best) {
+        compileWinningBackend.set(memoKey, best.backend);
+        log(
+          `parallel probe: winner=${best.backend} (${best.durationMs}ms)\n  ${digest.join('\n  ')}`,
+        );
+        return best.result;
+      }
+
+      log(`parallel probe: all backends failed\n  ${digest.join('\n  ')}`);
+      return {
+        result: {
+          ok: false as const,
+          error: 'NETWORK' as const,
+          message: `All backends failed during parallel probe: ${digest.join('; ')}`,
+        },
+        usedBackend: ladder[ladder.length - 1] ?? 'fetch',
+        attempts: [],
+      };
+    }
+
+    // ── Memo hit: start at the memoized winner, keep all later rungs ─────
+    // Previous logic sliced earlier rungs away (`ladder.slice(idx)`), which
+    // dropped cdp-replay as a fallback when stealth-fetch (the last rung)
+    // was the winner. Now: reorder the ladder to start at the winner and
+    // wrap around so every rung remains reachable. The winner is tried first
+    // (the optimization), but if it fails the remaining rungs catch it.
+    const idx = ladder.indexOf(memoWinner);
+    const memoLadder = idx > 0 ? [...ladder.slice(idx), ...ladder.slice(0, idx)] : ladder;
+    log(
+      `compile memo: ${memoKey} previously succeeded via ${memoWinner}; ladder: ${memoLadder.join(' → ')}`,
+    );
+    const result = await runWithLadder(memoLadder, tool, opts.params, assetRoot, stealthCache, {
+      skipBootstrapSplice: true,
+      cdpPool,
+    });
+    if (result.result.ok) {
+      compileWinningBackend.set(memoKey, result.usedBackend);
+    } else {
+      compileWinningBackend.delete(memoKey);
+    }
+    return result;
+  } finally {
+    // Keep the pool warm for the next call in this process; arm an idle-close so
+    // it's torn down shortly after the LAST call — that lets a raw `bun probe.ts`
+    // exit cleanly (no 30-min hang) and never leaks a browser.
+    armCompileCdpIdleClose();
   }
-  return result;
 }
 
 export interface RenderedRequest {

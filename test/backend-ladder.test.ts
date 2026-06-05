@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
+  __resetCompileCdpPoolForTest,
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
   __setCdpJarMinterForTest,
@@ -19,6 +20,7 @@ import {
   effectiveAutoLadder,
   evaluateBootstrapCapture,
   pickBaseUrl,
+  pickProbeWinner,
   prefersCdpReplayFirst,
   renderWorkflowRequests,
   resolveLadder,
@@ -63,6 +65,9 @@ afterEach(() => {
   __setCdpJarMinterForTest(null);
   __setCdpBrowserFetchFactoryForTest(null);
   __setProbeTimeoutMsForTest(null);
+  // The compile CDP pool is now process-global — reset it so a pooled browser /
+  // armed idle timer can't leak across tests.
+  __resetCompileCdpPoolForTest();
 });
 
 /**
@@ -145,6 +150,34 @@ describe('resolveLadder', () => {
 
   it('ignores the cached order when an explicit backend is named', () => {
     expect(resolveLadder('fetch', ['stealth-fetch', 'playbook'])).toEqual(['fetch']);
+  });
+});
+
+describe('pickProbeWinner (cdp-replay preferred over stealth-fetch)', () => {
+  it('prefers cdp-replay over a FASTER stealth-fetch — its cold start amortizes via the pool', () => {
+    const w = pickProbeWinner([
+      { backend: 'stealth-fetch' as const, durationMs: 1300 },
+      { backend: 'cdp-replay' as const, durationMs: 33000 },
+    ]);
+    expect(w?.backend).toBe('cdp-replay');
+  });
+
+  it('prefers fetch when it succeeded (cheapest, no browser)', () => {
+    const w = pickProbeWinner([
+      { backend: 'cdp-replay' as const, durationMs: 33000 },
+      { backend: 'fetch' as const, durationMs: 300 },
+      { backend: 'stealth-fetch' as const, durationMs: 1300 },
+    ]);
+    expect(w?.backend).toBe('fetch');
+  });
+
+  it('falls back to stealth-fetch when it is the only winner', () => {
+    const w = pickProbeWinner([{ backend: 'stealth-fetch' as const, durationMs: 1300 }]);
+    expect(w?.backend).toBe('stealth-fetch');
+  });
+
+  it('returns undefined when there are no winners', () => {
+    expect(pickProbeWinner([])).toBeUndefined();
   });
 });
 
