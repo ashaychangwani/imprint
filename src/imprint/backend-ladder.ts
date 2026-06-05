@@ -767,7 +767,10 @@ async function runCdpReplay(
       bootstrappedCredentials,
       bootstrapUrl ?? baseUrl,
     );
-    if (!captureResult.ok) return captureResult.result;
+    if (!captureResult.ok) {
+      if (ownsSession) await cf.close();
+      return captureResult.result;
+    }
 
     const result = await tool.toolFn(params, {
       credentials: bootstrappedCredentials,
@@ -776,7 +779,6 @@ async function runCdpReplay(
     });
 
     if (result.ok) {
-      // Store in pool for reuse (Chrome stays alive).
       if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
       try {
         const postJar = await cf.mintJar();
@@ -784,6 +786,8 @@ async function runCdpReplay(
       } catch {
         // best-effort
       }
+    } else if (ownsSession) {
+      await cf.close();
     }
 
     return result;
