@@ -1674,7 +1674,9 @@ async function siteReplayAndDiff(
 ): Promise<ClassifiedValue[] | undefined> {
   try {
     const { replayRawSession } = await import('./replay-capture.ts');
-    const { diffTriagedSessions, triageByAlignment } = await import('./session-diff.ts');
+    const { diffTriagedSessions, triageByAlignment, mergeClassifications } = await import(
+      './session-diff.ts'
+    );
 
     const session = loadJsonFile(
       sessionPath,
@@ -1717,9 +1719,49 @@ async function siteReplayAndDiff(
 
     mp.update('replay', 'Diffing replay against original...');
 
+    // Pass 1: original recording vs the automated browser replay.
     const triaged2Seqs = triageByAlignment(session.requests, replayRequests);
     const triaged2Requests = replayRequests.filter((r) => triaged2Seqs.includes(r.seq));
-    const diffResult = diffTriagedSessions(session, { requests: triaged2Requests });
+    const replayDiff = diffTriagedSessions(session, { requests: triaged2Requests });
+    const diffPasses: ClassifiedValue[][] = [replayDiff.classifications];
+
+    // Additional passes: original recording vs every OTHER real recording of
+    // this site. Real recordings come from a trusted browser, so they reproduce
+    // anti-bot-protected requests the automated replay may be blocked from
+    // making (e.g. Akamai denies Playwright at the page level). A value
+    // identical across time-separated recordings is static infrastructure
+    // (GraphQL safelisting signatures, persisted-query hashes, app keys) and
+    // must be kept even when the replay never observed it — see
+    // mergeClassifications. All passes share `session` as the original, so
+    // originalSeq aligns them.
+    let crossRecordingCount = 0;
+    try {
+      const sessionAbs = pathResolve(sessionPath);
+      const others = listSiteSessions(site).filter((s) => pathResolve(s.absPath) !== sessionAbs);
+      for (const info of others) {
+        try {
+          const other = loadJsonFile(
+            info.absPath,
+            SessionSchema,
+            { notFound: 'Other recording not found.' },
+            'session',
+          );
+          const seqs = triageByAlignment(session.requests, other.requests);
+          const reqs = other.requests.filter((r) => seqs.includes(r.seq));
+          diffPasses.push(diffTriagedSessions(session, { requests: reqs }).classifications);
+          crossRecordingCount++;
+        } catch {
+          // Skip a malformed sibling recording; the other passes still stand.
+        }
+      }
+    } catch {
+      // No sibling recordings available — replay-only classification stands.
+    }
+
+    const diffResult = {
+      ...replayDiff,
+      classifications: mergeClassifications(diffPasses),
+    };
 
     const classPath = pathJoin(localSiteDir(site), '.classifications.json');
     writeFileSync(classPath, JSON.stringify(diffResult, null, 2));
@@ -1727,6 +1769,10 @@ async function siteReplayAndDiff(
     mp.clear();
     mp.remove('replay');
 
+    const sourcesLabel =
+      crossRecordingCount > 0
+        ? `replay + ${crossRecordingCount} recording${crossRecordingCount === 1 ? '' : 's'}`
+        : 'replay';
     const nonConstant = diffResult.classifications.filter((c) => c.classification !== 'constant');
     if (nonConstant.length > 0) {
       const counts: Record<string, number> = {};
@@ -1735,10 +1781,12 @@ async function siteReplayAndDiff(
         .map(([k, v]) => `${v} ${k}`)
         .join(', ');
       p.log.info(
-        `Dual-pass: ${nonConstant.length} ephemeral values (${breakdown}). ${replayRequests.length} requests captured.`,
+        `Dual-pass (${sourcesLabel}): ${nonConstant.length} ephemeral values (${breakdown}). ${replayRequests.length} requests captured.`,
       );
     } else {
-      p.log.info(`Dual-pass: all values constant. ${replayRequests.length} requests captured.`);
+      p.log.info(
+        `Dual-pass (${sourcesLabel}): all values constant. ${replayRequests.length} requests captured.`,
+      );
     }
 
     mp.render();
