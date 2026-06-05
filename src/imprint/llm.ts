@@ -550,12 +550,20 @@ async function traceMessageWithTools(
           return `[${b.type}]`;
         })
         .join('\n');
+      const cacheReadTokens = response.usage.cache_read_input_tokens ?? undefined;
+      const cacheWriteTokens = response.usage.cache_creation_input_tokens ?? undefined;
       setSpanAttributes(span, {
         ...llmSpanAttributes({
           provider,
           model,
-          inputTokens: response.usage.input_tokens,
+          inputTokens: totalPromptTokens(
+            response.usage.input_tokens,
+            cacheReadTokens,
+            cacheWriteTokens,
+          ),
           outputTokens: response.usage.output_tokens,
+          cacheReadTokens,
+          cacheWriteTokens,
           stopReason: response.stop_reason,
           outputMessages: captureIo
             ? traceLlmMessages([{ role: 'assistant', content: outputText }])

@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { IS_COMPILED_BINARY } from './imprint/is-compiled.ts';
 import type { ProviderName } from './imprint/llm.ts';
 import { isDebug } from './imprint/log.ts';
-import { shutdownTracing, traced } from './imprint/tracing.ts';
+import { shutdownTracing, tracedWithCostRollup } from './imprint/tracing.ts';
 import { VERSION } from './imprint/version.ts';
 
 /** Load .env from the project root (next to src/) if present.
@@ -987,7 +987,7 @@ async function main(argv: string[]): Promise<number> {
       const { runAudit } = await import('./imprint/audit.ts');
       const { localAuditReportPath } = await import('./imprint/paths.ts');
       const outPath = values.out ?? localAuditReportPath(site);
-      const score = await traced(
+      const score = await tracedWithCostRollup(
         'cli.audit',
         'AGENT',
         {
@@ -1237,7 +1237,7 @@ async function main(argv: string[]): Promise<number> {
 
       try {
         const { teach } = await import('./imprint/teach.ts');
-        await traced(
+        await tracedWithCostRollup(
           'cli.teach',
           'AGENT',
           {

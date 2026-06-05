@@ -5,11 +5,10 @@
  * Cost is read from the `llm.cost.*` attributes the app already emits on its
  * spans (the single source of truth in src/imprint/tracing.ts) — this script
  * does NOT recompute cost from a private rate table, so it can never drift from
- * the app's pricing or miss a newly added model. Cost is emitted at exactly one
- * level per logical LLM op (the `compile.claude_cli_agent` aggregate, leaf
- * `llm.analyze` spans, the `audit.session` aggregate), so summing
- * `llm.cost.total` across every span in a trace gives the trace total without
- * double-counting.
+ * the app's pricing or miss a newly added model. Root spans (`cli.teach`,
+ * `cli.audit`) carry a rolled-up `llm.cost.total` from tracedWithCostRollup;
+ * this script reads from non-root spans to avoid double-counting against
+ * the leaf LLM/agent spans that feed the rollup.
  *
  * Usage: bun run scripts/analyze-phoenix.ts [--trace-id <id>] [--last <N>] [--kind teach|audit|all]
  */
@@ -134,12 +133,13 @@ function spanCostTotal(span: SpanNode): number | null {
   return attrNum(parseAttrs(span.attributes), 'llm.cost.total');
 }
 
-/** Sum emitted `llm.cost.total` across spans. Safe to sum across an entire trace:
- *  cost is emitted at exactly one level per logical LLM op, so there's no
- *  parent/child double-counting. */
+/** Sum emitted `llm.cost.total` across non-root spans. Root spans now carry a
+ *  rolled-up total from tracedWithCostRollup, so they must be excluded to avoid
+ *  double-counting against the leaf LLM/agent spans that feed the rollup. */
 function sumCostTotal(spans: SpanNode[]): number {
   let total = 0;
   for (const s of spans) {
+    if (!s.parentId) continue;
     const c = spanCostTotal(s);
     if (c != null) total += c;
   }
@@ -265,7 +265,8 @@ function printCompileSpan(span: SpanNode, allSpans: SpanNode[]): void {
 async function analyzeTrace(traceId: string) {
   const spans = await getTraceSpans(traceId);
   const root = spans.find((s) => !s.parentId);
-  const traceCost = sumCostTotal(spans);
+  const rootCost = root ? spanCostTotal(root) : null;
+  const traceCost = rootCost ?? sumCostTotal(spans);
 
   console.log(`\n${'═'.repeat(80)}`);
   console.log(`Trace: ${traceId}`);
