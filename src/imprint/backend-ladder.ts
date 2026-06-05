@@ -1096,13 +1096,18 @@ export function pickBaseUrl(tool: ResolvedTool): string {
   // safest bootstrap target. The homepage loads the full SPA shell
   // with Akamai/Cloudflare/DataDome sensor scripts, minting a valid
   // _abck cookie that covers all paths under that origin.
-  const firstUrl = requests[0]?.url;
+  const first = requests[0];
+  if (!first) {
+    throw new Error(
+      `Workflow ${tool.workflow.toolName} has no requests — unreachable after length check above.`,
+    );
+  }
   try {
-    const u = new URL(firstUrl);
+    const u = new URL(first.url);
     return u.origin;
   } catch {
     throw new Error(
-      `Could not parse bootstrap URL: ${firstUrl}\n→ check workflow.json — the first request URL must be absolute (https://...).`,
+      `Could not parse bootstrap URL: ${first.url}\n→ check workflow.json — the first request URL must be absolute (https://...).`,
     );
   }
 }
