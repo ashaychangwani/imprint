@@ -1717,8 +1717,16 @@ export function classifyIntegrationOutcome(input: {
     return { ...base, outcome: 'failed', captureFailName: null, captureFailFromKnown: false };
   }
   // Fix C — a STATE_MISSING traced to a declared capture is a workflow-correctness
-  // error, not infra; waiving it would silently ship a broken workflow.
-  const captureFailMatch = combined.match(/STATE_MISSING:\s*Required capture\s+"([^"]+)"/i);
+  // error, not infra; waiving it would silently ship a broken workflow. Match the
+  // EXACT runtime message (runtime.ts: `Required capture "<name>" (<source>) did
+  // not produce a value.`) — the error code prefix is separated by an em-dash, not
+  // a colon, so the old `STATE_MISSING:` regex never matched and these failures
+  // wrongly fell through to the anti-bot branch (shipped waived-bot instead of
+  // failed). Checked BEFORE the bot-defense branch so a capture-fail that also has
+  // an `_abck` line in the log is still classified `failed`, not waived.
+  const captureFailMatch = combined.match(
+    /Required capture\s+"([^"]+)"\s*\([^)]*\)\s*did not produce a value/i,
+  );
   if (captureFailMatch) {
     const name = captureFailMatch[1] ?? '';
     return {

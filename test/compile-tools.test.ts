@@ -1955,7 +1955,8 @@ describe('classifyIntegrationOutcome (Fix A — liveVerified decoupled from the 
     const v = classifyIntegrationOutcome({
       exitCode: 1,
       timedOut: false,
-      combined: 'STATE_MISSING: Required capture "csrf_token" returned null',
+      // The EXACT runtime message (em-dash separator + "(source) did not produce a value").
+      combined: 'STATE_MISSING — Required capture "csrf_token" (json) did not produce a value.',
       passedTests: new Set(),
       referencedStateBroken: false,
       failedCaptureNames: new Set(['csrf_token']),
@@ -1963,6 +1964,29 @@ describe('classifyIntegrationOutcome (Fix A — liveVerified decoupled from the 
     expect(v.outcome).toBe('failed');
     expect(v.captureFailName).toBe('csrf_token');
     expect(v.captureFailFromKnown).toBe(true);
+  });
+
+  it('a capture-fail is failed (not waived-bot) even when an _abck line is in the log', () => {
+    // Regression for marriott search_hotels: req1 placeId capture returned empty
+    // (a broken self-derived chain), all backends STATE_MISSING, but `_abck~-1~`
+    // was in the log. Must be `failed` (fix the workflow), NOT shipped waived-bot.
+    const combined = [
+      '[imprint backend] trying fetch…',
+      '[imprint cdp-browser] _abck status after interaction: ~-1~',
+      '[imprint backend] fetch: STATE_MISSING in 494ms — non-escalatable, returning',
+      'STATE_MISSING — Required capture "placeId" (json) did not produce a value.',
+      '[imprint backend] parallel probe: all backends failed',
+    ].join('\n');
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: false,
+      combined,
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.captureFailName).toBe('placeId');
+    expect(v.outcome).toBe('failed');
   });
 });
 
