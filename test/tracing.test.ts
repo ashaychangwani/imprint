@@ -279,4 +279,78 @@ describe('LLM trace usage and cost attributes', () => {
     const cacheBlindPrompt = ((uncached + cacheRead + cacheWrite) / 1e6) * 5;
     expect(attrs['llm.cost.prompt'] as number).toBeLessThan(cacheBlindPrompt / 3);
   });
+
+  it('emits cache cost detail attributes when cache tokens are present', () => {
+    const attrs = llmSpanAttributes({
+      provider: 'anthropic-api',
+      model: 'claude-sonnet-4-6',
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheReadTokens: 800_000,
+      cacheWriteTokens: 100_000,
+    });
+
+    // uncached = 1M - 800K - 100K = 100K
+    // cache read cost: 800K @ $3/M * 0.1 = $0.24
+    // cache write cost: 100K @ $3/M * 1.25 = $0.375
+    // uncached input cost: 100K @ $3/M = $0.30
+    expect(attrs['llm.cost.prompt_details.cache_read'] as number).toBeCloseTo(0.24, 4);
+    expect(attrs['llm.cost.prompt_details.cache_write'] as number).toBeCloseTo(0.375, 4);
+    expect(attrs['llm.cost.prompt_details.input'] as number).toBeCloseTo(0.3, 4);
+
+    // Token count details
+    expect(attrs['llm.token_count.prompt_details.cache_read']).toBe(800_000);
+    expect(attrs['llm.token_count.prompt_details.cache_write']).toBe(100_000);
+  });
+
+  it('omits cache detail attributes when no cache tokens are present', () => {
+    const attrs = llmSpanAttributes({
+      provider: 'anthropic-api',
+      model: 'claude-sonnet-4-6',
+      inputTokens: 500_000,
+      outputTokens: 100_000,
+    });
+
+    expect(attrs['llm.cost.prompt_details.cache_read']).toBeUndefined();
+    expect(attrs['llm.cost.prompt_details.cache_write']).toBeUndefined();
+    expect(attrs['llm.cost.prompt_details.input']).toBeUndefined();
+    expect(attrs['llm.token_count.prompt_details.cache_read']).toBeUndefined();
+    expect(attrs['llm.token_count.prompt_details.cache_write']).toBeUndefined();
+  });
+});
+
+describe('cost accumulator (tracedWithCostRollup internals)', () => {
+  // The accumulator is internal — tracedWithCostRollup wires it via
+  // AsyncLocalStorage. We test the public contract: llmSpanAttributes
+  // returns correct per-span cost, and the cache detail breakdown is present.
+  // The rollup is tested end-to-end via a real teach/audit run.
+
+  it('produces correct per-span costs for multiple independent calls', () => {
+    const call1 = llmSpanAttributes({
+      provider: 'anthropic-api',
+      model: 'claude-opus-4-8',
+      inputTokens: 100_000,
+      outputTokens: 10_000,
+      cacheReadTokens: 80_000,
+      cacheWriteTokens: 10_000,
+    });
+    const call2 = llmSpanAttributes({
+      provider: 'anthropic-api',
+      model: 'claude-sonnet-4-6',
+      inputTokens: 50_000,
+      outputTokens: 5_000,
+    });
+
+    expect(call1['llm.cost.total']).toBeGreaterThan(0);
+    expect(call2['llm.cost.total']).toBeGreaterThan(0);
+
+    // call1: uncached=10K@$5/M + cacheRead=80K@$0.5/M + cacheWrite=10K@$6.25/M + output=10K@$25/M
+    const expected1 =
+      (10_000 / 1e6) * 5 + (80_000 / 1e6) * 0.5 + (10_000 / 1e6) * 6.25 + (10_000 / 1e6) * 25;
+    expect(call1['llm.cost.total'] as number).toBeCloseTo(expected1, 4);
+
+    // call2: 50K@$3/M + output=5K@$15/M (no cache)
+    const expected2 = (50_000 / 1e6) * 3 + (5_000 / 1e6) * 15;
+    expect(call2['llm.cost.total'] as number).toBeCloseTo(expected2, 4);
+  });
 });
