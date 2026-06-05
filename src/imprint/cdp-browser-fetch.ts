@@ -107,7 +107,7 @@ export interface CdpBrowserFetchOptions {
   bootstrapUrl?: string;
   /** Seconds budget to validate _abck via interaction. Default 25. */
   abckWaitSeconds?: number;
-  /** Per-request in-page timeout (ms). Default 30000. */
+  /** Per-request in-page timeout (ms). Default 60000. */
   requestTimeoutMs?: number;
   /** Launch a visible window instead of headless. Default false (headless). Only
    *  needed as a fallback on a GPU-less host where headless WebGL falls back to
@@ -200,7 +200,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   const baseLooksLikeApi = /\.act(\?|$)|\/api\//i.test(opts.baseUrl);
   const navUrl = opts.bootstrapUrl ?? (baseLooksLikeApi ? `${baseOrigin}/` : opts.baseUrl);
   const abckWaitMs = (opts.abckWaitSeconds ?? 25) * 1000;
-  const reqTimeoutMs = opts.requestTimeoutMs ?? 30_000;
+  const reqTimeoutMs = opts.requestTimeoutMs ?? 60_000;
 
   let chrome: Awaited<ReturnType<typeof launchChromium>> | null = null;
   let client: CdpClient | null = null;

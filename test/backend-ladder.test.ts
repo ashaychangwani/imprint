@@ -14,6 +14,7 @@ import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
+  __setProbeTimeoutMsForTest,
   __setCdpJarMinterForTest,
   effectiveAutoLadder,
   evaluateBootstrapCapture,
@@ -52,12 +53,16 @@ beforeEach(() => {
   }));
   // Disable the compile-path .act rate gate so tests don't sleep between calls.
   process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '0';
+  // Shorten the parallel probe deadline so its setTimeout doesn't keep bun's
+  // event loop alive past the default 5s test timeout.
+  __setProbeTimeoutMsForTest(1_000);
 });
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   __setCdpJarMinterForTest(null);
   __setCdpBrowserFetchFactoryForTest(null);
+  __setProbeTimeoutMsForTest(null);
 });
 
 /**

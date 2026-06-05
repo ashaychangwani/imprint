@@ -85,6 +85,11 @@ export function __resetCompileWinningBackendForTest(): void {
   compileWinningBackend.clear();
 }
 
+let probeTimeoutMsForTest: number | null = null;
+export function __setProbeTimeoutMsForTest(ms: number | null): void {
+  probeTimeoutMsForTest = ms;
+}
+
 /** Freshness window for the file-backed compile-time stealth token. Matches
  *  stealth-fetch's in-process `maxTokenAgeSeconds` default so a reused token is
  *  not immediately considered stale by `createStealthFetch`. */
@@ -1238,7 +1243,7 @@ export async function runWorkflowWithLadder(opts: {
   // compile agent's iteration loop re-probes after every workflow change —
   // no premature lock-in.
   if (!memoWinner) {
-    const PROBE_TIMEOUT_MS = 45_000;
+    const PROBE_TIMEOUT_MS = probeTimeoutMsForTest ?? 45_000;
     const probeBackends: ConcreteBackend[] = ['fetch', 'cdp-replay', 'stealth-fetch'];
 
     const settled = await Promise.allSettled(
