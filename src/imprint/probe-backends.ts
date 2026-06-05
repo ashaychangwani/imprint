@@ -63,14 +63,17 @@ export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBa
 
   const params = resolveParams(tool, opts.paramOverrides);
 
-  log(`probing fetch / fetch-bootstrap / stealth-fetch / playbook for ${tool.workflow.toolName}…`);
+  log(`probing backends for ${tool.workflow.toolName}…`);
   log(`  params: ${JSON.stringify(params)}`);
 
   // Try every backend (single-rung ladders) — operators want the full
-  // matrix, not just the first that worked.
+  // matrix, not just the first that worked. cdp-replay is included so it
+  // lands in preferredOrder when it works — without it, runtime always
+  // falls through fetch-bootstrap (~30-60s) before reaching the spliced-in
+  // cdp-replay rung, wasting time on every call.
   const stealthCache = new Map<string, StealthFetch>();
   const allBackends: ConcreteBackend[] = workflowNeedsBootstrap(tool.workflow)
-    ? ['fetch', 'fetch-bootstrap', 'stealth-fetch', 'playbook']
+    ? ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']
     : ['fetch', 'stealth-fetch', 'playbook'];
   const results: BackendsCache['results'] = {};
   const working: ConcreteBackend[] = [];
