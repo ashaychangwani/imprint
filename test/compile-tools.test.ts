@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import {
   buildCompileTools,
+  classifyIntegrationOutcome,
   classifyParamCoverage,
   crossReferenceReferencedStateCaptures,
   detectTokenSources,
@@ -1806,6 +1807,10 @@ describe('isBotDefenseFailure', () => {
     ['DataDome', '403 Forbidden\nx-datadome: protected'],
     ['PerimeterX', '403 Forbidden — perimeterx px-captcha shown'],
     ['Akamai 403 challenge', '403 Forbidden: bot challenge from Akamai'],
+    [
+      'Akamai _abck unvalidated after interaction (200 soft-block)',
+      '[imprint cdp-browser] _abck status after interaction: ~-1~\n[imprint backend] fetch: OK in 1201ms\nworkflow returned no hotels',
+    ],
     ['429 rate limit', '429 Too Many Requests — rate limit exceeded'],
     ['generic access denied 403', '403 Forbidden: Access Denied'],
   ] as const;
@@ -1824,12 +1829,141 @@ describe('isBotDefenseFailure', () => {
     ['plain empty result', 'workflow returned { flights: [] } — no data for these inputs'],
     ['generic 500', '500 Internal Server Error'],
     ['ordinary redirect, no challenge', '302 Found\nlocation: https://example.com/results?page=2'],
+    // The bare re-mint log precedes a retry that often succeeds — it must NOT, on
+    // its own, be read as a block (only the post-interaction confirmation does).
+    [
+      'Akamai cached-jar re-mint log (precedes retry)',
+      '[imprint cdp-jar] cached jar not validated (_abck~-1~, no bm_sv) — re-mint',
+    ],
   ] as const;
   for (const [name, text] of notBlocked) {
     it(`does NOT treat "${name}" as bot defense`, () => {
       expect(isBotDefenseFailure(text)).toBe(false);
     });
   }
+});
+
+describe('classifyIntegrationOutcome (Fix A — liveVerified decoupled from the param suite)', () => {
+  // Faithful reproduction of the southwest search_flights verifier run that shipped
+  // liveVerified:false: fetch 403, but stealth-fetch AND cdp-replay BOTH returned
+  // real data and the probe picked a winner — then the paced param suite overran
+  // the verifier timeout and was SIGKILLed (timedOut), leaving a partial log whose
+  // lone fetch-403 used to be misread as a total bot block ⇒ waived-bot ⇒ false.
+  const WINNER_BUT_TIMED_OUT = [
+    '[imprint backend] trying fetch…',
+    '[imprint backend] trying cdp-replay…',
+    '[imprint backend] trying stealth-fetch…',
+    '[imprint backend] fetch: FORBIDDEN in 201ms — escalating',
+    '[imprint backend] stealth-fetch: OK in 16679ms',
+    '[imprint backend] cdp-replay: OK in 35137ms',
+    '[imprint backend] parallel probe: winner=stealth-fetch (16679ms)',
+    '  fetch: FORBIDDEN — Request 0 returned 403: { "code": 403050700 } (202ms)',
+    '  cdp-replay: OK in 35137ms',
+    '  stealth-fetch: OK in 16679ms',
+  ].join('\n');
+
+  it('keeps the baseline live-verified when a probe winner returned real data, despite a timeout', () => {
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: true,
+      combined: WINNER_BUT_TIMED_OUT,
+      passedTests: new Set(['baseline returns flights', 'param:origination_airport_code=OAK']),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    // The bug was: waived-bot ⇒ liveVerified:false. Now a backend demonstrably
+    // returned real data, so the baseline IS verified…
+    expect(v.baselineLiveVerified).toBe(true);
+    // …and a TIMEOUT is infra, never a bot block (the lone fetch-403 must not win).
+    expect(v.outcome).toBe('waived-infra');
+    // exhaustedBackends lists ONLY the rung that failed (fetch) — not cdp-replay /
+    // stealth-fetch, which succeeded.
+    expect(v.exhaustedBackends).toEqual(['fetch']);
+  });
+
+  it('detects the baseline via the probe-winner log even when JUnit is empty (timeout SIGKILL)', () => {
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: true,
+      combined: WINNER_BUT_TIMED_OUT,
+      passedTests: new Set(), // JUnit truncated/absent on a kill
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.baselineLiveVerified).toBe(true);
+  });
+
+  it('detects the baseline via a passing non-param JUnit test even without a winner line', () => {
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: false,
+      combined: '[imprint backend] fetch: NETWORK in 30000ms — escalating',
+      passedTests: new Set(['baseline returns real data']),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.baselineLiveVerified).toBe(true);
+  });
+
+  it('still waives liveVerified:false on a GENUINE total block — no winner, no baseline pass', () => {
+    const combined = [
+      '[imprint backend] trying fetch…',
+      '[imprint backend] fetch: FORBIDDEN in 180ms — escalating',
+      '[imprint backend] parallel probe: all backends failed',
+      '  fetch: FORBIDDEN — 403 Access Denied (180ms)',
+      '  stealth-fetch: FORBIDDEN — 403 (220ms)',
+    ].join('\n');
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: false,
+      combined,
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.baselineLiveVerified).toBe(false);
+    expect(v.outcome).toBe('waived-bot'); // 403 + access denied ⇒ bot defense
+  });
+
+  it('a timeout is infra even if the partial output has a fetch 403 (never a bot block)', () => {
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: true,
+      combined:
+        '[imprint backend] fetch: FORBIDDEN in 200ms — escalating\n  fetch: FORBIDDEN — 403 (200ms)',
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.outcome).toBe('waived-infra');
+  });
+
+  it('classifies a clean exit as passed + baseline verified', () => {
+    const v = classifyIntegrationOutcome({
+      exitCode: 0,
+      timedOut: false,
+      combined: '[imprint backend] fetch: OK in 300ms',
+      passedTests: new Set(['baseline', 'param:max_price=50']),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.outcome).toBe('passed');
+    expect(v.baselineLiveVerified).toBe(true);
+  });
+
+  it('classifies a declared-capture STATE_MISSING as failed (workflow bug, not waived)', () => {
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: false,
+      combined: 'STATE_MISSING: Required capture "csrf_token" returned null',
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(['csrf_token']),
+    });
+    expect(v.outcome).toBe('failed');
+    expect(v.captureFailName).toBe('csrf_token');
+    expect(v.captureFailFromKnown).toBe(true);
+  });
 });
 
 describe('crossReferenceReferencedStateCaptures (Fix 2)', () => {
