@@ -146,7 +146,12 @@ export async function runWithLadder(
   params: Record<string, string | number | boolean>,
   assetRoot: string,
   stealthCache: Map<string, StealthFetch>,
-  options?: { skipBootstrapSplice?: boolean },
+  options?: {
+    skipBootstrapSplice?: boolean;
+    /** Per-site CDP browser pool so cdp-replay reuses a live Chrome across
+     *  calls (~2-5s) instead of launching a fresh one each time (~33s). */
+    cdpPool?: Map<string, CdpBrowserFetch>;
+  },
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
     throw new Error('runWithLadder: empty ladder');
@@ -193,7 +198,7 @@ export async function runWithLadder(
           result = await runFetchBootstrap(tool, params);
           break;
         case 'cdp-replay':
-          result = await runCdpReplay(tool, params);
+          result = await runCdpReplay(tool, params, options?.cdpPool);
           break;
         case 'stealth-fetch': {
           const sf = ensureStealthFetch(tool, stealthCache);
@@ -331,7 +336,17 @@ export function effectiveAutoLadder(
   // costco — so we always splice now.)
   if (!next.includes('fetch-bootstrap')) {
     const fetchIdx = next.indexOf('fetch');
-    if (fetchIdx !== -1) next.splice(fetchIdx + 1, 0, 'fetch-bootstrap');
+    if (fetchIdx !== -1) {
+      next.splice(fetchIdx + 1, 0, 'fetch-bootstrap');
+    } else if (!next.includes('cdp-replay')) {
+      // `fetch` was probed-out (e.g. Akamai 403) and `cdp-replay` is not
+      // explicitly in the ladder. Splice fetch-bootstrap before stealth-fetch
+      // so the jar-based path gets a shot. When cdp-replay IS explicit, the
+      // probe already determined it's the right rung and fetch-bootstrap was
+      // exhausted — don't re-add a doomed 60s+ rung before it.
+      const sfIdx = next.indexOf('stealth-fetch');
+      if (sfIdx !== -1) next.splice(sfIdx, 0, 'fetch-bootstrap');
+    }
   }
   // Splice cdp-replay right after fetch-bootstrap. It runs the API requests IN a
   // live trusted Chrome so a protected POST's self-invalidated _abck is
@@ -671,6 +686,7 @@ async function runFetchBootstrap(
 async function runCdpReplay(
   tool: ResolvedTool,
   params: Record<string, string | number | boolean>,
+  cdpPool?: Map<string, CdpBrowserFetch>,
 ): Promise<ToolResult> {
   let baseUrl: string;
   try {
@@ -694,32 +710,34 @@ async function runCdpReplay(
     ? substituteString(tool.workflow.bootstrap.url, params, credentials, [])
     : undefined;
 
-  // Plant the user's recorded high-trust jar into the live page before navigating
-  // (a synthetic mint reaches _abck~0~ yet still tarpits .act; only the
-  // recording's earned trust sustains it). Reuse the cached jar; else seed one
-  // from the newest recording.
   const siteDir = pathResolve(tool.dir, '..');
-  let seedCookies: MintedJar['cookies'] | undefined;
-  try {
-    const rec = newestRecording(siteDir);
-    let cached = loadJar(siteDir);
-    if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
-    if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
-    if (cached?.cookies.length) seedCookies = cached.cookies;
-  } catch {
-    // best-effort — cdp-replay still works (lower trust) from a synthetic mint
-  }
+  const poolKey = tool.site;
+  const pooled = cdpPool?.get(poolKey);
+  const ownsSession = !pooled;
 
-  let cf: CdpBrowserFetch | undefined;
-  try {
+  let cf: CdpBrowserFetch;
+  if (pooled) {
+    log('cdp-replay: reusing pooled Chrome session');
+    cf = pooled;
+  } else {
+    let seedCookies: MintedJar['cookies'] | undefined;
+    try {
+      const rec = newestRecording(siteDir);
+      let cached = loadJar(siteDir);
+      if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
+      if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
+      if (cached?.cookies.length) seedCookies = cached.cookies;
+    } catch {
+      // best-effort
+    }
     cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({
       baseUrl,
       bootstrapUrl,
       seedCookies,
     });
-    // Navigate the bootstrap page, validate `_abck` via interaction, and harvest
-    // the live page HTML + session cookies. The browser stays OPEN (mintJar does
-    // not close it) so the in-page fetchImpl reuses the SAME trusted session.
+  }
+
+  try {
     const jar = await cf.mintJar();
     const bootstrappedCredentials: CredentialStore = {
       ...credentials,
@@ -746,16 +764,33 @@ async function runCdpReplay(
     );
     if (!captureResult.ok) return captureResult.result;
 
-    return await tool.toolFn(params, {
+    const result = await tool.toolFn(params, {
       credentials: bootstrappedCredentials,
       initialState: captureResult.state,
       fetchImpl: cf.fetchImpl,
     });
+
+    if (result.ok) {
+      // Store in pool for reuse (Chrome stays alive).
+      if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
+      try {
+        const postJar = await cf.mintJar();
+        saveJar(siteDir, postJar);
+      } catch {
+        // best-effort
+      }
+    }
+
+    return result;
   } catch (err) {
+    // Session is dead — evict from pool so the next call creates a fresh one.
+    if (cdpPool) {
+      cdpPool.delete(poolKey);
+      log('cdp-replay: evicted dead session from pool');
+    }
+    if (ownsSession) await cf.close();
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: 'NETWORK', message: `cdp-replay failed: ${msg}` };
-  } finally {
-    await cf?.close();
   }
 }
 
@@ -1017,32 +1052,51 @@ function ensureStealthFetch(tool: ResolvedTool, cache: Map<string, StealthFetch>
   return sf;
 }
 
-/** First request URL's origin — Akamai binds sensor tokens to that
- *  origin, and the origin is always literal (substitutions only appear
- *  after the domain in well-formed workflows). */
-function pickBaseUrl(tool: ResolvedTool): string {
-  const firstRequest = tool.workflow.requests[0];
-  if (!firstRequest) {
+/** Pick the URL to navigate when bootstrapping an anti-bot session.
+ *  Akamai binds sensor tokens to the origin+path the browser navigated
+ *  to, so we need an HTML page — not a JSON API endpoint.
+ *
+ *  Heuristic: skip leading requests whose path looks like a raw data
+ *  endpoint (.json, .xml, /api/, /version) — those return JSON/XML
+ *  without rendering an HTML page, so the anti-bot sensor JS never
+ *  fires and the _abck cookie stays unvalidated. Fall back to
+ *  requests[0] if every request looks like an API call. */
+export function pickBaseUrl(tool: ResolvedTool): string {
+  const requests = tool.workflow.requests;
+  if (!requests.length) {
     throw new Error(
       `Workflow ${tool.workflow.toolName} has no requests — stealth-fetch needs at least one request URL.\n→ re-record the session; recording probably stopped before any XHR fired.`,
     );
   }
-  // Strip query string but KEEP the path. Anti-bot services like Akamai
-  // can apply different protection profiles per URL path: navigating to
-  // the bare origin (e.g. https://www.costcotravel.com/) may trip a
-  // stricter challenge that RSTs the HTTP/2 stream, whereas the
-  // recorded landing path (e.g. /Rental-Cars) is exactly the URL the
-  // user reached during recording, so Akamai's bot-cookie minting
-  // behavior is known to work for it. URL resolution inside stealth-fetch
-  // uses `new URL(baseUrl).origin` regardless, so the path is only used
-  // for the bootstrap navigation target and Referer header — both of
-  // which are correct with the path included.
+
+  // Prefer the first request whose Referer is an HTML page — the Referer
+  // is the page the user was on when the API call fired, so it's the
+  // correct bootstrap target. Referer is set by the browser and always
+  // points to a real navigable page.
+  for (const req of requests) {
+    const referer = req.headers?.Referer ?? req.headers?.referer;
+    if (referer) {
+      try {
+        const u = new URL(referer);
+        return `${u.origin}${u.pathname}`;
+      } catch {
+        // malformed referer — skip
+      }
+    }
+  }
+
+  // Fallback: use the origin of the first request. API paths
+  // (/api/...) aren't navigable HTML pages — the anti-bot sensor only
+  // fires on a real page load — so the bare origin (homepage) is the
+  // safest bootstrap target. The homepage loads the full SPA shell
+  // with Akamai/Cloudflare/DataDome sensor scripts, minting a valid
+  // _abck cookie that covers all paths under that origin.
   try {
-    const u = new URL(firstRequest.url);
-    return `${u.origin}${u.pathname}`;
+    const u = new URL(requests[0].url);
+    return u.origin;
   } catch {
     throw new Error(
-      `Could not parse bootstrap URL: ${firstRequest.url}\n→ check workflow.json — the first request URL must be absolute (https://...).`,
+      `Could not parse bootstrap URL: ${requests[0].url}\n→ check workflow.json — the first request URL must be absolute (https://...).`,
     );
   }
 }
@@ -1121,65 +1175,12 @@ export async function runWorkflowWithLadder(opts: {
     },
   };
 
-  // Include `fetch-bootstrap` so compile-time live verification can reach the
-  // API anti-bot path: a one-time cdp-browser jar mint, then PLAIN-fetch replay.
-  // On an anti-bot site where `fetch` tarpits the state-changing `.act`, this is
-  // the transport that gets a real baseline — without it a correct anti-bot
-  // workflow can never pass compile verification and the tool fails to ship
-  // (verified: costco's `.act` tools timed out at compile because neither fetch
-  // nor stealth can defeat Akamai). NO playbook rung here — playbook is DOM-only
-  // and playbook.yaml doesn't exist at tool-compile time. The per-tool memo below
-  // makes only the FIRST call pay the doomed `fetch` timeout; siblings start at
-  // the winning rung (and the cdp jar is cached across them — bounding .act volume).
-  //
-  // NOTE: cdp-replay is deliberately NOT in the compile ladder. It launches a
-  // real Chrome PER call, and the compile path runs the live integration suite
-  // as many short-lived `bun test` subprocesses (retries × per-param tests),
-  // each re-walking the ladder from scratch (the winning-backend memo is
-  // process-scoped and a fresh subprocess can't see it) — so cdp-replay here
-  // spawns (and orphans) a Chrome per call, piling up dozens of browsers that
-  // thrash the host and never converge. Compile verifies via the cached-jar
-  // PLAIN-fetch rung (fetch-bootstrap mints Chrome ONCE, cached to disk); a
-  // multi-step .act tool that plain-fetch can't sustain ships liveVerified=false
-  // and is verified at AUDIT/runtime instead, where the production ladder runs
-  // cdp-replay exactly once per tool (bounded, properly closed).
-  let ladder: ConcreteBackend[] = ['fetch', 'fetch-bootstrap', 'stealth-fetch'];
+  const ladder: ConcreteBackend[] = ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
 
-  // Compile-time speedup: on an anti-bot site, `fetch` (and `fetch-bootstrap`)
-  // are doomed — each costs a full ~30s timeout before the ladder escalates to
-  // the stealth rung that actually works. The param-coverage suite makes one
-  // runWorkflowWithLadder call PER exposed parameter (plus the producer chain
-  // for consumer tools), so paying ~60s of doomed-rung timeouts on every call
-  // can push a multi-param tool's verification past the per-tool timeout. Once
-  // a backend has won for THIS TOOL in THIS process, start the ladder there and
-  // skip the rungs we already know fail. Process-scoped only (never persisted),
-  // and only on this compile/test path — production replay (runWithLadder via
-  // the tool-loader) is untouched and still tries fetch-first every call.
-  //
-  // Keyed by tool, NOT site: sibling tools on one site can have DIFFERENT
-  // winning backends (e.g. a JSON API tool wins via `fetch` while the anti-bot
-  // .act tool needs `stealth-fetch`). A site-wide key would thrash — the API
-  // tool would memoize `fetch`, forcing the anti-bot tool to re-pay the doomed
-  // 30s fetch timeout on every param-coverage call.
   const memoKey = `${tool.site}::${workflow.toolName}`;
   const memoWinner = compileWinningBackend.get(memoKey);
-  if (memoWinner) {
-    const idx = ladder.indexOf(memoWinner);
-    if (idx > 0) {
-      log(
-        `compile memo: ${memoKey} previously succeeded via ${memoWinner}; skipping earlier rungs`,
-      );
-      ladder = ladder.slice(idx);
-    }
-  }
 
   // Share one stealth token across this site's compile-time test processes.
-  // Each `bun test` is a fresh process and would otherwise mint a new ~12s
-  // headless bootstrap; the resulting burst against one origin trips anti-bot
-  // and forces the integration test to be waived. Pre-seed the ladder's stealth
-  // cache with a fetcher whose bootstrap is file-backed (keyed by the site asset
-  // dir). On any failure to derive a base URL, fall back to the default lazy
-  // bootstrap inside runWithLadder.
   const stealthCache = new Map<string, StealthFetch>();
   try {
     const siteDir = pathResolve(toolDir, '..');
@@ -1206,39 +1207,102 @@ export async function runWorkflowWithLadder(opts: {
     // will lazily bootstrap (same behavior as before this optimization).
   }
 
-  // Skip the fetch-bootstrap splice on the compile/test path. On an anti-bot
-  // site, fetch-bootstrap's plain-fetch request to the protected endpoint hangs
-  // until the server RSTs (~30s+) AND those hanging/RST'd requests are a strong
-  // bot signal — the param-coverage suite fires one per parameter, and the
-  // resulting burst trips the site's IP-level defense, which then TARPITS every
-  // later request including the stealth rung that works in isolation (observed:
-  // stealth .act hanging 4-5 min after a fetch-bootstrap burst). stealth-fetch
-  // now fully honors the workflow bootstrap (same-session CSRF + transport), so
-  // it is a superset of fetch-bootstrap here — skipping fetch-bootstrap removes
-  // the doomed, defense-tripping requests without losing verification coverage.
-  // Production replay (the tool-loader path) keeps fetch-bootstrap: it's a valid
-  // lighter rung there and isn't under a per-test burst.
-  // Pace live requests under the anti-bot rate-flag: the param-coverage suite
-  // makes one runWorkflowWithLadder call per parameter, and an unpaced burst
-  // flags the IP and tarpits everything. Space them per origin (no-op in tests
-  // via IMPRINT_COMPILE_ACT_SPACING_MS=0).
   try {
     await paceCompileRequest(new URL(pickBaseUrl(tool)).origin);
   } catch {
     // no parseable base URL → nothing to pace
   }
-  // skipBootstrapSplice: the compile ladder already lists fetch-bootstrap
-  // explicitly (in the API-anti-bot position), so don't let effectiveAutoLadder
-  // re-splice it.
-  const result = await runWithLadder(ladder, tool, opts.params, assetRoot, stealthCache, {
+
+  // ── First call: parallel probe (45s deadline) ───────────────────────────
+  // Race non-overlapping backends so a tarpitted rung doesn't block a
+  // faster one. fetch-bootstrap is excluded: it launches Chrome to the
+  // same origin as cdp-replay, and two simultaneous Chromes trip Akamai's
+  // concurrent-session detection. cdp-replay is strictly better when both
+  // need Chrome; if fetch wins, fetch-bootstrap is unnecessary anyway.
+  //
+  // Diagnostics from ALL probed rungs (including failures) are logged so
+  // the compile agent can see what to fix to unlock faster backends.
+  //
+  // Each bun-test subprocess is a fresh process (memo empty), so the
+  // compile agent's iteration loop re-probes after every workflow change —
+  // no premature lock-in.
+  if (!memoWinner) {
+    const PROBE_TIMEOUT_MS = 45_000;
+    const probeBackends: ConcreteBackend[] = ['fetch', 'cdp-replay', 'stealth-fetch'];
+
+    const settled = await Promise.allSettled(
+      probeBackends.map(async (b) => {
+        const t0 = Date.now();
+        const r = await Promise.race([
+          runWithLadder([b], tool, opts.params, assetRoot, stealthCache, {
+            skipBootstrapSplice: true,
+          }),
+          sleepMs(PROBE_TIMEOUT_MS).then(
+            () =>
+              ({
+                result: { ok: false, error: 'NETWORK', message: 'probe deadline exceeded' },
+                usedBackend: b,
+                attempts: [],
+              }) as LadderResult,
+          ),
+        ]);
+        return { backend: b, result: r, durationMs: Date.now() - t0 };
+      }),
+    );
+
+    const digest = settled.map((s, i) => {
+      const b = ladder[i];
+      if (s.status === 'rejected')
+        return `${b}: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`.slice(
+          0,
+          120,
+        );
+      const { result: lr, durationMs } = s.value;
+      return lr.result.ok
+        ? `${b}: OK in ${durationMs}ms`
+        : `${b}: ${lr.result.error} — ${lr.result.message.slice(0, 200)} (${durationMs}ms)`;
+    });
+
+    type ProbeEntry = { backend: ConcreteBackend; result: LadderResult; durationMs: number };
+    const winners = settled
+      .filter((s): s is PromiseFulfilledResult<ProbeEntry> => s.status === 'fulfilled' && s.value.result.result.ok)
+      .map((s) => s.value)
+      .sort((a, b) => a.durationMs - b.durationMs);
+
+    if (winners.length > 0) {
+      compileWinningBackend.set(memoKey, winners[0].backend);
+      log(
+        `parallel probe: winner=${winners[0].backend} (${winners[0].durationMs}ms)\n  ${digest.join('\n  ')}`,
+      );
+      return winners[0].result;
+    }
+
+    // All failed — log full diagnostics so the compile agent can act on them
+    log(`parallel probe: all backends failed\n  ${digest.join('\n  ')}`);
+    const last = settled[settled.length - 1];
+    if (last?.status === 'fulfilled') return last.value.result;
+    // All threw — return a synthetic error
+    return {
+      result: {
+        ok: false as const,
+        error: 'NETWORK' as const,
+        message: `All backends failed during parallel probe: ${digest.join('; ')}`,
+      },
+      usedBackend: ladder[ladder.length - 1] ?? 'fetch',
+      attempts: [],
+    };
+  }
+
+  // ── Memo hit: sequential from memoized winner ──────────────────────────
+  let memoLadder = ladder;
+  const idx = ladder.indexOf(memoWinner);
+  if (idx > 0) {
+    log(`compile memo: ${memoKey} previously succeeded via ${memoWinner}; skipping earlier rungs`);
+    memoLadder = ladder.slice(idx);
+  }
+  const result = await runWithLadder(memoLadder, tool, opts.params, assetRoot, stealthCache, {
     skipBootstrapSplice: true,
   });
-  // Memoize the winning backend so sibling param tests in this process skip the
-  // doomed `fetch` rung. Memoizing a `fetch-bootstrap` (cdp jar) win is what
-  // bounds per-param .act volume on an anti-bot site — without it every param
-  // test re-pays the doomed fetch timeout before reaching the working rung. The
-  // minted jar is itself cached (cdp-jar-cache, 90 min) so the memoized
-  // fetch-bootstrap rung reuses ONE browser bootstrap across the whole suite.
   if (
     result.result.ok &&
     (result.usedBackend === 'fetch' ||

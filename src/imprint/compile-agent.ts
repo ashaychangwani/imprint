@@ -192,7 +192,7 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
       `System prompt not found at ${systemPromptPath}\n→ this is an Imprint installation problem; please file an issue at https://github.com/ashaychangwani/imprint/issues with the steps you ran.`,
     );
   }
-  const systemPrompt = readFileSync(systemPromptPath, 'utf8');
+  const systemPrompt = `${readFileSync(systemPromptPath, 'utf8')}\n\nToday's date is ${new Date().toISOString().slice(0, 10)}.`;
 
   // 5. Build the toolset (shared with the MCP server used by the claude-cli path)
   const sessionPathAbs = opts.sessionPath.startsWith('/')
