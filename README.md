@@ -68,7 +68,8 @@ Real-time domain availability with per-request URL signing — the agent wrote t
 </tr>
 </table>
 
-> All three steps happen in a single `imprint teach` command.
+> [!TIP]
+> All three steps happen in a single `imprint teach` command. Credentials and PII are redacted automatically before anything reaches the LLM.
 
 ---
 
