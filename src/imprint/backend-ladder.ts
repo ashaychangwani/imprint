@@ -1220,8 +1220,19 @@ export async function runWorkflowWithLadder(opts: {
   // concurrent-session detection. cdp-replay is strictly better when both
   // need Chrome; if fetch wins, fetch-bootstrap is unnecessary anyway.
   //
-  // Diagnostics from ALL probed rungs (including failures) are logged so
-  // the compile agent can see what to fix to unlock faster backends.
+  // Uses Promise.allSettled (NOT Promise.any) deliberately: a fast OK from
+  // a lower rung (e.g. fetch returning a cached/stale 200) may not be the
+  // best result — we need all backends to settle so we can pick the
+  // fastest *correct* one. The tradeoff is wall-clock: the probe blocks
+  // until the slowest backend resolves (or hits the deadline). cdp-replay
+  // is slow on its first cold start (~33s) but subsequent calls reuse the
+  // CDP pool and complete in ~2-5s — so the first probe pays the cost but
+  // all later calls benefit from having discovered the right rung.
+  //
+  // The compile agent's integration tests MUST use a timeout >= 60s (the
+  // compile-agent.md prompt recommends this) so the test process survives
+  // the full probe duration. A 30s test timeout kills the probe before
+  // cdp-replay can finish its cold start.
   //
   // Each bun-test subprocess is a fresh process (memo empty), so the
   // compile agent's iteration loop re-probes after every workflow change —

@@ -210,8 +210,10 @@ Follow these steps to compile the session:
       }
       // usedBackend tells you which rung succeeded — useful when debugging
       // a flaky test or confirming the stealth-fetch fallback worked.
-    }, 30_000);
+    }, 60_000);
     ```
+    The 60 s timeout is important: `runWorkflowWithLadder` runs a parallel backend probe on its first call, and the cdp-replay rung needs ~33 s for a cold Chrome launch. A shorter timeout kills the test before the probe can finish, causing a false live-verification failure.
+
     If both rungs fail (400, 403 across both, expired tokens), this test fails and you must fix the workflow. Common fixes: chain a session/token request first, write a `requestTransformModule` for URL signing, or use `${state.X}` captures instead of hardcoded values. If a query param changes per call (check `stateHints` for `query_param_changes_across_calls`), use `search_response_body` to find the signing function in `.js` responses and replicate it in `request-transform.ts`.
 
     **Per-parameter coverage tests.** Beyond the baseline test above, you must write one integration test for **every parameter that has a non-default value in any captured request** (visible in `inlineData.requestBodyDecoded` or via `read_request`). Walk every recorded request, decode its body, and enumerate the set of `(paramName, nonDefaultValue)` tuples. Each tuple is a coverage unit — write a test that overrides that param and asserts a constraint on the response.
