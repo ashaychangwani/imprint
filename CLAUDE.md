@@ -63,6 +63,9 @@ Changelog config lives in `cliff.toml`. Preview unreleased changelog: `bun run c
 - `/release` — bump version, tag, push, trigger release workflow
 - `/commit` — create a conventional commit from staged changes
 - `/pr` — open a PR with conventional title and pre-flight checks
+- `/debug-teach` — diagnose a stuck, failing, or broken teach run (env vars, log files, recipes)
+- `/imprint-teach-deepdive` — analyze where a teach run spent its time (Phoenix traces + compile logs)
+- `/imprint-reteach-audit` — re-teach from existing recordings and verify with audit
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for commit conventions and release process.
 
@@ -79,6 +82,43 @@ This is a **public** repo. Real credentials, session tokens, cookie values, pers
 - A real recording you collected for end-to-end verification stays on your laptop only. The contents of `~/.imprint/`, credential store files under `~/.config/imprint/`, the `imprint teach` output for any account you actually log into, and `*.imprintbundle` files are all sensitive — keep them out of the repo and out of PR comments.
 - The pre-commit hook (`.githooks/pre-commit`) runs `gitleaks` and a tight regex pass. It is **fail-closed**: if gitleaks isn't installed it blocks the commit and tells you how to install it. Do not bypass with `--no-verify`. Install: `brew install gitleaks` (or see `https://github.com/gitleaks/gitleaks#installing`). Enable hooks once per clone: `git config core.hooksPath .githooks`.
 - If you discover a leak that already shipped to a remote: stop, tell the user, and rotate the credential. Force-pushing a rewrite over remote history doesn't undo a public exposure.
+
+## Debugging teach runs
+
+Use `/debug-teach` for guided diagnosis. Quick reference below.
+
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `IMPRINT_DEBUG=1` | Verbose stderr: HTTP requests, cookie snapshots, Chromium stderr, stack traces |
+| `IMPRINT_REPLAY_DEBUG=1` | Write replay events to `/tmp/imprint-replay-debug-<ts>.log` |
+| `IMPRINT_TRACE=1` | OpenTelemetry tracing to Phoenix (see [docs/tracing.md](docs/tracing.md)) |
+| `IMPRINT_TRACE_LLM_IO=1` | Capture prompt/response text in trace spans |
+| `IMPRINT_KEEP_TEST=1` | Retain generated `parser.test.ts` after compile |
+| `IMPRINT_NO_BUILD_PLAN=1` | Skip shared-module planning |
+| `IMPRINT_COMPILE_ACT_SPACING_MS=0` | Fast compile-time replay (default 25s) |
+
+### Artifacts written during teach
+
+| Path | Contents |
+|---|---|
+| `~/.imprint/<site>/<tool>/.compile-log.json` | Full compile-agent conversation |
+| `~/.imprint/<site>/<tool>/.tool-plan.md` | LLM-generated tool implementation plan |
+| `~/.imprint/<site>/.audit-report.json` | Audit results (after `imprint audit`) |
+| `~/.imprint/<site>/.audit-transcript.txt` | Audit session transcript |
+| `/tmp/imprint-replay-debug-<ts>.log` | Replay debug log (`IMPRINT_REPLAY_DEBUG=1`) |
+| `/tmp/imprint-playbook-*-step*.png` | Per-step screenshots (`imprint playbook --trace`) |
+
+### Diagnostic commands
+
+```
+imprint doctor                              # check environment
+imprint check <session.json>                # validate a captured session
+imprint playbook <site> --headed --trace    # interactive playbook test with screenshots
+imprint audit <site> --json                 # score all tools
+imprint mcp status                          # audit MCP registrations
+```
 
 ## Key risks (still open)
 
