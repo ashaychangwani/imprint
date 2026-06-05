@@ -1551,6 +1551,17 @@ export function isBotDefenseFailure(output: string): boolean {
   const strong =
     /unusual traffic|recaptcha|hcaptcha|h-captcha|are you (a )?(human|robot)|verify (you are|you'?re) (a )?human|px-captcha|datadome|perimeterx|cf[-_]chl|attention required|just a moment\s*(\.\.\.|…)?|enable javascript and cookies to continue/i;
   if (strong.test(output)) return true;
+
+  // Server auth errors are NOT bot defense — they indicate a workflow
+  // correctness issue (missing/expired session code, invalid credentials).
+  // Check BEFORE the weak match because the runtime wraps these in
+  // `error: 'FORBIDDEN'` + remediation text that mentions "bot detection",
+  // which would otherwise trigger the weak path and silently waive a broken
+  // workflow.
+  const serverAuth =
+    /session expired|invalid source|invalid session|unauthorized|authentication required|login required|not authenticated/i;
+  if (serverAuth.test(output)) return false;
+
   // Akamai Bot Manager runtime signal: `_abck` is the sensor cookie and a value
   // ending in `~-1~` means the session is UNVALIDATED (bot-flagged); `~0~` means
   // validated. The cdp bootstrap logs `_abck status after interaction: ~-1~` when
