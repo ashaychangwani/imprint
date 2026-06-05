@@ -1185,6 +1185,25 @@ export async function runCommand(
     proc.on('close', (exitCode) => {
       clearTimeout(timeout);
 
+      // Reap the whole process GROUP on EVERY exit, not just on timeout. The
+      // compile verifier runs `bun test`, whose runner calls process.exit() the
+      // instant the suite passes — and bun does NOT run process 'exit' /
+      // 'beforeExit' handlers (only afterAll), so the compile cdp pool's
+      // idle-close timer never fires and its launchChromium child is orphaned
+      // (reparented to PID 1), accumulating across a multi-tool/multi-site teach
+      // until the box OOMs. That child is still in THIS process group, though:
+      // the group's id (= proc.pid) outlives the dead `sh` leader, so SIGKILLing
+      // the group here reaps the orphaned Chrome regardless of how `bun test`
+      // chose to exit. Harmless when the group is already empty (ESRCH). Skipped
+      // on timeout (the group was already SIGKILLed above).
+      if (!timedOut && proc.pid) {
+        try {
+          process.kill(-proc.pid, 'SIGKILL');
+        } catch {
+          // group already empty — nothing left to reap
+        }
+      }
+
       if (stdout.length > TRUNCATE_LIMIT) {
         stdout = `${stdout.slice(0, TRUNCATE_LIMIT)}\n[…truncated…]`;
       }
