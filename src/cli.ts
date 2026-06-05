@@ -376,7 +376,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--timeout <duration>',
         description:
-          'Audit-session wall-clock cap. Accepts 20m, 1h, 300s, or plain ms. Default 20m.',
+          'Audit-session wall-clock cap. Accepts 20m, 1h, 300s, or plain ms. Default 45m.',
       },
       { name: '--json', description: 'Print the machine-readable report to stdout.' },
     ],
