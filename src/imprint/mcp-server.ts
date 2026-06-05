@@ -17,6 +17,7 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { resolveLadder, runWithLadder } from './backend-ladder.ts';
+import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
 import { loadBackendsCache } from './probe-backends.ts';
@@ -94,7 +95,7 @@ function buildServer(
   version: string,
   tools: ResolvedTool[],
   assetRoot: string,
-): Server {
+): { server: Server; closeCdpPool: () => Promise<void> } {
   const server = new Server(
     { name, version },
     {
@@ -110,6 +111,12 @@ function buildServer(
 
   // Per-site stealth-fetch cache so the ~12s bootstrap runs once per site.
   const stealthCache = new Map<string, StealthFetch>();
+
+  // Per-site CDP browser pool: cdp-replay stores its live Chrome here after
+  // the first successful call so subsequent calls reuse it (~2-5s vs ~33s).
+  const cdpPool = new Map<string, CdpBrowserFetch>();
+  const cdpIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const CDP_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((t) => ({
@@ -154,7 +161,24 @@ function buildServer(
         args,
         assetRoot,
         stealthCache,
+        { cdpPool },
       );
+      // Reset the idle timer for this site's pooled Chrome.
+      if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
+        const prev = cdpIdleTimers.get(tool.site);
+        if (prev) clearTimeout(prev);
+        const timer = setTimeout(() => {
+          const cf = cdpPool.get(tool.site);
+          if (cf) {
+            log(`closing idle CDP session for ${tool.site}`);
+            cf.close().catch(() => {});
+            cdpPool.delete(tool.site);
+            cdpIdleTimers.delete(tool.site);
+          }
+        }, CDP_IDLE_TIMEOUT_MS);
+        timer.unref();
+        cdpIdleTimers.set(tool.site, timer);
+      }
       if (!result.ok) {
         const text = formatToolError(result);
         return {
@@ -171,7 +195,17 @@ function buildServer(
     }
   });
 
-  return server;
+  async function closeCdpPool(): Promise<void> {
+    for (const [site, cf] of cdpPool) {
+      log(`shutdown: closing CDP session for ${site}`);
+      await cf.close().catch(() => {});
+    }
+    cdpPool.clear();
+    for (const timer of cdpIdleTimers.values()) clearTimeout(timer);
+    cdpIdleTimers.clear();
+  }
+
+  return { server, closeCdpPool };
 }
 
 function formatToolError(result: Extract<ToolResult, { ok: false }>): string {
@@ -269,7 +303,7 @@ async function runStdio(
   tools: ResolvedTool[],
   assetRoot: string,
 ): Promise<void> {
-  const server = buildServer(name, version, tools, assetRoot);
+  const { server, closeCdpPool } = buildServer(name, version, tools, assetRoot);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log(`stdio transport ready (${tools.length} tool${tools.length === 1 ? '' : 's'})`);
@@ -283,6 +317,7 @@ async function runStdio(
     process.once('SIGINT', () => done('SIGINT'));
     process.once('SIGTERM', () => done('SIGTERM'));
   });
+  await closeCdpPool();
 }
 
 /**
@@ -302,7 +337,7 @@ async function runHttp(
   port: number,
   assetRoot: string,
 ): Promise<void> {
-  const server = buildServer(name, version, tools, assetRoot);
+  const { server, closeCdpPool } = buildServer(name, version, tools, assetRoot);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
   });
@@ -353,4 +388,5 @@ async function runHttp(
     process.once('SIGINT', () => shutdown('SIGINT'));
     process.once('SIGTERM', () => shutdown('SIGTERM'));
   });
+  await closeCdpPool();
 }

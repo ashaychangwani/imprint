@@ -1121,7 +1121,7 @@ function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): Ag
       required: ['command'],
     },
     handler: async (input: unknown) => {
-      const { command, timeoutSec = 60 } = input as { command: string; timeoutSec?: number };
+      const { command, timeoutSec = 120 } = input as { command: string; timeoutSec?: number };
 
       if (command.match(/rm\s+-rf\s+\//) || command.includes('sudo')) {
         return {

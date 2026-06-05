@@ -15,8 +15,10 @@ import {
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
   __setCdpJarMinterForTest,
+  __setProbeTimeoutMsForTest,
   effectiveAutoLadder,
   evaluateBootstrapCapture,
+  pickBaseUrl,
   prefersCdpReplayFirst,
   renderWorkflowRequests,
   resolveLadder,
@@ -51,12 +53,16 @@ beforeEach(() => {
   }));
   // Disable the compile-path .act rate gate so tests don't sleep between calls.
   process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '0';
+  // Shorten the parallel probe deadline so its setTimeout doesn't keep bun's
+  // event loop alive past the default 5s test timeout.
+  __setProbeTimeoutMsForTest(1_000);
 });
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   __setCdpJarMinterForTest(null);
   __setCdpBrowserFetchFactoryForTest(null);
+  __setProbeTimeoutMsForTest(null);
 });
 
 /**
@@ -817,16 +823,15 @@ describe('runWorkflowWithLadder', () => {
           site: 'memo-site',
         }),
       );
-      // First call: fetch wins → memoized. Second call: memo=fetch is already
-      // the first rung, so behavior is identical (regression guard — the memo
-      // must never break a fetch-winning tool).
+      // First call: parallel probe — fetch wins (fastest). Second call:
+      // memo=fetch, sequential from the memoized winner.
       const a = await runWorkflowWithLadder({ workflowPath, params: {} });
       const b = await runWorkflowWithLadder({ workflowPath, params: {} });
       expect(a.usedBackend).toBe('fetch');
       expect(b.usedBackend).toBe('fetch');
-      expect(a.attempts.map((x) => x.backend)).toEqual(['fetch']);
+      // Second call uses the memo path (sequential, single-rung)
       expect(b.attempts.map((x) => x.backend)).toEqual(['fetch']);
-      expect(hits).toBe(2);
+      expect(hits).toBeGreaterThanOrEqual(2);
     } finally {
       server.stop(true);
       __resetCompileWinningBackendForTest();
@@ -1119,5 +1124,108 @@ describe('effectiveAutoLadder + prefersCdpReplayFirst (Fix 4 — cdp-replay rung
       ],
     });
     expect(prefersCdpReplayFirst(w)).toBe(false);
+  });
+
+  it('splices fetch-bootstrap + cdp-replay before stealth-fetch when fetch is probed-out', () => {
+    const out = effectiveAutoLadder(['stealth-fetch', 'playbook'], wf({}));
+    expect(out).toEqual(['fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']);
+  });
+
+  it('does not splice fetch-bootstrap before cdp-replay when cdp-replay is explicitly in the ladder', () => {
+    const out = effectiveAutoLadder(['cdp-replay', 'stealth-fetch', 'playbook'], wf({}));
+    expect(out).toEqual(['cdp-replay', 'stealth-fetch', 'playbook']);
+  });
+
+  it('front-loads cdp-replay even when fetch is probed-out for multi-step anti-bot workflows', () => {
+    const w = wf({
+      bootstrap: { url: 'https://x/boot' },
+      requests: [
+        { method: 'POST', url: 'https://x/a.act', headers: {} },
+        { method: 'POST', url: 'https://x/b.act', headers: {} },
+      ],
+    });
+    expect(effectiveAutoLadder(['stealth-fetch', 'playbook'], w)).toEqual([
+      'cdp-replay',
+      'fetch-bootstrap',
+      'stealth-fetch',
+      'playbook',
+    ]);
+  });
+});
+
+describe('pickBaseUrl', () => {
+  function toolWith(
+    requests: Array<{ method: string; url: string; headers?: Record<string, string> }>,
+  ): ResolvedTool {
+    return {
+      site: 'test',
+      dir: '/tmp/test',
+      workflow: {
+        toolName: 'test_tool',
+        intent: { description: 'test' },
+        parameters: [],
+        requests: requests.map((r) => ({ ...r, headers: r.headers ?? {} })),
+        site: 'test',
+      },
+      toolFn: async () => ({ ok: true, data: {} }),
+    };
+  }
+
+  it('uses Referer header when available', () => {
+    const tool = toolWith([
+      {
+        method: 'POST',
+        url: 'https://example.com/api/data',
+        headers: { Referer: 'https://example.com/app/page' },
+      },
+    ]);
+    expect(pickBaseUrl(tool)).toBe('https://example.com/app/page');
+  });
+
+  it('falls back to origin when no Referer and first request is .json', () => {
+    const tool = toolWith([
+      { method: 'GET', url: 'https://example.com/version.json' },
+      { method: 'POST', url: 'https://example.com/api/data' },
+    ]);
+    expect(pickBaseUrl(tool)).toBe('https://example.com');
+  });
+
+  it('falls back to origin when no Referer exists', () => {
+    const tool = toolWith([
+      { method: 'GET', url: 'https://example.com/config.json' },
+      { method: 'GET', url: 'https://example.com/schema.xml' },
+      { method: 'POST', url: 'https://example.com/api/search' },
+    ]);
+    expect(pickBaseUrl(tool)).toBe('https://example.com');
+  });
+
+  it('prefers Referer from a later request over skipping logic', () => {
+    const tool = toolWith([
+      { method: 'GET', url: 'https://example.com/version.json' },
+      {
+        method: 'POST',
+        url: 'https://example.com/api/data',
+        headers: { Referer: 'https://example.com/booking/page' },
+      },
+    ]);
+    expect(pickBaseUrl(tool)).toBe('https://example.com/booking/page');
+  });
+
+  it('falls back to origin when all requests are data endpoints', () => {
+    const tool = toolWith([
+      { method: 'GET', url: 'https://example.com/v1.json' },
+      { method: 'GET', url: 'https://example.com/v2.json' },
+    ]);
+    expect(pickBaseUrl(tool)).toBe('https://example.com');
+  });
+
+  it('uses origin for single API request with no Referer', () => {
+    const tool = toolWith([{ method: 'POST', url: 'https://example.com/api/booking/search?q=1' }]);
+    expect(pickBaseUrl(tool)).toBe('https://example.com');
+  });
+
+  it('throws for empty requests', () => {
+    const tool = toolWith([]);
+    expect(() => pickBaseUrl(tool)).toThrow('has no requests');
   });
 });

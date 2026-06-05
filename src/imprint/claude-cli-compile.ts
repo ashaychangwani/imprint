@@ -286,6 +286,8 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     JSON.stringify(mcpConfig),
     '--system-prompt-file',
     opts.systemPromptPath,
+    '--append-system-prompt',
+    `Today's date is ${new Date().toISOString().slice(0, 10)}.`,
     // Disable the built-in tool set so claude only uses our MCP tools.
     '--tools',
     '',

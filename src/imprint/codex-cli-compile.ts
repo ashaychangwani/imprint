@@ -155,7 +155,7 @@ async function compileViaCodexCliImpl(
 
   let systemPrompt: string;
   try {
-    systemPrompt = readFileSync(opts.systemPromptPath, 'utf8');
+    systemPrompt = `${readFileSync(opts.systemPromptPath, 'utf8')}\n\nToday's date is ${new Date().toISOString().slice(0, 10)}.`;
   } catch (err) {
     return finalErrorResult(opts, `failed to read system prompt: ${errMsg(err)}`);
   }
