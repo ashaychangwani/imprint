@@ -124,7 +124,10 @@ export function structuralDiff(
  *  present, else METHOD + URL path (query stripped). */
 function endpointKey(req: CapturedRequest): string {
   const url = req.url ?? '';
-  const rpc = /[?&]rpcids=([^&]+)/.exec(url);
+  // Accept both `rpcids=` (Google batchexecute, plural) and a singular `rpcid=`
+  // in the URL query, matching tool-candidates' endpoint-family keying — so a
+  // batchexecute-style endpoint never collapses distinct rpcs to one path key.
+  const rpc = /[?&]rpcids?=([^&]+)/.exec(url);
   if (rpc) return `rpc:${decodeURIComponent(rpc[1] ?? '')}`;
   try {
     const u = new URL(url);
