@@ -14,6 +14,8 @@ The recording *is* the executable.
 [![MIT License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/ashaychangwani/imprint?style=social)](https://github.com/ashaychangwani/imprint/stargazers)
 
+[Quick Start](#quick-start) · [Examples](#examples) · [How It Works](#how-it-works) · [Docs](docs/getting-started.md)
+
 </div>
 
 ---
@@ -49,27 +51,24 @@ Real-time domain availability with per-request URL signing — the agent wrote t
 
 ## How It Works
 
-```
-┌─────────────┐      ┌──────────────┐      ┌─────────────┐
-│   1. TEACH  │ ───▶ │  2. COMPILE  │ ───▶ │   3. USE    │
-│             │      │              │      │             │
-│ Open a real │      │ Generates:   │      │ A typed MCP │
-│ browser,    │      │              │      │ tool your   │
-│ drive the   │      │ workflow.json│      │ agent calls │
-│ workflow,   │      │ (API replay) │      │ like any    │
-│ narrate.    │      │              │      │ other tool. │
-│             │      │ playbook.yaml│      │             │
-│ Imprint     │      │ (DOM replay) │      │ Works with  │
-│ records     │      │              │      │ Claude,     │
-│ everything. │      │ request-     │      │ Codex, any  │
-│             │      │ transform.ts │      │ MCP client. │
-│             │      │ (signing)    │      │             │
-└─────────────┘      └──────────────┘      └─────────────┘
-```
+<table>
+<tr>
+<td align="center" width="33%">
+<h3>1. Teach</h3>
+<p>Open a real browser, drive the workflow, narrate what you're doing. Imprint records every network request and DOM interaction.</p>
+</td>
+<td align="center" width="33%">
+<h3>2. Compile</h3>
+<p>Generates two replay artifacts:<br><br><code>workflow.json</code> — API-level replay<br><code>playbook.yaml</code> — DOM-level fallback<br><br>Credentials are redacted automatically.</p>
+</td>
+<td align="center" width="34%">
+<h3>3. Use</h3>
+<p>A typed MCP tool your agent calls like any other tool. Works with Claude Code, Codex, Claude Desktop, and any MCP client.</p>
+</td>
+</tr>
+</table>
 
 > All three steps happen in a single `imprint teach` command.
-
-Credentials and PII are **redacted automatically** — credential values become `${credential.NAME}` placeholders, and a supplemental scan catches emails, phone numbers, API keys, JWTs, and more before anything reaches the LLM.
 
 ---
 
@@ -111,17 +110,18 @@ git clone https://github.com/ashaychangwani/imprint.git && cd imprint
 bun install && bun link
 ```
 
-### Browser Setup
+<details>
+<summary><strong>Browser setup & LLM providers</strong></summary>
 
-Commands that open a browser (`teach`, `record`, `login`, `playbook`) need Playwright's Chromium:
+<br>
+
+**Browser commands** (`teach`, `record`, `login`, `playbook`) need Playwright's Chromium:
 
 ```bash
 bunx playwright install chromium
 ```
 
-### LLM Providers
-
-Imprint auto-detects what's available on your system. Run `imprint doctor` to see detected providers.
+**LLM providers** are auto-detected. Run `imprint doctor` to see what's available.
 
 | Priority | Provider | Detected via |
 |:--|:--|:--|
@@ -131,6 +131,8 @@ Imprint auto-detects what's available on your system. Run `imprint doctor` to se
 | 4 | Cursor | `cursor` on PATH |
 
 Override with `--provider <name>` and `--model <name>`.
+
+</details>
 
 ---
 
@@ -235,7 +237,7 @@ See [Sharing Skills](docs/credential-sharing.md) for the full flow.
 | [Sharing Skills](docs/credential-sharing.md) | Credential export/import and remote provisioning |
 | [MCP Maintenance](docs/mcp-maintenance.md) | Audit, disable, restore, and prune MCP state |
 | [Troubleshooting](docs/troubleshooting.md) | Common failures and fixes |
-| [Tracing](docs/tracing.md) | Local compile tracing with Phoenix |
+| [Tracing](docs/tracing.md) | OpenTelemetry tracing, cost rollup, and Phoenix setup |
 
 <details>
 <summary>More docs</summary>
