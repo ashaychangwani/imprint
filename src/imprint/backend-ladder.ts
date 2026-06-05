@@ -1096,12 +1096,13 @@ export function pickBaseUrl(tool: ResolvedTool): string {
   // safest bootstrap target. The homepage loads the full SPA shell
   // with Akamai/Cloudflare/DataDome sensor scripts, minting a valid
   // _abck cookie that covers all paths under that origin.
+  const firstUrl = requests[0]!.url;
   try {
-    const u = new URL(requests[0].url);
+    const u = new URL(firstUrl);
     return u.origin;
   } catch {
     throw new Error(
-      `Could not parse bootstrap URL: ${requests[0].url}\n→ check workflow.json — the first request URL must be absolute (https://...).`,
+      `Could not parse bootstrap URL: ${firstUrl}\n→ check workflow.json — the first request URL must be absolute (https://...).`,
     );
   }
 }
@@ -1297,12 +1298,13 @@ export async function runWorkflowWithLadder(opts: {
       .map((s) => s.value)
       .sort((a, b) => a.durationMs - b.durationMs);
 
-    if (winners.length > 0) {
-      compileWinningBackend.set(memoKey, winners[0].backend);
+    const best = winners[0];
+    if (best) {
+      compileWinningBackend.set(memoKey, best.backend);
       log(
-        `parallel probe: winner=${winners[0].backend} (${winners[0].durationMs}ms)\n  ${digest.join('\n  ')}`,
+        `parallel probe: winner=${best.backend} (${best.durationMs}ms)\n  ${digest.join('\n  ')}`,
       );
-      return winners[0].result;
+      return best.result;
     }
 
     // All failed — log full diagnostics so the compile agent can act on them

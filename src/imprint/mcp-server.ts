@@ -29,7 +29,7 @@ import {
   buildZodValidator,
   discoverTools,
 } from './tool-loader.ts';
-import type { ToolResult, WorkflowParameter } from './types.ts';
+import type { ConcreteBackend, ToolResult, WorkflowParameter } from './types.ts';
 import { VERSION } from './version.ts';
 
 interface RunMcpServerOptions {
@@ -95,7 +95,7 @@ function buildServer(
   version: string,
   tools: ResolvedTool[],
   assetRoot: string,
-): Server {
+): { server: Server; closeCdpPool: () => Promise<void> } {
   const server = new Server(
     { name, version },
     {
