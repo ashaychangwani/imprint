@@ -10,6 +10,7 @@ import mcpMaintenance from '@docs/mcp-maintenance.md?raw';
 import notifications from '@docs/notifications.md?raw';
 import playbookDebugging from '@docs/playbook-debugging.md?raw';
 import security from '@docs/security.md?raw';
+import tracing from '@docs/tracing.md?raw';
 import troubleshooting from '@docs/troubleshooting.md?raw';
 
 const docsManifest = [
@@ -28,6 +29,7 @@ const docsManifest = [
       { slug: 'capture-protocol', title: 'Capture Protocol' },
       { slug: 'credential-sharing', title: 'Credential Sharing' },
       { slug: 'notifications', title: 'Notifications' },
+      { slug: 'tracing', title: 'Tracing' },
     ],
   },
   {
@@ -62,6 +64,7 @@ const docsContent = {
   security: security,
   decisions: decisions,
   design: design,
+  tracing: tracing,
 };
 
 export { docsManifest, docsContent };
