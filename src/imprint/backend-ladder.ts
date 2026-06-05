@@ -47,7 +47,7 @@ import {
   bootstrapStealthToken,
   createStealthFetch,
 } from './stealth-fetch.ts';
-import { loadCachedToken, saveCachedToken } from './stealth-token-cache.ts';
+import { clearCachedToken, loadCachedToken, saveCachedToken } from './stealth-token-cache.ts';
 import type { ResolvedTool } from './tool-loader.ts';
 import {
   type BootstrapCapture,
@@ -1190,14 +1190,20 @@ export async function runWorkflowWithLadder(opts: {
   try {
     const siteDir = pathResolve(toolDir, '..');
     const baseUrl = pickBaseUrl(tool);
+    let fileCacheConsumed = false;
     const cachingBootstrap = async (args: BootstrapArgs): Promise<TokenCache> => {
-      const cached = loadCachedToken(siteDir, STEALTH_TOKEN_MAX_AGE_SECONDS);
-      if (cached) {
-        log(`reusing cached stealth token for ${tool.site || siteDir}`);
-        return cached;
+      if (!fileCacheConsumed) {
+        const cached = loadCachedToken(siteDir, STEALTH_TOKEN_MAX_AGE_SECONDS);
+        if (cached) {
+          fileCacheConsumed = true;
+          log(`reusing cached stealth token for ${tool.site || siteDir}`);
+          return cached;
+        }
       }
+      clearCachedToken(siteDir);
       const token = await bootstrapStealthToken(args);
       saveCachedToken(siteDir, token);
+      fileCacheConsumed = true;
       return token;
     };
     stealthCache.set(
@@ -1211,6 +1217,11 @@ export async function runWorkflowWithLadder(opts: {
     // No usable base URL → leave the cache empty; runWithLadder/ensureStealthFetch
     // will lazily bootstrap (same behavior as before this optimization).
   }
+
+  // Process-scoped CDP pool for compile-time: keeps Chrome alive across calls
+  // within the same `bun test` process so cdp-replay is ~2-5s after the first
+  // ~35s cold start (same mechanism as the runtime pool in mcp-server.ts).
+  const cdpPool = new Map<string, CdpBrowserFetch>();
 
   try {
     await paceCompileRequest(new URL(pickBaseUrl(tool)).origin);
@@ -1252,6 +1263,7 @@ export async function runWorkflowWithLadder(opts: {
         const r = await Promise.race([
           runWithLadder([b], tool, opts.params, assetRoot, stealthCache, {
             skipBootstrapSplice: true,
+            cdpPool,
           }),
           sleepMs(PROBE_TIMEOUT_MS).then(
             () =>
@@ -1267,7 +1279,7 @@ export async function runWorkflowWithLadder(opts: {
     );
 
     const digest = settled.map((s, i) => {
-      const b = ladder[i];
+      const b = probeBackends[i];
       if (s.status === 'rejected')
         return `${b}: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`.slice(
           0,
@@ -1309,24 +1321,25 @@ export async function runWorkflowWithLadder(opts: {
     };
   }
 
-  // ── Memo hit: sequential from memoized winner ──────────────────────────
-  let memoLadder = ladder;
+  // ── Memo hit: start at the memoized winner, keep all later rungs ─────
+  // Previous logic sliced earlier rungs away (`ladder.slice(idx)`), which
+  // dropped cdp-replay as a fallback when stealth-fetch (the last rung)
+  // was the winner. Now: reorder the ladder to start at the winner and
+  // wrap around so every rung remains reachable. The winner is tried first
+  // (the optimization), but if it fails the remaining rungs catch it.
   const idx = ladder.indexOf(memoWinner);
-  if (idx > 0) {
-    log(`compile memo: ${memoKey} previously succeeded via ${memoWinner}; skipping earlier rungs`);
-    memoLadder = ladder.slice(idx);
-  }
+  const memoLadder = idx > 0
+    ? [...ladder.slice(idx), ...ladder.slice(0, idx)]
+    : ladder;
+  log(`compile memo: ${memoKey} previously succeeded via ${memoWinner}; ladder: ${memoLadder.join(' → ')}`);
   const result = await runWithLadder(memoLadder, tool, opts.params, assetRoot, stealthCache, {
     skipBootstrapSplice: true,
+    cdpPool,
   });
-  if (
-    result.result.ok &&
-    (result.usedBackend === 'fetch' ||
-      result.usedBackend === 'fetch-bootstrap' ||
-      result.usedBackend === 'cdp-replay' ||
-      result.usedBackend === 'stealth-fetch')
-  ) {
+  if (result.result.ok) {
     compileWinningBackend.set(memoKey, result.usedBackend);
+  } else {
+    compileWinningBackend.delete(memoKey);
   }
   return result;
 }
