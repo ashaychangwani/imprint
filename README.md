@@ -1,31 +1,37 @@
-<h1 align="center">Imprint</h1>
+<div align="center">
 
-<p align="center">
-  <strong>Don't do anything twice. Teach your AI agent once, and it remembers forever.</strong>
-</p>
+# imprint
 
-<p align="center">
-  <a href="https://github.com/ashaychangwani/imprint/actions/workflows/test.yml"><img src="https://github.com/ashaychangwani/imprint/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
-  <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ashaychangwani/cbd3134e06fb4fabf24aed94b251bdfd/raw/test-count.json" alt="Test count">
-  <a href="https://github.com/ashaychangwani/imprint/releases"><img src="https://img.shields.io/github/v/release/ashaychangwani/imprint?label=release" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
-  <a href="https://github.com/ashaychangwani/imprint/stargazers"><img src="https://img.shields.io/github/stars/ashaychangwani/imprint?style=social" alt="GitHub Stars"></a>
-</p>
+**Teach your AI agent any website. Once.**
 
-<br>
+Record a real browser session, get a deterministic MCP tool back.\
+No tokens burned on exploration. No "the LLM clicked the wrong button."\
+The recording *is* the executable.
+
+[![Tests](https://github.com/ashaychangwani/imprint/actions/workflows/test.yml/badge.svg)](https://github.com/ashaychangwani/imprint/actions/workflows/test.yml)
+![Test count](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ashaychangwani/cbd3134e06fb4fabf24aed94b251bdfd/raw/test-count.json)
+[![Release](https://img.shields.io/github/v/release/ashaychangwani/imprint?label=release)](https://github.com/ashaychangwani/imprint/releases)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/ashaychangwani/imprint?style=social)](https://github.com/ashaychangwani/imprint/stargazers)
+
+</div>
+
+---
+
+## Quick Start
 
 ```bash
 bun install -g imprint-mcp
 imprint teach southwest --url https://www.southwest.com
 ```
 
-That's it. Imprint opens a browser, you drive the workflow, and it compiles a deterministic **MCP tool** your AI agent can call from then on. No tokens burned on exploration, no "the LLM clicked the wrong button" variance. The recording *is* the executable.
+A browser opens. You drive the workflow and narrate what you're doing. Imprint records every request and interaction, then compiles a deterministic **MCP tool** your agent can call forever.
 
-<br>
+---
 
-## See it in action
+## See It in Action
 
-After teaching, your agent has a tool called `search_namecheap_domains`. The compile-agent reverse-engineered the site's CRC32 URL signing scheme from a captured JavaScript bundle, chains five API endpoints, and merges availability + pricing + aftermarket data:
+After teaching, your agent gets a tool called `search_namecheap_domains`. The compile agent reverse-engineered the site's CRC32 URL signing from a captured JS bundle, chains five API endpoints, and merges availability + pricing + aftermarket data:
 
 ```
 $ claude "search for getimprint on Namecheap, under $20/yr renewal"
@@ -39,279 +45,210 @@ $ claude "search for getimprint on Namecheap, under $20/yr renewal"
 
 Real-time domain availability with per-request URL signing — the agent wrote the signing function itself by reading the site's JS bundle.
 
-<br>
+---
 
-## How it works
+## How It Works
 
-<table>
-<tr>
-<td width="33%">
-
-### 1. Teach
-
-```bash
-imprint teach mysite \
-  --url https://example.com
 ```
-
-A browser opens. You drive the workflow and narrate what you're doing. Imprint records every network request and DOM interaction.
-
-Raw recordings are stored locally under `~/.imprint/<site>/sessions/`, and each generated tool lives under `~/.imprint/<site>/<toolName>/` by default, outside the repo. The generated `index.ts` imports from `imprint/runtime` via a `node_modules/imprint` symlink that Imprint maintains automatically — created on `emit`, self-healed at runtime if a worktree moves or vanishes (so the next `imprint mcp-server`/`cron`/`probe-backends` repairs a stale link without re-emitting). The tracked `examples/` tree remains as source fixtures and demos.
-
-</td>
-<td width="33%">
-
-### 2. Compile
-
-Imprint generates replay artifacts:
-
-- **`workflow.json`** — API-level replay (fast, with named state captures)
-- **`playbook.yaml`** — DOM-level fallback (universal)
-- **`request-transform.ts`** — URL signing when the API requires per-call tokens (optional)
-
-Both artifacts are written into the generated tool directory (`~/.imprint/<site>/<toolName>/`). `compile-playbook` uses that nested location by default so cron and MCP discovery can see the fallback without a custom `--out`.
-
-Credentials and PII are redacted automatically: credential values become `${credential.NAME}` placeholders, sensitive values become redaction markers that preserve equality within the artifact, and a supplemental free-form scan catches common emails, phone numbers, SSNs, payment cards, JWTs, API keys, private keys, database URLs, and webhook URLs before LLM compile. That free-form scan runs on request bodies, URLs, storage, and DOM/event details; response bodies are scrubbed by sensitive field name only, so structured server payloads (e.g. doubly-encoded RPC envelopes) stay intact.
-
-</td>
-<td width="34%">
-
-### 3. Use
-
-A typed MCP tool is generated and wired into your AI platform. Re-run `imprint install <site>` any time to add the same emitted MCP server to another platform, or remove it later with `imprint uninstall <site>`.
-
-</td>
-</tr>
-</table>
+┌─────────────┐      ┌──────────────┐      ┌─────────────┐
+│   1. TEACH  │ ───▶ │  2. COMPILE  │ ───▶ │   3. USE    │
+│             │      │              │      │             │
+│ Open a real │      │ Generates:   │      │ A typed MCP │
+│ browser,    │      │              │      │ tool your   │
+│ drive the   │      │ workflow.json│      │ agent calls │
+│ workflow,   │      │ (API replay) │      │ like any    │
+│ narrate.    │      │              │      │ other tool. │
+│             │      │ playbook.yaml│      │             │
+│ Imprint     │      │ (DOM replay) │      │ Works with  │
+│ records     │      │              │      │ Claude,     │
+│ everything. │      │ request-     │      │ Codex, any  │
+│             │      │ transform.ts │      │ MCP client. │
+│             │      │ (signing)    │      │             │
+└─────────────┘      └──────────────┘      └─────────────┘
+```
 
 > All three steps happen in a single `imprint teach` command.
 
-<br>
+Credentials and PII are **redacted automatically** — credential values become `${credential.NAME}` placeholders, and a supplemental scan catches emails, phone numbers, API keys, JWTs, and more before anything reaches the LLM.
+
+---
 
 ## Why Imprint?
 
-Other browser-tool frameworks (browser-use, Computer Use) ask the LLM to **decide every click at runtime**.
+Other browser-tool frameworks ask the LLM to **decide every click at runtime**. Imprint takes a fundamentally different approach:
 
-| | Imprint | browser-use / Computer Use |
-|---|---|---|
-| **How it works** | Record once, replay deterministically | LLM decides every click at runtime |
+| | **Imprint** | **browser-use / Computer Use** |
+|:--|:--|:--|
+| **Approach** | Record once, replay deterministically | LLM decides every click at runtime |
 | **Token cost** | Zero at runtime | Scales with workflow complexity |
 | **Reliability** | Deterministic — same input, same output | Variable — exploration can diverge |
 | **Bot detection** | Real Chromium + stealth-fetch | Detectable automation fingerprint |
-| **When it breaks** | Automatic fallback via backend ladder | No fallback |
-| **Time to result** | 200ms – 9s | 30s+ |
+| **Fallback** | Automatic ladder (API → DOM) | None |
+| **Speed** | 200ms – 9s | 30s+ |
 
-<br>
+---
 
-## Install
+## Installation
 
-### npm (requires [Bun](https://bun.sh) >= 1.3)
+### Recommended
 
 ```bash
 bun install -g imprint-mcp
 ```
 
-Or run without installing: `bunx imprint-mcp teach southwest --url https://www.southwest.com`
+> Requires [Bun](https://bun.sh) >= 1.3. Or run without installing: `bunx imprint-mcp teach <site> --url <url>`
 
-### Standalone binary (no Bun needed)
+### Standalone Binary
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ashaychangwani/imprint/main/scripts/install.sh | bash
 ```
 
-The standalone binary supports `mcp-server`, `install`, `cron`, and `credential` commands.
-Browser commands (`teach`, `record`, `login`, `playbook`) require a full Bun + Playwright install.
-
-### From source
+### From Source
 
 ```bash
 git clone https://github.com/ashaychangwani/imprint.git && cd imprint
 bun install && bun link
 ```
 
-### Browser commands
+### Browser Setup
 
-The `teach`, `record`, `login`, and `playbook` commands need Playwright's Chromium. Install it once:
+Commands that open a browser (`teach`, `record`, `login`, `playbook`) need Playwright's Chromium:
 
 ```bash
 bunx playwright install chromium
 ```
 
-### LLM providers
+### LLM Providers
 
-Imprint detects LLM providers from what's already on your system:
+Imprint auto-detects what's available on your system. Run `imprint doctor` to see detected providers.
 
-| Priority | Provider | Triggered by |
-|---|---|---|
-| 1 | `claude-cli` | `claude` on PATH (Claude Code subscription) |
-| 2 | `codex-cli` | `codex` on PATH (Codex subscription) |
-| 3 | `anthropic-api` | `ANTHROPIC_API_KEY` env var |
-| 4 | `cursor-cli` | `cursor` on PATH (generic prompt/playbook compile only; not `teach`/`generate`) |
+| Priority | Provider | Detected via |
+|:--|:--|:--|
+| 1 | Claude Code | `claude` on PATH |
+| 2 | Codex CLI | `codex` on PATH |
+| 3 | Anthropic API | `ANTHROPIC_API_KEY` env var |
+| 4 | Cursor | `cursor` on PATH |
 
-```bash
-imprint doctor
+Override with `--provider <name>` and `--model <name>`.
+
+---
+
+## The Backend Ladder
+
+When an API call gets blocked, Imprint doesn't jump to DOM replay. It escalates through the cheapest backend that works:
+
+```
+  fetch            ~200ms    Plain APIs, persisted cookies
+    │
+    ▼
+  fetch-bootstrap  browser   Mints cookies, CSRF tokens, storage
+    │               + API
+    ▼
+  stealth-fetch    ~1-12s    Defeats Akamai, Cloudflare, DataDome
+    │
+    ▼
+  playbook         ~9s       Full DOM replay — universal fallback
 ```
 
-Shows which providers are detected. Interactive `imprint teach` prompts you to choose when multiple compatible compile providers are available, and also lists undetected providers as setup-help entries. Pick one of those help entries to see exactly which CLI or environment variable to add so it will be detected next time.
+Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder always has a DOM fallback.
 
-To force a specific provider and skip the picker, pass `--provider <name>` to `teach`, `generate`, or `compile-playbook`. `teach` and `generate` require a compile-agent provider (`claude-cli`, `codex-cli`, or `anthropic-api`); `compile-playbook` can also use `cursor-cli`.
+---
 
-After selecting a provider, `teach` prompts for a **model** (e.g. `claude-opus-4-8` vs `claude-sonnet-4-6` for Anthropic, `gpt-5.4` vs `o3` for Codex). Override with `--model <name>`. Each tool compiles with a **20-minute timeout** by default — the compile agent writes the MCP server and runs thorough verification tests, so most complex tools take 10-15 minutes. Override with `--timeout <duration>` (e.g. `--timeout 30m`, `--timeout 1h`). To persist the generated tests after compilation, set `IMPRINT_KEEP_TEST=1` or pass `--keep-test`. To skip the replay-and-diff stage (the automated second pass that classifies ephemeral vs constant values), pass `--skip-replay` — faster, but may reduce workflow accuracy for sites with dynamic request parameters.
+## Platform Support
 
-When one recording yields **two or more** tools, `teach` first plans and builds **shared modules** (URL signing, response parsers, shared types) under `~/.imprint/<site>/_shared/` and verifies each one before the tools compile, so every tool reuses the same vetted code instead of re-deriving it. Set `IMPRINT_NO_BUILD_PLAN=1` to disable and compile each tool independently. Then, before each tool compiles, a short **per-tool planning pass** maps every parameter to its recorded field and fixes the request/parse plan, so the compile follows a vetted plan instead of re-deriving structure (disable with `IMPRINT_NO_TOOL_PLAN=1`).
-
-Once tools are generated, `imprint audit <site>` exercises every tool against the site's real MCP server and scores it deterministically (≥95% gate by default), so you can hold a fresh teach to a hard accuracy bar.
-
-<br>
-
-## Local compile tracing
-
-Slow or suspicious compiles can be inspected in a local [Phoenix](https://arize.com/docs/phoenix/self-hosting/deployment-options/terminal) trace UI.
-
-```bash
-# one-time install with uv
-uv tool install arize-phoenix
-phoenix serve
-
-# in another terminal
-IMPRINT_TRACE=1 \
-IMPRINT_TRACE_BATCH=false \
-IMPRINT_TRACE_LLM_IO=1 \
-IMPRINT_TRACE_TOOL_IO=1 \
-PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
-imprint teach namecheap-domains --from-session ~/.imprint/namecheap-domains/sessions/<ts>.json --provider codex-cli
-```
-
-Traces show the full compile pipeline at every level of detail: the `cli.teach` root fans out into one span per stage (`teach.record`, `teach.redact`, `teach.combine_sessions`, `compile.triage_requests`, `teach.detect_tool_candidates`, `teach.plan_prereqs` → `teach.build_shared_module`, `teach.plan_tool`, `compile.generate`, `compile.playbook`) so any stage is debuggable in isolation; each `agent.turn.N` span captures per-turn token counts; each `llm.message_with_tools` span records model, provider, input/output tokens, and stop reason; each `agent.tool.X` span times individual tool dispatches. Drill from `cli.teach` → `compile.generate` → `agent.turn.1` → tool calls to find exactly which turn or tool is spending tokens. `imprint audit` traces its own `cli.audit` → `audit.session` tree with the deterministic score attributes. Set `IMPRINT_TRACE_IO_MAX_CHARS` to raise or lower captured payload size. Set `IMPRINT_TRACE_INPUT_USD_PER_1M` and `IMPRINT_TRACE_OUTPUT_USD_PER_1M` to add estimated cost attributes.
-
-<br>
-
-## Platform support
-
-At the end of `imprint teach`, you pick your AI platform and Imprint handles the wiring:
+At the end of `imprint teach`, pick your AI platform and Imprint wires it up:
 
 | Platform | Integration |
-|---|---|
-| **Claude Code** | Automatic — runs `claude mcp add` for you |
-| **Codex CLI** | Automatic — runs `codex mcp add` for you |
+|:--|:--|
+| **Claude Code** | Automatic — runs `claude mcp add` |
+| **Codex CLI** | Automatic — runs `codex mcp add` |
 | **Claude Desktop** | Paste-ready JSON config |
 | **OpenClaw** | MCP config + SKILL.md export |
 | **Hermes** | MCP config + SKILL.md + cron mapping |
 
-Each site registers as its own MCP server (`imprint-southwest`, `imprint-discoverandgo`, ...) so tools never collide. See [Integrations](docs/integrations.md) for HTTP transport, Docker, and systemd options.
+Each site registers as its own MCP server (`imprint-southwest`, `imprint-google-flights`, ...) so tools never collide.
 
-Audit or clean up those registrations with `imprint mcp`:
-
-```bash
-imprint mcp status                         # registrations + local teach state
-imprint mcp                                # interactive cleanup TUI
-imprint mcp disable imprint-mysite --yes   # reversible; stores a local snapshot
-imprint mcp delete imprint-mysite --yes    # removes external MCP registrations only
-```
-
-Raw recordings under `~/.imprint/<site>/sessions/` may contain sensitive browser state. Cleanup commands leave them alone unless you explicitly choose `--local site`.
-
-See [MCP Maintenance](docs/mcp-maintenance.md) for status classifications, supported client config files, reversible disable behavior, and local artifact cleanup rules.
-
-<br>
-
-## Sharing skills across machines
-
-Teach on your laptop, ship the skill to a remote agent (OpenClaw, Hermes, a server-side cron host, ...). Skill folders committed to git contain **zero plaintext credentials** — only placeholders like `${credential.NAME}` / `${state.NAME}` and a `credentials.manifest.json` listing the secrets or durable storage keys the receiver must provision.
-
-> **Headless server?** Sites behind behavioral anti-bot defenses replay through a real Chrome run **headless** — no display needed (Imprint strips the `HeadlessChrome` UA token that would otherwise give it away). The only exception is a **GPU-less Linux host**, where headless WebGL can be fingerprinted; there, install `xvfb` (`apt-get install xvfb`) and Imprint runs the replay headed in a virtual display. `imprint doctor` flags this; see [troubleshooting](docs/troubleshooting.md#running-on-a-headless-server-anti-bot-sites).
-
-For credentials, use the **encrypted bundle** flow when you can't (or don't want to) re-type passwords on the receiving machine:
-
-```bash
-# On the laptop where you taught the skill:
-imprint credential export southwest --out southwest.imprintbundle
-# → prompts for a passphrase. The bundle is libsodium-encrypted with an
-#   argon2id-derived key. Safe to send via Slack, email, scp, S3, etc.
-
-# On the OpenClaw machine (or any other receiver):
-imprint credential import southwest southwest.imprintbundle
-# → prompts for the same passphrase. Decrypts; secrets land in the OS keychain.
-```
-
-Pass the passphrase **out-of-band** (Signal, phone, password manager share — *not* the same channel as the bundle file).
-
-After import, the same `imprint mcp-server <site>` config you'd use locally works on the receiver — it resolves credentials from that machine's credential backend and initializes a fresh cookie/state jar for every tool call. If anything's missing, `imprint mcp-server` and `imprint cron` log/fail with the exact `imprint credential set`, `imprint login`, or `imprint credential import` commands you need.
-
-See [Sharing Skills](docs/credential-sharing.md) for the full flow including interactive `imprint credential set` (when you can re-type), threat model, rotation, and OpenClaw / Hermes wiring details.
-
-<br>
-
-## The backend ladder
-
-When an API call gets blocked or needs browser-minted state, Imprint doesn't jump straight to DOM replay. It escalates through the cheapest mode that can satisfy the workflow:
-
-| | Speed | Handles |
-|---|---|---|
-| **fetch** | ~200ms | Plain APIs, persisted cookies, in-flight HTTP captures |
-| **fetch-bootstrap** | browser bootstrap + API replay | Pages that only need Chromium to mint cookies, CSRF, storage, or DOM-derived state |
-| **stealth-fetch** | ~12s first call, ~1s after | Akamai, Cloudflare, DataDome, bot-defense state |
-| **playbook** | ~9s | Anything — full DOM replay as fallback |
-
-`fetch-bootstrap` is not a default rung for every workflow. `auto` inserts it only when the workflow declares bootstrap metadata, a capture requires browser/stealth bootstrap, or `fetch` returns structured `STATE_MISSING` that a browser bootstrap can satisfy. Every recording still compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder has a DOM fallback when API replay cannot work.
-
-State-aware workflows use named captures and `${state.NAME}` placeholders. For example, request A can set a CSRF cookie, request B can project it into a header, and the whole run stays on plain `fetch` without launching Chromium.
-
-<br>
+---
 
 ## Examples
 
-The checked-in `examples/` directory contains committed fixtures and demos. Generated tools from `imprint teach` go into `~/.imprint/<site>/<toolName>/` by default (configurable via `IMPRINT_HOME`). Runtime discovery (cron, MCP, probe-backends) reads `IMPRINT_HOME`, so to run the checked-in examples, point it at the repo's `examples/` directory:
+| Example | Description |
+|:--|:--|
+| [**southwest**](examples/southwest) | Live fare search — defeats Akamai bot detection |
+| [**google-flights**](examples/google-flights) | Real-time flight search, parses Google's protobuf response |
+| [**google-hotels**](examples/google-hotels) | Hotel search with ratings, prices, and booking options |
+| [**namecheap-domains**](examples/namecheap-domains) | Domain search with CRC32 URL signing reverse-engineered from JS |
+| [**discoverandgo**](examples/discoverandgo) | Authenticated booking via per-site credential store |
+| [**echo**](examples/echo) | MCP smoke-test fixture |
 
-You can also install an example directly into an MCP client:
+Install any example into your MCP client:
 
 ```bash
 imprint install google-flights --source examples --platform claude-desktop
 ```
 
-Run `imprint install` with no arguments for an interactive install/uninstall picker. It only shows detected AI platforms; uninstall lists installed `imprint-*` MCP servers directly. For GUI config-file clients such as Claude Desktop, install writes an absolute Bun + Imprint CLI path so the app does not depend on your shell PATH.
+---
 
-| Example | What it demonstrates | Run it |
-|---|---|---|
-| [**southwest**](examples/southwest) | Live fare watcher, defeats Akamai bot detection, price-drop notifications | `IMPRINT_HOME=examples imprint cron southwest --once` |
-| [**google-flights**](examples/google-flights) | Real-time flight search across all carriers, parses Google's raw protobuf response | `IMPRINT_HOME=examples imprint mcp-server google-flights` |
-| [**google-hotels**](examples/google-hotels) | Hotel search with star rating, guest scores, nightly + total prices | `IMPRINT_HOME=examples imprint mcp-server google-hotels` |
-| [**discoverandgo**](examples/discoverandgo) | Authenticated booking via per-site credential store | `IMPRINT_HOME=examples imprint cron discoverandgo --once` |
-| [**namecheap-domains**](examples/namecheap-domains) | Domain search with CRC32 URL signing reverse-engineered from JS, 5-endpoint chain with availability + aftermarket pricing | `IMPRINT_HOME=examples imprint mcp-server namecheap-domains` |
-| [**echo**](examples/echo) | MCP smoke-test fixture (no network, no LLM) | `IMPRINT_HOME=examples imprint mcp-server echo` |
+## CLI Reference
 
-<br>
-
-## CLI reference
-
-```
+```bash
 imprint --help              # all commands
 imprint <command> --help    # per-command options
 ```
 
-| | Commands |
-|---|---|
+| Category | Commands |
+|:--|:--|
 | **Pipeline** | `teach` · `record` · `redact` · `generate` · `compile-playbook` · `emit` |
 | **Runtime** | `cron` · `mcp-server` · `playbook` · `probe-backends` · `audit` |
 | **Credentials** | `credential set` · `credential list` · `credential export` · `credential import` · `credential migrate` |
-| **Utilities** | `mcp` · `login` · `assemble` · `check` · `doctor` |
+| **Utilities** | `mcp` · `login` · `assemble` · `check` · `doctor` · `install` · `uninstall` |
 
-`teach`, `generate`, and `compile-playbook` accept `--provider <name>` to override the auto-detected LLM (see [Install](#install) for valid names and compile-agent support). `teach` and `generate` also take `--keep-test` to retain the agent-written `parser.test.ts` for debugging — it's deleted by default since it reads the gitignored redacted session via `$IMPRINT_SESSION_PATH` and isn't reproducible elsewhere. For multi-tool sites, use `imprint cron <site> --tool <toolName>` and `imprint probe-backends <site> --tool <toolName>` unless `--config` or `--out` points inside the target tool directory.
+---
 
-<br>
+## Sharing Skills
 
-## Docs
+Teach on your laptop, ship to a remote agent. Skill folders contain **zero plaintext credentials** — only `${credential.NAME}` placeholders and a manifest listing what the receiver must provision.
 
-- [Getting Started](docs/getting-started.md) — full walkthrough
-- [Integrations](docs/integrations.md) — per-platform setup
-- [MCP Maintenance](docs/mcp-maintenance.md) — audit, disable, restore, and prune Imprint MCP state
-- [Sharing Skills](docs/credential-sharing.md) — laptop ↔ OpenClaw / Hermes / remote-agent provisioning
-- [Architecture](docs/architecture.md) — data flow and module map
-- [Security](docs/security.md) — redaction, credential handling, what gets stored
-- [Troubleshooting](docs/troubleshooting.md) — common failures and fixes
-- [Decisions](docs/decisions.md) · [Glossary](docs/glossary.md) · [Capture Protocol](docs/capture-protocol.md) · [Playbook Debugging](docs/playbook-debugging.md) · [Notifications](docs/notifications.md)
+```bash
+# Export (encrypted with libsodium + argon2id)
+imprint credential export southwest --out southwest.imprintbundle
 
-<br>
+# Import on another machine
+imprint credential import southwest southwest.imprintbundle
+```
+
+Send the bundle over any channel. Pass the passphrase **out-of-band**.
+
+See [Sharing Skills](docs/credential-sharing.md) for the full flow.
+
+---
+
+## Documentation
+
+| | |
+|:--|:--|
+| [Getting Started](docs/getting-started.md) | Full walkthrough |
+| [Architecture](docs/architecture.md) | Data flow and module map |
+| [Integrations](docs/integrations.md) | Per-platform setup |
+| [Security](docs/security.md) | Redaction, credential handling, what gets stored |
+| [Sharing Skills](docs/credential-sharing.md) | Credential export/import and remote provisioning |
+| [MCP Maintenance](docs/mcp-maintenance.md) | Audit, disable, restore, and prune MCP state |
+| [Troubleshooting](docs/troubleshooting.md) | Common failures and fixes |
+| [Tracing](docs/tracing.md) | Local compile tracing with Phoenix |
+
+<details>
+<summary>More docs</summary>
+
+- [Decisions](docs/decisions.md) — design rationale
+- [Glossary](docs/glossary.md) — terms and concepts
+- [Capture Protocol](docs/capture-protocol.md) — CDP recording details
+- [Playbook Debugging](docs/playbook-debugging.md) — DOM replay debugging
+- [Notifications](docs/notifications.md) — alert setup
+
+</details>
+
+---
 
 ## Contributing
 
@@ -321,8 +258,10 @@ Good first contributions: replay backends, notification predicates, auth extract
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 
-<br>
+---
 
-## License
+<div align="center">
 
-[MIT](LICENSE)
+**[MIT License](LICENSE)**
+
+</div>
