@@ -1,0 +1,184 @@
+toolName: search_flights
+summary: "Search Google Flights for itineraries between two airports on given dates and trip type, returning the GetShoppingResults batchexecute payload."
+parameters:
+  - name: origin
+    type: string
+    description: "Origin airport/city code, e.g. SJC"
+  - name: destination
+    type: string
+    description: "Destination airport/city code, e.g. SAN"
+  - name: departure_date
+    type: string
+    description: "Outbound date in YYYY-MM-DD"
+  - name: return_date
+    type: string
+    description: "Return date in YYYY-MM-DD (omit/ignore for one-way)"
+  - name: trip_type
+    type: string
+    description: "Visible ticket-type label to select: 'Round trip', 'One way', or 'Multi-city' (workflow encodes 1/2/3)"
+  - name: max_stops
+    type: number
+    description: "Max stops filter: 0 nonstop, 1, 2, or 3 any (best-effort via filter bar)"
+  - name: airlines
+    type: string
+    description: "Alliance (Oneworld/SkyTeam/Star Alliance) or carrier name to include (best-effort via filter bar)"
+  - name: max_price
+    type: number
+    description: "Maximum total price in USD (best-effort via filter bar)"
+  - name: outbound_times
+    type: string
+    description: "Outbound departure/arrival time window in hours (best-effort via filter bar)"
+  - name: return_times
+    type: string
+    description: "Return departure/arrival time window in hours (best-effort via filter bar)"
+  - name: max_duration
+    type: number
+    description: "Maximum total trip duration in minutes (best-effort via filter bar)"
+  - name: carry_on_bags
+    type: number
+    description: "Number of carry-on bags to filter/price by (best-effort via filter bar)"
+steps:
+  - action: navigate
+    url: https://www.google.com/travel/flights
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: aria_label
+        value: "Where from?"
+      - by: css
+        value: 'div.cQnuXe.k0gFV input.II2One.j0Ppje'
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value_pattern: "Where (from\\?|else\\?)"
+      - by: css
+        value: 'div.cQnuXe.k0gFV input.II2One.j0Ppje'
+    value: ${origin}
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: ${origin}
+      - by: text
+        value_pattern: ${origin}
+    wait_for: visible
+  - action: click
+    locators:
+      - by: aria_label
+        value: "Where to? "
+      - by: css
+        value: 'div.wUiEcc.SOcuWe input.II2One.j0Ppje'
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value_pattern: "Where (to\\? ?|else\\?)"
+      - by: css
+        value: 'div.wUiEcc.SOcuWe input.II2One.j0Ppje'
+    value: ${destination}
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: ${destination}
+      - by: text
+        value_pattern: ${destination}
+    wait_for: visible
+  - action: click
+    locators:
+      - by: aria_label
+        value: "Select your ticket type."
+      - by: css
+        value: 'div.TQYpgc.gInvKb div.VfPpkd-aPP78e'
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: role
+        value: option
+        name: ${trip_type}
+      - by: text
+        value_pattern: ${trip_type}
+    wait_for: visible
+  - action: click
+    locators:
+      - by: aria_label
+        value: "Departure"
+      - by: css
+        value: 'div.GYgkab.YICvqf input.TP4Lpb.eoY5cb'
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: "Departure"
+      - by: css
+        value: 'div.GYgkab.YICvqf input.TP4Lpb.eoY5cb'
+    value: ${departure_date}
+    wait_for:
+      sleep_ms: 400
+  - action: type
+    locators:
+      - by: aria_label
+        value: "Return"
+    value: ${return_date}
+    wait_for:
+      sleep_ms: 400
+  - action: click
+    locators:
+      - by: text
+        value: Done
+      - by: aria_label
+        value_pattern: "Done"
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: role
+        value: button
+        name: Search
+      - by: text
+        value: Search
+      - by: aria_label
+        value_pattern: "Search"
+    wait_for:
+      xhr: /FlightsFrontendService/GetShoppingResults
+result:
+  source: xhr
+  url_pattern: /FlightsFrontendService/GetShoppingResults
+  extract: "2"
+  return_as: itineraries
+notes: >
+  Google Flights is a batchexecute RPC app. The result-bearing XHR is
+  GetShoppingResults (POST to /_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults);
+  the largest/last GetShoppingResults response after the Search click carries the
+  full itinerary set. The response is NOT plain JSON: it is prefixed with )]}' and
+  chunked into length-prefixed lines. The parser must strip the )]}' prefix, split
+  on the numeric length markers, JSON.parse each line to find the ["wrb.fr",null,"<json-string>"]
+  envelope, then JSON.parse the index-2 element (the double-encoded payload). Flight
+  itineraries live in deeply nested positional arrays inside that payload — each
+  itinerary exposes carrier code+name, flight number, origin/destination codes,
+  [hour,minute] depart/arrive, duration minutes, stops, layover info, and price in
+  USD (the integer like 88008 = $880.08 scaled, or the [[null,337],...] cents-ish
+  marker). The extract path "2" denotes the wrb.fr payload slot and requires the
+  custom decoding above — a plain dot-path cannot traverse the stringified inner JSON.
+  DOM-locator caveats: this site uses auto-generated class names (e.g. VfPpkd-*,
+  II2One) and react-style ids (#c7293, #c115604) that change every deploy and per
+  session — prefer the aria_label/text/role locators; the css fallbacks are brittle.
+  The origin/destination editable field re-labels itself to "Where else?" while
+  focused, hence the regex aria_label patterns.
+  trip_type must be passed as the visible label ("Round trip" / "One way" /
+  "Multi-city"), not the 1/2/3 encoding used by the API workflow.
+  For one-way searches the "Return" type step is a no-op/absent — skip or expect it
+  to be ignored. Multi-city requires per-leg origin/destination entry not captured
+  as discrete linear steps here.
+  Filter parameters (max_stops, airlines, max_price, outbound_times, return_times,
+  max_duration, carry_on_bags) are applied via the chip filter bar (Stops/Airlines/
+  Bags/Price/Times/Duration buttons) which open popovers with obfuscated controls;
+  they are best applied through the API workflow rather than DOM steps. They are
+  listed here only to keep params 1:1 with workflow.json for cron/MCP fallback.

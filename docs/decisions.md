@@ -22,7 +22,7 @@ A running log of the load-bearing calls made for Imprint. Each entry: the decisi
 
 ## D4 — Backend ladder with auto-escalation
 
-**Decided.** `fetch → conditional fetch-bootstrap → stealth-fetch → playbook`. Walks in order; escalates on `FORBIDDEN` and on structured `STATE_MISSING` only when the next backend can satisfy every required missing item. The principle: as long as some backend would have worked, the call succeeds, but missing credentials or unsupported workflow gaps should fail with actionable errors instead of blindly launching a browser.
+**Decided.** `fetch → conditional fetch-bootstrap → cdp-replay → stealth-fetch → playbook`. Walks in order; escalates on `FORBIDDEN`, on a `400`/`BAD_RESPONSE` (up to a higher-trust rung), and on structured `STATE_MISSING` only when the next backend can satisfy every required missing item. `cdp-replay` runs the API requests *inside* a live trusted Chrome so a protected POST re-validates its anti-bot token (`_abck`) between calls — the only rung that sustains a sequence of multi-step state-changing POSTs. The principle: as long as some backend would have worked, the call succeeds, but missing credentials or unsupported workflow gaps should fail with actionable errors instead of blindly launching a browser.
 
 **Alternative:** One backend per site, configured manually. Cleaner mental model, worse UX — every Akamai migration becomes a config edit.
 
@@ -111,7 +111,7 @@ This shows up everywhere: `requirePositional` → "→ run \`imprint <verb> --he
 
 **Decided.** Allow `workflow.json` to declare an optional `requestTransformModule` path. The module exports `transform(method, url, responses) → url`. The runtime calls it before each request, enabling per-request URL signing, header injection, or dynamic query param construction.
 
-The compile-agent writes this module when `stateHints` flag per-call query params (`query_param_changes_across_calls`). It uses `search_response_body` to find the signing function in the session's JavaScript responses and replicates the computation. Example: Namecheap's CRC32 + XOR + base64 URL signing.
+The compile-agent writes this module when `stateHints` flag per-call query params (`query_param_changes_across_calls`) or when a request body must be constructed from the tool's parameters. It uses `search_response_body` to find the signing/encoding function in the session's JavaScript responses and replicates the computation. Example: google-flights builds Google's positional `batchexecute` request body from flat snake_case params in `request-transform.ts`.
 
 **Alternative:** Bake signing logic into the workflow JSON URL template syntax (e.g. a `${sign(...)}` function). Too rigid — signing schemes vary widely (HMAC, CRC32, OAuth, custom XOR). A JS module is testable, composable, and doesn't pollute the workflow schema with execution semantics.
 

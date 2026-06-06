@@ -1,0 +1,36 @@
+toolName: autocomplete_hotel_location
+summary: Resolve a free-text place query into Google Hotels location autocomplete suggestions via the mejVKc endpoint.
+parameters:
+  - name: query
+    type: string
+    description: Partial place/hotel text to autocomplete, e.g. "chicago loop" or "tahoe city"
+steps:
+  - action: navigate
+    url: https://www.google.com/travel/search
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: aria_label
+        value: Search for places, hotels and more
+      - by: role
+        value: textbox
+        name: Search for places, hotels and more
+      - by: css
+        value: input.II2One.j0Ppje
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: Search for places, hotels and more
+      - by: css
+        value: input.II2One.j0Ppje
+    value: ${query}
+    wait_for:
+      xhr: rpcids=mejVKc
+result:
+  source: xhr
+  url_pattern: rpcids=mejVKc
+  extract: "[0][].1"
+  return_as: suggestions
+notes: "The mejVKc response uses Google's batchexecute anti-XSSI envelope: strip the )]}' prefix and chunk-length lines, locate the [\"wrb.fr\",\"mejVKc\",\"<inner>\"] tuple, then JSON.parse the doubly-encoded inner string. The parsed inner JSON is [ [suggestion, ...], [meta] ]; each suggestion is a positional array whose index 1 is the suggested query string (e.g. \"granlibakken tahoe\"), index 5 holds the bolded match segments, and index 7 holds the internal id triple used to disambiguate the place. The extract path [0][].1 yields the list of suggestion strings; downstream callers needing the id triple should read index 7 of each entry. Autocomplete fires per keystroke during recording (debounced); only the final mejVKc response for the fully-typed query is relevant. No auth required — unauthenticated POST to /_/TravelFrontendUi/data/batchexecute. The DOM dropdown options (li.Q1RWxd span.S5TdWc) are an alternative DOM-source fallback if the XHR shape changes."

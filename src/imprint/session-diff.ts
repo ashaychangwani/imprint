@@ -435,3 +435,52 @@ export function triageByAlignment(
   const aligned = alignRequests(run1TriagedRequests, run2AllRequests);
   return aligned.filter((pair) => pair.confidence >= 0.5).map((pair) => pair.replaySeq);
 }
+
+/**
+ * Severity order — a value seen varying in ANY pass outranks one seen constant.
+ * server_derived (traceable to a response) wins over browser_minted.
+ */
+const CLASSIFICATION_RANK: Record<ValueClassification, number> = {
+  constant: 0,
+  browser_minted: 1,
+  server_derived: 2,
+};
+
+/**
+ * Merge `ClassifiedValue`s from several diff passes that all share the SAME
+ * `original` recording (so `originalSeq` is a stable join key across passes).
+ *
+ * Each pass diffs the original recording against one other run — the automated
+ * browser replay AND every other real recording of the site. Anti-bot edges
+ * (Akamai, DataDome, …) often block the automated replay at the page level, so
+ * the replay reproduces only a fraction of the recording's requests and their
+ * functional values (GraphQL safelisting signatures, persisted-query hashes,
+ * app keys) never get classified. Real recordings come from a trusted browser
+ * and DO carry those requests, so diffing recordings against each other
+ * recovers the missing signal.
+ *
+ * Merge rule per (originalSeq, location):
+ *   - a value that VARIES in any pass is ephemeral — the strongest non-constant
+ *     classification wins (server_derived > browser_minted), preserving its
+ *     producer provenance;
+ *   - a value constant in every pass that observed it is `constant`.
+ * A value the replay never observed (because it was blocked) but that is
+ * identical across time-separated recordings is therefore kept as `constant`,
+ * not silently dropped.
+ */
+export function mergeClassifications(passes: ClassifiedValue[][]): ClassifiedValue[] {
+  const byKey = new Map<string, ClassifiedValue>();
+  for (const pass of passes) {
+    for (const cv of pass) {
+      const key = `${cv.originalSeq} ${cv.location}`;
+      const prev = byKey.get(key);
+      if (
+        !prev ||
+        CLASSIFICATION_RANK[cv.classification] > CLASSIFICATION_RANK[prev.classification]
+      ) {
+        byKey.set(key, cv);
+      }
+    }
+  }
+  return [...byKey.values()];
+}

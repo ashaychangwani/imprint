@@ -1144,9 +1144,12 @@ export async function runCommand(
   extraEnv?: Record<string, string>,
 ): Promise<{ result: string; isError?: boolean }> {
   return new Promise((resolve) => {
+    // `detached: true` makes the child its own process-group leader so a timeout
+    // can SIGKILL the WHOLE tree (sh → bun → Chrome), not just `sh`.
     const proc = spawn('sh', ['-c', command], {
       cwd,
       env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+      detached: true,
     });
 
     let stdout = '';
@@ -1165,11 +1168,41 @@ export async function runCommand(
 
     const timeout = setTimeout(() => {
       timedOut = true;
-      proc.kill();
+      // Kill the whole process GROUP, not just `sh`. A hung `bun run probe.ts`
+      // spawns bun + Chrome children that survive a bare proc.kill() (SIGTERM to
+      // sh only); they keep the stdout pipe open so 'close' never fires, hanging
+      // this call until the outer MCP tool timeout (30m) — exactly what ate a
+      // tool's compile budget. SIGKILL the group so the timeout reaps bun + any
+      // leaked browser and 'close' fires promptly.
+      try {
+        if (proc.pid) process.kill(-proc.pid, 'SIGKILL');
+        else proc.kill('SIGKILL');
+      } catch {
+        proc.kill('SIGKILL');
+      }
     }, timeoutMs);
 
     proc.on('close', (exitCode) => {
       clearTimeout(timeout);
+
+      // Reap the whole process GROUP on EVERY exit, not just on timeout. The
+      // compile verifier runs `bun test`, whose runner calls process.exit() the
+      // instant the suite passes — and bun does NOT run process 'exit' /
+      // 'beforeExit' handlers (only afterAll), so the compile cdp pool's
+      // idle-close timer never fires and its launchChromium child is orphaned
+      // (reparented to PID 1), accumulating across a multi-tool/multi-site teach
+      // until the box OOMs. That child is still in THIS process group, though:
+      // the group's id (= proc.pid) outlives the dead `sh` leader, so SIGKILLing
+      // the group here reaps the orphaned Chrome regardless of how `bun test`
+      // chose to exit. Harmless when the group is already empty (ESRCH). Skipped
+      // on timeout (the group was already SIGKILLed above).
+      if (!timedOut && proc.pid) {
+        try {
+          process.kill(-proc.pid, 'SIGKILL');
+        } catch {
+          // group already empty — nothing left to reap
+        }
+      }
 
       if (stdout.length > TRUNCATE_LIMIT) {
         stdout = `${stdout.slice(0, TRUNCATE_LIMIT)}\n[…truncated…]`;
@@ -1396,6 +1429,19 @@ export function isBotDefenseFailure(output: string): boolean {
   const strong =
     /unusual traffic|recaptcha|hcaptcha|h-captcha|are you (a )?(human|robot)|verify (you are|you'?re) (a )?human|px-captcha|datadome|perimeterx|cf[-_]chl|attention required|just a moment\s*(\.\.\.|…)?|enable javascript and cookies to continue/i;
   if (strong.test(output)) return true;
+  // Akamai Bot Manager runtime signal: `_abck` is the sensor cookie and a value
+  // ending in `~-1~` means the session is UNVALIDATED (bot-flagged); `~0~` means
+  // validated. The cdp bootstrap logs `_abck status after interaction: ~-1~` when
+  // it ran the human-like interaction (mouse/scroll) and STILL could not validate
+  // the sensor — i.e. it actively tried to beat the defense and failed. On such a
+  // session Akamai serves a 200 "soft block" with empty/placeholder data instead
+  // of a 403, so the live integration fails to produce data even though every
+  // backend reports OK. Treat that as a bot-defense waiver (the tool falls through
+  // to the runtime ladder / playbook and the audit validates it live) rather than
+  // a hard compile failure. Scoped to the post-interaction confirmation so the
+  // ordinary "cached jar not validated … — re-mint" log (which precedes a retry
+  // that often succeeds) does NOT trip it.
+  if (/_abck status after interaction:\s*~-1~/i.test(output)) return true;
   // Weaker terms need a corroborating blocking status or a redirect to a
   // challenge page so ordinary error text doesn't get a free pass.
   const weak =
@@ -1446,6 +1492,10 @@ interface BunTestRun {
   stdout: string;
   stderr: string;
   exitCode: number;
+  /** True when the run was killed by the wall-clock timeout (not a clean exit).
+   *  Lets the classifier treat a truncated paced anti-bot suite as infra, never
+   *  as a bot block (the partial output's fetch-403 must not look like a block). */
+  timedOut: boolean;
   /** Per-test names recovered from the JUnit report. */
   passed: Set<string>;
   failed: Set<string>;
@@ -1506,7 +1556,12 @@ async function runBunTestWithResults(
     timeoutMs,
     env,
   );
-  const output = JSON.parse(result.result) as { stdout: string; stderr: string; exitCode: number };
+  const output = JSON.parse(result.result) as {
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    timedOut?: boolean;
+  };
   let xml = '';
   try {
     if (existsSync(junitPath)) xml = readFileSync(junitPath, 'utf8');
@@ -1523,6 +1578,7 @@ async function runBunTestWithResults(
     stdout: output.stdout,
     stderr: output.stderr,
     exitCode: output.exitCode,
+    timedOut: output.timedOut ?? false,
     passed,
     failed,
   };
@@ -1599,6 +1655,130 @@ function sourcedFromOf(ts: {
   return ts.sourceTool && ts.sourceField
     ? { tool: ts.sourceTool, field: ts.sourceField }
     : undefined;
+}
+
+interface IntegrationVerdict {
+  /** Drives PARAM coverage: a waived suite lets per-param tests waive (non-blocking);
+   *  `failed` blocks; `passed` grades params strictly. */
+  outcome: 'passed' | 'waived-bot' | 'waived-infra' | 'failed';
+  /** Drives `liveVerified` — INDEPENDENT of `outcome`. True when a backend returned
+   *  real data this run (the workflow IS live-verifiable), even if the per-param
+   *  suite was truncated/blocked. Decoupling these is the fix for tools whose
+   *  stealth/cdp baseline succeeded shipping `liveVerified:false` just because the
+   *  param suite hit the verifier timeout. */
+  baselineLiveVerified: boolean;
+  firstError: string;
+  exhaustedBackends: string[];
+  /** Non-null when a declared `${state.X}` capture returned null at runtime (a
+   *  workflow-correctness error, not infra) — the caller crafts the actionable msg. */
+  captureFailName: string | null;
+  captureFailFromKnown: boolean;
+}
+
+/**
+ * Pure classifier for the live integration run. Decides the suite `outcome` AND,
+ * separately, whether the BASELINE was live-verified.
+ *
+ * Why two outputs: an anti-bot suite can have its baseline return real data
+ * (liveVerified) while its per-param tests time out / get blocked (params waive,
+ * non-blocking). The old code coupled `liveVerified` to the WHOLE suite passing,
+ * so a tool whose stealth/cdp baseline succeeded shipped `liveVerified:false`
+ * merely because the param suite was truncated by the 60s verifier timeout, and a
+ * lone `fetch`-rung 403 in the partial output read as a total bot block.
+ *
+ * `baselineLiveVerified` = a backend returned real data this run, detected by the
+ * ladder's `parallel probe: winner=<backend>` log (logged ONLY on an ok result —
+ * robust when JUnit is absent because a timeout SIGKILLed the suite) OR a
+ * non-`param:` baseline test passing in JUnit (robust when a memoized call skipped
+ * the probe log).
+ *
+ * `exhaustedBackends` lists only backends whose probe digest line reported an
+ * ERROR — NOT every backend that was "trying…" (cdp-replay/stealth-fetch usually
+ * succeed and must not be reported as exhausted).
+ */
+export function classifyIntegrationOutcome(input: {
+  exitCode: number;
+  timedOut: boolean;
+  combined: string;
+  passedTests: ReadonlySet<string>;
+  referencedStateBroken: boolean;
+  failedCaptureNames: ReadonlySet<string>;
+}): IntegrationVerdict {
+  const { combined } = input;
+  const baselineLiveVerified =
+    /parallel probe: winner=/.test(combined) ||
+    [...input.passedTests].some((t) => !t.startsWith('param:'));
+  const exhaustedBackends = Array.from(
+    new Set(
+      Array.from(
+        combined.matchAll(
+          /^\s*([a-z-]+): (?:NETWORK|FORBIDDEN|RATE_LIMITED|BAD_RESPONSE|STATE_MISSING|AUTH_EXPIRED|UNKNOWN)\b/gm,
+        ),
+      ).map((m) => m[1] as string),
+    ),
+  );
+  const firstErrorMatch = combined.match(/\b(NETWORK|FORBIDDEN|RATE_LIMITED)\b[^\n]{0,200}/);
+  const firstError = firstErrorMatch?.[0]?.trim() ?? 'unknown';
+  const base = { baselineLiveVerified, firstError, exhaustedBackends };
+
+  if (input.exitCode === 0) {
+    return {
+      ...base,
+      outcome: 'passed',
+      baselineLiveVerified: true,
+      firstError: '',
+      exhaustedBackends: [],
+      captureFailName: null,
+      captureFailFromKnown: false,
+    };
+  }
+  if (input.referencedStateBroken) {
+    return { ...base, outcome: 'failed', captureFailName: null, captureFailFromKnown: false };
+  }
+  // Fix C — a STATE_MISSING traced to a declared capture is a workflow-correctness
+  // error, not infra; waiving it would silently ship a broken workflow. Match the
+  // EXACT runtime message (runtime.ts: `Required capture "<name>" (<source>) did
+  // not produce a value.`) — the error code prefix is separated by an em-dash, not
+  // a colon, so the old `STATE_MISSING:` regex never matched and these failures
+  // wrongly fell through to the anti-bot branch (shipped waived-bot instead of
+  // failed). Checked BEFORE the bot-defense branch so a capture-fail that also has
+  // an `_abck` line in the log is still classified `failed`, not waived.
+  const captureFailMatch = combined.match(
+    /Required capture\s+"([^"]+)"\s*\([^)]*\)\s*did not produce a value/i,
+  );
+  if (captureFailMatch) {
+    const name = captureFailMatch[1] ?? '';
+    return {
+      ...base,
+      outcome: 'failed',
+      captureFailName: name,
+      captureFailFromKnown: input.failedCaptureNames.has(name),
+    };
+  }
+  // A verifier TIMEOUT truncated a paced suite — that's infra, NEVER a bot block.
+  // (Don't let the partial output's fetch-403 masquerade as a total block.)
+  if (input.timedOut) {
+    return {
+      ...base,
+      outcome: 'waived-infra',
+      firstError: firstError === 'unknown' ? 'verifier timeout (suite truncated)' : firstError,
+      captureFailName: null,
+      captureFailFromKnown: false,
+    };
+  }
+  if (isBotDefenseFailure(combined)) {
+    return { ...base, outcome: 'waived-bot', captureFailName: null, captureFailFromKnown: false };
+  }
+  // Every ladder rung exhausted with an infra error. Matches the runWorkflowWithLadder
+  // probe summary (`all backends failed`) + the runWithLadder memo-path summary
+  // (`ladder exhausted`) + stealth's `giving up` / non-escalatable markers.
+  const hasImprintBlock =
+    /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(combined) &&
+    /non-escalatable|giving up|ladder exhausted|all backends failed/.test(combined);
+  if (hasImprintBlock) {
+    return { ...base, outcome: 'waived-infra', captureFailName: null, captureFailFromKnown: false };
+  }
+  return { ...base, outcome: 'failed', captureFailName: null, captureFailFromKnown: false };
 }
 
 /**
@@ -2515,116 +2695,101 @@ export async function externalVerification(
       'skipped the live integration test: a request references a ${state.X} capture (e.g. csrf/csp-nonce) whose pattern does not match the recorded page, so the live call is guaranteed to fail with STATE_MISSING. Fix the capture pattern/source (see the failure above) — the next verification cycle will run the live test once it can succeed. This avoids burning a doomed anti-bot .act call.',
     );
   } else {
+    // Scale the verifier's live-test timeout to the suite size: the baseline plus
+    // one live `runWorkflowWithLadder` per param, each gated by the ~25s compile
+    // pacing and a possible cdp cold start. A flat 60s truncated paced anti-bot
+    // suites mid-run, and the partial output then misclassified as a bot block.
+    // Cap it so a genuinely wedged suite can't run away.
+    const paramCount = opts.likelyParams?.length ?? 0;
+    const pacingMs = Number(process.env.IMPRINT_COMPILE_ACT_SPACING_MS ?? 25_000) || 0;
+    const verifierTimeoutMs = Math.min(120_000 + paramCount * (pacingMs + 20_000), 10 * 60_000);
     let run: BunTestRun = {
       stdout: '',
       stderr: '',
       exitCode: 1,
+      timedOut: false,
       passed: new Set(),
       failed: new Set(),
     };
     for (let attempt = 0; attempt < 3; attempt++) {
-      run = await runBunTestWithResults(integrationTestPath, toolDir, 60000);
+      run = await runBunTestWithResults(integrationTestPath, toolDir, verifierTimeoutMs);
       if (run.exitCode === 0) break;
-      // A bot-defense / anti-bot ladder-exhaustion failure will NOT clear on a
-      // retry — re-running only fires more state-changing .act calls and deepens
-      // the per-IP rate flag. One attempt is enough to classify it; stop early.
+      // A timeout, bot-defense, or ladder-exhaustion failure will NOT clear on a
+      // retry — re-running only fires more state-changing calls and deepens the
+      // per-IP rate flag. One attempt is enough to classify it; stop early.
+      if (run.timedOut) break;
       const out = `${run.stdout}\n${run.stderr}`;
       const ladderExhausted =
         /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(out) &&
-        /non-escalatable|giving up|every backend escalated/.test(out);
+        /non-escalatable|giving up|ladder exhausted|all backends failed/.test(out);
       if (isBotDefenseFailure(out) || ladderExhausted) break;
     }
     integrationPassedTests = run.passed;
-    if (run.exitCode === 0) {
-      integrationOutcome = 'passed';
-    } else {
-      const combined = `${run.stdout}\n${run.stderr}`;
-      // After backend-ladder.ts:171 was changed to escalate NETWORK across
-      // rungs, a NETWORK in the test output means every rung in the integration
-      // ladder was tried and failed — the new "every backend escalated" log
-      // is the unambiguous signal. AUTH_EXPIRED/RATE_LIMITED still trip the
-      // older "non-escalatable" path. "giving up" is stealth-fetch's
-      // two-403-in-a-row exhaustion marker.
-      const hasImprintBlock =
-        /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(combined) &&
-        /non-escalatable|giving up|every backend escalated/.test(combined);
-      // Extract attempted backend names from the bun-test output so we can
-      // record which rungs were actually tried before waiving. Best-effort —
-      // the ladder logs "[imprint backend] trying <name>…" per attempt.
-      const exhaustedBackends = Array.from(
-        new Set(
-          Array.from(combined.matchAll(/\[imprint backend\] trying ([a-z-]+)…/g)).map(
-            (m) => m[1] as string,
-          ),
-        ),
-      );
-      const firstErrorMatch = combined.match(/\b(NETWORK|FORBIDDEN|RATE_LIMITED)\b[^\n]{0,200}/);
-      const firstError = firstErrorMatch?.[0]?.trim() ?? 'unknown';
-      // Fix C — a STATE_MISSING traced to a declared capture is a workflow
-      // correctness error, not infra. The runtime is telling us the recipe is
-      // wrong; waiving it would silently ship a broken workflow. Detect by
-      // matching the runtime's STATE_MISSING capture-failure string. When
-      // Fix A's check already flagged the same capture name we ALSO redirect
-      // to `failed`; the independent regex path catches the case where Fix A
-      // matched a different (or no) seq but runtime still reached the bad
-      // capture.
-      const captureFailMatch = combined.match(/STATE_MISSING:\s*Required capture\s+"([^"]+)"/i);
-      const captureFailFromKnown =
-        captureFailMatch !== null && failedCaptureNames.has(captureFailMatch[1] ?? '');
-      const captureFailUnconditional = captureFailMatch !== null;
-      if (captureFailUnconditional) {
-        integrationOutcome = 'failed';
-        const capName = captureFailMatch[1];
-        // If the failing capture is a `response_header` on a REPLAYED workflow
-        // request, the cause is almost always the replay asymmetry: programmatic
-        // fetch reliably receives the response BODY and Set-Cookie, but anti-bot
-        // edges withhold browser-only response headers from non-browser requests.
-        // Steer the agent to the source that survives replay. General — applies to
-        // any site whose token also appears in the body / a cookie.
-        let sourceHint = '';
-        try {
-          const wf = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
-            requests?: Array<{ captures?: Array<{ name: string; source: string }> }>;
-            bootstrap?: { captures?: Array<{ name: string; source: string }> };
-          };
-          const reqCap = (wf.requests ?? [])
-            .flatMap((r) => r.captures ?? [])
-            .find((c) => c.name === capName);
-          if (reqCap?.source === 'response_header') {
-            sourceHint = ` The capture uses source: 'response_header' on a replayed request. Programmatic replay does NOT receive browser-only response headers that anti-bot edges withhold — but it DOES receive the response body and Set-Cookie. If this token also appears in the HTML body, switch to source: 'text_regex' (read it from the body); if it is set as a cookie, switch to source: 'cookie'. Reserve 'response_header' for a workflow.bootstrap capture (a real Chrome navigation), not a replayed request.`;
-          }
-        } catch {
-          // best-effort hint only
+
+    const verdict = classifyIntegrationOutcome({
+      exitCode: run.exitCode,
+      timedOut: run.timedOut,
+      combined: `${run.stdout}\n${run.stderr}`,
+      passedTests: run.passed,
+      referencedStateBroken: false, // the broken-capture case is handled above
+      failedCaptureNames,
+    });
+    integrationOutcome = verdict.outcome;
+
+    if (verdict.outcome === 'passed') {
+      // exitCode 0 — nothing to surface.
+    } else if (verdict.captureFailName !== null) {
+      const capName = verdict.captureFailName;
+      // If the failing capture is a `response_header` on a REPLAYED workflow
+      // request, the cause is almost always the replay asymmetry: programmatic
+      // fetch reliably receives the response BODY and Set-Cookie, but anti-bot
+      // edges withhold browser-only response headers from non-browser requests.
+      let sourceHint = '';
+      try {
+        const wf = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
+          requests?: Array<{ captures?: Array<{ name: string; source: string }> }>;
+          bootstrap?: { captures?: Array<{ name: string; source: string }> };
+        };
+        const reqCap = (wf.requests ?? [])
+          .flatMap((r) => r.captures ?? [])
+          .find((c) => c.name === capName);
+        if (reqCap?.source === 'response_header') {
+          sourceHint = ` The capture uses source: 'response_header' on a replayed request. Programmatic replay does NOT receive browser-only response headers that anti-bot edges withhold — but it DOES receive the response body and Set-Cookie. If this token also appears in the HTML body, switch to source: 'text_regex' (read it from the body); if it is set as a cookie, switch to source: 'cookie'. Reserve 'response_header' for a workflow.bootstrap capture (a real Chrome navigation), not a replayed request.`;
         }
-        failures.push(
-          `integration test failed because a declared capture did not produce a value at runtime: capture "${capName}" returned null${
-            captureFailFromKnown
-              ? ' (matches a capture flagged by the compile-time cross-reference check)'
-              : ''
-          }. This is a workflow-correctness error, not infra — fix the capture source/path in workflow.json so it actually reads from the recorded location.${sourceHint}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
-        );
-      } else if (isBotDefenseFailure(combined)) {
-        integrationOutcome = 'waived-bot';
-        liveVerification = { kind: 'waived-bot', firstError, exhaustedBackends };
-        warnings.push(
-          `integration test failed with likely bot-detection / anti-automation challenge (tried 3 times). Stamping liveVerified=false on workflow.json — the runtime will fall through to the playbook last-ditch rung, which is a degraded path. Audit and teach will surface this tool as unverified.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
-        );
-      } else if (hasImprintBlock) {
-        integrationOutcome = 'waived-infra';
-        liveVerification = { kind: 'waived-infra', firstError, exhaustedBackends };
-        warnings.push(
-          `integration test failed with infrastructure error (${
-            combined.match(/\b(RATE_LIMITED|FORBIDDEN|NETWORK)\b/)?.[0] ?? 'unknown'
-          }, tried 3 times). Every rung in the ladder was exhausted (${
-            exhaustedBackends.join(', ') || 'unknown'
-          }). Stamping liveVerified=false on workflow.json — audit and teach will surface this tool as unverified.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
-        );
-      } else {
-        integrationOutcome = 'failed';
-        failures.push(
-          `bun test integration.test.ts exited ${run.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
-        );
+      } catch {
+        // best-effort hint only
       }
+      failures.push(
+        `integration test failed because a declared capture did not produce a value at runtime: capture "${capName}" returned null${
+          verdict.captureFailFromKnown
+            ? ' (matches a capture flagged by the compile-time cross-reference check)'
+            : ''
+        }. This is a workflow-correctness error, not infra — fix the capture source/path in workflow.json so it actually reads from the recorded location.${sourceHint}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+      );
+    } else if (verdict.outcome === 'waived-bot' || verdict.outcome === 'waived-infra') {
+      // `liveVerified` is driven by whether the BASELINE produced real data, NOT by
+      // whether every param test passed. Only stamp liveVerified=false when the
+      // baseline ALSO failed — if a backend returned real data this run the tool IS
+      // live-verified; only its per-parameter tests waive (non-blocking).
+      liveVerification = verdict.baselineLiveVerified
+        ? undefined
+        : {
+            kind: verdict.outcome,
+            firstError: verdict.firstError,
+            exhaustedBackends: verdict.exhaustedBackends,
+          };
+      const liveNote = verdict.baselineLiveVerified
+        ? 'The baseline returned real data this run, so liveVerified stays TRUE — only the per-parameter tests are waived.'
+        : 'Stamping liveVerified=false on workflow.json — the runtime falls through to the cdp-replay / playbook rung. Audit and teach surface this tool as unverified.';
+      warnings.push(
+        verdict.outcome === 'waived-bot'
+          ? `integration test hit a likely bot-detection / anti-automation challenge. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`
+          : `integration test hit an infrastructure error (${verdict.firstError}); rungs exhausted: ${verdict.exhaustedBackends.join(', ') || 'unknown'}. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+      );
+    } else {
+      failures.push(
+        `bun test integration.test.ts exited ${run.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+      );
     }
   }
 

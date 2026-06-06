@@ -29,8 +29,15 @@ const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
 const PROMPTS_DIR = pathJoin(REPO_ROOT, 'prompts');
 
-/** Default wall-clock cap for an audit session. */
-const DEFAULT_AUDIT_TIMEOUT_MS = 20 * 60_000;
+/** Default wall-clock cap for an audit session. This is a CAP, not a fixed
+ *  duration: a fast site (e.g. marriott's plain-fetch tools) finishes its full
+ *  differential param sweep in ~2 min and exits early. The cap only bites on
+ *  slow sites — those whose tools replay via cdp (a real Chrome per call,
+ *  ~60-90s each) AND expose many parameters, so the per-param sweep needs far
+ *  more than the old 20 min (southwest, with 62KB search payloads across ~14
+ *  params, was killed mid-sweep at 20 min despite both tools being live). 45 min
+ *  lets those complete while still bounding a genuinely hung session. */
+const DEFAULT_AUDIT_TIMEOUT_MS = 45 * 60_000;
 
 /** One invocation the auditor performed against a tool. */
 const InvocationSchema = z.object({
@@ -523,6 +530,12 @@ async function driveAudit(opts: DriveAuditOptions): Promise<DriveAuditResult> {
       [serverName]: {
         command: bunPath,
         args: ['run', CLI_PATH, 'mcp-server', opts.site],
+        // Pace every audit tool call: the auditor now differentially probes
+        // bot-defended idempotent reads (search/calendar) instead of bailing
+        // after one call, so a deliberate inter-call delay keeps the probing
+        // steady enough that the per-IP anti-bot defense isn't tripped. Only
+        // the audit sets this; production mcp-server runs unpaced.
+        env: { IMPRINT_AUDIT_PACING_MS: '5000' },
       },
     },
   };

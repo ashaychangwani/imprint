@@ -82,7 +82,7 @@ Items deferred from the v0.1 design + eng review. Not blocking the 2-week sprint
 
 **Why:** Used as the dev test target during the v0.1 sprint (days 2-7), so by launch we already have a working capture/generate/emit pipeline against D&G's real auth and traffic. Shipping it as a 4th demo would only require the cron + Pushover wiring (~3-4 hours) since codegen is already validated. Tweet hook: "I taught Claude to use my library card. Got us into the Exploratorium tomorrow at 12:00:03 AM."
 
-**Why not in v0.1:** User chose conservative scope — Luma stays in the demo lineup. D&G is a stretch goal post-launch.
+**Why not in v0.1:** User chose conservative scope. D&G is a stretch goal post-launch.
 
 **Effort:** human ~1 day / CC ~3hr post-sprint. Pros: heartwarming narrative, daily content stream ("got us into the SF Zoo today"), real personal value. Cons: slight social-cost question (free scarce resource). User should set their own moral cadence: 1-2 outings/month is fine, aggressive nightly sniping changes the vibe.
 
@@ -106,7 +106,7 @@ Claude Desktop wire-up is documented in the README.
 
 ### 14. ~~Multi-backend ladder + record-time probe~~ ✅ done (Day 9)
 
-**Resolution:** Three replay backends in increasing cost: `fetch` (~200ms, plain Node fetch) → `stealth-fetch` (~12s bootstrap + ~1s/call, Playwright-minted Akamai sensor tokens used by native fetch — derived from PR #1) → `playbook` (~9.4s/call, full Playwright + stealth + DOM walk). `replayBackend: "auto"` walks them in order, escalating only on FORBIDDEN.
+**Resolution:** Replay backends in increasing cost, walked by the ladder: `fetch` (~200ms, plain Node fetch) → `fetch-bootstrap` (Chromium bootstrap mints cookies/CSRF/state, then native fetch replay) → `cdp-replay` (workflow's API requests run inside a live trusted Chrome so a protected POST re-validates its `_abck` between calls — the only rung that sustains a sequence of multi-step state-changing anti-bot POSTs; warm CDP pool reuses one Chrome at ~2–5s vs ~33s cold) → `stealth-fetch` (~12s bootstrap + ~1s/call, Playwright-minted Akamai sensor tokens used by native fetch — derived from PR #1) → `playbook` (~9.4s/call, full Playwright + stealth + DOM walk). `replayBackend: "auto"` walks them in order, escalating only on FORBIDDEN. (Day 9 shipped fetch → stealth-fetch → playbook; `fetch-bootstrap` and `cdp-replay` were spliced in later.)
 
 `imprint probe-backends <site>` runs the ladder once at record time and writes `examples/<site>/<toolName>/backends.json` with the ranked order. cron + MCP read this and skip futile rungs every tick — without the probe, an "auto" Southwest tick wastes ~200ms on the fetch attempt that always 403s. Runtime ladder remains the fallback if the cached preferred backend stops working between probes.
 
@@ -118,7 +118,7 @@ Verified end-to-end against Southwest: probe identifies `stealth-fetch → playb
 
 1. **`rebrowser-patches`** — patches Chrome itself to defeat the deeper headless-detection markers. ~70% success against modern Akamai per public reports.
 2. **Residential-IP proxy rotation** — Akamai also weighs IP reputation. Datacenter IPs flagged faster than residential.
-3. **A paid stealth API** — Bright Data Web Unlocker, ScrapingBee, ZenRows. $30-300/mo. Would slot in as a fourth backend in the ladder via the existing `BackendContext` + `runWithLadder` extension point.
+3. **A paid stealth API** — Bright Data Web Unlocker, ScrapingBee, ZenRows. $30-300/mo. Would slot in as an additional backend in the ladder via the existing `BackendContext` + `runWithLadder` extension point.
 
 **Why not now:** Current ladder works. The probe writes empirical results, so when a backend stops working, the operator sees it in the next probe + can pick the next-cheapest known-working option. v0.2 work, only if launch reveals real demand.
 

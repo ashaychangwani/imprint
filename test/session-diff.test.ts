@@ -1,11 +1,29 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type CapturedReplayRequest,
+  type ClassifiedValue,
   alignRequests,
   diffTriagedSessions,
+  mergeClassifications,
   triageByAlignment,
 } from '../src/imprint/session-diff.ts';
 import type { Session } from '../src/imprint/types.ts';
+
+function cv(
+  originalSeq: number,
+  location: string,
+  classification: ClassifiedValue['classification'],
+  overrides: Partial<ClassifiedValue> = {},
+): ClassifiedValue {
+  return {
+    classification,
+    location,
+    originalSeq,
+    value1: 'v1',
+    value2: 'v2',
+    ...overrides,
+  };
+}
 
 function makeRequest(
   seq: number,
@@ -407,5 +425,64 @@ describe('triageByAlignment', () => {
     const allRun2 = [makeRequest(1, 'GET', 'https://completely-different.com/path')];
     const result = triageByAlignment(triaged1, allRun2);
     expect(result).toHaveLength(0);
+  });
+});
+
+describe('mergeClassifications', () => {
+  it('keeps a value the replay never observed but recordings agree on (marriott signature regression)', () => {
+    // Pass 1 = recording vs blocked replay: the protected request never aligned,
+    // so its signature header was never classified.
+    const replayPass: ClassifiedValue[] = [cv(2, 'url_param:q', 'constant')];
+    // Pass 2 = recording vs another real recording (captured hours apart): the
+    // protected request aligned and its signature is byte-identical → constant.
+    const crossPass: ClassifiedValue[] = [
+      cv(5, 'header:graphql-operation-signature', 'constant', {
+        value1: '7d7f73',
+        value2: '7d7f73',
+      }),
+    ];
+    const merged = mergeClassifications([replayPass, crossPass]);
+    const sig = merged.find((c) => c.location === 'header:graphql-operation-signature');
+    expect(sig).toBeDefined();
+    expect(sig?.classification).toBe('constant');
+  });
+
+  it('a value that varies in ANY pass is ephemeral (non-constant wins)', () => {
+    const passA: ClassifiedValue[] = [cv(1, 'header:x-token', 'constant')];
+    const passB: ClassifiedValue[] = [
+      cv(1, 'header:x-token', 'server_derived', { producerSeq: 0, producerPath: '$.token' }),
+    ];
+    const merged = mergeClassifications([passA, passB]);
+    const tok = merged.find((c) => c.location === 'header:x-token');
+    expect(tok?.classification).toBe('server_derived');
+    // provenance from the non-constant pass is preserved
+    expect(tok?.producerSeq).toBe(0);
+    expect(tok?.producerPath).toBe('$.token');
+  });
+
+  it('server_derived outranks browser_minted', () => {
+    const merged = mergeClassifications([
+      [cv(3, 'body:$.nonce', 'browser_minted')],
+      [cv(3, 'body:$.nonce', 'server_derived', { producerSeq: 1 })],
+    ]);
+    expect(merged.find((c) => c.location === 'body:$.nonce')?.classification).toBe(
+      'server_derived',
+    );
+  });
+
+  it('keys by (originalSeq, location) so the same header on different requests stays distinct', () => {
+    const merged = mergeClassifications([
+      [cv(5, 'header:graphql-operation-signature', 'constant')],
+      [cv(8, 'header:graphql-operation-signature', 'server_derived')],
+    ]);
+    const sigs = merged.filter((c) => c.location === 'header:graphql-operation-signature');
+    expect(sigs).toHaveLength(2);
+    expect(sigs.find((c) => c.originalSeq === 5)?.classification).toBe('constant');
+    expect(sigs.find((c) => c.originalSeq === 8)?.classification).toBe('server_derived');
+  });
+
+  it('returns empty for no passes / empty passes', () => {
+    expect(mergeClassifications([])).toEqual([]);
+    expect(mergeClassifications([[], []])).toEqual([]);
   });
 });

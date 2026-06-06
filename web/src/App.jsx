@@ -41,17 +41,16 @@ const comparisons = [
   ['Runtime control', 'Deterministic replay', 'LLM chooses every click'],
   ['Token cost', 'Zero at runtime', 'Scales with every page'],
   ['State handling', 'Named captures + per-run cookie jar', 'Rediscover hidden tokens live'],
-  ['Bot defense', 'Gated fetch-bootstrap + stealth-fetch', 'Automation fingerprint risk'],
+  ['Bot defense', 'Gated fetch-bootstrap → cdp-replay → stealth-fetch', 'Automation fingerprint risk'],
   ['Failure mode', 'Backend ladder fallback', 'Retry the same brittle path'],
   ['Typical result', '200ms fetch, browser only when needed', '30s+ exploration loop'],
 ];
 
 const examples = [
+  { name: 'google-flights ★', use: '4-tool suite', detail: 'One-shot compiled from a single recording: batchexecute wire-format decode + search→booking token chain. Audited 92.6%, every tool live-verified.' },
+  { name: 'google-hotels ★', use: '4-tool suite', detail: 'One-shot compiled from a single recording: autocomplete → search → reviews/booking producer-token chaining. Audited 91.7%.' },
   { name: 'southwest', use: 'Live fare watcher', detail: 'Akamai-resistant flight search with price-drop notifications.' },
-  { name: 'google-flights', use: 'Carrier search', detail: 'Parses raw flight-search payloads into structured results.' },
-  { name: 'google-hotels', use: 'Hotel search', detail: 'Nightly totals, guest scores, stars, and filters from real-time results.' },
   { name: 'discoverandgo', use: 'Authed booking', detail: 'Museum-pass flow using the per-site credential store and replay state.' },
-  { name: 'namecheap-domains', use: 'Domain search', detail: 'CRC32 URL signing reverse-engineered from JS bundle, 5-endpoint chain with availability + aftermarket pricing.' },
 ];
 
 function LogoMark() {
@@ -76,31 +75,7 @@ function TerminalCard() {
         <span />
         <strong>imprint</strong>
       </div>
-      <pre><code>{`$ ${product.install}
-
-$ ${product.teach}
-
-recording Chromium session...             00:42
-redacting credentials + PII...             done
-compiling state-aware API workflow...      workflow.json
-compiling DOM playbook fallback...         <tool>/playbook.yaml
-state hints found...                       cookie → header
-emitting MCP tool...                       search_southwest_flights
-wiring MCP registration...                 imprint-southwest
-
-$ bun run imprint mcp status --site southwest
-registrations...                           claude-code/imprint-southwest
-local tools...                             1 complete, 0 incomplete
-issues...                                  none
-
-$ bun run imprint cron southwest --once
-auto ladder...                             gated browser fallback
-stealth-fetch bootstrapping Chromium...    13.4s
-stealth-fetch request complete              1.2s
-
-  SFO → LAX   2026-05-15    $87   Wanna Get Away
-  SFO → LAX   2026-05-15   $142   Anytime
-  SFO → LAX   2026-05-15   $177   Business Select`}</code></pre>
+      <img className="terminal-gif" src="/imprint-teach.gif" alt="A real `imprint teach google-flights` run — six recordings compiled into four live-verified MCP tools" loading="lazy" />
       <div className="terminal-footer">
         <span>MIT license · Bun ≥ 1.3 · Chrome required</span>
         <span>v0.1 shipped</span>
@@ -241,8 +216,9 @@ export default function App() {
         .terminal-chrome span:nth-child(2) { background: #ffc857; }
         .terminal-chrome span:nth-child(3) { background: var(--acid); }
         .terminal-chrome strong { margin-left: auto; font-size: .75rem; color: rgba(242,235,216,.62); font-weight: 400; }
-        .terminal-chrome, pre, .terminal-footer { position: relative; z-index: 1; }
+        .terminal-chrome, pre, .terminal-gif, .terminal-footer { position: relative; z-index: 1; }
         pre { margin: 0; padding: clamp(1.05rem, 2.4vw, 1.55rem); overflow-x: auto; max-width: 100%; }
+        .terminal-gif { display: block; width: 100%; height: auto; }
         code { font-family: "Courier New", "Lucida Console", monospace; }
         pre code { display: block; color: #dff5e8; font-size: clamp(calc(.73rem * var(--terminal-scale)), 1.1vw, calc(.92rem * var(--terminal-scale))); line-height: 1.66; white-space: pre-wrap; overflow-wrap: anywhere; }
         .terminal-footer { display: flex; justify-content: space-between; gap: 16px; padding: 15px 18px; border-top: 1px solid rgba(242,235,216,.12); color: rgba(242,235,216,.58); font-size: .72rem; position: relative; z-index: 1; }
@@ -393,7 +369,7 @@ export default function App() {
               </div>
               <div className="hero-meta" aria-label="Project highlights">
                 <div className="meta-tile"><strong>v0.1</strong><span>Shipped with working browser automation demos</span></div>
-                <div className="meta-tile"><strong>4 modes</strong><span>fetch, fetch-bootstrap, stealth-fetch, and playbook</span></div>
+                <div className="meta-tile"><strong>5 modes</strong><span>fetch, fetch-bootstrap, cdp-replay, stealth-fetch, and playbook</span></div>
                 <div className="meta-tile"><strong>Traceable</strong><span>Per-turn, per-tool, per-LLM-call Phoenix spans</span></div>
               </div>
             </div>
@@ -410,7 +386,7 @@ export default function App() {
                 <p className="problem-copy">Browser-use and Computer Use are powerful, but they spend runtime tokens deciding clicks, scanning pages, and recovering from variance. Imprint moves that intelligence to compile time: record a known-good path once, then replay it with deterministic machinery.</p>
                 <div className="belief-grid">
                   <div className="belief"><b>Recordings are source</b><span>The human-demonstrated session becomes the executable contract.</span></div>
-                  <div className="belief"><b>Fallback is built in</b><span>API replay, browser bootstrap, stealth-fetch, and DOM playbooks form a backend ladder.</span></div>
+                  <div className="belief"><b>Fallback is built in</b><span>API replay, browser bootstrap, cdp-replay, stealth-fetch, and DOM playbooks form a backend ladder.</span></div>
                 </div>
               </div>
             </div>
@@ -458,6 +434,7 @@ export default function App() {
                 <div className="ladder">
                   <div className="ladder-row"><b>fetch</b><span>~200ms</span></div>
                   <div className="ladder-row"><b>fetch-bootstrap</b><span>browser state mint</span></div>
+                  <div className="ladder-row"><b>cdp-replay</b><span>~2-5s warm · multi-step anti-bot</span></div>
                   <div className="ladder-row"><b>stealth-fetch</b><span>~12s first · ~1s warm</span></div>
                   <div className="ladder-row"><b>playbook</b><span>~9s universal fallback</span></div>
                 </div>
@@ -491,7 +468,7 @@ export default function App() {
                   <span className="kicker">Working examples</span>
                   <h2 id="examples-title">Real sites, real friction, real replay.</h2>
                 </div>
-                <p>Imprint ships with examples that exercise bot protection, protobuf parsing, authenticated flows, notifications, and MCP smoke testing. Install any example directly with <code>imprint install --source examples</code> and remove the registration later with <code>imprint uninstall</code>.</p>
+                <p>Imprint ships with examples that exercise bot protection, batchexecute nested-array parsing, authenticated flows, notifications, and MCP smoke testing. Install any example directly with <code>imprint install --source examples</code> and remove the registration later with <code>imprint uninstall</code>.</p>
               </div>
               <div className="example-grid">
                 {examples.map((example) => (

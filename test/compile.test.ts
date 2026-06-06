@@ -193,8 +193,8 @@ describe('compilePlaybook defaults', () => {
 
   it('writes playbook fallbacks under the generated tool directory by default', () => {
     withImprintHome(pathResolve('/tmp', 'imprint-home'), () => {
-      expect(defaultCompilePlaybookPath('namecheap-domains', 'search_domains')).toBe(
-        pathResolve('/tmp', 'imprint-home', 'namecheap-domains', 'search_domains', 'playbook.yaml'),
+      expect(defaultCompilePlaybookPath('webwidget-domains', 'search_domains')).toBe(
+        pathResolve('/tmp', 'imprint-home', 'webwidget-domains', 'search_domains', 'playbook.yaml'),
       );
     });
   });

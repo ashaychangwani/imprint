@@ -9,7 +9,7 @@ git clone https://github.com/<you>/imprint.git
 cd imprint
 bun install
 bunx playwright install chromium
-bun run check                     # typecheck + lint + 193 tests, ~12s combined
+bun run check                     # typecheck + lint + ~977 tests, ~30s combined
 imprint doctor                    # verify env (after `bun link`)
 ```
 

@@ -1,0 +1,154 @@
+toolName: get_hotel_booking_options
+summary: "Open a hotel's booking options on Google Hotels for a location/date window and read per-provider pricing, with optional stay-total vs nightly pricing."
+parameters:
+  - name: location
+    type: string
+    description: "Place to search (resolved by the autocomplete), e.g. Chicago Loop"
+  - name: check_in_date
+    type: string
+    description: "Check-in date (YYYY-MM-DD)"
+  - name: check_out_date
+    type: string
+    description: "Check-out date (YYYY-MM-DD)"
+  - name: adults
+    type: number
+    description: "Number of adults for pricing"
+    default: 2
+  - name: price_mode
+    type: string
+    description: "nightly | stay_total — controls whether totals reflect the full stay"
+    default: nightly
+steps:
+  - action: navigate
+    url: https://www.google.com/travel/search
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: aria_label
+        value: Search for places, hotels and more
+      - by: css
+        value: input.II2One.j0Ppje
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: Search for places, hotels and more
+      - by: css
+        value: input.II2One.j0Ppje
+    value: ${location}
+    wait_for:
+      xhr: rpcids=mejVKc
+  - action: click
+    locators:
+      - by: text
+        value_pattern: ${location}
+      - by: css
+        value: ul.F3AVKd > li.Q1RWxd span.wA6vgd
+    wait_for:
+      xhr: rpcids=AtySUc
+  - action: click
+    locators:
+      - by: aria_label
+        value: Check-in
+      - by: css
+        value: div.NA5Egc.ESCxub > input.TP4Lpb.eoY5cb
+    wait_for:
+      sleep_ms: 400
+  - action: type
+    locators:
+      - by: aria_label
+        value: Check-in
+      - by: css
+        value: div.NA5Egc.ESCxub > input.TP4Lpb.eoY5cb
+    value: ${check_in_date}
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: Check-out
+      - by: css
+        value: div.GYgkab.YICvqf input.TP4Lpb.eoY5cb
+    value: ${check_out_date}
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: role
+        value: button
+        name: Done
+      - by: text
+        value: Done
+    wait_for:
+      xhr: rpcids=AtySUc
+  - action: click
+    locators:
+      - by: aria_label
+        value: "Number of travelers."
+      - by: css
+        value: div.rb1Kdf.CpGuFd
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: role
+        value: button
+        name: Done
+      - by: text
+        value: Done
+    wait_for:
+      xhr: rpcids=AtySUc
+  - action: click
+    locators:
+      - by: role
+        value: link
+        name: ${location}
+      - by: css
+        value: c-wiz.K1smNd a.PVOOXe
+    wait_for:
+      xhr: rpcids=M0CRd
+  - action: click
+    locators:
+      - by: text
+        value: Nightly price with fees
+      - by: css
+        value: span.BoOe8c button.VfPpkd-LgbsSe
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: text
+        value: Stay total
+      - by: css
+        value: label.LLYsl div.GgTqfe
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: role
+        value: button
+        name: Done
+      - by: text
+        value: Done
+    wait_for:
+      xhr: rpcids=M0CRd
+result:
+  source: xhr
+  url_pattern: rpcids=M0CRd
+  extract: "2.2[]"
+  return_as: booking_options
+notes: >-
+  The M0CRd response is a batchexecute anti-XSSI envelope: strip the ")]}'" prefix and chunk-length
+  lines, JSON.parse the outer array, then JSON.parse the inner escaped string (element [2] of the
+  ["wrb.fr","M0CRd", ...] tuple) — use the shared batchexecute helper. The parsed inner JSON is
+  positional (no keys). Pricing context is at index [1] (currency, [[checkInY,M-1,D],[checkOutY,M-1,D],
+  nights/occupancy], location [mid,name]). The offer block is at index [2]: [2][1] is the summary
+  ["$199" nightly, "$237" nightly-with-fees, ...] and [2][2] is the per-provider offer list, where
+  each entry's [0][0]=provider name, [0][1]=numeric price, [0][2]=booking click-through URL. When
+  price_mode=stay_total, the toggle steps make totals reflect the full stay (summary/totals fields
+  change accordingly); for price_mode=nightly, skip the "Nightly price with fees"/"Stay total"/"Done"
+  steps. Location is resolved to a Google KG mid via the mejVKc/AtySUc autocomplete flow before
+  pricing is available. adults is set through the travelers popover (use +/- to reach the target);
+  the date inputs accept typed YYYY-MM-DD, falling back to calendar-cell clicks if typing is rejected.
+  f.sid/bl/X-Goog-BatchExecute-Bgr are session-bound and supplied by the live browser context.

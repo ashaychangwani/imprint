@@ -89,7 +89,7 @@ imprint mcp-server <site>    # runtime tool calls too
 
 The site is blocking API replay or needs browser-minted state. Three escalating fixes:
 
-1. **Set `replayBackend: "auto"`** in `cron.json` (or `imprint cron --once` will use it). The ladder can try `fetch-bootstrap` for browser-minted state and `stealth-fetch` for bot-defense tokens before falling back to DOM replay.
+1. **Set `replayBackend: "auto"`** in `cron.json` (or `imprint cron --once` will use it). The ladder can try `fetch-bootstrap` for browser-minted state, `cdp-replay` for multi-step state-changing anti-bot flows (API requests issued inside a live trusted Chrome), and `stealth-fetch` for bot-defense tokens before falling back to DOM replay.
 
 2. **Probe and cache the working backend:**
    ```bash
@@ -148,7 +148,7 @@ The LLM call returned text instead of JSON. This happens occasionally when:
 - The prompt is being clipped (very large session)
 - The model returned an apology / refusal (rare)
 
-**Fix:** re-run `imprint generate`. If it persists, try `--no-shrink` or split the recording into smaller workflows.
+**Fix:** re-run `imprint generate`. If it persists, split the recording into smaller workflows (or, for `compile-playbook`, retry with `--no-shrink`).
 
 ## "Replay-and-diff is slow or failing"
 

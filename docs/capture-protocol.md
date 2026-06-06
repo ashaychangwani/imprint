@@ -73,7 +73,7 @@ Password fields are auto-redacted before being captured. Other input values are 
 - `imprint generate` → `workflow.json` → `imprint emit` → `index.ts` (API replay path, including named state captures)
 - `imprint compile-playbook` → `playbook.yaml` (DOM replay path)
 
-You don't have to commit to one or the other when you record. Generate both; the cron / MCP layer picks which to use per `replayBackend` config (`fetch` / `fetch-bootstrap` / `stealth-fetch` / `playbook` / `auto`).
+You don't have to commit to one or the other when you record. Generate both; the cron / MCP layer picks which to use per `replayBackend` config (`fetch` / `fetch-bootstrap` / `cdp-replay` / `stealth-fetch` / `playbook` / `auto`).
 
 ## After the recording — verify it worked
 
