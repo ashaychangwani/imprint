@@ -1,0 +1,64 @@
+toolName: get_hotel_reviews
+summary: Open a hotel's detail panel on Google Hotels and capture its aggregated reviews (the ocp93e batchexecute response).
+parameters:
+  - name: location
+    type: string
+    description: Destination/area to search for hotels, e.g. "Chicago Loop". Used to populate the search box and pick the matching autocomplete suggestion.
+  - name: hotel_name
+    type: string
+    description: Display name of the hotel whose reviews are wanted, e.g. "Hyatt Regency Chicago". Used to click the matching result card.
+steps:
+  - action: navigate
+    url: https://www.google.com/travel/search
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: aria_label
+        value: Search for places, hotels and more
+      - by: css
+        value: input.II2One.j0Ppje
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: Search for places, hotels and more
+      - by: css
+        value: input.II2One.j0Ppje
+    value: ${location}
+    wait_for:
+      sleep_ms: 600
+  - action: click
+    locators:
+      - by: text
+        value_pattern: ${location}
+      - by: css
+        value: ul.F3AVKd > li.Q1RWxd span.S5TdWc
+    wait_for:
+      xhr: rpcids=AtySUc
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: ${hotel_name}
+      - by: text
+        value_pattern: ${hotel_name}
+      - by: css
+        value: a.PVOOXe
+    wait_for:
+      xhr: rpcids=ocp93e
+result:
+  source: xhr
+  url_pattern: rpcids=ocp93e
+  extract: "[0][0][0][]"
+  return_as: reviews
+notes: >-
+  The ocp93e response uses Google's anti-XSSI batchexecute envelope: strip the ")]}'" prefix and chunk-length lines,
+  JSON.parse the outer array, then JSON.parse the escaped inner string at ["wrb.fr","ocp93e", <innerJsonString>].
+  The inner JSON is positional (no object keys); the extract index path "[0][0][0][]" iterates the review-source entries.
+  Within each entry: index [0] = provider block [providerName, null, [iconUrl,w,h], type, id]; index [1] = reviewer block
+  [[reviewerName, profileUrl, [avatarUrl,w,h]], relativeDate, [ratingNum, ratingMax], [[ [sentiment, reviewText, ...] ]], reviewUrl, ...].
+  Reviews load automatically when the hotel detail panel opens (the same click also triggers M0CRd pricing) — opening the
+  Reviews tab is not required. Check-in/out dates were set during recording but do not affect the review payload, so they are
+  omitted as parameters. f.sid / bl / X-Goog-BatchExecute-Bgr are session-bound and are supplied by the live browser context,
+  not by this playbook. If the hotel result is not visible in the initial list, the agent may need to scroll the results column
+  before the ${hotel_name} click resolves.

@@ -1,0 +1,143 @@
+{
+  "toolName": "search_flights",
+  "site": "google-flights",
+  "intent": {
+    "description": "Search Google Flights for itineraries between two airports with dates, trip type, and filters (stops, airlines, price, times, duration, bags).",
+    "userSaid": "searched for a round trip flight; searched for a one way flight; played with the stops and the airlines filters; added bags; played with the price and time filters; played with the duration filter; did a multi city flight query"
+  },
+  "parameters": [
+    {
+      "name": "origin",
+      "type": "string",
+      "description": "Origin airport/city IATA code, e.g. SJC",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "destination",
+      "type": "string",
+      "description": "Destination airport/city IATA code, e.g. SAN",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "departure_date",
+      "type": "string",
+      "description": "Outbound date in YYYY-MM-DD",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "return_date",
+      "type": "string",
+      "description": "Return date in YYYY-MM-DD (omit/empty for one way)",
+      "default": "",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "trip_type",
+      "type": "string",
+      "description": "round_trip, one_way, or multi_city",
+      "default": "round_trip",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "max_stops",
+      "type": "number",
+      "description": "Max stops: 0=nonstop, 1=<=1 stop, 2=<=2 stops, 3=any",
+      "default": 3,
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "airlines",
+      "type": "string",
+      "description": "Comma-separated alliance (ONEWORLD/SKYTEAM/STAR_ALLIANCE) or 2-letter carrier codes (e.g. AS,WN). Empty = no filter",
+      "default": "",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "max_price",
+      "type": "number",
+      "description": "Maximum total price in USD (0 = no filter)",
+      "default": 0,
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "outbound_times",
+      "type": "string",
+      "description": "Outbound departure window in hours, e.g. '6-23' (empty = no filter)",
+      "default": "",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "return_times",
+      "type": "string",
+      "description": "Return departure window in hours, e.g. '6-23' (empty = no filter)",
+      "default": "",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "max_duration",
+      "type": "number",
+      "description": "Maximum total trip duration in minutes, e.g. 540 (0 = no filter)",
+      "default": 0,
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "carry_on_bags",
+      "type": "number",
+      "description": "Number of carry-on bags to filter/price by (0 = no filter)",
+      "default": 0,
+      "verified": false,
+      "verifyNote": "annotated"
+    }
+  ],
+  "bootstrap": {
+    "url": "https://www.google.com/travel/flights",
+    "waitUntil": "domcontentloaded",
+    "timeoutMs": 30000,
+    "captures": [
+      {
+        "source": "html_regex",
+        "name": "f_sid",
+        "pattern": "\"FdrFJe\":\"([^\"]+)\"",
+        "group": 1,
+        "required": false,
+        "capability": "browser_bootstrap"
+      },
+      {
+        "source": "html_regex",
+        "name": "bl",
+        "pattern": "\"cfb2h\":\"([^\"]+)\"",
+        "group": 1,
+        "required": false,
+        "capability": "browser_bootstrap"
+      }
+    ]
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=1708023&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "Referer": "https://www.google.com/travel/flights",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=${param.origin}|${param.destination}|${param.departure_date}|${param.return_date}|${param.trip_type}|${param.max_stops}|${param.airlines}|${param.max_price}|${param.outbound_times}|${param.return_times}|${param.max_duration}|${param.carry_on_bags}&",
+      "effect": "safe"
+    }
+  ],
+  "requestTransformModule": "./request-transform.ts",
+  "parserModule": "./parser.ts",
+  "liveVerified": true
+}

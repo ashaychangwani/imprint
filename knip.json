@@ -1,10 +1,10 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "entry": [
-    "examples/*/index.ts",
     "examples/*/*/index.ts",
     "examples/*/*/parser.ts",
     "examples/*/*/request-transform.ts",
+    "examples/*/_shared/*.ts",
     "scripts/*.ts"
   ],
   "project": [

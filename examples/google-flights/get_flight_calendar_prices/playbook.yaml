@@ -1,0 +1,97 @@
+toolName: get_flight_calendar_prices
+summary: Open the Google Flights date picker for a route to capture the calendar grid of lowest prices by departure/return date.
+parameters:
+  - name: origin
+    type: string
+    description: Origin airport code, e.g. SJC
+  - name: destination
+    type: string
+    description: Destination airport code, e.g. SAN
+  - name: start_date
+    type: string
+    description: Start of date window YYYY-MM-DD (used to filter the returned calendar range; the picker returns a fixed window starting near today)
+  - name: end_date
+    type: string
+    description: End of date window YYYY-MM-DD (used to filter the returned calendar range)
+steps:
+  - action: navigate
+    url: https://www.google.com/travel/flights
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: role
+        value: combobox
+        name: "Where from?"
+      - by: aria_label
+        value: "Where from?"
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: "Where from?"
+      - by: aria_label
+        value: "Where else?"
+    value: ${origin}
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: ${origin}
+      - by: role
+        value: option
+      - by: css
+        value: "ul.DFGgtd > li.n4HaVc"
+    wait_for: visible
+  - action: click
+    locators:
+      - by: role
+        value: combobox
+        name: "Where to?"
+      - by: aria_label
+        value: "Where to? "
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: "Where to? "
+      - by: aria_label
+        value: "Where else?"
+    value: ${destination}
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: ${destination}
+      - by: role
+        value: option
+      - by: css
+        value: "ul.DFGgtd > li.n4HaVc"
+    wait_for: visible
+  - action: click
+    locators:
+      - by: aria_label
+        value: Departure
+      - by: css
+        value: "div.GYgkab.YICvqf > div.NA5Egc.ESCxub > input.TP4Lpb.eoY5cb"
+    wait_for:
+      xhr: /GetCalendarPicker
+result:
+  source: xhr
+  url_pattern: /GetCalendarPicker
+  extract: "[1][]"
+  return_as: calendar_prices
+notes: >-
+  The GetCalendarPicker response is a Google batchexecute payload: strip the )]}' prefix, split on
+  numeric length-prefix lines, and JSON.parse the "wrb.fr" envelope's third element (a JSON-encoded
+  string). Inside that decoded array, index [1] is the list of date entries; each entry is
+  [departureDate (YYYY-MM-DD), returnDate (YYYY-MM-DD), [[null, lowestPriceUSD], opaqueFlightToken], 1].
+  Build a departureDate->lowestPriceUSD map and filter to [start_date, end_date]. The extract path
+  "[1][]" is relative to the decoded wrb.fr payload, not the raw HTTP body. start_date/end_date are
+  client-side filters: the picker returns a fixed forward window (~from today) and is opened simply by
+  clicking the Departure field — no date is typed to drive the request. The request is authorized by a
+  per-page f.sid plus X-Goog-BatchExecute-Bgr header that must be captured fresh from the page bootstrap
+  (navigate step), not parameterized.

@@ -367,7 +367,7 @@ The runtime calls `transform` before each outgoing request. The `responses` arra
 
 The compile-agent writes this module when `stateHints` flag `query_param_changes_across_calls` — high-entropy query params that vary per call. It uses `search_response_body` to find the signing function in `.js` responses and replicates it.
 
-Example: `examples/namecheap-domains/search_namecheap_domains/request-transform.ts` implements Namecheap's CRC32 + XOR + base64 URL signing scheme.
+Example: a site that signs each request URL with a scheme computed in its `.js` (CRC32, HMAC, etc.) — the compile agent reads the signing function out of the bundle and replicates it in `request-transform.ts`.
 
 ### Parser context
 

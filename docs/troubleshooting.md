@@ -89,7 +89,7 @@ imprint mcp-server <site>    # runtime tool calls too
 
 The site is blocking API replay or needs browser-minted state. Three escalating fixes:
 
-1. **Set `replayBackend: "auto"`** in `cron.json` (or `imprint cron --once` will use it). The ladder can try `fetch-bootstrap` for browser-minted state and `stealth-fetch` for bot-defense tokens before falling back to DOM replay.
+1. **Set `replayBackend: "auto"`** in `cron.json` (or `imprint cron --once` will use it). The ladder can try `fetch-bootstrap` for browser-minted state, `cdp-replay` for multi-step state-changing anti-bot flows (API requests issued inside a live trusted Chrome), and `stealth-fetch` for bot-defense tokens before falling back to DOM replay.
 
 2. **Probe and cache the working backend:**
    ```bash

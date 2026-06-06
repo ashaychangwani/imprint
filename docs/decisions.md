@@ -22,7 +22,7 @@ A running log of the load-bearing calls made for Imprint. Each entry: the decisi
 
 ## D4 — Backend ladder with auto-escalation
 
-**Decided.** `fetch → conditional fetch-bootstrap → stealth-fetch → playbook`. Walks in order; escalates on `FORBIDDEN` and on structured `STATE_MISSING` only when the next backend can satisfy every required missing item. The principle: as long as some backend would have worked, the call succeeds, but missing credentials or unsupported workflow gaps should fail with actionable errors instead of blindly launching a browser.
+**Decided.** `fetch → conditional fetch-bootstrap → cdp-replay → stealth-fetch → playbook`. Walks in order; escalates on `FORBIDDEN`, on a `400`/`BAD_RESPONSE` (up to a higher-trust rung), and on structured `STATE_MISSING` only when the next backend can satisfy every required missing item. `cdp-replay` runs the API requests *inside* a live trusted Chrome so a protected POST re-validates its anti-bot token (`_abck`) between calls — the only rung that sustains a sequence of multi-step state-changing POSTs. The principle: as long as some backend would have worked, the call succeeds, but missing credentials or unsupported workflow gaps should fail with actionable errors instead of blindly launching a browser.
 
 **Alternative:** One backend per site, configured manually. Cleaner mental model, worse UX — every Akamai migration becomes a config edit.
 

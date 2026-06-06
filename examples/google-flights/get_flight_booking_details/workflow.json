@@ -1,0 +1,98 @@
+{
+  "toolName": "get_flight_booking_details",
+  "site": "google-flights",
+  "intent": {
+    "description": "Get booking/fare details and bookable options for a specific selected flight itinerary on Google Flights.",
+    "userSaid": "clicked one of the one-way fares to find more details and booking details; saw the options for another flight; chose round trip fares; kept exploring round trip fare details"
+  },
+  "parameters": [
+    {
+      "name": "origin",
+      "type": "string",
+      "description": "Origin airport IATA code for the outbound leg, e.g. SJC",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "destination",
+      "type": "string",
+      "description": "Destination airport IATA code for the outbound leg, e.g. SAN",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "departure_date",
+      "type": "string",
+      "description": "Outbound date in YYYY-MM-DD",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "return_date",
+      "type": "string",
+      "description": "Return date in YYYY-MM-DD. Empty/omit for a one-way booking.",
+      "default": "",
+      "verified": true
+    },
+    {
+      "name": "outbound_flight",
+      "type": "string",
+      "description": "Selected outbound flight as 'carrier number', e.g. 'WN 3489'",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "return_flight",
+      "type": "string",
+      "description": "Selected return flight as 'carrier number' (round trip only), e.g. 'WN 3540'. Empty for one-way.",
+      "default": "",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "flight_token",
+      "type": "string",
+      "description": "Opaque per-itinerary booking token minted by the search_flights tool's flight_token output for the selected itinerary."
+    }
+  ],
+  "bootstrap": {
+    "url": "https://www.google.com/travel/flights",
+    "waitUntil": "domcontentloaded",
+    "timeoutMs": 30000,
+    "captures": [
+      {
+        "source": "html_regex",
+        "name": "f_sid",
+        "pattern": "\"FdrFJe\":\"([^\"]+)\"",
+        "group": 1,
+        "required": false,
+        "capability": "browser_bootstrap"
+      },
+      {
+        "source": "html_regex",
+        "name": "bl",
+        "pattern": "\"cfb2h\":\"([^\"]+)\"",
+        "group": 1,
+        "required": false,
+        "capability": "browser_bootstrap"
+      }
+    ]
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetBookingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=1659189&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "Referer": "https://www.google.com/travel/flights",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=${param.origin}|${param.destination}|${param.departure_date}|${param.return_date}|${param.outbound_flight}|${param.return_flight}|${param.flight_token}&",
+      "effect": "safe"
+    }
+  ],
+  "requestTransformModule": "./request-transform.ts",
+  "parserModule": "./parser.ts",
+  "liveVerified": true
+}

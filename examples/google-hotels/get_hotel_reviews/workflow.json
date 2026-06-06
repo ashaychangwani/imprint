@@ -1,0 +1,37 @@
+{
+  "toolName": "get_hotel_reviews",
+  "intent": {
+    "description": "Fetch aggregated reviews and reviewer snippets for a selected Google Hotels hotel.",
+    "userSaid": "clicked one of the offerings, saw booking options"
+  },
+  "site": "google-hotels",
+  "parameters": [
+    {
+      "name": "hotel_id",
+      "type": "string",
+      "description": "Opaque hotel token (e.g. \"ChcI78-luoXdhoaIARoKL20vMDJ2cGdnMRAB\") obtained from the search_hotels tool's hotel_id output.",
+      "verified": true,
+      "sourcedFrom": {
+        "tool": "search_hotels",
+        "field": "hotel_id"
+      }
+    }
+  ],
+  "requestTransformModule": "./request-transform.ts",
+  "parserModule": "./parser.ts",
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=ocp93e&source-path=%2Ftravel%2Fsearch&f.sid=7513562915459271421&bl=boq_travel-frontend-ui_20260527.01_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=3252256&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "Origin": "https://www.google.com",
+        "Referer": "https://www.google.com/travel/search"
+      },
+      "body": "f.req=%5B%5B%5B%22ocp93e%22%2C%22%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5C%22${param.hotel_id}%5C%22%2Cnull%2Cnull%2C%5B%5B%5D%5D%5D%22%2Cnull%2C%221%22%5D%5D%5D&",
+      "effect": "safe"
+    }
+  ],
+  "liveVerified": true
+}

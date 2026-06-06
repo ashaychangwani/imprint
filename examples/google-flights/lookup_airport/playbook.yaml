@@ -1,0 +1,47 @@
+toolName: lookup_airport
+summary: Resolve a city or airport query (e.g. "SJC" or "san jose") into structured airport matches via Google Flights' autocomplete RPC.
+parameters:
+  - name: query
+    type: string
+    description: City or airport search text, e.g. "san jose" or "SJC".
+steps:
+  - action: navigate
+    url: https://www.google.com/travel/flights
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: aria_label
+        value: "Where from?"
+      - by: css
+        value: "div.cQnuXe.k0gFV input.II2One.j0Ppje"
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: "Where else?"
+      - by: aria_label
+        value: "Where from?"
+      - by: css
+        value: "input.II2One.j0Ppje"
+    value: ${query}
+    wait_for:
+      xhr: "batchexecute?rpcids=tDoGIe"
+      method: POST
+result:
+  source: xhr
+  url_pattern: "rpcids=tDoGIe"
+  extract: "1[]"
+  return_as: airports
+notes: >-
+  The tDoGIe response is a Google batchexecute payload, not plain JSON. The
+  downstream parser must: (1) strip the )]}' prefix and the numeric length-prefixed
+  chunk markers, (2) locate the ["wrb.fr","tDoGIe", <payload-string>, ...] envelope,
+  (3) JSON.parse the double-encoded <payload-string>. After decoding, the parsed
+  array's index [1] is the list of matches (the `extract` path "1[]" above). Each
+  match is positional: code = [0][0] (e.g. "SJC"), name = [1] (e.g. "San Jose Mineta
+  International Airport"), city = [2][1], lat = [3][0], lng = [3][1], country = [6].
+  Return one {code, name, city, lat, lng} object per match. The XHR is authorized by
+  the page-bootstrap session id (f.sid) and X-Goog-BatchExecute-Bgr header, which are
+  session-bound — they must come from a freshly loaded page (handled by the navigate
+  step), not parameterized. No login/auth is required.

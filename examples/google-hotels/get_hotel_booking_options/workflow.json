@@ -1,0 +1,84 @@
+{
+  "toolName": "get_hotel_booking_options",
+  "intent": {
+    "description": "Get booking options (per-provider nightly and stay-total prices with click-through URLs) for the top hotel in a location/date window.",
+    "userSaid": "clicked one of the offerings, saw booking options; changed to stay total pricing; looked at more booking options; changed number of adults"
+  },
+  "parameters": [
+    {
+      "name": "location_context",
+      "type": "string",
+      "description": "Opaque area token from search_hotels (shape '<mid>|<displayName>', e.g. '/m/0gz469|Chicago Loop').",
+      "default": "/m/0gz469|Chicago Loop",
+      "verified": true
+    },
+    {
+      "name": "check_in_date",
+      "type": "string",
+      "description": "Check-in date (YYYY-MM-DD)",
+      "default": "2026-07-03",
+      "verified": true
+    },
+    {
+      "name": "check_out_date",
+      "type": "string",
+      "description": "Check-out date (YYYY-MM-DD)",
+      "default": "2026-07-06",
+      "verified": true
+    },
+    {
+      "name": "adults",
+      "type": "number",
+      "description": "Number of adults for pricing",
+      "default": 2,
+      "verified": true
+    },
+    {
+      "name": "children",
+      "type": "number",
+      "description": "Number of children for pricing (0 = none)",
+      "default": 0,
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "price_mode",
+      "type": "string",
+      "description": "nightly | stay_total. Each offer carries both; the flag selects the UI default.",
+      "default": "nightly",
+      "verified": true
+    }
+  ],
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=AtySUc&source-path=%2Ftravel%2Fsearch&f.sid=7513562915459271421&bl=boq_travel-frontend-ui_20260527.01_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=2252256&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]",
+        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"x6c25Q==\"]",
+        "Referer": "https://www.google.com/travel/search"
+      },
+      "body": "f.req={\"location_context\":\"${param.location_context}\",\"check_in_date\":\"${param.check_in_date}\",\"check_out_date\":\"${param.check_out_date}\",\"adults\":\"${param.adults}\",\"children\":\"${param.children}\"}",
+      "effect": "safe"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=M0CRd&source-path=%2Ftravel%2Fsearch&f.sid=7513562915459271421&bl=boq_travel-frontend-ui_20260527.01_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=2552256&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]",
+        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"x6c25Q==\"]",
+        "Referer": "https://www.google.com/travel/search"
+      },
+      "body": "f.req={\"location_context\":\"${param.location_context}\",\"check_in_date\":\"${param.check_in_date}\",\"check_out_date\":\"${param.check_out_date}\",\"adults\":\"${param.adults}\",\"children\":\"${param.children}\",\"price_mode\":\"${param.price_mode}\"}",
+      "effect": "safe"
+    }
+  ],
+  "site": "google-hotels",
+  "requestTransformModule": "./request-transform.ts",
+  "parserModule": "./parser.ts",
+  "liveVerified": true
+}

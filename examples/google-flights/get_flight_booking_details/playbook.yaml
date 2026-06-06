@@ -1,0 +1,138 @@
+toolName: get_flight_booking_details
+summary: "On Google Flights, search a route/date, open a selected flight itinerary, and capture its GetBookingResults fare/booking-provider detail."
+parameters:
+  - name: origin
+    type: string
+    description: Origin airport code, e.g. SJC
+  - name: destination
+    type: string
+    description: Destination airport code, e.g. SAN
+  - name: departure_date
+    type: string
+    description: Outbound date, YYYY-MM-DD
+  - name: return_date
+    type: string
+    description: Return date YYYY-MM-DD. Omit for one-way (the recorded primary flow is one-way).
+  - name: outbound_flight
+    type: string
+    description: Selected outbound flight as carrier+number, e.g. "WN 3489". Used to pick the flight card whose booking details are fetched.
+  - name: return_flight
+    type: string
+    description: Selected return flight as carrier+number (round-trip only); omit for one-way.
+steps:
+  - action: navigate
+    url: https://www.google.com/travel/flights
+    wait_for: networkidle
+
+  - action: type
+    locators:
+      - by: aria_label
+        value: Where from?
+      - by: css
+        value: div.wUiEcc.SOcuWe input.II2One.j0Ppje
+    value: ${origin}
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: ${origin}
+      - by: text
+        value_pattern: ${origin}
+    wait_for: visible
+
+  - action: type
+    locators:
+      - by: aria_label
+        value: "Where to?"
+      - by: css
+        value: div.cQnuXe.k0gFV input.II2One.j0Ppje
+    value: ${destination}
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: ${destination}
+      - by: text
+        value_pattern: ${destination}
+    wait_for: visible
+
+  # Trip type -> One way (omit these two steps for a round trip)
+  - action: click
+    locators:
+      - by: aria_label
+        value: "Select your ticket type."
+      - by: css
+        value: div.TQYpgc.gInvKb div.VfPpkd-aPP78e
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: text
+        value: One way
+      - by: role
+        value: option
+        name: One way
+    wait_for: visible
+
+  - action: type
+    locators:
+      - by: aria_label
+        value: Departure
+      - by: css
+        value: div.GYgkab.YICvqf input.TP4Lpb.eoY5cb
+    value: ${departure_date}
+    wait_for:
+      sleep_ms: 400
+  - action: click
+    locators:
+      - by: text
+        value: Done
+      - by: aria_label
+        value: Done
+    wait_for:
+      sleep_ms: 300
+
+  - action: click
+    locators:
+      - by: text
+        value: Search
+      - by: aria_label
+        value: Search
+    wait_for:
+      xhr: /GetShoppingResults
+
+  # Open the chosen flight; this is the click that triggers GetBookingResults.
+  - action: click
+    locators:
+      - by: text
+        value_pattern: ${outbound_flight}
+      - by: css
+        value: ul.Rk10dc > li.pIav2d div.yR1fYc
+    wait_for:
+      xhr: /GetBookingResults
+result:
+  source: xhr
+  url_pattern: /data/travel.frontend.flights.FlightsFrontendService/GetBookingResults
+  extract: "[1][5][0]"
+  return_as: booking_details
+notes: >
+  Response is a Google batchexecute payload prefixed with )]}' and split into length-prefixed
+  chunks; the parser must strip the prefix, split on the numeric length markers, and JSON.parse
+  each "wrb.fr" envelope's double-encoded inner JSON. Flight data is positional, not keyed: in the
+  first wrb.fr chunk, [1][5][0] holds the selected itinerary slices (each slice = [carrier,[airlineName],
+  [[segment...]], origCode,[y,m,d],[h,m], destCode,...], with segment carrier+number at the
+  [\"WN\",\"3489\",null,\"Southwest\"] tuple). The bookable fare options with provider and price live in
+  the SECOND wrb.fr chunk of the same response at [1][0]: each option is
+  [0,[[provider,providerName,...]],null,[[carrier,number]],false,[bookingUrl...],...,priceCents]; price is
+  in cents (e.g. 88008 = $880.08) and provider name is option[1][0][1]. Auth is session-bound:
+  f.sid (per-page session id) plus the X-Goog-BatchExecute-Bgr header are captured fresh from page
+  bootstrap and are NOT parameterized. The per-itinerary base64 flight token required by the underlying
+  GetBookingResults RPC is produced by the prior GetShoppingResults and is not user-controllable — the
+  DOM flow handles it automatically by clicking the rendered flight card, which is why this playbook
+  clicks rather than POSTs. For a round trip, do NOT set trip type to "One way"; supply return_date so
+  the search returns round-trip results, then after the outbound-flight click pick the return flight
+  (matching return_flight) before GetBookingResults fires. Result cards show airline name + times rather
+  than the raw flight number, so the ${outbound_flight} text locator may need the carrier/time; the
+  css fallback selects the first result card.

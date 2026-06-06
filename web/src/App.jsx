@@ -41,17 +41,16 @@ const comparisons = [
   ['Runtime control', 'Deterministic replay', 'LLM chooses every click'],
   ['Token cost', 'Zero at runtime', 'Scales with every page'],
   ['State handling', 'Named captures + per-run cookie jar', 'Rediscover hidden tokens live'],
-  ['Bot defense', 'Gated fetch-bootstrap + stealth-fetch', 'Automation fingerprint risk'],
+  ['Bot defense', 'Gated fetch-bootstrap → cdp-replay → stealth-fetch', 'Automation fingerprint risk'],
   ['Failure mode', 'Backend ladder fallback', 'Retry the same brittle path'],
   ['Typical result', '200ms fetch, browser only when needed', '30s+ exploration loop'],
 ];
 
 const examples = [
+  { name: 'google-flights ★', use: '4-tool suite', detail: 'One-shot compiled from a single recording: batchexecute wire-format decode + search→booking token chain. Audited 92.6%, every tool live-verified.' },
+  { name: 'google-hotels ★', use: '4-tool suite', detail: 'One-shot compiled from a single recording: autocomplete → search → reviews/booking producer-token chaining. Audited 91.7%.' },
   { name: 'southwest', use: 'Live fare watcher', detail: 'Akamai-resistant flight search with price-drop notifications.' },
-  { name: 'google-flights', use: 'Carrier search', detail: 'Parses raw flight-search payloads into structured results.' },
-  { name: 'google-hotels', use: 'Hotel search', detail: 'Nightly totals, guest scores, stars, and filters from real-time results.' },
   { name: 'discoverandgo', use: 'Authed booking', detail: 'Museum-pass flow using the per-site credential store and replay state.' },
-  { name: 'namecheap-domains', use: 'Domain search', detail: 'CRC32 URL signing reverse-engineered from JS bundle, 5-endpoint chain with availability + aftermarket pricing.' },
 ];
 
 function LogoMark() {

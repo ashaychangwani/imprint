@@ -1,0 +1,57 @@
+{
+  "toolName": "lookup_airport",
+  "intent": {
+    "description": "Resolve a city or airport query into airport codes and structured airport details.",
+    "userSaid": "multi city from SJC to SAN to LAX to SFO"
+  },
+  "site": "google-flights",
+  "parameters": [
+    {
+      "name": "query",
+      "type": "string",
+      "description": "City or airport search text, e.g. 'san jose' or 'SJC'",
+      "verified": true
+    }
+  ],
+  "bootstrap": {
+    "url": "https://www.google.com/travel/flights",
+    "waitUntil": "domcontentloaded",
+    "timeoutMs": 30000,
+    "captures": [
+      {
+        "source": "html_regex",
+        "name": "f_sid",
+        "pattern": "\"FdrFJe\":\"([^\"]+)\"",
+        "group": 1,
+        "required": true,
+        "capability": "browser_bootstrap"
+      },
+      {
+        "source": "html_regex",
+        "name": "bl",
+        "pattern": "\"cfb2h\":\"([^\"]+)\"",
+        "group": 1,
+        "required": true,
+        "capability": "browser_bootstrap"
+      }
+    ]
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/batchexecute?rpcids=tDoGIe&source-path=%2Ftravel%2Fflights&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=608023&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "Referer": "https://www.google.com/travel/flights",
+        "Accept-Language": "en-US,en;q=0.9",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=%5B%5B%5B%22tDoGIe%22%2C%22%5Bnull%2C%5B%5B%5C%22${param.query}%5C%22%2C0%5D%5D%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&",
+      "effect": "safe"
+    }
+  ],
+  "parserModule": "./parser.ts",
+  "requestTransformModule": "./request-transform.ts",
+  "liveVerified": true
+}
