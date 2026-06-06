@@ -380,6 +380,12 @@ async function driveStreamJson(
   const parentCtx = otelContext.active();
 
   const conversationLog: unknown[] = [];
+  const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
+  const flushLog = (): void => {
+    try {
+      writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
+    } catch {}
+  };
   const captureLlmIo = traceLlmIoEnabled();
   let inputTokens = 0;
   let outputTokens = 0;
@@ -489,6 +495,7 @@ async function driveStreamJson(
             });
             endTraceSpan(currentTurnSpan);
           }
+          flushLog();
           turn++;
           turnInputTokens = 0;
           turnOutputTokens = 0;
@@ -573,13 +580,8 @@ async function driveStreamJson(
     log(`unflushed stdout tail (${stdoutBuf.length} bytes) discarded`);
   }
 
-  // Persist conversation log for post-mortem.
-  const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
-  try {
-    writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
-  } catch (err) {
-    log(`failed to persist conversation log: ${errMsg(err)}`);
-  }
+  // Final flush of the complete conversation log.
+  flushLog();
 
   // Inspect sentinels to determine outcome.
   const doneSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.done);

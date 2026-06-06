@@ -281,6 +281,9 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
   }
 
   // 9. Run the agent loop with verification sub-loop
+  mkdirSync(absoluteToolDir, { recursive: true });
+  const conversationLogPath = pathJoin(absoluteToolDir, '.compile-log.json');
+
   let totalTurns = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -315,6 +318,10 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       deadlineMs,
       llm: provider,
       onProgress: wrappedOnProgress,
+      onConversationUpdate: (currentCycleLog) => {
+        const fullLog = [...conversationLog, ...currentCycleLog];
+        writeFileSync(conversationLogPath, JSON.stringify(fullLog, null, 2), 'utf8');
+      },
       onDeadlineReached: opts.onDeadlineReached,
     });
 
@@ -393,9 +400,7 @@ ${failures.map((f) => `- ${f}`).join('\n')}
 Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.test.ts), fix the issues, re-run tests, and call done again when fixed.`;
   }
 
-  // 10. Persist conversation log
-  mkdirSync(absoluteToolDir, { recursive: true });
-  const conversationLogPath = pathJoin(absoluteToolDir, '.compile-log.json');
+  // 10. Final flush of the complete conversation log
   writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
 
   // 11. Return the result
