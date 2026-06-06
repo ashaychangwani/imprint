@@ -77,6 +77,9 @@ interface AgentLoopOptions {
   llm: ToolUseProvider;
   /** called before each LLM call and tool dispatch with structured progress */
   onProgress?: (p: AgentProgress) => void;
+  /** called after each turn with the full conversation log so far, so callers
+   *  can flush incrementally (e.g. write .compile-log.json to disk). */
+  onConversationUpdate?: (log: ConversationLogEntry[]) => void;
   /** called when the wall-clock deadline is reached; return ms to extend or null to time out */
   onDeadlineReached?: OnDeadlineReached;
 }
@@ -460,6 +463,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
         return { action: 'continue' };
       },
     );
+
+    opts.onConversationUpdate?.(conversationLog);
 
     if (turnOutcome.action === 'return') return turnOutcome.result;
 

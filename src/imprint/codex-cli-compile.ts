@@ -293,6 +293,12 @@ async function driveJsonl(
   const parentCtx = otelContext.active();
 
   const conversationLog: unknown[] = [];
+  const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
+  const flushLog = (): void => {
+    try {
+      writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
+    } catch {}
+  };
   let inputTokens = 0;
   let outputTokens = 0;
   let turn = 0;
@@ -373,6 +379,7 @@ async function driveJsonl(
 
         if (evt.type === 'turn.started') {
           if (currentTurnSpan) endTraceSpan(currentTurnSpan);
+          flushLog();
           turn++;
           currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
             'imprint.agent.turn': turn,
@@ -454,12 +461,7 @@ async function driveJsonl(
     log(`unflushed stdout tail (${stdoutBuf.length} bytes) discarded`);
   }
 
-  const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
-  try {
-    writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
-  } catch (err) {
-    log(`failed to persist conversation log: ${errMsg(err)}`);
-  }
+  flushLog();
 
   const workflowPath = pathJoin(opts.absoluteToolDir, 'workflow.json');
   const parserPath = pathJoin(opts.absoluteToolDir, 'parser.ts');
