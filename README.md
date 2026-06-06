@@ -35,32 +35,7 @@ A browser opens. You drive the workflow and narrate what you're doing. Imprint r
 
 **Teach once.** `imprint teach google-flights` records one real search and compiles a **4-tool** MCP server from that single session — the compile agent reverse-engineers Google's `batchexecute` wire format itself and wires the search→booking token chain, with no hand-written request code. Here is the actual run (6 recordings → 4 tools, every tool live-verified):
 
-```
-$ imprint teach google-flights
-
-┌  imprint teach — teaching your agent to use google-flights
-│
-●  Auto-combining 6 session(s) for "google-flights".
-◇  Combined 6 sessions (1044 requests, 26 narrations).
-◇  Redacted 0 value(s) across 0 request(s) and 31 cookie(s).
-●  Dual-pass diff: 1103 ephemeral values (980 minted · 123 server-derived).
-◇  Replay complete.
-◇  Triaged 285 requests → 9 candidate endpoints.
-◇  Detected 4 candidate tools.
-◇  Compile step
-│  Provider: claude-cli · Model: claude-opus-4-8 · concurrency 2
-│  4 agents reverse-engineer the tools, build _shared once,
-│  write the MCP server, run live verification on the real API.
-│
-◇  Built 2 shared modules (batchexecute, flights_request).
-◆  lookup_airport compiled.
-◆  search_flights compiled.
-◆  get_flight_calendar_prices compiled.
-◆  get_flight_booking_details compiled.
-◆  Compile summary: 4/4 tools compiled — every tool live-verified.
-│
-└  Done! 4 tools ready → registered as MCP server imprint-google-flights.
-```
+![imprint teach google-flights — a real run: six recordings compiled into four live-verified MCP tools](web/public/imprint-teach.gif)
 
 **Then your agent calls those tools** like any other — real-time results through a live trusted-Chrome (`cdp-replay`) backend:
 

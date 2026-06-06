@@ -1,6 +1,5 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { teachDemo } from './data/teach-demo.js';
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "accentColor": "#CFFF58",
@@ -76,7 +75,7 @@ function TerminalCard() {
         <span />
         <strong>imprint</strong>
       </div>
-      <pre><code>{teachDemo.join('\n')}</code></pre>
+      <img className="terminal-gif" src="/imprint-teach.gif" alt="A real `imprint teach google-flights` run — six recordings compiled into four live-verified MCP tools" loading="lazy" />
       <div className="terminal-footer">
         <span>MIT license · Bun ≥ 1.3 · Chrome required</span>
         <span>v0.1 shipped</span>
@@ -217,8 +216,9 @@ export default function App() {
         .terminal-chrome span:nth-child(2) { background: #ffc857; }
         .terminal-chrome span:nth-child(3) { background: var(--acid); }
         .terminal-chrome strong { margin-left: auto; font-size: .75rem; color: rgba(242,235,216,.62); font-weight: 400; }
-        .terminal-chrome, pre, .terminal-footer { position: relative; z-index: 1; }
+        .terminal-chrome, pre, .terminal-gif, .terminal-footer { position: relative; z-index: 1; }
         pre { margin: 0; padding: clamp(1.05rem, 2.4vw, 1.55rem); overflow-x: auto; max-width: 100%; }
+        .terminal-gif { display: block; width: 100%; height: auto; }
         code { font-family: "Courier New", "Lucida Console", monospace; }
         pre code { display: block; color: #dff5e8; font-size: clamp(calc(.73rem * var(--terminal-scale)), 1.1vw, calc(.92rem * var(--terminal-scale))); line-height: 1.66; white-space: pre-wrap; overflow-wrap: anywhere; }
         .terminal-footer { display: flex; justify-content: space-between; gap: 16px; padding: 15px 18px; border-top: 1px solid rgba(242,235,216,.12); color: rgba(242,235,216,.58); font-size: .72rem; position: relative; z-index: 1; }
