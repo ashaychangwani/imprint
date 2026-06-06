@@ -140,18 +140,18 @@ describe('inferPlaybookSiteForSmokeCommand', () => {
   it('infers the site from nested generated tool playbook paths', () => {
     expect(
       inferPlaybookSiteForSmokeCommand(
-        '/Users/me/.imprint/namecheap-domains/search_domain_extensions/playbook.yaml',
+        '/Users/me/.imprint/webwidget-domains/search_domain_extensions/playbook.yaml',
         'search_domain_extensions',
       ),
-    ).toBe('namecheap-domains');
+    ).toBe('webwidget-domains');
   });
 
   it('keeps supporting old site-level playbook paths', () => {
     expect(
       inferPlaybookSiteForSmokeCommand(
-        '/Users/me/.imprint/namecheap-domains/playbook.yaml',
+        '/Users/me/.imprint/webwidget-domains/playbook.yaml',
         'search_domain_extensions',
       ),
-    ).toBe('namecheap-domains');
+    ).toBe('webwidget-domains');
   });
 });

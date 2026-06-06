@@ -4,7 +4,7 @@ Imprint is a CLI tool: record a real browser session once, get back two determin
 
 ## Status
 
-v0.1 shipped. Working demos: `examples/southwest` (live, defeats Akamai via stealth-fetch) and `examples/discoverandgo` (authed museum-pass booking). `examples/echo` is the MCP smoke-test fixture. Future demos (Luma SF event finder, internal canteen ordering) live in [TODOS.md](TODOS.md), not yet committed.
+v0.1 shipped. Star demos: `examples/google-flights` (4 tools, audit 92.6%) and `examples/google-hotels` (4 tools, audit 91.7%) — each one-shot compiled from a single real browser-session recording via `imprint teach`, decoding Google's `batchexecute` nested-array wire format with producer→consumer token chaining (search → booking/reviews). Other working demos: `examples/southwest` (live, defeats Akamai via stealth-fetch) and `examples/discoverandgo` (authed museum-pass booking). `examples/echo` is the MCP smoke-test fixture. Deferred work lives in [TODOS.md](TODOS.md).
 
 ## Where to look
 
@@ -24,7 +24,7 @@ v0.1 shipped. Working demos: `examples/southwest` (live, defeats Akamai via stea
 
 ```
 src/
-├── cli.ts                  # 13 verbs (run `imprint --help`)
+├── cli.ts                  # 19 verbs (run `imprint --help`)
 ├── imprint/                # core modules — see docs/architecture.md for the map
 examples/
 ├── <site>/<toolName>/{workflow.json, playbook.yaml, index.ts, cron.json, backends.json}
@@ -34,7 +34,7 @@ prompts/
 ├── playbook-compilation.md # compile-playbook (playbook.yaml) system prompt
 docs/                       # human-facing documentation
 web/                        # standalone Vite/React landing page; run web commands from web/
-test/                       # bun test, ~130 tests
+test/                       # bun test, ~977 tests across ~56 files
 scripts/                    # smoke tests + one-off dev helpers
 ```
 

@@ -392,7 +392,7 @@ export default function App() {
               </div>
               <div className="hero-meta" aria-label="Project highlights">
                 <div className="meta-tile"><strong>v0.1</strong><span>Shipped with working browser automation demos</span></div>
-                <div className="meta-tile"><strong>4 modes</strong><span>fetch, fetch-bootstrap, stealth-fetch, and playbook</span></div>
+                <div className="meta-tile"><strong>5 modes</strong><span>fetch, fetch-bootstrap, cdp-replay, stealth-fetch, and playbook</span></div>
                 <div className="meta-tile"><strong>Traceable</strong><span>Per-turn, per-tool, per-LLM-call Phoenix spans</span></div>
               </div>
             </div>
@@ -409,7 +409,7 @@ export default function App() {
                 <p className="problem-copy">Browser-use and Computer Use are powerful, but they spend runtime tokens deciding clicks, scanning pages, and recovering from variance. Imprint moves that intelligence to compile time: record a known-good path once, then replay it with deterministic machinery.</p>
                 <div className="belief-grid">
                   <div className="belief"><b>Recordings are source</b><span>The human-demonstrated session becomes the executable contract.</span></div>
-                  <div className="belief"><b>Fallback is built in</b><span>API replay, browser bootstrap, stealth-fetch, and DOM playbooks form a backend ladder.</span></div>
+                  <div className="belief"><b>Fallback is built in</b><span>API replay, browser bootstrap, cdp-replay, stealth-fetch, and DOM playbooks form a backend ladder.</span></div>
                 </div>
               </div>
             </div>
@@ -457,6 +457,7 @@ export default function App() {
                 <div className="ladder">
                   <div className="ladder-row"><b>fetch</b><span>~200ms</span></div>
                   <div className="ladder-row"><b>fetch-bootstrap</b><span>browser state mint</span></div>
+                  <div className="ladder-row"><b>cdp-replay</b><span>~2-5s warm · multi-step anti-bot</span></div>
                   <div className="ladder-row"><b>stealth-fetch</b><span>~12s first · ~1s warm</span></div>
                   <div className="ladder-row"><b>playbook</b><span>~9s universal fallback</span></div>
                 </div>
@@ -490,7 +491,7 @@ export default function App() {
                   <span className="kicker">Working examples</span>
                   <h2 id="examples-title">Real sites, real friction, real replay.</h2>
                 </div>
-                <p>Imprint ships with examples that exercise bot protection, protobuf parsing, authenticated flows, notifications, and MCP smoke testing. Install any example directly with <code>imprint install --source examples</code> and remove the registration later with <code>imprint uninstall</code>.</p>
+                <p>Imprint ships with examples that exercise bot protection, batchexecute nested-array parsing, authenticated flows, notifications, and MCP smoke testing. Install any example directly with <code>imprint install --source examples</code> and remove the registration later with <code>imprint uninstall</code>.</p>
               </div>
               <div className="example-grid">
                 {examples.map((example) => (

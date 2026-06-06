@@ -182,15 +182,15 @@ describe('installed MCP discovery parsing', () => {
       `Checking MCP server health...
 context7: https://mcp.context7.com/mcp (HTTP) - ✓ Connected
 imprint-google-flights: imprint mcp-server google-flights - ✓ Connected
-imprint-namecheap-domains: imprint mcp-server namecheap-domains - ✗ Failed to connect
+imprint-webwidget-domains: imprint mcp-server webwidget-domains - ✗ Failed to connect
 `,
     );
 
     expect(servers.map((server) => server.serverName)).toEqual([
       'imprint-google-flights',
-      'imprint-namecheap-domains',
+      'imprint-webwidget-domains',
     ]);
-    expect(servers.map((server) => server.site)).toEqual(['google-flights', 'namecheap-domains']);
+    expect(servers.map((server) => server.site)).toEqual(['google-flights', 'webwidget-domains']);
   });
 
   it('parses Codex mcp list table output', () => {
@@ -198,7 +198,7 @@ imprint-namecheap-domains: imprint mcp-server namecheap-domains - ✗ Failed to 
       'codex',
       `Name                       Command  Args                          Env                 Cwd  Status   Auth
 imprint-echo               imprint  mcp-server echo               IMPRINT_HOME=*****  -    enabled  Unsupported
-imprint-namecheap-domains  imprint  mcp-server namecheap-domains  IMPRINT_HOME=*****  -    enabled  Unsupported
+imprint-webwidget-domains  imprint  mcp-server webwidget-domains  IMPRINT_HOME=*****  -    enabled  Unsupported
 
 Name                 Url                                Bearer Token Env Var  Status   Auth
 openaiDeveloperDocs  https://developers.openai.com/mcp  -                     enabled  Unsupported
@@ -207,9 +207,9 @@ openaiDeveloperDocs  https://developers.openai.com/mcp  -                     en
 
     expect(servers.map((server) => server.serverName)).toEqual([
       'imprint-echo',
-      'imprint-namecheap-domains',
+      'imprint-webwidget-domains',
     ]);
-    expect(servers.map((server) => server.site)).toEqual(['echo', 'namecheap-domains']);
+    expect(servers.map((server) => server.site)).toEqual(['echo', 'webwidget-domains']);
   });
 });
 

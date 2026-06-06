@@ -11,7 +11,7 @@
 
 ```bash
 # Inspect via mcp-inspector (recommended for debugging)
-npx @modelcontextprotocol/inspector imprint mcp-server --site echo
+npx @modelcontextprotocol/inspector imprint mcp-server echo
 
 # Or run the included client smoke test
 bun scripts/mcp-client-test.ts

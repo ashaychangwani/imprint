@@ -111,7 +111,7 @@ This shows up everywhere: `requirePositional` → "→ run \`imprint <verb> --he
 
 **Decided.** Allow `workflow.json` to declare an optional `requestTransformModule` path. The module exports `transform(method, url, responses) → url`. The runtime calls it before each request, enabling per-request URL signing, header injection, or dynamic query param construction.
 
-The compile-agent writes this module when `stateHints` flag per-call query params (`query_param_changes_across_calls`). It uses `search_response_body` to find the signing function in the session's JavaScript responses and replicates the computation. Example: Namecheap's CRC32 + XOR + base64 URL signing.
+The compile-agent writes this module when `stateHints` flag per-call query params (`query_param_changes_across_calls`) or when a request body must be constructed from the tool's parameters. It uses `search_response_body` to find the signing/encoding function in the session's JavaScript responses and replicates the computation. Example: google-flights builds Google's positional `batchexecute` request body from flat snake_case params in `request-transform.ts`.
 
 **Alternative:** Bake signing logic into the workflow JSON URL template syntax (e.g. a `${sign(...)}` function). Too rigid — signing schemes vary widely (HMAC, CRC32, OAuth, custom XOR). A JS module is testable, composable, and doesn't pollute the workflow schema with execution semantics.
 
