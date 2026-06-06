@@ -391,6 +391,29 @@ export async function runWithLadder(
       continue;
     }
 
+    // BAD_RESPONSE (e.g. HTTP 400) is backend-specific on anti-bot sites, so it
+    // escalates rather than stopping. A cdp-replay in-page POST can be rejected
+    // because it lacks the live Akamai sensor headers the endpoint demands, while
+    // stealth-fetch — which MINTS those sensor headers during its bootstrap —
+    // returns 200 for the byte-identical request. Validated on southwest's
+    // low-fare-calendar (cdp-replay 400, stealth-fetch 200). Stopping at the first
+    // 400 stranded the working rung; escalate so a higher-trust backend gets a
+    // shot, and the winner memo then locks onto whatever passed. A genuinely
+    // malformed request 400s at every rung and the last 400 is still returned
+    // below — cost is bounded by the ladder length.
+    if (result.error === 'BAD_RESPONSE') {
+      attempts.push({
+        backend,
+        outcome: 'escalate',
+        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        durationMs,
+      });
+      log(
+        `${backend}: BAD_RESPONSE in ${durationMs}ms — escalating (a higher-trust rung may pass)`,
+      );
+      continue;
+    }
+
     // AUTH_EXPIRED needs a re-login; RATE_LIMITED needs backoff. Neither
     // is fixed by switching transport.
     attempts.push({

@@ -1163,6 +1163,55 @@ describe('fetch-bootstrap fast-fail on an unvalidated jar (latency Fix A)', () =
   });
 });
 
+describe('runWithLadder — BAD_RESPONSE (400) escalates (anti-bot backend divergence)', () => {
+  it('escalates a 400 from one backend to a higher-trust rung that passes', async () => {
+    // southwest's reality: cdp-replay's in-page POST 400s (no live Akamai sensor
+    // headers) but stealth-fetch (mints them) returns 200 for the same request.
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'BAD_RESPONSE', message: '400 missing sensor headers' },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('alpha', behavior, pathJoin(root, 'alpha', 'tool'));
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      {
+        skipBootstrapSplice: true,
+      },
+    );
+    expect(r.usedBackend).toBe('stealth-fetch');
+    expect(r.result.ok).toBe(true);
+    expect(behavior.calls.fetch).toBe(1); // the 400 rung was tried, then escalated
+  });
+
+  it('returns the last 400 when every rung BAD_RESPONSEs (genuinely malformed)', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'BAD_RESPONSE', message: '400 bad body' },
+      stealthResult: { ok: false, error: 'BAD_RESPONSE', message: '400 bad body' },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('beta', behavior, pathJoin(root, 'beta', 'tool'));
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      {
+        skipBootstrapSplice: true,
+      },
+    );
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe('BAD_RESPONSE');
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(1); // escalated through both before returning
+  });
+});
+
 describe('runtime winner memo (latency Fix B)', () => {
   it('starts the next call at the memoized winner and skips earlier rungs', async () => {
     const behavior: FakeToolBehavior = {
