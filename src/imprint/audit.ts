@@ -530,6 +530,12 @@ async function driveAudit(opts: DriveAuditOptions): Promise<DriveAuditResult> {
       [serverName]: {
         command: bunPath,
         args: ['run', CLI_PATH, 'mcp-server', opts.site],
+        // Pace every audit tool call: the auditor now differentially probes
+        // bot-defended idempotent reads (search/calendar) instead of bailing
+        // after one call, so a deliberate inter-call delay keeps the probing
+        // steady enough that the per-IP anti-bot defense isn't tripped. Only
+        // the audit sets this; production mcp-server runs unpaced.
+        env: { IMPRINT_AUDIT_PACING_MS: '5000' },
       },
     },
   };

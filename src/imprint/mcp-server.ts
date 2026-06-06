@@ -162,6 +162,15 @@ function buildServer(
       string | number | boolean
     >;
 
+    // Audit-only pacing: when the audit harness sets IMPRINT_AUDIT_PACING_MS,
+    // sleep before each tool call so the auditor's per-parameter differential
+    // probing of bot-defended idempotent reads stays steady enough not to trip
+    // the per-IP anti-bot defense. Unset in production → no delay.
+    const pacingMs = Number(process.env.IMPRINT_AUDIT_PACING_MS);
+    if (Number.isFinite(pacingMs) && pacingMs > 0) {
+      await new Promise((r) => setTimeout(r, pacingMs));
+    }
+
     try {
       const ladder = resolveLadder('auto', tool.preferredOrder);
       const { result, usedBackend } = await runWithLadder(
