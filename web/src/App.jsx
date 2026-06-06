@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { teachDemo } from './data/teach-demo.js';
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "accentColor": "#CFFF58",
@@ -75,31 +76,7 @@ function TerminalCard() {
         <span />
         <strong>imprint</strong>
       </div>
-      <pre><code>{`$ ${product.install}
-
-$ ${product.teach}
-
-recording Chromium session...             00:42
-redacting credentials + PII...             done
-compiling state-aware API workflow...      workflow.json
-compiling DOM playbook fallback...         <tool>/playbook.yaml
-state hints found...                       cookie → header
-emitting MCP tool...                       search_southwest_flights
-wiring MCP registration...                 imprint-southwest
-
-$ bun run imprint mcp status --site southwest
-registrations...                           claude-code/imprint-southwest
-local tools...                             1 complete, 0 incomplete
-issues...                                  none
-
-$ bun run imprint cron southwest --once
-auto ladder...                             gated browser fallback
-stealth-fetch bootstrapping Chromium...    13.4s
-stealth-fetch request complete              1.2s
-
-  SFO → LAX   2026-05-15    $87   Wanna Get Away
-  SFO → LAX   2026-05-15   $142   Anytime
-  SFO → LAX   2026-05-15   $177   Business Select`}</code></pre>
+      <pre><code>{teachDemo.join('\n')}</code></pre>
       <div className="terminal-footer">
         <span>MIT license · Bun ≥ 1.3 · Chrome required</span>
         <span>v0.1 shipped</span>
