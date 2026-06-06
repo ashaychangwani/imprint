@@ -227,15 +227,41 @@ export async function runWithLadder(
     /** Per-site CDP browser pool so cdp-replay reuses a live Chrome across
      *  calls (~2-5s) instead of launching a fresh one each time (~33s). */
     cdpPool?: Map<string, CdpBrowserFetch>;
+    /** Per-session memo of the backend that last served each tool. Once set, the
+     *  next call starts at that backend instead of re-walking the doomed early
+     *  rungs — the runtime analog of the compile path's `compileWinningBackend`.
+     *  The mcp-server owns one map and ties its lifetime to `cdpPool` (a memoized
+     *  cdp-replay is only fast while its Chrome is pooled). */
+    winnerCache?: Map<string, ConcreteBackend>;
   },
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
     throw new Error('runWithLadder: empty ladder');
   }
 
-  const effectiveLadder = options?.skipBootstrapSplice
+  const baseLadder = options?.skipBootstrapSplice
     ? ladder
     : effectiveAutoLadder(ladder, tool.workflow);
+
+  // Runtime winner memo. Once a backend has served this tool in THIS session,
+  // start there next time instead of re-walking the doomed early rungs (southwest
+  // re-paid an ~80s fetch-bootstrap before cdp-replay on every call). The memo
+  // reorders the POST-splice ladder — cdp-replay only exists after
+  // effectiveAutoLadder splices it in, so reordering the raw `ladder` could never
+  // memoize it. Wrap-around keeps every other rung as fallback, so a now-stale
+  // winner still escalates correctly.
+  const memoKey = `${tool.site}:${tool.workflow.toolName}`;
+  let effectiveLadder = baseLadder;
+  const memoWinner = options?.winnerCache?.get(memoKey);
+  if (memoWinner) {
+    const idx = baseLadder.indexOf(memoWinner);
+    if (idx > 0) {
+      effectiveLadder = [...baseLadder.slice(idx), ...baseLadder.slice(0, idx)];
+      log(
+        `runtime memo: ${memoKey} → start at ${memoWinner}; ladder: ${effectiveLadder.join(' → ')}`,
+      );
+    }
+  }
   const attempts: LadderResult['attempts'] = [];
   let lastResult: ToolResult | null = null;
   let skipUntilBackend: ConcreteBackend | null = null;
@@ -318,6 +344,7 @@ export async function runWithLadder(
     if (result.ok) {
       attempts.push({ backend, outcome: 'ok', detail: `succeeded in ${durationMs}ms`, durationMs });
       log(`${backend}: OK in ${durationMs}ms`);
+      options?.winnerCache?.set(memoKey, backend);
       return { result, usedBackend: backend, attempts };
     }
 
@@ -694,6 +721,27 @@ async function runFetchBootstrap(
         ok: false,
         error: 'NETWORK',
         message: 'fetch-bootstrap could not mint a session jar (browser launch failed).',
+      };
+    }
+
+    // Fast-fail an UNVALIDATED jar. A cdp-minted jar without `_abck~0~`/`bm_sv`
+    // (validated:false) is rejected by Akamai on plain-fetch replay, and a second
+    // mint just produces another unvalidated jar — so don't pay two doomed
+    // ~40s mint+replay cycles (the ~80s that made southwest's every call slow).
+    // Escalate straight to cdp-replay, which fetches INSIDE the live page (the
+    // bmak sensor re-validates `_abck` between calls) and is the only path that
+    // works once the recording is too old to seed a high-trust jar. A
+    // recording-seeded or cached jar is validated:true by construction, so the
+    // cheap plain-fetch path is untouched; `=== false` (not falsy) leaves jars
+    // without the field — older caches / test stubs — on the original path.
+    if (jar.validated === false) {
+      log(
+        'fetch-bootstrap: minted jar unvalidated (no _abck~0~/bm_sv) — plain-fetch replay doomed; escalating to cdp-replay',
+      );
+      return {
+        ok: false,
+        error: 'FORBIDDEN',
+        message: 'fetch-bootstrap: cdp-minted jar did not validate; cdp-replay (in-page) required.',
       };
     }
 

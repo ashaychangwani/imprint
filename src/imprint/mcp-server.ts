@@ -118,6 +118,15 @@ function buildServer(
   const cdpIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const CDP_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
+  // Per-tool memo of the winning backend for THIS server session. After the
+  // first call discovers the right rung, later calls skip the doomed early ones
+  // (e.g. southwest's ~80s fetch-bootstrap FORBIDDEN before cdp-replay wins). Its
+  // lifetime is tied to `cdpPool`: the memoized cdp-replay is only cheap while
+  // its Chrome is pooled, so a site's memo is evicted when that pool entry is
+  // idle-closed (below) — otherwise the next call would start at a now-cold
+  // cdp-replay and re-pay the ~33s relaunch.
+  const winnerCache = new Map<string, ConcreteBackend>();
+
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((t) => ({
       name: t.workflow.toolName,
@@ -161,7 +170,7 @@ function buildServer(
         args,
         assetRoot,
         stealthCache,
-        { cdpPool },
+        { cdpPool, winnerCache },
       );
       // Reset the idle timer for this site's pooled Chrome.
       if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
@@ -174,6 +183,11 @@ function buildServer(
             cf.close().catch(() => {});
             cdpPool.delete(tool.site);
             cdpIdleTimers.delete(tool.site);
+            // Drop this site's winner memo too: a memoized cdp-replay would now
+            // point at a closed Chrome and re-pay the cold relaunch.
+            for (const key of winnerCache.keys()) {
+              if (key.startsWith(`${tool.site}:`)) winnerCache.delete(key);
+            }
           }
         }, CDP_IDLE_TIMEOUT_MS);
         timer.unref();
@@ -203,6 +217,7 @@ function buildServer(
     cdpPool.clear();
     for (const timer of cdpIdleTimers.values()) clearTimeout(timer);
     cdpIdleTimers.clear();
+    winnerCache.clear();
   }
 
   return { server, closeCdpPool };

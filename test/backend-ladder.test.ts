@@ -30,7 +30,7 @@ import {
 import type { MintedJar } from '../src/imprint/cdp-browser-fetch.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
-import type { ToolResult, Workflow } from '../src/imprint/types.ts';
+import type { ConcreteBackend, ToolResult, Workflow } from '../src/imprint/types.ts';
 
 let root: string;
 
@@ -1071,6 +1071,171 @@ describe('fetch-bootstrap happy path (cdp jar minted → plain-fetch replay)', (
       globalThis.fetch = origFetch;
     }
     expect(sentUa).toBe('JarUA/148');
+  });
+});
+
+describe('fetch-bootstrap fast-fail on an unvalidated jar (latency Fix A)', () => {
+  function bootstrapTool(site: string, onReplay: () => void): ResolvedTool {
+    return {
+      site,
+      dir: pathJoin(root, site, 'tool'),
+      workflow: {
+        toolName: `tool_${site}`,
+        intent: { description: 'x' },
+        parameters: [],
+        requests: [{ method: 'GET', url: `https://${site}.example.com/api/x`, headers: {} }],
+        site,
+      },
+      toolFn: async (_p, opts) => {
+        if ((opts as { fetchImpl?: unknown })?.fetchImpl) {
+          onReplay();
+          return { ok: true, data: { via: 'jar' } };
+        }
+        return { ok: false, error: 'FORBIDDEN', message: 'akamai' };
+      },
+    };
+  }
+
+  it('escalates immediately — no replay, no second mint — when jar.validated===false', async () => {
+    let mints = 0;
+    __setCdpJarMinterForTest(async () => {
+      mints++;
+      return {
+        cookies: [{ name: '_abck', value: 'X~-1~Y', domain: '.alpha.example.com', path: '/' }],
+        ua: 'JarUA/148',
+        html: '',
+        bootstrapEpoch: 1_700_000_000_000,
+        abckFlag: '-1',
+        validated: false,
+      } as MintedJar;
+    });
+    let replays = 0;
+    const tool = bootstrapTool('alpha', () => {
+      replays++;
+    });
+    // skipBootstrapSplice for exact ladder control (no cdp-replay spliced in, so
+    // the final result reflects fetch-bootstrap's fast-fail, not a stubbed cdp rung).
+    const r = await runWithLadder(
+      ['fetch', 'fetch-bootstrap'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      {
+        skipBootstrapSplice: true,
+      },
+    );
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe('FORBIDDEN');
+    expect(replays).toBe(0); // doomed plain-fetch replay skipped
+    expect(mints).toBe(1); // no second re-mint (was 2 → ~80s)
+  });
+
+  it('still replays a validated jar (happy path preserved)', async () => {
+    __setCdpJarMinterForTest(
+      async () =>
+        ({
+          cookies: [{ name: '_abck', value: 'X~0~Y', domain: '.beta.example.com', path: '/' }],
+          ua: 'JarUA/148',
+          html: '',
+          bootstrapEpoch: 1_700_000_000_000,
+          abckFlag: '0',
+          validated: true,
+        }) as MintedJar,
+    );
+    let replays = 0;
+    const tool = bootstrapTool('beta', () => {
+      replays++;
+    });
+    const r = await runWithLadder(
+      ['fetch', 'fetch-bootstrap'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      {
+        skipBootstrapSplice: true,
+      },
+    );
+    expect(r.usedBackend).toBe('fetch-bootstrap');
+    expect(r.result.ok).toBe(true);
+    expect(replays).toBe(1);
+  });
+});
+
+describe('runtime winner memo (latency Fix B)', () => {
+  it('starts the next call at the memoized winner and skips earlier rungs', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('alpha', behavior, pathJoin(root, 'alpha', 'tool'));
+    const stealthCache = makeStealthCache(tool);
+    const winnerCache = new Map<string, ConcreteBackend>();
+
+    const r1 = await runWithLadder(['fetch', 'stealth-fetch'], tool, {}, root, stealthCache, {
+      skipBootstrapSplice: true,
+      winnerCache,
+    });
+    expect(r1.usedBackend).toBe('stealth-fetch');
+    expect(winnerCache.get('alpha:tool_alpha')).toBe('stealth-fetch');
+    expect(behavior.calls.fetch).toBe(1);
+
+    const r2 = await runWithLadder(['fetch', 'stealth-fetch'], tool, {}, root, stealthCache, {
+      skipBootstrapSplice: true,
+      winnerCache,
+    });
+    expect(r2.usedBackend).toBe('stealth-fetch');
+    expect(r2.attempts[0]?.backend).toBe('stealth-fetch');
+    expect(behavior.calls.fetch).toBe(1); // fetch rung NOT re-walked on call 2
+  });
+
+  it('wrap-around still escalates when the memoized winner now fails', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: true, data: { via: 'fetch' } },
+      stealthResult: { ok: false, error: 'FORBIDDEN', message: 'stealth down' },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('beta', behavior, pathJoin(root, 'beta', 'tool'));
+    const winnerCache = new Map<string, ConcreteBackend>([['beta:tool_beta', 'stealth-fetch']]);
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      {
+        skipBootstrapSplice: true,
+        winnerCache,
+      },
+    );
+    expect(r.attempts[0]?.backend).toBe('stealth-fetch'); // tried the memo first
+    expect(r.usedBackend).toBe('fetch'); // wrapped around to the working rung
+    expect(r.result.ok).toBe(true);
+  });
+
+  it('reorders the POST-splice ladder so a spliced cdp-replay can be the start', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'FORBIDDEN', message: 'x' },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('gamma', behavior, pathJoin(root, 'gamma', 'tool'));
+    // cdp-replay only exists AFTER effectiveAutoLadder splices it in (no
+    // skipBootstrapSplice). The memo must be found in the spliced ladder.
+    const winnerCache = new Map<string, ConcreteBackend>([['gamma:tool_gamma', 'cdp-replay']]);
+    const r = await runWithLadder(
+      ['stealth-fetch', 'playbook'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      {
+        winnerCache,
+      },
+    );
+    expect(r.attempts[0]?.backend).toBe('cdp-replay'); // started at the spliced+memoized rung
   });
 });
 
