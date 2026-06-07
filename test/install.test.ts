@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
@@ -42,6 +49,31 @@ export async function searchGoogleFlights() {
         toolNames: ['search_google_flights'],
       },
     ]);
+  });
+});
+
+describe('checked-in examples', () => {
+  it('marks Google Flights page tokens as browser-bootstrap state', () => {
+    const flightsRoot = pathResolve(import.meta.dir, '..', 'examples', 'google-flights');
+    for (const toolDir of readdirSync(flightsRoot, { withFileTypes: true })) {
+      if (!toolDir.isDirectory()) continue;
+      const workflowPath = pathJoin(flightsRoot, toolDir.name, 'workflow.json');
+      if (!existsSync(workflowPath)) continue;
+      const workflow = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
+        bootstrap?: { captures?: { name: string; capability?: string }[] };
+        requests?: { url?: string }[];
+      };
+      const usesGooglePageTokens = JSON.stringify(workflow.requests ?? []).includes(
+        '${state.f_sid}',
+      );
+      if (!usesGooglePageTokens) continue;
+
+      const captures = new Map(
+        (workflow.bootstrap?.captures ?? []).map((capture) => [capture.name, capture.capability]),
+      );
+      expect(captures.get('f_sid')).toBe('browser_bootstrap');
+      expect(captures.get('bl')).toBe('browser_bootstrap');
+    }
   });
 });
 
@@ -225,6 +257,78 @@ describe('install', () => {
       else process.env.IMPRINT_HOME = originalImprintHome;
     }
   }
+
+  it('prints install instructions for every checked-in example MCP', async () => {
+    const examplesRoot = pathResolve(import.meta.dir, '..', 'examples');
+    const sites = await listInstallableSites('examples', examplesRoot);
+    expect(
+      sites.map((site) => ({
+        site: site.site,
+        toolNames: site.toolNames,
+      })),
+    ).toEqual([
+      {
+        site: 'discoverandgo',
+        toolNames: ['book_discoverandgo_museum_pass'],
+      },
+      {
+        site: 'echo',
+        toolNames: ['echo_test'],
+      },
+      {
+        site: 'google-flights',
+        toolNames: [
+          'get_flight_booking_details',
+          'get_flight_calendar_prices',
+          'lookup_airport',
+          'search_flights',
+        ],
+      },
+      {
+        site: 'google-hotels',
+        toolNames: [
+          'autocomplete_hotel_location',
+          'get_hotel_booking_options',
+          'get_hotel_reviews',
+          'search_hotels',
+        ],
+      },
+      {
+        site: 'southwest',
+        toolNames: ['search_southwest_flights'],
+      },
+    ]);
+
+    const logs: string[] = [];
+    const consoleLog = console.log;
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    };
+    try {
+      for (const site of sites) {
+        const result = await install({
+          site: site.site,
+          platform: 'claude-desktop',
+          source: 'examples',
+          print: true,
+          noInteractive: true,
+        });
+        expect(result.site).toBe(site.site);
+        expect(result.source).toBe('examples');
+        expect(result.serverName).toBe(`imprint-${site.site}`);
+        expect(result.message).toBe(`Printed imprint-${site.site} claude-desktop configuration.`);
+      }
+    } finally {
+      console.log = consoleLog;
+    }
+
+    const printed = logs.join('\n');
+    for (const site of sites) {
+      expect(printed).toContain(`"imprint-${site.site}"`);
+      expect(printed).toContain('"IMPRINT_HOME"');
+      expect(printed).toContain('/examples');
+    }
+  });
 
   it('prints install instructions for an emitted local MCP without touching platform config', async () => {
     const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-install-'));

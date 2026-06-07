@@ -29,6 +29,14 @@ imprint teach southwest --url https://www.southwest.com
 
 A browser opens. You drive the workflow and narrate what you're doing. Imprint records every request and interaction, then compiles a deterministic **MCP tool** your agent can call forever.
 
+Want to try a finished MCP before recording anything?
+
+```bash
+imprint install google-flights --source examples --platform claude-desktop
+```
+
+That registers the checked-in Google Flights example as an MCP server in your client. Swap `claude-desktop` for `claude-code`, `codex`, `openclaw`, or `hermes`, or add `--print` to see the config without changing anything.
+
 ---
 
 ## See It in Action
@@ -207,6 +215,21 @@ Install any example into your MCP client:
 imprint install google-flights --source examples --platform claude-desktop
 ```
 
+Examples are real generated MCPs, not handwritten SDK samples. `imprint install <site> --source examples` points the MCP server at this repo's `examples/` directory with `IMPRINT_HOME`, so your client can list and call the checked-in tools immediately:
+
+```bash
+imprint install google-hotels --source examples --platform codex
+imprint install southwest --source examples --platform claude-code
+imprint install echo --source examples --platform claude-desktop --print
+```
+
+For your own generated tools, leave off `--source examples`:
+
+```bash
+imprint install mysite --platform claude-code
+imprint install mysite --platform codex
+```
+
 ---
 
 ## CLI Reference
@@ -227,7 +250,14 @@ imprint <command> --help    # per-command options
 
 ## Sharing Skills
 
-Teach on your laptop, ship to a remote agent. Skill folders contain **zero plaintext credentials** — only `${credential.NAME}` placeholders and a manifest listing what the receiver must provision.
+Teach on your laptop, ship to a remote agent. Generated MCP folders contain the portable tool artifacts: `workflow.json`, `playbook.yaml`, `index.ts`, optional shared modules, and cron/backend metadata. Copy `~/.imprint/<site>` into the receiver's `~/.imprint/<site>` or commit it to a private repo, install Imprint there, then register it:
+
+```bash
+bun install -g imprint-mcp
+imprint install mysite --platform claude-code
+```
+
+Credentials stay separate. Skill folders contain **zero plaintext credentials** — only `${credential.NAME}` placeholders and a manifest listing what the receiver must provision.
 
 ```bash
 # Export (encrypted with libsodium + argon2id)
