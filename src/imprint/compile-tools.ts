@@ -7,7 +7,14 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join as pathJoin, relative as pathRelative } from 'node:path';
 import type { AgentTool } from './agent.ts';
 import { inferAppApiHosts } from './app-api-hosts.ts';
@@ -1234,8 +1241,9 @@ export async function typecheckArtifacts(
   includes: string[],
 ): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
   const configPath = pathJoin(dir, '.imprint-typecheck.tsconfig.json');
-  const rootTsconfig = pathJoin(REPO_ROOT, 'tsconfig.json');
-  const extendsPath = normalizeTsconfigPath(pathRelative(dir, rootTsconfig));
+  const rootTsconfig = realpathSync(pathJoin(REPO_ROOT, 'tsconfig.json'));
+  const configDir = realpathSync(dir);
+  const extendsPath = normalizeTsconfigPath(pathRelative(configDir, rootTsconfig));
 
   writeFileSync(
     configPath,

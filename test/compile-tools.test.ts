@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import {
   buildCompileTools,
@@ -11,6 +12,7 @@ import {
   extractTestBlocks,
   isBotDefenseFailure,
   parseJUnitResults,
+  typecheckArtifacts,
 } from '../src/imprint/compile-tools.ts';
 import { type Session, WorkflowSchema } from '../src/imprint/types.ts';
 
@@ -413,6 +415,31 @@ describe('compile tools representativeSeqs', () => {
 });
 
 describe('externalVerification', () => {
+  it('typechecks generated artifacts from os tmpdir paths', async () => {
+    const exampleDir = mkdtempSync(pathJoin(tmpdir(), 'imprint-typecheck-tmp-'));
+
+    try {
+      symlinkSync(
+        pathJoin(import.meta.dir, '..', 'node_modules'),
+        pathJoin(exampleDir, 'node_modules'),
+      );
+      writeFileSync(
+        pathJoin(exampleDir, 'parser.ts'),
+        `export function extract(input: { ok: boolean }) {
+  return { ok: input.ok };
+}
+`,
+        'utf8',
+      );
+
+      const result = await typecheckArtifacts(exampleDir, ['parser.ts']);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).not.toContain('/private/Users');
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects generated artifacts that pass bun tests but fail strict typecheck', async () => {
     const repoRoot = pathJoin(import.meta.dir, '..');
     const scratchRoot = pathJoin(repoRoot, '.context');
