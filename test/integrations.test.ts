@@ -180,6 +180,7 @@ describe('generatePasteSnippet', () => {
       imprintCommand: { command: 'imprint', args: [] },
     });
 
+    expect(snippet).toContain('$HERMES_HOME/config.yaml');
     expect(snippet).toContain('~/.hermes/config.yaml');
     expect(snippet).toContain('imprint-testsite:');
     expect(snippet).toContain('command: "imprint"');

@@ -2,11 +2,20 @@
  *  bundled Chromium (unmanaged) over system Chrome (corporate policy
  *  often blocks --remote-debugging-port). $CHROMIUM_PATH overrides. */
 
-import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { type ChildProcess, spawnSync as nodeSpawnSync, spawn } from 'node:child_process';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
-import { join as pathJoin } from 'node:path';
+import { dirname as pathDirname, join as pathJoin } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isDebug } from './log.ts';
 
@@ -62,6 +71,13 @@ export function chromeProxyArg(proxy: string): string | null {
   return /^[\w.-]+:\d+$/.test(proxy) ? proxy : null;
 }
 
+export function shouldDisableChromiumSandbox(): boolean {
+  const override = process.env.IMPRINT_CHROMIUM_NO_SANDBOX?.trim().toLowerCase();
+  if (override === '1' || override === 'true' || override === 'yes') return true;
+  if (override === '0' || override === 'false' || override === 'no') return false;
+  return process.platform === 'linux' && existsSync('/.dockerenv');
+}
+
 interface LaunchedChromium {
   process: ChildProcess;
   port: number;
@@ -77,14 +93,36 @@ const LINUX_CANDIDATES = [
   '/usr/bin/chromium',
   '/usr/bin/chromium-browser',
 ];
+const require = createRequire(import.meta.url);
+
+export function defaultPlaywrightBrowsersPath(): string | undefined {
+  const hermesHome = process.env.HERMES_HOME?.trim();
+  if (hermesHome) return pathJoin(hermesHome, '.cache', 'ms-playwright');
+  const explicit = process.env.PLAYWRIGHT_BROWSERS_PATH?.trim();
+  if (explicit) return explicit;
+  return undefined;
+}
+
+function playwrightInstallEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  const browsersPath = defaultPlaywrightBrowsersPath();
+  if (browsersPath) env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
+  return env;
+}
+
+function playwrightChromiumCacheRoots(): string[] {
+  const roots = [
+    defaultPlaywrightBrowsersPath(),
+    pathJoin(homedir(), 'Library/Caches/ms-playwright'),
+    pathJoin(homedir(), '.cache/ms-playwright'),
+  ].filter((root): root is string => Boolean(root));
+  return [...new Set(roots)];
+}
 
 /** Find Playwright's "Google Chrome for Testing" — newest version wins
  *  if multiple are installed. */
 function findPlaywrightChromium(): string | null {
-  const cacheRoots = [
-    pathJoin(homedir(), 'Library/Caches/ms-playwright'),
-    pathJoin(homedir(), '.cache/ms-playwright'),
-  ];
+  const cacheRoots = playwrightChromiumCacheRoots();
   for (const root of cacheRoots) {
     if (!existsSync(root)) continue;
     let dirs: string[];
@@ -122,6 +160,7 @@ function findPlaywrightChromium(): string | null {
           'Google Chrome for Testing',
         ),
         // Linux layout
+        pathJoin(root, dir, 'chrome-linux64', 'chrome'),
         pathJoin(root, dir, 'chrome-linux', 'chrome'),
       ];
       for (const c of candidates) {
@@ -136,7 +175,236 @@ function findPlaywrightChromium(): string | null {
   return null;
 }
 
+function playwrightInstallCommand(): string[] {
+  const playwrightCli = resolvePlaywrightCli();
+  if (playwrightCli) return ['node', playwrightCli, 'install', 'chromium'];
+  if (process.versions.bun) return [process.execPath, 'x', 'playwright', 'install', 'chromium'];
+  return ['bunx', 'playwright', 'install', 'chromium'];
+}
+
+function resolvePlaywrightCli(): string | null {
+  try {
+    const packageJson = require.resolve('playwright/package.json');
+    const cli = pathJoin(pathDirname(packageJson), 'cli.js');
+    return existsSync(cli) ? cli : null;
+  } catch {
+    return null;
+  }
+}
+
+function quoteShellArg(value: string): string {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function commandText(command: string[], env: NodeJS.ProcessEnv): string {
+  const prefix = env.PLAYWRIGHT_BROWSERS_PATH
+    ? `PLAYWRIGHT_BROWSERS_PATH=${quoteShellArg(env.PLAYWRIGHT_BROWSERS_PATH)} `
+    : '';
+  return `${prefix}${command.map(quoteShellArg).join(' ')}`;
+}
+
+interface InstallerResult {
+  exitCode: number | null;
+  stdout?: string;
+  stderr?: string;
+  signal?: NodeJS.Signals | null;
+  error?: string;
+  timedOut?: boolean;
+  timeoutMs?: number;
+  logPath?: string;
+}
+
+type ChromiumInstaller = (command: string[], env: NodeJS.ProcessEnv) => InstallerResult;
+
+let chromiumInstallerForTest: ChromiumInstaller | null = null;
+let chromiumFinderForTest: (() => string | null) | null = null;
+let verifiedChromiumPath: string | null = null;
+
+export function __setPlaywrightChromiumInstallerForTest(installer: ChromiumInstaller | null): void {
+  chromiumInstallerForTest = installer;
+}
+
+export function __setChromiumFinderForTest(finder: (() => string | null) | null): void {
+  chromiumFinderForTest = finder;
+  verifiedChromiumPath = null;
+}
+
+function runPlaywrightChromiumInstall(command: string[], env: NodeJS.ProcessEnv): InstallerResult {
+  if (chromiumInstallerForTest) return chromiumInstallerForTest(command, env);
+  const timeoutMs = playwrightInstallTimeoutMs();
+  const logPath = pathJoin(tmpdir(), `imprint-playwright-install-${process.pid}-${Date.now()}.log`);
+  let logFd: number | null = null;
+  try {
+    logFd = openSync(logPath, 'w');
+    const result = nodeSpawnSync(command[0] ?? '', command.slice(1), {
+      env,
+      // Playwright emits frequent progress lines. Send them to a file so parent
+      // command runners that capture stderr without draining it cannot block.
+      stdio: ['ignore', logFd, logFd],
+      timeout: timeoutMs,
+    });
+    const failed = result.status !== 0 || Boolean(result.error);
+    if (!failed) unlinkInstallerLog(logPath);
+    return formatSpawnResult(
+      result,
+      timeoutMs,
+      failed ? readInstallerLog(logPath) : undefined,
+      logPath,
+    );
+  } finally {
+    if (logFd !== null) closeSync(logFd);
+  }
+}
+
+function formatSpawnResult(
+  result: ReturnType<typeof nodeSpawnSync>,
+  timeoutMs: number,
+  output: string | undefined,
+  logPath: string,
+): InstallerResult {
+  const error = result.error as (Error & { code?: string }) | undefined;
+  return {
+    exitCode: result.status,
+    stderr: output,
+    signal: result.signal,
+    error: error?.message,
+    timedOut: error?.code === 'ETIMEDOUT',
+    timeoutMs,
+    logPath,
+  };
+}
+
+function readInstallerLog(logPath: string): string | undefined {
+  try {
+    const output = readFileSync(logPath, 'utf8').trim();
+    const maxChars = 50_000;
+    if (output.length <= maxChars) return output;
+    return `[last ${maxChars} chars of ${logPath}]\n${output.slice(-maxChars)}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function unlinkInstallerLog(logPath: string): void {
+  try {
+    unlinkSync(logPath);
+  } catch {
+    // best effort cleanup
+  }
+}
+
+function playwrightInstallTimeoutMs(): number {
+  const raw = process.env.IMPRINT_PLAYWRIGHT_INSTALL_TIMEOUT_MS?.trim();
+  if (!raw) return 10 * 60 * 1000;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10 * 60 * 1000;
+}
+
+function formatInstallerFailure(result: InstallerResult): string | undefined {
+  const lines: string[] = [];
+  if (result.timedOut) {
+    lines.push(`Timed out after ${Math.round((result.timeoutMs ?? 0) / 1000)}s.`);
+  }
+  if (result.signal) lines.push(`Terminated by signal: ${result.signal}`);
+  if (result.error) lines.push(`Error: ${result.error}`);
+  const output = [result.stderr, result.stdout].filter(Boolean).join('\n').trim();
+  if (output) lines.push(`Output:\n${output}`);
+  else if (result.logPath) lines.push(`Installer log: ${result.logPath}`);
+  return lines.length > 0 ? lines.join('\n') : undefined;
+}
+
+interface EnsureChromiumResult {
+  path: string;
+  installed: boolean;
+  command?: string;
+}
+
+function verifyChromiumExecutable(path: string): void {
+  if (verifiedChromiumPath === path) return;
+  const result = Bun.spawnSync([path, '--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  if (result.exitCode === 0) {
+    verifiedChromiumPath = path;
+    return;
+  }
+  const output = `${result.stderr.toString()}\n${result.stdout.toString()}`.trim();
+  throw new Error(
+    [
+      `Chromium was found at ${path}, but it could not start.`,
+      output ? `Output:\n${output}` : undefined,
+      process.platform === 'linux'
+        ? 'Install missing Linux browser libraries with: bunx playwright install --with-deps chromium'
+        : undefined,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join('\n'),
+  );
+}
+
+export function ensurePlaywrightChromiumInstalled(
+  opts: {
+    log?: (message: string) => void;
+  } = {},
+): EnsureChromiumResult {
+  let existingPath: string | null = null;
+  try {
+    existingPath = findChromium();
+  } catch {
+    // Install below.
+  }
+  if (existingPath) {
+    verifyChromiumExecutable(existingPath);
+    return { path: existingPath, installed: false };
+  }
+
+  const env = playwrightInstallEnv();
+  if (env.PLAYWRIGHT_BROWSERS_PATH) {
+    process.env.PLAYWRIGHT_BROWSERS_PATH = env.PLAYWRIGHT_BROWSERS_PATH;
+  }
+  const command = playwrightInstallCommand();
+  const displayCommand = commandText(command, env);
+  opts.log?.(`Chromium not found; installing Playwright Chromium with: ${displayCommand}`);
+  const result = runPlaywrightChromiumInstall(command, env);
+  if (result.exitCode !== 0 || result.error) {
+    const failure = formatInstallerFailure(result);
+    throw new Error(
+      [
+        'Could not install Playwright Chromium automatically.',
+        `Command: ${displayCommand}`,
+        failure,
+        '',
+        'Retry manually with the command above.',
+        process.platform === 'linux'
+          ? 'If Chromium is installed but cannot launch in a fresh Linux image, install OS browser libraries with: bunx playwright install --with-deps chromium'
+          : undefined,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join('\n'),
+    );
+  }
+
+  try {
+    const path = findChromium();
+    verifyChromiumExecutable(path);
+    return { path, installed: true, command: displayCommand };
+  } catch (err) {
+    throw new Error(
+      [
+        'Playwright Chromium install completed, but Imprint still could not locate or start the Chromium binary.',
+        `Command: ${displayCommand}`,
+        err instanceof Error ? err.message : String(err),
+      ].join('\n'),
+    );
+  }
+}
+
 export function findChromium(): string {
+  if (chromiumFinderForTest) {
+    const path = chromiumFinderForTest();
+    if (path) return path;
+    throw new Error('Could not locate Chromium.');
+  }
+
   const explicit = process.env.CHROMIUM_PATH;
   if (explicit && existsSync(explicit)) return explicit;
 
@@ -272,7 +540,9 @@ async function waitForCdp(port: number, timeoutMs = 10_000): Promise<void> {
 }
 
 export async function launchChromium(opts: LaunchOptions = {}): Promise<LaunchedChromium> {
-  const exe = findChromium();
+  const exe = ensurePlaywrightChromiumInstalled({
+    log: (message) => process.stderr.write(`[imprint] ${message}\n`),
+  }).path;
   const port = opts.port ?? (await pickFreePort());
   const userDataDir =
     opts.userDataDir ?? pathJoin(tmpdir(), `imprint-chrome-${Date.now()}-${process.pid}`);
@@ -286,6 +556,7 @@ export async function launchChromium(opts: LaunchOptions = {}): Promise<Launched
     '--disable-popup-blocking',
     '--use-mock-keychain',
   ];
+  if (shouldDisableChromiumSandbox()) args.push('--no-sandbox');
   if (opts.headless) args.push('--headless=new');
   const proxy = opts.proxy ?? proxyUrl();
   if (proxy) {

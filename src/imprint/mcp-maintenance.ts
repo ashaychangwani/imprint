@@ -144,6 +144,14 @@ function defaultContext(opts: Partial<MaintenanceContext> = {}): MaintenanceCont
   };
 }
 
+function hermesConfigPath(ctx: MaintenanceContext): string {
+  const explicit = process.env.HERMES_CONFIG?.trim();
+  if (explicit) return explicit;
+  const hermesHome = process.env.HERMES_HOME?.trim();
+  if (hermesHome) return pathJoin(hermesHome, 'config.yaml');
+  return pathJoin(ctx.homeDir, '.hermes', 'config.yaml');
+}
+
 function parseSubArgs(argv: string[]): ParsedArgs {
   const positionals: string[] = [];
   const flags: Record<string, string | boolean> = {};
@@ -1419,7 +1427,7 @@ function scanJsonMap(
 }
 
 function scanHermes(ctx: MaintenanceContext): McpRegistration[] {
-  const configPath = pathJoin(ctx.homeDir, '.hermes', 'config.yaml');
+  const configPath = hermesConfigPath(ctx);
   if (!existsSync(configPath)) return [];
   const doc = YAML.parseDocument(readFileSync(configPath, 'utf8'));
   const servers = doc.get('mcp_servers', true);

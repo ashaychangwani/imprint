@@ -14,6 +14,8 @@ const product = {
   install: 'bun install -g imprint-mcp',
   teach: 'imprint teach southwest --url https://www.southwest.com',
   installMcp: 'imprint install southwest --platform claude-desktop',
+  installExample: 'imprint install google-flights --source examples --platform claude-desktop',
+  shareMcp: 'imprint install mysite --platform codex',
 };
 
 const pipeline = [
@@ -33,7 +35,7 @@ const pipeline = [
     step: '03',
     title: 'Call forever',
     body: 'Emit a typed MCP tool and install or remove it wherever your agent runs: Claude Code, Codex CLI, Claude Desktop, OpenClaw, Hermes, or cron.',
-    artifact: 'bun run imprint install <site>',
+    artifact: 'imprint install <site>',
   },
 ];
 
@@ -280,6 +282,10 @@ export default function App() {
         .example-card h3 { color: var(--ink); font-size: 1.45rem; letter-spacing: -.04em; }
         .example-card p { color: var(--ink-soft); line-height: 1.55; }
         .tag { display: inline-flex; width: max-content; padding: 7px 9px; border-radius: 999px; background: #172521; color: var(--acid); font-size: .73rem; }
+        .example-install { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+        .example-install .command { background: #172521; border-color: rgba(24,33,31,.2); }
+        .example-install .command code { color: #dff5e8; }
+        .example-install .command b { color: var(--acid); }
 
         .security { padding: clamp(4rem, 7vw, 7rem) 0; }
         .security-grid { display: grid; grid-template-columns: .95fr 1.05fr; gap: 28px; align-items: center; }
@@ -323,7 +329,7 @@ export default function App() {
           #workflow, #comparison, #examples, #install { scroll-margin-top: 132px; }
           .hero { padding-top: 3.4rem; }
           h1 { max-width: 9ch; }
-          .hero-meta, .belief-grid, .example-grid { grid-template-columns: 1fr; }
+          .hero-meta, .belief-grid, .example-grid, .example-install { grid-template-columns: 1fr; }
           .terminal-footer, .footer-inner { flex-direction: column; }
           .table-card, .table-card tbody, .comparison-row { display: block; width: 100%; }
           .comparison-row > th, .comparison-row > td { display: block; width: 100%; padding: 14px 16px; }
@@ -468,7 +474,7 @@ export default function App() {
                   <span className="kicker">Working examples</span>
                   <h2 id="examples-title">Real sites, real friction, real replay.</h2>
                 </div>
-                <p>Imprint ships with examples that exercise bot protection, batchexecute nested-array parsing, authenticated flows, notifications, and MCP smoke testing. Install any example directly with <code>imprint install --source examples</code> and remove the registration later with <code>imprint uninstall</code>.</p>
+                <p>Imprint ships with examples that exercise bot protection, batchexecute nested-array parsing, authenticated flows, notifications, and MCP smoke testing. Install any example directly with <code>imprint install --source examples</code>; browser-backed installs fetch Playwright Chromium automatically. Share your own generated MCP folder and register it with <code>imprint install &lt;site&gt;</code>.</p>
               </div>
               <div className="example-grid">
                 {examples.map((example) => (
@@ -482,6 +488,10 @@ export default function App() {
                     </div>
                   </article>
                 ))}
+              </div>
+              <div className="example-install" aria-label="Example install commands">
+                <div className="command"><b>Try example</b><code>{product.installExample}</code></div>
+                <div className="command"><b>Share MCP</b><code>{product.shareMcp}</code></div>
               </div>
             </div>
           </section>
@@ -507,7 +517,7 @@ export default function App() {
               <div>
                 <span className="kicker">Install</span>
                 <h2 id="install-title">Teach your first agent tool in minutes.</h2>
-                <p>Install via npm (requires Bun 1.3+) or download a standalone binary. Imprint detects Claude CLI, Codex CLI, or Anthropic API; Cursor CLI is available for playbook compilation.</p>
+                <p>Install via npm (requires Bun 1.3+) or download a standalone binary. Try a checked-in example first, then teach your own site and register the emitted MCP wherever your agent runs.</p>
                 <div className="hero-actions">
                   <a className="btn btn-primary" href={product.githubUrl}>View on GitHub</a>
                   <Link className="btn btn-secondary" to="/docs/getting-started">Read getting started</Link>
@@ -515,7 +525,7 @@ export default function App() {
               </div>
               <div className="command-list" aria-label="Install commands">
                 <div className="command"><b>1</b><code>{product.install}</code></div>
-                <div className="command"><b>2</b><code>bunx playwright install chromium</code></div>
+                <div className="command"><b>2</b><code>{product.installExample}</code></div>
                 <div className="command"><b>3</b><code>{product.teach}</code></div>
                 <div className="command"><b>4</b><code>{product.installMcp}</code></div>
               </div>
