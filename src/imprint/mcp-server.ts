@@ -179,7 +179,7 @@ function buildServer(
         args,
         assetRoot,
         stealthCache,
-        { cdpPool, winnerCache, skipBootstrapSplice: Boolean(tool.preferredOrder?.length) },
+        { cdpPool, winnerCache },
       );
       // Reset the idle timer for this site's pooled Chrome.
       if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {

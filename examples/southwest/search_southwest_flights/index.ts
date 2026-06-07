@@ -56,29 +56,12 @@ const WORKFLOW: Workflow = {
   ],
   "requests": [
     {
-      "method": "GET",
-      "url": "https://www.southwest.com/swa-ui/bootstrap/landing-home-page-v2/1/data.js",
-      "headers": {
-        "Accept": "application/javascript, text/javascript, */*; q=0.01"
-      },
-      "captures": [
-        {
-          "name": "southwest_api_key",
-          "source": "text_regex",
-          "pattern": "\"swa-bootstrap-landing-home-page-v2/api-keys\":\\[function\\(require,module,exports\\)\\{\\s*module\\.exports = \\{[^}]*\"prod\":\"([^\"]+)\"",
-          "group": 1,
-          "required": true,
-          "capability": "ordinary_http"
-        }
-      ]
-    },
-    {
       "method": "POST",
       "url": "https://www.southwest.com/api/air-booking/v1/air-booking/page/air/booking/shopping",
       "headers": {
         "Content-Type": "application/json",
         "Accept": "application/json, text/javascript, */*; q=0.01",
-        "X-API-Key": "${state.southwest_api_key}",
+        "X-API-Key": "${env.SOUTHWEST_API_KEY}",
         "X-App-ID": "air-booking",
         "X-Channel-ID": "southwest"
       },

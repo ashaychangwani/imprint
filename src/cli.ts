@@ -238,7 +238,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Install an already-emitted MCP server into Claude Code, Codex, Claude Desktop, OpenClaw, or Hermes.',
     usage: [
-      'imprint install [<site>] [--platform <name>] [--source local|examples] [--print] [--no-interactive] [--skip-browser-install]',
+      'imprint install [<site>] [--platform <name>] [--source local|examples] [--print] [--no-interactive]',
     ],
     flags: [
       {
@@ -256,10 +256,6 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--no-interactive',
         description: 'Do not prompt; requires <site> and --platform.',
-      },
-      {
-        name: '--skip-browser-install',
-        description: 'Do not auto-install Playwright Chromium for browser-backed tools.',
       },
     ],
     example: 'imprint install google-flights --source examples --platform claude-desktop',
@@ -826,7 +822,6 @@ async function main(argv: string[]): Promise<number> {
           source: { type: 'string' },
           print: { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
-          'skip-browser-install': { type: 'boolean' },
         },
         allowPositionals: false,
       });
@@ -855,7 +850,6 @@ async function main(argv: string[]): Promise<number> {
             source: values.source as (typeof sources)[number] | undefined,
             print: values.print,
             noInteractive: values['no-interactive'],
-            skipBrowserInstall: values['skip-browser-install'],
           });
       console.log(`[imprint] ${result.message}`);
       if ('source' in result)

@@ -77,7 +77,6 @@ async function runOnce(
   ladder: ConcreteBackend[],
   assetRoot: string,
   stealthCache: Map<string, StealthFetch>,
-  skipBootstrapSplice: boolean,
 ): Promise<ToolResult> {
   const startedAt = new Date();
   log(
@@ -91,7 +90,6 @@ async function runOnce(
     params,
     assetRoot,
     stealthCache,
-    { skipBootstrapSplice },
   );
 
   const elapsed = Date.now() - t0;
@@ -276,7 +274,6 @@ async function runCronImpl(opts: RunCronOptions): Promise<void> {
     ladder,
     assetRoot,
     stealthCache,
-    Boolean(cached?.preferredOrder.length),
   ] as const;
 
   if (opts.once) {

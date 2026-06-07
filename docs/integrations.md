@@ -240,29 +240,7 @@ Hermes is an agent framework with built-in scheduling, MCP support, and a skill 
 
 ### MCP setup
 
-Use `imprint install` to write the MCP entry directly:
-
-```bash
-imprint install google-flights --source examples --platform hermes
-```
-
-In a Hermes container, Imprint writes to `$HERMES_HOME/config.yaml` when `HERMES_HOME` is set. Outside Hermes, it falls back to `~/.hermes/config.yaml`. You can install the full checked-in example set with:
-
-```bash
-for site in google-flights google-hotels southwest discoverandgo echo; do
-  imprint install "$site" --source examples --platform hermes --no-interactive
-done
-```
-
-Browser-backed examples install Playwright Chromium automatically on the machine running Hermes. When `HERMES_HOME` is set, Imprint uses `$HERMES_HOME/.cache/ms-playwright` and writes `PLAYWRIGHT_BROWSERS_PATH` into the MCP entry. Use `--skip-browser-install` only when an offline image already contains the browser.
-
-```bash
-imprint install google-flights --source examples --platform hermes --no-interactive
-```
-
-If you are building a fresh Linux image that lacks browser libraries, run `bunx playwright install --with-deps chromium` during image setup.
-
-To edit the config manually instead, add this under the `mcp_servers` key in `$HERMES_HOME/config.yaml` (or `~/.hermes/config.yaml` outside Hermes):
+Add to `~/.hermes/config.yaml` under the `mcp_servers` key:
 
 ```yaml
 mcp_servers:
@@ -279,7 +257,7 @@ Similar to OpenClaw, Hermes reads SKILL.md files from `~/.hermes/skills/`. `impr
 
 If `~/.hermes/` exists, the SKILL.md is written directly to `~/.hermes/skills/imprint-mysite/SKILL.md`. Otherwise it's written to `./imprint-mysite/SKILL.md`.
 
-For remote Hermes hosts, install the `imprint` package on that host (the generated wrappers import from `imprint/runtime`, so the package must be installed but no re-emit is needed). To share a taught MCP, copy or publish the generated site directory, install the package on the target host, then run `imprint install <site> --platform hermes` there so Hermes gets a local config entry with the correct asset path.
+For remote Hermes hosts, install the `imprint` package on that host (the generated wrappers import from `imprint/runtime`, so the package must be installed but no re-emit is needed).
 
 ### Cron mapping
 

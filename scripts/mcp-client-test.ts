@@ -1,6 +1,6 @@
 /**
- * Stdio MCP client smoke test. Spawns `imprint mcp-server echo` as a
- * child process, lists tools, and calls echo_test to exercise an async tool
+ * Stdio MCP client smoke test. Spawns `imprint mcp-server --site echo` as a
+ * child process, lists tools, and calls fetch_probe to exercise an async tool
  * implementation end-to-end. Mirrors mcp-http-client-test.ts so we can
  * confirm both transports behave identically.
  *
@@ -13,12 +13,11 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const cliPath = pathResolve(import.meta.dir, '..', 'src', 'cli.ts');
 
-console.log('[client] spawning imprint mcp-server (stdio, echo)…');
+console.log('[client] spawning imprint mcp-server (stdio, --site echo)…');
 const transport = new StdioClientTransport({
   command: 'bun',
-  args: [cliPath, 'mcp-server', 'echo'],
+  args: [cliPath, 'mcp-server', '--site', 'echo'],
   cwd: pathResolve(import.meta.dir, '..'),
-  env: { ...process.env, IMPRINT_HOME: pathResolve(import.meta.dir, '..', 'examples') },
   // Pipe stderr so we can attach our own listener and forward server logs.
   stderr: 'pipe',
 });

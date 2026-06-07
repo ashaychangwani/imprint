@@ -283,10 +283,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           throw new Error('navigate timeout');
         }),
       ]);
-      await Promise.race([
-        Page.loadEventFired(),
-        sleep(Math.min(abckWaitMs, 5000)).then(() => undefined),
-      ]).catch(() => {});
+      await Page.loadEventFired().catch(() => {});
     } catch (err) {
       log(`navigation issue (continuing): ${err instanceof Error ? err.message : String(err)}`);
     }

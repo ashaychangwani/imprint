@@ -7,7 +7,7 @@ The fastest path is `imprint teach`, which runs the full pipeline interactively 
 ## Prerequisites
 
 - [Bun](https://bun.sh) ≥ 1.3
-- Google Chrome (any modern build) or Playwright Chromium, which Imprint can install automatically when needed
+- Google Chrome (any modern build)
 - A compile-agent provider for `teach`/`generate`: Claude CLI, Codex CLI, or Anthropic API. Cursor CLI is supported for generic prompt/playbook compilation, not the agentic API workflow compiler yet.
 
 ## Install
@@ -16,6 +16,7 @@ The fastest path is `imprint teach`, which runs the full pipeline interactively 
 
 ```bash
 bun install -g imprint-mcp
+bunx playwright install chromium   # needed for teach/record/login
 ```
 
 ### From source
@@ -25,6 +26,7 @@ git clone https://github.com/ashaychangwani/imprint.git
 cd imprint
 bun install
 bun link                          # makes `imprint` global (needs ~/.bun/bin on PATH)
+bunx playwright install chromium  # needed for teach/record/login
 ```
 
 By default, all Imprint data lives in `~/.imprint/`. Set `IMPRINT_HOME` to relocate it.
@@ -38,42 +40,6 @@ imprint doctor
 # → checks Bun, Chromium, Playwright Chromium, LLM providers, push providers.
 # → exits 0 if all required checks pass; 1 otherwise (CI-friendly).
 ```
-
-## Install a checked-in example MCP
-
-You can install one of the committed example MCPs without recording anything:
-
-```bash
-imprint install google-flights --source examples --platform claude-desktop
-```
-
-Swap `claude-desktop` for `claude-code`, `codex`, `openclaw`, or `hermes`. Add `--print` to preview the config without changing any client files.
-
-For browser-backed examples such as Google Flights, Google Hotels, and Southwest, `imprint install` installs Playwright Chromium automatically on the same machine that will run the MCP server. If you are preparing an offline image, preinstall it with:
-
-```bash
-bunx playwright install chromium
-```
-
-In a Linux image that is missing browser libraries, install OS-level browser dependencies at image build time with:
-
-```bash
-bunx playwright install --with-deps chromium
-```
-
-### Hermes Agent / Docker
-
-Hermes containers commonly expose their live config through `$HERMES_HOME/config.yaml`. Imprint detects that automatically, so a Hermes agent can set itself up from a shell with:
-
-```bash
-bun install -g imprint-mcp
-
-for site in google-flights google-hotels southwest discoverandgo echo; do
-  imprint install "$site" --source examples --platform hermes --no-interactive
-done
-```
-
-Restart or reload Hermes after editing its config. The installed MCP entries will use `$HERMES_HOME/config.yaml` when `HERMES_HOME` is set, or `~/.hermes/config.yaml` outside Hermes. Browser-backed examples install Playwright Chromium into `$HERMES_HOME/.cache/ms-playwright` automatically and add `PLAYWRIGHT_BROWSERS_PATH` to the Hermes MCP entry.
 
 ## Your first tool — step by step
 

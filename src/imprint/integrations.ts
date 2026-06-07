@@ -105,7 +105,7 @@ export function generatePasteSnippet(opts: {
 This gives your agent a tool that ${descLower}. Parameters: ${paramList}.`;
 
     case 'hermes':
-      return `Add the ${toolName} tool: add to $HERMES_HOME/config.yaml (or ~/.hermes/config.yaml outside Hermes) under mcp_servers:
+      return `Add the ${toolName} tool: add to ~/.hermes/config.yaml under mcp_servers:
 
   ${toolName}:
     command: "${ic.command}"

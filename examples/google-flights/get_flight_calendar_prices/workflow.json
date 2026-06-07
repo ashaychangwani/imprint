@@ -44,16 +44,14 @@
         "name": "f_sid",
         "pattern": "\"FdrFJe\":\"([^\"]+)\"",
         "group": 1,
-        "required": false,
-        "capability": "browser_bootstrap"
+        "required": false
       },
       {
         "source": "html_regex",
         "name": "bl",
         "pattern": "\"cfb2h\":\"([^\"]+)\"",
         "group": 1,
-        "required": false,
-        "capability": "browser_bootstrap"
+        "required": false
       }
     ]
   },

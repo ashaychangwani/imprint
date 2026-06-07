@@ -1,4 +1,4 @@
-import { ensurePlaywrightChromiumInstalled } from './chromium.ts';
+import { findChromium } from './chromium.ts';
 
 /**
  * Shared loader for Playwright's chromium with the stealth plugin applied.
@@ -69,11 +69,13 @@ export async function isStealthPluginAvailable(): Promise<boolean> {
  * replay browser using chrome-headless-shell looks like a bot. Using the
  * SAME binary for both eliminates the binary asymmetry.
  *
- * Throws if Chromium cannot be installed or started; callers translate the
- * error into their own result shape.
+ * Returns `undefined` if no Chromium can be located — callers should let
+ * Playwright fall back to whatever default it finds.
  */
 export function getStealthExecutablePath(): string | undefined {
-  return ensurePlaywrightChromiumInstalled({
-    log: (message) => process.stderr.write(`[imprint] ${message}\n`),
-  }).path;
+  try {
+    return findChromium();
+  } catch {
+    return undefined;
+  }
 }

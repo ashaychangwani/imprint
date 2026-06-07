@@ -6,7 +6,6 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { findChromium } from './chromium.ts';
-import { defaultHermesConfigPath } from './install.ts';
 import { getProviderStatuses } from './llm.ts';
 import { VERSION } from './version.ts';
 
@@ -64,13 +63,9 @@ function checkPlaywrightChromium(): CheckResult {
   // useful as a separate line so users see whether the Playwright path
   // specifically is set up (matters for stealth-fetch + playbook backends).
   const cacheRoots = [
-    process.env.PLAYWRIGHT_BROWSERS_PATH,
-    process.env.HERMES_HOME
-      ? pathJoin(process.env.HERMES_HOME, '.cache', 'ms-playwright')
-      : undefined,
     pathJoin(homedir(), 'Library/Caches/ms-playwright'),
     pathJoin(homedir(), '.cache/ms-playwright'),
-  ].filter((root): root is string => Boolean(root));
+  ];
   for (const root of cacheRoots) {
     if (!existsSync(root)) continue;
     try {
@@ -89,8 +84,7 @@ function checkPlaywrightChromium(): CheckResult {
   return {
     name: 'Playwright Chromium',
     ok: false,
-    detail:
-      'no chromium-* install under PLAYWRIGHT_BROWSERS_PATH, $HERMES_HOME/.cache/ms-playwright, ~/Library/Caches/ms-playwright, or ~/.cache/ms-playwright',
+    detail: 'no chromium-* install under ~/Library/Caches/ms-playwright or ~/.cache/ms-playwright',
     fix: 'run: bunx playwright install chromium  (needed for stealth-fetch + playbook)',
   };
 }
@@ -215,7 +209,7 @@ function checkClaudeCode(): CheckResult {
 }
 
 function checkHermes(): CheckResult {
-  const configPath = defaultHermesConfigPath();
+  const configPath = pathJoin(homedir(), '.hermes', 'config.yaml');
   if (!existsSync(configPath)) {
     return {
       name: 'Hermes Agent',

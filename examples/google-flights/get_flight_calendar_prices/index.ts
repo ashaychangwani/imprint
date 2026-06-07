@@ -75,7 +75,7 @@ const WORKFLOW: Workflow = {
       {
         "name": "f_sid",
         "required": false,
-        "capability": "browser_bootstrap",
+        "capability": "ordinary_http",
         "source": "html_regex",
         "pattern": "\"FdrFJe\":\"([^\"]+)\"",
         "group": 1
@@ -83,7 +83,7 @@ const WORKFLOW: Workflow = {
       {
         "name": "bl",
         "required": false,
-        "capability": "browser_bootstrap",
+        "capability": "ordinary_http",
         "source": "html_regex",
         "pattern": "\"cfb2h\":\"([^\"]+)\"",
         "group": 1
