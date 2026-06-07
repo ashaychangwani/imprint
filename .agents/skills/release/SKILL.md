@@ -1,7 +1,7 @@
 ---
 name: release
 version: 1.0.0
-description: Cut a new semver release — bumps package.json, generates changelog preview, commits, tags, and pushes.
+description: Cut a new semver release — bumps package.json, previews changelog, commits, tags, pushes, and verifies npm publish.
 triggers:
   - release
   - cut a release
@@ -67,8 +67,27 @@ Ask the user for confirmation, then:
 git push && git push --tags
 ```
 
-This triggers the `release.yml` workflow which creates the GitHub Release with auto-generated changelog.
+This triggers the `release.yml` workflow, which creates the GitHub Release, publishes the npm package, and uploads binaries.
 
-## Step 9 — Confirm
+## Step 9 — Watch publish
 
-Tell the user: "Release `v<VERSION>` tagged and pushed. GitHub Actions will create the release at `https://github.com/ashaychangwani/imprint/releases`."
+Watch the release workflow:
+```
+gh run list --workflow release.yml --limit 1
+gh run watch <RUN_ID> --exit-status
+```
+
+Then verify npm:
+```
+npm view imprint-mcp version
+```
+
+If GitHub Actions cannot publish and local npm auth is available, publish manually from the tagged commit:
+```
+npm whoami
+npm publish --access public
+```
+
+## Step 10 — Confirm
+
+Tell the user: "Release `v<VERSION>` tagged and pushed. GitHub Actions created the release at `https://github.com/ashaychangwani/imprint/releases`, and npm shows `imprint-mcp@<VERSION>`."
