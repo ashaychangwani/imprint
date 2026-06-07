@@ -14,8 +14,8 @@
 ## Run it
 
 ```bash
-# One-time setup (if you haven't already)
-bunx playwright install chromium
+# One-time setup: registers the example MCP and installs Playwright Chromium if missing
+imprint install southwest --source examples --platform claude-desktop
 
 # Run a single tick (verifies everything still works)
 imprint cron southwest --once

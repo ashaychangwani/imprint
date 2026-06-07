@@ -37,6 +37,16 @@ imprint install google-flights --source examples --platform claude-desktop
 
 That registers the checked-in Google Flights example as an MCP server in your client. Swap `claude-desktop` for `claude-code`, `codex`, `openclaw`, or `hermes`, or add `--print` to see the config without changing anything.
 
+On a Hermes agent or Docker host, register the examples directly into Hermes:
+
+```bash
+for site in google-flights google-hotels southwest discoverandgo echo; do
+  imprint install "$site" --source examples --platform hermes --no-interactive
+done
+```
+
+When `HERMES_HOME` is set, Imprint writes Hermes MCP entries to `$HERMES_HOME/config.yaml`; outside Hermes it uses `~/.hermes/config.yaml`. For browser-backed MCPs, `imprint install` also installs Playwright Chromium into `$HERMES_HOME/.cache/ms-playwright` and writes `PLAYWRIGHT_BROWSERS_PATH` into the MCP config so Hermes can find it. Use `--skip-browser-install` only for offline builds where you preinstall the browser yourself. In a fresh Linux image that is missing browser system libraries, install those during image build with `bunx playwright install --with-deps chromium`.
+
 ---
 
 ## See It in Action
@@ -126,7 +136,7 @@ bun install && bun link
 
 <br>
 
-**Browser commands** (`teach`, `record`, `login`, `playbook`) need Playwright's Chromium:
+**Browser commands** (`teach`, `record`, `login`, `playbook`) and browser-backed `imprint install` targets auto-install Playwright Chromium when it is missing. For offline CI or prebuilt Linux images where you pass `--skip-browser-install`, preinstall it ahead of time:
 
 ```bash
 bunx playwright install chromium
@@ -215,7 +225,7 @@ Install any example into your MCP client:
 imprint install google-flights --source examples --platform claude-desktop
 ```
 
-Examples are real generated MCPs, not handwritten SDK samples. `imprint install <site> --source examples` points the MCP server at this repo's `examples/` directory with `IMPRINT_HOME`, so your client can list and call the checked-in tools immediately:
+Examples are real generated MCPs, not handwritten SDK samples. `imprint install <site> --source examples` points the MCP server at this repo's `examples/` directory with `IMPRINT_HOME`, ensures Playwright Chromium for browser-backed tools, and lets your client list and call the checked-in tools immediately:
 
 ```bash
 imprint install google-hotels --source examples --platform codex

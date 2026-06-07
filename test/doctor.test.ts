@@ -6,6 +6,9 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pathJoin } from 'node:path';
 import { type CheckResult, doctor, reportDoctor } from '../src/imprint/doctor.ts';
 
 describe('doctor()', () => {
@@ -24,6 +27,22 @@ describe('doctor()', () => {
     const bun = doctor().find((c) => c.name === 'Bun runtime');
     expect(bun?.ok).toBe(true);
     expect(bun?.detail).toMatch(/^v\d+\.\d+\.\d+/);
+  });
+
+  it('recognizes Playwright Chromium installed under HERMES_HOME', () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-doctor-hermes-'));
+    const oldHermesHome = process.env.HERMES_HOME;
+    mkdirSync(pathJoin(root, '.cache', 'ms-playwright', 'chromium-1234'), { recursive: true });
+    process.env.HERMES_HOME = root;
+    try {
+      const check = doctor().find((c) => c.name === 'Playwright Chromium');
+      expect(check?.ok).toBe(true);
+      expect(check?.detail).toContain(pathJoin(root, '.cache', 'ms-playwright'));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      if (oldHermesHome === undefined) Reflect.deleteProperty(process.env, 'HERMES_HOME');
+      else process.env.HERMES_HOME = oldHermesHome;
+    }
   });
 });
 

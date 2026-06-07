@@ -22,12 +22,20 @@ function withTemp<T>(
   mkdirSync(cwd, { recursive: true });
   mkdirSync(imprint, { recursive: true });
   const oldImprintHome = process.env.IMPRINT_HOME;
+  const oldHermesConfig = process.env.HERMES_CONFIG;
+  const oldHermesHome = process.env.HERMES_HOME;
   process.env.IMPRINT_HOME = imprint;
+  Reflect.deleteProperty(process.env, 'HERMES_CONFIG');
+  Reflect.deleteProperty(process.env, 'HERMES_HOME');
   try {
     return fn({ root, home, cwd, imprint });
   } finally {
     if (oldImprintHome === undefined) Reflect.deleteProperty(process.env, 'IMPRINT_HOME');
     else process.env.IMPRINT_HOME = oldImprintHome;
+    if (oldHermesConfig === undefined) Reflect.deleteProperty(process.env, 'HERMES_CONFIG');
+    else process.env.HERMES_CONFIG = oldHermesConfig;
+    if (oldHermesHome === undefined) Reflect.deleteProperty(process.env, 'HERMES_HOME');
+    else process.env.HERMES_HOME = oldHermesHome;
     rmSync(root, { recursive: true, force: true });
   }
 }
@@ -378,6 +386,29 @@ describe('mcp maintenance adapters', () => {
         env: { HERMES_TOKEN: 'fixture-hermes-token' },
         cwd: '/tmp/hermes-demo',
       });
+    });
+  });
+
+  it('uses HERMES_HOME/config.yaml when scanning Hermes registrations', () => {
+    withTemp(({ root, home, cwd, imprint }) => {
+      const hermesHome = pathJoin(root, 'hermes-runtime');
+      const config = pathJoin(hermesHome, 'config.yaml');
+      process.env.HERMES_HOME = hermesHome;
+      writeFile(
+        config,
+        [
+          'mcp_servers:',
+          '  imprint-demo:',
+          '    command: imprint',
+          '    args: ["mcp-server", "demo"]',
+          '',
+        ].join('\n'),
+      );
+
+      const status = scanMcpStatus({ homeDir: home, cwd, imprintHome: imprint });
+
+      expect(status.registrations.find((r) => r.client === 'hermes')?.configPath).toBe(config);
+      expect(status.registrations.map((r) => r.name)).toContain('imprint-demo');
     });
   });
 });

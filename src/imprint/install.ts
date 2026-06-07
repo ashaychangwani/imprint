@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import * as p from '@clack/prompts';
 import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
+import { defaultPlaywrightBrowsersPath, ensurePlaywrightChromiumInstalled } from './chromium.ts';
 import {
   type McpServerConfig,
   PLATFORMS,
@@ -16,7 +17,7 @@ import {
   shellQuote,
 } from './integrations.ts';
 import { imprintHomeDir } from './paths.ts';
-import { discoverTools } from './tool-loader.ts';
+import { type ResolvedTool, discoverTools } from './tool-loader.ts';
 import type { Workflow } from './types.ts';
 
 type InstallSource = 'local' | 'examples';
@@ -28,6 +29,7 @@ interface InstallOptions {
   source?: InstallSource;
   print?: boolean;
   noInteractive?: boolean;
+  skipBrowserInstall?: boolean;
 }
 
 interface UninstallOptions {
@@ -70,6 +72,7 @@ interface InstallTarget {
   source: InstallSource;
   assetRoot: string;
   site: string;
+  tools: ResolvedTool[];
   workflows: Workflow[];
 }
 
@@ -114,7 +117,11 @@ function defaultOpenClawConfigPath(): string {
   return pathJoin(homedir(), '.openclaw', 'openclaw.json');
 }
 
-function defaultHermesConfigPath(): string {
+export function defaultHermesConfigPath(): string {
+  const explicit = process.env.HERMES_CONFIG?.trim();
+  if (explicit) return explicit;
+  const hermesHome = process.env.HERMES_HOME?.trim();
+  if (hermesHome) return pathJoin(hermesHome, 'config.yaml');
   return pathJoin(homedir(), '.hermes', 'config.yaml');
 }
 
@@ -255,7 +262,7 @@ export async function install(opts: InstallOptions = {}): Promise<InstallResult>
   const imprintCommand = configFilePlatform(platform)
     ? detectDirectBunImprintCommand()
     : detectImprintCommand();
-  const env = { IMPRINT_HOME: target.assetRoot };
+  const env = buildInstallEnvironment(target);
   const workflow = target.workflows[0];
   if (!workflow) {
     throw new Error(`No emitted workflows found for ${target.site}. Run \`imprint emit\` first.`);
@@ -285,6 +292,10 @@ export async function install(opts: InstallOptions = {}): Promise<InstallResult>
       serverName: server.name,
       message: `Printed ${server.name} ${platform} configuration.`,
     };
+  }
+
+  if (!opts.skipBrowserInstall) {
+    ensureBrowserRuntimeForInstall(target);
   }
 
   const regCommand = buildRegistrationCommand({
@@ -422,8 +433,66 @@ async function resolveInstallTarget(opts: InstallOptions): Promise<InstallTarget
     source: selected.source,
     assetRoot: selected.assetRoot,
     site: selected.site,
+    tools,
     workflows,
   };
+}
+
+function buildInstallEnvironment(target: InstallTarget): Record<string, string> {
+  const env: Record<string, string> = { IMPRINT_HOME: target.assetRoot };
+  const browsersPath = defaultPlaywrightBrowsersPath();
+  if (browsersPath && installTargetNeedsBrowserRuntime(target)) {
+    env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
+  }
+  return env;
+}
+
+function ensureBrowserRuntimeForInstall(target: InstallTarget): void {
+  if (!installTargetNeedsBrowserRuntime(target)) return;
+  const result = ensurePlaywrightChromiumInstalled({
+    log: (message) => process.stderr.write(`[imprint install] ${message}\n`),
+  });
+  if (result.installed) {
+    process.stderr.write(`[imprint install] installed Playwright Chromium at ${result.path}\n`);
+  }
+}
+
+function installTargetNeedsBrowserRuntime(target: InstallTarget): boolean {
+  return target.tools.some(
+    (tool) => workflowNeedsBrowserRuntime(tool.workflow) || toolDirNeedsBrowserRuntime(tool.dir),
+  );
+}
+
+function workflowNeedsBrowserRuntime(workflow: Workflow): boolean {
+  if (workflow.bootstrap) return true;
+  if (workflow.liveVerified === false && workflow.liveVerifiedWaiver?.kind === 'waived-bot') {
+    return true;
+  }
+  if (workflow.requests.some((request) => request.url.includes('${state.'))) return true;
+  return workflow.requests.some((request) =>
+    (request.captures ?? []).some((capture) => captureNeedsBrowserRuntime(capture.capability)),
+  );
+}
+
+function toolDirNeedsBrowserRuntime(toolDir: string): boolean {
+  if (existsSync(pathJoin(toolDir, 'playbook.yaml'))) return true;
+  const backendsPath = pathJoin(toolDir, 'backends.json');
+  if (!existsSync(backendsPath)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(backendsPath, 'utf8')) as { preferredOrder?: unknown };
+    if (!Array.isArray(parsed.preferredOrder)) return false;
+    return parsed.preferredOrder.some(
+      (backend) =>
+        typeof backend === 'string' &&
+        ['fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook'].includes(backend),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function captureNeedsBrowserRuntime(capability: string | undefined): boolean {
+  return capability === 'browser_bootstrap' || capability === 'stealth_bootstrap';
 }
 
 async function resolveInstallPlatform(
@@ -658,7 +727,13 @@ function isPlatformDetected(platform: Platform): boolean {
     case 'openclaw':
       return commandExists('openclaw') || existsSync(pathJoin(homedir(), '.openclaw'));
     case 'hermes':
-      return commandExists('hermes') || existsSync(pathJoin(homedir(), '.hermes'));
+      return (
+        commandExists('hermes') ||
+        Boolean(process.env.HERMES_CONFIG?.trim()) ||
+        Boolean(process.env.HERMES_HOME?.trim()) ||
+        existsSync(defaultHermesConfigPath()) ||
+        existsSync(pathJoin(homedir(), '.hermes'))
+      );
   }
 }
 

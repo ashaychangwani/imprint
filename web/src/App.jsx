@@ -474,7 +474,7 @@ export default function App() {
                   <span className="kicker">Working examples</span>
                   <h2 id="examples-title">Real sites, real friction, real replay.</h2>
                 </div>
-                <p>Imprint ships with examples that exercise bot protection, batchexecute nested-array parsing, authenticated flows, notifications, and MCP smoke testing. Install any example directly with <code>imprint install --source examples</code>, or share your own generated MCP folder and register it with <code>imprint install &lt;site&gt;</code>.</p>
+                <p>Imprint ships with examples that exercise bot protection, batchexecute nested-array parsing, authenticated flows, notifications, and MCP smoke testing. Install any example directly with <code>imprint install --source examples</code>; browser-backed installs fetch Playwright Chromium automatically. Share your own generated MCP folder and register it with <code>imprint install &lt;site&gt;</code>.</p>
               </div>
               <div className="example-grid">
                 {examples.map((example) => (
@@ -525,10 +525,9 @@ export default function App() {
               </div>
               <div className="command-list" aria-label="Install commands">
                 <div className="command"><b>1</b><code>{product.install}</code></div>
-                <div className="command"><b>2</b><code>bunx playwright install chromium</code></div>
-                <div className="command"><b>3</b><code>{product.installExample}</code></div>
-                <div className="command"><b>4</b><code>{product.teach}</code></div>
-                <div className="command"><b>5</b><code>{product.installMcp}</code></div>
+                <div className="command"><b>2</b><code>{product.installExample}</code></div>
+                <div className="command"><b>3</b><code>{product.teach}</code></div>
+                <div className="command"><b>4</b><code>{product.installMcp}</code></div>
               </div>
             </div>
           </section>
