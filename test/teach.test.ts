@@ -5,7 +5,7 @@ import { resolve as pathResolve } from 'node:path';
 import { VERB_HELP } from '../src/cli.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
 import { localSessionsDir, localSiteDir } from '../src/imprint/paths.ts';
-import { discoverOrphanSession } from '../src/imprint/teach-state.ts';
+import { type WorkflowState, discoverOrphanSession } from '../src/imprint/teach-state.ts';
 import {
   assertCandidateToolName,
   buildTeachProviderPickerOptions,
@@ -13,6 +13,7 @@ import {
   mapLimit,
   promptForTeachProvider,
   resolveTeachStatePath,
+  resolveWorkflowTriagedPath,
 } from '../src/imprint/teach.ts';
 
 describe('teach verb', () => {
@@ -95,6 +96,16 @@ describe('teach session state helpers', () => {
     }
   }
 
+  function workflowState(overrides: Partial<WorkflowState>): WorkflowState {
+    return {
+      sessionPath: 'sessions/2026-06-08T07-22-19-383Z.json',
+      completedSteps: [],
+      startedAt: '2026-06-08T07:52:26.823Z',
+      updatedAt: '2026-06-08T07:52:26.823Z',
+      ...overrides,
+    };
+  }
+
   it('treats blank stored session paths as missing', () => {
     expect(resolveTeachStatePath('google-flights', '')).toBeNull();
     expect(resolveTeachStatePath('google-flights', '   ')).toBeNull();
@@ -111,6 +122,51 @@ describe('teach session state helpers', () => {
 
     const absolute = pathResolve('/tmp', 'session.json');
     expect(resolveTeachStatePath('google-flights', absolute)).toBe(absolute);
+  });
+
+  it('resolves explicit relative triaged paths under IMPRINT_HOME', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      const state = workflowState({
+        completedSteps: ['record', 'redact', 'triage'],
+        triagedPath: 'sessions/2026-06-08T07-22-19-383Z.triaged.json',
+      });
+
+      expect(resolveWorkflowTriagedPath('yelp', state)).toBe(
+        pathResolve(home, 'yelp', 'sessions', '2026-06-08T07-22-19-383Z.triaged.json'),
+      );
+    });
+  });
+
+  it('recovers legacy triaged paths from a redacted sibling file', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      const sessionsDir = localSessionsDir('yelp');
+      mkdirSync(sessionsDir, { recursive: true });
+      const triagedPath = pathResolve(sessionsDir, '2026-06-08T07-22-19-383Z.triaged.json');
+      writeFileSync(triagedPath, '{}\n');
+
+      const state = workflowState({
+        completedSteps: ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+        redactedPath: 'sessions/2026-06-08T07-22-19-383Z.redacted.json',
+      });
+
+      expect(resolveWorkflowTriagedPath('yelp', state)).toBe(triagedPath);
+    });
+  });
+
+  it('does not derive triaged paths when the sibling artifact is absent', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      const sessionsDir = localSessionsDir('yelp');
+      mkdirSync(sessionsDir, { recursive: true });
+      const state = workflowState({
+        completedSteps: ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+        redactedPath: 'sessions/2026-06-08T07-22-19-383Z.redacted.json',
+      });
+
+      expect(resolveWorkflowTriagedPath('yelp', state)).toBeNull();
+    });
   });
 
   it('builds --from-session checkpoint state with the real session path', () => {

@@ -83,6 +83,7 @@ import {
   loadTeachState,
   nextTeachStep as nextStep,
   resolveTeachStatePath,
+  resolveWorkflowTriagedPath,
   saveTeachState,
   toRelativeTeachStatePath as toRelative,
 } from './teach-state.ts';
@@ -98,7 +99,11 @@ import { setSpanAttributes, traced } from './tracing.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
 import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
 
-export { buildTeachStateFromSession, resolveTeachStatePath } from './teach-state.ts';
+export {
+  buildTeachStateFromSession,
+  resolveTeachStatePath,
+  resolveWorkflowTriagedPath,
+} from './teach-state.ts';
 
 /**
  * How many compile agents run in parallel when more than one tool is selected.
@@ -725,7 +730,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // Run them in parallel so the user can select tools while replay runs.
   let siteClassifications: ClassifiedValue[] | undefined;
   let triageResult: TriageResult | undefined;
-  let triagedPath: string | null = null;
   let plans: CandidateCompilePlan[];
 
   let needsReplay = startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
@@ -783,7 +787,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
       // Branch B: triage → detect-candidates → user selection (fast, ~30s)
       type CandidateChainResult = {
-        triageRes?: { result: TriageResult; sessionPath: string };
+        triageResult?: TriageResult;
         plans: CandidateCompilePlan[];
       };
       const candidatePromise = (async (): Promise<CandidateChainResult> => {
@@ -836,8 +840,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           );
         } else {
           const ws = state.workflows[workflowKey];
-          if (ws?.triagedPath) {
-            localTriagedPath = resolveTeachStatePath(site, ws.triagedPath);
+          localTriagedPath = resolveWorkflowTriagedPath(site, ws);
+          if (ws && localTriagedPath && !ws.triagedPath) {
+            updateCheckpoint(site, state, workflowKey, 'triage', {
+              triagedPath: toRelative(site, localTriagedPath),
+            });
           }
         }
 
@@ -875,6 +882,9 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           kind: 'raw',
         });
         const baseState = buildTeachStateFromSession(site, rawSessionPath, redactedPath);
+        if (localTriagedPath) {
+          baseState.triagedPath = toRelative(site, localTriagedPath);
+        }
         const candidatePlans = selected.map((candidate) => {
           checkpoint(site, state, candidate.toolName, {
             ...baseState,
@@ -896,9 +906,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         }
 
         return {
-          triageRes: localTriageResult
-            ? { result: localTriageResult, sessionPath: replaySessionPath }
-            : undefined,
+          triageResult: localTriageResult,
           plans: candidatePlans,
         };
       })();
@@ -907,13 +915,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       const candidateResult = await candidatePromise;
       plans = candidateResult.plans;
 
-      if (candidateResult.triageRes) {
-        triageResult = candidateResult.triageRes.result;
-        triagedPath = candidateResult.triageRes.sessionPath.replace(
-          /\.redacted\.json$/,
-          '.triaged.json',
-        );
-      }
+      triageResult = candidateResult.triageResult;
 
       // Wait for replay — may already be done, or show progress while waiting
       let replaySettled = false;
@@ -939,16 +941,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
       // Checkpoints — write sequentially after both complete
       if (needsReplay) {
-        updateCheckpoint(site, state, workflowKey, 'replay-and-diff', {
+        const replayExtra = {
           classificationsPath: siteClassifications
             ? toRelative(site, pathJoin(localSiteDir(site), '.classifications.json'))
             : undefined,
-        });
-      }
-      if (candidateResult.triageRes && triagedPath) {
-        updateCheckpoint(site, state, workflowKey, 'triage', {
-          triagedPath: toRelative(site, triagedPath),
-        });
+        };
+        for (const key of new Set(plans.map((plan) => plan.workflowKey))) {
+          updateCheckpoint(site, state, key, 'replay-and-diff', replayExtra);
+        }
       }
     } finally {
       unmuteLog();
@@ -964,8 +964,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       }
     }
     const ws = state.workflows[workflowKey];
-    if (ws?.triagedPath) {
-      triagedPath = resolveTeachStatePath(site, ws.triagedPath);
+    const resolvedTriagedPath = resolveWorkflowTriagedPath(site, ws);
+    if (ws && resolvedTriagedPath && !ws.triagedPath) {
+      updateCheckpoint(site, state, workflowKey, 'triage', {
+        triagedPath: toRelative(site, resolvedTriagedPath),
+      });
     }
     plans = [
       {

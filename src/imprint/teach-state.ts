@@ -148,6 +148,24 @@ export function resolveTeachStatePath(
   return resolveLocalSitePath(site, value);
 }
 
+export function resolveWorkflowTriagedPath(
+  site: string,
+  ws: WorkflowState | undefined,
+): string | null {
+  if (!ws) return null;
+
+  const explicitPath = resolveTeachStatePath(site, ws.triagedPath);
+  if (explicitPath) return explicitPath;
+
+  if (!ws.completedSteps.includes('triage')) return null;
+
+  const redactedPath = resolveTeachStatePath(site, ws.redactedPath);
+  if (!redactedPath?.endsWith('.redacted.json')) return null;
+
+  const derivedPath = redactedPath.replace(/\.redacted\.json$/, '.triaged.json');
+  return existsSync(derivedPath) ? derivedPath : null;
+}
+
 export function toRelativeTeachStatePath(site: string, absPath: string): string {
   const localRelative = relativeToLocalSite(site, absPath);
   if (localRelative) return localRelative;
