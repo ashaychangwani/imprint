@@ -82,6 +82,7 @@ import {
   isExistingTeachFile as isExistingFile,
   loadTeachState,
   nextTeachStep as nextStep,
+  pruneStalePendingTeachWorkflows,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
   saveTeachState,
@@ -401,6 +402,9 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   const completedWorkflows = discoverCompletedWorkflows(site);
   const completedSet = new Set(completedWorkflows);
+  if (pruneStalePendingTeachWorkflows(site, state, completedWorkflows)) {
+    saveTeachState(site, state);
+  }
   const incompleteWorkflows = Object.entries(state.workflows).filter(
     ([name]) => !completedSet.has(name),
   );
@@ -940,16 +944,19 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       mp.clear();
 
       // Checkpoints — write sequentially after both complete
-      if (needsReplay) {
-        const replayExtra = {
-          classificationsPath: siteClassifications
-            ? toRelative(site, pathJoin(localSiteDir(site), '.classifications.json'))
-            : undefined,
-        };
-        for (const key of new Set(plans.map((plan) => plan.workflowKey))) {
-          updateCheckpoint(site, state, key, 'replay-and-diff', replayExtra);
-        }
-      }
+      updateCandidateStageCheckpoints({
+        site,
+        state,
+        plans,
+        fallbackWorkflowKey: workflowKey,
+        replay: needsReplay
+          ? {
+              classificationsPath: siteClassifications
+                ? toRelative(site, pathJoin(localSiteDir(site), '.classifications.json'))
+                : undefined,
+            }
+          : undefined,
+      });
     } finally {
       unmuteLog();
     }
@@ -1252,6 +1259,29 @@ export interface CandidateCompilePlan {
   startFrom: Step;
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
+}
+
+function candidateStageCheckpointKeys(
+  plans: CandidateCompilePlan[],
+  fallbackWorkflowKey: string,
+): string[] {
+  const keys = plans.map((plan) => plan.workflowKey).filter((key) => key.length > 0);
+  return [...new Set(keys.length > 0 ? keys : [fallbackWorkflowKey])];
+}
+
+export function updateCandidateStageCheckpoints(opts: {
+  site: string;
+  state: TeachState;
+  plans: CandidateCompilePlan[];
+  fallbackWorkflowKey: string;
+  replay?: Partial<WorkflowState>;
+  triage?: Partial<WorkflowState>;
+}): void {
+  const keys = candidateStageCheckpointKeys(opts.plans, opts.fallbackWorkflowKey);
+  for (const key of keys) {
+    if (opts.replay) updateCheckpoint(opts.site, opts.state, key, 'replay-and-diff', opts.replay);
+    if (opts.triage) updateCheckpoint(opts.site, opts.state, key, 'triage', opts.triage);
+  }
 }
 
 async function detectTeachCandidates(opts: {

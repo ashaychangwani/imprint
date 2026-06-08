@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve as pathResolve } from 'node:path';
 import { VERB_HELP } from '../src/cli.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
 import { localSessionsDir, localSiteDir } from '../src/imprint/paths.ts';
-import { type WorkflowState, discoverOrphanSession } from '../src/imprint/teach-state.ts';
+import {
+  type TeachState,
+  type WorkflowState,
+  discoverOrphanSession,
+  pruneStalePendingTeachWorkflows,
+} from '../src/imprint/teach-state.ts';
 import {
   assertCandidateToolName,
   buildTeachProviderPickerOptions,
@@ -14,6 +19,7 @@ import {
   promptForTeachProvider,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
+  updateCandidateStageCheckpoints,
 } from '../src/imprint/teach.ts';
 
 describe('teach verb', () => {
@@ -218,6 +224,122 @@ describe('teach session state helpers', () => {
 
       expect(state?.sessionPath).toBe('sessions/2026-05-08T09-24-14-916Z.json');
       expect(state?.completedSteps).toEqual(['record']);
+    });
+  });
+
+  it('prunes stale pending workflows with no recoverable session when a completed workflow owns the same recording', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      const sessionsDir = localSessionsDir('yelp');
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(pathResolve(sessionsDir, '2026-06-08T07-22-19-383Z.json'), '{}\n');
+      writeFileSync(pathResolve(sessionsDir, '2026-06-08T07-22-19-383Z.redacted.json'), '{}\n');
+
+      const state: TeachState = {
+        workflows: {
+          search_restaurants: {
+            sessionPath: 'sessions/2026-06-08T07-22-19-383Z.json',
+            redactedPath: 'sessions/2026-06-08T07-22-19-383Z.redacted.json',
+            completedSteps: [
+              'record',
+              'redact',
+              'replay-and-diff',
+              'triage',
+              'detect-candidates',
+              'generate',
+              'compile-playbook',
+              'emit',
+              'register',
+            ],
+            startedAt: '2026-06-08T07:52:26.823Z',
+            updatedAt: '2026-06-08T08:05:19.644Z',
+          },
+          _pending_stale: {
+            sessionPath: '',
+            completedSteps: ['replay-and-diff', 'triage'],
+            startedAt: '2026-06-08T07:52:26.835Z',
+            updatedAt: '2026-06-08T07:52:26.836Z',
+            classificationsPath: '.classifications.json',
+            triagedPath: 'sessions/2026-06-08T07-22-19-383Z.triaged.json',
+          },
+        },
+      };
+
+      expect(pruneStalePendingTeachWorkflows('yelp', state, ['search_restaurants'])).toBe(true);
+      expect(state.workflows._pending_stale).toBeUndefined();
+      expect(state.workflows.search_restaurants).toBeDefined();
+    });
+  });
+
+  it('preserves pending workflows that still have recoverable session files', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      const sessionsDir = localSessionsDir('yelp');
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(pathResolve(sessionsDir, 'pending.json'), '{}\n');
+      writeFileSync(pathResolve(sessionsDir, 'pending.redacted.json'), '{}\n');
+
+      const state: TeachState = {
+        workflows: {
+          search_restaurants: {
+            sessionPath: 'sessions/completed.json',
+            redactedPath: 'sessions/completed.redacted.json',
+            completedSteps: ['record', 'redact', 'generate', 'compile-playbook', 'emit'],
+            startedAt: '2026-06-08T07:52:26.823Z',
+            updatedAt: '2026-06-08T08:05:19.644Z',
+          },
+          _pending_valid: {
+            sessionPath: 'sessions/pending.json',
+            redactedPath: 'sessions/pending.redacted.json',
+            completedSteps: ['record', 'redact'],
+            startedAt: '2026-06-08T07:52:26.835Z',
+            updatedAt: '2026-06-08T07:52:26.836Z',
+          },
+        },
+      };
+
+      expect(pruneStalePendingTeachWorkflows('yelp', state, ['search_restaurants'])).toBe(false);
+      expect(state.workflows._pending_valid).toBeDefined();
+    });
+  });
+
+  it('writes candidate-stage checkpoints to selected tool keys without recreating the pending key', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      const state: TeachState = {
+        workflows: {
+          search_restaurants: {
+            sessionPath: 'sessions/2026-06-08T07-22-19-383Z.json',
+            redactedPath: 'sessions/2026-06-08T07-22-19-383Z.redacted.json',
+            completedSteps: ['record', 'redact', 'detect-candidates'],
+            startedAt: '2026-06-08T07:52:26.823Z',
+            updatedAt: '2026-06-08T08:05:19.644Z',
+          },
+        },
+      };
+
+      updateCandidateStageCheckpoints({
+        site: 'yelp',
+        state,
+        plans: [{ workflowKey: 'search_restaurants', startFrom: 'generate' }],
+        fallbackWorkflowKey: '_pending_stale',
+        replay: { classificationsPath: '.classifications.json' },
+        triage: { triagedPath: 'sessions/2026-06-08T07-22-19-383Z.triaged.json' },
+      });
+
+      const ws = state.workflows.search_restaurants;
+      expect(ws?.completedSteps).toContain('replay-and-diff');
+      expect(ws?.completedSteps).toContain('triage');
+      expect(ws?.classificationsPath).toBe('.classifications.json');
+      expect(ws?.triagedPath).toBe('sessions/2026-06-08T07-22-19-383Z.triaged.json');
+      expect(state.workflows._pending_stale).toBeUndefined();
+
+      const persisted = readFileSync(
+        pathResolve(localSiteDir('yelp'), '.teach-state.json'),
+        'utf8',
+      );
+      expect(persisted).toContain('search_restaurants');
+      expect(persisted).not.toContain('_pending_stale');
     });
   });
 });
