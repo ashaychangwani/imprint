@@ -263,6 +263,65 @@ export function isExistingTeachFile(path: string | null | undefined): path is st
   }
 }
 
+function hasRecoverableRawOrRedactedSession(site: string, ws: WorkflowState): boolean {
+  return (
+    isExistingTeachFile(resolveTeachStatePath(site, ws.sessionPath)) ||
+    isExistingTeachFile(resolveTeachStatePath(site, ws.redactedPath))
+  );
+}
+
+function artifactStem(storedPath: string | null | undefined): string | null {
+  const value = storedPath?.trim();
+  if (!value) return null;
+  const base = pathBasename(value);
+  if (!base.endsWith('.json')) return null;
+  return base
+    .replace(/\.triaged/g, '')
+    .replace(/\.redacted/g, '')
+    .replace(/\.json$/, '');
+}
+
+function workflowArtifactStems(ws: WorkflowState): Set<string> {
+  const stems = new Set<string>();
+  for (const path of [ws.sessionPath, ws.redactedPath, ws.triagedPath]) {
+    const stem = artifactStem(path);
+    if (stem) stems.add(stem);
+  }
+  return stems;
+}
+
+export function pruneStalePendingTeachWorkflows(
+  site: string,
+  state: TeachState,
+  completedWorkflows: string[],
+): boolean {
+  const completedSet = new Set(completedWorkflows);
+  const completedStems = new Set<string>();
+  for (const name of completedSet) {
+    const ws = state.workflows[name];
+    if (!ws) continue;
+    for (const stem of workflowArtifactStems(ws)) completedStems.add(stem);
+  }
+
+  let changed = false;
+  for (const [key, ws] of Object.entries(state.workflows)) {
+    if (!key.startsWith('_pending_')) continue;
+    if (hasRecoverableRawOrRedactedSession(site, ws)) continue;
+
+    const pendingStems = workflowArtifactStems(ws);
+    const duplicatesCompletedWorkflow =
+      pendingStems.size === 0
+        ? completedSet.size > 0
+        : [...pendingStems].some((stem) => completedStems.has(stem));
+    if (!duplicatesCompletedWorkflow) continue;
+
+    delete state.workflows[key];
+    changed = true;
+  }
+
+  return changed;
+}
+
 export function friendlySessionTimestamp(sessionPath: string): string {
   const m = sessionPath.match(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})/);
   if (!m) return pathBasename(sessionPath);
