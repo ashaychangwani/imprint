@@ -270,10 +270,7 @@ function hasRecoverableRawOrRedactedSession(site: string, ws: WorkflowState): bo
   );
 }
 
-export function pruneStalePendingTeachWorkflows(
-  site: string,
-  state: TeachState,
-): boolean {
+export function pruneStalePendingTeachWorkflows(site: string, state: TeachState): boolean {
   let changed = false;
   for (const [key, ws] of Object.entries(state.workflows)) {
     if (!key.startsWith('_pending_')) continue;
