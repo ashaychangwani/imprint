@@ -278,6 +278,7 @@ export async function importArchive(opts: {
       }
 
       for (const tool of entry.tools) {
+        assertSafeSegment('tool name', tool);
         const src = pathJoin(stagedSite, tool);
         const dest = pathJoin(targetDir, tool);
         mkdirSync(dest, { recursive: true });
@@ -338,6 +339,14 @@ export async function importArchive(opts: {
     return result;
   } finally {
     rmSync(staging, { recursive: true, force: true });
+  }
+}
+
+function assertSafeSegment(label: string, value: string): void {
+  if (value.includes('..') || value.includes('/') || value.includes('\\')) {
+    throw new Error(
+      `Invalid ${label} in archive: "${value}". Must not contain path separators or ".." sequences.`,
+    );
   }
 }
 

@@ -193,6 +193,33 @@ describe('importArchive', () => {
     await expect(importArchive({ archivePath: bogus })).rejects.toThrow(/manifest\.json/i);
   });
 
+  it('rejects path-traversal tool names in manifest', async () => {
+    const staging = mkdtempSync(pathJoin(tmpdir(), 'traversal-'));
+    const siteDir = pathJoin(staging, 'evil');
+    const toolDir = pathJoin(siteDir, 'legit_tool');
+    mkdirSync(toolDir, { recursive: true });
+    writeFileSync(pathJoin(toolDir, 'index.ts'), 'x');
+    writeFileSync(
+      pathJoin(staging, 'manifest.json'),
+      JSON.stringify({
+        version: 1,
+        imprintVersion: '0.0.0',
+        createdAt: new Date().toISOString(),
+        sites: [
+          { name: 'evil', tools: ['../../etc/passwd'], hasCredentials: false, hasShared: false },
+        ],
+      }),
+    );
+    const archivePath = pathJoin(tempHome, 'traversal.tar.gz');
+    const { execSync } = await import('node:child_process');
+    execSync(`tar czf '${archivePath}' -C '${staging}' .`, { stdio: 'pipe' });
+    rmSync(staging, { recursive: true });
+
+    await expect(importArchive({ archivePath, force: true })).rejects.toThrow(
+      /must not contain path separators/i,
+    );
+  });
+
   it('round-trips multiple sites', async () => {
     seedSite('site_a', ['search_a']);
     seedSite('site_b', ['search_b', 'list_b']);
