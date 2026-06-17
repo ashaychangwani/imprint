@@ -402,7 +402,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   const completedWorkflows = discoverCompletedWorkflows(site);
   const completedSet = new Set(completedWorkflows);
-  if (pruneStalePendingTeachWorkflows(site, state, completedWorkflows)) {
+  if (pruneStalePendingTeachWorkflows(site, state)) {
     saveTeachState(site, state);
   }
   const incompleteWorkflows = Object.entries(state.workflows).filter(

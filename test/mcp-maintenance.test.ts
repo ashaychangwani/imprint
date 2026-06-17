@@ -109,7 +109,7 @@ describe('mcp maintenance status', () => {
       const status = scanMcpStatus({ homeDir: home, cwd, imprintHome: imprint });
       expect(status.registrations.map((r) => r.name)).toEqual(['imprint-stale']);
       expect(status.sites.find((s) => s.site === 'demo')?.tools[0]?.complete).toBe(true);
-      expect(status.issues.map((i) => i.kind)).toContain('incomplete');
+      expect(status.issues.map((i) => i.kind)).not.toContain('incomplete');
       expect(status.issues.map((i) => i.kind)).toContain('missing-session');
       expect(status.issues.map((i) => i.kind)).toContain('stale-registration');
 
