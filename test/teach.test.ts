@@ -265,7 +265,7 @@ describe('teach session state helpers', () => {
         },
       };
 
-      expect(pruneStalePendingTeachWorkflows('yelp', state, ['search_restaurants'])).toBe(true);
+      expect(pruneStalePendingTeachWorkflows('yelp', state)).toBe(true);
       expect(state.workflows._pending_stale).toBeUndefined();
       expect(state.workflows.search_restaurants).toBeDefined();
     });
@@ -298,7 +298,7 @@ describe('teach session state helpers', () => {
         },
       };
 
-      expect(pruneStalePendingTeachWorkflows('yelp', state, ['search_restaurants'])).toBe(false);
+      expect(pruneStalePendingTeachWorkflows('yelp', state)).toBe(false);
       expect(state.workflows._pending_valid).toBeDefined();
     });
   });

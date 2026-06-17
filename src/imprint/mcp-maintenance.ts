@@ -30,6 +30,7 @@ import { imprintHomeDir, localSiteDir } from './paths.ts';
 import {
   type WorkflowState,
   loadTeachState,
+  pruneStalePendingTeachWorkflows,
   resolveTeachStatePath,
   saveTeachState,
   teachStatePath,
@@ -37,7 +38,7 @@ import {
 
 type McpClient = 'claude-code' | 'codex' | 'claude-desktop' | 'openclaw' | 'hermes';
 type LocalDeleteMode = 'none' | 'tool' | 'site';
-type IssueKind = 'incomplete' | 'missing-session' | 'stale-registration';
+type IssueKind = 'missing-session' | 'stale-registration';
 
 const CLIENTS: McpClient[] = ['claude-code', 'codex', 'claude-desktop', 'openclaw', 'hermes'];
 const DISABLED_STORE_VERSION = 1;
@@ -427,7 +428,7 @@ function fixIssue(issue: McpIssue, status: McpStatus, ctx: MaintenanceContext): 
         };
   }
 
-  if ((issue.kind === 'incomplete' || issue.kind === 'missing-session') && issue.workflow) {
+  if (issue.kind === 'missing-session' && issue.workflow) {
     return pruneSingleTeachWorkflow(issue.site, issue.workflow);
   }
 
@@ -688,8 +689,6 @@ function issueFixHint(issue: McpIssue): string | null {
   switch (issue.kind) {
     case 'stale-registration':
       return `choose "Fix an issue" or run: imprint mcp delete ${issue.name ?? `imprint-${issue.site}`} --client ${issue.client ?? 'all'} --yes`;
-    case 'incomplete':
-      return `choose "Fix an issue" or run: imprint mcp prune-state --site ${issue.site} --incomplete --yes`;
     case 'missing-session':
       return `choose "Fix an issue" or run: imprint mcp prune-state --site ${issue.site} --missing-session --yes`;
   }
@@ -737,6 +736,9 @@ function scanLocalSite(site: string, dir: string): LocalSiteStatus {
   }
 
   const state = loadTeachState(site);
+  if (pruneStalePendingTeachWorkflows(site, state)) {
+    saveTeachState(site, state);
+  }
   const workflows = Object.entries(state.workflows)
     .map(([name, ws]) => workflowStatus(site, name, ws, tools))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -801,14 +803,6 @@ function collectIssues(opts: {
           workflow: wf.name,
           message: `${site.site}/${wf.name} references a missing session file`,
           path: wf.sessionPath ?? undefined,
-        });
-      }
-      if (wf.incomplete) {
-        issues.push({
-          kind: 'incomplete',
-          site: site.site,
-          workflow: wf.name,
-          message: `${site.site}/${wf.name} is incomplete (${wf.completedSteps.join(', ') || 'no completed steps'})`,
         });
       }
     }
