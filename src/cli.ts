@@ -62,6 +62,10 @@ INSTALL
   install [<site>]         Install an emitted MCP server into an AI platform.
   uninstall [<site>]       Remove an installed Imprint MCP server from an AI platform.
 
+SHARE
+  export <site> [<site2>]  Bundle site tools into a portable .tar.gz archive.
+  import <archive.tar.gz>  Unpack an archive into ~/.imprint and set up tools.
+
 RUN
   mcp-server <site>        Serve one site's tools as MCP (stdio default).
   cron <site>              Polling daemon for ~/.imprint/<site>/<toolName>/cron.json.
@@ -283,6 +287,39 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       },
     ],
     example: 'imprint uninstall google-flights --platform claude-desktop',
+  },
+  export: {
+    summary:
+      'Bundle one or more site tool sets into a portable .tar.gz archive for sharing across machines.',
+    usage: ['imprint export <site> [<site2> ...] [--out <path>] [--include-credentials]'],
+    flags: [
+      {
+        name: '--out <path>',
+        description:
+          'Output path. Defaults to ./imprint-export-<site>.tar.gz (single) or ./imprint-export-<timestamp>.tar.gz (multi).',
+      },
+      {
+        name: '--include-credentials',
+        description: 'Embed encrypted credential bundles (prompts for a passphrase per site).',
+      },
+    ],
+    example: 'imprint export avis southwest marriott --out tools.tar.gz --include-credentials',
+  },
+  import: {
+    summary: 'Unpack an imprint export archive into ~/.imprint and set up tools for use.',
+    usage: ['imprint import <archive.tar.gz> [--force] [--platform <name>]'],
+    flags: [
+      {
+        name: '--force',
+        description: 'Overwrite existing sites instead of skipping them.',
+      },
+      {
+        name: '--platform <name>',
+        description:
+          'Auto-install MCP servers after import: claude-code, codex, claude-desktop, openclaw, hermes.',
+      },
+    ],
+    example: 'imprint import tools.tar.gz --force --platform claude-code',
   },
   login: {
     summary: 'Persist auth cookies for <site> from a captured session.',
@@ -893,6 +930,114 @@ async function main(argv: string[]): Promise<number> {
         noInteractive: values['no-interactive'],
       });
       console.log(`[imprint] ${result.message}`);
+      return 0;
+    }
+
+    case 'export': {
+      const sites: string[] = [];
+      let i = 1;
+      for (; i < argv.length; i++) {
+        const arg = argv[i];
+        if (!arg || arg.startsWith('-')) break;
+        sites.push(arg);
+      }
+      if (sites.length === 0) {
+        console.error('error: `imprint export` requires at least one <site> argument.');
+        return 2;
+      }
+      const { values } = parseArgs({
+        args: argv.slice(i),
+        options: {
+          out: { type: 'string' },
+          'include-credentials': { type: 'boolean' },
+        },
+        allowPositionals: false,
+      });
+      const defaultOut =
+        sites.length === 1
+          ? `imprint-export-${sites[0]}.tar.gz`
+          : `imprint-export-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.tar.gz`;
+      const out = values.out ?? defaultOut;
+      const { exportArchive } = await import('./imprint/export-archive.ts');
+      const result = await exportArchive({
+        sites,
+        out,
+        includeCredentials: values['include-credentials'],
+      });
+      console.log(`[imprint] exported → ${result.archivePath}`);
+      for (const s of result.sites) {
+        console.log(
+          `[imprint]   ${s.name}: ${s.tools.length} tool${s.tools.length === 1 ? '' : 's'} (${s.tools.join(', ')})`,
+        );
+      }
+      const kb = (result.byteSize / 1024).toFixed(1);
+      console.log(`[imprint] archive size: ${kb} KB`);
+      console.log('');
+      console.log('next step:');
+      console.log(`  imprint import ${out}    # on the target machine`);
+      return 0;
+    }
+
+    case 'import': {
+      const archivePath = requirePositional(argv, 'import', 'an <archive.tar.gz> argument');
+      if (archivePath === null) return 2;
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          force: { type: 'boolean' },
+          platform: { type: 'string' },
+        },
+        allowPositionals: false,
+      });
+
+      if (values.platform) {
+        const { PLATFORMS } = await import('./imprint/integrations.ts');
+        if (!PLATFORMS.includes(values.platform as (typeof PLATFORMS)[number])) {
+          console.error(
+            `error: unknown platform '${values.platform}' — valid: ${PLATFORMS.join(', ')}`,
+          );
+          return 2;
+        }
+      }
+
+      const { importArchive } = await import('./imprint/export-archive.ts');
+      const result = await importArchive({
+        archivePath,
+        force: values.force,
+      });
+
+      for (const s of result.sites) {
+        if (s.skipped) {
+          console.log(`[imprint] ${s.name}: skipped (already exists)`);
+        } else {
+          console.log(
+            `[imprint] ${s.name}: imported ${s.tools.length} tool${s.tools.length === 1 ? '' : 's'} (${s.tools.join(', ')})${s.credentialsImported ? ' + credentials' : ''}`,
+          );
+        }
+      }
+
+      const imported = result.sites.filter((s) => !s.skipped);
+      if (imported.length > 0 && !values.platform) {
+        console.log('');
+        console.log('next steps:');
+        for (const s of imported) {
+          console.log(`  imprint install ${s.name}    # register MCP server`);
+        }
+      }
+
+      if (values.platform) {
+        const { install } = await import('./imprint/install.ts');
+        const { PLATFORMS } = await import('./imprint/integrations.ts');
+        for (const s of imported) {
+          const installResult = await install({
+            site: s.name,
+            platform: values.platform as (typeof PLATFORMS)[number],
+            noInteractive: true,
+          });
+          console.log(`[imprint] ${installResult.message}`);
+        }
+      }
+
       return 0;
     }
 
