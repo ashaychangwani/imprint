@@ -56,13 +56,13 @@ interface ExportManifest {
   }>;
 }
 
-export interface ExportResult {
+interface ExportResult {
   archivePath: string;
   sites: Array<{ name: string; tools: string[] }>;
   byteSize: number;
 }
 
-export interface ImportResult {
+interface ImportResult {
   sites: Array<{
     name: string;
     tools: string[];
