@@ -4,13 +4,13 @@ import { VERSION } from './version.ts';
 const PACKAGE_NAME = 'imprint-mcp';
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
 
-export interface UpdateCheckResult {
+interface UpdateCheckResult {
   current: string;
   latest: string;
   updateAvailable: boolean;
 }
 
-export interface UpdateResult {
+interface UpdateResult {
   ok: boolean;
   from: string;
   to: string;
