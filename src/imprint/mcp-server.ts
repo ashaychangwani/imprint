@@ -20,7 +20,7 @@ import { resolveLadder, runWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
-import { loadBackendsCache } from './probe-backends.ts';
+import { loadBackendsCacheStatus, persistRuntimeBackendsCache } from './probe-backends.ts';
 import { checkSiteCredentialsReady } from './runtime.ts';
 import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
@@ -173,7 +173,7 @@ function buildServer(
 
     try {
       const ladder = resolveLadder('auto', tool.preferredOrder);
-      const { result, usedBackend } = await runWithLadder(
+      const { result, usedBackend, attempts } = await runWithLadder(
         ladder,
         tool,
         args,
@@ -208,6 +208,24 @@ function buildServer(
           isError: true,
           content: [{ type: 'text', text: `${text}\n(backend: ${usedBackend})` }],
         };
+      }
+      try {
+        const cache = persistRuntimeBackendsCache({
+          tool,
+          assetRoot,
+          usedBackend,
+          attempts,
+        });
+        if (cache) {
+          tool.preferredOrder = cache.preferredOrder;
+          log(
+            `  learned backend order for ${tool.workflow.toolName}: ${cache.preferredOrder.join(' → ')}`,
+          );
+        }
+      } catch (err) {
+        log(
+          `  warning: could not persist backend order for ${tool.workflow.toolName}: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
       const text =
         typeof result.data === 'string' ? result.data : JSON.stringify(result.data, null, 2);
@@ -250,12 +268,19 @@ export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
   const discovered = await discoverTools(assetRoot, opts.site, '[imprint mcp]');
   const tools: ResolvedTool[] = discovered.map((t) => {
     const playbookPath = pathResolve(t.dir, 'playbook.yaml');
-    const cache = loadBackendsCache(t.site, assetRoot, t.dir);
+    const cacheStatus = loadBackendsCacheStatus(t.site, assetRoot, t.dir, {
+      toolName: t.workflow.toolName,
+    });
+    if (cacheStatus.status === 'stale' || cacheStatus.status === 'invalid') {
+      log(
+        `  ${t.workflow.toolName}: ${cacheStatus.status} backends.json (${cacheStatus.reason}); run \`${cacheStatus.remediation}\``,
+      );
+    }
     return {
       ...t,
       inputSchema: buildJsonSchema(t.workflow.parameters),
       playbookPath: existsSync(playbookPath) ? playbookPath : undefined,
-      preferredOrder: cache?.preferredOrder,
+      preferredOrder: cacheStatus.status === 'ok' ? cacheStatus.cache.preferredOrder : undefined,
     };
   });
   if (tools.length === 0) {

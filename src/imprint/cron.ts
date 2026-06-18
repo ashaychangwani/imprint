@@ -16,7 +16,7 @@ import { loadJsonFile } from './load-json.ts';
 import { createLog, isDebug } from './log.ts';
 import { evaluateNotifyWhen, notify } from './notify.ts';
 import { imprintHomeDir } from './paths.ts';
-import { loadBackendsCache } from './probe-backends.ts';
+import { loadBackendsCache, persistRuntimeBackendsCache } from './probe-backends.ts';
 import { checkSiteCredentialsReady } from './runtime.ts';
 import { availableSitesHint } from './sites.ts';
 import type { StealthFetch } from './stealth-fetch.ts';
@@ -100,6 +100,19 @@ async function runOnce(
   }
 
   if (result.ok) {
+    try {
+      const cache = persistRuntimeBackendsCache({
+        tool,
+        assetRoot,
+        usedBackend,
+        attempts,
+      });
+      if (cache) log(`  learned backend order: ${cache.preferredOrder.join(' → ')}`);
+    } catch (err) {
+      log(
+        `  warning: could not persist backend order: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     const data = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
     // Cap the inline preview at ~500 chars; full payload available via
     // IMPRINT_DEBUG=1. Long-running daemons flood stderr otherwise.

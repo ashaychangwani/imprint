@@ -180,6 +180,8 @@ When an API call gets blocked, Imprint doesn't jump to DOM replay. It escalates 
 
 The full order is `fetch → fetch-bootstrap → cdp-replay → stealth-fetch → playbook`; `auto` mode walks it and stops at the first backend that works.
 
+For bot-protected sites, `imprint probe-backends <site> --tool <toolName>` writes a `backends.json` preference cache so cron and MCP start from the known-good backend instead of rediscovering blocked rungs. Use `imprint probe-backends <site> --all` to refresh every tool in a multi-tool site; `imprint mcp status` reports stale or invalid backend caches before they quietly fall back to the default ladder. CDP replay records both cold and warm timings when it succeeds: a timeout-safe cold start may rank by its fast warm runtime, but a cold start above the preferred threshold stays behind cold-safe backends in durable cache order.
+
 Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder always has a DOM fallback.
 
 ---

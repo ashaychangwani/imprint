@@ -12,7 +12,14 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
-import { loadBackendsCache } from '../src/imprint/probe-backends.ts';
+import {
+  loadBackendsCache,
+  loadBackendsCacheStatus,
+  persistRuntimeBackendsCache,
+  probeAllBackends,
+  rankSuccessfulBackends,
+} from '../src/imprint/probe-backends.ts';
+import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import { type BackendsCache, BackendsCacheSchema, WorkflowSchema } from '../src/imprint/types.ts';
 
 let root: string;
@@ -43,7 +50,22 @@ describe('BackendsCacheSchema', () => {
         probedAt: TS,
         imprintVersion: VER,
         preferredOrder: ['stealth-fetch'],
-        results: { 'stealth-fetch': { outcome: 'ok', durationMs: 1234 } },
+        results: {
+          'stealth-fetch': {
+            outcome: 'ok',
+            durationMs: 1234,
+            tooSlow: true,
+            detail: 'exceeded preferred backend threshold 90000ms',
+          },
+          'cdp-replay': {
+            outcome: 'ok',
+            durationMs: 30000,
+            coldDurationMs: 30000,
+            warmDurationMs: 2500,
+            rankingDurationMs: 2500,
+            detail: 'warm cdp-replay succeeded in 2500ms',
+          },
+        },
       }).success,
     ).toBe(true);
 
@@ -121,6 +143,23 @@ describe('loadBackendsCache', () => {
     ).toBeNull();
   });
 
+  it('reports invalid cache status with remediation', () => {
+    const dir = pathResolve(root, 'invalid', 'search_invalid');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(pathResolve(dir, 'backends.json'), '{not-json');
+
+    const status = loadBackendsCacheStatus('invalid', root, dir, {
+      warn: false,
+      toolName: 'search_invalid',
+    });
+
+    expect(status.status).toBe('invalid');
+    if (status.status === 'invalid') {
+      expect(status.remediation).toBe('imprint probe-backends invalid --tool search_invalid');
+      expect(status.reason).toContain('JSON');
+    }
+  });
+
   it('ignores schema v2 caches whose workflow hash is stale', () => {
     const dir = pathResolve(root, 'stale', 'stale');
     mkdirSync(dir, { recursive: true });
@@ -148,6 +187,15 @@ describe('loadBackendsCache', () => {
     writeFileSync(pathResolve(dir, 'backends.json'), JSON.stringify(cache, null, 2));
 
     expect(loadBackendsCache('stale', root, dir)).toBeNull();
+
+    const status = loadBackendsCacheStatus('stale', root, dir, {
+      warn: false,
+      toolName: 'tool',
+    });
+    expect(status.status).toBe('stale');
+    if (status.status === 'stale') {
+      expect(status.remediation).toBe('imprint probe-backends stale --tool tool');
+    }
   });
 
   it('accepts fresh v2 caches when workflow.json omits schema-defaulted capture fields', () => {
@@ -182,5 +230,216 @@ describe('loadBackendsCache', () => {
     writeFileSync(pathResolve(dir, 'backends.json'), JSON.stringify(cache, null, 2));
 
     expect(loadBackendsCache('defaults', root, dir)?.preferredOrder).toEqual(['fetch']);
+  });
+});
+
+describe('backend preference ranking', () => {
+  it('uses warm cdp-replay runtime when the cold start is still timeout-safe', () => {
+    expect(
+      rankSuccessfulBackends([
+        {
+          backend: 'cdp-replay',
+          durationMs: 30_000,
+          warmDurationMs: 2_000,
+          rankingDurationMs: 2_000,
+          tooSlow: false,
+        },
+        { backend: 'stealth-fetch', durationMs: 9_000, tooSlow: false },
+      ]),
+    ).toEqual(['cdp-replay', 'stealth-fetch']);
+  });
+
+  it('keeps cold-too-slow cdp-replay behind timeout-safe successful backends', () => {
+    expect(
+      rankSuccessfulBackends([
+        {
+          backend: 'cdp-replay',
+          durationMs: 140_000,
+          warmDurationMs: 2_000,
+          rankingDurationMs: 2_000,
+          tooSlow: true,
+        },
+        { backend: 'stealth-fetch', durationMs: 9_000, tooSlow: false },
+        { backend: 'fetch', durationMs: 200, tooSlow: false },
+      ]),
+    ).toEqual(['fetch', 'stealth-fetch', 'cdp-replay']);
+  });
+});
+
+describe('runtime backend learning', () => {
+  it('persists the successful runtime backend ahead of failed rungs', () => {
+    const dir = pathResolve(root, 'learn', 'search_learn');
+    mkdirSync(dir, { recursive: true });
+    const workflow = WorkflowSchema.parse({
+      toolName: 'search_learn',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+      site: 'learn',
+    });
+    writeFileSync(pathResolve(dir, 'workflow.json'), JSON.stringify(workflow));
+    const tool: ResolvedTool = {
+      site: 'learn',
+      dir,
+      workflow,
+      toolFn: async () => ({ ok: true, data: {} }),
+    };
+
+    const cache = persistRuntimeBackendsCache({
+      tool,
+      assetRoot: root,
+      usedBackend: 'stealth-fetch',
+      attempts: [
+        {
+          backend: 'fetch',
+          outcome: 'escalate',
+          detail: 'FORBIDDEN: 403',
+          durationMs: 12,
+        },
+        {
+          backend: 'fetch-bootstrap',
+          outcome: 'failed',
+          detail: 'NETWORK: timeout',
+          durationMs: 90_000,
+        },
+        {
+          backend: 'stealth-fetch',
+          outcome: 'ok',
+          detail: 'succeeded',
+          durationMs: 9_000,
+        },
+      ],
+    });
+
+    expect(cache?.preferredOrder).toEqual(['stealth-fetch']);
+    expect(loadBackendsCache('learn', root, dir)?.preferredOrder).toEqual(['stealth-fetch']);
+    expect(cache?.results.fetch?.outcome).toBe('forbidden');
+    expect(cache?.results['fetch-bootstrap']?.outcome).toBe('failed');
+  });
+
+  it('preserves playbook as a structural fallback when learning from runtime', () => {
+    const dir = pathResolve(root, 'learn-playbook', 'search_learn');
+    mkdirSync(dir, { recursive: true });
+    const workflow = WorkflowSchema.parse({
+      toolName: 'search_learn',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+      site: 'learn-playbook',
+    });
+    writeFileSync(pathResolve(dir, 'workflow.json'), JSON.stringify(workflow));
+    writeFileSync(pathResolve(dir, 'playbook.yaml'), 'steps: []\n');
+    const tool: ResolvedTool = {
+      site: 'learn-playbook',
+      dir,
+      workflow,
+      toolFn: async () => ({ ok: true, data: {} }),
+    };
+
+    const cache = persistRuntimeBackendsCache({
+      tool,
+      assetRoot: root,
+      usedBackend: 'stealth-fetch',
+      attempts: [
+        {
+          backend: 'stealth-fetch',
+          outcome: 'ok',
+          detail: 'succeeded',
+          durationMs: 9_000,
+        },
+      ],
+    });
+
+    expect(cache?.preferredOrder).toEqual(['stealth-fetch', 'playbook']);
+    expect(loadBackendsCache('learn-playbook', root, dir)?.preferredOrder).toEqual([
+      'stealth-fetch',
+      'playbook',
+    ]);
+  });
+
+  it('does not durable-frontload a cold-too-slow cdp-replay success ahead of known good backends', () => {
+    const dir = pathResolve(root, 'learn-slow-cdp', 'search_learn');
+    mkdirSync(dir, { recursive: true });
+    const workflow = WorkflowSchema.parse({
+      toolName: 'search_learn',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+      site: 'learn-slow-cdp',
+    });
+    writeFileSync(pathResolve(dir, 'workflow.json'), JSON.stringify(workflow));
+    writeFileSync(
+      pathResolve(dir, 'backends.json'),
+      JSON.stringify({
+        probedAt: '2026-05-03T22:00:00.000Z',
+        imprintVersion: '0.1.0',
+        preferredOrder: ['stealth-fetch'],
+        results: { 'stealth-fetch': { outcome: 'ok', durationMs: 9_000 } },
+      }),
+    );
+    const tool: ResolvedTool = {
+      site: 'learn-slow-cdp',
+      dir,
+      workflow,
+      toolFn: async () => ({ ok: true, data: {} }),
+    };
+
+    const cache = persistRuntimeBackendsCache({
+      tool,
+      assetRoot: root,
+      usedBackend: 'cdp-replay',
+      attempts: [
+        {
+          backend: 'cdp-replay',
+          outcome: 'ok',
+          detail: 'succeeded',
+          durationMs: 140_000,
+        },
+      ],
+    });
+
+    expect(cache?.preferredOrder).toEqual(['stealth-fetch', 'cdp-replay']);
+    expect(cache?.results['cdp-replay']).toMatchObject({
+      outcome: 'ok',
+      durationMs: 140_000,
+      tooSlow: true,
+    });
+  });
+});
+
+describe('probeAllBackends', () => {
+  it('writes a cache for every generated tool in a site', async () => {
+    const site = pathResolve(root, 'multi');
+    for (const toolName of ['first_tool', 'second_tool']) {
+      const dir = pathResolve(site, toolName);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        pathResolve(dir, 'index.ts'),
+        [
+          `export const WORKFLOW = ${JSON.stringify({
+            toolName,
+            intent: { description: toolName },
+            parameters: [],
+            requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+            site: 'multi',
+          })};`,
+          `export async function ${toolName === 'first_tool' ? 'firstTool' : 'secondTool'}(_input, _opts) { return { ok: true, data: { tool: '${toolName}' } }; }`,
+        ].join('\n'),
+      );
+    }
+
+    const results = await probeAllBackends({ site: 'multi', assetRoot: root });
+
+    expect(results).toHaveLength(2);
+    expect(results.map((r) => r.cache.preferredOrder.sort())).toEqual([
+      ['fetch', 'stealth-fetch'],
+      ['fetch', 'stealth-fetch'],
+    ]);
+    expect(
+      loadBackendsCache('multi', root, pathResolve(site, 'first_tool'))?.preferredOrder,
+    ).toContain('fetch');
+    expect(
+      loadBackendsCache('multi', root, pathResolve(site, 'second_tool'))?.preferredOrder,
+    ).toContain('fetch');
   });
 });

@@ -380,6 +380,18 @@ const BackendProbeResultSchema = z.discriminatedUnion('outcome', [
   z.object({
     outcome: z.literal('ok'),
     durationMs: z.number(),
+    /** Optional cdp-replay cold-start measurement. `durationMs` remains the
+     *  first-call duration for backward compatibility. */
+    coldDurationMs: z.number().optional(),
+    /** Optional cdp-replay warm-pool measurement from a second call against the
+     *  same pooled Chrome. Used to explain why CDP may outrank stealth when its
+     *  cold start is still under the operator timeout. */
+    warmDurationMs: z.number().optional(),
+    /** Effective duration used for preference ranking when it differs from the
+     *  first-call duration, e.g. warm cdp-replay. */
+    rankingDurationMs: z.number().optional(),
+    tooSlow: z.boolean().optional(),
+    detail: z.string().optional(),
   }),
   z.object({
     outcome: z.literal('forbidden'),

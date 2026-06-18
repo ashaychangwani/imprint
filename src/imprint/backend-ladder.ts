@@ -317,7 +317,8 @@ export async function runWithLadder(
           result = await runCdpReplay(tool, params, options?.cdpPool);
           break;
         case 'stealth-fetch': {
-          const sf = ensureStealthFetch(tool, stealthCache);
+          const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
+          const sf = await ensureStealthFetch(tool, stealthCache, paramsWithDefaults);
           // When the workflow declares a bootstrap block, mint its declared
           // session-token state (CSRF cookies etc.) from the SAME stealth
           // session that provides the transport cookies. Without this, a
@@ -327,7 +328,7 @@ export async function runWithLadder(
           const initialState = tool.workflow.bootstrap
             ? await stealthBootstrapState(sf, tool.workflow.bootstrap)
             : undefined;
-          result = await tool.toolFn(params, { fetchImpl: sf.fetchImpl, initialState });
+          result = await tool.toolFn(paramsWithDefaults, { fetchImpl: sf.fetchImpl, initialState });
           break;
         }
         case 'playbook': {
@@ -1213,8 +1214,21 @@ async function stealthBootstrapState(
   return state;
 }
 
-function ensureStealthFetch(tool: ResolvedTool, cache: Map<string, StealthFetch>): StealthFetch {
-  const cached = cache.get(tool.site);
+async function ensureStealthFetch(
+  tool: ResolvedTool,
+  cache: Map<string, StealthFetch>,
+  params: Record<string, string | number | boolean>,
+): Promise<StealthFetch> {
+  const credentials = (await loadCredentialStore(tool.site)) ?? {
+    site: tool.site,
+    cookies: [],
+    values: {},
+  };
+  const bootstrapUrl = tool.workflow.bootstrap?.url
+    ? substituteString(tool.workflow.bootstrap.url, params, credentials, [], 'url')
+    : undefined;
+  const cacheKey = bootstrapUrl ? `${tool.site}:${bootstrapUrl}` : tool.site;
+  const cached = cache.get(cacheKey);
   if (cached) return cached;
   const sf = createStealthFetch({
     baseUrl: pickBaseUrl(tool),
@@ -1223,9 +1237,9 @@ function ensureStealthFetch(tool: ResolvedTool, cache: Map<string, StealthFetch>
     // minted in the same session as the anti-bot cookies. Otherwise the
     // stealth rung can't satisfy a `${state.X}` the workflow bootstrap was
     // supposed to provide, and escalation from fetch-bootstrap dead-ends.
-    bootstrapUrl: tool.workflow.bootstrap?.url,
+    bootstrapUrl,
   });
-  cache.set(tool.site, sf);
+  cache.set(cacheKey, sf);
   return sf;
 }
 

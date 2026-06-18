@@ -346,9 +346,13 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   'probe-backends': {
     summary: 'Try each backend once and cache the working order to backends.json.',
-    usage: ['imprint probe-backends <site> [--tool <toolName>] [--out <path>] [--param k=v]…'],
+    usage: [
+      'imprint probe-backends <site> [--tool <toolName>] [--out <path>] [--param k=v]…',
+      'imprint probe-backends <site> --all [--param k=v]…',
+    ],
     flags: [
       { name: '--tool <toolName>', description: 'Select a generated tool for multi-tool sites.' },
+      { name: '--all', description: 'Probe every generated tool for the site.' },
       { name: '--out <path>', description: 'Override backends.json output path.' },
       { name: '--param k=v', description: 'Override a workflow parameter (repeatable).' },
     ],
@@ -1212,6 +1216,7 @@ async function main(argv: string[]): Promise<number> {
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {
+          all: { type: 'boolean' },
           out: { type: 'string' },
           tool: { type: 'string' },
           param: { type: 'string', multiple: true },
@@ -1220,7 +1225,30 @@ async function main(argv: string[]): Promise<number> {
       });
       const overrides = tryParseParamKV(values.param);
       if (overrides === null) return 2;
-      const { probeBackends } = await import('./imprint/probe-backends.ts');
+      if (values.all && values.tool) {
+        console.error('error: --all cannot be combined with --tool');
+        return 2;
+      }
+      if (values.all && values.out) {
+        console.error('error: --all cannot be combined with --out');
+        return 2;
+      }
+      const { probeAllBackends, probeBackends } = await import('./imprint/probe-backends.ts');
+      if (values.all) {
+        const results = await probeAllBackends({
+          site,
+          paramOverrides: Object.keys(overrides).length > 0 ? overrides : undefined,
+        });
+        for (const result of results) {
+          console.log(`[imprint] probed → ${result.outPath}`);
+          console.log(`[imprint] preferred order: ${result.cache.preferredOrder.join(' → ')}`);
+        }
+        console.log('');
+        console.log(
+          '[imprint] cron + mcp-server now skip futile rungs at startup using these caches.',
+        );
+        return 0;
+      }
       const result = await probeBackends({
         site,
         outPath: values.out,

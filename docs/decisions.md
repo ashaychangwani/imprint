@@ -42,7 +42,7 @@ A running log of the load-bearing calls made for Imprint. Each entry: the decisi
 
 ## D6 — Probe backends at record time, cache the working order
 
-**Decided.** `imprint probe-backends <site> --tool <toolName>` runs each applicable backend once and writes `backends.json`. cron / MCP read it at startup so they don't burn a fetch attempt every tick on known-blocked sites. v2 probe caches include canonical workflow and capability hashes; stale caches are ignored. Single-tool sites can omit `--tool`; multi-tool sites must select explicitly or point `--out` inside the target tool directory.
+**Decided.** `imprint probe-backends <site> --tool <toolName>` runs each applicable backend once and writes `backends.json`; `--all` refreshes every generated tool for a site. cron / MCP read it at startup so they don't burn a fetch attempt every tick on known-blocked sites. v2 probe caches include canonical workflow and capability hashes; stale caches are ignored by runtime but surfaced by `imprint mcp status` as `stale-backends` / `invalid-backends` with a concrete re-probe command. Successful probes are ranked by observed runtime, with unusually slow winners kept behind faster working backends. Because `cdp-replay` has a real cold-start/warm-pool split, probing records `coldDurationMs` and `warmDurationMs`: timeout-safe cold CDP can rank by its warm runtime, but cold-too-slow CDP stays behind cold-safe backends for the next process. Runtime MCP/cron calls also persist the backend that actually succeeds so the next process does not rediscover the same blocked rungs.
 
 **Alternative:** Probe at runtime on every cron tick. Wastes ~200ms per tick + log noise on bot-protected sites.
 

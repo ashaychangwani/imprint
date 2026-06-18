@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
@@ -137,6 +138,40 @@ describe('mcp maintenance status', () => {
       // The recordings are untouched on disk.
       expect(existsSync(orphanJsonl)).toBe(true);
       expect(existsSync(orphanJson)).toBe(true);
+    });
+  });
+
+  it('reports stale backend caches as actionable MCP status issues', () => {
+    withTemp(({ home, cwd, imprint }) => {
+      const dir = pathJoin(imprint, 'demo', 'search_demo');
+      mkdirSync(dir, { recursive: true });
+      writeFile(pathJoin(dir, 'index.ts'), 'export const x = 1;\n');
+      writeJson(pathJoin(dir, 'workflow.json'), {
+        toolName: 'search_demo',
+        intent: { description: 'x' },
+        parameters: [],
+        requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+        site: 'demo',
+      });
+      writeJson(pathJoin(dir, 'backends.json'), {
+        probedAt: '2026-05-03T22:00:00.000Z',
+        imprintVersion: '0.1.0',
+        schemaVersion: 2,
+        workflowHash: createHash('sha256')
+          .update(JSON.stringify({ old: true }))
+          .digest('hex'),
+        capabilityHash: 'old',
+        preferredOrder: ['stealth-fetch'],
+        results: { 'stealth-fetch': { outcome: 'ok', durationMs: 9000 } },
+      });
+
+      const status = scanMcpStatus({ homeDir: home, cwd, imprintHome: imprint });
+
+      expect(status.sites[0]?.tools[0]?.backendCache.status).toBe('stale');
+      expect(status.issues.map((i) => i.kind)).toContain('stale-backends');
+      expect(status.issues.find((i) => i.kind === 'stale-backends')?.message).toContain(
+        'runtime will fall back to the default ladder',
+      );
     });
   });
 });
