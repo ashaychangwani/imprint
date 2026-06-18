@@ -181,6 +181,20 @@ const compileLastRequestAt = new Map<string, number>();
 function sleepMs(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+function withWorkflowDefaults(
+  workflow: Workflow,
+  params: Record<string, string | number | boolean>,
+): Record<string, string | number | boolean> {
+  const paramsWithDefaults: Record<string, string | number | boolean> = { ...params };
+  for (const p of workflow.parameters) {
+    if (!(p.name in paramsWithDefaults) && p.default !== undefined) {
+      paramsWithDefaults[p.name] = p.default;
+    }
+  }
+  return paramsWithDefaults;
+}
+
 /** Await the per-origin min spacing before a compile-path live request. The
  *  first call to an origin never waits (last=0); subsequent ones within the
  *  window are delayed so the suite paces itself under the rate-flag. */
@@ -320,12 +334,7 @@ export async function runWithLadder(
           // DOM-walk last resort (the anti-bot API path is fetch-bootstrap, above).
           // Apply workflow.json's declared parameter defaults — runPlaybook
           // validates and throws on absent values regardless of declared defaults.
-          const paramsWithDefaults: typeof params = { ...params };
-          for (const p of tool.workflow.parameters) {
-            if (!(p.name in paramsWithDefaults) && p.default !== undefined) {
-              paramsWithDefaults[p.name] = p.default;
-            }
-          }
+          const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
           result = await runPlaybook({
             playbook: playbookPath(assetRoot, tool.site, tool.dir),
             params: paramsWithDefaults,
@@ -726,8 +735,9 @@ async function runFetchBootstrap(
     values: {},
     storage: [],
   };
+  const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   const bootstrapUrl = tool.workflow.bootstrap
-    ? substituteString(tool.workflow.bootstrap.url, params, credentials, [])
+    ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
   const siteDir = pathResolve(tool.dir, '..');
 
@@ -799,7 +809,7 @@ async function runFetchBootstrap(
     );
     if (!captureResult.ok) return captureResult.result;
 
-    const result = await tool.toolFn(params, {
+    const result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
       initialState: captureResult.state,
       fetchImpl: makeJarUaFetch(jar.ua),
@@ -860,8 +870,9 @@ async function runCdpReplay(
     values: {},
     storage: [],
   };
+  const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   const bootstrapUrl = tool.workflow.bootstrap
-    ? substituteString(tool.workflow.bootstrap.url, params, credentials, [])
+    ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
 
   const siteDir = pathResolve(tool.dir, '..');
@@ -921,7 +932,7 @@ async function runCdpReplay(
       return captureResult.result;
     }
 
-    const result = await tool.toolFn(params, {
+    const result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
       initialState: captureResult.state,
       fetchImpl: cf.fetchImpl,
@@ -934,6 +945,8 @@ async function runCdpReplay(
         saveJar(siteDir, postJar);
       } catch {
         // best-effort
+      } finally {
+        if (!cdpPool && ownsSession) await cf.close();
       }
     } else {
       if (ownsSession) {

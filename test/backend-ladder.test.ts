@@ -1163,6 +1163,121 @@ describe('fetch-bootstrap fast-fail on an unvalidated jar (latency Fix A)', () =
   });
 });
 
+describe('browser-backed rungs honor workflow parameter defaults', () => {
+  const defaultedJar: MintedJar = {
+    cookies: [{ name: '_abck', value: 'X~0~Y', domain: '.flights.example.com', path: '/' }],
+    ua: 'JarUA/148',
+    html: '',
+    bootstrapEpoch: 1_700_000_000_000,
+    abckFlag: '0',
+    validated: true,
+  };
+
+  function defaultedBootstrapTool(
+    site: string,
+    onReplay: (params: Record<string, unknown>, opts: Record<string, unknown>) => ToolResult,
+  ): ResolvedTool {
+    return {
+      site,
+      dir: pathJoin(root, site, 'tool'),
+      workflow: {
+        toolName: `tool_${site}`,
+        intent: { description: 'x' },
+        parameters: [
+          { name: 'origin', type: 'string', description: 'Origin airport' },
+          {
+            name: 'return_date',
+            type: 'string',
+            description: 'Return date',
+            default: '',
+          },
+          {
+            name: 'adult_passengers_count',
+            type: 'number',
+            description: 'Adult passengers',
+            default: 1,
+          },
+        ],
+        requests: [{ method: 'GET', url: `https://${site}.example.com/api/x`, headers: {} }],
+        site,
+        bootstrap: {
+          url: `https://${site}.example.com/search?origin=\${param.origin}&returnDate=\${param.return_date}&adults=\${param.adult_passengers_count}`,
+        },
+      },
+      toolFn: async (params, opts) => onReplay(params, (opts ?? {}) as Record<string, unknown>),
+    };
+  }
+
+  it('uses workflow defaults before fetch-bootstrap substitutes bootstrap.url', async () => {
+    let seenBootstrapUrl: string | undefined;
+    let seenParams: Record<string, unknown> | undefined;
+    __setCdpJarMinterForTest(async (_baseUrl, bootstrapUrl) => {
+      seenBootstrapUrl = bootstrapUrl;
+      return defaultedJar;
+    });
+    const tool = defaultedBootstrapTool('flights', (params, opts) => {
+      seenParams = params;
+      expect(opts.fetchImpl).toBeDefined();
+      return { ok: true, data: { via: 'fetch-bootstrap' } };
+    });
+
+    const r = await runWithLadder(
+      ['fetch-bootstrap'],
+      tool,
+      { origin: 'SAN' },
+      root,
+      makeStealthCache(tool),
+    );
+
+    expect(r.usedBackend).toBe('fetch-bootstrap');
+    expect(r.result.ok).toBe(true);
+    expect(seenBootstrapUrl).toBe(
+      'https://flights.example.com/search?origin=SAN&returnDate=&adults=1',
+    );
+    expect(seenParams).toEqual({
+      origin: 'SAN',
+      return_date: '',
+      adult_passengers_count: 1,
+    });
+  });
+
+  it('uses workflow defaults before cdp-replay substitutes bootstrap.url and closes no-pool sessions', async () => {
+    let seenBootstrapUrl: string | undefined;
+    let seenParams: Record<string, unknown> | undefined;
+    let closes = 0;
+    __setCdpBrowserFetchFactoryForTest((opts) => {
+      seenBootstrapUrl = opts.bootstrapUrl;
+      return {
+        fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => defaultedJar,
+        close: async () => {
+          closes++;
+        },
+      };
+    });
+    const tool = defaultedBootstrapTool('flights', (params, opts) => {
+      seenParams = params;
+      expect(opts.fetchImpl).toBeDefined();
+      return { ok: true, data: { via: 'cdp-replay' } };
+    });
+
+    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map());
+
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(r.result.ok).toBe(true);
+    expect(seenBootstrapUrl).toBe(
+      'https://flights.example.com/search?origin=SAN&returnDate=&adults=1',
+    );
+    expect(seenParams).toEqual({
+      origin: 'SAN',
+      return_date: '',
+      adult_passengers_count: 1,
+    });
+    expect(closes).toBe(1);
+  });
+});
+
 describe('runWithLadder — BAD_RESPONSE (400) escalates (anti-bot backend divergence)', () => {
   it('escalates a 400 from one backend to a higher-trust rung that passes', async () => {
     // southwest's reality: cdp-replay's in-page POST 400s (no live Akamai sensor
