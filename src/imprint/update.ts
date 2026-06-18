@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import semver from 'semver';
 import { VERSION } from './version.ts';
 
 const PACKAGE_NAME = 'imprint-mcp';
@@ -27,7 +28,7 @@ export async function checkForUpdate(): Promise<UpdateCheckResult | null> {
     const data = (await res.json()) as { version?: string };
     const latest = data.version;
     if (!latest) return null;
-    return { current: VERSION, latest, updateAvailable: latest !== VERSION };
+    return { current: VERSION, latest, updateAvailable: semver.gt(latest, VERSION) };
   } catch {
     return null;
   }
@@ -64,7 +65,7 @@ export async function performUpdate(): Promise<UpdateResult> {
       ok: false,
       from: check.current,
       to: check.latest,
-      error: stderr || `install exited with code ${result.status}`,
+      error: stderr || result.error?.message || `install exited with code ${result.status}`,
     };
   }
 
