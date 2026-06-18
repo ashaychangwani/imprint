@@ -8,6 +8,7 @@ import { join as pathJoin } from 'node:path';
 import { findChromium } from './chromium.ts';
 import { defaultHermesConfigPath } from './install.ts';
 import { getProviderStatuses } from './llm.ts';
+import { checkForUpdate } from './update.ts';
 import { VERSION } from './version.ts';
 
 export interface CheckResult {
@@ -17,9 +18,10 @@ export interface CheckResult {
   fix?: string;
 }
 
-export function doctor(): CheckResult[] {
+export async function doctor(): Promise<CheckResult[]> {
   return [
     checkBun(),
+    await checkLatestVersion(),
     checkChromium(),
     checkPlaywrightChromium(),
     checkVirtualDisplay(),
@@ -29,6 +31,22 @@ export function doctor(): CheckResult[] {
     checkHermes(),
     checkOpenClaw(),
   ];
+}
+
+async function checkLatestVersion(): Promise<CheckResult> {
+  const result = await checkForUpdate();
+  if (!result) {
+    return { name: 'Latest version', ok: true, detail: `v${VERSION} (could not reach registry)` };
+  }
+  if (!result.updateAvailable) {
+    return { name: 'Latest version', ok: true, detail: `v${VERSION} (up to date)` };
+  }
+  return {
+    name: 'Latest version',
+    ok: true,
+    detail: `v${result.current} → v${result.latest} available`,
+    fix: 'run: imprint update',
+  };
 }
 
 function checkBun(): CheckResult {

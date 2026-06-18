@@ -12,9 +12,9 @@ import { join as pathJoin } from 'node:path';
 import { type CheckResult, doctor, reportDoctor } from '../src/imprint/doctor.ts';
 
 describe('doctor()', () => {
-  it('returns one CheckResult per check (currently 9)', () => {
-    const checks = doctor();
-    expect(checks.length).toBe(9);
+  it('returns one CheckResult per check (currently 10)', async () => {
+    const checks = await doctor();
+    expect(checks.length).toBe(10);
     expect(checks.some((c) => c.name === 'Display (headed replay)')).toBe(true);
     for (const c of checks) {
       expect(typeof c.name).toBe('string');
@@ -23,19 +23,19 @@ describe('doctor()', () => {
     }
   });
 
-  it('always passes the Bun runtime check (we run under Bun)', () => {
-    const bun = doctor().find((c) => c.name === 'Bun runtime');
+  it('always passes the Bun runtime check (we run under Bun)', async () => {
+    const bun = (await doctor()).find((c) => c.name === 'Bun runtime');
     expect(bun?.ok).toBe(true);
     expect(bun?.detail).toMatch(/^v\d+\.\d+\.\d+/);
   });
 
-  it('recognizes Playwright Chromium installed under HERMES_HOME', () => {
+  it('recognizes Playwright Chromium installed under HERMES_HOME', async () => {
     const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-doctor-hermes-'));
     const oldHermesHome = process.env.HERMES_HOME;
     mkdirSync(pathJoin(root, '.cache', 'ms-playwright', 'chromium-1234'), { recursive: true });
     process.env.HERMES_HOME = root;
     try {
-      const check = doctor().find((c) => c.name === 'Playwright Chromium');
+      const check = (await doctor()).find((c) => c.name === 'Playwright Chromium');
       expect(check?.ok).toBe(true);
       expect(check?.detail).toContain(pathJoin(root, '.cache', 'ms-playwright'));
     } finally {
@@ -86,22 +86,22 @@ describe('reportDoctor()', () => {
 });
 
 describe('AI tool advisory checks', () => {
-  it('claude code check is always ok (advisory)', () => {
-    const checks = doctor();
+  it('claude code check is always ok (advisory)', async () => {
+    const checks = await doctor();
     const ccCheck = checks.find((c) => c.name === 'Claude Code');
     expect(ccCheck).toBeDefined();
     expect(ccCheck?.ok).toBe(true);
   });
 
-  it('hermes check is always ok (advisory)', () => {
-    const checks = doctor();
+  it('hermes check is always ok (advisory)', async () => {
+    const checks = await doctor();
     const hCheck = checks.find((c) => c.name === 'Hermes Agent');
     expect(hCheck).toBeDefined();
     expect(hCheck?.ok).toBe(true);
   });
 
-  it('openclaw check is always ok (advisory)', () => {
-    const checks = doctor();
+  it('openclaw check is always ok (advisory)', async () => {
+    const checks = await doctor();
     const ocCheck = checks.find((c) => c.name === 'OpenClaw');
     expect(ocCheck).toBeDefined();
     expect(ocCheck?.ok).toBe(true);

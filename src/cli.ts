@@ -451,6 +451,14 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     ],
     example: 'imprint mcp status',
   },
+  update: {
+    summary: 'Check for updates and install the latest version of imprint.',
+    usage: ['imprint update [--check]'],
+    flags: [
+      { name: '--check', description: 'Only check whether an update is available; do not install.' },
+    ],
+    example: 'imprint update',
+  },
 };
 
 function printVerbHelp(verb: string): void {
@@ -621,7 +629,7 @@ async function main(argv: string[]): Promise<number> {
 
     case 'doctor': {
       const { doctor, reportDoctor } = await import('./imprint/doctor.ts');
-      const report = reportDoctor(doctor());
+      const report = reportDoctor(await doctor());
       for (const line of report.lines) console.log(line);
       return report.ok ? 0 : 1;
     }
@@ -1480,6 +1488,38 @@ async function main(argv: string[]): Promise<number> {
         sharedModules,
       });
       return 0;
+    }
+
+    case 'update': {
+      const { checkForUpdate, performUpdate } = await import('./imprint/update.ts');
+      const checkOnly = argv.slice(1).includes('--check');
+      if (checkOnly) {
+        const result = await checkForUpdate();
+        if (!result) {
+          console.error('Could not reach npm registry.');
+          return 1;
+        }
+        console.log(`Current: v${result.current}`);
+        console.log(`Latest:  v${result.latest}`);
+        if (result.updateAvailable) {
+          console.log('\nUpdate available — run `imprint update` to install.');
+        } else {
+          console.log('\nAlready up to date.');
+        }
+        return 0;
+      }
+      console.log('Checking for updates...');
+      const result = await performUpdate();
+      if (result.from === result.to && result.ok) {
+        console.log(`imprint v${result.from} is already the latest version.`);
+        return 0;
+      }
+      if (result.ok) {
+        console.log(`Updated imprint: v${result.from} → v${result.to}`);
+        return 0;
+      }
+      console.error(`Update failed: ${result.error}`);
+      return 1;
     }
 
     default: {
