@@ -109,6 +109,9 @@ export interface CdpBrowserFetchOptions {
   abckWaitSeconds?: number;
   /** Per-request in-page timeout (ms). Default 60000. */
   requestTimeoutMs?: number;
+  /** Per-CDP-command timeout (ms). Default 20000. Prevents a wedged browser
+   *  or CDP socket from hanging an MCP tool call forever. */
+  cdpCommandTimeoutMs?: number;
   /** Launch a visible window instead of headless. Default false (headless). Only
    *  needed as a fallback on a GPU-less host where headless WebGL falls back to
    *  SwiftShader and the site fingerprints it — pair with `display`/Xvfb. */
@@ -135,6 +138,19 @@ export interface CdpBrowserFetchOptions {
 }
 
 type CdpClient = Awaited<ReturnType<typeof CDP>>;
+type LaunchedChromium = Awaited<ReturnType<typeof launchChromium>>;
+type ChromiumLauncher = (opts: Parameters<typeof launchChromium>[0]) => Promise<LaunchedChromium>;
+type CdpConnector = (port: number) => Promise<CdpClient>;
+
+let chromiumLauncherForTest: ChromiumLauncher | null = null;
+let cdpConnectorForTest: CdpConnector | null = null;
+
+export function __setCdpBrowserFetchHooksForTest(
+  hooks: { launchChromium?: ChromiumLauncher; connectCdp?: CdpConnector } | null,
+): void {
+  chromiumLauncherForTest = hooks?.launchChromium ?? null;
+  cdpConnectorForTest = hooks?.connectCdp ?? null;
+}
 
 function abckIsValidated(v: string | undefined): boolean {
   return !!v && v.split('~')[1] === '0';
@@ -201,168 +217,234 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   const navUrl = opts.bootstrapUrl ?? (baseLooksLikeApi ? `${baseOrigin}/` : opts.baseUrl);
   const abckWaitMs = (opts.abckWaitSeconds ?? 25) * 1000;
   const reqTimeoutMs = opts.requestTimeoutMs ?? 60_000;
+  const cdpCommandTimeoutMs = opts.cdpCommandTimeoutMs ?? 20_000;
+  const shortCdpTimeoutMs = Math.max(1, Math.min(cdpCommandTimeoutMs, 2_000));
 
-  let chrome: Awaited<ReturnType<typeof launchChromium>> | null = null;
+  let chrome: LaunchedChromium | null = null;
   let client: CdpClient | null = null;
   let bootstrapped = false;
   let appliedUa: string | undefined;
 
+  async function close(): Promise<void> {
+    const c = client;
+    const ch = chrome;
+    client = null;
+    chrome = null;
+    bootstrapped = false;
+    appliedUa = undefined;
+    try {
+      await withTimeout(Promise.resolve(c?.close()), 'CDP client close', 2_000);
+    } catch {
+      /* ignore */
+    }
+    try {
+      await withTimeout(Promise.resolve(ch?.close()), 'Chromium close', 3_000);
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function ensure(): Promise<CdpClient> {
     if (client && bootstrapped) return client;
-    const headed = opts.headed ?? false;
-    if (!chrome) {
-      log(`launching real ${headed ? 'headed' : 'headless'} Chrome (will navigate ${navUrl})`);
-      // Launch at about:blank — we MUST attach CDP and override the UA before the
-      // first request to the protected origin fires, so we navigate via
-      // Page.navigate AFTER the override rather than passing the URL at launch.
-      // headless renders offscreen (no display); headed needs one (Xvfb on Linux).
-      chrome = await launchChromium({
-        headless: !headed,
-        extraArgs: gpuLaunchArgs(),
-        ...(headed ? { display: opts.display } : {}),
-      });
-      await chrome.ready;
-    }
-    if (!client) client = await CDP({ port: chrome.port });
-    const { Runtime, Network, Input, Page } = client;
-    await Runtime.enable();
-    await Network.enable();
-    await Page.enable();
-    // Plant the high-trust seed cookies (the recording's validated Akamai jar)
-    // BEFORE navigating, so the first request to the protected origin carries the
-    // trusted session. A synthetic mint can reach `_abck~0~` yet still get its
-    // `.act` tarpitted; starting from the recording's earned trust is what makes
-    // the in-page protected POSTs succeed (the live bmak sensor then keeps it
-    // re-validated between calls).
-    if (opts.seedCookies && opts.seedCookies.length > 0) {
-      let planted = 0;
-      for (const c of opts.seedCookies) {
-        try {
-          await Network.setCookie({
-            name: c.name,
-            value: c.value,
-            domain: c.domain,
-            path: c.path ?? '/',
-            secure: c.secure ?? false,
-            httpOnly: c.httpOnly ?? false,
-            ...(c.sameSite ? { sameSite: normalizeSameSite(c.sameSite) } : {}),
-            ...(typeof c.expires === 'number' && c.expires > 0 ? { expires: c.expires } : {}),
-          });
-          planted++;
-        } catch {
-          // best-effort — a cookie Akamai re-issues on navigate isn't fatal
+    try {
+      const headed = opts.headed ?? false;
+      if (!chrome) {
+        log(`launching real ${headed ? 'headed' : 'headless'} Chrome (will navigate ${navUrl})`);
+        // Launch at about:blank — we MUST attach CDP and override the UA before the
+        // first request to the protected origin fires, so we navigate via
+        // Page.navigate AFTER the override rather than passing the URL at launch.
+        // headless renders offscreen (no display); headed needs one (Xvfb on Linux).
+        const launch = chromiumLauncherForTest ?? launchChromium;
+        chrome = await withTimeout(
+          launch({
+            headless: !headed,
+            extraArgs: gpuLaunchArgs(),
+            ...(headed ? { display: opts.display } : {}),
+          }),
+          'Chromium launch',
+          cdpCommandTimeoutMs,
+        );
+        await withTimeout(chrome.ready, 'Chromium CDP readiness', cdpCommandTimeoutMs);
+      }
+      if (!client) {
+        const connectCdp = cdpConnectorForTest ?? ((port: number) => CDP({ port }));
+        client = await withTimeout(connectCdp(chrome.port), 'CDP connect', cdpCommandTimeoutMs);
+      }
+      const { Runtime, Network, Input, Page } = client;
+      await withTimeout(Runtime.enable(), 'CDP Runtime.enable', cdpCommandTimeoutMs);
+      await withTimeout(Network.enable(), 'CDP Network.enable', cdpCommandTimeoutMs);
+      await withTimeout(Page.enable(), 'CDP Page.enable', cdpCommandTimeoutMs);
+      // Plant the high-trust seed cookies (the recording's validated Akamai jar)
+      // BEFORE navigating, so the first request to the protected origin carries the
+      // trusted session. A synthetic mint can reach `_abck~0~` yet still get its
+      // `.act` tarpitted; starting from the recording's earned trust is what makes
+      // the in-page protected POSTs succeed (the live bmak sensor then keeps it
+      // re-validated between calls).
+      if (opts.seedCookies && opts.seedCookies.length > 0) {
+        let planted = 0;
+        for (const c of opts.seedCookies) {
+          try {
+            await withTimeout(
+              Network.setCookie({
+                name: c.name,
+                value: c.value,
+                domain: c.domain,
+                path: c.path ?? '/',
+                secure: c.secure ?? false,
+                httpOnly: c.httpOnly ?? false,
+                ...(c.sameSite ? { sameSite: normalizeSameSite(c.sameSite) } : {}),
+                ...(typeof c.expires === 'number' && c.expires > 0 ? { expires: c.expires } : {}),
+              }),
+              `CDP Network.setCookie(${c.name})`,
+              shortCdpTimeoutMs,
+            );
+            planted++;
+          } catch {
+            // best-effort — a cookie Akamai re-issues on navigate isn't fatal
+          }
         }
+        log(`seeded ${planted}/${opts.seedCookies.length} high-trust cookies before navigate`);
       }
-      log(`seeded ${planted}/${opts.seedCookies.length} high-trust cookies before navigate`);
-    }
-    // Strip the `HeadlessChrome` UA token (Akamai's only headless edge-tell) and
-    // send matching client hints — BEFORE navigating to the protected origin.
-    try {
-      const { result } = await Runtime.evaluate({
-        expression: 'navigator.userAgent',
-        returnByValue: true,
-      });
-      const rawUa = String(result.value ?? '');
-      if (rawUa) {
-        const override = buildUaOverride(rawUa);
-        await Network.setUserAgentOverride(override);
-        appliedUa = override.userAgent;
-        log(`UA override: ${override.userAgent}`);
-      }
-    } catch {
-      // best-effort — a headed launch already has a clean UA
-    }
-    // Navigate now (post-override). Page.navigate stalls forever on an Akamai
-    // origin ONLY when the UA still says HeadlessChrome; with the override it
-    // loads normally. Race a timeout and proceed regardless — _abck polling below
-    // tolerates a partial load.
-    try {
-      await Promise.race([
-        Page.navigate({ url: navUrl }),
-        sleep(Math.min(abckWaitMs, 25_000)).then(() => {
-          throw new Error('navigate timeout');
-        }),
-      ]);
-      await Promise.race([
-        Page.loadEventFired(),
-        sleep(Math.min(abckWaitMs, 5000)).then(() => undefined),
-      ]).catch(() => {});
-    } catch (err) {
-      log(`navigation issue (continuing): ${err instanceof Error ? err.message : String(err)}`);
-    }
-    // Give the sensor JS time to start.
-    await sleep(3000);
-    // Drive HUMAN-LIKE interaction until _abck validates (or budget expires).
-    // Akamai's bmak grades the behavioral SHAPE of trusted input, not just that
-    // it exists: a robotic linear lattice + a programmatic `window.scrollBy`
-    // (which is isTrusted=FALSE — a real bot tell) score low. Instead we move the
-    // cursor along Bezier paths with variable velocity + sub-pixel jitter, scroll
-    // via a TRUSTED CDP mouseWheel, and emit occasional key events — all through
-    // CDP Input (isTrusted=true). Note: this raises the behavioral score that
-    // sits ON TOP of IP reputation; it does NOT overcome a datacenter egress
-    // (Akamai serves a 200 empty-shell to a datacenter ASN regardless), which is
-    // what IMPRINT_PROXY (residential egress) is for.
-    const start = Date.now();
-    let i = 0;
-    let status = '?';
-    let pos = { x: rand(120, 1100), y: rand(120, 600) };
-    while (Date.now() - start < abckWaitMs) {
+      // Strip the `HeadlessChrome` UA token (Akamai's only headless edge-tell) and
+      // send matching client hints — BEFORE navigating to the protected origin.
       try {
-        const target = { x: rand(60, 1200), y: rand(80, 680) };
-        for (const p of bezierPoints(pos, target, Math.round(rand(8, 20)))) {
-          await Input.dispatchMouseEvent({
-            type: 'mouseMoved',
-            x: Math.round(p.x),
-            y: Math.round(p.y),
-            timestamp: Date.now() / 1000,
-          });
-          await sleep(rand(8, 28)); // variable velocity, not a fixed cadence
-        }
-        pos = target;
-        if (i % 3 === 0) {
-          // TRUSTED wheel scroll via CDP Input (replaces the isTrusted=false
-          // programmatic window.scrollBy).
-          await Input.dispatchMouseEvent({
-            type: 'mouseWheel',
-            x: Math.round(pos.x),
-            y: Math.round(pos.y),
-            deltaX: 0,
-            deltaY: rand(80, 260),
-          });
-        }
-        if (i % 5 === 2) {
-          // A keystroke broadens the behavioral feature vector beyond mouse-only.
-          await Input.dispatchKeyEvent({
-            type: 'keyDown',
-            key: 'ArrowDown',
-            code: 'ArrowDown',
-            windowsVirtualKeyCode: 40,
-          });
-          await sleep(rand(30, 90));
-          await Input.dispatchKeyEvent({
-            type: 'keyUp',
-            key: 'ArrowDown',
-            code: 'ArrowDown',
-            windowsVirtualKeyCode: 40,
-          });
+        const { result } = await withTimeout(
+          Runtime.evaluate({
+            expression: 'navigator.userAgent',
+            returnByValue: true,
+          }),
+          'CDP Runtime.evaluate(navigator.userAgent)',
+          cdpCommandTimeoutMs,
+        );
+        const rawUa = String(result.value ?? '');
+        if (rawUa) {
+          const override = buildUaOverride(rawUa);
+          await withTimeout(
+            Network.setUserAgentOverride(override),
+            'CDP Network.setUserAgentOverride',
+            cdpCommandTimeoutMs,
+          );
+          appliedUa = override.userAgent;
+          log(`UA override: ${override.userAgent}`);
         }
       } catch {
-        // non-fatal
+        // best-effort — a headed launch already has a clean UA
       }
-      await sleep(rand(180, 520)); // non-uniform dwell between interaction bursts
-      const abck = await getCookie(client, '_abck');
-      status = abck?.split('~')[1] ?? '?';
-      if (abckIsValidated(abck)) break;
-      i++;
+      // Navigate now (post-override). Page.navigate stalls forever on an Akamai
+      // origin ONLY when the UA still says HeadlessChrome; with the override it
+      // loads normally. Bound the CDP command and proceed regardless — _abck
+      // polling below tolerates a partial load.
+      try {
+        await withTimeout(
+          Page.navigate({ url: navUrl }),
+          'CDP Page.navigate',
+          Math.max(1, Math.min(abckWaitMs, 25_000)),
+        );
+        await withTimeout(
+          Page.loadEventFired(),
+          'CDP Page.loadEventFired',
+          Math.max(1, Math.min(abckWaitMs, 5_000)),
+        ).catch(() => {});
+      } catch (err) {
+        log(`navigation issue (continuing): ${err instanceof Error ? err.message : String(err)}`);
+      }
+      // Give the sensor JS time to start.
+      await sleep(3000);
+      // Drive HUMAN-LIKE interaction until _abck validates (or budget expires).
+      // Akamai's bmak grades the behavioral SHAPE of trusted input, not just that
+      // it exists: a robotic linear lattice + a programmatic `window.scrollBy`
+      // (which is isTrusted=FALSE — a real bot tell) score low. Instead we move the
+      // cursor along Bezier paths with variable velocity + sub-pixel jitter, scroll
+      // via a TRUSTED CDP mouseWheel, and emit occasional key events — all through
+      // CDP Input (isTrusted=true). Note: this raises the behavioral score that
+      // sits ON TOP of IP reputation; it does NOT overcome a datacenter egress
+      // (Akamai serves a 200 empty-shell to a datacenter ASN regardless), which is
+      // what IMPRINT_PROXY (residential egress) is for.
+      const start = Date.now();
+      let i = 0;
+      let status = '?';
+      let pos = { x: rand(120, 1100), y: rand(120, 600) };
+      while (Date.now() - start < abckWaitMs) {
+        try {
+          const target = { x: rand(60, 1200), y: rand(80, 680) };
+          for (const p of bezierPoints(pos, target, Math.round(rand(8, 20)))) {
+            await withTimeout(
+              Input.dispatchMouseEvent({
+                type: 'mouseMoved',
+                x: Math.round(p.x),
+                y: Math.round(p.y),
+                timestamp: Date.now() / 1000,
+              }),
+              'CDP Input.dispatchMouseEvent(mouseMoved)',
+              shortCdpTimeoutMs,
+            );
+            await sleep(rand(8, 28)); // variable velocity, not a fixed cadence
+          }
+          pos = target;
+          if (i % 3 === 0) {
+            // TRUSTED wheel scroll via CDP Input (replaces the isTrusted=false
+            // programmatic window.scrollBy).
+            await withTimeout(
+              Input.dispatchMouseEvent({
+                type: 'mouseWheel',
+                x: Math.round(pos.x),
+                y: Math.round(pos.y),
+                deltaX: 0,
+                deltaY: rand(80, 260),
+              }),
+              'CDP Input.dispatchMouseEvent(mouseWheel)',
+              shortCdpTimeoutMs,
+            );
+          }
+          if (i % 5 === 2) {
+            // A keystroke broadens the behavioral feature vector beyond mouse-only.
+            await withTimeout(
+              Input.dispatchKeyEvent({
+                type: 'keyDown',
+                key: 'ArrowDown',
+                code: 'ArrowDown',
+                windowsVirtualKeyCode: 40,
+              }),
+              'CDP Input.dispatchKeyEvent(keyDown)',
+              shortCdpTimeoutMs,
+            );
+            await sleep(rand(30, 90));
+            await withTimeout(
+              Input.dispatchKeyEvent({
+                type: 'keyUp',
+                key: 'ArrowDown',
+                code: 'ArrowDown',
+                windowsVirtualKeyCode: 40,
+              }),
+              'CDP Input.dispatchKeyEvent(keyUp)',
+              shortCdpTimeoutMs,
+            );
+          }
+        } catch {
+          // non-fatal
+        }
+        await sleep(rand(180, 520)); // non-uniform dwell between interaction bursts
+        const abck = await getCookie(client, '_abck');
+        status = abck?.split('~')[1] ?? '?';
+        if (abckIsValidated(abck)) break;
+        i++;
+      }
+      log(`_abck status after interaction: ~${status}~`);
+      bootstrapped = true;
+      return client;
+    } catch (err) {
+      await close();
+      throw err;
     }
-    log(`_abck status after interaction: ~${status}~`);
-    bootstrapped = true;
-    return client;
   }
 
   async function getCookie(c: CdpClient, name: string): Promise<string | undefined> {
     try {
-      const { cookies } = await c.Network.getCookies({ urls: [baseOrigin] });
+      const { cookies } = await withTimeout(
+        c.Network.getCookies({ urls: [baseOrigin] }),
+        'CDP Network.getCookies',
+        shortCdpTimeoutMs,
+      );
       return cookies.find((ck: { name: string; value: string }) => ck.name === name)?.value;
     } catch (err) {
       // A failed CDP call (dead/crashed browser, closed target) is
@@ -405,7 +487,11 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     if (requestOrigin !== baseOrigin) {
       let cookieHeader: string | undefined;
       try {
-        const { cookies } = await c.Network.getCookies({ urls: [requestOrigin] });
+        const { cookies } = await withTimeout(
+          c.Network.getCookies({ urls: [requestOrigin] }),
+          'CDP Network.getCookies(cross-origin)',
+          cdpCommandTimeoutMs,
+        );
         if (cookies.length) {
           cookieHeader = cookies
             .map((ck: { name: string; value: string }) => `${ck.name}=${ck.value}`)
@@ -453,11 +539,15 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         return JSON.stringify({ ok: false, error: String(e) });
       }
     })()`;
-    const { result } = await c.Runtime.evaluate({
-      expression: expr,
-      awaitPromise: true,
-      returnByValue: true,
-    });
+    const { result } = await withTimeout(
+      c.Runtime.evaluate({
+        expression: expr,
+        awaitPromise: true,
+        returnByValue: true,
+      }),
+      'CDP Runtime.evaluate(fetch)',
+      Math.max(cdpCommandTimeoutMs, reqTimeoutMs + 5_000),
+    );
     const payload = JSON.parse(result.value as string) as
       | { ok: true; status: number; body: string; headers: Record<string, string> }
       | { ok: false; error: string };
@@ -476,7 +566,11 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     async ensureBootstrapped() {
       const c = await ensure();
       try {
-        const { cookies } = await c.Network.getCookies({ urls: [baseOrigin] });
+        const { cookies } = await withTimeout(
+          c.Network.getCookies({ urls: [baseOrigin] }),
+          'CDP Network.getCookies',
+          cdpCommandTimeoutMs,
+        );
         return cookies.map((ck: { name: string; value: string }) => ({
           name: ck.name,
           value: ck.value,
@@ -489,7 +583,11 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       const c = await ensure();
       const cookies: MintedJar['cookies'] = [];
       try {
-        const res = await c.Network.getCookies({ urls: [baseOrigin] });
+        const res = await withTimeout(
+          c.Network.getCookies({ urls: [baseOrigin] }),
+          'CDP Network.getCookies',
+          cdpCommandTimeoutMs,
+        );
         for (const ck of res.cookies as unknown as Array<Record<string, unknown>>) {
           cookies.push({
             name: ck.name as string,
@@ -508,10 +606,14 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       }
       let html = '';
       try {
-        const { result } = await c.Runtime.evaluate({
-          expression: 'document.documentElement.outerHTML',
-          returnByValue: true,
-        });
+        const { result } = await withTimeout(
+          c.Runtime.evaluate({
+            expression: 'document.documentElement.outerHTML',
+            returnByValue: true,
+          }),
+          'CDP Runtime.evaluate(document HTML)',
+          cdpCommandTimeoutMs,
+        );
         html = String(result.value ?? '');
       } catch {
         // best-effort — html_regex captures will miss
@@ -527,26 +629,31 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         source: 'mint',
       };
     },
-    async close() {
-      try {
-        await client?.close();
-      } catch {
-        /* ignore */
-      }
-      try {
-        await chrome?.close();
-      } catch {
-        /* ignore */
-      }
-      client = null;
-      chrome = null;
-      bootstrapped = false;
-    },
+    close,
   };
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+async function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs: number): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+        (timer as unknown as { unref?: () => void }).unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Uniform random in [min, max). Used to humanize interaction timing/geometry —

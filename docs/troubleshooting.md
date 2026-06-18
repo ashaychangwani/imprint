@@ -70,6 +70,18 @@ export DISPLAY=:0           # or let imprint auto-start Xvfb when headed
 
 `launchChromium` auto-starts Xvfb (`Xvfb :NN -screen 0 1920x1080x24`) when a **headed** launch finds no `$DISPLAY`. `imprint doctor` reports this as **"Display (headed replay)"** — advisory only, since the default headless path needs no display and sites that replay on the plain `fetch` rung never launch a browser at all. macOS/Windows need nothing.
 
+## Browser-backed MCP calls time out instead of hanging forever
+
+`fetch-bootstrap` and `cdp-replay` drive Chrome through CDP. The underlying `chrome-remote-interface` calls do not impose command deadlines: a command such as `Runtime.enable`, `Page.loadEventFired`, `Network.getCookies`, or an in-page `Runtime.evaluate(fetch(...))` can stay pending if the renderer, page, or CDP socket stops answering. Imprint bounds each CDP operation and closes the browser instead of leaving an MCP `tools/call` stuck indefinitely. In MCP output this surfaces as a structured `NETWORK` error like `cdp-replay failed: CDP Runtime.enable timed out after 20000ms`, after which the backend ladder can try the next rung.
+
+If you are debugging a long-running Hermes or cron host, check for old browser roots before retrying:
+
+```bash
+ps -eo pid,ppid,etime,args | grep -E 'imprint|chrome' | grep -v grep
+```
+
+Chrome processes that have lived far longer than the MCP call timeout usually mean the host is still running an older Imprint runtime or a stale helper process. Restart the MCP host after upgrading Imprint so existing MCP server processes reload the patched source and close any inherited browser children.
+
 ## Anti-bot returns "empty results" on a cloud/datacenter IP — use `IMPRINT_PROXY`
 
 Distinct from a 403/tarpit: a behavioral anti-bot service (Akamai et al.) can return a **200 with an empty body** (e.g. a search that yields `count: 0` for an obviously-valid query) even though the request succeeded. The dominant cause is the **egress IP reputation** — requests from **AWS / GCP / Azure / VPN datacenter IPs** are heavily penalized and "empty-shelled" regardless of how trusted the browser session is. (Check your egress with `curl -s https://ipinfo.io/json`; an `org` like "Amazon" / "Google Cloud" means datacenter.) The recorded *workflow* is fine — the IP is the problem, and no amount of token-minting overcomes a datacenter IP.
