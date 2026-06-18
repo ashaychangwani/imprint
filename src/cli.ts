@@ -455,7 +455,10 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary: 'Check for updates and install the latest version of imprint.',
     usage: ['imprint update [--check]'],
     flags: [
-      { name: '--check', description: 'Only check whether an update is available; do not install.' },
+      {
+        name: '--check',
+        description: 'Only check whether an update is available; do not install.',
+      },
     ],
     example: 'imprint update',
   },

@@ -33,8 +33,7 @@ export async function checkForUpdate(): Promise<UpdateCheckResult | null> {
   }
 }
 
-const IS_COMPILED =
-  typeof (globalThis as Record<string, unknown>).__IMPRINT_VERSION__ === 'string';
+const IS_COMPILED = typeof (globalThis as Record<string, unknown>).__IMPRINT_VERSION__ === 'string';
 
 export async function performUpdate(): Promise<UpdateResult> {
   const check = await checkForUpdate();
@@ -46,8 +45,18 @@ export async function performUpdate(): Promise<UpdateResult> {
   }
 
   const result = IS_COMPILED
-    ? spawnSync('bash', ['-c', `curl -fsSL https://raw.githubusercontent.com/ashaychangwani/imprint/main/scripts/install.sh | bash`], { stdio: 'pipe', timeout: 60_000 })
-    : spawnSync('bun', ['install', '-g', `${PACKAGE_NAME}@latest`], { stdio: 'pipe', timeout: 60_000 });
+    ? spawnSync(
+        'bash',
+        [
+          '-c',
+          'curl -fsSL https://raw.githubusercontent.com/ashaychangwani/imprint/main/scripts/install.sh | bash',
+        ],
+        { stdio: 'pipe', timeout: 60_000 },
+      )
+    : spawnSync('bun', ['install', '-g', `${PACKAGE_NAME}@latest`], {
+        stdio: 'pipe',
+        timeout: 60_000,
+      });
 
   if (result.status !== 0) {
     const stderr = result.stderr?.toString().trim();
