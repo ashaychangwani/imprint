@@ -27,6 +27,7 @@ import {
 import * as p from '@clack/prompts';
 import YAML from 'yaml';
 import { imprintHomeDir, localSiteDir } from './paths.ts';
+import { type BackendsCacheStatus, loadBackendsCacheStatus } from './probe-backends.ts';
 import {
   type WorkflowState,
   loadTeachState,
@@ -38,7 +39,7 @@ import {
 
 type McpClient = 'claude-code' | 'codex' | 'claude-desktop' | 'openclaw' | 'hermes';
 type LocalDeleteMode = 'none' | 'tool' | 'site';
-type IssueKind = 'missing-session' | 'stale-registration';
+type IssueKind = 'missing-session' | 'stale-registration' | 'stale-backends' | 'invalid-backends';
 
 const CLIENTS: McpClient[] = ['claude-code', 'codex', 'claude-desktop', 'openclaw', 'hermes'];
 const DISABLED_STORE_VERSION = 1;
@@ -81,6 +82,15 @@ interface LocalToolStatus {
   hasPlaybook: boolean;
   hasBackends: boolean;
   hasCron: boolean;
+  backendCache: PublicBackendsCacheStatus;
+}
+
+interface PublicBackendsCacheStatus {
+  status: BackendsCacheStatus['status'];
+  path: string | null;
+  preferredOrder?: string[];
+  reason?: string;
+  remediation?: string;
 }
 
 interface LocalWorkflowStatus {
@@ -475,7 +485,13 @@ function cmdStatus(argv: string[]): number {
   const status = scanMcpStatus({ site });
   if (flags.json === true) console.log(JSON.stringify(status, null, 2));
   else console.log(formatMcpStatus(status));
-  return status.issues.some((i) => i.kind === 'stale-registration' || i.kind === 'missing-session')
+  return status.issues.some(
+    (i) =>
+      i.kind === 'stale-registration' ||
+      i.kind === 'missing-session' ||
+      i.kind === 'stale-backends' ||
+      i.kind === 'invalid-backends',
+  )
     ? 1
     : 0;
 }
@@ -691,6 +707,11 @@ function issueFixHint(issue: McpIssue): string | null {
       return `choose "Fix an issue" or run: imprint mcp delete ${issue.name ?? `imprint-${issue.site}`} --client ${issue.client ?? 'all'} --yes`;
     case 'missing-session':
       return `choose "Fix an issue" or run: imprint mcp prune-state --site ${issue.site} --missing-session --yes`;
+    case 'stale-backends':
+    case 'invalid-backends':
+      return issue.path
+        ? `run: imprint probe-backends ${issue.site}${issue.workflow ? ` --tool ${issue.workflow}` : ''}`
+        : `run: imprint probe-backends ${issue.site}${issue.workflow ? ` --tool ${issue.workflow}` : ''}`;
   }
   return null;
 }
@@ -712,26 +733,32 @@ function scanLocalSites(ctx: MaintenanceContext): LocalSiteStatus[] {
     if (entry === 'node_modules' || entry.startsWith('.')) continue;
     const dir = pathJoin(ctx.imprintHome, entry);
     if (!safeIsDir(dir)) continue;
-    sites.push(scanLocalSite(entry, dir));
+    sites.push(scanLocalSite(entry, dir, ctx.imprintHome));
   }
   return sites;
 }
 
-function scanLocalSite(site: string, dir: string): LocalSiteStatus {
+function scanLocalSite(site: string, dir: string, imprintHome: string): LocalSiteStatus {
   const tools: LocalToolStatus[] = [];
   for (const entry of readdirSync(dir).sort()) {
     if (entry === 'sessions' || entry === '_shared' || entry.startsWith('.')) continue;
     const toolDir = pathJoin(dir, entry);
     if (!safeIsDir(toolDir)) continue;
+    const toolName = workflowJsonToolName(toolDir) ?? entry;
+    const cacheStatus = loadBackendsCacheStatus(site, imprintHome, toolDir, {
+      warn: false,
+      toolName,
+    });
     tools.push({
       site,
-      toolName: entry,
+      toolName,
       dir: toolDir,
       complete: existsSync(pathJoin(toolDir, 'index.ts')),
       hasWorkflow: existsSync(pathJoin(toolDir, 'workflow.json')),
       hasPlaybook: existsSync(pathJoin(toolDir, 'playbook.yaml')),
       hasBackends: existsSync(pathJoin(toolDir, 'backends.json')),
       hasCron: existsSync(pathJoin(toolDir, 'cron.json')),
+      backendCache: publicBackendsCacheStatus(cacheStatus),
     });
   }
 
@@ -744,6 +771,29 @@ function scanLocalSite(site: string, dir: string): LocalSiteStatus {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return { site, dir, tools, workflows };
+}
+
+function publicBackendsCacheStatus(status: BackendsCacheStatus): PublicBackendsCacheStatus {
+  if (status.status === 'ok') {
+    return {
+      status: status.status,
+      path: status.path,
+      preferredOrder: status.cache.preferredOrder,
+    };
+  }
+  if (status.status === 'missing') {
+    return {
+      status: status.status,
+      path: status.path,
+      remediation: status.remediation,
+    };
+  }
+  return {
+    status: status.status,
+    path: status.path,
+    reason: status.reason,
+    remediation: status.remediation,
+  };
 }
 
 function workflowStatus(
@@ -795,6 +845,21 @@ function collectIssues(opts: {
   const sitesByName = new Map(opts.sites.map((s) => [s.site, s]));
 
   for (const site of opts.sites) {
+    for (const tool of site.tools) {
+      if (tool.backendCache.status === 'stale' || tool.backendCache.status === 'invalid') {
+        issues.push({
+          kind: tool.backendCache.status === 'stale' ? 'stale-backends' : 'invalid-backends',
+          site: site.site,
+          workflow: tool.toolName,
+          path: tool.backendCache.path ?? undefined,
+          message:
+            tool.backendCache.status === 'stale'
+              ? `${site.site}/${tool.toolName} has a stale backends.json; runtime will fall back to the default ladder until reprobed`
+              : `${site.site}/${tool.toolName} has an invalid backends.json; runtime will fall back to the default ladder until reprobed`,
+        });
+      }
+    }
+
     for (const wf of site.workflows) {
       if (wf.missingSession) {
         issues.push({
@@ -1091,7 +1156,7 @@ function pruneTeachState(
   for (const site of sites) {
     const statePath = teachStatePath(site);
     if (!existsSync(statePath)) continue;
-    const status = scanLocalSite(site, localSiteDir(site));
+    const status = scanLocalSite(site, localSiteDir(site), ctx.imprintHome);
     const remove = new Set(
       status.workflows
         .filter(

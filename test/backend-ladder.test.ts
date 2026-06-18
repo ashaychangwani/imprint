@@ -664,7 +664,7 @@ describe('runWithLadder — stealth honors workflow bootstrap', () => {
     // exactly what a real Chrome navigation of the bootstrap page would mint.
     const cache = new Map<string, StealthFetch>();
     cache.set(
-      'bs',
+      'bs:https://bs.example.com/page',
       createStealthFetch(
         { baseUrl: 'https://bs.example.com', bootstrapUrl: 'https://bs.example.com/page' },
         {
@@ -685,6 +685,68 @@ describe('runWithLadder — stealth honors workflow bootstrap', () => {
     // bootstrap session and were threaded into the workflow as ${state.X}.
     expect(receivedState?.csrf).toBe('tok-abc');
     expect(receivedState?.nonce).toBe('42');
+  });
+
+  it('applies workflow parameter defaults before resolving the stealth bootstrap URL', async () => {
+    let receivedParams: Record<string, unknown> | undefined;
+    const workflow: Workflow = {
+      toolName: 'tool_bs_default',
+      intent: { description: 'bootstrap tool' },
+      parameters: [
+        {
+          name: 'return_date',
+          type: 'string',
+          description: 'optional return date',
+          default: '',
+        },
+      ],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://bs.example.com/api/act',
+          headers: {},
+        },
+      ],
+      site: 'bs',
+      bootstrap: {
+        url: 'https://bs.example.com/page?ret=${param.return_date}',
+        captures: [],
+      },
+    };
+    const tool: ResolvedTool = {
+      site: 'bs',
+      dir: '',
+      workflow,
+      toolFn: async (input, opts) => {
+        if (opts?.fetchImpl) {
+          receivedParams = input;
+          return { ok: true, data: { ok: 1 } };
+        }
+        return { ok: false, error: 'UNKNOWN', message: 'fetch path not expected' };
+      },
+    };
+    const cache = new Map<string, StealthFetch>();
+    cache.set(
+      'bs:https://bs.example.com/page?ret=',
+      createStealthFetch(
+        { baseUrl: 'https://bs.example.com', bootstrapUrl: 'https://bs.example.com/page?ret=' },
+        {
+          bootstrap: async () => ({
+            cookies: [],
+            sensorHeaders: {},
+            bootstrappedAt: Date.now(),
+            bootstrapHtml: '',
+            bootstrapResponseHeaders: {},
+          }),
+        },
+      ),
+    );
+
+    const r = await runWithLadder(['stealth-fetch'], tool, {}, root, cache);
+
+    expect(r.result.ok).toBe(true);
+    expect(r.usedBackend).toBe('stealth-fetch');
+    expect(receivedParams?.return_date).toBe('');
   });
 });
 

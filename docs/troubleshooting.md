@@ -106,8 +106,9 @@ The site is blocking API replay or needs browser-minted state. Three escalating 
 2. **Probe and cache the working backend:**
    ```bash
    imprint probe-backends <site> --tool <toolName>
+   imprint probe-backends <site> --all
    ```
-   This writes `backends.json`; cron + MCP read it at startup. On a single-tool site, `--tool` is optional; on multi-tool sites, `--out ~/.imprint/<site>/<toolName>/backends.json` also selects the target.
+   This writes `backends.json`; cron + MCP read it at startup. On a single-tool site, `--tool` is optional; on multi-tool sites, `--all` refreshes every generated tool, and `--out ~/.imprint/<site>/<toolName>/backends.json` also selects one target. Successful probes are ranked by observed runtime, with backends slower than `IMPRINT_BACKEND_PREFERRED_MAX_MS` (default 90000) kept as lower-priority fallbacks.
 
 3. **Compile a playbook fallback:**
    ```bash
@@ -121,7 +122,7 @@ The workflow referenced a required `${state.NAME}` or cookie value that was not 
 
 - `ordinary_http` — an earlier safe/idempotent HTTP request was expected to produce the value. Check `requests[].captures`, request order, and whether the producer request still sets the cookie/header/body field.
 - `browser_bootstrap` — add or fix `workflow.bootstrap`; `fetch-bootstrap` should be able to mint this state before API replay.
-- `stealth_bootstrap` — `stealth-fetch` supplies bot-defense cookies/headers to API replay but does not fill `${state.NAME}` placeholders by itself. Use `replayBackend: "auto"` so the ladder escalates to `fetch-bootstrap` (if the workflow has bootstrap metadata) or the `playbook` fallback. If neither resolves the missing state, regenerate the workflow from a recording that includes the state-producing interaction.
+- `stealth_bootstrap` — `stealth-fetch` supplies bot-defense cookies/headers to API replay and can project supported bootstrap captures (`cookie`, `html_regex`, `response_header`) from the same stealth session. Use `replayBackend: "auto"` so the ladder can still escalate to `fetch-bootstrap`/`cdp-replay` or the `playbook` fallback when the workflow needs unsupported DOM/storage state. If neither resolves the missing state, regenerate the workflow from a recording that includes the state-producing interaction.
 - `credential_required` — provision secrets/cookies/storage with `imprint login`, `imprint credential set`, or `imprint credential import`.
 - `unsupported` — the workflow references state no backend knows how to produce; regenerate or edit `workflow.json`.
 
@@ -332,6 +333,8 @@ imprint mcp prune-state --site mysite --missing-session --yes
 `delete` only removes external MCP registrations by default. It does not remove generated tools or raw recordings unless you explicitly pass `--local tool` or `--local site`; recordings may contain sensitive cookies or browser state. Restart Claude Desktop, OpenClaw, or Hermes after direct config edits.
 
 For the complete cleanup command reference, see [MCP Maintenance](mcp-maintenance.md).
+
+If `imprint mcp status --json` reports `stale-backends` or `invalid-backends`, the MCP registration itself is not the problem. The server can connect and list tools, but runtime will ignore that tool's `backends.json` and fall back to the default ladder until you run the reported `imprint probe-backends ...` command. That is especially visible on bot-protected sites where `fetch-bootstrap` or a cold `cdp-replay` can consume most of an MCP client's tool-call timeout before the known-good backend runs. Fresh CDP probes record both cold and warm timings; cold-too-slow CDP is kept behind cold-safe backends in durable cache order even if its warm pool is fast.
 
 ## "No backend succeeded for <site>"
 

@@ -108,6 +108,7 @@ imprint emit ~/.imprint/google-flights/search_google_flights/workflow.json
 # 6. (Optional) Probe which backends work and cache the order.
 #    Safe to skip for plain APIs; useful for stateful or bot-protected sites.
 imprint probe-backends google-flights --tool search_google_flights
+#   Multi-tool site? Refresh every tool with: imprint probe-backends google-flights --all
 #   → Output: ~/.imprint/google-flights/search_google_flights/backends.json
 
 # 7. Test it
