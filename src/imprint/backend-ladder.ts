@@ -75,6 +75,8 @@ interface LadderResult {
 const log = createLog('backend');
 
 const DEFAULT_LADDER: ConcreteBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
+const DEFAULT_PLAYBOOK_BACKEND_TIMEOUT_MS = 75_000;
+const DEFAULT_PLAYBOOK_BACKEND_STEP_TIMEOUT_MS = 20_000;
 
 /** Process-scoped memo of the backend that last succeeded for a site on the
  *  compile/test path (`runWorkflowWithLadder`). Lets the param-coverage suite
@@ -180,6 +182,22 @@ function compileActSpacingMs(): number {
 const compileLastRequestAt = new Map<string, number>();
 function sleepMs(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function playbookBackendTimeoutMs(): number {
+  return positiveEnvMs('IMPRINT_PLAYBOOK_BACKEND_TIMEOUT_MS', DEFAULT_PLAYBOOK_BACKEND_TIMEOUT_MS);
+}
+
+function playbookBackendStepTimeoutMs(): number {
+  return positiveEnvMs(
+    'IMPRINT_PLAYBOOK_BACKEND_STEP_TIMEOUT_MS',
+    DEFAULT_PLAYBOOK_BACKEND_STEP_TIMEOUT_MS,
+  );
+}
+
+function positiveEnvMs(name: string, fallback: number): number {
+  const raw = Number(process.env[name] ?? fallback);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
 }
 
 function withWorkflowDefaults(
@@ -340,6 +358,8 @@ export async function runWithLadder(
             playbook: playbookPath(assetRoot, tool.site, tool.dir),
             params: paramsWithDefaults,
             site: tool.site,
+            stepTimeoutMs: playbookBackendStepTimeoutMs(),
+            maxDurationMs: playbookBackendTimeoutMs(),
           });
           break;
         }
@@ -1466,7 +1486,7 @@ export async function runWorkflowWithLadder(opts: {
           // A backend that finishes AFTER the probe returned (it lost the race but
           // is still cold-starting Chrome) pools its browser late — arm the idle
           // close so it's torn down rather than left lingering.
-          void inner.finally(() => armCompileCdpIdleClose());
+          void inner.finally(() => armCompileCdpIdleClose()).catch(() => {});
           const r = await Promise.race([
             inner,
             sleepMs(PROBE_TIMEOUT_MS).then(

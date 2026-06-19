@@ -131,4 +131,55 @@ describe('runPlaybook', () => {
     if (r.ok) return;
     expect(r.message).toContain('not found');
   });
+
+  it('bounds a hanging playbook step with the whole-run timeout', async () => {
+    const stubPage = {
+      on: () => {},
+      goto: () => new Promise(() => {}),
+      screenshot: async () => Buffer.from(''),
+    } as unknown as import('playwright').Page;
+    const startedAt = Date.now();
+
+    const r = await runPlaybook({
+      playbook: MIN_PLAYBOOK,
+      params: { q: 'hello' },
+      pageOverride: stubPage,
+      stepTimeoutMs: 10_000,
+      maxDurationMs: 25,
+      screenshotTimeoutMs: 10,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toBe('NETWORK');
+    expect(r.message).toContain('Playbook step 1/1 (navigate) timed out');
+  });
+
+  it('does not hang when the failure screenshot stalls', async () => {
+    const stubPage = {
+      on: () => {},
+      goto: async () => {
+        throw new Error('Timeout 10ms exceeded while navigating');
+      },
+      screenshot: () => new Promise(() => {}),
+    } as unknown as import('playwright').Page;
+    const startedAt = Date.now();
+
+    const r = await runPlaybook({
+      playbook: MIN_PLAYBOOK,
+      params: { q: 'hello' },
+      pageOverride: stubPage,
+      stepTimeoutMs: 10,
+      maxDurationMs: 100,
+      screenshotTimeoutMs: 10,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toBe('NETWORK');
+    expect(r.message).toContain('Timeout 10ms exceeded');
+    expect(r.message).not.toContain('screenshot:');
+  });
 });

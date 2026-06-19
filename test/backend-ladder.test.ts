@@ -893,6 +893,7 @@ describe('runWorkflowWithLadder', () => {
 
   it('memoizes the winning backend across calls without breaking the fetch path', async () => {
     __resetCompileWinningBackendForTest();
+    __setProbeTimeoutMsForTest(5_000);
     let hits = 0;
     const server = Bun.serve({
       port: 0,

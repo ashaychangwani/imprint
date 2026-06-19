@@ -160,6 +160,34 @@ describe('loadBackendsCache', () => {
     }
   });
 
+  it('reports unsafe preferred playbook caches as invalid', () => {
+    const dir = pathResolve(root, 'unsafe-playbook', 'search_flights');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      pathResolve(dir, 'backends.json'),
+      JSON.stringify({
+        probedAt: '2026-05-03T22:00:00.000Z',
+        imprintVersion: '0.4.2',
+        preferredOrder: ['stealth-fetch', 'playbook'],
+        results: { 'stealth-fetch': { outcome: 'ok', durationMs: 9_000 } },
+      }),
+    );
+
+    expect(loadBackendsCache('unsafe-playbook', root, dir)).toBeNull();
+    const status = loadBackendsCacheStatus('unsafe-playbook', root, dir, {
+      warn: false,
+      toolName: 'search_flights',
+    });
+
+    expect(status.status).toBe('invalid');
+    if (status.status === 'invalid') {
+      expect(status.reason).toContain('playbook');
+      expect(status.remediation).toBe(
+        'imprint probe-backends unsafe-playbook --tool search_flights',
+      );
+    }
+  });
+
   it('ignores schema v2 caches whose workflow hash is stale', () => {
     const dir = pathResolve(root, 'stale', 'stale');
     mkdirSync(dir, { recursive: true });
@@ -317,7 +345,7 @@ describe('runtime backend learning', () => {
     expect(cache?.results['fetch-bootstrap']?.outcome).toBe('failed');
   });
 
-  it('preserves playbook as a structural fallback when learning from runtime', () => {
+  it('does not preserve playbook as a structural fallback when learning from runtime', () => {
     const dir = pathResolve(root, 'learn-playbook', 'search_learn');
     mkdirSync(dir, { recursive: true });
     const workflow = WorkflowSchema.parse({
@@ -350,8 +378,55 @@ describe('runtime backend learning', () => {
       ],
     });
 
-    expect(cache?.preferredOrder).toEqual(['stealth-fetch', 'playbook']);
+    expect(cache?.preferredOrder).toEqual(['stealth-fetch']);
     expect(loadBackendsCache('learn-playbook', root, dir)?.preferredOrder).toEqual([
+      'stealth-fetch',
+    ]);
+  });
+
+  it('preserves playbook only when an existing cache proved it works', () => {
+    const dir = pathResolve(root, 'learn-proven-playbook', 'search_learn');
+    mkdirSync(dir, { recursive: true });
+    const workflow = WorkflowSchema.parse({
+      toolName: 'search_learn',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+      site: 'learn-proven-playbook',
+    });
+    writeFileSync(pathResolve(dir, 'workflow.json'), JSON.stringify(workflow));
+    writeFileSync(
+      pathResolve(dir, 'backends.json'),
+      JSON.stringify({
+        probedAt: '2026-05-03T22:00:00.000Z',
+        imprintVersion: '0.1.0',
+        preferredOrder: ['playbook'],
+        results: { playbook: { outcome: 'ok', durationMs: 4_000 } },
+      }),
+    );
+    const tool: ResolvedTool = {
+      site: 'learn-proven-playbook',
+      dir,
+      workflow,
+      toolFn: async () => ({ ok: true, data: {} }),
+    };
+
+    const cache = persistRuntimeBackendsCache({
+      tool,
+      assetRoot: root,
+      usedBackend: 'stealth-fetch',
+      attempts: [
+        {
+          backend: 'stealth-fetch',
+          outcome: 'ok',
+          detail: 'succeeded',
+          durationMs: 9_000,
+        },
+      ],
+    });
+
+    expect(cache?.preferredOrder).toEqual(['stealth-fetch', 'playbook']);
+    expect(loadBackendsCache('learn-proven-playbook', root, dir)?.preferredOrder).toEqual([
       'stealth-fetch',
       'playbook',
     ]);
