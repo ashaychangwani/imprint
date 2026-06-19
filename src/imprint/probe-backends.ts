@@ -272,6 +272,27 @@ function backendResultTooSlow(result: BackendsCache['results'][string] | undefin
   return result?.outcome === 'ok' && result.tooSlow === true;
 }
 
+function invalidPreferredOrderReason(cache: BackendsCache): string | null {
+  for (const backend of cache.preferredOrder) {
+    const result = cache.results[backend];
+    if (backend === 'playbook' && result?.outcome !== 'ok') {
+      return 'preferredOrder includes playbook without a successful playbook result';
+    }
+    if (result && result.outcome !== 'ok') {
+      return `preferredOrder includes ${backend} with ${result.outcome} result`;
+    }
+  }
+  return null;
+}
+
+function existingBackendUsable(
+  backend: ConcreteBackend,
+  result: BackendsCache['results'][string] | undefined,
+): boolean {
+  if (!result) return backend !== 'playbook';
+  return result.outcome === 'ok';
+}
+
 async function probeWarmCdpReplay(
   tool: ResolvedTool,
   params: Record<string, string | number | boolean>,
@@ -358,6 +379,15 @@ export function loadBackendsCacheStatus(
         }
       }
     }
+    const invalidPreferredReason = invalidPreferredOrderReason(parsed);
+    if (invalidPreferredReason) {
+      if (opts.warn !== false) {
+        process.stderr.write(
+          `[imprint] backends.json at ${path} has unsafe preferred backends — ignoring (run \`${remediation}\` to regenerate): ${invalidPreferredReason}\n`,
+        );
+      }
+      return { status: 'invalid', path, reason: invalidPreferredReason, remediation };
+    }
     return { status: 'ok', path, cache: parsed };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -438,17 +468,11 @@ export function persistRuntimeBackendsCache(opts: {
   const usedOkAttempt = observedOkAttempts.find((a) => a.backend === opts.usedBackend);
   const usedBackendTooSlow =
     usedOkAttempt !== undefined && usedOkAttempt.durationMs > preferredBackendMaxMs();
-  const existingFast = existingPreferred.filter(
-    (backend) => !backendResultTooSlow(results[backend]),
+  const existingUsable = existingPreferred.filter((backend) =>
+    existingBackendUsable(backend, results[backend]),
   );
-  const existingSlow = existingPreferred.filter((backend) =>
-    backendResultTooSlow(results[backend]),
-  );
-  const structuralFallbacks: ConcreteBackend[] = existsSync(
-    pathResolve(opts.tool.dir, 'playbook.yaml'),
-  )
-    ? ['playbook']
-    : [];
+  const existingFast = existingUsable.filter((backend) => !backendResultTooSlow(results[backend]));
+  const existingSlow = existingUsable.filter((backend) => backendResultTooSlow(results[backend]));
   const preferredOrder = uniqueBackends([
     ...(usedOkAttempt && !usedBackendTooSlow ? [opts.usedBackend] : []),
     ...existingFast,
@@ -456,7 +480,6 @@ export function persistRuntimeBackendsCache(opts: {
     ...existingSlow,
     ...slowObservedOk,
     ...(usedOkAttempt && usedBackendTooSlow ? [opts.usedBackend] : []),
-    ...structuralFallbacks,
   ]);
   const cache: BackendsCache = {
     probedAt: new Date().toISOString(),

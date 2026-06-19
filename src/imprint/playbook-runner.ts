@@ -30,6 +30,10 @@ interface RunPlaybookOptions {
   headed?: boolean;
   /** Per-step timeout in ms. Default 30000. */
   stepTimeoutMs?: number;
+  /** Whole-playbook timeout in ms. Default unbounded for direct playbook runs. */
+  maxDurationMs?: number;
+  /** Timeout for diagnostic screenshots in ms. Default 5000. */
+  screenshotTimeoutMs?: number;
   /** Screenshot after every step (not just on failure). */
   trace?: boolean;
   /** Inject a Playwright Page for tests. */
@@ -44,6 +48,8 @@ interface RunPlaybookOptions {
 }
 
 const log = createLog('playbook');
+const DEFAULT_STEP_TIMEOUT_MS = 30000;
+const DEFAULT_SCREENSHOT_TIMEOUT_MS = 5000;
 
 export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult> {
   let playbook: Playbook;
@@ -57,7 +63,10 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   // Generous default — Akamai sensor JS, A/B loaders, lazy bundles all
   // need real time to settle. Tight timeouts make broken sites look
   // worse than they are.
-  const stepTimeoutMs = opts.stepTimeoutMs ?? 30000;
+  const stepTimeoutMs = positiveMs(opts.stepTimeoutMs, DEFAULT_STEP_TIMEOUT_MS);
+  const screenshotTimeoutMs = positiveMs(opts.screenshotTimeoutMs, DEFAULT_SCREENSHOT_TIMEOUT_MS);
+  const deadlineAt =
+    opts.maxDurationMs !== undefined ? Date.now() + positiveMs(opts.maxDurationMs, 1) : null;
 
   let browser: Browser | undefined;
   let context: BrowserContext | undefined;
@@ -137,19 +146,42 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
 
     for (const [i, step] of playbook.steps.entries()) {
       lastStep = i + 1;
+      const budgetMs = budgetedTimeoutMs(
+        stepTimeoutMs,
+        deadlineAt,
+        `Playbook exceeded max duration before step ${lastStep}`,
+      );
       log(`step ${i + 1}/${playbook.steps.length}: ${step.action}`);
-      await executeStep(page, step, params, stepTimeoutMs);
+      await withTimeout(
+        executeStep(page, step, params, budgetMs),
+        budgetMs,
+        `Playbook step ${lastStep}/${playbook.steps.length} (${step.action})`,
+      );
       if (opts.trace) {
-        const traceShot = await screenshot(page, `${playbook.toolName}-trace`, lastStep);
+        const traceShot = await screenshot(
+          page,
+          `${playbook.toolName}-trace`,
+          lastStep,
+          screenshotTimeoutMs,
+        );
         log(`  url=${page.url()}`);
         if (traceShot) log(`  trace screenshot: ${traceShot}`);
       }
     }
-    await Promise.allSettled(pendingBodyReads);
+    const bodyReadBudgetMs = budgetedTimeoutMs(
+      stepTimeoutMs,
+      deadlineAt,
+      'Playbook exceeded max duration while reading captured responses',
+    );
+    await withTimeout(
+      Promise.allSettled(pendingBodyReads),
+      bodyReadBudgetMs,
+      'Playbook captured-response drain',
+    );
     const data = await extractResult(page, playbook.result, captured);
     return { ok: true, data };
   } catch (err) {
-    const screenshotPath = await screenshot(page, playbook.toolName, lastStep);
+    const screenshotPath = await screenshot(page, playbook.toolName, lastStep, screenshotTimeoutMs);
     const suffix = screenshotPath ? `\nscreenshot: ${screenshotPath}` : '';
     const errStr = errMsg(err);
     // Classify the failure mode honestly: a missing locator, a step
@@ -161,9 +193,10 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     // bug, which over-attributes drift to defects. Map known
     // transient-shape errors to NETWORK so they count as `infra`
     // (re-runnable) rather than `tool_broken` (permanent defect).
-    const isTransient = /No locator matched|Timeout \d+ms exceeded|forResponse|waiting for/i.test(
-      errStr,
-    );
+    const isTransient =
+      /No locator matched|Timeout \d+ms exceeded|timed out after|exceeded max duration|forResponse|waiting for/i.test(
+        errStr,
+      );
     return {
       ok: false,
       error: isTransient ? 'NETWORK' : 'BAD_RESPONSE',
@@ -177,16 +210,55 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   }
 }
 
-async function screenshot(page: Page, toolName: string, stepNum: number): Promise<string | null> {
+async function screenshot(
+  page: Page,
+  toolName: string,
+  stepNum: number,
+  timeoutMs: number,
+): Promise<string | null> {
   try {
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const path = join(tmpdir(), `imprint-playbook-${toolName}-step${stepNum}-${ts}.png`);
-    await page.screenshot({ path, fullPage: true });
+    await withTimeout(page.screenshot({ path, fullPage: true }), timeoutMs, 'Playbook screenshot');
     return path;
   } catch {
     return null;
+  }
+}
+
+function positiveMs(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+function budgetedTimeoutMs(
+  configuredMs: number,
+  deadlineAt: number | null,
+  errorMessage: string,
+): number {
+  if (deadlineAt === null) return configuredMs;
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) throw new Error(errorMessage);
+  return Math.max(1, Math.min(configuredMs, Math.floor(remainingMs)));
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  const boundedMs = positiveMs(timeoutMs, 1);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${boundedMs}ms`)),
+          boundedMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
