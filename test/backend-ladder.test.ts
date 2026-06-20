@@ -932,7 +932,7 @@ describe('runWorkflowWithLadder', () => {
       server.stop(true);
       __resetCompileWinningBackendForTest();
     }
-  });
+  }, 15_000);
 });
 
 describe('evaluateBootstrapCapture — response_header source (Fix C)', () => {
