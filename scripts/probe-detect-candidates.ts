@@ -21,11 +21,19 @@ const summary: Array<{ run: number; count: number; tools: string[] }> = [];
 for (let i = 1; i <= runs; i++) {
   const t0 = Date.now();
   try {
-    const det = await detectToolCandidates(session, { provider: 'claude-cli' });
+    const det = await detectToolCandidates(
+      session,
+      { provider: 'claude-cli' },
+      { trustSessionScope: true },
+    );
     const tools = det.candidates.map(
       (c) => `${c.toolName}${c.primary ? '*' : ''}[${c.requestSeqs.join(',')}]`,
     );
-    summary.push({ run: i, count: det.candidates.length, tools: det.candidates.map((c) => c.toolName) });
+    summary.push({
+      run: i,
+      count: det.candidates.length,
+      tools: det.candidates.map((c) => c.toolName),
+    });
     console.log(
       `\n[probe] RUN ${i}: ${det.candidates.length} candidate(s) in ${((Date.now() - t0) / 1000).toFixed(0)}s`,
     );
@@ -38,7 +46,9 @@ for (let i = 1; i <= runs; i++) {
 
 console.log('\n===== SUMMARY =====');
 for (const s of summary) {
-  console.log(`run ${s.run}: ${s.count < 0 ? 'ERROR' : `${s.count} tools`} → ${s.tools.join(', ')}`);
+  console.log(
+    `run ${s.run}: ${s.count < 0 ? 'ERROR' : `${s.count} tools`} → ${s.tools.join(', ')}`,
+  );
 }
 const ok = summary.filter((s) => s.count >= 2).length;
 console.log(`\nmulti-tool (>=2) runs: ${ok}/${summary.length}`);

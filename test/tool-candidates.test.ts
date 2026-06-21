@@ -251,6 +251,41 @@ describe('tool candidate payload', () => {
     expect(payload.requests.map((r) => r.seq)).toEqual([1, 2, 3]);
   });
 
+  it('trusts triaged public cross-origin API scope while still dropping telemetry', () => {
+    const remitlyTriagedSession: Session = {
+      ...session,
+      site: 'remitly',
+      url: 'https://www.remitly.com/',
+      requests: [
+        {
+          seq: 534,
+          timestamp: 23794,
+          method: 'GET',
+          url: 'https://api.remitly.io/v3/calculator/estimate?conduit=USA%3AUSD-IND%3AINR&anchor=SEND&amount=1100',
+          headers: { accept: 'application/json' },
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: '{"estimate":{"send_amount":"1100.00"}}' },
+        },
+        {
+          seq: 536,
+          timestamp: 25281,
+          method: 'POST',
+          url: 'https://uel.remitly.io/v1/collect',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '' },
+        },
+      ],
+    };
+
+    expect(buildToolCandidatePayload(remitlyTriagedSession).requests.map((r) => r.seq)).toEqual([]);
+    expect(
+      buildToolCandidatePayload(remitlyTriagedSession, { trustSessionScope: true }).requests.map(
+        (r) => r.seq,
+      ),
+    ).toEqual([534]);
+  });
+
   it('compacts identical repeated requests before sending candidate context', () => {
     const duplicateSession: Session = {
       ...session,
@@ -275,6 +310,15 @@ describe('tool candidate payload', () => {
 });
 
 describe('tool candidate validation', () => {
+  it('reports an empty detector result as a friendly Imprint error', () => {
+    expect(() =>
+      validateToolCandidateDetection({
+        sharedContext: {},
+        candidates: [],
+      }),
+    ).toThrow(/did not identify any tool candidates backed by requests/);
+  });
+
   it('requires exactly one primary candidate', () => {
     expect(() =>
       validateToolCandidateDetection({

@@ -883,6 +883,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           sessionPath: compileSessionPath,
           providerName,
           model,
+          trustSessionScope: !!localTriagedPath,
         });
         spinner.stop(
           `Detected ${detection.candidates.length} candidate tool${detection.candidates.length === 1 ? '' : 's'}.`,
@@ -1303,6 +1304,7 @@ async function detectTeachCandidates(opts: {
   sessionPath: string;
   providerName: ProviderName;
   model?: string;
+  trustSessionScope?: boolean;
 }): Promise<Awaited<ReturnType<typeof detectToolCandidates>>> {
   const session = loadJsonFile(
     opts.sessionPath,
@@ -1313,7 +1315,11 @@ async function detectTeachCandidates(opts: {
     },
     'session',
   );
-  return await detectToolCandidates(session, { provider: opts.providerName, model: opts.model });
+  return await detectToolCandidates(
+    session,
+    { provider: opts.providerName, model: opts.model },
+    { trustSessionScope: opts.trustSessionScope },
+  );
 }
 
 async function selectTeachCandidates(

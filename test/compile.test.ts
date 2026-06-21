@@ -16,6 +16,7 @@ import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
   defaultCompilePlaybookPath,
   findCredentialBearingSeqs,
+  rescueActionAlignedRepeatedSeqs,
   resolveDefaultCompilePlaybookPath,
   shrinkSession,
 } from '../src/imprint/compile.ts';
@@ -176,6 +177,87 @@ describe('shrinkSession', () => {
     expect(r.events).toHaveLength(1);
     expect(r.narration).toHaveLength(1);
     expect(r.cookieSnapshots).toHaveLength(1);
+  });
+});
+
+describe('rescueActionAlignedRepeatedSeqs', () => {
+  it('keeps repeated endpoint calls near input events while ignoring telemetry repeats', () => {
+    const session = makeSession({
+      url: 'https://www.remitly.com/',
+      events: [
+        {
+          seq: 533,
+          timestamp: 23535,
+          type: 'input',
+          detail: '{"value":"1100.00"}',
+        },
+      ],
+      requests: [
+        {
+          seq: 386,
+          timestamp: 5965,
+          method: 'GET',
+          url: 'https://api.remitly.io/v3/calculator/estimate?amount=1000',
+          headers: {},
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: '{"estimate":{"send_amount":"1000.00"}}' },
+        },
+        {
+          seq: 534,
+          timestamp: 23794,
+          method: 'GET',
+          url: 'https://api.remitly.io/v3/calculator/estimate?amount=1100',
+          headers: {},
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: '{"estimate":{"send_amount":"1100.00"}}' },
+        },
+        {
+          seq: 530,
+          timestamp: 23352,
+          method: 'POST',
+          url: 'https://uel.remitly.io/v1/events',
+          headers: {},
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 536,
+          timestamp: 25281,
+          method: 'POST',
+          url: 'https://uel.remitly.io/v1/events',
+          headers: {},
+          resourceType: 'Fetch',
+        },
+      ],
+    });
+
+    const rescued = rescueActionAlignedRepeatedSeqs(
+      session,
+      [386, 530],
+      [
+        {
+          seq: 386,
+          timestamp: 5965,
+          method: 'GET',
+          url: 'https://api.remitly.io/v3/calculator/estimate?amount=1000',
+          resourceType: 'XHR',
+          headers: '{}',
+          repeatedSeqs: [386, 534],
+          lastTimestamp: 23794,
+        },
+        {
+          seq: 530,
+          timestamp: 23352,
+          method: 'POST',
+          url: 'https://uel.remitly.io/v1/events',
+          resourceType: 'Fetch',
+          headers: '{}',
+          repeatedSeqs: [530, 536],
+          lastTimestamp: 25281,
+        },
+      ],
+    );
+
+    expect(rescued).toEqual([534]);
   });
 });
 
