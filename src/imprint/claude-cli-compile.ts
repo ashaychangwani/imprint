@@ -257,6 +257,7 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
             ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)]
             : []),
         ],
+        alwaysLoad: true,
       },
     },
   };
