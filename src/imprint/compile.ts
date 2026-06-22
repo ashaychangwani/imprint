@@ -326,7 +326,7 @@ export interface TriageResult {
   durationMs: number;
 }
 
-export interface TriageRequestContext {
+interface TriageRequestContext {
   seq: number;
   timestamp: number;
   method: string;
@@ -345,7 +345,7 @@ export interface TriageRequestContext {
   lastTimestamp?: number;
 }
 
-export interface TriageEventContext {
+interface TriageEventContext {
   seq: number;
   timestamp: number;
   type: Session['events'][number]['type'];

@@ -19,7 +19,7 @@ const EVENT_COLLECTOR_BODY_PATTERNS = [
   /"screen_(?:height|scale_factor|width)"/i,
 ];
 
-export function isTelemetryPath(pathname: string): boolean {
+function isTelemetryPath(pathname: string): boolean {
   return HARD_TELEMETRY_PATH_PATTERN.test(pathname);
 }
 
