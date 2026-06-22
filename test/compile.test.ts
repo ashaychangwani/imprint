@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
+  buildTriageEventContexts,
   defaultCompilePlaybookPath,
   findCredentialBearingSeqs,
   rescueActionAlignedRepeatedSeqs,
@@ -177,6 +178,40 @@ describe('shrinkSession', () => {
     expect(r.events).toHaveLength(1);
     expect(r.narration).toHaveLength(1);
     expect(r.cookieSnapshots).toHaveLength(1);
+  });
+});
+
+describe('buildTriageEventContexts', () => {
+  it('keeps only browser action/navigation events for the triage prompt', () => {
+    const session = makeSession({
+      events: [
+        { seq: 1, timestamp: 100, type: 'navigation', detail: 'https://example.com/start' },
+        { seq: 2, timestamp: 200, type: 'click', detail: '{"text":"Search"}' },
+        { seq: 3, timestamp: 300, type: 'input', detail: '{"value":"delhi"}' },
+        { seq: 4, timestamp: 400, type: 'change', detail: '{"value":"mumbai"}' },
+        { seq: 5, timestamp: 500, type: 'submit', detail: '{"action":"/search"}' },
+        {
+          seq: 6,
+          timestamp: 600,
+          type: 'ws-sent',
+          detail: '{"url":"wss://example.com/socket","payloadDataPreview":"noisy"}',
+        },
+        {
+          seq: 7,
+          timestamp: 700,
+          type: 'ws-received',
+          detail: '{"url":"wss://example.com/socket","payloadDataPreview":"noisy"}',
+        },
+        {
+          seq: 8,
+          timestamp: 800,
+          type: 'dom-snapshot',
+          detail: '{"html":"<main>large snapshot</main>"}',
+        },
+      ],
+    });
+
+    expect(buildTriageEventContexts(session).map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
   });
 });
 

@@ -304,7 +304,18 @@ const HEADER_TRUNCATE_LIMIT = 200;
 const TRIAGE_BODY_LIMIT = 500;
 const TRIAGE_ACTION_ALIGNMENT_BEFORE_MS = 1000;
 const TRIAGE_ACTION_ALIGNMENT_AFTER_MS = 5000;
-const TRIAGE_ACTION_EVENT_TYPES = new Set(['input', 'change', 'submit']);
+const TRIAGE_CONTEXT_EVENT_TYPES = new Set<Session['events'][number]['type']>([
+  'navigation',
+  'click',
+  'input',
+  'change',
+  'submit',
+]);
+const TRIAGE_ACTION_EVENT_TYPES = new Set<Session['events'][number]['type']>([
+  'input',
+  'change',
+  'submit',
+]);
 
 export interface TriageResult {
   session: Session;
@@ -332,6 +343,13 @@ export interface TriageRequestContext {
   repeatCount?: number;
   repeatedSeqs?: number[];
   lastTimestamp?: number;
+}
+
+export interface TriageEventContext {
+  seq: number;
+  timestamp: number;
+  type: Session['events'][number]['type'];
+  detail: string;
 }
 
 export async function triageRequests(
@@ -386,12 +404,7 @@ export async function triageRequests(
         site: session.site,
         url: session.url,
         narration: session.narration,
-        events: session.events.map((event) => ({
-          seq: event.seq,
-          timestamp: event.timestamp,
-          type: event.type,
-          detail: truncate(event.detail, TRIAGE_BODY_LIMIT),
-        })),
+        events: buildTriageEventContexts(session),
         requests: metadata,
       };
 
@@ -458,6 +471,17 @@ export async function triageRequests(
       };
     },
   );
+}
+
+export function buildTriageEventContexts(session: Session): TriageEventContext[] {
+  return session.events
+    .filter((event) => TRIAGE_CONTEXT_EVENT_TYPES.has(event.type))
+    .map((event) => ({
+      seq: event.seq,
+      timestamp: event.timestamp,
+      type: event.type,
+      detail: truncate(event.detail, TRIAGE_BODY_LIMIT) ?? '',
+    }));
 }
 
 export function rescueActionAlignedRepeatedSeqs(
