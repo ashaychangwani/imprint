@@ -13,6 +13,9 @@ You receive a JSON object:
   "narration": [
     { "timestamp": ms, "text": "what the user said they were doing" }
   ],
+  "events": [
+    { "seq": int, "timestamp": ms, "type": "click|input|change|submit|navigation", "detail": "truncated browser event detail" }
+  ],
   "requests": [
     {
       "seq": int,
@@ -35,6 +38,9 @@ You receive a JSON object:
 ```
 
 The narration is the user's own description of what they did. Use it to understand the workflow's intent, then select the requests that serve that intent.
+The events are the browser actions captured during recording. Use input/change/submit
+event timestamps to disambiguate repeated endpoint calls when narration was spoken
+after the action.
 
 Request entries may include `repeatCount`, `repeatedSeqs`, and `lastTimestamp` when identical requests were compacted. Select the representative `seq` unless a specific repeated seq is needed for an intentional multi-step workflow.
 
@@ -62,9 +68,12 @@ Request entries may include `repeatCount`, `repeatedSeqs`, and `lastTimestamp` w
 
 1. **Read the narration first.** It tells you the user's goal -- "searching for flights," "booking a hotel," "checking prices." Every request you select should serve that goal.
 2. **Correlate timestamps.** The narration has timestamps; the requests have timestamps. A request whose timestamp falls near a narration event ("now I clicked search") is likely load-bearing.
-3. **Prefer POST/PUT/PATCH over GET** when both exist for the same endpoint -- the mutation is usually the load-bearing one.
-4. **When in doubt, include it.** A false positive (including a noise request) is cheaper than a false negative (excluding the result-bearing XHR). The downstream compilation LLM can ignore noise, but it can't work with data it never sees.
-5. **Aim for 5-50 requests** out of potentially hundreds. If you're selecting more than 50, you're probably not filtering aggressively enough. If fewer than 3, double-check you haven't dropped the key data-fetch.
+3. **Use browser events for repeated calls.** If the same endpoint appears more
+   than once with different user-controlled values, keep the request closest to
+   the input/change/submit event, even if narration came later.
+4. **Prefer POST/PUT/PATCH over GET** when both exist for the same endpoint -- the mutation is usually the load-bearing one.
+5. **When in doubt, include it.** A false positive (including a noise request) is cheaper than a false negative (excluding the result-bearing XHR). The downstream compilation LLM can ignore noise, but it can't work with data it never sees.
+6. **Aim for 5-50 requests** out of potentially hundreds. If you're selecting more than 50, you're probably not filtering aggressively enough. If fewer than 3, double-check you haven't dropped the key data-fetch.
 
 ## Output
 

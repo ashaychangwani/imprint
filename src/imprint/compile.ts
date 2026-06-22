@@ -31,6 +31,7 @@ import { redactSession } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { ClassifiedValue } from './session-diff.ts';
+import { isTelemetryRequest } from './telemetry.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import {
@@ -301,6 +302,20 @@ const HEADER_TRUNCATE_LIMIT = 200;
 // data-bearing POSTs (search/booking) from telemetry; full bodies on a busy
 // site can total >1MB and blow the 200K-token cap on `claude-opus-4-8`.
 const TRIAGE_BODY_LIMIT = 500;
+const TRIAGE_ACTION_ALIGNMENT_BEFORE_MS = 1000;
+const TRIAGE_ACTION_ALIGNMENT_AFTER_MS = 5000;
+const TRIAGE_CONTEXT_EVENT_TYPES = new Set<Session['events'][number]['type']>([
+  'navigation',
+  'click',
+  'input',
+  'change',
+  'submit',
+]);
+const TRIAGE_ACTION_EVENT_TYPES = new Set<Session['events'][number]['type']>([
+  'input',
+  'change',
+  'submit',
+]);
 
 export interface TriageResult {
   session: Session;
@@ -328,6 +343,13 @@ interface TriageRequestContext {
   repeatCount?: number;
   repeatedSeqs?: number[];
   lastTimestamp?: number;
+}
+
+interface TriageEventContext {
+  seq: number;
+  timestamp: number;
+  type: Session['events'][number]['type'];
+  detail: string;
 }
 
 export async function triageRequests(
@@ -382,6 +404,7 @@ export async function triageRequests(
         site: session.site,
         url: session.url,
         narration: session.narration,
+        events: buildTriageEventContexts(session),
         requests: metadata,
       };
 
@@ -421,7 +444,8 @@ export async function triageRequests(
         );
       }
 
-      const selectedSet = new Set([...(seqs as number[]), ...preserveSeqs]);
+      const rescuedSeqs = rescueActionAlignedRepeatedSeqs(session, seqs as number[], compacted);
+      const selectedSet = new Set([...(seqs as number[]), ...rescuedSeqs, ...preserveSeqs]);
       const triaged: Session = {
         ...session,
         requests: session.requests.filter((r) => selectedSet.has(r.seq)),
@@ -446,6 +470,63 @@ export async function triageRequests(
         durationMs: result.durationMs,
       };
     },
+  );
+}
+
+export function buildTriageEventContexts(session: Session): TriageEventContext[] {
+  return session.events
+    .filter((event) => TRIAGE_CONTEXT_EVENT_TYPES.has(event.type))
+    .map((event) => ({
+      seq: event.seq,
+      timestamp: event.timestamp,
+      type: event.type,
+      detail: truncate(event.detail, TRIAGE_BODY_LIMIT) ?? '',
+    }));
+}
+
+export function rescueActionAlignedRepeatedSeqs(
+  session: Session,
+  selectedSeqs: Iterable<number>,
+  compactedRequests: TriageRequestContext[],
+): number[] {
+  const selectedSet = new Set(selectedSeqs);
+  const requestBySeq = new Map(session.requests.map((request) => [request.seq, request]));
+  const actionTimestamps = session.events
+    .filter((event) => TRIAGE_ACTION_EVENT_TYPES.has(event.type))
+    .map((event) => event.timestamp);
+  if (actionTimestamps.length === 0) return [];
+
+  const rescued = new Set<number>();
+  for (const request of compactedRequests) {
+    const repeatedSeqs = request.repeatedSeqs ?? [];
+    if (repeatedSeqs.length === 0) continue;
+    if (!selectedSet.has(request.seq) && !repeatedSeqs.some((seq) => selectedSet.has(seq))) {
+      continue;
+    }
+
+    for (const seq of repeatedSeqs) {
+      if (selectedSet.has(seq)) continue;
+      const original = requestBySeq.get(seq);
+      if (!original) continue;
+      if (!isTriageRescueCandidate(original)) continue;
+      if (!isNearActionEvent(original.timestamp, actionTimestamps)) continue;
+      rescued.add(seq);
+    }
+  }
+
+  return [...rescued].sort((a, b) => a - b);
+}
+
+function isTriageRescueCandidate(request: Session['requests'][number]): boolean {
+  if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
+  return !isTelemetryRequest(request);
+}
+
+function isNearActionEvent(timestamp: number, actionTimestamps: number[]): boolean {
+  return actionTimestamps.some(
+    (eventTimestamp) =>
+      timestamp >= eventTimestamp - TRIAGE_ACTION_ALIGNMENT_BEFORE_MS &&
+      timestamp <= eventTimestamp + TRIAGE_ACTION_ALIGNMENT_AFTER_MS,
   );
 }
 

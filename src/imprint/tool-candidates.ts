@@ -14,6 +14,7 @@ import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
+import { isTelemetryRequest } from './telemetry.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
@@ -120,9 +121,10 @@ export type ToolCandidate = z.infer<typeof ToolCandidateSchema>;
 const ToolCandidateDetectionSchema = z
   .object({
     sharedContext: SharedCompileContextSchema.default({}),
-    candidates: z.array(ToolCandidateSchema).min(1),
+    candidates: z.array(ToolCandidateSchema),
   })
   .superRefine((value, ctx) => {
+    if (value.candidates.length === 0) return;
     const primaryCount = value.candidates.filter((c) => c.primary).length;
     if (primaryCount !== 1) {
       ctx.addIssue({
@@ -151,9 +153,19 @@ interface DetectToolCandidatesResult extends ToolCandidateDetection {
   durationMs: number;
 }
 
+interface DetectToolCandidatesOptions {
+  /**
+   * The input session has already been reduced by request triage. Trust that
+   * selected XHR/Fetch scope instead of re-applying the raw-session origin
+   * heuristic, which would drop public cross-origin APIs such as api.remitly.io.
+   */
+  trustSessionScope?: boolean;
+}
+
 export async function detectToolCandidates(
   session: Session,
   llmConfig?: LLMOptions,
+  opts: DetectToolCandidatesOptions = {},
 ): Promise<DetectToolCandidatesResult> {
   return await traced(
     'teach.detect_tool_candidates',
@@ -171,12 +183,24 @@ export async function detectToolCandidates(
         );
       }
       const systemPrompt = readFileSync(promptPath, 'utf8');
-      const payload = buildToolCandidatePayload(session);
+      const payload = buildToolCandidatePayload(session, {
+        trustSessionScope: opts.trustSessionScope,
+      });
 
       setSpanAttributes(span, {
         'imprint.events_considered': payload.events.length,
         'imprint.requests_considered': payload.requests.length,
       });
+
+      if (payload.requests.length === 0) {
+        throw new Error(
+          [
+            'Candidate detection received no eligible XHR/Fetch requests.',
+            'Imprint needs at least one data-bearing request to compile a tool.',
+            'This usually means triage removed the load-bearing API call, the recording only captured page/static traffic, or the workflow uses a browser-local calculation with no backend request.',
+          ].join('\n'),
+        );
+      }
 
       log(
         `detecting candidate tools from ${payload.events.length} event(s), ${payload.requests.length} request(s)…`,
@@ -250,6 +274,14 @@ export async function detectToolCandidates(
 export function validateToolCandidateDetection(input: unknown): ToolCandidateDetection {
   const raw = ToolCandidateDetectionSchema.parse(input);
   const before = raw.candidates.length;
+  if (before === 0) {
+    throw new Error(
+      [
+        'Candidate detector did not identify any tool candidates backed by requests.',
+        'Imprint needs at least one candidate with requestSeqs so the compiler has an API call to replay.',
+      ].join('\n'),
+    );
+  }
   raw.candidates = raw.candidates.filter((c) => c.requestSeqs.length > 0);
   if (raw.candidates.length === 0) {
     throw new Error(
@@ -316,12 +348,19 @@ interface ToolCandidatePayload {
   requests: CandidateRequestPayload[];
 }
 
-export function buildToolCandidatePayload(session: Session): ToolCandidatePayload {
+export function buildToolCandidatePayload(
+  session: Session,
+  opts: DetectToolCandidatesOptions = {},
+): ToolCandidatePayload {
   const startRoot = candidateStartRoot(session);
   const appApiHosts = inferAppApiHosts(session, startRoot);
   const requests = compactRequestContexts(
     session.requests
-      .filter((request) => isCandidateRequest(request, startRoot, appApiHosts))
+      .filter((request) =>
+        isCandidateRequest(request, startRoot, appApiHosts, {
+          trustSessionScope: opts.trustSessionScope,
+        }),
+      )
       .map((request) => {
         const body = truncate(request.body, BODY_LIMIT);
         const responsePreview = truncate(request.response?.body, RESPONSE_PREVIEW_LIMIT);
@@ -408,9 +447,6 @@ function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
  *  and — worse — the detector can anchor a candidate's `requestSeqs` on one
  *  (e.g. Google's `/log`), sending compile to reverse-engineer a beacon. Excluded
  *  entirely. The boundary lookahead keeps `/login`, `/catalog`, etc. safe. */
-const TELEMETRY_PATH =
-  /\/(log|gen_204|jserror|ping|beacon|csi|batchlog|metrics|stats|collect|analytics|adsct|pagead|ccm)(?=$|[/?])/i;
-
 /** Count distinct endpoint families (batchexecute rpcid, else METHOD+path) that
  *  carry a non-trivial number of requests. ≥2 means the session genuinely hit
  *  multiple backends — a single detected candidate there signals under-
@@ -433,11 +469,13 @@ function isCandidateRequest(
   request: CapturedRequest,
   startRoot: string | null,
   appApiHosts: Set<string>,
+  opts: DetectToolCandidatesOptions = {},
 ): boolean {
   if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
   const url = safeUrl(request.url);
   if (!url) return false;
-  if (TELEMETRY_PATH.test(url.pathname)) return false;
+  if (isTelemetryRequest(request)) return false;
+  if (opts.trustSessionScope) return true;
   if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) {
     return appApiHosts.has(url.hostname);
   }
