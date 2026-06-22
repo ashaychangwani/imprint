@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
   defaultCompilePlaybookPath,
+  findCredentialBearingSeqs,
   resolveDefaultCompilePlaybookPath,
   shrinkSession,
 } from '../src/imprint/compile.ts';
@@ -217,6 +218,83 @@ describe('compilePlaybook defaults', () => {
   });
 });
 
-// Tests for the old generate() function have been removed.
-// The new compileAgent() workflow is tested in test/compile-agent.test.ts.
-// This file now only tests shrinkSession() — the pure noise-stripping logic.
+describe('findCredentialBearingSeqs', () => {
+  it('finds credential placeholders in request body', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: 'UserID=${credential.username}&Password=${credential.password}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{}' },
+        },
+        {
+          seq: 2,
+          timestamp: 200,
+          method: 'GET',
+          url: 'https://example.com/data',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{}' },
+        },
+      ],
+    });
+    expect(findCredentialBearingSeqs(session)).toEqual([1]);
+  });
+
+  it('finds credential placeholders in request headers', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 5,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api',
+          headers: { authorization: 'Basic ${credential.api_token}' },
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{}' },
+        },
+      ],
+    });
+    expect(findCredentialBearingSeqs(session)).toEqual([5]);
+  });
+
+  it('returns empty array when no credential placeholders exist', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/search?q=test',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{}' },
+        },
+      ],
+    });
+    expect(findCredentialBearingSeqs(session)).toEqual([]);
+  });
+
+  it('does not false-positive on ${param.*} or [REDACTED:...] patterns', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/search',
+          headers: {},
+          body: '{"query":"${param.query}","token":"[REDACTED:v3:id=1:len=32]"}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{}' },
+        },
+      ],
+    });
+    expect(findCredentialBearingSeqs(session)).toEqual([]);
+  });
+});

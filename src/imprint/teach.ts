@@ -27,6 +27,7 @@ import {
   type CompileAgentProgress,
   type TriageResult,
   compilePlaybook,
+  findCredentialBearingSeqs,
   generate,
   triageRequests,
 } from './compile.ts';
@@ -826,11 +827,25 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           const model = await getModel();
           mp.pause();
           mp.clear();
+          const credentialSeqs = findCredentialBearingSeqs(triageSession);
           spinner.start('Triaging requests');
-          localTriageResult = await triageRequests(triageSession, {
-            provider: providerName,
-            model,
-          });
+          localTriageResult = await triageRequests(
+            triageSession,
+            {
+              provider: providerName,
+              model,
+            },
+            credentialSeqs.length > 0
+              ? {
+                  sharedContext: {
+                    loginRequestSeqs: credentialSeqs,
+                    credentialNames: [],
+                    tokenExtractionNotes: '',
+                    sharedHelperNotes: '',
+                  },
+                }
+              : {},
+          );
           spinner.stop(
             `Triaged to ${localTriageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`,
           );
