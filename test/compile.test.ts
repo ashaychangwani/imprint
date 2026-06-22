@@ -217,7 +217,16 @@ describe('rescueActionAlignedRepeatedSeqs', () => {
           method: 'POST',
           url: 'https://uel.remitly.io/v1/events',
           headers: {},
+          body: JSON.stringify([
+            {
+              app_version: '<unknown>',
+              browser_name: 'Chrome',
+              device_environment_type: 'Web',
+              screen_width: 1200,
+            },
+          ]),
           resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '' },
         },
         {
           seq: 536,
@@ -225,7 +234,16 @@ describe('rescueActionAlignedRepeatedSeqs', () => {
           method: 'POST',
           url: 'https://uel.remitly.io/v1/events',
           headers: {},
+          body: JSON.stringify([
+            {
+              app_version: '<unknown>',
+              browser_name: 'Chrome',
+              device_environment_type: 'Web',
+              screen_width: 1200,
+            },
+          ]),
           resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '' },
         },
       ],
     });

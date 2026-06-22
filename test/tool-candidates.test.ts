@@ -56,7 +56,7 @@ describe('tool candidate payload', () => {
     expect(payload.requests[1]?.likelyLoginOrAuth).toBe(false);
   });
 
-  it('excludes same-site telemetry/beacon endpoints (/log, /events, /gen_204) from the payload', () => {
+  it('excludes telemetry/beacon endpoints without dropping event-listing APIs', () => {
     const telemetrySession: Session = {
       ...session,
       requests: [
@@ -84,6 +84,14 @@ describe('tool candidate payload', () => {
           method: 'POST',
           url: 'https://www.example.com/v1/events',
           headers: {},
+          body: JSON.stringify([
+            {
+              app_version: '1.0.0',
+              browser_name: 'Chrome',
+              device_environment_type: 'Web',
+              screen_width: 1200,
+            },
+          ]),
           resourceType: 'Fetch',
           response: { status: 204, headers: {}, body: '' },
         },
@@ -105,15 +113,36 @@ describe('tool candidate payload', () => {
           resourceType: 'Fetch',
           response: { status: 200, headers: {}, body: '{}' },
         },
+        {
+          seq: 6,
+          timestamp: 500,
+          method: 'GET',
+          url: 'https://www.example.com/api/events',
+          headers: {},
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: '{"events":[{"id":"evt_1"}]}' },
+        },
+        {
+          seq: 7,
+          timestamp: 600,
+          method: 'POST',
+          url: 'https://www.example.com/v1/events/search',
+          headers: {},
+          body: '{"query":"conference"}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{"events":[{"id":"evt_2"}]}' },
+        },
       ],
     };
     const payload = buildToolCandidatePayload(telemetrySession);
     const seqs = payload.requests.map((r) => r.seq);
     expect(seqs).toContain(4); // real search kept
     expect(seqs).toContain(5); // /login kept (word-boundary guard)
+    expect(seqs).toContain(6); // product /events endpoint kept
+    expect(seqs).toContain(7); // product /events/search endpoint kept
     expect(seqs).not.toContain(1); // /log dropped
     expect(seqs).not.toContain(2); // /gen_204 dropped
-    expect(seqs).not.toContain(3); // /events dropped
+    expect(seqs).not.toContain(3); // analytics-style /events dropped
   });
 
   it('keeps cross-domain auth setup requests while dropping unrelated third parties', () => {
@@ -291,8 +320,25 @@ describe('tool candidate payload', () => {
           method: 'POST',
           url: 'https://uel.remitly.io/v1/events',
           headers: {},
+          body: JSON.stringify([
+            {
+              app_version: '<unknown>',
+              browser_name: 'Chrome',
+              device_environment_type: 'Web',
+              screen_width: 1200,
+            },
+          ]),
           resourceType: 'Fetch',
           response: { status: 200, headers: {}, body: '' },
+        },
+        {
+          seq: 538,
+          timestamp: 25400,
+          method: 'GET',
+          url: 'https://api.remitly.io/v1/events',
+          headers: {},
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: '{"events":[{"id":"evt_1"}]}' },
         },
       ],
     };
@@ -302,7 +348,7 @@ describe('tool candidate payload', () => {
       buildToolCandidatePayload(remitlyTriagedSession, { trustSessionScope: true }).requests.map(
         (r) => r.seq,
       ),
-    ).toEqual([534]);
+    ).toEqual([534, 538]);
   });
 
   it('compacts identical repeated requests before sending candidate context', () => {

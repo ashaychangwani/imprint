@@ -14,7 +14,7 @@ import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
-import { isTelemetryPath } from './telemetry.ts';
+import { isTelemetryRequest } from './telemetry.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
@@ -474,7 +474,7 @@ function isCandidateRequest(
   if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
   const url = safeUrl(request.url);
   if (!url) return false;
-  if (isTelemetryPath(url.pathname)) return false;
+  if (isTelemetryRequest(request)) return false;
   if (opts.trustSessionScope) return true;
   if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) {
     return appApiHosts.has(url.hostname);

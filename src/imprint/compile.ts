@@ -31,7 +31,7 @@ import { redactSession } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { ClassifiedValue } from './session-diff.ts';
-import { isTelemetryPath } from './telemetry.ts';
+import { isTelemetryRequest } from './telemetry.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import {
@@ -495,13 +495,7 @@ export function rescueActionAlignedRepeatedSeqs(
 
 function isTriageRescueCandidate(request: Session['requests'][number]): boolean {
   if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
-  let url: URL;
-  try {
-    url = new URL(request.url);
-  } catch {
-    return false;
-  }
-  return !isTelemetryPath(url.pathname);
+  return !isTelemetryRequest(request);
 }
 
 function isNearActionEvent(timestamp: number, actionTimestamps: number[]): boolean {
