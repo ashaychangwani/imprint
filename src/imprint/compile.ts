@@ -280,6 +280,19 @@ function safeUrl(s: string): URL | null {
   }
 }
 
+// ─── Credential-bearing request detection ───────────────────────────────────
+
+const CREDENTIAL_PLACEHOLDER_RE = /\$\{credential\.[^}]+\}/;
+
+export function findCredentialBearingSeqs(session: Session): number[] {
+  const seqs: number[] = [];
+  for (const r of session.requests) {
+    const text = `${r.url}\n${JSON.stringify(r.headers)}\n${r.body ?? ''}`;
+    if (CREDENTIAL_PLACEHOLDER_RE.test(text)) seqs.push(r.seq);
+  }
+  return seqs;
+}
+
 // ─── triageRequests (LLM-based request filtering) ───────────────────────────
 
 const TRIAGE_RESOURCE_TYPES = new Set(['XHR', 'Fetch', 'Document']);

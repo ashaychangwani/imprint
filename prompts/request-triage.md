@@ -46,6 +46,7 @@ Request entries may include `repeatCount`, `repeatedSeqs`, and `lastTimestamp` w
 - Data fetches that populate the page the user cared about
 - Navigation documents (the HTML pages the user visited)
 - Lookup or resolution endpoints (anything that converts user input into structured data -- e.g. returning locations, IDs, or options the user selects from)
+- **Credential-bearing requests** -- any request whose body or headers contain `${credential.username}`, `${credential.password}`, or other `${credential.*}` placeholders. These are login/auth requests critical for downstream compilation. Always include them, even if they look like duplicates of other login requests to the same endpoint.
 
 **What to EXCLUDE** (even if same-origin):
 - Analytics and telemetry (`/collect`, `/event`, `/track`, `/log`, `/beacon`, `/pixel`, `analytics`, `telemetry`, `metrics`)
