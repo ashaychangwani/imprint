@@ -56,7 +56,7 @@ describe('tool candidate payload', () => {
     expect(payload.requests[1]?.likelyLoginOrAuth).toBe(false);
   });
 
-  it('excludes same-site telemetry/beacon endpoints (/log, /gen_204) from the payload', () => {
+  it('excludes same-site telemetry/beacon endpoints (/log, /events, /gen_204) from the payload', () => {
     const telemetrySession: Session = {
       ...session,
       requests: [
@@ -80,6 +80,15 @@ describe('tool candidate payload', () => {
         },
         {
           seq: 3,
+          timestamp: 250,
+          method: 'POST',
+          url: 'https://www.example.com/v1/events',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 204, headers: {}, body: '' },
+        },
+        {
+          seq: 4,
           timestamp: 300,
           method: 'GET',
           url: 'https://www.example.com/search?q=test',
@@ -88,7 +97,7 @@ describe('tool candidate payload', () => {
           response: { status: 200, headers: {}, body: '{"items":[]}' },
         },
         {
-          seq: 4,
+          seq: 5,
           timestamp: 400,
           method: 'GET',
           url: 'https://www.example.com/login', // must NOT be excluded by the /log rule
@@ -100,10 +109,11 @@ describe('tool candidate payload', () => {
     };
     const payload = buildToolCandidatePayload(telemetrySession);
     const seqs = payload.requests.map((r) => r.seq);
-    expect(seqs).toContain(3); // real search kept
-    expect(seqs).toContain(4); // /login kept (word-boundary guard)
+    expect(seqs).toContain(4); // real search kept
+    expect(seqs).toContain(5); // /login kept (word-boundary guard)
     expect(seqs).not.toContain(1); // /log dropped
     expect(seqs).not.toContain(2); // /gen_204 dropped
+    expect(seqs).not.toContain(3); // /events dropped
   });
 
   it('keeps cross-domain auth setup requests while dropping unrelated third parties', () => {
@@ -271,6 +281,15 @@ describe('tool candidate payload', () => {
           timestamp: 25281,
           method: 'POST',
           url: 'https://uel.remitly.io/v1/collect',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '' },
+        },
+        {
+          seq: 537,
+          timestamp: 25310,
+          method: 'POST',
+          url: 'https://uel.remitly.io/v1/events',
           headers: {},
           resourceType: 'Fetch',
           response: { status: 200, headers: {}, body: '' },

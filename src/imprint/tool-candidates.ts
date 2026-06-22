@@ -14,6 +14,7 @@ import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
+import { isTelemetryPath } from './telemetry.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
@@ -446,9 +447,6 @@ function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
  *  and — worse — the detector can anchor a candidate's `requestSeqs` on one
  *  (e.g. Google's `/log`), sending compile to reverse-engineer a beacon. Excluded
  *  entirely. The boundary lookahead keeps `/login`, `/catalog`, etc. safe. */
-const TELEMETRY_PATH =
-  /\/(log|gen_204|jserror|ping|beacon|csi|batchlog|metrics|stats|collect|analytics|adsct|pagead|ccm)(?=$|[/?])/i;
-
 /** Count distinct endpoint families (batchexecute rpcid, else METHOD+path) that
  *  carry a non-trivial number of requests. ≥2 means the session genuinely hit
  *  multiple backends — a single detected candidate there signals under-
@@ -476,7 +474,7 @@ function isCandidateRequest(
   if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
   const url = safeUrl(request.url);
   if (!url) return false;
-  if (TELEMETRY_PATH.test(url.pathname)) return false;
+  if (isTelemetryPath(url.pathname)) return false;
   if (opts.trustSessionScope) return true;
   if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) {
     return appApiHosts.has(url.hostname);

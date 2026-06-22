@@ -31,6 +31,7 @@ import { redactSession } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { ClassifiedValue } from './session-diff.ts';
+import { isTelemetryPath } from './telemetry.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import {
@@ -304,8 +305,6 @@ const TRIAGE_BODY_LIMIT = 500;
 const TRIAGE_ACTION_ALIGNMENT_BEFORE_MS = 1000;
 const TRIAGE_ACTION_ALIGNMENT_AFTER_MS = 5000;
 const TRIAGE_ACTION_EVENT_TYPES = new Set(['input', 'change', 'submit']);
-const TRIAGE_TELEMETRY_PATH =
-  /\/(log|events?|gen_204|jserror|ping|beacon|csi|batchlog|metrics|stats|collect|analytics|adsct|pagead|ccm)(?=$|[/?])/i;
 
 export interface TriageResult {
   session: Session;
@@ -502,7 +501,7 @@ function isTriageRescueCandidate(request: Session['requests'][number]): boolean 
   } catch {
     return false;
   }
-  return !TRIAGE_TELEMETRY_PATH.test(url.pathname);
+  return !isTelemetryPath(url.pathname);
 }
 
 function isNearActionEvent(timestamp: number, actionTimestamps: number[]): boolean {
