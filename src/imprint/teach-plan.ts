@@ -120,6 +120,7 @@ export async function planAndBuildPrereqs(opts: {
   const plan: BuildPlan = {
     sharedModules: generated.sharedModules,
     perTool: generated.perTool,
+    authTool: generated.authTool,
   };
 
   // Persist immediately so a crash mid-build still leaves a readable plan.
@@ -187,6 +188,10 @@ export async function planAndBuildPrereqs(opts: {
       usesSharedModules: t.usesSharedModules.filter((p) => verifiedPaths.has(p)),
       parserGuidance: correctGuidanceForPrunedModules(t.parserGuidance, verifiedPaths),
     })),
+    // Carry the auth tool through pruning — it is independent of shared modules,
+    // and dropping it here silently disables auth compilation for any site that
+    // has shared modules (the auth gate reads authTool from this sidecar).
+    authTool: plan.authTool,
   };
   writeBuildPlanSidecar(opts.site, prunedPlan);
 

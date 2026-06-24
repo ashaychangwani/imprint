@@ -23,6 +23,7 @@ import {
   pickProbeWinner,
   prefersCdpReplayFirst,
   renderWorkflowRequests,
+  reshapePlaybookAuthResult,
   resolveLadder,
   runWithLadder,
   runWorkflowWithLadder,
@@ -1803,5 +1804,75 @@ describe('pickBaseUrl', () => {
   it('throws for empty requests', () => {
     const tool = toolWith([]);
     expect(() => pickBaseUrl(tool)).toThrow('has no requests');
+  });
+});
+
+describe('reshapePlaybookAuthResult', () => {
+  const authWorkflow = (over: Partial<Workflow['authConfig']> = {}): Workflow =>
+    ({
+      toolName: 'authenticate_fix',
+      toolKind: 'authenticate',
+      intent: { description: 'auth' },
+      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
+      requests: [{ method: 'POST', url: 'https://fix.example/login', headers: {} }],
+      site: 'fix',
+      authConfig: {
+        twoFactorType: 'otp',
+        initiateRequestCount: 1,
+        twoFactorContext: ['SecurityCode'],
+        ...over,
+      },
+    }) as Workflow;
+
+  const okResult = (data: Record<string, unknown>): ToolResult => ({ ok: true, data });
+
+  it('reshapes a 2FA playbook ok:true into AWAITING_2FA carrying the captured token', () => {
+    const r = reshapePlaybookAuthResult(
+      okResult({ authenticated: true, SecurityCode: 'SYNTH-SEC-1' }),
+      authWorkflow(),
+      { action: 'initiate' },
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected AWAITING_2FA');
+    expect(r.error).toBe('AWAITING_2FA');
+    expect(r.twoFactorType).toBe('otp');
+    expect(r.twoFactorContext).toEqual({ SecurityCode: 'SYNTH-SEC-1' });
+  });
+
+  it('reshapes with undefined twoFactorContext when no token was captured', () => {
+    const r = reshapePlaybookAuthResult(okResult({ authenticated: true }), authWorkflow(), {
+      action: 'initiate',
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected AWAITING_2FA');
+    expect(r.error).toBe('AWAITING_2FA');
+    expect(r.twoFactorContext).toBeUndefined();
+  });
+
+  it('leaves a no-2FA authenticate ok:true untouched (full login)', () => {
+    const r = reshapePlaybookAuthResult(
+      okResult({ authenticated: true }),
+      authWorkflow({ twoFactorType: 'none' }),
+      { action: 'initiate' },
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it('does NOT reshape submit_otp/complete actions (those run via fetch)', () => {
+    for (const action of ['submit_otp', 'complete']) {
+      const r = reshapePlaybookAuthResult(okResult({ authenticated: true }), authWorkflow(), {
+        action,
+      });
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  it('passes through a failed result and non-authenticate tools unchanged', () => {
+    const failed: ToolResult = { ok: false, error: 'NETWORK', message: 'boom' };
+    expect(reshapePlaybookAuthResult(failed, authWorkflow(), { action: 'initiate' })).toBe(failed);
+
+    const dataTool = { ...authWorkflow(), toolKind: 'read' } as unknown as Workflow;
+    const ok = okResult({ x: 1 });
+    expect(reshapePlaybookAuthResult(ok, dataTool, { action: 'initiate' })).toBe(ok);
   });
 });

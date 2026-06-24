@@ -21,6 +21,7 @@ import { compactRequestContexts, requestContextDigest } from './request-context.
 import { type ClassifiedValue, looksLikeToken } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
+import { TwoFactorTypeSchema } from './types.ts';
 import type { Session } from './types.ts';
 
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
@@ -98,6 +99,7 @@ const PerToolPlanSchema = z.object({
   parserGuidance: z.string().default(''),
   paramChecklist: z.array(z.string()).default([]),
   authRecipe: AuthRecipeSchema,
+  dependsOnAuth: z.boolean().optional(),
   /** Opaque-token chain — producer side: fields this tool's parser must emit for
    *  sibling consumers. */
   emitsTokens: z.array(EmittedTokenSchema).default([]),
@@ -106,10 +108,27 @@ const PerToolPlanSchema = z.object({
 });
 type PerToolPlan = z.infer<typeof PerToolPlanSchema>;
 
+export const AuthToolPlanSchema = z
+  .object({
+    toolName: z.string(),
+    loginRequestSeqs: z.array(z.number().int().nonnegative()),
+    twoFactorRequestSeqs: z.array(z.number().int().nonnegative()).default([]),
+    twoFactorType: TwoFactorTypeSchema,
+    /** OTP only: initiate-response field names the completion request chains via
+     *  ${state.X} (structural, from the recording). */
+    twoFactorContext: z.array(z.string()).default([]),
+    credentialNames: z.array(z.string()).default([]),
+    captures: z.array(AuthCaptureSchema).default([]),
+    notes: z.string().default(''),
+  })
+  .optional();
+export type AuthToolPlan = z.infer<typeof AuthToolPlanSchema>;
+
 export const BuildPlanSchema = z
   .object({
     sharedModules: z.array(SharedModuleSpecSchema).default([]),
     perTool: z.array(PerToolPlanSchema).min(1),
+    authTool: AuthToolPlanSchema,
   })
   .superRefine((value, ctx) => {
     const modulePaths = new Set<string>();

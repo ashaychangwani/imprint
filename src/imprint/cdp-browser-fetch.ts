@@ -519,11 +519,26 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
     // Execute the fetch INSIDE the trusted page. credentials:'include' so the
     // browser attaches the validated session cookies.
+    // Some sites monkeypatch window.fetch (e.g. AmEx's SPA throws from their
+    // patched version). Get the native fetch from a hidden iframe — its fresh
+    // browsing context has the unpatched global, but shares the page's cookie
+    // jar for same-origin requests. The iframe must stay alive until the
+    // response body is fully read, then gets cleaned up.
     const expr = `(async () => {
+      let ifr;
       try {
+        let _f = fetch;
+        try {
+          ifr = document.createElement('iframe');
+          ifr.style.display = 'none';
+          document.body.appendChild(ifr);
+          if (ifr.contentWindow && typeof ifr.contentWindow.fetch === 'function') {
+            _f = ifr.contentWindow.fetch.bind(ifr.contentWindow);
+          }
+        } catch (_) {}
         const ctrl = new AbortController();
         const to = setTimeout(() => ctrl.abort(), ${reqTimeoutMs});
-        const r = await fetch(${JSON.stringify(fullUrl)}, {
+        const r = await _f(${JSON.stringify(fullUrl)}, {
           method: ${JSON.stringify(method)},
           headers: ${JSON.stringify(headers)},
           ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
@@ -534,8 +549,10 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         const text = await r.text();
         const h = {};
         r.headers.forEach((v, k) => { h[k] = v; });
+        if (ifr) ifr.remove();
         return JSON.stringify({ ok: true, status: r.status, body: text, headers: h });
       } catch (e) {
+        if (ifr) try { ifr.remove(); } catch (_) {}
         return JSON.stringify({ ok: false, error: String(e) });
       }
     })()`;

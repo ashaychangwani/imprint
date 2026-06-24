@@ -13,6 +13,7 @@ import {
   getCredentialBackend,
   loadSiteCredentials,
   resetBackendCache,
+  saveSiteStorage,
   setBackendOverride,
 } from '../src/imprint/credential-store.ts';
 
@@ -124,5 +125,52 @@ describe('credential-store backend overrides', () => {
     expect(view.storage).toEqual([
       { origin: 'https://example.com', kind: 'localStorage', key: 'access_token', value: 'tok' },
     ]);
+  });
+
+  it('saveSiteStorage round-trips localStorage records through the backend', async () => {
+    const fake = new InMemoryBackend();
+    setBackendOverride(fake);
+    const records: StorageRecord[] = [
+      {
+        origin: 'https://fix.example',
+        kind: 'localStorage',
+        key: 'sessionHandle',
+        value: 'SYNTH-1',
+      },
+      { origin: 'https://fix.example', kind: 'localStorage', key: 'authBlob', value: 'SYNTH-2' },
+    ];
+    await saveSiteStorage('fix', records);
+    const view = await loadSiteCredentials('fix');
+    expect(view.storage).toEqual(records);
+  });
+
+  it('saveSiteStorage no-ops gracefully on a backend without setStorage', async () => {
+    // A legacy backend implements neither getStorage nor setStorage. saveSiteStorage
+    // must tolerate it (optional chaining) rather than throwing.
+    const legacyLike: CredentialBackend = {
+      id: 'legacy-json',
+      async getSecret() {
+        return null;
+      },
+      async setSecret() {},
+      async deleteSecret() {},
+      async listSecrets() {
+        return [];
+      },
+      async getCookies() {
+        return [];
+      },
+      async setCookies() {},
+      async listSites() {
+        return [];
+      },
+    };
+    setBackendOverride(legacyLike);
+    await saveSiteStorage('fix', [
+      { origin: 'https://fix.example', kind: 'localStorage', key: 'k', value: 'v' },
+    ]);
+    // No throw; storage is simply not persisted.
+    const view = await loadSiteCredentials('fix');
+    expect(view.storage).toEqual([]);
   });
 });

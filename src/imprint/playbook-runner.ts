@@ -6,7 +6,7 @@ import {
   relative as pathRelative,
   resolve as pathResolve,
 } from 'node:path';
-import type { Browser, BrowserContext, Locator as PWLocator, Page } from 'playwright';
+import type { Browser, BrowserContext, Frame, Locator as PWLocator, Page } from 'playwright';
 import { extractAt } from './json-path.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
@@ -16,6 +16,7 @@ import { getStealthChromium, getStealthExecutablePath } from './stealth-chromium
 import type {
   Locator,
   Playbook,
+  PlaybookCapture,
   PlaybookResult,
   PlaybookStep,
   ToolResult,
@@ -45,6 +46,10 @@ interface RunPlaybookOptions {
    *  whether the skill lives under `~/.imprint/`, `~/.hermes/skills/`,
    *  `~/.openclaw/skills/`, or anywhere else. */
   site?: string;
+  /** Harvest the browser context's cookies after a successful run and save them
+   *  to the credential store. Set by the ladder for authenticate tools so a
+   *  login playbook's freshly minted session is persisted for data tools. */
+  persistCookies?: boolean;
 }
 
 const log = createLog('playbook');
@@ -67,6 +72,13 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   const screenshotTimeoutMs = positiveMs(opts.screenshotTimeoutMs, DEFAULT_SCREENSHOT_TIMEOUT_MS);
   const deadlineAt =
     opts.maxDurationMs !== undefined ? Date.now() + positiveMs(opts.maxDurationMs, 1) : null;
+
+  // Resolve the site once (used for cookie injection, credential resolution in
+  // login playbooks, and post-run session persistence).
+  const site = opts.site ?? inferSiteFromPath(opts.playbook);
+  // Credential VALUES (username/password/etc.) for ${credential.X} placeholders
+  // in typed field steps. Loaded from the store below; never logged.
+  let credValues: Record<string, string> = {};
 
   let browser: Browser | undefined;
   let context: BrowserContext | undefined;
@@ -103,20 +115,54 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     page = await context.newPage();
 
     // Inject credentials.cookies into the browser so the playbook can navigate
-    // an authenticated flow (e.g., my-trips → reservation → seat map). Prefer
-    // the explicit opts.site. Fall back to path inference only when the caller
-    // hasn't supplied one and the playbook lives under IMPRINT_HOME.
-    const site = opts.site ?? inferSiteFromPath(opts.playbook);
+    // an authenticated flow (e.g., my-trips → reservation → seat map), and load
+    // credential values for ${credential.X} placeholders in login playbooks.
     if (site) {
       try {
         const { loadSiteCredentials } = await import('./credential-store.ts');
         const view = await loadSiteCredentials(site);
+        credValues = view.values ?? {};
         const playwrightCookies = view.cookies
           .map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path }))
           .filter((c) => c.name && c.value);
         if (playwrightCookies.length > 0) {
           await context.addCookies(playwrightCookies);
           log(`injected ${playwrightCookies.length} cookies for site ${site}`);
+        }
+        // Rehydrate persisted localStorage (Option B): a prior `initiate` run may
+        // have minted per-origin localStorage (token blobs, session handles) that
+        // a stateless `submit_otp` needs. `storageState()` only round-trips
+        // localStorage, so we scope to that. addInitScript runs in every
+        // frame/navigation, so guard by origin inside the script — each record's
+        // setItem only fires on its own origin.
+        const localStorageRecords = view.storage.filter((s) => s.kind === 'localStorage');
+        if (localStorageRecords.length > 0) {
+          const byOrigin = new Map<string, Array<{ key: string; value: string }>>();
+          for (const rec of localStorageRecords) {
+            const list = byOrigin.get(rec.origin) ?? [];
+            list.push({ key: rec.key, value: rec.value });
+            byOrigin.set(rec.origin, list);
+          }
+          for (const [origin, entries] of byOrigin) {
+            await context.addInitScript(
+              ({ origin: o, entries: e }) => {
+                // Runs in the browser; type the needed globals locally since the
+                // Node typecheck has no DOM lib.
+                const w = globalThis as unknown as {
+                  location: { origin: string };
+                  localStorage: { setItem(k: string, v: string): void };
+                };
+                try {
+                  if (w.location.origin !== o) return;
+                  for (const { key, value } of e) w.localStorage.setItem(key, value);
+                } catch {
+                  /* storage may be unavailable (sandboxed frame) — skip */
+                }
+              },
+              { origin, entries },
+            );
+          }
+          log(`seeded ${localStorageRecords.length} localStorage keys for site ${site}`);
         }
       } catch (err) {
         log(`failed to inject cookies: ${errMsg(err)} (proceeding without)`);
@@ -153,7 +199,7 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
       );
       log(`step ${i + 1}/${playbook.steps.length}: ${step.action}`);
       await withTimeout(
-        executeStep(page, step, params, budgetMs),
+        executeStep(page, step, params, credValues, budgetMs),
         budgetMs,
         `Playbook step ${lastStep}/${playbook.steps.length} (${step.action})`,
       );
@@ -179,6 +225,57 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
       'Playbook captured-response drain',
     );
     const data = await extractResult(page, playbook.result, captured);
+    // Best-effort 2FA-chain captures: pull named tokens (e.g. a single-use
+    // SecurityCode minted during an OTP-send) out of the run so the ladder can
+    // echo them as twoFactorContext for a later submit_otp. Missing captures are
+    // skipped (not fatal) — the attempt still fires and fails honestly.
+    if (playbook.captures && playbook.captures.length > 0) {
+      Object.assign(data, extractPlaybookCaptures(playbook.captures, captured));
+    }
+    // Persist the post-run session for authenticate tools: the login playbook
+    // just minted a fresh session in this browser, so harvest its cookies into
+    // the credential store for downstream data tools to reuse. Gated by the
+    // caller (the ladder sets this only for toolKind==='authenticate').
+    if (opts.persistCookies && site && context) {
+      try {
+        const harvested = (await context.cookies()).map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path,
+          expires: c.expires,
+          httpOnly: c.httpOnly,
+          secure: c.secure,
+          sameSite: c.sameSite,
+        }));
+        if (harvested.length > 0) {
+          const { saveSiteCookies } = await import('./credential-store.ts');
+          await saveSiteCookies(site, harvested);
+          log(`persisted ${harvested.length} session cookies for site ${site}`);
+        }
+        // Also harvest localStorage (Option B): serialize the post-login
+        // per-origin localStorage so a later stateless `submit_otp` can rehydrate
+        // the same session state. storageState() captures cookies + localStorage;
+        // we already persist cookies above, so take only the localStorage here.
+        // sessionStorage is not captured by storageState() — a documented gap.
+        const state = await context.storageState();
+        const storageRecords = state.origins.flatMap((o) =>
+          o.localStorage.map((entry) => ({
+            origin: o.origin,
+            kind: 'localStorage' as const,
+            key: entry.name,
+            value: entry.value,
+          })),
+        );
+        if (storageRecords.length > 0) {
+          const { saveSiteStorage } = await import('./credential-store.ts');
+          await saveSiteStorage(site, storageRecords);
+          log(`persisted ${storageRecords.length} localStorage keys for site ${site}`);
+        }
+      } catch (err) {
+        log(`failed to persist session cookies: ${errMsg(err)} (proceeding)`);
+      }
+    }
     return { ok: true, data };
   } catch (err) {
     const screenshotPath = await screenshot(page, playbook.toolName, lastStep, screenshotTimeoutMs);
@@ -295,6 +392,7 @@ async function executeStep(
   page: Page,
   step: PlaybookStep,
   params: Record<string, string | number | boolean>,
+  credValues: Record<string, string>,
   timeoutMs: number,
 ): Promise<void> {
   switch (step.action) {
@@ -328,7 +426,7 @@ async function executeStep(
     }
     case 'type': {
       const locator = await firstMatching(page, step.locators, params, timeoutMs);
-      const value = subst(step.value, params);
+      const value = subst(step.value, params, credValues);
       // Detect element type so we dispatch the right action. `type` on a
       // <select> means "choose the option whose value/label matches" —
       // a recording can capture either action shape, and the audit-time
@@ -391,6 +489,14 @@ async function executeStep(
  * Try each locator in priority order with a tight per-locator timeout.
  * Filter to visible elements before .first() — many sites have hidden
  * mirrors (e.g. a hidden native <select> alongside a custom dropdown).
+ *
+ * Searches the main frame first, then any child iframes. A great many real
+ * login flows put critical controls inside iframes the page itself can't reach
+ * with a plain `page.locator` — reCAPTCHA/hCaptcha widgets, embedded SSO/login
+ * forms, hosted payment fields. Page-level locators silently never match those,
+ * so the playbook stalls. We dedupe the main frame (it's reachable via `page`)
+ * and divide the per-probe budget by the number of roots, so a page with NO
+ * child frames (the common case) keeps its exact prior timing.
  */
 async function firstMatching(
   page: Page,
@@ -398,22 +504,31 @@ async function firstMatching(
   params: Record<string, string | number | boolean>,
   timeoutMs: number,
 ): Promise<PWLocator> {
-  const probeMs = Math.max(1000, Math.floor(timeoutMs / Math.max(locators.length, 1)));
+  const childFrames = page.frames().filter((f) => f !== page.mainFrame());
+  const roots: Array<Page | Frame> = [page, ...childFrames];
+  const probeMs = Math.max(
+    1000,
+    Math.floor(timeoutMs / Math.max(locators.length * roots.length, 1)),
+  );
   const errors: string[] = [];
-  for (const loc of locators) {
-    const visibleOnly = buildLocator(page, loc, params).locator('visible=true');
-    try {
-      await visibleOnly.first().waitFor({ state: 'visible', timeout: probeMs });
-      return visibleOnly.first();
-    } catch (err) {
-      errors.push(`${describeLocator(loc)}: ${errMsg(err)}`);
+  // Main frame first (preserves prior behavior), then each child frame.
+  for (const root of roots) {
+    const where = root === page ? '' : ' [iframe]';
+    for (const loc of locators) {
+      const visibleOnly = buildLocator(root, loc, params).locator('visible=true');
+      try {
+        await visibleOnly.first().waitFor({ state: 'visible', timeout: probeMs });
+        return visibleOnly.first();
+      } catch (err) {
+        errors.push(`${describeLocator(loc)}${where}: ${errMsg(err)}`);
+      }
     }
   }
   throw new Error(`No locator matched. Tried:\n  - ${errors.join('\n  - ')}`);
 }
 
 function buildLocator(
-  page: Page,
+  root: Page | Frame,
   loc: Locator,
   params: Record<string, string | number | boolean>,
 ): PWLocator {
@@ -421,28 +536,28 @@ function buildLocator(
     case 'role': {
       const opts = loc.name ? { name: loc.name } : undefined;
       // biome-ignore lint/suspicious/noExplicitAny: Playwright's role enum is opaque
-      return page.getByRole(loc.value as any, opts);
+      return root.getByRole(loc.value as any, opts);
     }
     case 'aria_label': {
-      if (loc.value !== undefined) return page.getByLabel(loc.value, { exact: true });
+      if (loc.value !== undefined) return root.getByLabel(loc.value, { exact: true });
       if (loc.value_pattern !== undefined) {
         const pattern = subst(loc.value_pattern, params);
-        return page.locator(`[aria-label*="${escapeAttr(pattern)}" i]`);
+        return root.locator(`[aria-label*="${escapeAttr(pattern)}" i]`);
       }
       throw new Error('aria_label locator requires value or value_pattern');
     }
     case 'text': {
-      if (loc.value !== undefined) return page.getByText(loc.value, { exact: true });
+      if (loc.value !== undefined) return root.getByText(loc.value, { exact: true });
       if (loc.value_pattern !== undefined) {
         const pattern = subst(loc.value_pattern, params);
-        return page.getByText(new RegExp(escapeRegex(pattern), 'i'));
+        return root.getByText(new RegExp(escapeRegex(pattern), 'i'));
       }
       throw new Error('text locator requires value or value_pattern');
     }
     case 'id':
-      return page.locator(`#${cssEscape(loc.value)}`);
+      return root.locator(`#${cssEscape(loc.value)}`);
     case 'css':
-      return page.locator(loc.value);
+      return root.locator(loc.value);
   }
 }
 
@@ -566,10 +681,57 @@ export async function extractResult(
   return { [result.return_as]: value };
 }
 
-/** Substitute ${X} or ${param.X} (we accept both for ergonomics). */
-function subst(template: string, params: Record<string, string | number | boolean>): string {
+/** Best-effort 2FA-chain capture: for each declared capture, find the matching
+ *  captured XHR (last wins) and extract the named value. Unmatched captures are
+ *  skipped — Component D is best-effort, so a missing token degrades to an
+ *  attempt that fails honestly rather than aborting the playbook. Exported for
+ *  testing the capture contract symmetric with the workflow runtime. */
+export function extractPlaybookCaptures(
+  captures: PlaybookCapture[],
+  captured: Array<{ url: string; method: string; status: number; body: string | null }>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const cap of captures) {
+    try {
+      const re = new RegExp(cap.url_pattern);
+      const matches = captured.filter(
+        (c) =>
+          re.test(c.url) &&
+          (!cap.method || c.method === cap.method) &&
+          c.body !== null &&
+          c.status < 400,
+      );
+      const last = matches.at(-1);
+      if (!last || last.body === null) continue;
+      let parsed: unknown = last.body;
+      try {
+        parsed = JSON.parse(last.body);
+      } catch {
+        /* keep raw string for '*'/'' extraction */
+      }
+      const value =
+        cap.extract === '*' || cap.extract === '' ? parsed : extractAt(parsed, cap.extract);
+      if (value !== undefined && value !== null) out[cap.name] = value;
+    } catch {
+      /* malformed pattern / extraction — skip this capture (best-effort) */
+    }
+  }
+  return out;
+}
+
+/** Substitute ${X} / ${param.X} and ${credential.X}. The bare-name → param
+ *  rewrite only touches dotless `${X}` (the `.` in `${credential.X}` keeps it
+ *  intact), so credential placeholders flow straight through to
+ *  substituteString, which resolves them from the credential store. Credentials
+ *  are only ever passed for typed field VALUES (login playbooks), never URLs or
+ *  locators. */
+function subst(
+  template: string,
+  params: Record<string, string | number | boolean>,
+  credValues: Record<string, string> = {},
+): string {
   const mapped = template.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, '${param.$1}');
-  return substituteString(mapped, params, { site: '', cookies: [], values: {} }, []);
+  return substituteString(mapped, params, { site: '', cookies: [], values: credValues }, []);
 }
 
 function escapeAttr(s: string): string {

@@ -29,6 +29,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
 import type { OnDeadlineReached } from './agent.ts';
+import type { AuthCliCompileMode } from './auth-compile-tools.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
@@ -105,6 +106,42 @@ interface CompileViaClaudeCliOptions {
   sharedModules?: SharedModuleManifestEntry[];
   /** Per-tool implementation plan injected into the agent's initial message. */
   toolPlan?: string;
+  /** Present → drive an auth compile rather than a data compile. */
+  authMode?: AuthCliCompileMode;
+}
+
+/** Options for the auth-compile entry point. A strict subset of the data
+ *  options — the auth-specific bits live in `authMode`. */
+interface AuthCompileViaClaudeCliOptions {
+  session: Session;
+  absoluteToolDir: string;
+  sessionPath: string;
+  systemPromptPath: string;
+  deadlineMs: number;
+  startTime: number;
+  onProgress?: (p: CompileAgentProgress) => void;
+  onDeadlineReached?: OnDeadlineReached;
+  authMode: AuthCliCompileMode;
+}
+
+/** Auth-compile entry point for claude-cli. Delegates to the same trace +
+ *  usage-policy-retry + stream-json driver as the data path; the only
+ *  differences (MCP args, allowedTools, prompts, verification) are carried by
+ *  `authMode` and resolved inside runClaudeCliAttempt. */
+export function compileAuthViaClaudeCli(
+  opts: AuthCompileViaClaudeCliOptions,
+): Promise<CompileAgentResult> {
+  return compileViaClaudeCli({
+    session: opts.session,
+    absoluteToolDir: opts.absoluteToolDir,
+    sessionPath: opts.sessionPath,
+    systemPromptPath: opts.systemPromptPath,
+    deadlineMs: opts.deadlineMs,
+    startTime: opts.startTime,
+    onProgress: opts.onProgress,
+    onDeadlineReached: opts.onDeadlineReached,
+    authMode: opts.authMode,
+  });
 }
 
 interface StreamJsonEvent {
@@ -236,38 +273,62 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
   const sessionPathAbs = opts.sessionPath.startsWith('/')
     ? opts.sessionPath
     : pathJoin(REPO_ROOT, opts.sessionPath);
-  const mcpConfig = {
-    mcpServers: {
-      [MCP_SERVER_NAME]: {
-        command: bunPath,
-        args: [
-          'run',
-          CLI_PATH,
-          '__mcp-compile-server',
-          '--session-path',
-          sessionPathAbs,
-          '--tool-dir',
-          opts.absoluteToolDir,
-          ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
-          ...(opts.sharedContext
-            ? ['--shared-context-json', JSON.stringify(opts.sharedContext)]
-            : []),
-          ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
-          ...(opts.sharedModules
-            ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)]
-            : []),
-        ],
-        alwaysLoad: true,
-      },
-    },
-  };
 
-  const { assignedSharedModules } = resolvePlanSliceFromFile(
-    opts.buildPlanPath,
-    opts.candidate?.toolName,
-    opts.sharedModules,
-  );
-  const initialPrompt = `A new compile task is starting.
+  // Auth and data compiles share the spawn + stream-json driver below; only the
+  // MCP server args, the pre-approved tool list, and the initial prompt differ.
+  let mcpServerArgs: string[];
+  let allowedToolNames: string[];
+  let initialPrompt: string;
+
+  if (opts.authMode) {
+    mcpServerArgs = [
+      'run',
+      CLI_PATH,
+      '__mcp-compile-server',
+      '--session-path',
+      sessionPathAbs,
+      '--tool-dir',
+      opts.absoluteToolDir,
+      '--site',
+      opts.authMode.site,
+      '--auth-plan-json',
+      opts.authMode.authPlanJson,
+    ];
+    allowedToolNames = [...opts.authMode.allowedTools, 'done', 'give_up'];
+    initialPrompt = opts.authMode.initialPrompt;
+  } else {
+    mcpServerArgs = [
+      'run',
+      CLI_PATH,
+      '__mcp-compile-server',
+      '--session-path',
+      sessionPathAbs,
+      '--tool-dir',
+      opts.absoluteToolDir,
+      ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
+      ...(opts.sharedContext ? ['--shared-context-json', JSON.stringify(opts.sharedContext)] : []),
+      ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
+      ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
+    ];
+    allowedToolNames = [
+      'read_session_summary',
+      'read_request',
+      'read_response_body',
+      'search_response_body',
+      'read_file',
+      'write_file',
+      'run_bash',
+      'run_tests',
+      'read_build_plan',
+      'done',
+      'give_up',
+    ];
+    const { assignedSharedModules } = resolvePlanSliceFromFile(
+      opts.buildPlanPath,
+      opts.candidate?.toolName,
+      opts.sharedModules,
+    );
+    initialPrompt = `A new compile task is starting.
 
 Session path: ${sessionPathAbs}
 Tool directory: ${opts.absoluteToolDir}
@@ -276,6 +337,17 @@ ${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModul
 ${formatToolPlan(opts.toolPlan)}
 
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
+  }
+
+  const mcpConfig = {
+    mcpServers: {
+      [MCP_SERVER_NAME]: {
+        command: bunPath,
+        args: mcpServerArgs,
+        alwaysLoad: true,
+      },
+    },
+  };
 
   const args = [
     '--print',
@@ -294,28 +366,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     '',
     // Pre-approve every tool from our MCP server so no permission prompt
     // fires in non-interactive print mode.
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__read_session_summary`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__read_request`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__read_response_body`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__search_response_body`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__read_file`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__write_file`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__run_bash`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__run_tests`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__read_build_plan`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__done`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__give_up`,
+    ...allowedToolNames.flatMap((name) => ['--allowedTools', `mcp__${MCP_SERVER_NAME}__${name}`]),
     // Bound the run. softTurnCap=100 in the in-process loop × up to 5
     // verification cycles = 500 hard ceiling there. Verification is now
     // in-tool so we pick a single bound that comfortably exceeds typical runs

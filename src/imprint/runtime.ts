@@ -12,7 +12,12 @@ import {
   RuntimeCookieJar,
   extractSetCookieHeaders,
 } from './cookie-jar.ts';
-import { type StorageRecord, loadSiteCredentials, readSiteManifest } from './credential-store.ts';
+import {
+  type StorageRecord,
+  loadSiteCredentials,
+  readSiteManifest,
+  saveSiteCookies,
+} from './credential-store.ts';
 import type {
   RequestCapture,
   StateCapability,
@@ -92,6 +97,10 @@ interface ResponseSlot {
 }
 
 export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promise<ToolResult<T>> {
+  if (opts.workflow.toolKind === 'authenticate') {
+    return executeAuthWorkflow(opts) as Promise<ToolResult<T>>;
+  }
+
   const fetchFn = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.requestTimeoutMs ?? 30_000;
 
@@ -340,6 +349,250 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 
 function emptyStore(site: string): CredentialStore {
   return { site, cookies: [], values: {}, storage: [] };
+}
+
+async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
+  const fetchFn = opts.fetchImpl ?? fetch;
+  const timeoutMs = opts.requestTimeoutMs ?? 30_000;
+  const action = String(opts.params?.action ?? 'initiate');
+  const authConfig = opts.workflow.authConfig;
+  const initiateCount = authConfig?.initiateRequestCount ?? opts.workflow.requests.length;
+
+  const credentials =
+    opts.credentials ??
+    (await loadCredentialStore(opts.workflow.site)) ??
+    emptyStore(opts.workflow.site);
+
+  const cookieJar = new RuntimeCookieJar(credentials.cookies);
+  const liveCredentials: CredentialStore = { ...credentials, cookies: cookieJar.toJSON() };
+  const responseSlots: ResponseSlot[] = [];
+  const state: Record<string, unknown> = { ...(opts.initialState ?? {}) };
+  const stateCapabilities = collectStateCapabilities(opts.workflow);
+  const params: Record<string, string | number | boolean> = { ...opts.params };
+  let loginResponsePreview: string | undefined;
+
+  const runRequests = async (startIdx: number, endIdx: number): Promise<ToolResult | null> => {
+    for (let i = startIdx; i < endIdx; i++) {
+      const req = opts.workflow.requests[i];
+      if (!req) continue;
+
+      let subbedReq: SubstitutedRequest;
+      const subbedResult = substituteRequest(req, {
+        params,
+        credentials: liveCredentials,
+        responseSlots,
+        state,
+        cookieJar,
+        stateCapabilities,
+        requestUrlTemplate: req.url,
+      });
+      if (!subbedResult.ok) return subbedResult.result;
+      subbedReq = subbedResult.value;
+
+      const cookieHeader = cookieJar.getCookieHeader(subbedReq.url);
+      if (cookieHeader && !hasHeader(subbedReq.headers, 'cookie'))
+        subbedReq.headers.cookie = cookieHeader;
+
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+      let resp: Response;
+      try {
+        resp = await fetchFn(subbedReq.url, {
+          method: subbedReq.method,
+          headers: subbedReq.headers,
+          body: subbedReq.body,
+          signal: controller.signal,
+          redirect: 'follow',
+        });
+      } catch (err) {
+        clearTimeout(timeoutHandle);
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: 'NETWORK', message: `Auth request ${i} failed: ${msg}` };
+      }
+      clearTimeout(timeoutHandle);
+
+      if (resp.status >= 400) {
+        const text = await safeText(resp);
+        return {
+          ok: false,
+          error: resp.status === 401 ? 'AUTH_EXPIRED' : 'BAD_RESPONSE',
+          message: `Auth request ${i} returned ${resp.status}: ${text.slice(0, 500)}`,
+        };
+      }
+
+      try {
+        for (const sc of extractSetCookieHeaders(resp.headers))
+          cookieJar.setCookieFromHeader(sc, subbedReq.url);
+        liveCredentials.cookies = cookieJar.toJSON();
+      } catch {
+        // Non-fatal
+      }
+
+      const text = await safeText(resp);
+      // Capture the last login-phase response for shape comparison
+      if (i < initiateCount) loginResponsePreview = text.slice(0, 500);
+
+      let parsed: unknown = text;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        // keep raw
+      }
+      const aliases = evaluateLegacyExtract(req, parsed);
+      responseSlots.push({ raw: parsed, aliases });
+
+      const captureResult = evaluateRequestCaptures(req.captures ?? [], {
+        parsed,
+        text,
+        headers: resp.headers,
+        requestUrl: subbedReq.url,
+        cookieJar,
+      });
+      if (!captureResult.ok) return captureResult.result;
+      Object.assign(state, captureResult.value);
+    }
+    return null;
+  };
+
+  if (action === 'initiate') {
+    const err = await runRequests(0, initiateCount);
+    if (err) return err;
+
+    if (authConfig && authConfig.twoFactorType !== 'none') {
+      await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+      // Stateless state-chain bridge: each MCP call is a fresh executeAuthWorkflow
+      // with a fresh `state`, so a token the login response returned in its body
+      // (e.g. a reauth mfaId) would be lost before submit_otp. Project the
+      // declared twoFactorContext names out of the captured state and echo them
+      // to the caller, who passes them back as initialState on the next call.
+      const ctx: Record<string, unknown> = {};
+      for (const name of authConfig.twoFactorContext ?? []) {
+        if (name in state) ctx[name] = state[name];
+      }
+      return {
+        ok: false,
+        error: 'AWAITING_2FA',
+        twoFactorType: authConfig.twoFactorType,
+        twoFactorContext: Object.keys(ctx).length > 0 ? ctx : undefined,
+        loginResponsePreview,
+        message: `2FA required (${authConfig.twoFactorType}). ${
+          authConfig.twoFactorType === 'push'
+            ? 'Approve the push notification on your device, then call again with action=complete.'
+            : 'Enter the code and call again with action=submit_otp, otp_code, and the echoed twoFactorContext.'
+        }`,
+      };
+    }
+
+    await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+    return { ok: true, data: { authenticated: true }, loginResponsePreview };
+  }
+
+  if (action === 'complete') {
+    if (authConfig?.twoFactorType === 'push' && authConfig.pollEndpoint) {
+      // The recorded default is generous (≈3 min) for a real run where a human
+      // approves the push. An unattended *attempt* (e.g. `imprint teach
+      // --no-interactive`) wants a short bound so it fails fast instead of
+      // blocking. IMPRINT_AUTH_POLL_ATTEMPTS lets any caller cap the poll
+      // without mutating the artifact; the runtime default stays generous.
+      const pollOverride = parsePositiveInt(process.env.IMPRINT_AUTH_POLL_ATTEMPTS);
+      const pollMax = pollOverride ?? authConfig.maxPollAttempts ?? 60;
+      const pollInterval = authConfig.pollIntervalMs ?? 3000;
+      let approved = false;
+      for (let attempt = 0; attempt < pollMax; attempt++) {
+        await sleep(pollInterval);
+        const cookieHeader = cookieJar.getCookieHeader(authConfig.pollEndpoint);
+        const pollHeaders: Record<string, string> = {};
+        if (cookieHeader) pollHeaders.cookie = cookieHeader;
+        try {
+          const pollResp = await fetchFn(authConfig.pollEndpoint, {
+            method: 'POST',
+            headers: pollHeaders,
+          });
+          if (pollResp.ok) {
+            const body = await safeText(pollResp);
+            let newSessionCookie = false;
+            try {
+              for (const sc of extractSetCookieHeaders(pollResp.headers)) {
+                cookieJar.setCookieFromHeader(sc, authConfig.pollEndpoint);
+                newSessionCookie = true;
+              }
+              liveCredentials.cookies = cookieJar.toJSON();
+            } catch {
+              /* non-fatal */
+            }
+            // Approval is recognized from the recording, not from hardcoded
+            // strings: `pollTerminal` is a capture the compile agent grounds in
+            // the recorded *approved* poll response (and which is absent on the
+            // pending ones). It is "done" once that capture yields a value.
+            // Fallback when no terminal was declared: a fresh session Set-Cookie
+            // appeared, the universal sign of a completed login.
+            if (authConfig.pollTerminal) {
+              let parsed: unknown = body;
+              try {
+                parsed = JSON.parse(body);
+              } catch {
+                /* keep raw */
+              }
+              const term = evaluateRequestCaptures([authConfig.pollTerminal], {
+                parsed,
+                text: body,
+                headers: pollResp.headers,
+                requestUrl: authConfig.pollEndpoint,
+                cookieJar,
+              });
+              if (term.ok && Object.keys(term.value).length > 0) {
+                approved = true;
+                break;
+              }
+            } else if (newSessionCookie) {
+              approved = true;
+              break;
+            }
+          }
+        } catch {
+          // retry
+        }
+      }
+      if (!approved) {
+        return {
+          ok: false,
+          error: 'UNKNOWN',
+          message: `Push notification was not approved after ${pollMax} attempts.`,
+        };
+      }
+    }
+
+    const err = await runRequests(initiateCount, opts.workflow.requests.length);
+    if (err) return err;
+
+    await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+    return { ok: true, data: { authenticated: true } };
+  }
+
+  if (action === 'submit_otp') {
+    const err = await runRequests(initiateCount, opts.workflow.requests.length);
+    if (err) return err;
+
+    await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+    return { ok: true, data: { authenticated: true } };
+  }
+
+  return {
+    ok: false,
+    error: 'UNKNOWN',
+    message: `Unknown auth action: ${action}. Use 'initiate', 'complete', or 'submit_otp'.`,
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Parse a strictly-positive integer from an env string; undefined otherwise. */
+function parsePositiveInt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 interface SubstitutedRequest {
@@ -650,7 +903,7 @@ function requestEffect(req: WorkflowRequest): 'safe' | 'idempotent' | 'unsafe' {
   return method === 'GET' || method === 'HEAD' ? 'safe' : 'unsafe';
 }
 
-function collectStatePlaceholders(req: WorkflowRequest): string[] {
+export function collectStatePlaceholders(req: WorkflowRequest): string[] {
   const templates = [req.url, ...Object.values(req.headers), req.body ?? ''];
   const names = new Set<string>();
   for (const template of templates) {
