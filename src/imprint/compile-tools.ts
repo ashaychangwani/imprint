@@ -85,7 +85,7 @@ export function buildCompileTools(
   return tools;
 }
 
-interface CompileToolContext {
+export interface CompileToolContext {
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
   classifications?: ClassifiedValue[];
@@ -108,7 +108,7 @@ function buildReadBuildPlanTool(
   return {
     name: 'read_build_plan',
     description:
-      "Read this tool's slice of the shared build plan: shared modules to import (instead of re-implementing), parser guidance, the parameter checklist, the auth recipe to replicate inline, and the opaque-token contract (fields this tool must EMIT for siblings, and params it CONSUMES from siblings).",
+      "Read this tool's slice of the shared build plan: shared modules to import (instead of re-implementing), parser guidance, the parameter checklist, the auth recipe (when dependsOnAuth is true, a standalone authenticate tool handles login — skip request[0] login), and the opaque-token contract (fields this tool must EMIT for siblings, and params it CONSUMES from siblings).",
     input_schema: { type: 'object', properties: {}, required: [] },
     handler: async () => {
       const plan = readBuildPlanFile(buildPlanPath);
@@ -146,6 +146,7 @@ function buildReadBuildPlanTool(
             parserGuidance: slice.tool.parserGuidance,
             paramChecklist: slice.tool.paramChecklist,
             authRecipe: slice.tool.authRecipe,
+            dependsOnAuth: slice.tool.dependsOnAuth ?? false,
             emitsTokens,
             tokenParams,
             note:
@@ -164,7 +165,10 @@ function buildReadBuildPlanTool(
 
 // ─── Tool: read_session_summary ──────────────────────────────────────────────
 
-function buildReadSessionSummaryTool(session: Session, context: CompileToolContext): AgentTool {
+export function buildReadSessionSummaryTool(
+  session: Session,
+  context: CompileToolContext,
+): AgentTool {
   return {
     name: 'read_session_summary',
     description:
@@ -787,7 +791,7 @@ function safeUrl(s: string): URL | null {
 
 // ─── Tool: read_request ──────────────────────────────────────────────────────
 
-function buildReadRequestTool(session: Session): AgentTool {
+export function buildReadRequestTool(session: Session): AgentTool {
   return {
     name: 'read_request',
     description: 'Get the full request including method, URL, headers, and body for a given seq.',
@@ -876,7 +880,7 @@ function buildDiffRequestForEventTool(session: Session, context: CompileToolCont
 
 // ─── Tool: read_response_body ────────────────────────────────────────────────
 
-function buildReadResponseBodyTool(session: Session): AgentTool {
+export function buildReadResponseBodyTool(session: Session): AgentTool {
   return {
     name: 'read_response_body',
     description:
@@ -1004,11 +1008,18 @@ function buildSearchResponseBodyTool(session: Session): AgentTool {
 
 // ─── Tool: write_file ────────────────────────────────────────────────────────
 
-function buildWriteFileTool(toolDir: string): AgentTool {
+export function buildWriteFileTool(toolDir: string, extraAllowed: string[] = []): AgentTool {
+  const allowed = [
+    'workflow.json',
+    'parser.ts',
+    'parser.test.ts',
+    'request-transform.ts',
+    'integration.test.ts',
+    ...extraAllowed,
+  ];
   return {
     name: 'write_file',
-    description:
-      'Write a file to the generated tool directory. Allowed paths: workflow.json, parser.ts, parser.test.ts, notes/*.md',
+    description: `Write a file to the generated tool directory. Allowed paths: ${allowed.join(', ')}, notes/*.md`,
     input_schema: {
       type: 'object',
       properties: {
@@ -1027,13 +1038,6 @@ function buildWriteFileTool(toolDir: string): AgentTool {
         };
       }
 
-      const allowed = [
-        'workflow.json',
-        'parser.ts',
-        'parser.test.ts',
-        'request-transform.ts',
-        'integration.test.ts',
-      ];
       const isNotes = relativePath.startsWith('notes/') && relativePath.endsWith('.md');
       if (!allowed.includes(relativePath) && !isNotes) {
         return {
@@ -1058,7 +1062,7 @@ function buildWriteFileTool(toolDir: string): AgentTool {
 
 // ─── Tool: read_file ─────────────────────────────────────────────────────────
 
-function buildReadFileTool(toolDir: string): AgentTool {
+export function buildReadFileTool(toolDir: string): AgentTool {
   return {
     name: 'read_file',
     description: 'Read a file in the generated tool directory.',
@@ -1115,7 +1119,7 @@ function buildReadFileTool(toolDir: string): AgentTool {
 
 // ─── Tool: run_bash ──────────────────────────────────────────────────────────
 
-function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): AgentTool {
+export function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): AgentTool {
   return {
     name: 'run_bash',
     description: 'Run a shell command in the generated tool directory with a timeout.',

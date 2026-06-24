@@ -16,6 +16,7 @@ import { createLog } from './log.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { isTelemetryRequest } from './telemetry.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
+import { TwoFactorTypeSchema } from './types.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
@@ -94,6 +95,14 @@ export const SharedCompileContextSchema = z.object({
   credentialNames: z.array(z.string()).default([]),
   tokenExtractionNotes: z.string().default(''),
   sharedHelperNotes: z.string().default(''),
+  twoFactorDetected: z.boolean().default(false),
+  twoFactorType: TwoFactorTypeSchema,
+  twoFactorRequestSeqs: z.array(z.number().int().nonnegative()).default([]),
+  authCompletionSeqs: z.array(z.number().int().nonnegative()).default([]),
+  /** OTP only: names of initiate-response fields the completion request reads
+   *  (chained as ${state.X}); listed structurally from the recording. */
+  twoFactorContext: z.array(z.string()).default([]),
+  twoFactorNotes: z.string().default(''),
 });
 export type SharedCompileContext = z.infer<typeof SharedCompileContextSchema>;
 

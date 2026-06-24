@@ -294,6 +294,35 @@ export function findCredentialBearingSeqs(session: Session): number[] {
   return seqs;
 }
 
+// ─── Auth-adjacent request detection (2FA/MFA/OTP) ──────────────────────────
+
+const AUTH_ADJACENT_WINDOW_MS = 120_000;
+const MFA_PATTERN =
+  /mfa|2fa|two.?factor|otp|verify|verification|challenge|push.?notification|authenticate|oauth|token|trusted.?device|security.?code/i;
+
+/** Find requests that are temporally and semantically adjacent to credential-
+ *  bearing login POSTs — 2FA triggers, status polls, OTP submits, OAuth
+ *  exchanges, trusted-device registrations. These must survive triage so
+ *  detect-candidates can classify the 2FA type. */
+export function findAuthAdjacentSeqs(session: Session, credentialSeqs: number[]): number[] {
+  if (credentialSeqs.length === 0) return [];
+  const credSet = new Set(credentialSeqs);
+  const lastCredTs = Math.max(
+    ...credentialSeqs.map((s) => session.requests.find((r) => r.seq === s)?.timestamp ?? 0),
+  );
+  if (lastCredTs === 0) return [];
+
+  const seqs: number[] = [];
+  for (const r of session.requests) {
+    if (credSet.has(r.seq)) continue;
+    if (r.timestamp < lastCredTs) continue;
+    if (r.timestamp > lastCredTs + AUTH_ADJACENT_WINDOW_MS) break;
+    const text = `${r.url}\n${r.body ?? ''}`;
+    if (MFA_PATTERN.test(text)) seqs.push(r.seq);
+  }
+  return seqs;
+}
+
 // ─── triageRequests (LLM-based request filtering) ───────────────────────────
 
 const TRIAGE_RESOURCE_TYPES = new Set(['XHR', 'Fetch', 'Document']);

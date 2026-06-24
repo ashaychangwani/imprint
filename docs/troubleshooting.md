@@ -140,6 +140,21 @@ imprint login <site> --from-session ~/.imprint/<site>/sessions/<ts>.json
 
 This refreshes the site's credential backend entry. Modern credential backends store cookies, named secrets, and declared durable storage values in the OS keychain when available, with an encrypted fallback for headless systems. The legacy JSON path is still read for migration, but new credentials should be managed with `imprint login` and `imprint credential *`.
 
+## Authenticate tool that logs in through a real browser (`playbook` rung)
+
+Some sites' logins can't be replayed as API requests — the credential POST body is computed by the page's own JS per session (encrypted credential blobs, per-load nonces). For these the compile agent emits a **`playbook.yaml`** alongside `workflow.json`: the recorded login DOM steps (type username/password, submit). The login then runs on the ladder's `playbook` rung — a real stealth browser that lets the page mint a fresh valid request — exactly like any other tool that needs the playbook backend. There is no separate login backend or `loginBackend` field.
+
+- **It needs the credentials in the store.** The playbook fills the `${credential.*}` fields it references (typically `username` + `password`). Set them with `imprint credential set <site>`.
+- **Wrong landing fails honestly.** The playbook's success marker is grounded in the recording; if a site routes an automated login to an account-setup/enrollment page instead of the recorded authenticated page, the tool reports failure rather than a false success.
+- **2FA is one of two structural shapes** (`twoFactorType` = `push` or `otp` — the delivery channel doesn't matter; SMS, email, and authenticator-app codes are all `otp`).
+- **Push.** `authenticate_<site>` with `action: initiate` performs the login, then `action: complete` (after you approve the push) finishes; polling is bounded by `maxPollAttempts × pollIntervalMs` and ends on a recording-grounded marker (or a fresh session cookie). Set `IMPRINT_AUTH_POLL_ATTEMPTS=<n>` to cap the poll (e.g. an unattended `imprint teach` attempt uses a short bound so it fails fast).
+- **OTP (any out-of-band code) is two calls.** `action: initiate` reaches the code step and returns `AWAITING_2FA` (with a `twoFactorContext` object if the login returned a token to chain); call again with `action: submit_otp`, `otp_code: "123456"`, **and** that same `twoFactorContext` passed back verbatim. A login that reaches the OTP screen on the **playbook** rung surfaces as `AWAITING_2FA` too (the ladder reshapes the playbook's 2FA-challenge success into the same signal).
+- **Session reuse across the two calls.** After the login the browser's session cookies **and per-origin `localStorage`** are persisted to the credential store; the `submit_otp`/`complete` call rehydrates them so the second stateless call resumes the session.
+- **Unattended `imprint teach` *attempts* the 2FA.** Even with `--no-interactive` (no human to supply a code), teach drives the completion: a placeholder `otp_code` (`000000`) for `otp`, a bounded poll for `push`. It almost always fails without a live second factor — that's expected and reported honestly. Reaching *and* attempting the 2FA is the bar, not completing it.
+- **Still not supported:** a browser-minted login whose OTP must be typed into the *same live page* holding **non-serializable in-page JS state** (live WebCrypto handles, closures) — cookies + `localStorage` round-trip, but the original page's JS heap does not. Such a tool is still *attempted* (and fails honestly); the compile agent does not give up over it, because reaching the 2FA challenge is the compile-time goal.
+- **Orphan Chrome?** Playbook browsers close at the end of each run. If a run was killed mid-flight, check `pgrep -fl "Chrome.*--headless"` and kill leftovers.
+- If a site moves its login form, re-teach so the agent re-records the steps.
+
 ## "RATE_LIMITED" / 429
 
 Back off. The cron schedule is probably too aggressive — every 5 minutes is fine for most sites; every 30 seconds is not.

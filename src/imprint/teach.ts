@@ -17,6 +17,8 @@ import {
 } from 'node:path';
 import * as p from '@clack/prompts';
 import type { OnDeadlineReached } from './agent.ts';
+import { compileAuthAgent } from './auth-compile-agent.ts';
+import { runWorkflowWithLadder } from './backend-ladder.ts';
 import {
   type SharedModuleManifestEntry,
   buildPlanSidecarPath,
@@ -27,6 +29,7 @@ import {
   type CompileAgentProgress,
   type TriageResult,
   compilePlaybook,
+  findAuthAdjacentSeqs,
   findCredentialBearingSeqs,
   generate,
   triageRequests,
@@ -34,7 +37,8 @@ import {
 import { mapLimit, mapLimitSettled } from './concurrency.ts';
 import {
   type CredentialFinding,
-  type Replacement,
+  applyCredentialPlaceholders,
+  deriveLoginCredentials,
   extractCredentials,
 } from './credential-extract.ts';
 import { getCredentialBackend, readSiteManifest, upsertManifestEntry } from './credential-store.ts';
@@ -99,7 +103,7 @@ import {
 import { planToolCompile } from './tool-plan.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
-import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
+import type { CronConfig, Playbook, Session, ToolResult, Workflow } from './types.ts';
 
 export {
   buildTeachStateFromSession,
@@ -115,6 +119,16 @@ export {
  * still use concurrency 1.
  */
 const COMPILE_CONCURRENCY = 2;
+
+/** Placeholder OTP used when teach *attempts* a 2FA completion unattended (no
+ *  live user to supply a real code). The attempt is expected to be rejected;
+ *  it proves the initiate→submit_otp chain is wired, not that login succeeded. */
+const ATTEMPT_OTP_PLACEHOLDER = '000000';
+
+/** Bounded push-poll attempts for an unattended teach 2FA attempt — fail fast
+ *  instead of blocking the runtime default (≈3 min). Overridable via the same
+ *  IMPRINT_AUTH_POLL_ATTEMPTS env the runtime reads. */
+const ATTEMPT_PUSH_POLL_ATTEMPTS = '3';
 
 /** Module logger — suppressed during teach's spinner phases via muteLog(). */
 const log = createLog('teach');
@@ -600,6 +614,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   // ── 2. Redact ──────────────────────────────────────────────────────
   let teachCredentials: { site: string; values: Record<string, string> } | undefined;
+  let credentialFindings: CredentialFinding[] = [];
   if (startIdx <= STEPS.indexOf('redact')) {
     sessionPath = requireSessionFile(sessionPath, {
       site,
@@ -619,29 +634,13 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     );
 
     // Extract credentials from the raw session BEFORE redaction so we can
-    // both stash the values in the credential manager AND swap them for
-    // ${credential.X} placeholders in the redacted artifact.
-    const { findings, replacements } = extractCredentials(session);
-    let confirmedReplacements: Replacement[] = [];
-    if (findings.length > 0) {
-      const result = await promptAndPersistCredentials({
-        site,
-        findings,
-        replacements,
-        noInteractive: opts.noInteractive ?? false,
-      });
-      confirmedReplacements = result.replacements;
-      if (result.confirmedFinding) {
-        const f = result.confirmedFinding;
-        teachCredentials = {
-          site,
-          values: {
-            [f.usernameName ?? 'username']: f.usernameValue,
-            [f.passwordName ?? 'password']: f.passwordValue,
-          },
-        };
-      }
-    }
+    // swap their values for ${credential.X} placeholders in the redacted
+    // artifact.  ALL credential values are redacted for security.  The
+    // actual storage prompt is deferred until after detect-candidates so
+    // the LLM can determine which login attempt actually succeeded.
+    const extracted = extractCredentials(session);
+    credentialFindings = extracted.findings;
+    const { replacements } = extracted;
 
     spinner.start('Redacting credentials');
     redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
@@ -652,7 +651,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       async (span) => {
         const pageMintedHeaders = detectPageMintedHeaders(session);
         const redaction = redactSession(session, {
-          replacements: confirmedReplacements,
+          replacements,
           keepHeaders: pageMintedHeaders,
         });
         writeFileSync(
@@ -694,7 +693,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     // hand-editing.
     const warnings: string[] = [];
     const unpairedPasswordSeqs = findUnpairedPasswordRequests(session);
-    if (unpairedPasswordSeqs.length > 0 && confirmedReplacements.length === 0) {
+    if (unpairedPasswordSeqs.length > 0 && replacements.length === 0) {
       warnings.push('credentials_not_paired');
       const seqList = unpairedPasswordSeqs.slice(0, 5).join(', ');
       const more = unpairedPasswordSeqs.length > 5 ? ', …' : '';
@@ -828,6 +827,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           mp.pause();
           mp.clear();
           const credentialSeqs = findCredentialBearingSeqs(triageSession);
+          const authAdjacentSeqs = findAuthAdjacentSeqs(triageSession, credentialSeqs);
+          const allLoginSeqs = [...new Set([...credentialSeqs, ...authAdjacentSeqs])];
           spinner.start('Triaging requests');
           localTriageResult = await triageRequests(
             triageSession,
@@ -835,13 +836,19 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
               provider: providerName,
               model,
             },
-            credentialSeqs.length > 0
+            allLoginSeqs.length > 0
               ? {
                   sharedContext: {
-                    loginRequestSeqs: credentialSeqs,
+                    loginRequestSeqs: allLoginSeqs,
                     credentialNames: [],
                     tokenExtractionNotes: '',
                     sharedHelperNotes: '',
+                    twoFactorDetected: false,
+                    twoFactorType: 'none' as const,
+                    twoFactorRequestSeqs: [],
+                    authCompletionSeqs: [],
+                    twoFactorContext: [],
+                    twoFactorNotes: '',
                   },
                 }
               : {},
@@ -894,6 +901,62 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         mp.resume();
 
         const sharedContext = buildCandidateSharedCompileContext(detection, selected);
+
+        // ── Credential prompt (deferred until here so the LLM decides which login succeeded) ──
+        const llmLoginSeqs = new Set(detection.sharedContext?.loginRequestSeqs ?? []);
+        if (credentialFindings.length > 0 && llmLoginSeqs.size > 0) {
+          const isPlaceholder = (v: string) => /^\$\{credential\./.test(v);
+          const validFindings = credentialFindings.filter(
+            (f) =>
+              llmLoginSeqs.has(f.requestSeq) &&
+              !isPlaceholder(f.usernameValue) &&
+              !isPlaceholder(f.passwordValue),
+          );
+          if (validFindings.length > 0) {
+            // De-dup by username — keep the last (most recent password)
+            const byUser = new Map<string, CredentialFinding>();
+            for (const f of validFindings) byUser.set(f.usernameValue, f);
+            const candidates = [...byUser.values()];
+            const finding = candidates[candidates.length - 1] as CredentialFinding;
+
+            const maskedUser = maskUsername(finding.usernameValue);
+            p.note(
+              [
+                'Detected a successful login in this recording.',
+                `  username: ${maskedUser}`,
+                `  password: ${'*'.repeat(Math.min(finding.passwordValue.length, 16))}`,
+                `  request:  ${finding.requestLabel}`,
+                '',
+                'Imprint will store these credentials in your local credential manager',
+                '(OS keychain when available, libsodium-encrypted file otherwise).',
+              ].join('\n'),
+              'Credential capture',
+            );
+
+            let shouldStore = true;
+            if (!opts.noInteractive) {
+              const proceed = await p.confirm({
+                message: `Save credentials for "${site}" to the credential manager?`,
+                initialValue: true,
+              });
+              shouldStore = !p.isCancel(proceed) && !!proceed;
+            }
+
+            if (shouldStore) {
+              await persistFinding({ site, finding });
+              teachCredentials = {
+                site,
+                values: {
+                  [finding.usernameName]: finding.usernameValue,
+                  [finding.passwordName]: finding.passwordValue,
+                },
+              };
+            } else {
+              p.log.warn('Skipping credential save — workflow will not be able to log in.');
+            }
+          }
+        }
+
         const pendingKey = workflowKey.startsWith('_pending_') ? workflowKey : null;
         const rawSessionPath = requireSessionFile(sessionPath, {
           site,
@@ -1046,11 +1109,23 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     );
   }
 
-  const compileSessionPath = requireSessionFile(redactedPath, {
+  // Prefer the triaged session for compile (data AND auth tools). Triage keeps
+  // every load-bearing, auth, and DOM-event the agents need (events are kept in
+  // full) while dropping the bulk of telemetry/asset/noise requests — e.g. 415
+  // vs 4396 requests on a big multi-tool site. Handing the agent the entire
+  // redacted recording instead makes it burn its turn/time budget exploring
+  // thousands of irrelevant requests (the amex auth compile never converged on a
+  // playbook because of this). The detect-candidates summary already triages;
+  // this aligns the compile session with it.
+  const triagedCandidate = redactedPath?.replace(/\.redacted\.json$/, '.triaged.json');
+  const sessionForCompile =
+    triagedCandidate && existsSync(triagedCandidate) ? triagedCandidate : redactedPath;
+  const useTriaged = sessionForCompile === triagedCandidate;
+  const compileSessionPath = requireSessionFile(sessionForCompile, {
     site,
     workflowKey: plans[0]?.workflowKey ?? workflowKey,
     startFrom,
-    kind: 'redacted',
+    kind: useTriaged ? 'triaged' : 'redacted',
   });
 
   // ── Clean up stale tools from previous teach runs ──
@@ -1136,6 +1211,221 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           buildPlanPath: buildPlanPath ? toRelative(site, buildPlanPath) : undefined,
           sharedModules: sharedModulesManifest,
         });
+      }
+    }
+  }
+
+  // ── auth-tool: agentic compile loop + interactive 2FA ──
+  if (buildPlanPath && willGenerate) {
+    const buildPlan = readBuildPlanFile(buildPlanPath);
+    if (buildPlan?.authTool) {
+      const authPlan = buildPlan.authTool;
+      const redactedSession = SessionSchema.parse(
+        JSON.parse(readFileSync(compileSessionPath, 'utf8')),
+      );
+      // Passwordless / OTP-only logins (e.g. email + emailed code, magic link)
+      // carry no password for the username+password extractor to pair, so
+      // teachCredentials is empty. Derive the planner-declared credential values
+      // from the recorded login request(s), persist them, and back-fill
+      // ${credential.X} into the redacted session the agent reads.
+      if (!teachCredentials && sessionPath && existsSync(sessionPath)) {
+        try {
+          const rawForCreds = SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8')));
+          const derived = deriveLoginCredentials(
+            rawForCreds,
+            authPlan.loginRequestSeqs,
+            authPlan.credentialNames,
+          );
+          if (Object.keys(derived.values).length > 0) {
+            const backend = await getCredentialBackend();
+            for (const [name, value] of Object.entries(derived.values)) {
+              await backend.setSecret(site, name, value);
+              upsertManifestEntry(site, {
+                name,
+                kind: 'username',
+                description: 'Login identifier',
+              });
+            }
+            applyCredentialPlaceholders(redactedSession, derived.replacements);
+            teachCredentials = { site, values: derived.values };
+            p.log.success(
+              `Derived ${Object.keys(derived.values).length} credential(s) for passwordless login: ${Object.keys(derived.values).join(', ')}`,
+            );
+          }
+        } catch (err) {
+          p.log.warn(
+            `Credential derivation failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+      if (!teachCredentials) {
+        p.log.warn(
+          `Auth tool "${authPlan.toolName}" was planned but no credentials are available — skipping auth compile. Data tools will attempt inline login.`,
+        );
+      } else {
+        spinner.start(`Compiling auth tool: ${authPlan.toolName}`);
+        try {
+          muteLog();
+          const authResult = await compileAuthAgent({
+            site,
+            session: redactedSession,
+            sessionPath: compileSessionPath,
+            authToolPlan: authPlan,
+            teachCredentials,
+            llmConfig: { provider: compileProviderName },
+            // Browser-minted logins compile on the playbook rung — each live test
+            // launches a real browser (navigate + anti-bot settle + form submit),
+            // which is far slower than an API replay. Give the agent room to write
+            // and iterate a playbook, not just a workflow.json.
+            maxDurationMs: 20 * 60 * 1000,
+            onProgress: (prog) =>
+              spinner.message(
+                `Auth compile: turn ${prog.turn} (cycle ${prog.verificationCycle}/${prog.maxVerificationCycles})`,
+              ),
+          });
+          unmuteLog();
+
+          if (!authResult.success || !authResult.workflowPath) {
+            spinner.stop('Auth tool compilation failed.');
+            p.log.warn(`Auth agent: ${authResult.message}\nData tools will attempt inline login.`);
+          } else {
+            emit({
+              workflowPath: authResult.workflowPath,
+              outDir: pathDirname(authResult.workflowPath),
+              force: true,
+            });
+            spinner.stop(
+              `Auth tool compiled (${authResult.turns} turns, ${Math.round(authResult.durationMs / 1000)}s): ${authResult.workflowPath}`,
+            );
+
+            // The agent already tested initiate during compile; now do the
+            // interactive 2FA completion that needs user input. Read the 2FA type
+            // the agent committed to (it may refine the plan's guess).
+            let twoFactorType: string = authPlan.twoFactorType;
+            try {
+              const compiledWf = JSON.parse(readFileSync(authResult.workflowPath, 'utf8'));
+              twoFactorType = compiledWf?.authConfig?.twoFactorType ?? twoFactorType;
+            } catch {
+              // fall back to the plan's 2FA type
+            }
+            const credsForRun = { site, cookies: [], values: teachCredentials.values };
+
+            if (twoFactorType !== 'none') {
+              muteLog();
+              spinner.start('Running auth initiate for 2FA verification');
+              const initLadder = await runWorkflowWithLadder({
+                workflowPath: authResult.workflowPath,
+                params: { action: 'initiate' },
+                credentials: credsForRun,
+              });
+              const initResult = initLadder.result;
+              unmuteLog();
+
+              if (!initResult.ok && initResult.error === 'AWAITING_2FA') {
+                spinner.stop(
+                  `2FA required (${twoFactorType}) — reached via ${initLadder.usedBackend}.`,
+                );
+                // Stateless state-chain: carry any token the initiate response
+                // captured (echoed as twoFactorContext) into the completion call.
+                const twoFactorContext = initResult.twoFactorContext;
+
+                // Decide what to submit. Interactive runs prompt the user for a
+                // real code / push approval. Non-interactive runs (and a
+                // cancelled / empty prompt) ATTEMPT the completion unattended:
+                // a placeholder OTP for `otp`, a bounded poll for `push`. The
+                // attempt almost always fails without a live second factor —
+                // that's expected; reaching + attempting 2FA is the bar.
+                let otpCode: string | undefined;
+                let attemptOnly = opts.noInteractive ?? false;
+                if (!opts.noInteractive) {
+                  const twoFaMessage =
+                    twoFactorType === 'push'
+                      ? 'Approve the push notification on your device, then press Enter (blank = attempt unattended).'
+                      : 'Enter the verification code (blank = attempt with a placeholder):';
+                  const userInput = await p.text({
+                    message: twoFaMessage,
+                    placeholder: twoFactorType === 'push' ? '(press Enter)' : '123456',
+                  });
+                  if (p.isCancel(userInput) || !userInput) {
+                    attemptOnly = true;
+                  } else if (typeof userInput === 'string') {
+                    otpCode = userInput;
+                  }
+                }
+                if (twoFactorType !== 'push' && !otpCode) {
+                  otpCode = ATTEMPT_OTP_PLACEHOLDER;
+                }
+
+                muteLog();
+                spinner.start(
+                  attemptOnly
+                    ? 'Attempting 2FA completion (unattended)'
+                    : 'Completing 2FA verification',
+                );
+                const completeAction = twoFactorType === 'push' ? 'complete' : 'submit_otp';
+                const completeParams: Record<string, string> = { action: completeAction };
+                if (completeAction === 'submit_otp' && otpCode) {
+                  completeParams.otp_code = otpCode;
+                }
+                // Bound the push poll for an unattended attempt so it fails fast.
+                const prevPollEnv = process.env.IMPRINT_AUTH_POLL_ATTEMPTS;
+                if (attemptOnly && twoFactorType === 'push' && prevPollEnv === undefined) {
+                  process.env.IMPRINT_AUTH_POLL_ATTEMPTS = ATTEMPT_PUSH_POLL_ATTEMPTS;
+                }
+                let completeResult: ToolResult;
+                try {
+                  const completeLadder = await runWorkflowWithLadder({
+                    workflowPath: authResult.workflowPath,
+                    params: completeParams,
+                    credentials: credsForRun,
+                    initialState: twoFactorContext,
+                  });
+                  completeResult = completeLadder.result;
+                } finally {
+                  if (attemptOnly && twoFactorType === 'push' && prevPollEnv === undefined) {
+                    // Must unset, not assign undefined — process.env coerces
+                    // assigned values to strings, so `= undefined` would leave
+                    // the literal "undefined".
+                    // biome-ignore lint/performance/noDelete: env cleanup requires delete
+                    delete process.env.IMPRINT_AUTH_POLL_ATTEMPTS;
+                  }
+                }
+                unmuteLog();
+                if (completeResult.ok) {
+                  spinner.stop('Auth verified — cookies persisted to credential store.');
+                } else if (attemptOnly) {
+                  // An unattended attempt with a placeholder code / no live
+                  // approval is EXPECTED to fail. Report it honestly as an
+                  // attempt — never spin it as success.
+                  spinner.stop(
+                    `2FA reached and attempted (${twoFactorType}); not completed without a live second factor.`,
+                  );
+                  p.log.info(
+                    `Unattended 2FA attempt: ${completeResult.error ?? 'rejected'}${
+                      completeResult.message ? ` — ${completeResult.message}` : ''
+                    }`,
+                  );
+                } else {
+                  spinner.stop('Auth verification failed — data tools may need manual login.');
+                  p.log.warn(
+                    `Auth completion failed: ${completeResult.message ?? 'unknown error'}`,
+                  );
+                }
+              } else if (initResult.ok) {
+                spinner.stop('Auth verified (no 2FA needed) — cookies persisted.');
+              } else {
+                spinner.stop('Auth initiate failed — data tools may need manual login.');
+                p.log.warn(`Auth error: ${initResult.message ?? initResult.error}`);
+              }
+            }
+          }
+        } catch (err) {
+          unmuteLog();
+          spinner.stop('Auth tool compilation failed.');
+          p.log.warn(
+            `Auth tool failed: ${err instanceof Error ? err.message : String(err)}\nData tools will attempt inline login.`,
+          );
+        }
       }
     }
   }
@@ -1858,95 +2148,11 @@ async function siteReplayAndDiff(
 // can reuse them without an import cycle). Re-exported here for existing callers.
 export { mapLimit, mapLimitSettled };
 
-// ─── Credential capture (interactive) ───────────────────────────────────────
+// ─── Credential capture helpers ─────────────────────────────────────────────
 
-interface CredentialPromptResult {
-  replacements: Replacement[];
-  confirmedFinding?: CredentialFinding;
-}
-
-async function promptAndPersistCredentials(opts: {
-  site: string;
-  findings: CredentialFinding[];
-  replacements: Replacement[];
-  noInteractive: boolean;
-}): Promise<CredentialPromptResult> {
-  // De-duplicate findings by username+password value so a re-recorded session
-  // with the same login attempt across multiple seqs only prompts once.
-  const seen = new Set<string>();
-  const unique: CredentialFinding[] = [];
-  for (const f of opts.findings) {
-    const key = `${f.usernameValue}${f.passwordValue}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(f);
-  }
-  if (unique.length === 0) return { replacements: opts.replacements };
-
-  const summary = unique
-    .map(
-      (f, i) =>
-        `  ${i + 1}. ${f.requestLabel}\n     username: ${f.usernameValue}\n     password: ${'*'.repeat(Math.min(f.passwordValue.length, 16))}`,
-    )
-    .join('\n');
-  p.note(
-    [
-      `Detected ${unique.length} login form submission(s) in this recording.`,
-      'Imprint will store the credentials in your local credential manager (OS keychain when',
-      'available, libsodium-encrypted file otherwise) and rewrite their values to',
-      '${credential.username} / ${credential.password} placeholders before sending the',
-      'session to the LLM. The plaintext values never enter the workflow artifact.',
-      '',
-      summary,
-    ].join('\n'),
-    'Credential capture',
-  );
-
-  if (opts.noInteractive) {
-    // Persist silently in non-interactive mode — keeps automated runs working.
-    const finding = unique[0] as CredentialFinding;
-    await persistFinding({ site: opts.site, finding });
-    return { replacements: opts.replacements, confirmedFinding: finding };
-  }
-
-  const proceed = await p.confirm({
-    message: `Save credentials for "${opts.site}" to the credential manager?`,
-    initialValue: true,
-  });
-  if (p.isCancel(proceed) || !proceed) {
-    p.log.warn('Skipping credential save — workflow will not be able to log in.');
-    return { replacements: [] };
-  }
-
-  // For v1 we only support one set of credentials per site (flat
-  // username/password names). If multiple distinct logins were found,
-  // ask which one to persist.
-  let chosen: CredentialFinding | undefined = unique[0];
-  if (unique.length > 1) {
-    const pick = await p.select({
-      message: 'Which login should be stored?',
-      options: unique.map((f, i) => ({
-        value: String(i),
-        label: `${i + 1}. ${f.requestLabel} — ${f.usernameValue}`,
-      })),
-    });
-    if (p.isCancel(pick)) {
-      p.log.warn('Skipped.');
-      return { replacements: [] };
-    }
-    chosen = unique[Number.parseInt(pick as string, 10)];
-  }
-
-  if (!chosen) return { replacements: opts.replacements };
-
-  await persistFinding({ site: opts.site, finding: chosen });
-
-  return {
-    replacements: opts.replacements.filter(
-      (r) => r.originalValue === chosen?.usernameValue || r.originalValue === chosen?.passwordValue,
-    ),
-    confirmedFinding: chosen,
-  };
+function maskUsername(raw: string): string {
+  if (raw.length <= 4) return '***';
+  return `${raw.slice(0, 3)}${'*'.repeat(raw.length - 3)}`;
 }
 
 /** Find request seqs whose body contains a password-shaped key (per the

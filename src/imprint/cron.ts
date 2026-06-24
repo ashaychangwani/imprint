@@ -101,12 +101,7 @@ async function runOnce(
 
   if (result.ok) {
     try {
-      const cache = persistRuntimeBackendsCache({
-        tool,
-        assetRoot,
-        usedBackend,
-        attempts,
-      });
+      const cache = persistRuntimeBackendsCache({ tool, assetRoot, usedBackend, attempts });
       if (cache) log(`  learned backend order: ${cache.preferredOrder.join(' → ')}`);
     } catch (err) {
       log(

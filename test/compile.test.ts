@@ -16,6 +16,7 @@ import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
   buildTriageEventContexts,
   defaultCompilePlaybookPath,
+  findAuthAdjacentSeqs,
   findCredentialBearingSeqs,
   rescueActionAlignedRepeatedSeqs,
   resolveDefaultCompilePlaybookPath,
@@ -431,5 +432,172 @@ describe('findCredentialBearingSeqs', () => {
       ],
     });
     expect(findCredentialBearingSeqs(session)).toEqual([]);
+  });
+});
+
+describe('findAuthAdjacentSeqs', () => {
+  it('finds MFA/2FA requests after credential-bearing POSTs', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 10,
+          timestamp: 1000,
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: {},
+          body: 'user=${credential.username}&pass=${credential.password}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 11,
+          timestamp: 2000,
+          method: 'POST',
+          url: 'https://example.com/api/CreatePushNotificationDelivery',
+          headers: {},
+          body: '{"channel":"push"}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 12,
+          timestamp: 5000,
+          method: 'POST',
+          url: 'https://example.com/api/ReadPushNotificationDeliveryStatus',
+          headers: {},
+          body: '{"id":"abc123"}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 13,
+          timestamp: 8000,
+          method: 'POST',
+          url: 'https://example.com/api/oauth/token',
+          headers: {},
+          body: '{"grant_type":"authorization_code"}',
+          resourceType: 'Fetch',
+        },
+      ],
+    });
+    expect(findAuthAdjacentSeqs(session, [10])).toEqual([11, 12, 13]);
+  });
+
+  it('stops at the 120s window boundary', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 1000,
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: {},
+          body: '${credential.password}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 2,
+          timestamp: 5000,
+          method: 'POST',
+          url: 'https://example.com/verify-otp',
+          headers: {},
+          body: '{"code":"123456"}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 3,
+          timestamp: 200_000,
+          method: 'POST',
+          url: 'https://example.com/late-verification',
+          headers: {},
+          body: '{}',
+          resourceType: 'Fetch',
+        },
+      ],
+    });
+    expect(findAuthAdjacentSeqs(session, [1])).toEqual([2]);
+  });
+
+  it('skips requests before the last credential POST', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 500,
+          method: 'POST',
+          url: 'https://example.com/api/challenge',
+          headers: {},
+          body: '{}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 2,
+          timestamp: 1000,
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: {},
+          body: '${credential.password}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 3,
+          timestamp: 2000,
+          method: 'POST',
+          url: 'https://example.com/api/mfa-check',
+          headers: {},
+          body: '{}',
+          resourceType: 'Fetch',
+        },
+      ],
+    });
+    expect(findAuthAdjacentSeqs(session, [2])).toEqual([3]);
+  });
+
+  it('returns empty array when no credential seqs provided', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 1000,
+          method: 'POST',
+          url: 'https://example.com/api/verify-otp',
+          headers: {},
+          body: '{}',
+          resourceType: 'Fetch',
+        },
+      ],
+    });
+    expect(findAuthAdjacentSeqs(session, [])).toEqual([]);
+  });
+
+  it('ignores non-auth requests within the window', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 1000,
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: {},
+          body: '${credential.username}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 2,
+          timestamp: 2000,
+          method: 'GET',
+          url: 'https://example.com/api/search?q=hotels',
+          headers: {},
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 3,
+          timestamp: 3000,
+          method: 'POST',
+          url: 'https://example.com/api/trusted-device',
+          headers: {},
+          body: '{"register":true}',
+          resourceType: 'Fetch',
+        },
+      ],
+    });
+    expect(findAuthAdjacentSeqs(session, [1])).toEqual([3]);
   });
 });

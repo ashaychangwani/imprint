@@ -67,7 +67,10 @@ function buildToolDescription(w: ResolvedTool['workflow']): string {
 
 /** MCP advertises tool input as JSON Schema; build it directly from
  *  workflow parameters rather than going through Zod. */
-export function buildJsonSchema(parameters: WorkflowParameter[]): Tool['inputSchema'] {
+export function buildJsonSchema(
+  parameters: WorkflowParameter[],
+  opts?: { includeTwoFactorContext?: boolean },
+): Tool['inputSchema'] {
   const properties: Record<string, { type: string; description: string }> = {};
   const required: string[] = [];
   for (const p of parameters) {
@@ -79,6 +82,17 @@ export function buildJsonSchema(parameters: WorkflowParameter[]): Tool['inputSch
       : p.description;
     properties[p.name] = { type: p.type, description };
     if (p.default === undefined) required.push(p.name);
+  }
+  // Auth 2FA bridge (stateless): on the second (submit_otp) call the caller
+  // passes back the `twoFactorContext` object echoed verbatim in the prior
+  // AWAITING_2FA result, so a login token captured on the first call is
+  // available to the completion request. Never required (absent on initiate).
+  if (opts?.includeTwoFactorContext) {
+    properties.twoFactorContext = {
+      type: 'object',
+      description:
+        'Only for the submit_otp call: pass back the `twoFactorContext` object returned verbatim in the previous AWAITING_2FA response.',
+    };
   }
   return {
     type: 'object',
@@ -119,7 +133,7 @@ function buildServer(
     {
       capabilities: { tools: {} },
       instructions:
-        'Imprint runs deterministic workflows captured from real browser sessions. Tools prefer fetch API replay, may use gated fetch-bootstrap only for declared browser-minted state, then cdp-replay (API requests run inside a live trusted Chrome so a protected POST refreshes its anti-bot token between calls) for multi-step state-changing flows, then stealth-fetch for bot-defense state, and playbook only for full DOM interaction. Error codes: AUTH_EXPIRED (401, run `imprint login <site>`); STATE_MISSING (required cookie/state was unavailable or ambiguous); FORBIDDEN (403); RATE_LIMITED (429, back off); BAD_RESPONSE (other 4xx/5xx); NETWORK (fetch failed); UNKNOWN (everything else).',
+        'Imprint runs deterministic workflows captured from real browser sessions. Tools prefer fetch API replay, may use gated fetch-bootstrap only for declared browser-minted state, then cdp-replay (API requests run inside a live trusted Chrome so a protected POST refreshes its anti-bot token between calls) for multi-step state-changing flows, then stealth-fetch for bot-defense state, and playbook only for full DOM interaction. Error codes: AUTH_EXPIRED (401, call authenticate_<site> if available or run `imprint login <site>`); AWAITING_2FA (2FA required — approve push / enter OTP then call again with action=complete); STATE_MISSING (required cookie/state was unavailable or ambiguous); FORBIDDEN (403); RATE_LIMITED (429, back off); BAD_RESPONSE (other 4xx/5xx); NETWORK (fetch failed); UNKNOWN (everything else).',
     },
   );
 
@@ -186,6 +200,17 @@ function buildServer(
       string | number | boolean
     >;
 
+    // Auth 2FA bridge (stateless): the validator strips unknown keys, so read the
+    // echoed `twoFactorContext` from the raw arguments and seed it as initialState
+    // so a token captured on the initiate call resolves on this submit_otp call.
+    const rawArgs = (req.params.arguments ?? {}) as Record<string, unknown>;
+    const initialState =
+      tool.workflow.toolKind === 'authenticate' &&
+      rawArgs.twoFactorContext &&
+      typeof rawArgs.twoFactorContext === 'object'
+        ? (rawArgs.twoFactorContext as Record<string, unknown>)
+        : undefined;
+
     try {
       return await runSerializedBySite(siteExecutionQueues, tool.site, async () => {
         // Audit-only pacing: when the audit harness sets IMPRINT_AUDIT_PACING_MS,
@@ -204,7 +229,12 @@ function buildServer(
           args,
           assetRoot,
           stealthCache,
-          { cdpPool, winnerCache, skipBootstrapSplice: Boolean(tool.preferredOrder?.length) },
+          {
+            cdpPool,
+            winnerCache,
+            skipBootstrapSplice: Boolean(tool.preferredOrder?.length),
+            initialState,
+          },
         );
         // Reset the idle timer for this site's pooled Chrome.
         if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
@@ -235,12 +265,7 @@ function buildServer(
           };
         }
         try {
-          const cache = persistRuntimeBackendsCache({
-            tool,
-            assetRoot,
-            usedBackend,
-            attempts,
-          });
+          const cache = persistRuntimeBackendsCache({ tool, assetRoot, usedBackend, attempts });
           if (cache) {
             tool.preferredOrder = cache.preferredOrder;
             log(
@@ -285,6 +310,11 @@ function formatToolError(result: Extract<ToolResult, { ok: false }>): string {
       );
     }
   }
+  // Auth 2FA bridge (stateless): echo the captured login context back to the
+  // caller so it can pass it as `twoFactorContext` on the submit_otp call.
+  if (result.error === 'AWAITING_2FA' && result.twoFactorContext) {
+    lines.push(`  twoFactorContext: ${JSON.stringify(result.twoFactorContext)}`);
+  }
   if (result.remediation) lines.push(`  → ${result.remediation}`);
   return lines.join('\n');
 }
@@ -304,7 +334,9 @@ export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
     }
     return {
       ...t,
-      inputSchema: buildJsonSchema(t.workflow.parameters),
+      inputSchema: buildJsonSchema(t.workflow.parameters, {
+        includeTwoFactorContext: t.workflow.toolKind === 'authenticate',
+      }),
       playbookPath: existsSync(playbookPath) ? playbookPath : undefined,
       preferredOrder: cacheStatus.status === 'ok' ? cacheStatus.cache.preferredOrder : undefined,
     };

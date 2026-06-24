@@ -1486,6 +1486,8 @@ async function main(argv: string[]): Promise<number> {
           'shared-context-json': { type: 'string' },
           'build-plan-path': { type: 'string' },
           'shared-modules-json': { type: 'string' },
+          'auth-plan-json': { type: 'string' },
+          site: { type: 'string' },
         },
         allowPositionals: false,
       });
@@ -1500,7 +1502,9 @@ async function main(argv: string[]): Promise<number> {
       const { ToolCandidateSchema, SharedCompileContextSchema } = await import(
         './imprint/tool-candidates.ts'
       );
-      const { SharedModuleManifestSchema } = await import('./imprint/build-plan.ts');
+      const { SharedModuleManifestSchema, AuthToolPlanSchema } = await import(
+        './imprint/build-plan.ts'
+      );
       const candidate = values['candidate-json']
         ? ToolCandidateSchema.parse(JSON.parse(values['candidate-json']))
         : undefined;
@@ -1510,6 +1514,9 @@ async function main(argv: string[]): Promise<number> {
       const sharedModules = values['shared-modules-json']
         ? SharedModuleManifestSchema.parse(JSON.parse(values['shared-modules-json']))
         : undefined;
+      const authToolPlan = values['auth-plan-json']
+        ? AuthToolPlanSchema.parse(JSON.parse(values['auth-plan-json']))
+        : undefined;
       await runCompileMcpServer({
         sessionPath: values['session-path'],
         toolDir,
@@ -1517,6 +1524,8 @@ async function main(argv: string[]): Promise<number> {
         sharedContext,
         buildPlanPath: values['build-plan-path'],
         sharedModules,
+        authToolPlan: authToolPlan ?? undefined,
+        site: values.site,
       });
       return 0;
     }

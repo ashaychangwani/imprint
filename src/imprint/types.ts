@@ -238,8 +238,39 @@ const WorkflowRequestSchema = z.object({
 });
 export type WorkflowRequest = z.infer<typeof WorkflowRequestSchema>;
 
+/** The two *structural* 2FA cases the runtime actually branches on, plus `none`.
+ *  A code that arrives out-of-band (sms / email / authenticator app) and is typed
+ *  back into a second request is one case (`otp`); an approval the user taps
+ *  elsewhere while we poll is the other (`push`). The delivery *channel* never
+ *  changes how we replay it, so we don't model it. */
+export const TwoFactorTypeSchema = z.enum(['otp', 'push', 'none']).default('none');
+
+const AuthConfigSchema = z
+  .object({
+    twoFactorType: TwoFactorTypeSchema,
+    /** How many requests to execute for the 'initiate' phase (login + 2FA trigger).
+     *  The remaining requests run during the 'complete'/'submit_otp' phase. */
+    initiateRequestCount: z.number().int().nonnegative().default(0),
+    pollEndpoint: z.string().optional(),
+    pollIntervalMs: z.number().int().positive().default(3000),
+    maxPollAttempts: z.number().int().positive().default(60),
+    /** Push only: a recording-grounded capture that resolves on the *approved*
+     *  poll response (and not on the pending ones). When it yields a non-empty
+     *  value the poll is done. Omitted → fall back to "a session Set-Cookie
+     *  appeared". Replaces hardcoded body-substring matching. */
+    pollTerminal: RequestCaptureSchema.optional(),
+    /** OTP only: the names of `${state.X}` values captured from the initiate
+     *  response that the completion (submit_otp) requests need (e.g. a reauth
+     *  `mfaId`). Because each MCP call is stateless, these are echoed back to
+     *  the caller in the AWAITING_2FA result and passed in again on submit_otp. */
+    twoFactorContext: z.array(z.string()).default([]),
+  })
+  .optional();
+export type AuthConfig = z.infer<typeof AuthConfigSchema>;
+
 export const WorkflowSchema = z.object({
   toolName: z.string(),
+  toolKind: z.enum(['data', 'authenticate']).optional(),
   intent: z.object({
     description: z.string(),
     /** Concatenated narration the user spoke while recording. */
@@ -247,6 +278,7 @@ export const WorkflowSchema = z.object({
   }),
   parameters: z.array(WorkflowParameterSchema),
   requests: z.array(WorkflowRequestSchema),
+  authConfig: AuthConfigSchema,
   site: z.string(),
   bootstrap: z
     .object({
@@ -318,11 +350,12 @@ export interface StateMissingItem {
 
 /** Discriminated union returned by every generated tool. */
 export type ToolResult<T = unknown> =
-  | { ok: true; data: T }
+  | { ok: true; data: T; loginResponsePreview?: string }
   | {
       ok: false;
       error:
         | 'AUTH_EXPIRED' // 401 — run `imprint login`
+        | 'AWAITING_2FA' // 2FA required — user must approve push / enter OTP
         | 'FORBIDDEN' // 403 — bot detection, geo, ToS, capability mismatch
         | 'NETWORK' // fetch threw / timed out
         | 'RATE_LIMITED' // 429
@@ -332,6 +365,12 @@ export type ToolResult<T = unknown> =
       message: string;
       remediation?: string;
       missing?: StateMissingItem[];
+      twoFactorType?: string;
+      /** OTP only: the `${state.X}` values captured from the initiate response
+       *  that the caller must echo back on the submit_otp call (stateless
+       *  state-chain bridge). Names are declared in authConfig.twoFactorContext. */
+      twoFactorContext?: Record<string, unknown>;
+      loginResponsePreview?: string;
     };
 
 // ─── Cron config (input to `imprint cron`) ───────────────────────────────────
@@ -529,6 +568,22 @@ const PlaybookResultSchema = z.discriminatedUnion('source', [
 ]);
 export type PlaybookResult = z.infer<typeof PlaybookResultSchema>;
 
+/** A named value extracted from a captured XHR response, in addition to the
+ *  success marker. Used by a login playbook to carry a 2FA-chain token (e.g. a
+ *  single-use `SecurityCode` minted in the browser during the OTP-send step)
+ *  out of the playbook run so a later stateless `submit_otp` can include it.
+ *  The `name` should match an `authConfig.twoFactorContext` entry. */
+const PlaybookCaptureSchema = z.object({
+  name: z.string(),
+  /** Regex matched against the captured response URL. */
+  url_pattern: z.string(),
+  method: z.string().optional(),
+  /** Dot-path with [] for array iteration (see json-path.ts), or '*'/'' for the
+   *  whole parsed body. */
+  extract: z.string(),
+});
+export type PlaybookCapture = z.infer<typeof PlaybookCaptureSchema>;
+
 // Playbook params are structurally identical to workflow params — reuse
 // the same schema directly to stay in sync.
 export const PlaybookSchema = z.object({
@@ -537,6 +592,8 @@ export const PlaybookSchema = z.object({
   parameters: z.array(WorkflowParameterSchema),
   steps: z.array(PlaybookStepSchema).min(1),
   result: PlaybookResultSchema,
+  /** Optional named XHR captures for the 2FA chain (best-effort). */
+  captures: z.array(PlaybookCaptureSchema).optional(),
   notes: z.string().optional(),
 });
 export type Playbook = z.infer<typeof PlaybookSchema>;

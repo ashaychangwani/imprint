@@ -8,7 +8,7 @@ You receive:
 
 - `site`, `url`, `narration` — what the user was doing. When several captures were merged, `narration` includes `[Recording from <timestamp>] <url>` boundary lines marking where each capture begins (the same logical request may then appear once per capture, often with a different entity/token).
 - `selectedTools[]` — the tools that WILL be compiled: `{ toolName, description, expectedOutput, requestSeqs, dependencySeqs, likelyParams }`. You must emit exactly one `perTool` entry for each.
-- `sharedContext` — `{ loginRequestSeqs, credentialNames, tokenExtractionNotes, sharedHelperNotes }` from candidate detection.
+- `sharedContext` — `{ loginRequestSeqs, credentialNames, tokenExtractionNotes, sharedHelperNotes, twoFactorDetected, twoFactorType, twoFactorRequestSeqs, authCompletionSeqs, twoFactorContext, twoFactorNotes }` from candidate detection.
 - `ephemeralValues[]` — values that differed across two independent replays (highest-confidence signal for signing tokens / per-call state): `{ classification, originalSeq, location, producerSeq, producerPath, suggestedStateName }`. `browser_minted` with a high-entropy query-param `location` is the canonical sign of client-side URL signing → a `request-transform` module.
 - `tokenContractHints[]` — producer→consumer opaque-token edges DETECTED DETERMINISTICALLY from the dual-pass diff: `{ consumerTool, consumerParam, consumerLocation, producerTool, producerField, producerPath }`. Each is a grounded `server_derived` value `consumerTool` sends that was produced in `producerTool`'s response. These are pre-computed for you and are AUTHORITATIVE — you MUST declare each as a `tokenParams` (consumer) + `emitsTokens` (producer) contract per rule 12. Refine the rough `consumerParam`/`producerField` names and the `shape` from the recording, but do not drop an edge. (Any edge you miss is reconciled in deterministically, but declaring it yourself lets you pick the right `shape`.)
 - `requests[]` — the load-bearing requests for the selected tools (identical requests across tools are collapsed; `repeatCount`/`repeatedSeqs` show that). When the SAME endpoint appears for multiple tools, that's a strong shared-module signal.
@@ -28,6 +28,18 @@ You receive:
       "dependsOn": ["_shared/<other>.ts"]           // other shared modules this one imports (build order)
     }
   ],
+  "authTool": {                                     // OPTIONAL — only when sharedContext.twoFactorDetected is true
+    "toolName": "authenticate_<site>",
+    "loginRequestSeqs": [number],
+    "twoFactorRequestSeqs": [number],
+    "twoFactorType": "otp" | "push",                // structural: otp = code typed back; push = poll until approved
+    "twoFactorContext": [string],                   // otp only: initiate-response fields the submit_otp request chains via ${state.X}
+    "credentialNames": ["username", "password"],
+    "captures": [
+      { "name": "session_cookie", "source": "cookie", "locator": "cookie_name", "usedAs": "cookie" }
+    ],
+    "notes": "how the 2FA flow works: trigger, wait/poll (name the approval marker for push), completion"
+  },
   "perTool": [
     {
       "toolName": "snake_case_tool_name",
@@ -42,8 +54,9 @@ You receive:
         "captures": [
           { "name": "access_token", "source": "json", "locator": "$.token", "usedAs": "header:Authorization" }
         ],
-        "notes": "how every tool replicates login inline (Imprint has no shared-auth runtime primitive)"
+        "notes": "how every tool replicates login inline"
       },
+      "dependsOnAuth": false,                        // true when authTool exists and this tool needs its cookies
       "emitsTokens": [
         { "field": "item_id", "shape": "composite '<ftid>|<areaId>|<areaName>|<areaToken>' the detail tool needs" }
       ],
@@ -62,7 +75,7 @@ You receive:
 3. **`request-transform`** — URL signing or body construction shared across tools. Wire-up: the consuming tool sets `requestTransformModule: "../_shared/<name>.ts"`. Ground it in `ephemeralValues` (browser_minted, high-entropy query param) and `sourceSeqs`. The exported `transform(method, url, responses, params?)` returns the signed URL (or `{ url, body? }`).
 4. **`parser-helper`** — a decoder/normalizer ≥2 tools' parsers call (e.g. a shared JSPB walker, a shared field mapper). The consuming tool's parser.ts does `import { ... } from '../_shared/<name>.ts'`. Ground it in a captured response body (`sourceSeqs`).
 5. **`types`** — shared TypeScript interfaces used by ≥2 parsers. Type-only; no runtime behavior.
-6. **Auth is NEVER a shared module.** Login is request data, and the runtime cannot run a shared sub-workflow. Put the exact recipe in each tool's `authRecipe` (login seqs, credential names, captures with `${state.X}` wiring) and set `required: false` with empty arrays when a tool needs no login. Every authed tool replicates the same recipe inline.
+6. **Auth is NEVER a shared module.** When `sharedContext.twoFactorDetected` is **true**, declare an `authTool` entry — a standalone `authenticate_<site>` tool that handles the full login + 2FA flow. Carry `twoFactorType` from `sharedContext` (structural: `otp` = a code typed back into a later request; `push` = poll one endpoint until it flips/sets a session cookie), and for `otp` carry `twoFactorContext` (the initiate-response fields the completion request chains). Data tools for the same site set `authRecipe.required: false` and `dependsOnAuth: true` — they assume cookies are already present from a prior `authenticate_<site>` call. When the site has simple login (no 2FA), each tool still replicates login inline via `authRecipe` and `dependsOnAuth` is false/omitted. When there is no login at all, omit `authTool` and set `authRecipe.required: false` with empty arrays.
 7. **`exportSignatures` must be real TypeScript signatures** the builder will implement and the verifier will check for. List every public export.
 8. **`spec` must be concrete enough to implement and test** — name the inputs, the exact output, and the `sourceSeqs` that prove it (e.g. "given the URL at seq 41 with the `sig` param stripped, regenerate `sig` to match the recorded value").
 9. **`dependsOn` only references other `sharedModules[].path`.** No cycles.
