@@ -73,11 +73,25 @@ export interface MintedJar {
   source?: 'mint' | 'recording';
 }
 
-/** A session is replay-safe when `_abck` is validated (`~0~`) OR the Akamai
- *  validated-session marker `bm_sv` is present (it is only set post-validation,
- *  and survives `_abck` rotating back to `~-1~`). Shared by the cdp mint and the
- *  recording-seed paths so both judge "validated" identically. */
+/** Akamai session jars have recognizable sensor cookies and must pass the
+ *  stricter validation check below before plain-fetch replay is trusted. Other
+ *  sites may still need a cached CDP bootstrap page + ordinary cookies, but
+ *  will never carry `_abck`/`bm_sv`; do not apply Akamai-specific invalidation
+ *  to those generic bootstrap artifacts. */
+export function jarHasAkamaiValidationSignals(
+  cookies: Array<{ name: string; value: string }>,
+): boolean {
+  return cookies.some((c) =>
+    ['_abck', 'bm_sv', 'ak_bmsc', 'bm_sz', 'bm_mi'].includes(c.name.toLowerCase()),
+  );
+}
+
+/** A session is replay-safe when either it is not an Akamai-style jar, or its
+ *  `_abck` is validated (`~0~`) / the Akamai validated-session marker `bm_sv` is
+ *  present. `bm_sv` survives `_abck` rotating back to `~-1~`. Shared by the cdp
+ *  mint and recording-seed paths so both judge "validated" identically. */
 export function jarCookiesValidated(cookies: Array<{ name: string; value: string }>): boolean {
+  if (!jarHasAkamaiValidationSignals(cookies)) return true;
   const abck = cookies.find((c) => c.name === '_abck')?.value;
   if (abck && abck.split('~')[1] === '0') return true;
   return cookies.some((c) => c.name === 'bm_sv');

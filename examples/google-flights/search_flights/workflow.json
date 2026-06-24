@@ -140,7 +140,8 @@
   "requestTransformModule": "./request-transform.ts",
   "parserModule": "./parser.ts",
   "execution": {
-    "minCallSpacingMs": 2000
+    "minCallSpacingMs": 2000,
+    "skipPlaybookFallback": true
   },
   "liveVerified": true
 }

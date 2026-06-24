@@ -87,6 +87,50 @@ export function buildJsonSchema(parameters: WorkflowParameter[]): Tool['inputSch
   };
 }
 
+export function shouldSkipBootstrapSplice(preferredOrder?: ConcreteBackend[]): boolean {
+  return Boolean(preferredOrder?.length && !preferredOrder.includes('fetch-bootstrap'));
+}
+
+export function withPreferredFallbacks(
+  ladder: ConcreteBackend[],
+  preferredOrder?: ConcreteBackend[],
+): ConcreteBackend[] {
+  const next = [...ladder];
+  if (preferredOrder?.includes('fetch-bootstrap') && !next.includes('cdp-replay')) {
+    const idx = next.indexOf('fetch-bootstrap');
+    if (idx !== -1) next.splice(idx + 1, 0, 'cdp-replay');
+  }
+  if (
+    (preferredOrder?.includes('fetch-bootstrap') || preferredOrder?.includes('cdp-replay')) &&
+    !next.includes('stealth-fetch')
+  ) {
+    const cdpIdx = next.indexOf('cdp-replay');
+    const fbIdx = next.indexOf('fetch-bootstrap');
+    const idx = cdpIdx !== -1 ? cdpIdx : fbIdx;
+    if (idx !== -1) next.splice(idx + 1, 0, 'stealth-fetch');
+  }
+  return next;
+}
+
+export function applyExecutionFallbacks(
+  ladder: ConcreteBackend[],
+  execution?: { skipPlaybookFallback?: boolean },
+): ConcreteBackend[] {
+  if (!execution?.skipPlaybookFallback || ladder.length <= 1) return ladder;
+  return ladder.filter((backend) => backend !== 'playbook');
+}
+
+export function buildSiteSpacingMap(
+  tools: Array<{ site: string; workflow: { execution?: { minCallSpacingMs?: number } } }>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const tool of tools) {
+    const spacing = Math.max(0, tool.workflow.execution?.minCallSpacingMs ?? 0);
+    if (spacing > (out.get(tool.site) ?? 0)) out.set(tool.site, spacing);
+  }
+  return out;
+}
+
 const log = createLog('mcp');
 
 export async function runSerializedBySite<T>(
@@ -174,6 +218,7 @@ function buildServer(
   // sequential while allowing unrelated sites to proceed independently.
   const siteExecutionQueues = new Map<string, Promise<void>>();
   const siteLastFinishedAt = new Map<string, number>();
+  const siteMinCallSpacingMs = buildSiteSpacingMap(tools);
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((t) => ({
@@ -224,14 +269,22 @@ function buildServer(
             await new Promise((r) => setTimeout(r, pacingMs));
           }
 
-          const ladder = resolveLadder('auto', tool.preferredOrder);
+          const ladder = withPreferredFallbacks(
+            resolveLadder('auto', tool.preferredOrder),
+            tool.preferredOrder,
+          );
+          const executionLadder = applyExecutionFallbacks(ladder, tool.workflow.execution);
           const { result, usedBackend, attempts } = await runWithLadder(
-            ladder,
+            executionLadder,
             tool,
             args,
             assetRoot,
             stealthCache,
-            { cdpPool, winnerCache, skipBootstrapSplice: Boolean(tool.preferredOrder?.length) },
+            {
+              cdpPool,
+              winnerCache,
+              skipBootstrapSplice: shouldSkipBootstrapSplice(tool.preferredOrder),
+            },
           );
           // Reset the idle timer for this site's pooled Chrome.
           if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
@@ -284,7 +337,7 @@ function buildServer(
           return { content: [{ type: 'text', text: `${text}\n\n(backend: ${usedBackend})` }] };
         },
         {
-          minCallSpacingMs: tool.workflow.execution?.minCallSpacingMs,
+          minCallSpacingMs: siteMinCallSpacingMs.get(tool.site),
           lastFinishedAt: siteLastFinishedAt,
         },
       );

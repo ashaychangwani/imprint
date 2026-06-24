@@ -8,12 +8,13 @@
 // with the date range living in the outer wrapper; Shopping/Booking use the full
 // 15-slot leg with DATE at [6]. Verified by decoding seq 97 vs seq 111.
 
-// Fresh searches emit wrapper `...,0,0,0,1]` and leg[14]=3 (proven seq 111/140).
-// In-page-refined searches use `...,0,1,0,1]` with return-leg[14]=1 (seq 194/425) —
-// a UI freshness flag, not a user param; we always emit the fresh form for shopping.
+// Fresh searches emit wrapper `...,0,0,0,1]`; current round-trip UI requests mark
+// the outbound leg [14]=3 and the return leg [14]=1.
+// In-page-refined searches use `...,0,1,0,1]` — a UI freshness flag, not a user
+// param; we always emit the fresh form for shopping.
 // Booking outbound legs use [14]=3, return legs [14]=1 (seq 764/811).
 
-function buildLeg(leg: any): any[] {
+function buildLeg(leg: any, classifier = 3): any[] {
   const out: any[] = new Array(15).fill(null);
   out[0] = [[[leg?.origin, 0]]];
   out[1] = [[[leg?.dest, 0]]];
@@ -26,7 +27,7 @@ function buildLeg(leg: any): any[] {
   out[8] = Array.isArray(leg?.selected)
     ? leg.selected.map((s: any) => [s?.origin, s?.date, s?.dest, null, s?.carrier, s?.flightNumber])
     : null;
-  out[14] = 3;
+  out[14] = classifier;
   return out;
 }
 
@@ -41,7 +42,9 @@ export function buildFlightSearchParams(params: Record<string, any>): any[] {
   sp[7] = p.maxPrice != null ? [null, p.maxPrice] : null;
   sp[10] = p.bags ? [p.bags.carryOn ?? 0, p.bags.checked ?? 0] : null;
   const legs: any[] = Array.isArray(p.legs) ? p.legs : [];
-  sp[13] = legs.map((l: any) => buildLeg(l));
+  sp[13] = legs.map((l: any, i: number) =>
+    buildLeg(l, p.tripType === 1 && i >= 1 ? 1 : 3),
+  );
   sp[17] = 1;
   return sp;
 }

@@ -28,7 +28,7 @@ It also scans `IMPRINT_HOME` for generated tools, `.teach-state.json`, raw and r
 | `incomplete` | A `teach` workflow lacks `emit`/`register` completion, or has no matching generated tool. |
 | `missing-session` | `.teach-state.json` references a raw or redacted session file that is gone. |
 | `stale-registration` | An external MCP registration points at `imprint mcp-server <site>`, but there is no complete generated tool for that site. |
-| `stale-backends` | A tool's `backends.json` was written for an older `workflow.json`; runtime will ignore it and fall back to the default ladder until reprobed. |
+| `stale-backends` | A tool's `backends.json` was written for an older backend-capability shape; runtime will ignore it and fall back to the default ladder until reprobed. Execution-only workflow edits can keep using the cache when the capability hash still matches. |
 | `invalid-backends` | A tool's `backends.json` cannot be parsed or fails schema validation; runtime will ignore it until reprobed. |
 
 Each issue includes a next-step hint. In interactive mode, choose `Fix an issue` to apply the exact matching cleanup action instead of selecting a registration or site manually. The fix prompt is a multi-select: toggle individual issues with `space`, or pick `Select all issues` to fix everything in one pass.

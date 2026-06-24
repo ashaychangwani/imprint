@@ -367,8 +367,11 @@ export function loadBackendsCacheStatus(
     if (parsed.schemaVersion && parsed.schemaVersion >= 2 && parsed.workflowHash) {
       const workflowPath = pathResolve(toolDir, 'workflow.json');
       if (existsSync(workflowPath)) {
-        const currentHash = workflowHashSync(readFileSync(workflowPath, 'utf8'));
-        if (currentHash !== parsed.workflowHash) {
+        const current = workflowCacheHashesSync(readFileSync(workflowPath, 'utf8'));
+        if (
+          current.workflowHash !== parsed.workflowHash &&
+          (!parsed.capabilityHash || current.capabilityHash !== parsed.capabilityHash)
+        ) {
           const reason = 'workflow hash changed';
           if (opts.warn !== false) {
             process.stderr.write(
@@ -496,10 +499,15 @@ export function persistRuntimeBackendsCache(opts: {
   return cache;
 }
 
-function workflowHashSync(workflowJson: string): string {
-  return createHash('sha256')
-    .update(JSON.stringify(WorkflowSchema.parse(JSON.parse(workflowJson))))
-    .digest('hex');
+function workflowCacheHashesSync(workflowJson: string): {
+  workflowHash: string;
+  capabilityHash: string;
+} {
+  const workflow = WorkflowSchema.parse(JSON.parse(workflowJson));
+  return {
+    workflowHash: workflowHash(workflow),
+    capabilityHash: capabilityHash(workflow),
+  };
 }
 
 function backendsCacheRemediation(site: string, toolName?: string): string {

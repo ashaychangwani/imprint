@@ -25,7 +25,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join as pathJoin } from 'node:path';
-import { type MintedJar, jarCookiesValidated } from './cdp-browser-fetch.ts';
+import {
+  type MintedJar,
+  jarCookiesValidated,
+  jarHasAkamaiValidationSignals,
+} from './cdp-browser-fetch.ts';
 import { createLog } from './log.ts';
 
 const log = createLog('cdp-jar');
@@ -67,11 +71,12 @@ export function loadJar(siteDir: string): MintedJar | null {
       log(`cached jar in ${siteDir} is ${Math.round(ageSeconds)}s old (>= ${maxAge}s) — re-mint`);
       return null;
     }
-    // Validated = `_abck~0~` OR `bm_sv` present (the latter survives `_abck`
-    // rotating back to `~-1~`). Fall back to the abckFlag check for caches
-    // written before the `validated` field existed.
-    const validated = raw.validated ?? raw.abckFlag === '0';
-    if (!validated) {
+    // Akamai jars must be validated (`_abck~0~` OR `bm_sv`). Non-Akamai jars
+    // may still be valid generic bootstrap artifacts (HTML captures + ordinary
+    // cookies), so do not discard them just because they lack Akamai markers.
+    // Fall back to cookie inspection for caches written before `validated`.
+    const validated = raw.validated ?? jarCookiesValidated(raw.cookies);
+    if (!validated && jarHasAkamaiValidationSignals(raw.cookies)) {
       log(`cached jar not validated (_abck~${raw.abckFlag}~, no bm_sv) — re-mint`);
       return null;
     }
@@ -203,6 +208,7 @@ export function seedJarFromRecording(
   }));
   const abck = cookies.find((c) => c.name === '_abck')?.value;
   const abckFlag = abck?.split('~')[1] ?? '?';
+  const hasAkamaiValidationSignals = jarHasAkamaiValidationSignals(cookies);
   // Validated = `_abck~0~` OR a `bm_sv` cookie (Akamai's validated-session
   // marker). `_abck` rotates back to `~-1~` after clearing a request, so a real
   // working recording often ends with `_abck~-1~` + `bm_sv` — that jar replays
@@ -250,8 +256,9 @@ export function seedJarFromRecording(
     validated: true, // gated above on jarCookiesValidated
     source: 'recording',
   });
+  const validationLabel = hasAkamaiValidationSignals ? 'bm_sv-validated' : 'generic-bootstrap';
   log(
-    `seeded jar from recording ${newest} (${cookies.length} cookies, _abck~${abckFlag}~, bm_sv-validated, ua=${ua ? `${ua.slice(0, 40)}…` : '(none)'}, html=${html.length}b)`,
+    `seeded jar from recording ${newest} (${cookies.length} cookies, _abck~${abckFlag}~, ${validationLabel}, ua=${ua ? `${ua.slice(0, 40)}…` : '(none)'}, html=${html.length}b)`,
   );
   return true;
 }

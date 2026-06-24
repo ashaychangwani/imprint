@@ -173,6 +173,11 @@ export function extract(
 
   const segments = [...segMap.values()];
   const fareOptions = [...fareMap.values()];
+  if (segments.length === 0 && fareOptions.length === 0) {
+    throw new Error(
+      'Google Flights GetBookingResults payload did not contain recognizable booking details',
+    );
+  }
   const prices = fareOptions.map((f) => f.priceUSD);
 
   return {

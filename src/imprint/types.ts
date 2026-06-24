@@ -300,6 +300,8 @@ export const WorkflowSchema = z.object({
     .object({
       /** Minimum end-to-start spacing between MCP calls for the same site. */
       minCallSpacingMs: z.number().int().nonnegative().optional(),
+      /** Do not enter the DOM playbook rung after API/browser-backed rungs fail. */
+      skipPlaybookFallback: z.boolean().optional(),
     })
     .optional(),
 });

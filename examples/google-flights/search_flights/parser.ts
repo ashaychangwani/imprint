@@ -167,6 +167,11 @@ export function extract(
   }
 
   const itineraries = [...byToken.values()];
+  if (itineraries.length === 0) {
+    throw new Error(
+      'Google Flights GetShoppingResults payload did not contain recognizable itineraries',
+    );
+  }
   return {
     count: itineraries.length,
     itineraries,

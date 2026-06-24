@@ -66,13 +66,14 @@ export function extract(
       break;
     }
   }
-  // If no frame produced entries, still attempt the first frame's payload so an
-  // empty (zero-result) response yields an empty calendar rather than throwing.
-  if (payload == null && frames.length > 0) payload = frames[0]?.payload ?? null;
-
   const entries = collectEntries(payload).sort((a, b) =>
     a.departureDate < b.departureDate ? -1 : a.departureDate > b.departureDate ? 1 : 0,
   );
+  if (entries.length === 0) {
+    throw new Error(
+      'Google Flights GetCalendarPicker payload did not contain recognizable calendar prices',
+    );
+  }
 
   const prices: Record<string, number> = {};
   for (const e of entries) prices[e.departureDate] = e.lowestPriceUSD;

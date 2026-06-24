@@ -22,6 +22,7 @@ import {
   type CdpBrowserFetchOptions,
   type MintedJar,
   createCdpBrowserFetch,
+  jarHasAkamaiValidationSignals,
 } from './cdp-browser-fetch.ts';
 import {
   clearJar,
@@ -665,8 +666,10 @@ async function getOrMintCdpJar(
   try {
     cf = createCdpBrowserFetch({ baseUrl, bootstrapUrl });
     const jar = await cf.mintJar();
-    if (jar.abckFlag !== '0') {
+    if (jar.abckFlag !== '0' && jarHasAkamaiValidationSignals(jar.cookies)) {
       log(`cdp jar minted with _abck~${jar.abckFlag}~ (not validated) — replay may be rejected`);
+    } else if (!jarHasAkamaiValidationSignals(jar.cookies)) {
+      log(`cdp jar minted generic bootstrap state (html=${jar.html.length}b)`);
     }
     saveJar(siteDir, jar);
     return jar;
@@ -788,7 +791,7 @@ async function runFetchBootstrap(
     // recording-seeded or cached jar is validated:true by construction, so the
     // cheap plain-fetch path is untouched; `=== false` (not falsy) leaves jars
     // without the field — older caches / test stubs — on the original path.
-    if (jar.validated === false) {
+    if (jar.validated === false && jarHasAkamaiValidationSignals(jar.cookies)) {
       log(
         'fetch-bootstrap: minted jar unvalidated (no _abck~0~/bm_sv) — plain-fetch replay doomed; escalating to cdp-replay',
       );

@@ -40,6 +40,17 @@ function writeCache(site: string, cache: unknown): string {
   return path;
 }
 
+function backendCapabilityHash(workflow: unknown): string {
+  const parsed = WorkflowSchema.parse(workflow);
+  const caps = {
+    bootstrap: Boolean(parsed.bootstrap),
+    captures: parsed.requests.flatMap((r) =>
+      (r.captures ?? []).map((c) => `${c.source}:${c.name}:${c.capability}`),
+    ),
+  };
+  return createHash('sha256').update(JSON.stringify(caps)).digest('hex');
+}
+
 describe('BackendsCacheSchema', () => {
   const TS = '2026-05-03T22:00:00.000Z';
   const VER = '0.1.0';
@@ -224,6 +235,40 @@ describe('loadBackendsCache', () => {
     if (status.status === 'stale') {
       expect(status.remediation).toBe('imprint probe-backends stale --tool tool');
     }
+  });
+
+  it('keeps v2 caches when only execution metadata changed', () => {
+    const dir = pathResolve(root, 'execution-only', 'execution-only');
+    mkdirSync(dir, { recursive: true });
+    const currentWorkflow = {
+      toolName: 'tool',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+      execution: { skipPlaybookFallback: true },
+      site: 'execution-only',
+    };
+    writeFileSync(pathResolve(dir, 'workflow.json'), JSON.stringify(currentWorkflow));
+    const cache: BackendsCache = {
+      probedAt: '2026-05-03T22:00:00.000Z',
+      imprintVersion: '0.4.6',
+      schemaVersion: 2,
+      workflowHash: createHash('sha256')
+        .update(JSON.stringify({ old: true }))
+        .digest('hex'),
+      capabilityHash: backendCapabilityHash(currentWorkflow),
+      preferredOrder: ['cdp-replay'],
+      results: { 'cdp-replay': { outcome: 'ok', durationMs: 30_000 } },
+    };
+    writeFileSync(pathResolve(dir, 'backends.json'), JSON.stringify(cache, null, 2));
+
+    expect(loadBackendsCache('execution-only', root, dir)?.preferredOrder).toEqual(['cdp-replay']);
+
+    const status = loadBackendsCacheStatus('execution-only', root, dir, {
+      warn: false,
+      toolName: 'tool',
+    });
+    expect(status.status).toBe('ok');
   });
 
   it('accepts fresh v2 caches when workflow.json omits schema-defaulted capture fields', () => {

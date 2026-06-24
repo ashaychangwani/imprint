@@ -74,5 +74,8 @@
   ],
   "requestTransformModule": "./request-transform.ts",
   "parserModule": "./parser.ts",
+  "execution": {
+    "skipPlaybookFallback": true
+  },
   "liveVerified": true
 }

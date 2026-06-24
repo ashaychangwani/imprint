@@ -49,7 +49,11 @@ export function extract(
     throw new Error('Google Flights tDoGIe response did not contain a batchexecute payload');
   }
 
-  const matchesRaw = Array.isArray(payload) && Array.isArray(payload[1]) ? payload[1] : [];
+  if (!Array.isArray(payload) || !Array.isArray(payload[1])) {
+    throw new Error('Google Flights tDoGIe payload did not contain a recognizable match list');
+  }
+
+  const matchesRaw = payload[1];
   const matches = matchesRaw
     .map(parseItem)
     .filter((m): m is AirportMatch => m !== null);

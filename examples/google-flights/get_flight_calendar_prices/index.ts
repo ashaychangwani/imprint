@@ -92,6 +92,9 @@ const WORKFLOW: Workflow = {
   },
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
+  "execution": {
+    "skipPlaybookFallback": true
+  },
   "liveVerified": true
 };
 

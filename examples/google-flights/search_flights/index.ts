@@ -158,7 +158,8 @@ const WORKFLOW: Workflow = {
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
   "execution": {
-    "minCallSpacingMs": 2000
+    "minCallSpacingMs": 2000,
+    "skipPlaybookFallback": true
   },
   "liveVerified": true
 };
