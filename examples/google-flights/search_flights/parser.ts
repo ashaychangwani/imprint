@@ -147,6 +147,11 @@ export function extract(
       const frames = decodeBatchExecute(rawResponse);
       payload = frames[0]?.payload;
     }
+    if (payload == null) {
+      throw new Error(
+        'Google Flights GetShoppingResults response did not contain a batchexecute payload',
+      );
+    }
   } else {
     payload = rawResponse;
   }

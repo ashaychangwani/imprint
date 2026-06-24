@@ -122,4 +122,34 @@ describe('runSerializedBySite', () => {
     expect(events).toEqual(['first:start', 'second:start']);
     expect(queues.has('google-flights')).toBe(false);
   });
+
+  it('waits between same-site calls when a workflow declares MCP pacing', async () => {
+    const queues = new Map<string, Promise<void>>();
+    const lastFinishedAt = new Map<string, number>([['google-flights', 1_000]]);
+    const sleeps: number[] = [];
+    let now = 1_400;
+
+    await expect(
+      runSerializedBySite(
+        queues,
+        'google-flights',
+        async () => {
+          now = 4_000;
+          return 'done';
+        },
+        {
+          minCallSpacingMs: 2_000,
+          lastFinishedAt,
+          now: () => now,
+          sleep: async (ms) => {
+            sleeps.push(ms);
+            now += ms;
+          },
+        },
+      ),
+    ).resolves.toBe('done');
+
+    expect(sleeps).toEqual([1_600]);
+    expect(lastFinishedAt.get('google-flights')).toBe(4_000);
+  });
 });

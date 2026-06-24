@@ -93,9 +93,32 @@ export async function runSerializedBySite<T>(
   queues: Map<string, Promise<void>>,
   site: string,
   task: () => Promise<T>,
+  opts: {
+    minCallSpacingMs?: number;
+    lastFinishedAt?: Map<string, number>;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
 ): Promise<T> {
   const previous = queues.get(site) ?? Promise.resolve();
-  const run = previous.catch(() => undefined).then(task);
+  const run = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const spacingMs = Math.max(0, opts.minCallSpacingMs ?? 0);
+      const lastFinishedAt = opts.lastFinishedAt;
+      const now = opts.now ?? Date.now;
+      const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+      if (spacingMs > 0 && lastFinishedAt) {
+        const elapsed = now() - (lastFinishedAt.get(site) ?? 0);
+        const waitMs = spacingMs - elapsed;
+        if (waitMs > 0) await sleep(waitMs);
+      }
+      try {
+        return await task();
+      } finally {
+        lastFinishedAt?.set(site, now());
+      }
+    });
   const tail = run.then(
     () => undefined,
     () => undefined,
@@ -150,6 +173,7 @@ function buildServer(
   // make Google Flights return fast empty result sets. Keep same-site execution
   // sequential while allowing unrelated sites to proceed independently.
   const siteExecutionQueues = new Map<string, Promise<void>>();
+  const siteLastFinishedAt = new Map<string, number>();
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((t) => ({
@@ -187,75 +211,83 @@ function buildServer(
     >;
 
     try {
-      return await runSerializedBySite(siteExecutionQueues, tool.site, async () => {
-        // Audit-only pacing: when the audit harness sets IMPRINT_AUDIT_PACING_MS,
-        // sleep before each actual workflow execution so same-site queued calls
-        // stay spaced out instead of all waiting concurrently before the queue.
-        // Unset in production -> no delay.
-        const pacingMs = Number(process.env.IMPRINT_AUDIT_PACING_MS);
-        if (Number.isFinite(pacingMs) && pacingMs > 0) {
-          await new Promise((r) => setTimeout(r, pacingMs));
-        }
+      return await runSerializedBySite(
+        siteExecutionQueues,
+        tool.site,
+        async () => {
+          // Audit-only pacing: when the audit harness sets IMPRINT_AUDIT_PACING_MS,
+          // sleep before each actual workflow execution so same-site queued calls
+          // stay spaced out instead of all waiting concurrently before the queue.
+          // Unset in production -> no delay.
+          const pacingMs = Number(process.env.IMPRINT_AUDIT_PACING_MS);
+          if (Number.isFinite(pacingMs) && pacingMs > 0) {
+            await new Promise((r) => setTimeout(r, pacingMs));
+          }
 
-        const ladder = resolveLadder('auto', tool.preferredOrder);
-        const { result, usedBackend, attempts } = await runWithLadder(
-          ladder,
-          tool,
-          args,
-          assetRoot,
-          stealthCache,
-          { cdpPool, winnerCache, skipBootstrapSplice: Boolean(tool.preferredOrder?.length) },
-        );
-        // Reset the idle timer for this site's pooled Chrome.
-        if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
-          const prev = cdpIdleTimers.get(tool.site);
-          if (prev) clearTimeout(prev);
-          const timer = setTimeout(() => {
-            const cf = cdpPool.get(tool.site);
-            if (cf) {
-              log(`closing idle CDP session for ${tool.site}`);
-              cf.close().catch(() => {});
-              cdpPool.delete(tool.site);
-              cdpIdleTimers.delete(tool.site);
-              // Drop this site's winner memo too: a memoized cdp-replay would now
-              // point at a closed Chrome and re-pay the cold relaunch.
-              for (const key of winnerCache.keys()) {
-                if (key.startsWith(`${tool.site}:`)) winnerCache.delete(key);
-              }
-            }
-          }, CDP_IDLE_TIMEOUT_MS);
-          timer.unref();
-          cdpIdleTimers.set(tool.site, timer);
-        }
-        if (!result.ok) {
-          const text = formatToolError(result);
-          return {
-            isError: true,
-            content: [{ type: 'text', text: `${text}\n(backend: ${usedBackend})` }],
-          };
-        }
-        try {
-          const cache = persistRuntimeBackendsCache({
+          const ladder = resolveLadder('auto', tool.preferredOrder);
+          const { result, usedBackend, attempts } = await runWithLadder(
+            ladder,
             tool,
+            args,
             assetRoot,
-            usedBackend,
-            attempts,
-          });
-          if (cache) {
-            tool.preferredOrder = cache.preferredOrder;
+            stealthCache,
+            { cdpPool, winnerCache, skipBootstrapSplice: Boolean(tool.preferredOrder?.length) },
+          );
+          // Reset the idle timer for this site's pooled Chrome.
+          if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
+            const prev = cdpIdleTimers.get(tool.site);
+            if (prev) clearTimeout(prev);
+            const timer = setTimeout(() => {
+              const cf = cdpPool.get(tool.site);
+              if (cf) {
+                log(`closing idle CDP session for ${tool.site}`);
+                cf.close().catch(() => {});
+                cdpPool.delete(tool.site);
+                cdpIdleTimers.delete(tool.site);
+                // Drop this site's winner memo too: a memoized cdp-replay would now
+                // point at a closed Chrome and re-pay the cold relaunch.
+                for (const key of winnerCache.keys()) {
+                  if (key.startsWith(`${tool.site}:`)) winnerCache.delete(key);
+                }
+              }
+            }, CDP_IDLE_TIMEOUT_MS);
+            timer.unref();
+            cdpIdleTimers.set(tool.site, timer);
+          }
+          if (!result.ok) {
+            const text = formatToolError(result);
+            return {
+              isError: true,
+              content: [{ type: 'text', text: `${text}\n(backend: ${usedBackend})` }],
+            };
+          }
+          try {
+            const cache = persistRuntimeBackendsCache({
+              tool,
+              assetRoot,
+              usedBackend,
+              attempts,
+            });
+            if (cache) {
+              tool.preferredOrder = cache.preferredOrder;
+              log(
+                `  learned backend order for ${tool.workflow.toolName}: ${cache.preferredOrder.join(' → ')}`,
+              );
+            }
+          } catch (err) {
             log(
-              `  learned backend order for ${tool.workflow.toolName}: ${cache.preferredOrder.join(' → ')}`,
+              `  warning: could not persist backend order for ${tool.workflow.toolName}: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
-        } catch (err) {
-          log(
-            `  warning: could not persist backend order for ${tool.workflow.toolName}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-        const text =
-          typeof result.data === 'string' ? result.data : JSON.stringify(result.data, null, 2);
-        return { content: [{ type: 'text', text: `${text}\n\n(backend: ${usedBackend})` }] };
-      });
+          const text =
+            typeof result.data === 'string' ? result.data : JSON.stringify(result.data, null, 2);
+          return { content: [{ type: 'text', text: `${text}\n\n(backend: ${usedBackend})` }] };
+        },
+        {
+          minCallSpacingMs: tool.workflow.execution?.minCallSpacingMs,
+          lastFinishedAt: siteLastFinishedAt,
+        },
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { isError: true, content: [{ type: 'text', text: `[INTERNAL] ${msg}` }] };

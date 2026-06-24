@@ -295,6 +295,13 @@ export const WorkflowSchema = z.object({
       exhaustedBackends: z.array(z.string()),
     })
     .optional(),
+  /** Optional runtime hints for provider-specific replay constraints. */
+  execution: z
+    .object({
+      /** Minimum end-to-start spacing between MCP calls for the same site. */
+      minCallSpacingMs: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
 });
 export type Workflow = z.infer<typeof WorkflowSchema>;
 

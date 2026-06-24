@@ -178,9 +178,17 @@ type WorkflowBootstrap = {
   timeoutMs?: number;
   captures?: BootstrapCapture[];
 };
+
+type WorkflowExecution = {
+  // Optional MCP end-to-start spacing for providers whose warm browser-backed
+  // sessions return unreliable data when called back-to-back.
+  minCallSpacingMs?: number;
+};
 ```
 
 Captured values enter the per-execution `${state.NAME}` namespace. That namespace is the compiler's canonical output for ephemeral values like CSRF tokens, session nonces, and cookies copied into later headers. Direct `${cookie["NAME"]}` lookup remains an expert escape hatch and resolves against the current request URL; ambiguous lookups fail with `STATE_MISSING`.
+
+When a workflow declares `execution.minCallSpacingMs`, the MCP server still serializes calls by site, then waits that long between the previous same-site call finishing and the next one starting. This is a replay correctness hint for providers whose warm CDP/browser session can return fast-but-stale empty data if it is hammered back-to-back; it is not part of the global backend ladder and leaves unrelated sites free to run concurrently.
 
 `response_header` captures must choose `mode: "first" | "last" | "all"` for duplicate headers. `Set-Cookie` is intentionally not a normal response-header capture: the runtime ingests it into the cookie jar first, then workflows capture cookies from the jar. Cookie captures can constrain `url`, `domain`, `path`, and `sameSite`; projecting an `HttpOnly` cookie into a custom header/body requires explicit `allowHttpOnlyProjection: true`.
 

@@ -142,6 +142,9 @@ export function extract(
   let frames: Array<{ rpcid: string | null; payload: any }> = [];
   if (typeof rawResponse === 'string') {
     frames = decodeBatchExecute(rawResponse);
+    if (frames.length === 0) {
+      throw new Error('Google Flights GetBookingResults response did not contain a batchexecute payload');
+    }
   } else if (rawResponse != null) {
     frames = [{ rpcid: null, payload: rawResponse }];
   }

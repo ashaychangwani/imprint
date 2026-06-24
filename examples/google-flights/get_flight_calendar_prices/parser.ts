@@ -54,6 +54,9 @@ export function extract(
 ): unknown {
   const raw = typeof rawResponse === 'string' ? rawResponse : JSON.stringify(rawResponse ?? '');
   const frames = decodeBatchExecute(raw);
+  if (frames.length === 0) {
+    throw new Error('Google Flights GetCalendarPicker response did not contain a batchexecute payload');
+  }
 
   let payload: unknown = null;
   for (const f of frames) {

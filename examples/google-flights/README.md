@@ -17,6 +17,7 @@ A 4-tool MCP server for Google Flights, compiled from a recording of a normal fl
 
 - **Protocol**: Google's `/_/FlightsFrontendUi` **`batchexecute`** endpoint returns a nested-array (protobuf-ish) payload. The compiler reverse-engineered the encoding into `_shared/batchexecute.ts` (shared decoder) + per-tool `parser.ts`, and the `f.req` request shape into `_shared/flights_request.ts` + per-tool `request-transform.ts`.
 - **Anti-bot**: the per-page `f.sid` / `bl` tokens are bootstrapped at runtime (`${state.f_sid}` placeholders), and calls run on the **cdp-replay** rung (requests issued inside a live, trusted Chrome) with a **stealth-fetch** fallback.
+- **MCP pacing**: `search_flights` declares `execution.minCallSpacingMs: 2000` because Google Flights can return fast empty result sets when warm CDP searches are fired back-to-back with no breathing room.
 - **Artifacts per tool**: `workflow.json` (API replay), `playbook.yaml` (DOM fallback), `index.ts` (MCP tool), `parser.ts` + `request-transform.ts` (codecs).
 
 ## Install
