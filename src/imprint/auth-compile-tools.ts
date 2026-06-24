@@ -81,10 +81,19 @@ export function buildAuthCompileTools(
 // ─── Auth-specific tools ────────────────────────────────────────────────────
 
 function buildTestAuthWorkflowTool(toolDir: string, teachCredentials: TeachCredentials): AgentTool {
+  // Each live test fires a real login at the site. Sites rate-flag repeated
+  // logins (and a 2FA site emits a push/code on every initiate), so once a test
+  // has PROVEN the tool reaches its success signal (AWAITING_2FA or ok:true),
+  // there is nothing more to verify live — re-running only burns logins and
+  // trips the site's rate limit, which then makes the *next* genuine login
+  // (teach's post-compile verification, or runtime) fail. Cache the first
+  // success and short-circuit further initiate-phase tests. General: applies to
+  // any site, never overfit to one.
+  let cachedSuccess: string | null = null;
   return {
     name: 'test_auth_workflow',
     description:
-      'Run the auth workflow against the live site with real credentials. Pass params (e.g. {"action": "initiate"}) to test a specific auth phase. Returns the full result including ok, error, loginResponsePreview, twoFactorType, and message.',
+      'Run the auth workflow against the live site with real credentials. Pass params (e.g. {"action": "initiate"}) to test a specific auth phase. Returns the full result including ok, error, loginResponsePreview, twoFactorType, and message. NOTE: each call fires a real login — once you have reached AWAITING_2FA (or ok:true), STOP testing and call done; further calls are short-circuited to avoid tripping the site rate limit.',
     input_schema: {
       type: 'object',
       properties: {
@@ -100,6 +109,14 @@ function buildTestAuthWorkflowTool(toolDir: string, teachCredentials: TeachCrede
       const { params = { action: 'initiate' } } = input as {
         params?: Record<string, string | number | boolean>;
       };
+      // Short-circuit any repeat test once the login is already proven — every
+      // live test re-fires the login, and re-logging in only risks rate-flagging
+      // the account (which then breaks teach's post-compile verification).
+      if (cachedSuccess) {
+        return {
+          result: `Already verified live — the login reached its success signal on a prior test (result cached below to avoid re-triggering the site's login rate limit). The auth tool is proven; call done now. Do NOT call test_auth_workflow again.\n\n${cachedSuccess}`,
+        };
+      }
       const workflowPath = pathJoin(toolDir, 'workflow.json');
       if (!existsSync(workflowPath)) {
         return { result: 'Error: workflow.json does not exist. Write it first.', isError: true };
@@ -114,16 +131,21 @@ function buildTestAuthWorkflowTool(toolDir: string, teachCredentials: TeachCrede
             values: teachCredentials.values,
           },
         });
-        return {
-          result: JSON.stringify(
-            {
-              usedBackend: ladderResult.usedBackend,
-              ...ladderResult.result,
-            },
-            null,
-            2,
-          ),
-        };
+        const rendered = JSON.stringify(
+          {
+            usedBackend: ladderResult.usedBackend,
+            ...ladderResult.result,
+          },
+          null,
+          2,
+        );
+        // A reached-2FA challenge or a full no-2FA login is terminal success —
+        // cache it so any further test calls short-circuit.
+        const r = ladderResult.result;
+        if (r.ok === true || (!r.ok && r.error === 'AWAITING_2FA')) {
+          cachedSuccess = rendered;
+        }
+        return { result: rendered };
       } catch (err) {
         return {
           result: `Error running workflow: ${err instanceof Error ? err.message : String(err)}`,
