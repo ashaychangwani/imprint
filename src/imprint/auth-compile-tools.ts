@@ -86,7 +86,7 @@ export function buildAuthCompileTools(
 
 /** Lightweight structural checks after the agent calls done(). The agent has
  *  already proven the workflow works live (AWAITING_2FA / ok:true from
- *  test_auth_workflow); this just guards the artifact's shape. Returns a list
+ *  run_verification); this just guards the artifact's shape. Returns a list
  *  of failure strings (empty = passed). */
 export function authExternalVerification(toolDir: string): string[] {
   const failures: string[] = [];

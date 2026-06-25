@@ -59,7 +59,7 @@ interface RunCompileMcpServerOptions {
   buildPlanPath?: string;
   /** Shared-module build manifest for this site (verified flags). */
   sharedModules?: SharedModuleManifestEntry[];
-  /** Present → run in AUTH mode: register the auth toolset (test_auth_workflow)
+  /** Present → run in AUTH mode: register the auth toolset (run_verification)
    *  and run authExternalVerification in done() instead of the data-tool
    *  verification. */
   authToolPlan?: NonNullable<AuthToolPlan>;
@@ -107,7 +107,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
 
   if (isAuthMode) {
     const site = opts.site ?? session.site;
-    // Credentials power the live test_auth_workflow tool (and any login playbook
+    // Credentials power the live run_verification tool (and any login playbook
     // it drives). Loaded here (not passed on the command line) to keep secrets
     // out of argv.
     const creds = await loadCredentialStore(site);
@@ -228,7 +228,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     {
       capabilities: { tools: {} },
       instructions: isAuthMode
-        ? 'These tools let you turn the captured login + 2FA flow into an auth workflow.json. Read the recording, write workflow.json, test it live with test_auth_workflow (AWAITING_2FA = success), and call done() when login works. The done tool verifies the workflow structure and will tell you what to fix.'
+        ? 'These tools let you turn the captured login + 2FA flow into an auth workflow.json. Read the recording, write workflow.json, test it live with run_verification (AWAITING_2FA = success), and call done() when login works. The done tool verifies the workflow structure and will tell you what to fix.'
         : 'These tools let you reverse-engineer the captured session into workflow.json + parser.ts + parser.test.ts. Read the recording, write the artifacts, run tests, and call done() when verified. The done tool runs external verification and will tell you what to fix if anything is wrong.',
     },
   );
@@ -258,7 +258,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
       log(`done() called: ${summary}`);
 
       // Auth mode: lightweight structural verification (the agent already proved
-      // the workflow works live via test_auth_workflow). No param/live stamps.
+      // the workflow works live via run_verification). No param/live stamps.
       if (isAuthMode) {
         const failures = authExternalVerification(opts.toolDir);
         if (failures.length === 0) {
@@ -322,7 +322,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
 
 ${failures.map((f) => `- ${f}`).join('\n')}
 
-Fix the issues in workflow.json, re-test with test_auth_workflow, and call done again when fixed.`,
+Fix the issues in workflow.json, re-test with run_verification, and call done again when fixed.`,
             },
           ],
         };

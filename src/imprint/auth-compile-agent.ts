@@ -3,7 +3,7 @@
  * workflow.json, tests it against the live site, iterates until login works.
  *
  * Mirrors compile-agent.ts for data tools but with the auth-specific live-test
- * tool (test_auth_workflow) and lighter verification. Authentication runs on a
+ * tool (run_verification) and lighter verification. Authentication runs on a
  * single rung — headed cdp-replay (a real visible browser that replays the
  * recorded requests in-page); see AUTH_RUNGS in auth-verifier.ts. There is no
  * bespoke login backend and no playbook rung in the auth path.
@@ -249,7 +249,7 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
 
 ${failures.map((f) => `- ${f}`).join('\n')}
 
-Fix the issues in workflow.json, re-test with test_auth_workflow, and call done again.`;
+Fix the issues in workflow.json, re-test with run_verification, and call done again.`;
   }
 
   writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
