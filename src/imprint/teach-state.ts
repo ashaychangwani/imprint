@@ -426,6 +426,26 @@ export function analysisBlockRunsForWindow(startIdx: number, stopIdx: number): b
   );
 }
 
+/** The shared-pipeline steps recorded when the analysis block
+ *  (replay-and-diff → triage → detect-candidates) completes. */
+export const ANALYSIS_COMPLETED_STEPS: TeachStep[] = [
+  'record',
+  'redact',
+  'replay-and-diff',
+  'triage',
+  'detect-candidates',
+];
+
+/** Merge the analysis-block steps into a workflow's prior completedSteps WITHOUT
+ *  losing later progress. A re-run of detect-candidates (`--from-step`/`--only
+ *  detect-candidates`, or interactive redo) reuses an existing workflowKey, and the
+ *  candidate checkpoint replaces the whole WorkflowState — writing only the analysis
+ *  steps would regress a tool that already reached generate…register. The union
+ *  preserves prior steps; a first run (no prior entry) just gets the analysis steps. */
+export function mergeAnalysisCompletedSteps(prior: TeachStep[] | undefined): TeachStep[] {
+  return [...new Set<TeachStep>([...(prior ?? []), ...ANALYSIS_COMPLETED_STEPS])];
+}
+
 /** Validate and resolve the `imprint teach` phase-window flags (`--from-step`,
  *  `--to-step`, `--only`) against the canonical step list. `--only X` expands to
  *  `--from-step X --to-step X`. Returns the resolved window, or an `error` string

@@ -86,6 +86,7 @@ import {
   friendlySessionTimestamp,
   isExistingTeachFile as isExistingFile,
   loadTeachState,
+  mergeAnalysisCompletedSteps,
   nextTeachStep as nextStep,
   pruneStalePendingTeachWorkflows,
   resolveStepStartTarget,
@@ -561,7 +562,13 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     // Flush OpenTelemetry spans before exiting: process.exit(0) bypasses the CLI's
     // shutdownTracing() (run in its .then() handler), which would otherwise lose
     // batched spans for windowed (--to-step/--only) runs when IMPRINT_TRACE=1.
-    await shutdownTracing();
+    // Guard the flush so a shutdown error can't prevent the exit (this is typed
+    // Promise<never> and callers rely on it never returning).
+    try {
+      await shutdownTracing();
+    } catch {
+      /* best-effort flush — exit regardless */
+    }
     process.exit(0);
   };
   const spinner = p.spinner();
@@ -1059,7 +1066,15 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         const candidatePlans = selected.map((candidate) => {
           checkpoint(site, state, candidate.toolName, {
             ...baseState,
-            completedSteps: ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+            // Merge, don't replace: a re-run of the analysis block
+            // (`--from-step`/`--only detect-candidates`, or interactive redo) reuses
+            // the tool's existing workflowKey, and checkpoint() replaces the whole
+            // WorkflowState. Writing only the analysis steps would regress a tool
+            // that already reached generate…register, silently dropping those steps
+            // (and breaking a later `--from-step register`).
+            completedSteps: mergeAnalysisCompletedSteps(
+              state.workflows[candidate.toolName]?.completedSteps,
+            ),
             candidate,
             sharedContext,
           });

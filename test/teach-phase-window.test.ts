@@ -5,12 +5,14 @@
  */
 import { describe, expect, it } from 'bun:test';
 import {
+  ANALYSIS_COMPLETED_STEPS,
   TEACH_STEPS,
   type TeachState,
   type WorkflowState,
   analysisBlockRunsForWindow,
   assertResumableAt,
   isResumableAt,
+  mergeAnalysisCompletedSteps,
   resolveStepStartTarget,
   resolveTeachPhaseWindow,
   selectMultiToolResumePlans,
@@ -333,5 +335,27 @@ describe('resolveTeachPhaseWindow (CLI flag validation)', () => {
     expect('error' in invalid && invalid.error).toMatch(/invalid --only "bogus"/);
     const withSession = resolveTeachPhaseWindow({ only: 'redact', 'from-session': 'x.json' });
     expect('error' in withSession && withSession.error).toMatch(/--only resumes a prior run/);
+  });
+});
+
+describe('mergeAnalysisCompletedSteps (re-detect must not regress progress)', () => {
+  it('returns just the analysis steps for a first run (no prior state)', () => {
+    expect(mergeAnalysisCompletedSteps(undefined)).toEqual(ANALYSIS_COMPLETED_STEPS);
+    expect(mergeAnalysisCompletedSteps([])).toEqual(ANALYSIS_COMPLETED_STEPS);
+  });
+
+  it('preserves later steps when re-detecting a fully-compiled tool', () => {
+    // A completed single-tool run reached every step except plan-prereqs. Re-running
+    // detect-candidates must NOT drop generate…register from completedSteps.
+    const full = TEACH_STEPS.filter((s) => s !== 'plan-prereqs');
+    const merged = mergeAnalysisCompletedSteps(full);
+    for (const step of full) expect(merged).toContain(step);
+    expect(merged).toContain('register');
+  });
+
+  it('does not duplicate steps already present', () => {
+    const merged = mergeAnalysisCompletedSteps(['record', 'redact', 'generate']);
+    expect(new Set(merged).size).toBe(merged.length);
+    expect(merged).toContain('generate');
   });
 });
