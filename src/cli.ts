@@ -164,11 +164,12 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--to-step <step>',
         description:
-          'Stop after <step> instead of running to the end. Combine with --from-step (or --from-session) to run a window of phases.',
+          'Stop after <step> instead of running to the end. Combine with --from-step (or --from-session) to run a window of phases. Note: the per-tool compile (generate→compile-playbook→emit) is atomic, so a --to-step inside it runs the whole compile and stops before register.',
       },
       {
         name: '--only <step>',
-        description: 'Run exactly one phase: shorthand for --from-step <step> --to-step <step>.',
+        description:
+          'Run a single phase: shorthand for --from-step <step> --to-step <step> (not combinable with either). For a compile phase the whole atomic compile unit runs (see --to-step).',
       },
     ],
     example: 'imprint teach google-flights --url https://flights.google.com',

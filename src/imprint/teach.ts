@@ -529,6 +529,18 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // given step (default = the last step, i.e. run to the end). A phase runs only
   // when it falls within [startFrom, toStep].
   const stopIdx = opts.toStep ? STEPS.indexOf(opts.toStep) : STEPS.length - 1;
+  // Backwards-window guard for the one path the CLI validation can't see: an
+  // interactive resume (continue/redo) can pick a startFrom AFTER --to-step (e.g.
+  // `--to-step redact`, then "continue" a workflow whose next step is generate),
+  // producing an empty window that would silently run nothing and print a
+  // backwards "generate → redact" summary. (Explicit --from-step/--to-step
+  // ordering is already validated in resolveTeachPhaseWindow.)
+  if (opts.toStep && startIdx > stopIdx) {
+    throw new Error(
+      `The workflow resumes at "${startFrom}", which is after --to-step "${opts.toStep}" — nothing would run. ` +
+        `Re-run without --to-step, or with --to-step "${startFrom}" or later.`,
+    );
+  }
   /** True when `step` is inside the [startFrom, toStep] window. Replaces the bare
    *  `startIdx <= idx(step)` phase gates so a phase can also be skipped when it's
    *  PAST the requested stop step. */
@@ -539,9 +551,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   /** Stop the run early when `--to-step`/`--only` bounded the window before the
    *  normal end. Used at each phase-group boundary so the full-compile tail never
    *  runs on a partial. Reports what ran; exits 0 (the CLI ignores the return). */
-  const finishEarly = async (): Promise<never> => {
+  const finishEarly = async (lastStep?: Step): Promise<never> => {
+    // `lastStep` overrides the reported stop when the actual last phase differs
+    // from stopIdx — the per-tool compile is atomic, so a --to-step inside it
+    // (generate/compile-playbook) actually runs through emit. Report it honestly.
     p.outro(
-      `Ran teach phases ${startFrom} → ${STEPS[stopIdx]} for ${site}; stopped here (--to-step/--only).`,
+      `Ran teach phases ${startFrom} → ${lastStep ?? STEPS[stopIdx]} for ${site}; stopped here (--to-step/--only).`,
     );
     // Flush OpenTelemetry spans before exiting: process.exit(0) bypasses the CLI's
     // shutdownTracing() (run in its .then() handler), which would otherwise lose
@@ -1583,7 +1598,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // it above. Finish with the phase-window summary instead of the normal "Done!"
   // outro, after clearCachedToken + unverified warnings have run so the compile
   // token is cleaned up and waivers are still surfaced.
-  if (stopIdx < STEPS.indexOf('register')) await finishEarly();
+  // The per-tool compile is atomic (generate→compile-playbook→emit), so any
+  // --to-step landing inside it ran through emit — report that, not the requested
+  // mid-compile stopIdx.
+  if (stopIdx < STEPS.indexOf('register')) await finishEarly('emit');
   p.outro(
     `Done! ${results.length} tool${results.length === 1 ? '' : 's'} ready: ${results.map((r) => r.workflow.toolName).join(', ')}${
       unverified.length > 0 ? ` (${unverified.length} unverified — see warnings above)` : ''
@@ -1940,6 +1958,14 @@ async function compileSelectedCandidate(opts: {
   const workflowDir = localToolDir(site, toolName);
   mkdirSync(workflowDir, { recursive: true });
 
+  // The per-tool compile (generate → compile-playbook → emit) is ATOMIC by design:
+  // each phase gates on startIdx ONLY (not the window's stopIdx), so once started it
+  // runs through emit. Stopping mid-compile would leave artifact gaps the result
+  // tail (results array, register, audit) assumes exist — see the "Granularity"
+  // section of docs/plans/teach-phase-window.md. `--from-step` can RESUME mid-compile
+  // (each `else` branch loads the prior phase's artifact from disk); `--to-step`
+  // within the compile runs the whole unit and stops before register. Do NOT add a
+  // stopIdx gate here without also handling partial-artifact results downstream.
   // ── Step 1: plan THEN execute (workflow.json) ──
   let genResult: { workflow: Workflow; workflowPath: string } | undefined;
   if (startIdx <= STEPS.indexOf('generate')) {

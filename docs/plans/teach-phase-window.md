@@ -71,9 +71,13 @@ restart. `record` is always allowed (it produces everything fresh).
 - The **`replay-and-diff → triage → detect-candidates`** analysis runs as one
   atomic block (its sub-steps share a parallel run + the triaged session), so
   stopping at any of them completes through `detect-candidates`.
-- The **per-tool `generate → compile-playbook → emit`** compile runs as a unit
-  per tool; `--to-step` within it stops before `register` rather than mid-tool
-  (stopping mid-compile would leave artifact gaps the result tail assumes exist).
+- The **per-tool `generate → compile-playbook → emit`** compile is atomic per
+  tool. A `--to-step` (or `--only`) landing inside it runs the **whole** compile
+  unit and stops before `register` rather than mid-tool — stopping mid-compile
+  would leave artifact gaps the result tail assumes exist, so its early-exit
+  summary reports `→ emit`. `--from-step`, by contrast, **can** resume mid-compile:
+  each phase's `else` branch loads the prior phase's artifact (`workflow.json` /
+  `playbook.yaml`) from disk, so `--from-step compile-playbook` is valid.
 
 ## Files
 
