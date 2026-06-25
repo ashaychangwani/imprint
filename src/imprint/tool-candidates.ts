@@ -106,6 +106,16 @@ export const SharedCompileContextSchema = z.object({
 });
 export type SharedCompileContext = z.infer<typeof SharedCompileContextSchema>;
 
+/** True when the recording carries an auth flow worth compiling into a standalone
+ *  `authenticate_<site>` tool — credentials were submitted, with OR without 2FA.
+ *  Drives the build planner to emit `authTool` so the login runs ONCE and the
+ *  site's data tools reuse one stored session, instead of every data tool
+ *  replaying the login inline (which hammers the site at compile time). */
+export function sharedContextHasAuth(ctx: SharedCompileContext | undefined): boolean {
+  if (!ctx) return false;
+  return ctx.twoFactorDetected || ctx.loginRequestSeqs.length > 0 || ctx.credentialNames.length > 0;
+}
+
 export const ToolCandidateSchema = z.object({
   toolName: z.string().regex(/^[a-z][a-z0-9_]*$/),
   description: z.string().min(1),

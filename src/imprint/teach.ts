@@ -102,6 +102,7 @@ import {
   buildSharedCompileContext as buildCandidateSharedCompileContext,
   detectToolCandidates,
   primaryToolCandidate,
+  sharedContextHasAuth,
 } from './tool-candidates.ts';
 import { planToolCompile } from './tool-plan.ts';
 import { setSpanAttributes, shutdownTracing, traced } from './tracing.ts';
@@ -1296,18 +1297,19 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   // ── plan-prereqs: plan + build shared modules once before the fan-out ──
   // Engages for ≥2 selected tools (to plan shared modules) OR when the recording
-  // carries a login/2FA flow. The planner is the ONLY producer of the build-plan
-  // `authTool`, so a single authenticated tool must still run it — otherwise the
-  // 2FA is detected but never compiled into an auth tool. Resumes-past-generate
-  // are unchanged.
+  // carries ANY login (with or without 2FA). The planner is the ONLY producer of
+  // the build-plan `authTool`, so an authenticated single-tool site must still run
+  // it — otherwise the login is detected but never compiled into a reusable auth
+  // tool, and every data tool re-logs-in inline (hammering the site at compile
+  // time). Resumes-past-generate are unchanged.
   const selectedCandidates = plans.map((pl) => pl.candidate).filter((c): c is ToolCandidate => !!c);
   const willGenerate = plans.some((pl) => STEPS.indexOf(pl.startFrom) <= STEPS.indexOf('generate'));
-  // Detected login/2FA → the planner must run (even for a single data tool) so it
+  // Detected login/auth → the planner must run (even for a single data tool) so it
   // emits the build-plan `authTool` the auth-compile block below consumes.
-  const twoFactorDetected = plans.some((pl) => pl.sharedContext?.twoFactorDetected === true);
+  const authDetected = plans.some((pl) => sharedContextHasAuth(pl.sharedContext));
   let buildPlanPath = '';
   let sharedModulesManifest: SharedModuleManifestEntry[] = [];
-  if ((selectedCandidates.length >= 2 || twoFactorDetected) && willGenerate && compileModel) {
+  if ((selectedCandidates.length >= 2 || authDetected) && willGenerate && compileModel) {
     const sidecar = buildPlanSidecarPath(site);
     const firstWs = state.workflows[plans[0]?.workflowKey ?? ''];
     // Reuse the cached plan only when resuming PAST plan-prereqs (e.g. --from-step

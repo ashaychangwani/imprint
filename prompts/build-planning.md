@@ -28,11 +28,11 @@ You receive:
       "dependsOn": ["_shared/<other>.ts"]           // other shared modules this one imports (build order)
     }
   ],
-  "authTool": {                                     // OPTIONAL — only when sharedContext.twoFactorDetected is true
+  "authTool": {                                     // OPTIONAL — whenever the recording has a login (sharedContext.loginRequestSeqs non-empty), with or without 2FA
     "toolName": "authenticate_<site>",
     "loginRequestSeqs": [number],
     "twoFactorRequestSeqs": [number],
-    "twoFactorType": "otp" | "push",                // structural: otp = code typed back; push = poll until approved
+    "twoFactorType": "none" | "otp" | "push",       // structural: none = login completes in the login request(s); otp = code typed back; push = poll until approved
     "twoFactorContext": [string],                   // otp only: initiate-response fields the submit_otp request chains via ${state.X}
     "credentialNames": ["username", "password"],
     "captures": [
@@ -75,7 +75,7 @@ You receive:
 3. **`request-transform`** — URL signing or body construction shared across tools. Wire-up: the consuming tool sets `requestTransformModule: "../_shared/<name>.ts"`. Ground it in `ephemeralValues` (browser_minted, high-entropy query param) and `sourceSeqs`. The exported `transform(method, url, responses, params?)` returns the signed URL (or `{ url, body? }`).
 4. **`parser-helper`** — a decoder/normalizer ≥2 tools' parsers call (e.g. a shared JSPB walker, a shared field mapper). The consuming tool's parser.ts does `import { ... } from '../_shared/<name>.ts'`. Ground it in a captured response body (`sourceSeqs`).
 5. **`types`** — shared TypeScript interfaces used by ≥2 parsers. Type-only; no runtime behavior.
-6. **Auth is NEVER a shared module.** When `sharedContext.twoFactorDetected` is **true**, declare an `authTool` entry — a standalone `authenticate_<site>` tool that handles the full login + 2FA flow. Carry `twoFactorType` from `sharedContext` (structural: `otp` = a code typed back into a later request; `push` = poll one endpoint until it flips/sets a session cookie), and for `otp` carry `twoFactorContext` (the initiate-response fields the completion request chains). Data tools for the same site set `authRecipe.required: false` and `dependsOnAuth: true` — they assume cookies are already present from a prior `authenticate_<site>` call. When the site has simple login (no 2FA), each tool still replicates login inline via `authRecipe` and `dependsOnAuth` is false/omitted. When there is no login at all, omit `authTool` and set `authRecipe.required: false` with empty arrays.
+6. **Auth is NEVER a shared module.** Whenever the recording has a **login** (`sharedContext.loginRequestSeqs` is non-empty — credentials were submitted, **with OR without 2FA**), declare an `authTool` entry: a standalone `authenticate_<site>` tool that handles the full login. Carry `twoFactorType` from `sharedContext` (structural: `none` = the login completes in the login request(s), no second step; `otp` = a code typed back into a later request; `push` = poll one endpoint until it flips/sets a session cookie), and for `otp` carry `twoFactorContext` (the initiate-response fields the completion request chains). Data tools for the same site set `authRecipe.required: false` and `dependsOnAuth: true` — they reuse the session a prior `authenticate_<site>` call stored, so the login runs **once**, not once per tool (re-logging-in inline for every tool hammers the site and gets rate-flagged at compile time). Only when there is **no login at all** (`loginRequestSeqs` empty), omit `authTool` and set `authRecipe.required: false` with empty arrays.
 7. **`exportSignatures` must be real TypeScript signatures** the builder will implement and the verifier will check for. List every public export.
 8. **`spec` must be concrete enough to implement and test** — name the inputs, the exact output, and the `sourceSeqs` that prove it (e.g. "given the URL at seq 41 with the `sig` param stripped, regenerate `sig` to match the recorded value").
 9. **`dependsOn` only references other `sharedModules[].path`.** No cycles.

@@ -32,7 +32,11 @@ import { imprintHomeDir, localSharedDir } from './paths.ts';
 import { buildSharedModule } from './prereq-builder.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { ClassifiedValue } from './session-diff.ts';
-import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
+import {
+  type SharedCompileContext,
+  type ToolCandidate,
+  sharedContextHasAuth,
+} from './tool-candidates.ts';
 import { SessionSchema } from './types.ts';
 
 const log = createLog('teach-plan');
@@ -79,9 +83,9 @@ export async function planAndBuildPrereqs(opts: {
 }): Promise<PlanAndBuildPrereqsResult> {
   // Gate: shared prereqs only make sense across ≥2 tools — BUT the planner is also
   // the only producer of the build-plan `authTool`, so a single authenticated tool
-  // (a detected login/2FA flow) must still run it, else the 2FA is detected yet
-  // never compiled into an auth tool.
-  const hasAuthFlow = opts.sharedContext?.twoFactorDetected === true;
+  // (any detected login, with or without 2FA) must still run it, else the login is
+  // detected yet never compiled into a reusable auth tool.
+  const hasAuthFlow = sharedContextHasAuth(opts.sharedContext);
   if (opts.candidates.length < 2 && !hasAuthFlow) return { buildPlanPath: '', sharedModules: [] };
   if (buildPlanDisabled()) {
     log('IMPRINT_NO_BUILD_PLAN set — skipping build plan + shared prereqs');
