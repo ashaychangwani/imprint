@@ -1488,6 +1488,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     });
   } finally {
     unmuteLog();
+    // Drop the transient compile-time stealth token (shared across this site's
+    // per-tool `bun test` processes) now that every tool has compiled. In the
+    // finally so it runs on compile failure too: otherwise a thrown compile (or
+    // the `results.length === 0` throw below, or any later throw / early exit)
+    // would leak a file holding a live session token on disk.
+    clearCachedToken(localSiteDir(site));
   }
 
   if (results.length === 0) {
@@ -1554,11 +1560,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       updateCheckpoint(site, state, result.workflow.toolName, 'register');
     }
   }
-
-  // Drop the transient compile-time stealth token (shared across this site's
-  // per-tool `bun test` processes). It holds a live session token and is no
-  // longer needed once every tool has compiled.
-  clearCachedToken(localSiteDir(site));
 
   // Surface any tools that shipped without a passing live integration test
   // (waived during compile due to anti-bot / infra). These rely on the runtime

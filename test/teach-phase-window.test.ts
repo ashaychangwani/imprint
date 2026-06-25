@@ -71,6 +71,19 @@ describe('assertResumableAt (phase dependency guard)', () => {
       /missing required earlier step\(s\) \[replay-and-diff, triage, detect-candidates\]/,
     );
   });
+
+  it('ignores unknown step names in completedSteps (graceful degradation)', () => {
+    // A corrupted/migrated state may carry a step not in TEACH_STEPS; it must be
+    // ignored, not counted as progress — the furthest reached here is still redact.
+    const w = ws([
+      'record',
+      'redact',
+      'bogus-step-name',
+    ] as unknown as WorkflowState['completedSteps']);
+    expect(() => assertResumableAt('s', 'k', w, 'detect-candidates')).toThrow(
+      /Latest completed step: redact/,
+    );
+  });
 });
 
 describe('resolveStepStartTarget (workflow selection + guard)', () => {
@@ -279,5 +292,39 @@ describe('resolveTeachPhaseWindow (CLI flag validation)', () => {
 
   it('returns an empty window when no phase flags are set', () => {
     expect(resolveTeachPhaseWindow({})).toEqual({ fromStep: undefined, toStep: undefined });
+  });
+
+  it('rejects --only combined with --from-step', () => {
+    const r = resolveTeachPhaseWindow({ only: 'triage', 'from-step': 'redact' });
+    expect('error' in r && r.error).toMatch(/--only cannot combine/);
+  });
+
+  it('rejects --only combined with --to-step', () => {
+    const r = resolveTeachPhaseWindow({ only: 'triage', 'to-step': 'generate' });
+    expect('error' in r && r.error).toMatch(/--only cannot combine/);
+  });
+
+  it('expands --only to a single-phase window for every step', () => {
+    for (const step of TEACH_STEPS) {
+      expect(resolveTeachPhaseWindow({ only: step })).toEqual({ fromStep: step, toStep: step });
+    }
+  });
+
+  it('accepts --to-step at the first step (record) and last step (register)', () => {
+    expect(resolveTeachPhaseWindow({ 'to-step': 'record' })).toEqual({
+      fromStep: undefined,
+      toStep: 'record',
+    });
+    expect(resolveTeachPhaseWindow({ 'to-step': 'register' })).toEqual({
+      fromStep: undefined,
+      toStep: 'register',
+    });
+  });
+
+  it('accepts the full explicit range --from-step record --to-step register', () => {
+    expect(resolveTeachPhaseWindow({ 'from-step': 'record', 'to-step': 'register' })).toEqual({
+      fromStep: 'record',
+      toStep: 'register',
+    });
   });
 });

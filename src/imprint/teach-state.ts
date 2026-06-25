@@ -437,6 +437,18 @@ export function resolveTeachPhaseWindow(values: {
   only?: string;
   'from-session'?: string;
 }): { fromStep?: TeachStep; toStep?: TeachStep } | { error: string } {
+  // `--only` is shorthand for `--from-step X --to-step X`; combining it with an
+  // explicit --from-step/--to-step is contradictory (and the nullish-coalescing
+  // below would otherwise silently drop --only). Reject it with a clear message.
+  if (
+    values.only !== undefined &&
+    (values['from-step'] !== undefined || values['to-step'] !== undefined)
+  ) {
+    return {
+      error:
+        'error: --only cannot combine with --from-step or --to-step. Use either --only <step>, or --from-step/--to-step.',
+    };
+  }
   const fromStep = values['from-step'] ?? values.only;
   const toStep = values['to-step'] ?? values.only;
   const steps = TEACH_STEPS as readonly string[];
