@@ -1411,39 +1411,19 @@ async function main(argv: string[]): Promise<number> {
       });
 
       // ── Phase-window flags: run only specific steps of the teach chain ──
-      // `--only X` = `--from-step X --to-step X`. Validate names against the
-      // canonical step list; --from-step resumes a prior run (guarded in teach.ts)
-      // so it can't combine with --from-session (a fresh-input entry mode).
-      const { TEACH_STEPS } = await import('./imprint/teach-state.ts');
-      const fromStep = values['from-step'] ?? values.only;
-      const toStep = values['to-step'] ?? values.only;
-      for (const [flag, val] of [
-        ['--from-step', fromStep],
-        ['--to-step', toStep],
-      ] as const) {
-        if (val !== undefined && !(TEACH_STEPS as readonly string[]).includes(val)) {
-          console.error(`error: invalid ${flag} "${val}" — valid steps: ${TEACH_STEPS.join(', ')}`);
-          return 2;
-        }
-      }
-      if (
-        fromStep &&
-        toStep &&
-        (TEACH_STEPS as readonly string[]).indexOf(fromStep) >
-          (TEACH_STEPS as readonly string[]).indexOf(toStep)
-      ) {
-        console.error(`error: --from-step "${fromStep}" comes after --to-step "${toStep}"`);
+      // `--only X` = `--from-step X --to-step X`. resolveTeachPhaseWindow validates
+      // step names against the canonical list and the flag combinations (ordering,
+      // mutual exclusion with --from-session, and --to-step ≥ redact when
+      // --from-session enters the chain at redact), returning the resolved window
+      // or the exact error message to print. Extracted for unit-testing.
+      const { resolveTeachPhaseWindow } = await import('./imprint/teach-state.ts');
+      const phaseWindow = resolveTeachPhaseWindow(values);
+      if ('error' in phaseWindow) {
+        console.error(phaseWindow.error);
         return 2;
       }
-      if (fromStep && values['from-session']) {
-        console.error(
-          'error: --from-step resumes a prior run; it cannot combine with --from-session. Use --to-step with --from-session to cap phases on a fresh session.',
-        );
-        return 2;
-      }
-      // Pin types for teach() below.
-      const fromStepArg = fromStep as import('./imprint/teach-state.ts').TeachStep | undefined;
-      const toStepArg = toStep as import('./imprint/teach-state.ts').TeachStep | undefined;
+      const fromStepArg = phaseWindow.fromStep;
+      const toStepArg = phaseWindow.toStep;
 
       if (!site && values['no-interactive']) {
         console.error(
