@@ -140,6 +140,34 @@ describe('push poll terminal (recording-grounded)', () => {
     if (!r.ok) expect(r.message).toMatch(/not approved/i);
   });
 
+  it('bounds each poll with a timeout so a hung pollEndpoint cannot hang complete forever', async () => {
+    setBackendOverride(memBackend());
+    let polls = 0;
+    // A poll that accepts the connection but never responds — it settles ONLY when
+    // the per-poll AbortController fires. Without the timeout this single fetch (and
+    // thus the whole `complete` call) would hang forever and the budget never advances.
+    const fetchMock = (async (url: string, init?: { signal?: AbortSignal }) => {
+      if (String(url).includes('/poll')) {
+        polls += 1;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      }
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const r = await executeWorkflow({
+      workflow: pushWorkflow(terminal),
+      params: { action: 'complete' },
+      credentials: creds,
+      fetchImpl: fetchMock,
+      requestTimeoutMs: 20, // each hung poll aborts fast; the loop still advances
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/not approved/i);
+    expect(polls).toBe(5); // every attempt ran and timed out — no hang, no early stop
+  });
+
   it('honors IMPRINT_AUTH_POLL_ATTEMPTS to bound an unattended push attempt', async () => {
     // teach sets this env for an unattended 2FA *attempt* so the push poll fails
     // fast instead of running the artifact's generous default (maxPollAttempts:5

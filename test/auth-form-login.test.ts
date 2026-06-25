@@ -195,4 +195,32 @@ describe('authExternalVerification', () => {
     wf.authConfig = { twoFactorType: 'otp', initiateRequestCount: 1, twoFactorContext: [] };
     expect(authExternalVerification(writeWorkflow(wf))).toEqual([]);
   });
+
+  it("flags 'otp' with UNSET initiateRequestCount — completion captures must not count as initiate coverage", () => {
+    // With no initiateRequestCount there is no initiate phase, so the `mfaId`
+    // capture below is on a completion-phase request and must NOT cover the
+    // ${state.mfaId} read. (The earlier `slice(0, initiateCount || undefined)`
+    // bug returned ALL requests for an unset count, wrongly marking it covered.)
+    const wf = validWorkflow();
+    wf.parameters = [{ name: 'otp_code', type: 'string', description: 'code' }];
+    wf.requests = [
+      {
+        method: 'POST',
+        url: 'https://x.example/login',
+        headers: {},
+        body: 'u=${credential.username}',
+        captures: [{ name: 'mfaId', source: 'json', path: 'reauth.mfaId' }],
+      },
+      {
+        method: 'POST',
+        url: 'https://x.example/otp',
+        headers: {},
+        body: 'm=${state.mfaId}&c=${param.otp_code}',
+      },
+    ];
+    // initiateRequestCount intentionally omitted.
+    wf.authConfig = { twoFactorType: 'otp', twoFactorContext: [] };
+    const failures = authExternalVerification(writeWorkflow(wf));
+    expect(failures.some((f) => f.includes('mfaId'))).toBe(true);
+  });
 });

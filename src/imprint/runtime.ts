@@ -591,11 +591,18 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         const pollHeaders: Record<string, string> = {};
         if (cookieHeader) pollHeaders.cookie = cookieHeader;
         if (pollContentType) pollHeaders['content-type'] = pollContentType;
+        // Bound each poll the same way as a normal request: without a timeout a
+        // pollEndpoint that accepts the connection but never responds hangs this
+        // single fetch forever, so the poll budget never advances and `complete`
+        // hangs indefinitely. An abort throws → caught below → next attempt.
+        const pollController = new AbortController();
+        const pollTimeout = setTimeout(() => pollController.abort(), timeoutMs);
         try {
           const pollResp = await fetchFn(authConfig.pollEndpoint, {
             method: pollMethod,
             headers: pollHeaders,
             body: pollBody,
+            signal: pollController.signal,
           });
           if (pollResp.ok) {
             const body = await safeText(pollResp);
@@ -639,7 +646,10 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
             }
           }
         } catch {
-          // retry
+          // retry (a network error or a timed-out abort falls through to the
+          // next poll attempt rather than failing the whole completion)
+        } finally {
+          clearTimeout(pollTimeout);
         }
       }
       if (!approved) {

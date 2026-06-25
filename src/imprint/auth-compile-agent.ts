@@ -34,7 +34,6 @@ import {
 import { type AuthPhaseResult, AuthVerifier } from './auth-verifier.ts';
 import type { AuthToolPlan } from './build-plan.ts';
 import { compileAuthViaClaudeCli } from './claude-cli-compile.ts';
-import { compileAuthViaCodexCli } from './codex-cli-compile.ts';
 import type {
   AuthCheckpoint,
   CompileAgentProgress,
@@ -146,21 +145,20 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
       });
     }
     if (resolved.name === 'codex-cli') {
-      return await compileAuthViaCodexCli({
-        session,
-        absoluteToolDir: toolDir,
-        sessionPath: opts.sessionPath,
-        systemPromptPath,
-        deadlineMs,
-        startTime,
-        onProgress: opts.onProgress,
-        authMode: {
-          site,
-          authPlanJson: JSON.stringify(authToolPlan),
-          allowedTools: AUTH_COMPILE_TOOL_NAMES,
-          initialPrompt: initialUserMessage,
-        },
-      });
+      // Auth verification is checkpoint-based: the agent calls run_verification and
+      // STOPS, and the orchestrator must resume the SAME session past that
+      // checkpoint with the live result. codex-cli runs ephemerally (no resume) and
+      // its driver only recognizes the done/give_up sentinels — not the checkpoint
+      // sentinel — so a run_verification checkpoint exits 0, is misread as "stopped
+      // early", and every codex auth compile fails with a misleading message.
+      // Reject it up front rather than fail late. (Data-tool compiles, which never
+      // checkpoint, still run on codex-cli.)
+      throw new Error(
+        [
+          'provider "codex-cli" cannot compile an authenticate tool: live 2FA verification is checkpoint-based and codex-cli runs ephemerally — it cannot resume past a run_verification checkpoint.',
+          '→ use one of: claude-cli, anthropic-api (set ANTHROPIC_API_KEY)',
+        ].join('\n'),
+      );
     }
     if (!isToolUseProvider(resolved)) {
       throw new Error(

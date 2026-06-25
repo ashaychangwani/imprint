@@ -149,7 +149,11 @@ export function authExternalVerification(toolDir: string): string[] {
     const initiateCount = authConfig.initiateRequestCount || 0;
     const completionRequests = workflow.requests.slice(initiateCount);
     const initiateCaptureNames = new Set<string>();
-    for (const req of workflow.requests.slice(0, initiateCount || undefined)) {
+    // slice(0, initiateCount) — NOT `initiateCount || undefined`: when the count is
+    // 0/unset there are NO initiate-phase requests, so `slice(0, 0)` must yield an
+    // empty set. `|| undefined` would make this `slice(0, undefined)` = ALL requests,
+    // counting completion-phase captures as "covered" and defeating the check.
+    for (const req of workflow.requests.slice(0, initiateCount)) {
       for (const cap of req.captures ?? []) initiateCaptureNames.add(cap.name);
     }
     const covered = new Set([...(authConfig.twoFactorContext ?? []), ...initiateCaptureNames]);

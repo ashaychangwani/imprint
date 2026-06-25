@@ -61,37 +61,6 @@ interface CompileViaCodexCliOptions {
   authMode?: AuthCliCompileMode;
 }
 
-/** Options for the auth-compile entry point. A strict subset of the data
- *  options — the auth-specific bits live in `authMode`. */
-interface AuthCompileViaCodexCliOptions {
-  session: Session;
-  absoluteToolDir: string;
-  sessionPath: string;
-  systemPromptPath: string;
-  deadlineMs: number;
-  startTime: number;
-  onProgress?: (p: CompileAgentProgress) => void;
-  authMode: AuthCliCompileMode;
-}
-
-/** Auth-compile entry point for codex-cli. Delegates to the same trace +
- *  JSONL driver as the data path; the only differences (MCP args, prompt,
- *  verification) are carried by `authMode`. */
-export function compileAuthViaCodexCli(
-  opts: AuthCompileViaCodexCliOptions,
-): Promise<CompileAgentResult> {
-  return compileViaCodexCli({
-    session: opts.session,
-    absoluteToolDir: opts.absoluteToolDir,
-    sessionPath: opts.sessionPath,
-    systemPromptPath: opts.systemPromptPath,
-    deadlineMs: opts.deadlineMs,
-    startTime: opts.startTime,
-    onProgress: opts.onProgress,
-    authMode: opts.authMode,
-  });
-}
-
 interface CodexJsonEvent {
   type: string;
   thread_id?: string;
