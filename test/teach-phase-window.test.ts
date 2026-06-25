@@ -101,4 +101,22 @@ describe('resolveStepStartTarget (workflow selection + guard)', () => {
       /missing required earlier step/,
     );
   });
+
+  it('ignores stale _pending_ entries when selecting the resume target', () => {
+    // A _pending_ run interrupted after redact can carry a newer timestamp than a
+    // completed workflow; it must not shadow the real one — it has no candidate and
+    // never reached far enough, so selecting it would wrongly throw "run a full
+    // teach first" even though a valid resume target exists.
+    const state: TeachState = {
+      workflows: {
+        'search-flights': ws(
+          TEACH_STEPS.filter((s) => s !== 'plan-prereqs'),
+          '2026-01-01T00:00:00Z',
+        ),
+        _pending_1718000000000: ws(['record', 'redact'], '2026-06-01T00:00:00Z'),
+      },
+    };
+    const target = resolveStepStartTarget('s', state, 'generate');
+    expect(target.workflowKey).toBe('search-flights');
+  });
 });

@@ -760,7 +760,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     redactedPath = sessionPath ? sessionPath.replace(/\.json$/, '.redacted.json') : null;
   }
 
-  if (startIdx <= STEPS.indexOf('generate')) {
+  // Only require the redacted session once a phase that consumes it is in the
+  // window. A `--to-step record|redact` window stops before replay-and-diff (the
+  // first consumer), so `.redacted.json` may not exist yet — the finishEarly()
+  // just below handles the clean stop. Without the stopIdx guard, `--to-step
+  // record` throws on the missing file before ever reaching that early-exit.
+  if (startIdx <= STEPS.indexOf('generate') && stopIdx >= STEPS.indexOf('replay-and-diff')) {
     redactedPath = requireSessionFile(redactedPath, {
       site,
       workflowKey,

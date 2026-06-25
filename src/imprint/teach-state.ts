@@ -338,7 +338,12 @@ export function resolveStepStartTarget(
   state: TeachState,
   fromStep: TeachStep,
 ): { workflowKey: string; ws: WorkflowState } {
-  const entries = Object.entries(state.workflows);
+  // Exclude in-progress `_pending_*` placeholders: they never carry a candidate
+  // and never reached far enough, so a stale one with a newer timestamp would
+  // shadow a real completed workflow and make the guard throw "run a full teach
+  // first" even though a valid resume target sits right next to it. (Mirrors the
+  // sibling-plan reconstruction filter in teach.ts.)
+  const entries = Object.entries(state.workflows).filter(([k]) => !k.startsWith('_pending_'));
   if (entries.length === 0) {
     throw new Error(
       [
