@@ -2,10 +2,63 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import {
   __setCdpBrowserFetchHooksForTest,
   createCdpBrowserFetch,
+  parseSetCookieForCdp,
 } from '../src/imprint/cdp-browser-fetch.ts';
 
 afterEach(() => {
   __setCdpBrowserFetchHooksForTest(null);
+});
+
+describe('parseSetCookieForCdp (cross-origin Set-Cookie re-injection)', () => {
+  const reqUrl = 'https://functions.example.com/login';
+
+  it('parses name=value with url scoping and no attributes', () => {
+    expect(parseSetCookieForCdp('sid=ABC123', reqUrl)).toEqual({
+      name: 'sid',
+      value: 'ABC123',
+      url: reqUrl,
+    });
+  });
+
+  it('parses Domain/Path/Secure/HttpOnly/SameSite attributes', () => {
+    expect(
+      parseSetCookieForCdp(
+        'sess=tok; Domain=.example.com; Path=/app; Secure; HttpOnly; SameSite=Lax',
+        reqUrl,
+      ),
+    ).toEqual({
+      name: 'sess',
+      value: 'tok',
+      url: reqUrl,
+      domain: '.example.com',
+      path: '/app',
+      secure: true,
+      httpOnly: true,
+      sameSite: 'Lax',
+    });
+  });
+
+  it('converts Expires to epoch seconds', () => {
+    const ck = parseSetCookieForCdp('a=b; Expires=Thu, 01 Jan 2099 00:00:00 GMT', reqUrl);
+    expect(ck?.expires).toBe(Math.floor(Date.parse('Thu, 01 Jan 2099 00:00:00 GMT') / 1000));
+  });
+
+  it('drops unrecognized SameSite casing instead of emitting an invalid value', () => {
+    expect(parseSetCookieForCdp('a=b; SameSite=weird', reqUrl)?.sameSite).toBeUndefined();
+  });
+
+  it('returns null when there is no name=value pair', () => {
+    expect(parseSetCookieForCdp('', reqUrl)).toBeNull();
+    expect(parseSetCookieForCdp('   ; Path=/', reqUrl)).toBeNull();
+  });
+
+  it('preserves "=" inside the cookie value', () => {
+    expect(parseSetCookieForCdp('jwt=a.b=c; Path=/', reqUrl)).toMatchObject({
+      name: 'jwt',
+      value: 'a.b=c',
+      path: '/',
+    });
+  });
 });
 
 describe('createCdpBrowserFetch CDP timeouts', () => {

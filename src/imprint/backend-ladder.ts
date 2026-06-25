@@ -978,6 +978,9 @@ async function runCdpReplay(
       baseUrl,
       bootstrapUrl,
       seedCookies,
+      // Cross-origin Set-Cookie re-injection only when the (auth) workflow
+      // declares it — never a blanket default. See AuthConfig.crossOriginCookieReinjection.
+      reinjectCrossOriginCookies: tool.workflow.authConfig?.crossOriginCookieReinjection ?? false,
     });
   }
 
@@ -1027,6 +1030,23 @@ async function runCdpReplay(
       } finally {
         if (!cdpPool && ownsSession) await cf.close();
       }
+    } else if (cdpPool && result.error === 'AWAITING_2FA') {
+      // Cross-phase 2FA continuity: AWAITING_2FA is the EXPECTED, healthy outcome
+      // of the initiate phase — NOT a failure. Keep the live browser pooled so the
+      // completion phase reuses the EXACT page that minted the challenge: the
+      // server-side challenge state and any single-use in-page tokens are bound to
+      // THIS session, so a fresh browser would reset them and the poll/complete
+      // would 401. The caller (AuthVerifier) owns this pool and drains it in its
+      // `finally`. Without this carve-out the generic `else` below evicts+closes
+      // the session here and phase 2 silently starts cold → "tokens missing" 401.
+      if (ownsSession) cdpPool.set(poolKey, cf);
+      try {
+        const postJar = await cf.mintJar();
+        saveJar(siteDir, postJar);
+      } catch {
+        // best-effort
+      }
+      // Deliberately do NOT close cf — the pool retains it for the completion phase.
     } else {
       if (ownsSession) {
         await cf.close();
@@ -1464,6 +1484,13 @@ export async function runWorkflowWithLadder(opts: {
    *  it. Used by the auth verifier to keep ONE live session across 2FA phase 1
    *  (send) → user input → phase 2 (verify) so the challenge isn't reset. */
   cdpPool?: Map<string, CdpBrowserFetch>;
+  /** Pin execution to a single rung, bypassing the parallel probe AND the winner
+   *  memo. The 2FA auth verifier sets this to `cdp-replay`: only cdp-replay keeps
+   *  one live browser in `cdpPool` (which the AWAITING_2FA carve-out retains), so
+   *  phase 2 can reuse the exact session that minted the challenge. Left to the
+   *  probe, the FASTEST rung returning AWAITING_2FA wins (often fetch /
+   *  fetch-bootstrap), which can't persist the session → completion 401s. */
+  forceBackend?: ConcreteBackend;
 }): Promise<LadderResult> {
   if (!existsSync(opts.workflowPath)) {
     throw new Error(`runWorkflowWithLadder: workflow.json not found at ${opts.workflowPath}`);
@@ -1564,6 +1591,19 @@ export async function runWorkflowWithLadder(opts: {
       await paceCompileRequest(new URL(pickBaseUrl(tool)).origin);
     } catch {
       // no parseable base URL → nothing to pace
+    }
+
+    // ── Pinned rung: skip the probe + memo entirely ─────────────────────────
+    // A caller that requires a specific rung (the 2FA auth verifier → cdp-replay
+    // for cross-phase session continuity) runs ONLY that rung, with no fallback —
+    // falling to another rung would lose the live session and defeat the pin.
+    if (opts.forceBackend) {
+      log(`forced backend: ${opts.forceBackend} (probe + memo skipped)`);
+      return await runWithLadder([opts.forceBackend], tool, opts.params, assetRoot, stealthCache, {
+        skipBootstrapSplice: true,
+        cdpPool,
+        initialState: opts.initialState,
+      });
     }
 
     // ── First call: parallel probe (45s deadline) ───────────────────────────

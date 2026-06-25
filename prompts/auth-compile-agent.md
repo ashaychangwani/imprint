@@ -54,7 +54,7 @@ The point of completing the login is a **durable token the data tools reuse with
 Set `twoFactorType` to exactly one of:
 - **`none`** — login completes in the initiate request(s); no second step.
 - **`otp`** — a later request carries a short code the user got out-of-band (SMS, email, TOTP are all `otp`). Set `initiateRequestCount` (requests before that one run on `initiate`; the rest on `submit_otp`), declare an `otp_code` param, and if the completion reads a value the **initiate response returned** (e.g. a reauth `mfaId`), add a `capture` for it on the initiate request AND list its name in `twoFactorContext` (each call is stateless — this carries the token across the gap).
-- **`push`** — one endpoint polled until its response flips (pending→approved) or a session cookie appears. Set `pollEndpoint` (+ optional `pollIntervalMs`/`maxPollAttempts`) and a `pollTerminal` capture grounded in the recorded **approved** poll (a field absent on the pending polls). Omit `pollTerminal` only to fall back to "a fresh session cookie appeared".
+- **`push`** — one endpoint polled until its response flips (pending→approved) or a session cookie appears. Set `pollEndpoint` (+ optional `pollIntervalMs`/`maxPollAttempts`) and a `pollTerminal` capture grounded in the recorded **approved** poll (a field absent on the pending polls). Omit `pollTerminal` only to fall back to "a fresh session cookie appeared". **If the recorded poll request sends a body** (read it with `read_request` — many status endpoints require a JSON payload like `{"mfaId":"..."}` and reject an empty POST with 4xx), copy it into `pollBody` (templated: `${state.X}`/`${credential.X}`/`${param.X}`) and set `pollContentType` (and `pollMethod` if not POST) from the recorded request. A missing `pollBody` means the poll sends nothing, so an approval is never recognized.
 
 ## Replayable vs browser-minted logins
 
@@ -87,15 +87,21 @@ Read the credential POST with `read_request`:
     "initiateRequestCount": 1,
     "twoFactorContext": ["mfaId"],
     "pollEndpoint": "https://...   (push only)",
+    "pollMethod": "POST",
+    "pollBody": "{\"mfaId\":\"${state.mfaId}\"}   (push only; copy from the recorded poll request — omit if it was body-less)",
+    "pollContentType": "application/json",
     "pollTerminal": { "source": "json", "name": "approved", "path": "status" },
     "pollIntervalMs": 3000,
     "maxPollAttempts": 60,
+    "crossOriginCookieReinjection": false,
     "sessionCapture": [{ "name": "access_token", "source": "json", "path": "data.token" }]
   }
 }
 ```
 
 `twoFactorContext` lists the `${state.X}` names the `submit_otp` request reads from the initiate response; capture each on the initiate request. `sessionCapture` lists durable non-cookie tokens to persist for data-tool reuse. Both are derived from the recording, not invented.
+
+Set **`crossOriginCookieReinjection: true`** ONLY when the recording shows the login session is established/carried via a **cross-origin** `Set-Cookie` — i.e. a request to a DIFFERENT host than the login page (e.g. `functions.*`/`global.*` vs `www.*`) returns a `Set-Cookie` that a LATER request sends back. Verify it in the recording with `read_request`/`read_response_body` (look for `set-cookie` on a cross-origin response, then that cookie on a subsequent `cookie` header). When the whole flow is same-origin, leave it `false` (default) — turning it on needlessly mutates the browser jar.
 
 ## Request construction rules
 

@@ -42,6 +42,14 @@ export interface AuthPhaseResult {
   twoFactorType?: string;
   /** The `${state.X}` values echoed on AWAITING_2FA, carried into the next phase. */
   twoFactorContext?: Record<string, unknown>;
+  /** HTTP status code that produced this result, when one was received. Surfaced
+   *  so the compile agent sees the concrete code (e.g. 401 vs 400) directly. */
+  status?: number;
+  /** Truncated response body of the failing / initiate request (first ~500
+   *  chars) so the agent can inspect the server payload without re-running. */
+  responseBodyPreview?: string;
+  /** Wall-clock duration of this phase's live execution, in milliseconds. */
+  durationMs: number;
 }
 
 function parsePositiveInt(value: string | undefined): number | undefined {
@@ -85,6 +93,7 @@ export class AuthVerifier {
           error: 'BUDGET_EXHAUSTED',
           message: `Live-login budget of ${this.maxInitiate} reached — do NOT request another initiate. Either give_up, or only call run_verification for the completion phase if a challenge is already pending.`,
           usedBackend: 'none',
+          durationMs: 0,
         };
       }
       this.initiateCount += 1;
@@ -93,25 +102,43 @@ export class AuthVerifier {
     const params: Record<string, string> = { action: phase };
     if (phase === 'submit_otp' && opts?.otp_code) params.otp_code = opts.otp_code;
 
+    const t0 = Date.now();
     const ladder = await runWorkflowWithLadder({
       workflowPath: this.workflowPath,
       params,
       credentials: this.credentials,
       cdpPool: this.cdpPool,
+      // Pin every phase to cdp-replay. This is the load-bearing decision for 2FA:
+      // ONLY the cdp-replay rung keeps a live browser in `cdpPool`, and the
+      // AWAITING_2FA carve-out in runCdpReplay retains it across the user-input
+      // gap — so phase 2 reuses the EXACT session (cookies + server challenge +
+      // in-page tokens) that phase 1 minted. Left to the probe, the fastest rung
+      // returning AWAITING_2FA wins (often fetch/fetch-bootstrap), which is
+      // stateless across calls → the completion poll/re-login 401s with
+      // "tokens missing". cdp-replay is also the most anti-bot-robust rung, so
+      // there's no downside for an (infrequent) auth flow.
+      forceBackend: 'cdp-replay',
       // Carry the echoed challenge token into the completion phase so the same
       // session's submit_otp resolves ${state.X}. (Cookies ride the shared
       // pool/jar; this covers body-returned tokens.)
       initialState: phase === 'initiate' ? undefined : this.lastTwoFactorContext,
     });
+    const durationMs = Date.now() - t0;
 
     const r = ladder.result;
     if (!r.ok && r.error === 'AWAITING_2FA' && r.twoFactorContext) {
       this.lastTwoFactorContext = r.twoFactorContext;
     }
     log(
-      `phase=${phase} backend=${ladder.usedBackend} ok=${r.ok}${r.ok ? '' : ` error=${r.error}`}`,
+      `phase=${phase} backend=${ladder.usedBackend} ok=${r.ok}${r.ok ? '' : ` error=${r.error}`} in ${durationMs}ms`,
     );
 
+    // Surface the full picture to the compile agent: concrete status code, the
+    // response body preview (the initiate preview on AWAITING_2FA; the failing
+    // body otherwise), backend, timing, and the carried challenge context.
+    const responseBodyPreview = !r.ok
+      ? (r.responseBodyPreview ?? r.loginResponsePreview)
+      : r.loginResponsePreview;
     return {
       ok: r.ok,
       error: r.ok ? undefined : r.error,
@@ -119,6 +146,9 @@ export class AuthVerifier {
       usedBackend: ladder.usedBackend,
       twoFactorType: !r.ok ? r.twoFactorType : undefined,
       twoFactorContext: !r.ok ? r.twoFactorContext : undefined,
+      status: !r.ok ? r.status : undefined,
+      responseBodyPreview,
+      durationMs,
     };
   }
 

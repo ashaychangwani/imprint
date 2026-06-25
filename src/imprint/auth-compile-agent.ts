@@ -291,20 +291,35 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** The full set of live-execution facts every verification result carries, so the
+ *  agent never has to re-run (or reverse-engineer the runtime) to see what
+ *  happened: rung, timing, HTTP status, error code, and the response body. */
+function verifyFacts(r: AuthPhaseResult): string {
+  const parts = [`backend=${r.usedBackend}`, `duration=${r.durationMs}ms`];
+  if (typeof r.status === 'number') parts.push(`httpStatus=${r.status}`);
+  if (r.error) parts.push(`error=${r.error}`);
+  let s = `[${parts.join(' | ')}]`;
+  if (r.responseBodyPreview) s += `\nResponse body (truncated): ${r.responseBodyPreview}`;
+  return s;
+}
+
 /** Render an AuthVerifier phase result into the message the agent receives on
- *  resume — channel-agnostic, grounded only in the result. */
+ *  resume — channel-agnostic, grounded only in the result. Always includes the
+ *  full execution facts (status, timing, backend, body) so the agent can decide
+ *  its next move without inspecting the runtime. */
 function formatVerifyResult(phase: string, r: AuthPhaseResult): string {
+  const facts = verifyFacts(r);
   if (r.ok) {
-    return `Verification phase "${phase}" SUCCEEDED via ${r.usedBackend}. The login completed and the session token is now stored for data tools. Call done with a one-line summary.`;
+    return `Verification phase "${phase}" SUCCEEDED. ${facts}\nThe login completed and the session token is now stored for data tools. Call done with a one-line summary.`;
   }
   if (r.error === 'AWAITING_2FA') {
     const ctxKeys = r.twoFactorContext ? Object.keys(r.twoFactorContext) : [];
-    return `Verification phase "${phase}" reached the 2FA challenge (AWAITING_2FA, type=${r.twoFactorType ?? 'unknown'}, via ${r.usedBackend}). The OTP/push has been delivered to the user${ctxKeys.length ? ` (carried token keys: ${ctxKeys.join(', ')})` : ''}. Now call prompt_user to ask them for the live second factor, then run_verification for the completion phase.`;
+    return `Verification phase "${phase}" reached the 2FA challenge (AWAITING_2FA, type=${r.twoFactorType ?? 'unknown'}). ${facts}\nThe OTP/push has been delivered to the user${ctxKeys.length ? ` (carried token keys: ${ctxKeys.join(', ')})` : ''}. Now call prompt_user to ask them for the live second factor, then run_verification for the completion phase.`;
   }
   if (r.error === 'BUDGET_EXHAUSTED') {
-    return `Verification refused: ${r.message} Do not request another initiate — give_up if you cannot complete.`;
+    return `Verification refused: ${r.message} ${facts}\nDo not request another initiate — give_up if you cannot complete.`;
   }
-  return `Verification phase "${phase}" FAILED: error=${r.error} via ${r.usedBackend}. ${r.message ?? ''}\nIf this looks like the site rate-flagging repeated logins, call wait_for_cooldown. If it's a defect in workflow.json, fix it and run_verification again.`;
+  return `Verification phase "${phase}" FAILED. ${facts}\n${r.message ?? ''}\nIf this looks like the site rate-flagging repeated logins, call wait_for_cooldown. If it's a defect in workflow.json, fix it and run_verification again.`;
 }
 
 /**

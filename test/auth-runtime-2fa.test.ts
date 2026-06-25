@@ -202,6 +202,45 @@ describe('push poll terminal (recording-grounded)', () => {
     expect(r.ok).toBe(true);
     expect(polls).toBe(2);
   });
+
+  it('sends the declared pollBody (templated) + content-type + method on each poll (Fix 4)', async () => {
+    setBackendOverride(memBackend());
+    let capturedBody: string | undefined;
+    let capturedCt: string | undefined;
+    let capturedMethod: string | undefined;
+    let polls = 0;
+    const fetchMock = (async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/poll')) {
+        polls += 1;
+        capturedMethod = init?.method;
+        capturedBody = typeof init?.body === 'string' ? init.body : undefined;
+        capturedCt = new Headers(init?.headers as Record<string, string>).get('content-type') ?? '';
+        const body =
+          polls >= 2 ? '{"status":"approved","sessionToken":"SYNTH-TOK"}' : '{"status":"pending"}';
+        return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const wf = pushWorkflow(terminal);
+    // Declare a templated poll body (the recorded status endpoint requires it).
+    (wf.authConfig as NonNullable<Workflow['authConfig']>).pollBody =
+      '{"user":"${credential.username}"}';
+    (wf.authConfig as NonNullable<Workflow['authConfig']>).pollContentType = 'application/json';
+    (wf.authConfig as NonNullable<Workflow['authConfig']>).pollMethod = 'POST';
+
+    const r = await executeWorkflow({
+      workflow: wf,
+      params: { action: 'complete' },
+      credentials: creds,
+      fetchImpl: fetchMock,
+    });
+    expect(r.ok).toBe(true);
+    expect(capturedMethod).toBe('POST');
+    expect(capturedCt).toBe('application/json');
+    // `${credential.username}` resolved from the store, not sent as a literal.
+    expect(capturedBody).toBe('{"user":"SYNTH-USER"}');
+  });
 });
 
 describe('initiate→submit_otp state chain (stateless)', () => {

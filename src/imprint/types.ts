@@ -252,6 +252,18 @@ const AuthConfigSchema = z
      *  The remaining requests run during the 'complete'/'submit_otp' phase. */
     initiateRequestCount: z.number().int().nonnegative().default(0),
     pollEndpoint: z.string().optional(),
+    /** Push only: HTTP method for the poll request (default POST). */
+    pollMethod: z.string().optional(),
+    /** Push only: the request body to send on each poll attempt, templated like
+     *  any other request body (`${param.X}` / `${state.X}` / `${credential.X}`).
+     *  Some poll/status endpoints reject an empty body (e.g. require a JSON
+     *  `{mfaId,...}` payload), so the compile agent must declare the recorded
+     *  poll body here — otherwise the poll silently sends nothing and the
+     *  approved push is never recognized. Omitted → body-less poll (legacy). */
+    pollBody: z.string().optional(),
+    /** Push only: Content-Type for the poll body (default application/json when
+     *  pollBody is set). Grounded in the recorded poll request's header. */
+    pollContentType: z.string().optional(),
     pollIntervalMs: z.number().int().positive().default(3000),
     maxPollAttempts: z.number().int().positive().default(60),
     /** Push only: a recording-grounded capture that resolves on the *approved*
@@ -264,6 +276,13 @@ const AuthConfigSchema = z
      *  `mfaId`). Because each MCP call is stateless, these are echoed back to
      *  the caller in the AWAITING_2FA result and passed in again on submit_otp. */
     twoFactorContext: z.array(z.string()).default([]),
+    /** Opt-in: when the recorded login carries its session through a CROSS-ORIGIN
+     *  `Set-Cookie` (e.g. a `functions.*`/`global.*` host sets a cookie that a
+     *  later leg depends on), set this so cdp-replay writes those cross-origin
+     *  response cookies back into the browser jar. Default false — only declare it
+     *  when the recording actually shows cross-origin cookie chaining; otherwise
+     *  the browser's normal same-origin jar is left untouched. */
+    crossOriginCookieReinjection: z.boolean().default(false),
     /** Durable session tokens to persist after a SUCCESSFUL login completion so
      *  DATA tools can reuse them without re-running auth (they re-auth only on
      *  expiry / AUTH_EXPIRED). Cookies persist automatically; declare here only
@@ -373,6 +392,15 @@ export type ToolResult<T = unknown> =
       message: string;
       remediation?: string;
       missing?: StateMissingItem[];
+      /** HTTP status code that produced this failure, when one was received
+       *  (absent for transport/STATE_MISSING failures). Surfaced so the auth
+       *  compile agent sees the concrete code, not just a prose message. */
+      status?: number;
+      /** Truncated response body of the failing request (first ~500 chars).
+       *  Lets the compile agent inspect the server's actual error payload
+       *  without re-running. Distinct from `loginResponsePreview`, which is the
+       *  *initiate* response preview on the AWAITING_2FA path. */
+      responseBodyPreview?: string;
       twoFactorType?: string;
       /** OTP only: the `${state.X}` values captured from the initiate response
        *  that the caller must echo back on the submit_otp call (stateless

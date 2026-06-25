@@ -135,6 +135,14 @@ export interface CdpBrowserFetchOptions {
     sameSite?: string;
     expires?: number;
   }>;
+  /** Opt-in: write a cross-origin response's `Set-Cookie` back into the browser
+   *  cookie jar (the cross-origin plain-fetch path can't do this itself). OFF by
+   *  default — it changes the jar, so it must be a DELIBERATE decision grounded in
+   *  the recording, not a blanket behavior. The auth compile agent sets it (via
+   *  `authConfig.crossOriginCookieReinjection`) only when the recorded login
+   *  establishes/carries its session through a cross-origin `Set-Cookie` that a
+   *  later request depends on (e.g. www → functions → global). */
+  reinjectCrossOriginCookies?: boolean;
 }
 
 type CdpClient = Awaited<ReturnType<typeof CDP>>;
@@ -508,13 +516,42 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       // Route the cross-origin plain fetch through the SAME proxy as the browser
       // (Bun fetch `proxy` opt) so its egress IP matches the in-page traffic.
       const proxy = proxyUrl();
-      return globalThis.fetch(fullUrl, {
+      const xResp = await globalThis.fetch(fullUrl, {
         method,
         headers: outHeaders,
         body: body ?? undefined,
         signal: init?.signal ?? undefined,
         ...(proxy ? { proxy } : {}),
       } as RequestInit);
+      // Re-inject the cross-origin response's Set-Cookie back into the browser's
+      // cookie jar — ONLY when the auth compile agent opted in (the recorded login
+      // carries its session through a cross-origin Set-Cookie). The plain fetch
+      // above carries cookies OUT (read from the browser) but its response cookies
+      // never re-enter the browser, so a session cookie minted by a cross-origin
+      // leg (e.g. `functions.*`/`global.*` during a multi-step login) would be
+      // dropped and the next leg / 2FA completion 401s. We do NOT do this by
+      // default: it mutates the jar, so it's a deliberate, recording-grounded
+      // decision, not a blanket behavior for every cdp-replay tool. Best-effort.
+      if (opts.reinjectCrossOriginCookies) {
+        try {
+          const setCookies =
+            typeof xResp.headers.getSetCookie === 'function' ? xResp.headers.getSetCookie() : [];
+          const cdpCookies = setCookies
+            .map((sc) => parseSetCookieForCdp(sc, fullUrl))
+            .filter((ck): ck is NonNullable<typeof ck> => ck !== null);
+          if (cdpCookies.length) {
+            await withTimeout(
+              c.Network.setCookies({ cookies: cdpCookies }),
+              'CDP Network.setCookies(cross-origin)',
+              cdpCommandTimeoutMs,
+            );
+            log(`cross-origin: re-injected ${cdpCookies.length} Set-Cookie into browser jar`);
+          }
+        } catch {
+          // best-effort — cookie re-injection is opportunistic
+        }
+      }
+      return xResp;
     }
 
     // Execute the fetch INSIDE the trusted page. credentials:'include' so the
@@ -713,4 +750,54 @@ function normalizeSameSite(v: string): 'Strict' | 'Lax' | 'None' | undefined {
   if (s === 'lax') return 'Lax';
   if (s === 'none') return 'None';
   return undefined;
+}
+
+/** A CDP `Network.setCookies` CookieParam (the subset we populate). */
+interface CdpCookieParam {
+  name: string;
+  value: string;
+  url: string;
+  domain?: string;
+  path?: string;
+  secure?: boolean;
+  httpOnly?: boolean;
+  sameSite?: 'Strict' | 'Lax' | 'None';
+  expires?: number;
+}
+
+/** Parse a raw `Set-Cookie` header value into a CDP CookieParam so a cross-origin
+ *  response's cookies can be written back into the browser jar via
+ *  Network.setCookies (see the cross-origin branch of fetchImpl). Returns null
+ *  when there's no `name=value` pair. `url` scopes the cookie when the header
+ *  omits Domain/Path. Channel/site-agnostic. Exported for unit testing. */
+export function parseSetCookieForCdp(setCookie: string, requestUrl: string): CdpCookieParam | null {
+  const segments = setCookie.split(';');
+  const first = segments.shift();
+  if (!first) return null;
+  const eq = first.indexOf('=');
+  if (eq < 0) return null;
+  const name = first.slice(0, eq).trim();
+  const value = first.slice(eq + 1).trim();
+  if (!name) return null;
+  const ck: CdpCookieParam = { name, value, url: requestUrl };
+  for (const seg of segments) {
+    const i = seg.indexOf('=');
+    const k = (i < 0 ? seg : seg.slice(0, i)).trim().toLowerCase();
+    const v = i < 0 ? '' : seg.slice(i + 1).trim();
+    if (k === 'domain' && v) ck.domain = v;
+    else if (k === 'path' && v) ck.path = v;
+    else if (k === 'secure') ck.secure = true;
+    else if (k === 'httponly') ck.httpOnly = true;
+    else if (k === 'samesite' && v) {
+      const s = normalizeSameSite(v);
+      if (s) ck.sameSite = s;
+    } else if (k === 'expires' && v) {
+      const t = Date.parse(v);
+      if (!Number.isNaN(t)) ck.expires = Math.floor(t / 1000);
+    } else if (k === 'max-age' && v) {
+      const n = Number(v);
+      if (Number.isFinite(n)) ck.expires = Math.floor(Date.now() / 1000) + n;
+    }
+  }
+  return ck;
 }

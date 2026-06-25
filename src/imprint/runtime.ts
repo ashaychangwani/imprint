@@ -422,7 +422,12 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         return {
           ok: false,
           error: resp.status === 401 ? 'AUTH_EXPIRED' : 'BAD_RESPONSE',
-          message: `Auth request ${i} returned ${resp.status}: ${text.slice(0, 500)}`,
+          message: `Auth request ${i} (${subbedReq.method} ${subbedReq.url}) returned ${resp.status}: ${text.slice(0, 500)}`,
+          // Surface the concrete status + body so the auth compile agent sees the
+          // server's actual error (e.g. a 401 "tokens missing" vs a 400 schema
+          // error) without re-running — see run_verification's result.
+          status: resp.status,
+          responseBodyPreview: text.slice(0, 500),
         };
       }
 
@@ -537,16 +542,51 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       const pollOverride = parsePositiveInt(process.env.IMPRINT_AUTH_POLL_ATTEMPTS);
       const pollMax = pollOverride ?? authConfig.maxPollAttempts ?? 60;
       const pollInterval = authConfig.pollIntervalMs ?? 3000;
+      const pollMethod = authConfig.pollMethod ?? 'POST';
+      // Many poll/status endpoints reject an empty body (they need the recorded
+      // JSON payload, e.g. `{mfaId,...}`). Substitute the declared pollBody once
+      // (state is fixed during the completion phase) against the same runtime as
+      // any request, so `${state.X}`/`${credential.X}`/`${param.X}` resolve.
+      const pollContentType =
+        authConfig.pollBody !== undefined
+          ? (authConfig.pollContentType ?? 'application/json')
+          : undefined;
+      let pollBody: string | undefined;
+      if (authConfig.pollBody !== undefined) {
+        const ctLower = (pollContentType ?? '').toLowerCase();
+        const bodyCtx: SubstitutionContext = ctLower.includes('json')
+          ? 'json-body'
+          : ctLower.includes('urlencoded') || authConfig.pollBody.includes('=')
+            ? 'form-body'
+            : 'opaque-body';
+        const pollBodyResult = substituteStringInternal(
+          authConfig.pollBody,
+          {
+            params,
+            credentials: liveCredentials,
+            responseSlots,
+            state,
+            cookieJar,
+            stateCapabilities,
+            requestUrlTemplate: authConfig.pollEndpoint,
+          },
+          bodyCtx,
+        );
+        if (!pollBodyResult.ok) return pollBodyResult.result;
+        pollBody = pollBodyResult.value;
+      }
       let approved = false;
       for (let attempt = 0; attempt < pollMax; attempt++) {
         await sleep(pollInterval);
         const cookieHeader = cookieJar.getCookieHeader(authConfig.pollEndpoint);
         const pollHeaders: Record<string, string> = {};
         if (cookieHeader) pollHeaders.cookie = cookieHeader;
+        if (pollContentType) pollHeaders['content-type'] = pollContentType;
         try {
           const pollResp = await fetchFn(authConfig.pollEndpoint, {
-            method: 'POST',
+            method: pollMethod,
             headers: pollHeaders,
+            body: pollBody,
           });
           if (pollResp.ok) {
             const body = await safeText(pollResp);
