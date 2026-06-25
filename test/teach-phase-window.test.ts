@@ -327,4 +327,11 @@ describe('resolveTeachPhaseWindow (CLI flag validation)', () => {
       toStep: 'register',
     });
   });
+
+  it('names --only (not --from-step) in error messages when --only was used', () => {
+    const invalid = resolveTeachPhaseWindow({ only: 'bogus' });
+    expect('error' in invalid && invalid.error).toMatch(/invalid --only "bogus"/);
+    const withSession = resolveTeachPhaseWindow({ only: 'redact', 'from-session': 'x.json' });
+    expect('error' in withSession && withSession.error).toMatch(/--only resumes a prior run/);
+  });
 });

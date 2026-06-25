@@ -449,12 +449,15 @@ export function resolveTeachPhaseWindow(values: {
         'error: --only cannot combine with --from-step or --to-step. Use either --only <step>, or --from-step/--to-step.',
     };
   }
+  // Error messages name the flag the user actually typed: `--only` expands to both
+  // fromStep and toStep, so a raw `--from-step` in the message would be confusing.
+  const usingOnly = values.only !== undefined;
   const fromStep = values['from-step'] ?? values.only;
   const toStep = values['to-step'] ?? values.only;
   const steps = TEACH_STEPS as readonly string[];
   for (const [flag, val] of [
-    ['--from-step', fromStep],
-    ['--to-step', toStep],
+    [usingOnly ? '--only' : '--from-step', fromStep],
+    [usingOnly ? '--only' : '--to-step', toStep],
   ] as const) {
     if (val !== undefined && !steps.includes(val)) {
       return { error: `error: invalid ${flag} "${val}" — valid steps: ${TEACH_STEPS.join(', ')}` };
@@ -465,8 +468,7 @@ export function resolveTeachPhaseWindow(values: {
   }
   if (fromStep && values['from-session']) {
     return {
-      error:
-        'error: --from-step resumes a prior run; it cannot combine with --from-session. Use --to-step with --from-session to cap phases on a fresh session.',
+      error: `error: ${usingOnly ? '--only' : '--from-step'} resumes a prior run; it cannot combine with --from-session. Use --to-step with --from-session to cap phases on a fresh session.`,
     };
   }
   // --from-session enters the chain at `redact`, so a --to-step before redact
