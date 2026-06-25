@@ -113,7 +113,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay] [--from-step <step>] [--to-step <step>] [--only <step>]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
@@ -155,6 +155,21 @@ export const VERB_HELP: Record<string, VerbHelp> = {
         name: '--skip-replay',
         description:
           "Skip the replay-and-diff stage. Faster, but the compile agent won't be able to distinguish browser-minted values from constants, which may reduce workflow accuracy.",
+      },
+      {
+        name: '--from-step <step>',
+        description:
+          'Resume a prior run starting at <step> (record, redact, replay-and-diff, triage, detect-candidates, plan-prereqs, generate, compile-playbook, emit, register). Only allowed if a prior run reached/crossed that point — earlier phase outputs are reused. Not combinable with --from-session.',
+      },
+      {
+        name: '--to-step <step>',
+        description:
+          'Stop after <step> instead of running to the end. Combine with --from-step (or --from-session) to run a window of phases. Note: the per-tool compile (generate→compile-playbook→emit) is atomic, so a --to-step inside it runs the whole compile and stops before register.',
+      },
+      {
+        name: '--only <step>',
+        description:
+          'Run a single phase: shorthand for --from-step <step> --to-step <step> (not combinable with either). For a compile phase the whole atomic compile unit runs (see --to-step).',
       },
     ],
     example: 'imprint teach google-flights --url https://flights.google.com',
@@ -1389,9 +1404,27 @@ async function main(argv: string[]): Promise<number> {
           timeout: { type: 'string' },
           'keep-test': { type: 'boolean' },
           'skip-replay': { type: 'boolean' },
+          'from-step': { type: 'string' },
+          'to-step': { type: 'string' },
+          only: { type: 'string' },
         },
         allowPositionals: false,
       });
+
+      // ── Phase-window flags: run only specific steps of the teach chain ──
+      // `--only X` = `--from-step X --to-step X`. resolveTeachPhaseWindow validates
+      // step names against the canonical list and the flag combinations (ordering,
+      // mutual exclusion with --from-session, and --to-step ≥ redact when
+      // --from-session enters the chain at redact), returning the resolved window
+      // or the exact error message to print. Extracted for unit-testing.
+      const { resolveTeachPhaseWindow } = await import('./imprint/teach-state.ts');
+      const phaseWindow = resolveTeachPhaseWindow(values);
+      if ('error' in phaseWindow) {
+        console.error(phaseWindow.error);
+        return 2;
+      }
+      const fromStepArg = phaseWindow.fromStep;
+      const toStepArg = phaseWindow.toStep;
 
       if (!site && values['no-interactive']) {
         console.error(
@@ -1455,6 +1488,8 @@ async function main(argv: string[]): Promise<number> {
               keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
               allTools: values['all-tools'],
               skipReplay: values['skip-replay'],
+              fromStep: fromStepArg,
+              toStep: toStepArg,
             }),
         );
       } finally {

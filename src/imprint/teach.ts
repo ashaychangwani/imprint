@@ -79,7 +79,9 @@ import {
   type TeachStep as Step,
   type TeachState,
   type WorkflowState,
+  analysisBlockRunsForWindow,
   buildTeachStateFromSession,
+  detectCandidatesCompletedSteps,
   discoverCompletedWorkflows,
   discoverOrphanSession,
   friendlySessionTimestamp,
@@ -87,9 +89,11 @@ import {
   loadTeachState,
   nextTeachStep as nextStep,
   pruneStalePendingTeachWorkflows,
+  resolveStepStartTarget,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
   saveTeachState,
+  selectMultiToolResumePlans,
   toRelativeTeachStatePath as toRelative,
 } from './teach-state.ts';
 import {
@@ -100,7 +104,7 @@ import {
   primaryToolCandidate,
 } from './tool-candidates.ts';
 import { planToolCompile } from './tool-plan.ts';
-import { setSpanAttributes, traced } from './tracing.ts';
+import { setSpanAttributes, shutdownTracing, traced } from './tracing.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
 import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
 
@@ -142,6 +146,13 @@ interface TeachOptions {
   allTools?: boolean;
   /** Skip the replay-and-diff stage entirely. */
   skipReplay?: boolean;
+  /** Run only specific phases of the teach chain. `fromStep` resumes a PRIOR run
+   *  at that step (guarded — every earlier step must already be complete so its
+   *  output can be reused); `toStep` stops after that step. Together they bound a
+   *  window; fromStep===toStep runs a single phase. `fromStep` is non-interactive
+   *  (bypasses the resume prompt) and is not combined with `fromSession`. */
+  fromStep?: Step;
+  toStep?: Step;
 }
 
 interface TeachResult {
@@ -422,7 +433,43 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
 
-  if (opts.fromSession) {
+  if (opts.fromStep === 'record') {
+    // `--from-step record` / `--only record` is a non-interactive fresh start:
+    // record produces everything, so it needs no prior run (assertResumableAt
+    // always allows 'record'). Leave workflowKey/sessionPath null so a fresh
+    // _pending_ run is minted below, exactly like a normal new run — bypassing
+    // resolveStepStartTarget, which requires a prior run for any later step but
+    // would wrongly reject 'record' on a fresh site.
+    startFrom = 'record';
+  } else if (opts.fromStep) {
+    // Non-interactive phase resume: start at a specific step, reusing a prior
+    // run's persisted outputs. resolveStepStartTarget picks the most-recent
+    // workflow and THROWS if it didn't reach far enough (the dependency guard).
+    const target = resolveStepStartTarget(site, state, opts.fromStep);
+    workflowKey = target.workflowKey;
+    startFrom = opts.fromStep;
+    sessionPath = resolveTeachStatePath(site, target.ws.sessionPath);
+    redactedPath = resolveTeachStatePath(site, target.ws.redactedPath);
+    // Resolve a derived artifact path (.triaged/.redacted) back to the original
+    // recording so earlier-than-redact restarts operate on the full session.
+    if (sessionPath) {
+      const original = sessionPath.replace(/\.triaged/g, '').replace(/\.redacted/g, '');
+      if (original !== sessionPath && isExistingFile(original)) {
+        sessionPath = original;
+        redactedPath = null;
+      }
+    }
+    // startFrom is never 'record' here (handled by the branch above), so an
+    // unresolved session means a completed workflow with no stored path — recover
+    // the latest recording on disk.
+    if (!sessionPath) {
+      const orphan = discoverOrphanSession(site, state);
+      if (orphan) {
+        sessionPath = resolveTeachStatePath(site, orphan.sessionPath);
+        redactedPath = resolveTeachStatePath(site, orphan.redactedPath);
+      }
+    }
+  } else if (opts.fromSession) {
     startFrom = 'redact';
     sessionPath = pathResolve(opts.fromSession);
     usingFromSession = true;
@@ -479,6 +526,51 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   const startIdx = STEPS.indexOf(startFrom);
+  // Upper bound of the phase window: `--to-step`/`--only` stop the chain after a
+  // given step (default = the last step, i.e. run to the end). A phase runs only
+  // when it falls within [startFrom, toStep].
+  const stopIdx = opts.toStep ? STEPS.indexOf(opts.toStep) : STEPS.length - 1;
+  // Backwards-window guard for the one path the CLI validation can't see: an
+  // interactive resume (continue/redo) can pick a startFrom AFTER --to-step (e.g.
+  // `--to-step redact`, then "continue" a workflow whose next step is generate),
+  // producing an empty window that would silently run nothing and print a
+  // backwards "generate → redact" summary. (Explicit --from-step/--to-step
+  // ordering is already validated in resolveTeachPhaseWindow.)
+  if (opts.toStep && startIdx > stopIdx) {
+    throw new Error(
+      `The workflow resumes at "${startFrom}", which is after --to-step "${opts.toStep}" — nothing would run. ` +
+        `Re-run without --to-step, or with --to-step "${startFrom}" or later.`,
+    );
+  }
+  /** True when `step` is inside the [startFrom, toStep] window. Replaces the bare
+   *  `startIdx <= idx(step)` phase gates so a phase can also be skipped when it's
+   *  PAST the requested stop step. */
+  const inWindow = (step: Step): boolean => {
+    const i = STEPS.indexOf(step);
+    return startIdx <= i && i <= stopIdx;
+  };
+  /** Stop the run early when `--to-step`/`--only` bounded the window before the
+   *  normal end. Used at each phase-group boundary so the full-compile tail never
+   *  runs on a partial. Reports what ran; exits 0 (the CLI ignores the return). */
+  const finishEarly = async (lastStep?: Step): Promise<never> => {
+    // `lastStep` overrides the reported stop when the actual last phase differs
+    // from stopIdx — the per-tool compile is atomic, so a --to-step inside it
+    // (generate/compile-playbook) actually runs through emit. Report it honestly.
+    p.outro(
+      `Ran teach phases ${startFrom} → ${lastStep ?? STEPS[stopIdx]} for ${site}; stopped here (--to-step/--only).`,
+    );
+    // Flush OpenTelemetry spans before exiting: process.exit(0) bypasses the CLI's
+    // shutdownTracing() (run in its .then() handler), which would otherwise lose
+    // batched spans for windowed (--to-step/--only) runs when IMPRINT_TRACE=1.
+    // Guard the flush so a shutdown error can't prevent the exit (this is typed
+    // Promise<never> and callers rely on it never returning).
+    try {
+      await shutdownTracing();
+    } catch {
+      /* best-effort flush — exit regardless */
+    }
+    process.exit(0);
+  };
   const spinner = p.spinner();
   let resolvedProviderName: ProviderName | null = null;
   const getProviderName = async (): Promise<ProviderName> => {
@@ -539,12 +631,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     );
   }
 
-  if (startIdx <= STEPS.indexOf('compile-playbook')) {
+  if (startIdx <= STEPS.indexOf('compile-playbook') && stopIdx >= STEPS.indexOf('triage')) {
     await getProviderName();
   }
 
   // ── 1. Record ──────────────────────────────────────────────────────
-  if (startIdx <= STEPS.indexOf('record')) {
+  if (inWindow('record')) {
     const startUrl = await resolveStartUrl(opts);
 
     spinner.start('Recording');
@@ -604,7 +696,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // ── 2. Redact ──────────────────────────────────────────────────────
   let teachCredentials: { site: string; values: Record<string, string> } | undefined;
   let credentialFindings: CredentialFinding[] = [];
-  if (startIdx <= STEPS.indexOf('redact')) {
+  if (inWindow('redact')) {
     sessionPath = requireSessionFile(sessionPath, {
       site,
       workflowKey,
@@ -707,7 +799,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     redactedPath = sessionPath ? sessionPath.replace(/\.json$/, '.redacted.json') : null;
   }
 
-  if (startIdx <= STEPS.indexOf('generate')) {
+  // Only require the redacted session once a phase that consumes it is in the
+  // window. A `--to-step record|redact` window stops before replay-and-diff (the
+  // first consumer), so `.redacted.json` may not exist yet — the finishEarly()
+  // just below handles the clean stop. Without the stopIdx guard, `--to-step
+  // record` throws on the missing file before ever reaching that early-exit.
+  if (startIdx <= STEPS.indexOf('generate') && stopIdx >= STEPS.indexOf('replay-and-diff')) {
     redactedPath = requireSessionFile(redactedPath, {
       site,
       workflowKey,
@@ -723,10 +820,19 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // Run them in parallel so the user can select tools while replay runs.
   let siteClassifications: ClassifiedValue[] | undefined;
   let triageResult: TriageResult | undefined;
+  // Early stop: `--to-step record|redact` finishes before the analysis block.
+  if (stopIdx < STEPS.indexOf('replay-and-diff')) await finishEarly();
+
   let plans: CandidateCompilePlan[];
 
-  let needsReplay = startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
-  const needsCandidates = startIdx <= STEPS.indexOf('detect-candidates');
+  // The replay→triage→detect-candidates analysis is one atomic block (the sub-
+  // steps share a parallel run + the triaged session), so the window can START
+  // within it but always completes through detect-candidates. It runs when the
+  // [startFrom, toStep] window overlaps [replay-and-diff, detect-candidates].
+  const runsAnalysis = analysisBlockRunsForWindow(startIdx, stopIdx);
+  let needsReplay =
+    runsAnalysis && startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
+  const needsCandidates = runsAnalysis;
 
   if (needsReplay && !opts.noInteractive) {
     const runReplay = await p.confirm({
@@ -960,7 +1066,19 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         const candidatePlans = selected.map((candidate) => {
           checkpoint(site, state, candidate.toolName, {
             ...baseState,
-            completedSteps: ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+            // Preserve prior progress only when re-detecting the SAME recording, so
+            // a re-run of the analysis block (`--from-step`/`--only detect-candidates`,
+            // or interactive redo) doesn't regress a tool that already reached
+            // generate…register (which would break a later `--from-step register`).
+            // A fresh / different recording producing the same toolName must NOT
+            // inherit the old `plan-prereqs` marker, or the alreadyPlanned shortcut
+            // below would skip re-planning and compile against the previous
+            // recording's `_shared/` modules — detectCandidatesCompletedSteps gates
+            // on the recording's sessionPath.
+            completedSteps: detectCandidatesCompletedSteps(
+              state.workflows[candidate.toolName],
+              baseState.sessionPath,
+            ),
             candidate,
             sharedContext,
           });
@@ -1045,15 +1163,44 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         triagedPath: toRelative(site, resolvedTriagedPath),
       });
     }
-    plans = [
-      {
-        workflowKey,
-        startFrom,
-        candidate: ws?.candidate,
-        sharedContext: ws?.sharedContext,
-      },
-    ];
+    // A `--from-step` resume into plan-prereqs/generate reconstructs the prior
+    // run's tools from persisted state (shared-module planning needs ≥2 tools, and
+    // a multi-tool generate resumes all of them) — not just the most-recent
+    // workflow. selectMultiToolResumePlans scopes this to the same recording as the
+    // resume target and to tools that actually reached `startFrom`'s prerequisites,
+    // so a sibling from a different run can't be compiled against the wrong session
+    // and one that failed earlier can't crash loading a missing artifact. Confined
+    // to --from-step so interactive resume keeps its single-tool behavior.
+    const allCandidatePlans: CandidateCompilePlan[] = [];
+    if (opts.fromStep) {
+      const selection = selectMultiToolResumePlans(state, workflowKey, startFrom);
+      for (const { workflowKey: skippedKey, reason } of selection.skipped) {
+        p.log.warn(
+          reason === 'different-recording'
+            ? `Skipping tool "${skippedKey}" for --from-step ${startFrom}: it belongs to a different recording than the resume target.`
+            : `Skipping tool "${skippedKey}" for --from-step ${startFrom}: its prior run didn't reach "${startFrom}" — resume an earlier step or re-run it.`,
+        );
+      }
+      for (const sel of selection.plans) {
+        allCandidatePlans.push({
+          workflowKey: sel.workflowKey,
+          startFrom,
+          candidate: sel.candidate,
+          sharedContext: sel.sharedContext,
+        });
+      }
+    }
+    plans =
+      allCandidatePlans.length > 0
+        ? allCandidatePlans
+        : [{ workflowKey, startFrom, candidate: ws?.candidate, sharedContext: ws?.sharedContext }];
   }
+
+  // Early stop: `--to-step replay-and-diff|triage|detect-candidates` finishes
+  // after the analysis block, before shared-module planning / compile. The block is
+  // atomic and always runs through detect-candidates, so report that as the last
+  // step (mirrors the compile exit reporting 'emit').
+  if (stopIdx < STEPS.indexOf('plan-prereqs')) await finishEarly('detect-candidates');
 
   const needsCompileProvider = plans.some(
     (plan) => STEPS.indexOf(plan.startFrom) <= STEPS.indexOf('compile-playbook'),
@@ -1118,9 +1265,16 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   });
 
   // ── Clean up stale tools from previous teach runs ──
+  // Skipped entirely on a `--from-step` resume: a resume is scoped to a subset of
+  // the site's tools (selectMultiToolResumePlans intentionally leaves other
+  // recordings' tools — and same-recording tools that didn't reach the step —
+  // alone), so "not in the resume set" does NOT mean "stale". Treating it as stale
+  // here would silently rmSync a tool the resume just promised to preserve. Cleanup
+  // only applies to a fresh run that produces a superseding tool set.
   const incomingToolNames = new Set(plans.map((pl) => pl.candidate?.toolName ?? pl.workflowKey));
-  const existingTools = discoverCompletedWorkflows(site);
-  const staleTools = existingTools.filter((name) => !incomingToolNames.has(name));
+  const staleTools = opts.fromStep
+    ? []
+    : discoverCompletedWorkflows(site).filter((name) => !incomingToolNames.has(name));
   if (staleTools.length > 0) {
     let shouldReplace = true;
     if (!opts.noInteractive) {
@@ -1150,10 +1304,16 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   if (selectedCandidates.length >= 2 && willGenerate && compileModel) {
     const sidecar = buildPlanSidecarPath(site);
     const firstWs = state.workflows[plans[0]?.workflowKey ?? ''];
+    // Reuse the cached plan only when resuming PAST plan-prereqs (e.g. --from-step
+    // generate). When plan-prereqs is the explicit target (`--only plan-prereqs` /
+    // `--from-step plan-prereqs`), the user is asking to rebuild shared modules, so
+    // force a fresh planner run instead of short-circuiting to the cached sidecar.
     const alreadyPlanned =
+      opts.fromStep !== 'plan-prereqs' &&
       plans.every((pl) =>
         state.workflows[pl.workflowKey]?.completedSteps.includes('plan-prereqs'),
-      ) && existsSync(sidecar);
+      ) &&
+      existsSync(sidecar);
     if (alreadyPlanned && firstWs) {
       // Resume past plan-prereqs — reuse the persisted plan + manifest.
       buildPlanPath = sidecar;
@@ -1203,6 +1363,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       }
     }
   }
+
+  // Early stop: `--to-step plan-prereqs` finishes after shared-module planning,
+  // before any tool (auth or data) compiles.
+  if (stopIdx < STEPS.indexOf('generate')) await finishEarly();
 
   // ── auth-tool: agentic compile loop + interactive 2FA ──
   if (buildPlanPath && willGenerate) {
@@ -1373,6 +1537,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     });
   } finally {
     unmuteLog();
+    // Drop the transient compile-time stealth token (shared across this site's
+    // per-tool `bun test` processes) now that every tool has compiled. In the
+    // finally so it runs on compile failure too: otherwise a thrown compile (or
+    // the `results.length === 0` throw below, or any later throw / early exit)
+    // would leak a file holding a live session token on disk.
+    clearCachedToken(localSiteDir(site));
   }
 
   if (results.length === 0) {
@@ -1396,7 +1566,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   const primaryResult = results[0] as TeachToolResult;
 
   // ── 6. Platform integration ────────────────────────────────────────
-  if (startIdx <= STEPS.indexOf('register')) {
+  if (inWindow('register')) {
     if (opts.noInteractive) {
       const imprintCommand = detectImprintCommand();
       const platforms: Platform[] = [
@@ -1430,16 +1600,15 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         playbooks: results.map((r) => r.playbook),
       });
     }
-  }
 
-  for (const result of results) {
-    updateCheckpoint(site, state, result.workflow.toolName, 'register');
+    // Record `register` complete only when registration actually ran. A
+    // `--to-step emit/generate/compile-playbook` window skips this block; marking
+    // register here anyway would make `.teach-state.json` claim platform
+    // integration happened when it didn't.
+    for (const result of results) {
+      updateCheckpoint(site, state, result.workflow.toolName, 'register');
+    }
   }
-
-  // Drop the transient compile-time stealth token (shared across this site's
-  // per-tool `bun test` processes). It holds a live session token and is no
-  // longer needed once every tool has compiled.
-  clearCachedToken(localSiteDir(site));
 
   // Surface any tools that shipped without a passing live integration test
   // (waived during compile due to anti-bot / infra). These rely on the runtime
@@ -1458,6 +1627,15 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
   }
 
+  // `--to-step emit/generate/compile-playbook` runs the per-tool compile but stops
+  // before register (platform integration) — inWindow('register') already skipped
+  // it above. Finish with the phase-window summary instead of the normal "Done!"
+  // outro, after clearCachedToken + unverified warnings have run so the compile
+  // token is cleaned up and waivers are still surfaced.
+  // The per-tool compile is atomic (generate→compile-playbook→emit), so any
+  // --to-step landing inside it ran through emit — report that, not the requested
+  // mid-compile stopIdx.
+  if (stopIdx < STEPS.indexOf('register')) await finishEarly('emit');
   p.outro(
     `Done! ${results.length} tool${results.length === 1 ? '' : 's'} ready: ${results.map((r) => r.workflow.toolName).join(', ')}${
       unverified.length > 0 ? ` (${unverified.length} unverified — see warnings above)` : ''
@@ -1814,6 +1992,14 @@ async function compileSelectedCandidate(opts: {
   const workflowDir = localToolDir(site, toolName);
   mkdirSync(workflowDir, { recursive: true });
 
+  // The per-tool compile (generate → compile-playbook → emit) is ATOMIC by design:
+  // each phase gates on startIdx ONLY (not the window's stopIdx), so once started it
+  // runs through emit. Stopping mid-compile would leave artifact gaps the result
+  // tail (results array, register, audit) assumes exist — see the "Granularity"
+  // section of docs/plans/teach-phase-window.md. `--from-step` can RESUME mid-compile
+  // (each `else` branch loads the prior phase's artifact from disk); `--to-step`
+  // within the compile runs the whole unit and stops before register. Do NOT add a
+  // stopIdx gate here without also handling partial-artifact results downstream.
   // ── Step 1: plan THEN execute (workflow.json) ──
   let genResult: { workflow: Workflow; workflowPath: string } | undefined;
   if (startIdx <= STEPS.indexOf('generate')) {
