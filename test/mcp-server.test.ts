@@ -1,12 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import {
-  applyExecutionFallbacks,
-  buildJsonSchema,
-  buildSiteSpacingMap,
-  runSerializedBySite,
-  shouldSkipBootstrapSplice,
-  withPreferredFallbacks,
-} from '../src/imprint/mcp-server.ts';
+import { buildJsonSchema, runSerializedBySite } from '../src/imprint/mcp-server.ts';
 import type { WorkflowParameter } from '../src/imprint/types.ts';
 
 function deferred<T = void>(): {
@@ -57,69 +50,6 @@ describe('buildJsonSchema', () => {
     expect(props.query?.description).toBe('Search text.');
     // `query` has no default → required; `limit` has a default → optional.
     expect(schema.required).toEqual(['query']);
-  });
-});
-
-describe('shouldSkipBootstrapSplice', () => {
-  it('keeps the cdp-replay fallback when runtime learning starts at fetch-bootstrap', () => {
-    expect(shouldSkipBootstrapSplice(['fetch-bootstrap'])).toBe(false);
-    expect(shouldSkipBootstrapSplice(['fetch-bootstrap', 'stealth-fetch'])).toBe(false);
-  });
-
-  it('preserves exact preferred orders that do not need the bootstrap splice', () => {
-    expect(shouldSkipBootstrapSplice(undefined)).toBe(false);
-    expect(shouldSkipBootstrapSplice([])).toBe(false);
-    expect(shouldSkipBootstrapSplice(['cdp-replay'])).toBe(true);
-    expect(shouldSkipBootstrapSplice(['stealth-fetch'])).toBe(true);
-  });
-});
-
-describe('withPreferredFallbacks', () => {
-  it('adds browser-backed fallbacks behind a learned fetch-bootstrap preference', () => {
-    expect(withPreferredFallbacks(['fetch-bootstrap'], ['fetch-bootstrap'])).toEqual([
-      'fetch-bootstrap',
-      'cdp-replay',
-      'stealth-fetch',
-    ]);
-  });
-
-  it('adds stealth-fetch behind a learned cdp-replay preference', () => {
-    expect(withPreferredFallbacks(['cdp-replay'], ['cdp-replay'])).toEqual([
-      'cdp-replay',
-      'stealth-fetch',
-    ]);
-  });
-
-  it('leaves other preferred ladders unchanged', () => {
-    expect(withPreferredFallbacks(['stealth-fetch'], ['stealth-fetch'])).toEqual(['stealth-fetch']);
-  });
-});
-
-describe('applyExecutionFallbacks', () => {
-  it('drops playbook from multi-rung auto ladders when the workflow opts out', () => {
-    expect(
-      applyExecutionFallbacks(['fetch-bootstrap', 'cdp-replay', 'playbook'], {
-        skipPlaybookFallback: true,
-      }),
-    ).toEqual(['fetch-bootstrap', 'cdp-replay']);
-  });
-
-  it('keeps explicit single-rung playbook ladders intact', () => {
-    expect(applyExecutionFallbacks(['playbook'], { skipPlaybookFallback: true })).toEqual([
-      'playbook',
-    ]);
-  });
-});
-
-describe('buildSiteSpacingMap', () => {
-  it('uses the largest declared spacing across tools for the same site', () => {
-    const spacing = buildSiteSpacingMap([
-      { site: 'google-flights', workflow: { execution: { minCallSpacingMs: 2000 } } },
-      { site: 'google-flights', workflow: {} },
-      { site: 'southwest', workflow: { execution: { minCallSpacingMs: 500 } } },
-    ]);
-    expect(spacing.get('google-flights')).toBe(2000);
-    expect(spacing.get('southwest')).toBe(500);
   });
 });
 
@@ -191,35 +121,5 @@ describe('runSerializedBySite', () => {
     await expect(second).resolves.toBe('second');
     expect(events).toEqual(['first:start', 'second:start']);
     expect(queues.has('google-flights')).toBe(false);
-  });
-
-  it('waits between same-site calls when a workflow declares MCP pacing', async () => {
-    const queues = new Map<string, Promise<void>>();
-    const lastFinishedAt = new Map<string, number>([['google-flights', 1_000]]);
-    const sleeps: number[] = [];
-    let now = 1_400;
-
-    await expect(
-      runSerializedBySite(
-        queues,
-        'google-flights',
-        async () => {
-          now = 4_000;
-          return 'done';
-        },
-        {
-          minCallSpacingMs: 2_000,
-          lastFinishedAt,
-          now: () => now,
-          sleep: async (ms) => {
-            sleeps.push(ms);
-            now += ms;
-          },
-        },
-      ),
-    ).resolves.toBe('done');
-
-    expect(sleeps).toEqual([1_600]);
-    expect(lastFinishedAt.get('google-flights')).toBe(4_000);
   });
 });

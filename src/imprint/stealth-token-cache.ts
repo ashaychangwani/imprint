@@ -57,19 +57,6 @@ export function loadCachedToken(siteDir: string, maxAgeSeconds: number): TokenCa
       cookies: raw.cookies,
       sensorHeaders: raw.sensorHeaders,
       bootstrappedAt: raw.bootstrappedAt,
-      ...(typeof raw.bootstrapHtml === 'string' ? { bootstrapHtml: raw.bootstrapHtml } : {}),
-      ...(raw.bootstrapResponseHeaders &&
-      typeof raw.bootstrapResponseHeaders === 'object' &&
-      !Array.isArray(raw.bootstrapResponseHeaders)
-        ? { bootstrapResponseHeaders: raw.bootstrapResponseHeaders as Record<string, string> }
-        : {}),
-      ...(Array.isArray(raw.observedRequests)
-        ? { observedRequests: stripDurableObservedResponseBodies(raw.observedRequests) }
-        : {}),
-      ...(typeof raw.userAgent === 'string' ? { userAgent: raw.userAgent } : {}),
-      ...(raw.clientHints && typeof raw.clientHints === 'object' && !Array.isArray(raw.clientHints)
-        ? { clientHints: raw.clientHints as Record<string, string> }
-        : {}),
     };
   } catch {
     return null;
@@ -82,37 +69,13 @@ export function saveCachedToken(siteDir: string, token: TokenCache): void {
     mkdirSync(siteDir, { recursive: true });
     const p = tokenPath(siteDir);
     const tmp = `${p}.${process.pid}.tmp`;
-    writeFileSync(
-      tmp,
-      `${JSON.stringify({
-        ...token,
-        ...(token.observedRequests
-          ? { observedRequests: stripDurableObservedResponseBodies(token.observedRequests) }
-          : {}),
-      })}\n`,
-      'utf8',
-    );
+    writeFileSync(tmp, `${JSON.stringify(token)}\n`, 'utf8');
     renameSync(tmp, p);
   } catch (err) {
     log(
       `failed to persist stealth token to ${siteDir}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-}
-
-function stripDurableObservedResponseBodies(
-  observedRequests: NonNullable<TokenCache['observedRequests']>,
-): NonNullable<TokenCache['observedRequests']> {
-  return observedRequests.map((req) => {
-    if (!req.response || req.response.body === undefined) return req;
-    return {
-      ...req,
-      response: {
-        status: req.response.status,
-        headers: req.response.headers,
-      },
-    };
-  });
 }
 
 /** Remove a cached token (best-effort) — call when a site's teach run ends. */

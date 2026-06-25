@@ -44,7 +44,7 @@
         "name": "f_sid",
         "pattern": "\"FdrFJe\":\"([^\"]+)\"",
         "group": 1,
-        "required": true,
+        "required": false,
         "capability": "browser_bootstrap"
       },
       {
@@ -52,7 +52,7 @@
         "name": "bl",
         "pattern": "\"cfb2h\":\"([^\"]+)\"",
         "group": 1,
-        "required": true,
+        "required": false,
         "capability": "browser_bootstrap"
       }
     ]
@@ -74,8 +74,5 @@
   ],
   "requestTransformModule": "./request-transform.ts",
   "parserModule": "./parser.ts",
-  "execution": {
-    "skipPlaybookFallback": true
-  },
   "liveVerified": true
 }

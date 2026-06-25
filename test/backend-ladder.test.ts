@@ -28,7 +28,6 @@ import {
   runWorkflowWithLadder,
 } from '../src/imprint/backend-ladder.ts';
 import type { MintedJar } from '../src/imprint/cdp-browser-fetch.ts';
-import { loadJar } from '../src/imprint/cdp-jar-cache.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import type { ConcreteBackend, ToolResult, Workflow } from '../src/imprint/types.ts';
@@ -45,8 +44,6 @@ beforeEach(() => {
   // Chrome. Stub its factory so the rung fails fast (mintJar throws → runCdpReplay
   // returns NETWORK → escalate) instead of launching a browser in unit tests.
   __setCdpBrowserFetchFactoryForTest(() => ({
-    bootstrapUrl: 'about:blank',
-    setBootstrapUrl: () => {},
     fetchImpl: (async () => {
       throw new Error('cdp-replay disabled in tests');
     }) as unknown as typeof fetch,
@@ -625,11 +622,7 @@ describe('runWithLadder — stealth honors workflow bootstrap', () => {
         {
           method: 'POST',
           url: 'https://bs.example.com/api/act',
-          headers: {
-            'X-Csrf': '${state.csrf}',
-            'X-Nonce': '${state.nonce}',
-            'X-Browser-Request-Token': '${state.browser_request_token}',
-          },
+          headers: { 'X-Csrf': '${state.csrf}', 'X-Nonce': '${state.nonce}' },
         },
       ],
       site: 'bs',
@@ -649,27 +642,6 @@ describe('runWithLadder — stealth honors workflow bootstrap', () => {
             name: 'nonce',
             pattern: 'nonce="([0-9]+)"',
             group: 1,
-            required: true,
-            capability: 'browser_bootstrap',
-          },
-          {
-            source: 'request_header',
-            name: 'browser_request_token',
-            header: 'X-Browser-Request-Token',
-            method: 'POST',
-            urlPattern: '/api/bootstrap',
-            mode: 'last',
-            required: true,
-            capability: 'browser_bootstrap',
-          },
-          {
-            source: 'request_url_regex',
-            name: 'request_id',
-            pattern: '[?&]rid=([^&]+)',
-            group: 1,
-            method: 'POST',
-            urlPattern: '/api/bootstrap',
-            mode: 'last',
             required: true,
             capability: 'browser_bootstrap',
           },
@@ -702,13 +674,6 @@ describe('runWithLadder — stealth honors workflow bootstrap', () => {
             bootstrappedAt: Date.now(),
             bootstrapHtml: '<div nonce="42"></div>',
             bootstrapResponseHeaders: {},
-            observedRequests: [
-              {
-                method: 'POST',
-                url: 'https://bs.example.com/api/bootstrap?rid=req-42',
-                headers: { 'X-Browser-Request-Token': 'minted-by-page-js' },
-              },
-            ],
           }),
         },
       ),
@@ -716,13 +681,10 @@ describe('runWithLadder — stealth honors workflow bootstrap', () => {
     const r = await runWithLadder(['stealth-fetch'], tool, {}, root, cache);
     expect(r.result.ok).toBe(true);
     expect(r.usedBackend).toBe('stealth-fetch');
-    // The csrf cookie, html_regex nonce, and browser-generated request header
-    // all resolved from the stealth bootstrap session and were threaded into
-    // the workflow as ${state.X}.
+    // The csrf cookie and the html_regex nonce both resolved from the stealth
+    // bootstrap session and were threaded into the workflow as ${state.X}.
     expect(receivedState?.csrf).toBe('tok-abc');
     expect(receivedState?.nonce).toBe('42');
-    expect(receivedState?.browser_request_token).toBe('minted-by-page-js');
-    expect(receivedState?.request_id).toBe('req-42');
   });
 
   it('applies workflow parameter defaults before resolving the stealth bootstrap URL', async () => {
@@ -1276,10 +1238,7 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
 
   function defaultedBootstrapTool(
     site: string,
-    onReplay: (
-      params: Record<string, unknown>,
-      opts: Record<string, unknown>,
-    ) => ToolResult | Promise<ToolResult>,
+    onReplay: (params: Record<string, unknown>, opts: Record<string, unknown>) => ToolResult,
   ): ResolvedTool {
     return {
       site,
@@ -1352,8 +1311,6 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     __setCdpBrowserFetchFactoryForTest((opts) => {
       seenBootstrapUrl = opts.bootstrapUrl;
       return {
-        bootstrapUrl: opts.bootstrapUrl ?? opts.baseUrl,
-        setBootstrapUrl: () => {},
         fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
         ensureBootstrapped: async () => [],
         mintJar: async () => defaultedJar,
@@ -1381,588 +1338,6 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
       adult_passengers_count: 1,
     });
     expect(closes).toBe(1);
-  });
-
-  it('captures browser-generated bootstrap request headers into initial state', async () => {
-    const jar: MintedJar = {
-      ...defaultedJar,
-      observedRequests: [
-        {
-          method: 'POST',
-          url: 'https://flights.example.com/_/FlightsFrontendUi/data/GetShoppingResults?_reqid=52203',
-          headers: {
-            'X-Goog-BatchExecute-Bgr': 'browser-minted-bgr',
-          },
-          body: 'f.req=%5B%5Bnull%2Cnull%2Cnull%2C%5C%22browser%3Dminted%2Fsearch%2Btoken%5C%22%5D%2C',
-        },
-      ],
-    };
-    __setCdpJarMinterForTest(async () => jar);
-    let seenState: Record<string, unknown> | undefined;
-    const tool = defaultedBootstrapTool('flights', (_params, opts) => {
-      seenState = opts.initialState as Record<string, unknown>;
-      return { ok: true, data: { via: 'fetch-bootstrap' } };
-    });
-    const bootstrap = tool.workflow.bootstrap;
-    if (!bootstrap) throw new Error('expected defaultedBootstrapTool to define bootstrap');
-    tool.workflow.bootstrap = {
-      ...bootstrap,
-      captures: [
-        {
-          source: 'request_header',
-          name: 'bgr',
-          header: 'X-Goog-BatchExecute-Bgr',
-          method: 'POST',
-          urlPattern: 'GetShoppingResults',
-          mode: 'last',
-          required: true,
-          capability: 'browser_bootstrap',
-        },
-        {
-          source: 'request_url_regex',
-          name: 'reqid',
-          pattern: '[?&]_reqid=([^&]+)',
-          group: 1,
-          method: 'POST',
-          urlPattern: 'GetShoppingResults',
-          mode: 'last',
-          required: true,
-          capability: 'browser_bootstrap',
-        },
-        {
-          source: 'request_body_regex',
-          name: 'search_context_token',
-          pattern: '%5B%5Bnull%2Cnull%2Cnull%2C%5C%22(.+?)%5C%22%5D',
-          group: 1,
-          method: 'POST',
-          urlPattern: 'GetShoppingResults',
-          mode: 'last',
-          required: true,
-          capability: 'browser_bootstrap',
-        },
-      ],
-    };
-
-    const r = await runWithLadder(
-      ['fetch-bootstrap'],
-      tool,
-      { origin: 'SAN' },
-      root,
-      makeStealthCache(tool),
-    );
-
-    expect(r.result.ok).toBe(true);
-    expect(seenState?.bgr).toBe('browser-minted-bgr');
-    expect(seenState?.reqid).toBe('52203');
-    expect(seenState?.search_context_token).toBe('browser%3Dminted%2Fsearch%2Btoken');
-  });
-
-  it('remints a cached jar that cannot satisfy required browser-observed captures', async () => {
-    __setCdpJarMinterForTest(null);
-    const siteDir = pathJoin(root, 'flights');
-    mkdirSync(siteDir, { recursive: true });
-    writeFileSync(
-      pathJoin(siteDir, '.cdp-jar.json'),
-      `${JSON.stringify({
-        ...defaultedJar,
-        bootstrapEpoch: Date.now(),
-        observedRequests: [],
-      })}\n`,
-      'utf8',
-    );
-
-    let mintCalls = 0;
-    let seenState: Record<string, unknown> | undefined;
-    const remintedJar: MintedJar = {
-      ...defaultedJar,
-      bootstrapUrl: 'https://flights.example.com/search?origin=SAN&returnDate=&adults=1',
-      observedRequests: [
-        {
-          method: 'POST',
-          url: 'https://flights.example.com/_/FlightsFrontendUi/data/GetShoppingResults?f.sid=live-sid',
-          headers: {},
-          source: 'browser',
-        },
-      ],
-    };
-    __setCdpBrowserFetchFactoryForTest((opts) => ({
-      bootstrapUrl: opts.bootstrapUrl ?? opts.baseUrl,
-      setBootstrapUrl: () => {},
-      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
-      ensureBootstrapped: async () => [],
-      mintJar: async () => {
-        mintCalls++;
-        return remintedJar;
-      },
-      close: async () => {},
-    }));
-
-    const tool = defaultedBootstrapTool('flights', (_params, opts) => {
-      seenState = opts.initialState as Record<string, unknown>;
-      return { ok: true, data: { via: 'fetch-bootstrap' } };
-    });
-    const bootstrap = tool.workflow.bootstrap;
-    if (!bootstrap) throw new Error('expected defaultedBootstrapTool to define bootstrap');
-    tool.workflow.bootstrap = {
-      ...bootstrap,
-      captures: [
-        {
-          source: 'request_url_regex',
-          name: 'f_sid',
-          pattern: '[?&]f\\.sid=([^&]+)',
-          group: 1,
-          method: 'POST',
-          urlPattern: 'GetShoppingResults',
-          mode: 'last',
-          required: true,
-          capability: 'browser_bootstrap',
-        },
-      ],
-    };
-
-    const r = await runWithLadder(
-      ['fetch-bootstrap'],
-      tool,
-      { origin: 'SAN' },
-      root,
-      makeStealthCache(tool),
-    );
-
-    expect(r.result.ok).toBe(true);
-    expect(mintCalls).toBeGreaterThan(0);
-    expect(seenState?.f_sid).toBe('live-sid');
-  });
-
-  it('waits for delayed browser-observed bootstrap request captures', async () => {
-    let mintCalls = 0;
-    let seenState: Record<string, unknown> | undefined;
-    const delayedJar: MintedJar = {
-      ...defaultedJar,
-      observedRequests: [
-        {
-          method: 'POST',
-          url: 'https://flights.example.com/_/FlightsFrontendUi/data/GetShoppingResults?f.sid=late-sid&_reqid=52203',
-          headers: {
-            'X-Goog-BatchExecute-Bgr': 'late-bgr',
-          },
-          source: 'browser',
-        },
-      ],
-    };
-    __setCdpBrowserFetchFactoryForTest((opts) => ({
-      bootstrapUrl: opts.bootstrapUrl ?? opts.baseUrl,
-      setBootstrapUrl: () => {},
-      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
-      ensureBootstrapped: async () => [],
-      mintJar: async () => {
-        mintCalls++;
-        return mintCalls === 1 ? { ...defaultedJar, observedRequests: [] } : delayedJar;
-      },
-      close: async () => {},
-    }));
-    const tool = defaultedBootstrapTool('flights', (_params, opts) => {
-      seenState = opts.initialState as Record<string, unknown>;
-      return { ok: true, data: { via: 'cdp-replay' } };
-    });
-    const bootstrap = tool.workflow.bootstrap;
-    if (!bootstrap) throw new Error('expected defaultedBootstrapTool to define bootstrap');
-    tool.workflow.bootstrap = {
-      ...bootstrap,
-      timeoutMs: 25,
-      captures: [
-        {
-          source: 'request_url_regex',
-          name: 'f_sid',
-          pattern: '[?&]f\\.sid=([^&]+)',
-          group: 1,
-          method: 'POST',
-          urlPattern: 'GetShoppingResults',
-          mode: 'last',
-          required: true,
-          capability: 'browser_bootstrap',
-        },
-        {
-          source: 'request_header',
-          name: 'bgr',
-          header: 'X-Goog-BatchExecute-Bgr',
-          method: 'POST',
-          urlPattern: 'GetShoppingResults',
-          mode: 'last',
-          required: true,
-          capability: 'browser_bootstrap',
-        },
-      ],
-    };
-
-    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map());
-
-    expect(r.result.ok).toBe(true);
-    expect(mintCalls).toBeGreaterThanOrEqual(2);
-    expect(seenState?.f_sid).toBe('late-sid');
-    expect(seenState?.bgr).toBe('late-bgr');
-  });
-
-  it('serves an exact bootstrap-observed response instead of replaying a one-shot browser request', async () => {
-    let fallbackFetches = 0;
-    const observedJar: MintedJar = {
-      ...defaultedJar,
-      observedRequests: [
-        {
-          method: 'POST',
-          url: 'https://flights.example.com/api/search?rid=req-42',
-          headers: {},
-          body: 'q=SAN',
-          response: {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-            body: '{"itineraries":[{"price":"$42"}]}',
-          },
-        },
-      ],
-    };
-    __setCdpBrowserFetchFactoryForTest((opts) => ({
-      bootstrapUrl: opts.bootstrapUrl ?? opts.baseUrl,
-      setBootstrapUrl: () => {},
-      fetchImpl: (async () => {
-        fallbackFetches++;
-        return new Response('duplicate replay should not run', { status: 500 });
-      }) as unknown as typeof fetch,
-      ensureBootstrapped: async () => [],
-      mintJar: async () => observedJar,
-      close: async () => {},
-    }));
-    const tool = defaultedBootstrapTool('flights', async (_params, opts) => {
-      const fetchImpl = opts.fetchImpl as typeof fetch;
-      const resp = await fetchImpl('https://flights.example.com/api/search?rid=req-42', {
-        method: 'POST',
-        body: 'q=SAN',
-      });
-      return { ok: true, data: await resp.json() };
-    });
-
-    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map());
-
-    expect(r.usedBackend).toBe('cdp-replay');
-    expect(r.result.ok).toBe(true);
-    if (r.result.ok) expect(r.result.data).toEqual({ itineraries: [{ price: '$42' }] });
-    expect(fallbackFetches).toBe(0);
-  });
-
-  it('serves an exact bootstrap-observed response when CDP omitted the request body', async () => {
-    let fallbackFetches = 0;
-    const observedJar: MintedJar = {
-      ...defaultedJar,
-      observedRequests: [
-        {
-          method: 'POST',
-          url: 'https://flights.example.com/api/search?rid=req-42',
-          headers: {},
-          response: {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-            body: '{"itineraries":[{"price":"$42"}]}',
-          },
-        },
-      ],
-    };
-    __setCdpBrowserFetchFactoryForTest((opts) => ({
-      bootstrapUrl: opts.bootstrapUrl ?? opts.baseUrl,
-      setBootstrapUrl: () => {},
-      fetchImpl: (async () => {
-        fallbackFetches++;
-        return new Response('duplicate replay should not run', { status: 500 });
-      }) as unknown as typeof fetch,
-      ensureBootstrapped: async () => [],
-      mintJar: async () => observedJar,
-      close: async () => {},
-    }));
-    const tool = defaultedBootstrapTool('flights', async (_params, opts) => {
-      const fetchImpl = opts.fetchImpl as typeof fetch;
-      const resp = await fetchImpl('https://flights.example.com/api/search?rid=req-42', {
-        method: 'POST',
-        body: 'q=SAN',
-      });
-      return { ok: true, data: await resp.json() };
-    });
-
-    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map());
-
-    expect(r.result.ok).toBe(true);
-    if (r.result.ok) expect(r.result.data).toEqual({ itineraries: [{ price: '$42' }] });
-    expect(fallbackFetches).toBe(0);
-  });
-
-  it('does not reuse responses observed from Imprint replay requests as bootstrap responses', async () => {
-    let fallbackFetches = 0;
-    const observedJar: MintedJar = {
-      ...defaultedJar,
-      observedRequests: [
-        {
-          method: 'POST',
-          url: 'https://flights.example.com/api/search?rid=req-42',
-          headers: {},
-          body: 'q=SAN',
-          source: 'replay',
-          response: {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-            body: '{"poisoned":true}',
-          },
-        },
-      ],
-    };
-    __setCdpBrowserFetchFactoryForTest((opts) => ({
-      bootstrapUrl: opts.bootstrapUrl ?? opts.baseUrl,
-      setBootstrapUrl: () => {},
-      fetchImpl: (async () => {
-        fallbackFetches++;
-        return new Response('{"fresh":true}', { status: 200 });
-      }) as unknown as typeof fetch,
-      ensureBootstrapped: async () => [],
-      mintJar: async () => observedJar,
-      close: async () => {},
-    }));
-    const tool = defaultedBootstrapTool('flights', async (_params, opts) => {
-      const fetchImpl = opts.fetchImpl as typeof fetch;
-      const resp = await fetchImpl('https://flights.example.com/api/search?rid=req-42', {
-        method: 'POST',
-        body: 'q=SAN',
-      });
-      return { ok: true, data: await resp.json() };
-    });
-
-    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map());
-
-    expect(r.result.ok).toBe(true);
-    if (r.result.ok) expect(r.result.data).toEqual({ fresh: true });
-    expect(fallbackFetches).toBe(1);
-  });
-
-  it('does not reuse durable cached observed response bodies as live fare data', async () => {
-    let fallbackFetches = 0;
-    const site = 'cached-observed';
-    const siteDir = pathJoin(root, site);
-    mkdirSync(siteDir, { recursive: true });
-    const bootstrapUrl = 'https://flights.example.com/search?origin=SAN';
-    const searchUrl = 'https://flights.example.com/api/search?rid=req-42';
-    writeFileSync(
-      pathJoin(siteDir, '.cdp-jar.json'),
-      `${JSON.stringify({
-        cookies: [{ name: 'NID', value: 'n', domain: '127.0.0.1', path: '/' }],
-        ua: 'RealChrome/148',
-        html: '',
-        bootstrapEpoch: Date.now(),
-        abckFlag: '?',
-        validated: false,
-        bootstrapUrl,
-        observedRequests: [
-          {
-            method: 'POST',
-            url: searchUrl,
-            headers: {},
-            body: 'q=SAN',
-            source: 'browser',
-            response: {
-              status: 200,
-              headers: { 'content-type': 'application/json' },
-              body: '{"stale":true}',
-            },
-          },
-        ],
-      })}\n`,
-      'utf8',
-    );
-    __setCdpBrowserFetchFactoryForTest((opts) => ({
-      bootstrapUrl: opts.bootstrapUrl ?? opts.baseUrl,
-      setBootstrapUrl: () => {},
-      fetchImpl: (async () => {
-        fallbackFetches++;
-        return new Response('{"fresh":true}', { status: 200 });
-      }) as unknown as typeof fetch,
-      ensureBootstrapped: async () => [],
-      mintJar: async () => {
-        const loaded = loadJar(siteDir, bootstrapUrl);
-        if (!loaded) throw new Error('expected cached jar to load');
-        return loaded;
-      },
-      close: async () => {},
-    }));
-    const tool: ResolvedTool = {
-      site,
-      dir: pathJoin(siteDir, 'tool'),
-      workflow: {
-        toolName: 'search_flights',
-        intent: { description: 'search' },
-        parameters: [{ name: 'origin', type: 'string', description: 'Origin' }],
-        requests: [{ method: 'POST', url: searchUrl, headers: {}, body: 'q=${param.origin}' }],
-        site,
-        bootstrap: { url: 'https://flights.example.com/search?origin=${param.origin}' },
-      },
-      toolFn: async (_params, opts) => {
-        const fetchImpl = opts?.fetchImpl as typeof fetch;
-        const resp = await fetchImpl(searchUrl, { method: 'POST', body: 'q=SAN' });
-        return { ok: true, data: await resp.json() };
-      },
-    };
-
-    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map());
-
-    expect(r.result.ok).toBe(true);
-    if (r.result.ok) expect(r.result.data).toEqual({ fresh: true });
-    expect(fallbackFetches).toBe(1);
-  });
-
-  it('retargets a pooled CDP session when the workflow bootstrap URL changes', async () => {
-    const pool = new Map();
-    const closes: string[] = [];
-    const bootstraps: string[] = [];
-    const retargets: string[] = [];
-    __setCdpBrowserFetchFactoryForTest((opts) => {
-      let bootstrapUrl = opts.bootstrapUrl ?? opts.baseUrl;
-      bootstraps.push(bootstrapUrl);
-      return {
-        get bootstrapUrl() {
-          return bootstrapUrl;
-        },
-        setBootstrapUrl: (next: string) => {
-          bootstrapUrl = next;
-          retargets.push(next);
-        },
-        fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
-        ensureBootstrapped: async () => [],
-        mintJar: async () => defaultedJar,
-        close: async () => {
-          closes.push(bootstrapUrl);
-        },
-      };
-    });
-    const tool = defaultedBootstrapTool('flights', () => ({ ok: true, data: {} }));
-
-    await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
-      cdpPool: pool,
-    });
-    await runWithLadder(['cdp-replay'], tool, { origin: 'SFO' }, root, new Map(), {
-      cdpPool: pool,
-    });
-
-    expect(bootstraps).toEqual([
-      'https://flights.example.com/search?origin=SAN&returnDate=&adults=1',
-    ]);
-    expect(retargets).toEqual([
-      'https://flights.example.com/search?origin=SFO&returnDate=&adults=1',
-    ]);
-    expect(closes).toEqual([]);
-  });
-
-  it('refreshes observed response state when retargeting a pooled CDP session', async () => {
-    const pool = new Map();
-    let fallbackFetches = 0;
-    __setCdpBrowserFetchFactoryForTest((opts) => {
-      let bootstrapUrl = opts.bootstrapUrl ?? opts.baseUrl;
-      return {
-        get bootstrapUrl() {
-          return bootstrapUrl;
-        },
-        setBootstrapUrl: (next: string) => {
-          bootstrapUrl = next;
-        },
-        fetchImpl: (async () => {
-          fallbackFetches++;
-          return new Response('{"fallback":true}', { status: 200 });
-        }) as unknown as typeof fetch,
-        ensureBootstrapped: async () => [],
-        mintJar: async () => {
-          const origin = bootstrapUrl.includes('origin=SFO') ? 'SFO' : 'SAN';
-          return {
-            ...defaultedJar,
-            bootstrapUrl,
-            observedRequests: [
-              {
-                method: 'POST',
-                url: 'https://flights.example.com/api/search?rid=req-42',
-                headers: {},
-                body: `q=${origin}`,
-                source: 'browser',
-                response: {
-                  status: 200,
-                  headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({ origin }),
-                },
-              },
-            ],
-          };
-        },
-        close: async () => {},
-      };
-    });
-    const tool = defaultedBootstrapTool('flights', async (params, opts) => {
-      const fetchImpl = opts.fetchImpl as typeof fetch;
-      const resp = await fetchImpl('https://flights.example.com/api/search?rid=req-42', {
-        method: 'POST',
-        body: `q=${params.origin}`,
-      });
-      return { ok: true, data: await resp.json() };
-    });
-
-    const first = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
-      cdpPool: pool,
-    });
-    const second = await runWithLadder(['cdp-replay'], tool, { origin: 'SFO' }, root, new Map(), {
-      cdpPool: pool,
-    });
-
-    expect(first.result.ok).toBe(true);
-    if (first.result.ok) expect(first.result.data).toEqual({ origin: 'SAN' });
-    expect(second.result.ok).toBe(true);
-    if (second.result.ok) expect(second.result.data).toEqual({ origin: 'SFO' });
-    expect(fallbackFetches).toBe(0);
-  });
-
-  it('keeps a pooled CDP session after workflow-level BAD_RESPONSE failures', async () => {
-    const pool = new Map();
-    const closes: string[] = [];
-    const bootstraps: string[] = [];
-    const retargets: string[] = [];
-    __setCdpBrowserFetchFactoryForTest((opts) => {
-      let bootstrapUrl = opts.bootstrapUrl ?? opts.baseUrl;
-      bootstraps.push(bootstrapUrl);
-      return {
-        get bootstrapUrl() {
-          return bootstrapUrl;
-        },
-        setBootstrapUrl: (next: string) => {
-          bootstrapUrl = next;
-          retargets.push(next);
-        },
-        fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
-        ensureBootstrapped: async () => [],
-        mintJar: async () => defaultedJar,
-        close: async () => {
-          closes.push(bootstrapUrl);
-        },
-      };
-    });
-    const tool = defaultedBootstrapTool('flights', () => ({
-      ok: false,
-      error: 'BAD_RESPONSE',
-      message: 'parser did not recognize response',
-    }));
-
-    await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
-      cdpPool: pool,
-    });
-    await runWithLadder(['cdp-replay'], tool, { origin: 'SFO' }, root, new Map(), {
-      cdpPool: pool,
-    });
-
-    expect(pool.has('flights')).toBe(true);
-    expect(bootstraps).toEqual([
-      'https://flights.example.com/search?origin=SAN&returnDate=&adults=1',
-    ]);
-    expect(retargets).toEqual([
-      'https://flights.example.com/search?origin=SFO&returnDate=&adults=1',
-    ]);
-    expect(closes).toEqual([]);
   });
 });
 
@@ -2146,45 +1521,6 @@ describe('effectiveAutoLadder + prefersCdpReplayFirst (Fix 4 — cdp-replay rung
       ],
     });
     expect(prefersCdpReplayFirst(w)).toBe(true);
-  });
-
-  it('prefersCdpReplayFirst: true when bootstrap state comes from browser-observed request values', () => {
-    const w = wf({
-      bootstrap: {
-        url: 'https://x/search?q=${param.query}',
-        captures: [
-          {
-            name: 'reqid',
-            source: 'request_url_regex',
-            required: true,
-            capability: 'browser_bootstrap',
-            mode: 'last',
-            urlPattern: '/Search',
-            pattern: '[?&]_reqid=([^&]+)',
-            group: 1,
-          },
-          {
-            name: 'sensor',
-            source: 'request_header',
-            required: true,
-            capability: 'browser_bootstrap',
-            mode: 'last',
-            urlPattern: '/Search',
-            header: 'X-Sensor',
-          },
-        ],
-      },
-      parameters: [{ name: 'query', type: 'string', description: 'Search query.' }],
-      requests: [{ method: 'POST', url: 'https://x/Search?_reqid=${state.reqid}', headers: {} }],
-    });
-
-    expect(prefersCdpReplayFirst(w)).toBe(true);
-    expect(effectiveAutoLadder(['fetch', 'stealth-fetch'], w)).toEqual([
-      'cdp-replay',
-      'fetch',
-      'fetch-bootstrap',
-      'stealth-fetch',
-    ]);
   });
 
   it('prefersCdpReplayFirst: false for a single state-changing request', () => {

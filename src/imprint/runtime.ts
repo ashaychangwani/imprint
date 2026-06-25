@@ -133,39 +133,6 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     }
   }
 
-  type TransformResult = string | { url: string; body?: string; headers?: Record<string, string> };
-  let requestTransform:
-    | ((
-        method: string,
-        url: string,
-        responses: unknown[],
-        params?: Record<string, string | number | boolean>,
-        state?: Record<string, unknown>,
-      ) => TransformResult)
-    | null = null;
-  if (opts.workflow.requestTransformModule && opts.workflowPath) {
-    try {
-      const transformPath = pathResolve(
-        dirname(opts.workflowPath),
-        opts.workflow.requestTransformModule,
-      );
-      const mod = await import(transformPath);
-      if (typeof mod.prepareParams === 'function') {
-        const prepared = await mod.prepareParams(params);
-        if (prepared && typeof prepared === 'object') {
-          for (const [k, v] of Object.entries(prepared)) {
-            if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
-              params[k] = v;
-            }
-          }
-        }
-      }
-      if (typeof mod.transform === 'function') requestTransform = mod.transform;
-    } catch {
-      // Non-fatal — proceed without transform.
-    }
-  }
-
   // rawResponses feeds parser modules and the final return shape. responseSlots
   // keeps legacy request.extract aliases without replacing raw parser input.
   const responseSlots: ResponseSlot[] = [];
@@ -177,6 +144,28 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   const stateCapabilities = collectStateCapabilities(opts.workflow);
   const dependencyPreflight = preflightStateDependencies(opts.workflow, state, stateCapabilities);
   if (!dependencyPreflight.ok) return dependencyPreflight.result;
+
+  type TransformResult = string | { url: string; body?: string; headers?: Record<string, string> };
+  let requestTransform:
+    | ((
+        method: string,
+        url: string,
+        responses: unknown[],
+        params?: Record<string, string | number | boolean>,
+      ) => TransformResult)
+    | null = null;
+  if (opts.workflow.requestTransformModule && opts.workflowPath) {
+    try {
+      const transformPath = pathResolve(
+        dirname(opts.workflowPath),
+        opts.workflow.requestTransformModule,
+      );
+      const mod = await import(transformPath);
+      if (typeof mod.transform === 'function') requestTransform = mod.transform;
+    } catch {
+      // Non-fatal — proceed without transform.
+    }
+  }
 
   for (let i = 0; i < opts.workflow.requests.length; i++) {
     const req = opts.workflow.requests[i];
@@ -201,7 +190,6 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           subbed.url,
           responseSlots.map((s) => s.raw),
           params,
-          state,
         );
         if (typeof transformResult === 'string') {
           subbed.url = transformResult;

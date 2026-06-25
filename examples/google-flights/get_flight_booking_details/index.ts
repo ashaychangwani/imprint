@@ -94,7 +94,7 @@ const WORKFLOW: Workflow = {
     "captures": [
       {
         "name": "f_sid",
-        "required": true,
+        "required": false,
         "capability": "browser_bootstrap",
         "source": "html_regex",
         "pattern": "\"FdrFJe\":\"([^\"]+)\"",
@@ -102,7 +102,7 @@ const WORKFLOW: Workflow = {
       },
       {
         "name": "bl",
-        "required": true,
+        "required": false,
         "capability": "browser_bootstrap",
         "source": "html_regex",
         "pattern": "\"cfb2h\":\"([^\"]+)\"",
@@ -112,9 +112,6 @@ const WORKFLOW: Workflow = {
   },
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
-  "execution": {
-    "skipPlaybookFallback": true
-  },
   "liveVerified": true
 };
 

@@ -1261,7 +1261,7 @@ export async function typecheckArtifacts(
 
   try {
     const result = await runCommand(
-      'bun x tsc --noEmit -p .imprint-typecheck.tsconfig.json',
+      'bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json',
       dir,
       120000,
     );
@@ -2937,7 +2937,7 @@ export async function externalVerification(
     const output = await typecheckArtifacts(toolDir, ['parser.ts', 'request-transform.ts']);
     if (output.exitCode !== 0 || output.timedOut) {
       failures.push(
-        `generated TypeScript artifacts failed typecheck (bun x tsc --noEmit -p .imprint-typecheck.tsconfig.json) exited ${output.exitCode}${output.timedOut ? ' after timing out' : ''}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,
+        `generated TypeScript artifacts failed typecheck (bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json) exited ${output.exitCode}${output.timedOut ? ' after timing out' : ''}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,
       );
     }
   }

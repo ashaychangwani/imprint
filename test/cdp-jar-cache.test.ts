@@ -51,39 +51,9 @@ describe('cdp-jar-cache loadJar/saveJar/clearJar', () => {
 
   it('rejects a non-validated (_abck != 0) jar', () => {
     const j = validJar();
-    j.cookies = [{ name: '_abck', value: 'X~-1~Y', domain: '.example.com', path: '/' }];
     j.abckFlag = '-1';
     saveJar(siteDir, j);
     expect(loadJar(siteDir)).toBeNull();
-  });
-
-  it('loads a legacy Akamai jar with bm_sv even when validated is absent', () => {
-    const j = validJar();
-    j.cookies = [
-      { name: '_abck', value: 'X~-1~Y', domain: '.example.com', path: '/' },
-      { name: 'bm_sv', value: 'validated', domain: '.example.com', path: '/' },
-    ];
-    j.abckFlag = '-1';
-    j.validated = undefined;
-    saveJar(siteDir, j);
-    const loaded = loadJar(siteDir);
-    expect(loaded?.cookies.some((c) => c.name === 'bm_sv')).toBe(true);
-  });
-
-  it('loads a non-Akamai bootstrap jar even without Akamai validation markers', () => {
-    const j: MintedJar = {
-      cookies: [{ name: 'NID', value: 'n', domain: '.google.com', path: '/' }],
-      ua: 'Chrome/148',
-      html: '<html>"FdrFJe":"sid","cfb2h":"bl"</html>',
-      bootstrapEpoch: Date.now(),
-      abckFlag: '?',
-      validated: false, // legacy Google caches were written this way.
-      source: 'mint',
-    };
-    saveJar(siteDir, j);
-    const loaded = loadJar(siteDir);
-    expect(loaded?.html).toContain('FdrFJe');
-    expect(loaded?.cookies[0]?.name).toBe('NID');
   });
 
   it('clearJar removes the cached jar', () => {
@@ -132,29 +102,6 @@ describe('seedJarFromRecording', () => {
     });
     expect(seedJarFromRecording(siteDir)).toBe(false);
     expect(loadJar(siteDir)).toBeNull();
-  });
-
-  it('seeds a non-Akamai recording as a generic bootstrap jar', () => {
-    writeSession('2026-06-02T00-00-00-000Z.json', {
-      cookieSnapshots: [
-        {
-          label: 'end',
-          cookies: [{ name: 'NID', value: 'n', domain: '.google.com', path: '/' }],
-        },
-      ],
-      requests: [
-        { requestHeaders: { 'User-Agent': 'RealChrome/148' } },
-        {
-          url: 'https://www.google.com/travel/flights',
-          resourceType: 'Document',
-          response: { mimeType: 'text/html', body: '<html>"FdrFJe":"sid"</html>' },
-        },
-      ],
-    });
-    expect(seedJarFromRecording(siteDir, null, 'https://www.google.com/travel/flights')).toBe(true);
-    const j = loadJar(siteDir);
-    expect(j?.validated).toBe(true);
-    expect(j?.html).toContain('FdrFJe');
   });
 
   it('SEEDS a recording whose _abck rotated to ~-1~ but carries bm_sv (validated session)', () => {
@@ -273,51 +220,6 @@ describe('seedJarFromRecording', () => {
     expect(/nonce="([0-9a-f]{32})"/.exec(j?.html ?? '')?.[1]).toBe(
       'aabbccddeeff00112233445566778899',
     );
-  });
-
-  it('seeds observed browser request headers from the recording', () => {
-    writeSession('2026-06-02T00-00-00-000Z.json', {
-      cookieSnapshots: [
-        {
-          label: 'end',
-          cookies: [{ name: 'NID', value: 'n', domain: '.google.com', path: '/' }],
-        },
-      ],
-      requests: [
-        { requestHeaders: { 'User-Agent': 'RealChrome/148' } },
-        {
-          url: 'https://www.google.com/_/FlightsFrontendUi/data/GetShoppingResults',
-          method: 'POST',
-          body: 'f.req=abc&',
-          requestHeaders: {
-            'X-Goog-BatchExecute-Bgr': 'browser-minted-bgr',
-            'User-Agent': 'RealChrome/148',
-          },
-          response: {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-            body: ")]}'\n\n123\n[]",
-          },
-        },
-      ],
-    });
-    expect(seedJarFromRecording(siteDir, undefined, 'https://www.google.com/travel/flights')).toBe(
-      true,
-    );
-    const j = loadJar(siteDir, 'https://www.google.com/travel/flights');
-    expect(j?.bootstrapUrl).toBe('https://www.google.com/travel/flights');
-    expect(j?.observedRequests?.[0]).toMatchObject({
-      method: 'POST',
-      url: 'https://www.google.com/_/FlightsFrontendUi/data/GetShoppingResults',
-      body: 'f.req=abc&',
-      headers: {
-        'X-Goog-BatchExecute-Bgr': 'browser-minted-bgr',
-      },
-      response: {
-        status: 200,
-      },
-    });
-    expect(loadJar(siteDir, 'https://www.google.com/travel/flights?different=1')).toBeNull();
   });
 
   it('prefers the recorded response for the exact bootstrapUrl over the largest body', () => {

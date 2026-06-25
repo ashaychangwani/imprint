@@ -221,42 +221,6 @@ const BootstrapCaptureSchema = z.discriminatedUnion('source', [
     header: z.string(),
     mode: z.enum(['first', 'last', 'all']).optional().default('last'),
   }),
-  /** Read a header from a browser-generated request observed during bootstrap
-   *  navigation. This is for replay tokens produced by page JavaScript for an
-   *  XHR/fetch request, where neither HTML nor response headers contain the
-   *  value. `urlPattern` is a JavaScript regular expression tested against the
-   *  observed request URL. */
-  CaptureCommonSchema.extend({
-    source: z.literal('request_header'),
-    header: z.string(),
-    method: z.string().optional(),
-    urlPattern: z.string().optional(),
-    mode: z.enum(['first', 'last', 'all']).optional().default('last'),
-  }),
-  /** Read a value from a browser-generated request URL observed during
-   *  bootstrap navigation. This is for per-page request ids or URL tokens that
-   *  are generated alongside browser XHR/fetch calls. `urlPattern` selects the
-   *  observed request; `pattern` extracts the value from that request URL. */
-  CaptureCommonSchema.extend({
-    source: z.literal('request_url_regex'),
-    pattern: z.string(),
-    group: z.number().int().nonnegative().optional().default(1),
-    method: z.string().optional(),
-    urlPattern: z.string().optional(),
-    mode: z.enum(['first', 'last', 'all']).optional().default('last'),
-  }),
-  /** Read a value from a browser-generated request body observed during
-   *  bootstrap navigation. This is for page-minted replay tokens embedded in
-   *  POST bodies (for example form-encoded RPC envelopes) where neither the URL
-   *  nor request headers carry the value. */
-  CaptureCommonSchema.extend({
-    source: z.literal('request_body_regex'),
-    pattern: z.string(),
-    group: z.number().int().nonnegative().optional().default(1),
-    method: z.string().optional(),
-    urlPattern: z.string().optional(),
-    mode: z.enum(['first', 'last', 'all']).optional().default('last'),
-  }),
 ]);
 export type BootstrapCapture = z.infer<typeof BootstrapCaptureSchema>;
 
@@ -329,15 +293,6 @@ export const WorkflowSchema = z.object({
       kind: z.enum(['waived-bot', 'waived-infra']),
       firstError: z.string(),
       exhaustedBackends: z.array(z.string()),
-    })
-    .optional(),
-  /** Optional runtime hints for provider-specific replay constraints. */
-  execution: z
-    .object({
-      /** Minimum end-to-start spacing between MCP calls for the same site. */
-      minCallSpacingMs: z.number().int().nonnegative().optional(),
-      /** Do not enter the DOM playbook rung after API/browser-backed rungs fail. */
-      skipPlaybookFallback: z.boolean().optional(),
     })
     .optional(),
 });

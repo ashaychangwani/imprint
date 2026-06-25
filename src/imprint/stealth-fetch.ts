@@ -74,20 +74,6 @@ export interface TokenCache {
   /** Lower-cased response headers of the bootstrap navigation, so callers can
    *  satisfy `response_header` bootstrap captures. Optional. */
   bootstrapResponseHeaders?: Record<string, string>;
-  /** Browser-generated requests observed while the bootstrap page loaded. Lets
-   *  workflows capture replay headers minted by page JavaScript for later XHRs. */
-  observedRequests?: Array<{
-    method: string;
-    url: string;
-    headers: Record<string, string>;
-    body?: string;
-    resourceType?: string;
-    response?: {
-      status: number;
-      headers: Record<string, string>;
-      body?: string;
-    };
-  }>;
   /** The bootstrap browser's actual `navigator.userAgent`, captured live. Reused
    *  for the post-bootstrap fetches so the wire UA matches the binary that minted
    *  the cookies (and its client hints below). Absent if capture failed or on
@@ -523,42 +509,6 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
     });
 
     const page = await context.newPage();
-    const observedRequests: NonNullable<TokenCache['observedRequests']> = [];
-    const observedByRequest = new Map<
-      unknown,
-      NonNullable<TokenCache['observedRequests']>[number]
-    >();
-    const pendingResponseCaptures = new Set<Promise<void>>();
-    page.on('request', (request) => {
-      const entry: NonNullable<TokenCache['observedRequests']>[number] = {
-        method: request.method(),
-        url: request.url(),
-        headers: request.headers(),
-        ...(request.postData() !== null ? { body: request.postData() as string } : {}),
-        resourceType: request.resourceType(),
-      };
-      observedRequests.push(entry);
-      observedByRequest.set(request, entry);
-      if (observedRequests.length > 100) observedRequests.shift();
-    });
-    page.on('response', (response) => {
-      const entry = observedByRequest.get(response.request());
-      if (!entry || !shouldCaptureObservedBody(entry)) return;
-      const pending = (async () => {
-        try {
-          const headers = await response.allHeaders();
-          entry.response = {
-            status: response.status(),
-            headers,
-            body: await response.text(),
-          };
-        } catch {
-          // best-effort — response reuse simply won't match without a body
-        }
-      })();
-      pendingResponseCaptures.add(pending);
-      void pending.finally(() => pendingResponseCaptures.delete(pending));
-    });
     // Patch navigator.webdriver ONLY on the vanilla-Playwright fallback. When the
     // stealth plugin is active it already removes the property natively (a real
     // Chrome lacks it); stacking our Object.defineProperty on top leaves a
@@ -712,7 +662,6 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
     );
 
     await page.waitForTimeout(300);
-    await settlePendingResponseCaptures(pendingResponseCaptures, 2_000);
 
     // Capture cookies scoped to the recording's registrable domain
     // (eTLD+1). Naive `.split('.').slice(-2)` was wrong for multi-part
@@ -737,32 +686,12 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
       bootstrappedAt: Date.now(),
       bootstrapHtml,
       bootstrapResponseHeaders,
-      observedRequests,
       userAgent: capturedUserAgent,
       clientHints,
     };
   } finally {
     await browser?.close().catch(() => {});
   }
-}
-
-function shouldCaptureObservedBody(
-  entry: NonNullable<TokenCache['observedRequests']>[number],
-): boolean {
-  const type = entry.resourceType?.toLowerCase();
-  if (type && type !== 'xhr' && type !== 'fetch') return false;
-  return true;
-}
-
-async function settlePendingResponseCaptures(
-  pending: Set<Promise<void>>,
-  timeoutMs: number,
-): Promise<void> {
-  if (pending.size === 0) return;
-  await Promise.race([
-    Promise.allSettled([...pending]),
-    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
-  ]);
 }
 
 async function defaultUnderlyingFetch(

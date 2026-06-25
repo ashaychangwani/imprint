@@ -45,15 +45,8 @@ export function extract(
 ): unknown {
   const raw = typeof rawResponse === 'string' ? rawResponse : JSON.stringify(rawResponse);
   const payload = extractRpcPayload(raw, 'tDoGIe');
-  if (payload == null) {
-    throw new Error('Google Flights tDoGIe response did not contain a batchexecute payload');
-  }
 
-  if (!Array.isArray(payload) || !Array.isArray(payload[1])) {
-    throw new Error('Google Flights tDoGIe payload did not contain a recognizable match list');
-  }
-
-  const matchesRaw = payload[1];
+  const matchesRaw = Array.isArray(payload) && Array.isArray(payload[1]) ? payload[1] : [];
   const matches = matchesRaw
     .map(parseItem)
     .filter((m): m is AirportMatch => m !== null);

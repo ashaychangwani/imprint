@@ -10,9 +10,6 @@
  *    cached (~90 min) so one bootstrap serves many searches. Auto mode always
  *    splices this right after `fetch`; it only RUNS when `fetch` escalates, so a
  *    healthy plain-API site never pays for it.
- *  - `cdp-replay`      — live Chrome API replay. Reused by MCP/compile sessions
- *    when a workflow needs browser-observed request state or sustained protected
- *    POSTs.
  *  - `stealth-fetch`   — Playwright stealth bootstrap + native fetch (token tier).
  *  - `playbook`        — DOM-walk LAST RESORT (needs a compiled playbook.yaml).
  */
@@ -25,7 +22,6 @@ import {
   type CdpBrowserFetchOptions,
   type MintedJar,
   createCdpBrowserFetch,
-  jarHasAkamaiValidationSignals,
 } from './cdp-browser-fetch.ts';
 import {
   clearJar,
@@ -217,30 +213,6 @@ function withWorkflowDefaults(
   return paramsWithDefaults;
 }
 
-async function withWorkflowPreparedParams(
-  tool: ResolvedTool,
-  params: Record<string, string | number | boolean>,
-): Promise<Record<string, string | number | boolean>> {
-  const preparedParams = withWorkflowDefaults(tool.workflow, params);
-  const modulePath = tool.workflow.requestTransformModule;
-  if (!modulePath) return preparedParams;
-  try {
-    const mod = await import(pathResolve(tool.dir, modulePath));
-    if (typeof mod.prepareParams !== 'function') return preparedParams;
-    const extra = await mod.prepareParams(preparedParams);
-    if (!extra || typeof extra !== 'object') return preparedParams;
-    for (const [key, value] of Object.entries(extra)) {
-      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-        preparedParams[key] = value;
-      }
-    }
-  } catch {
-    // Non-fatal: request transforms are optional, and executeWorkflow will surface
-    // any still-missing placeholders with its normal STATE_MISSING diagnostics.
-  }
-  return preparedParams;
-}
-
 /** Await the per-origin min spacing before a compile-path live request. The
  *  first call to an origin never waits (last=0); subsequent ones within the
  *  window are delayed so the suite paces itself under the rate-flag. */
@@ -363,7 +335,7 @@ export async function runWithLadder(
           result = await runCdpReplay(tool, params, options?.cdpPool);
           break;
         case 'stealth-fetch': {
-          const paramsWithDefaults = await withWorkflowPreparedParams(tool, params);
+          const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
           const sf = await ensureStealthFetch(tool, stealthCache, paramsWithDefaults);
           // When the workflow declares a bootstrap block, mint its declared
           // session-token state (CSRF cookies etc.) from the SAME stealth
@@ -371,21 +343,17 @@ export async function runWithLadder(
           // workflow escalating here from fetch-bootstrap loses the
           // ${state.X} its requests need — the gap that made bootstrap-block
           // tools on anti-bot sites unverifiable.
-          const tokens = tool.workflow.bootstrap ? await sf.ensureBootstrapped() : undefined;
           const initialState = tool.workflow.bootstrap
-            ? await stealthBootstrapState(sf, tool.workflow.bootstrap, tokens)
+            ? await stealthBootstrapState(sf, tool.workflow.bootstrap)
             : undefined;
-          result = await tool.toolFn(paramsWithDefaults, {
-            fetchImpl: tokens ? makeObservedResponseFetch(tokens, sf.fetchImpl) : sf.fetchImpl,
-            initialState,
-          });
+          result = await tool.toolFn(paramsWithDefaults, { fetchImpl: sf.fetchImpl, initialState });
           break;
         }
         case 'playbook': {
           // DOM-walk last resort (the anti-bot API path is fetch-bootstrap, above).
           // Apply workflow.json's declared parameter defaults — runPlaybook
           // validates and throws on absent values regardless of declared defaults.
-          const paramsWithDefaults = await withWorkflowPreparedParams(tool, params);
+          const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
           result = await runPlaybook({
             playbook: playbookPath(assetRoot, tool.site, tool.dir),
             params: paramsWithDefaults,
@@ -554,9 +522,11 @@ export function effectiveAutoLadder(
     const fbIdx = next.indexOf('fetch-bootstrap');
     if (fbIdx !== -1) next.splice(fbIdx + 1, 0, 'cdp-replay');
   }
-  // For workflows that need live-browser request state, front-load cdp-replay so
-  // MCP sessions reuse the same Chrome instead of paying the one-shot
-  // fetch-bootstrap browser mint before every distinct bootstrap URL.
+  // For a MULTI-step state-changing anti-bot workflow, plain-fetch rungs are not
+  // just doomed — their tarpitted .act attempts BURN the per-IP rate budget
+  // before cdp-replay even runs, which can flag the IP and make cdp-replay tarpit
+  // too. Front-load cdp-replay for these so the live browser handles every
+  // protected POST from a clean slate.
   if (prefersCdpReplayFirst(workflow)) {
     const i = next.indexOf('cdp-replay');
     if (i > 0) {
@@ -567,20 +537,15 @@ export function effectiveAutoLadder(
   return next;
 }
 
-/** Prefer CDP first when the workflow needs live-browser request state.
- *
- * Two generic cases qualify:
- *  - bootstrap captures read fields from browser-observed requests
- *    (`request_header` / `request_url_regex` / `request_body_regex`). A one-shot fetch-bootstrap can
- *    also observe them, but it closes Chrome after minting; CDP can reuse the
- *    same browser across MCP calls and retarget route/date-specific bootstraps.
- *  - multi-step state-changing anti-bot flows (≥2 mutating requests plus a
- *    bootstrap/state signal). Plain-fetch replay can't sustain those protected
- *    POST sequences and can burn the per-IP budget before CDP runs.
- */
+/** A multi-step, state-changing, anti-bot workflow: ≥2 mutating requests AND an
+ *  anti-bot signal (a bootstrap block, or requests that depend on captured
+ *  `${state.X}` tokens). Plain-fetch replay can't sustain its sequence of
+ *  protected POSTs (each self-invalidates `_abck`); only the live-browser
+ *  cdp-replay rung can — and it should run FIRST so the doomed fetch /
+ *  fetch-bootstrap attempts don't pre-burn the per-IP .act budget. A plain
+ *  multi-POST REST API (no bootstrap, no `${state.X}`) is NOT matched, so it
+ *  keeps the cheap fetch-first order. */
 export function prefersCdpReplayFirst(workflow: Workflow): boolean {
-  if (workflow.bootstrap?.captures?.some(isObservedRequestBootstrapCapture)) return true;
-
   const mutating = workflow.requests.filter((r) => {
     const m = (r.method ?? 'GET').toUpperCase();
     return r.effect === 'unsafe' || m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE';
@@ -593,14 +558,6 @@ export function prefersCdpReplayFirst(workflow: Workflow): boolean {
       Object.values(r.headers ?? {}).some((v) => /\$\{state\./.test(v)),
   );
   return Boolean(workflow.bootstrap) || hasStateRefs;
-}
-
-function isObservedRequestBootstrapCapture(capture: BootstrapCapture): boolean {
-  return (
-    capture.source === 'request_header' ||
-    capture.source === 'request_url_regex' ||
-    capture.source === 'request_body_regex'
-  );
 }
 
 function nextStateMissingBackend(
@@ -673,11 +630,10 @@ async function getOrMintCdpJar(
   bootstrapUrl: string | undefined,
   siteDir: string,
   forceFresh: boolean,
-  workflow?: Workflow,
 ): Promise<MintedJar | null> {
   if (cdpJarMinterForTest) return cdpJarMinterForTest(baseUrl, bootstrapUrl);
   if (!forceFresh) {
-    let cached = loadJar(siteDir, bootstrapUrl);
+    let cached = loadJar(siteDir);
     // A recording NEWER than the cached jar supersedes it — e.g. the user
     // re-recorded on a new IP, so the cached (old-IP) jar would tarpit. Drop the
     // stale cache and re-seed from the fresh recording below.
@@ -688,18 +644,7 @@ async function getOrMintCdpJar(
     // many sequential .act), strictly better than a synthetic cdp-browser mint
     // (low-trust → tarpitted even on a fresh IP). "The recording IS the
     // executable." Reuse the `rec` stat above so we don't re-glob.
-    if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) {
-      cached = loadJar(siteDir, bootstrapUrl);
-    }
-    if (cached && workflow?.bootstrap) {
-      const missing = missingObservedRequestCaptureNames(workflow.bootstrap, cached);
-      if (missing.length > 0) {
-        log(
-          `cached jar is missing required browser-observed capture(s): ${missing.join(', ')} — re-mint`,
-        );
-        cached = null;
-      }
-    }
+    if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
     if (cached) {
       const provenance =
         cached.source === 'recording'
@@ -718,12 +663,10 @@ async function getOrMintCdpJar(
   }
   let cf: CdpBrowserFetch | undefined;
   try {
-    cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({ baseUrl, bootstrapUrl });
-    const jar = await mintJarWithBootstrapWait(cf, workflow);
-    if (jar.abckFlag !== '0' && jarHasAkamaiValidationSignals(jar.cookies)) {
+    cf = createCdpBrowserFetch({ baseUrl, bootstrapUrl });
+    const jar = await cf.mintJar();
+    if (jar.abckFlag !== '0') {
       log(`cdp jar minted with _abck~${jar.abckFlag}~ (not validated) — replay may be rejected`);
-    } else if (!jarHasAkamaiValidationSignals(jar.cookies)) {
-      log(`cdp jar minted generic bootstrap state (html=${jar.html.length}b)`);
     }
     saveJar(siteDir, jar);
     return jar;
@@ -733,43 +676,6 @@ async function getOrMintCdpJar(
   } finally {
     await cf?.close(); // browser dead; the jar outlives it
   }
-}
-
-async function mintJarWithBootstrapWait(
-  cf: CdpBrowserFetch,
-  workflow: Workflow | undefined,
-): Promise<MintedJar> {
-  let jar = await cf.mintJar();
-  const bootstrap = workflow?.bootstrap;
-  if (!bootstrap || requiredObservedRequestCaptures(bootstrap).length === 0) return jar;
-
-  const timeoutMs =
-    typeof bootstrap.timeoutMs === 'number' && bootstrap.timeoutMs > 0
-      ? bootstrap.timeoutMs
-      : 30_000;
-  const deadline = Date.now() + timeoutMs;
-  let loggedWait = false;
-
-  while (Date.now() < deadline) {
-    const missing = missingObservedRequestCaptureNames(bootstrap, jar);
-    if (missing.length === 0) return jar;
-    if (!loggedWait) {
-      log(
-        `waiting up to ${timeoutMs}ms for browser-observed bootstrap request capture(s): ${missing.join(', ')}`,
-      );
-      loggedWait = true;
-    }
-    await sleepMs(Math.min(500, Math.max(1, deadline - Date.now())));
-    jar = await cf.mintJar();
-  }
-
-  const missing = missingObservedRequestCaptureNames(bootstrap, jar);
-  if (missing.length > 0) {
-    log(
-      `timed out waiting for browser-observed bootstrap request capture(s): ${missing.join(', ')}`,
-    );
-  }
-  return jar;
 }
 
 /** Replay transport for the bootstrap-then-fetch path: PLAIN fetch that presents
@@ -811,81 +717,6 @@ function makeProxyFetch(): typeof fetch | undefined {
     )) as typeof fetch;
 }
 
-type ObservedResponseSource = {
-  observedRequests?: Array<{
-    method: string;
-    url: string;
-    body?: string;
-    source?: 'browser' | 'replay';
-    response?: {
-      status: number;
-      headers: Record<string, string>;
-      body?: string;
-    };
-  }>;
-};
-
-function makeObservedResponseFetch(
-  source: ObservedResponseSource,
-  fallbackFetch: typeof fetch,
-): typeof fetch {
-  return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url =
-      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-    const method = (init?.method ?? 'GET').toUpperCase();
-    const body = observedRequestBody(init?.body);
-    const observed = findObservedResponse(source, method, url, body);
-    if (observed) {
-      log(`using bootstrap-observed response for ${method} ${redactUrlForLog(url)}`);
-      return new Response(observed.body ?? '', {
-        status: observed.status,
-        headers: new Headers(observed.headers),
-      });
-    }
-    return fallbackFetch(input, init);
-  }) as typeof fetch;
-}
-
-function findObservedResponse(
-  source: ObservedResponseSource,
-  method: string,
-  url: string,
-  body: string | undefined,
-): { status: number; headers: Record<string, string>; body?: string } | undefined {
-  const observed = source.observedRequests ?? [];
-  for (let i = observed.length - 1; i >= 0; i--) {
-    const req = observed[i];
-    if (!req?.response || req.response.body === undefined) continue;
-    if (req.source === 'replay') continue;
-    if (req.method.toUpperCase() !== method) continue;
-    if (req.url !== url) continue;
-    // Some CDP requestWillBeSent events omit postData even though the matching
-    // response body is available. If the observed body exists, require an exact
-    // body match. If CDP omitted it, fall back to exact method+URL; Google-style
-    // batchexecute URLs carry session/request ids, so this still avoids serving a
-    // response from a different bootstrap request.
-    if (req.body !== undefined && req.body !== (body ?? undefined)) continue;
-    return req.response;
-  }
-  return undefined;
-}
-
-function observedRequestBody(body: RequestInit['body'] | undefined): string | undefined {
-  if (body === undefined || body === null) return undefined;
-  if (typeof body === 'string') return body;
-  if (body instanceof URLSearchParams) return body.toString();
-  return undefined;
-}
-
-function redactUrlForLog(url: string): string {
-  try {
-    const u = new URL(url);
-    return `${u.origin}${u.pathname}`;
-  } catch {
-    return url.slice(0, 80);
-  }
-}
-
 /** A replay error that means the JAR is bad (clear it + re-mint), as opposed to a
  *  transient IP rate-flag (NETWORK/RATE_LIMITED — a fresh jar won't help; back off). */
 function jarLikelyStale(result: ToolResult): boolean {
@@ -925,14 +756,14 @@ async function runFetchBootstrap(
     values: {},
     storage: [],
   };
-  const paramsWithDefaults = await withWorkflowPreparedParams(tool, params);
+  const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   const bootstrapUrl = tool.workflow.bootstrap
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
   const siteDir = pathResolve(tool.dir, '..');
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const jar = await getOrMintCdpJar(baseUrl, bootstrapUrl, siteDir, attempt > 0, tool.workflow);
+    const jar = await getOrMintCdpJar(baseUrl, bootstrapUrl, siteDir, attempt > 0);
     if (!jar) {
       // Couldn't even launch the bootstrap browser → let the ladder escalate.
       const stateMissing = bootstrapFailureStateMissingResult(
@@ -957,7 +788,7 @@ async function runFetchBootstrap(
     // recording-seeded or cached jar is validated:true by construction, so the
     // cheap plain-fetch path is untouched; `=== false` (not falsy) leaves jars
     // without the field — older caches / test stubs — on the original path.
-    if (jar.validated === false && jarHasAkamaiValidationSignals(jar.cookies)) {
+    if (jar.validated === false) {
       log(
         'fetch-bootstrap: minted jar unvalidated (no _abck~0~/bm_sv) — plain-fetch replay doomed; escalating to cdp-replay',
       );
@@ -1002,7 +833,7 @@ async function runFetchBootstrap(
     const result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
       initialState: captureResult.state,
-      fetchImpl: makeObservedResponseFetch(jar, makeJarUaFetch(jar.ua)),
+      fetchImpl: makeJarUaFetch(jar.ua),
     });
 
     if (result.ok) return result;
@@ -1060,7 +891,7 @@ async function runCdpReplay(
     values: {},
     storage: [],
   };
-  const paramsWithDefaults = await withWorkflowPreparedParams(tool, params);
+  const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   const bootstrapUrl = tool.workflow.bootstrap
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
@@ -1068,12 +899,6 @@ async function runCdpReplay(
   const siteDir = pathResolve(tool.dir, '..');
   const poolKey = tool.site;
   const pooled = cdpPool?.get(poolKey);
-  if (pooled && bootstrapUrl && pooled.bootstrapUrl !== bootstrapUrl) {
-    log(
-      `cdp-replay: reusing pooled Chrome session for new bootstrap (${pooled.bootstrapUrl} → ${bootstrapUrl})`,
-    );
-    pooled.setBootstrapUrl(bootstrapUrl);
-  }
   const ownsSession = !pooled;
 
   let cf: CdpBrowserFetch;
@@ -1099,7 +924,7 @@ async function runCdpReplay(
   }
 
   try {
-    const jar = await mintJarWithBootstrapWait(cf, tool.workflow);
+    const jar = await cf.mintJar();
     const bootstrappedCredentials: CredentialStore = {
       ...credentials,
       cookies: [
@@ -1131,7 +956,7 @@ async function runCdpReplay(
     const result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
       initialState: captureResult.state,
-      fetchImpl: makeObservedResponseFetch(jar, cf.fetchImpl),
+      fetchImpl: cf.fetchImpl,
     });
 
     if (result.ok) {
@@ -1145,13 +970,11 @@ async function runCdpReplay(
         if (!cdpPool && ownsSession) await cf.close();
       }
     } else {
-      // A workflow-level failure (BAD_RESPONSE/STATE_MISSING/FORBIDDEN/etc.) is
-      // not evidence that the Chrome/CDP session is dead. Keep pooled sessions
-      // alive so the next MCP call can reuse/retarget the browser; only the
-      // catch path below evicts sessions after an actual CDP exception.
-      if (cdpPool && ownsSession) {
-        cdpPool.set(poolKey, cf);
-      } else if (!cdpPool && ownsSession) {
+      if (ownsSession) {
+        await cf.close();
+      } else if (cdpPool) {
+        cdpPool.delete(poolKey);
+        log('cdp-replay: evicted degraded session from pool');
         await cf.close();
       }
     }
@@ -1223,45 +1046,6 @@ function jarBootstrapCaptureState(
           ),
         };
       }
-    } else if (capture.source === 'request_header') {
-      const value = captureObservedRequestHeader(jar, capture);
-      if (value !== undefined && value !== null && value !== '') state[capture.name] = value;
-      else if (capture.required !== false) {
-        return {
-          ok: false,
-          result: bootstrapCaptureMissingResult(
-            capture,
-            `Required bootstrap capture "${capture.name}" (request_header ${capture.header}) did not match an observed browser request.`,
-            'producer_ran_value_absent',
-          ),
-        };
-      }
-    } else if (capture.source === 'request_url_regex') {
-      const value = captureObservedRequestUrlRegex(jar, capture);
-      if (value !== undefined && value !== null && value !== '') state[capture.name] = value;
-      else if (capture.required !== false) {
-        return {
-          ok: false,
-          result: bootstrapCaptureMissingResult(
-            capture,
-            `Required bootstrap capture "${capture.name}" (request_url_regex ${capture.pattern}) did not match an observed browser request.`,
-            'producer_ran_value_absent',
-          ),
-        };
-      }
-    } else if (capture.source === 'request_body_regex') {
-      const value = captureObservedRequestBodyRegex(jar, capture);
-      if (value !== undefined && value !== null && value !== '') state[capture.name] = value;
-      else if (capture.required !== false) {
-        return {
-          ok: false,
-          result: bootstrapCaptureMissingResult(
-            capture,
-            `Required bootstrap capture "${capture.name}" (request_body_regex ${capture.pattern}) did not match an observed browser request body.`,
-            'producer_ran_value_absent',
-          ),
-        };
-      }
     } else if (capture.required !== false) {
       // response_header / dom_* can't be resolved from a closed browser jar.
       return {
@@ -1275,134 +1059,6 @@ function jarBootstrapCaptureState(
     }
   }
   return { ok: true, state };
-}
-
-function captureObservedRequestHeader(
-  jar: MintedJar,
-  capture: Extract<BootstrapCapture, { source: 'request_header' }>,
-): string | string[] | undefined {
-  return captureObservedRequestValueFromObserved(jar.observedRequests ?? [], capture, (req) =>
-    headerValue(req.headers, capture.header),
-  );
-}
-
-function captureObservedRequestUrlRegex(
-  jar: MintedJar,
-  capture: Extract<BootstrapCapture, { source: 'request_url_regex' }>,
-): string | string[] | undefined {
-  return captureObservedRequestValueFromObserved(jar.observedRequests ?? [], capture, (req) => {
-    try {
-      return req.url.match(new RegExp(capture.pattern))?.[capture.group ?? 1];
-    } catch {
-      return undefined;
-    }
-  });
-}
-
-function captureObservedRequestBodyRegex(
-  jar: MintedJar,
-  capture: Extract<BootstrapCapture, { source: 'request_body_regex' }>,
-): string | string[] | undefined {
-  return captureObservedRequestValueFromObserved(jar.observedRequests ?? [], capture, (req) => {
-    if (typeof req.body !== 'string') return undefined;
-    try {
-      const match = req.body.match(new RegExp(capture.pattern));
-      return match?.[capture.group ?? 1] ?? match?.[0];
-    } catch {
-      return undefined;
-    }
-  });
-}
-
-function requiredObservedRequestCaptures(
-  bootstrap: NonNullable<Workflow['bootstrap']>,
-): Array<
-  Extract<
-    BootstrapCapture,
-    { source: 'request_header' | 'request_url_regex' | 'request_body_regex' }
-  >
-> {
-  return (bootstrap.captures ?? []).filter(
-    (
-      capture,
-    ): capture is Extract<
-      BootstrapCapture,
-      { source: 'request_header' | 'request_url_regex' | 'request_body_regex' }
-    > =>
-      capture.required !== false &&
-      (capture.source === 'request_header' ||
-        capture.source === 'request_url_regex' ||
-        capture.source === 'request_body_regex'),
-  );
-}
-
-function missingObservedRequestCaptureNames(
-  bootstrap: NonNullable<Workflow['bootstrap']>,
-  jar: MintedJar,
-): string[] {
-  const missing: string[] = [];
-  for (const capture of requiredObservedRequestCaptures(bootstrap)) {
-    const value =
-      capture.source === 'request_header'
-        ? captureObservedRequestHeader(jar, capture)
-        : capture.source === 'request_url_regex'
-          ? captureObservedRequestUrlRegex(jar, capture)
-          : captureObservedRequestBodyRegex(jar, capture);
-    if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) {
-      missing.push(capture.name);
-    }
-  }
-  return missing;
-}
-
-function captureObservedRequestValueFromObserved(
-  observed: Array<{
-    method: string;
-    url: string;
-    headers: Record<string, string>;
-    body?: string;
-    source?: 'browser' | 'replay';
-  }>,
-  capture: Extract<
-    BootstrapCapture,
-    { source: 'request_header' | 'request_url_regex' | 'request_body_regex' }
-  >,
-  pickValue: (req: {
-    method: string;
-    url: string;
-    headers: Record<string, string>;
-    body?: string;
-    source?: 'browser' | 'replay';
-  }) => string | undefined,
-): string | string[] | undefined {
-  let urlRe: RegExp | null = null;
-  if (capture.urlPattern) {
-    try {
-      urlRe = new RegExp(capture.urlPattern);
-    } catch {
-      return undefined;
-    }
-  }
-  const method = capture.method?.toUpperCase();
-  const matches: string[] = [];
-  for (const req of observed) {
-    if (req.source === 'replay') continue;
-    if (method && req.method.toUpperCase() !== method) continue;
-    if (urlRe && !urlRe.test(req.url)) continue;
-    const value = pickValue(req);
-    if (value !== undefined && value !== '') matches.push(value);
-  }
-  if (capture.mode === 'all') return matches.length ? matches : undefined;
-  if (capture.mode === 'first') return matches[0];
-  return matches[matches.length - 1];
-}
-
-function headerValue(headers: Record<string, string>, header: string): string | undefined {
-  const headerName = header.toLowerCase();
-  for (const [name, value] of Object.entries(headers)) {
-    if (name.toLowerCase() === headerName) return value;
-  }
-  return undefined;
 }
 
 function bootstrapFailureStateMissingResult(
@@ -1532,12 +1188,6 @@ export async function evaluateBootstrapCapture(
         },
         { origin: capture.origin, key: capture.key },
       );
-    case 'request_header':
-      return undefined;
-    case 'request_url_regex':
-      return undefined;
-    case 'request_body_regex':
-      return undefined;
     case 'cookie':
       return undefined;
   }
@@ -1545,38 +1195,30 @@ export async function evaluateBootstrapCapture(
 
 /** Per-site stealth fetcher; bootstrap pays its ~12s once per process. */
 /** Mint `${state.X}` values from the stealth bootstrap session for a workflow
- *  that declares a bootstrap block. Satisfies `cookie`, `html_regex`,
- *  `response_header`, and observed request captures from the cookies / HTML /
- *  headers / observed browser requests the stealth navigation minted — all one
- *  consistent session as the transport cookies, so a token the later API POST
- *  checks against the session resolves.
+ *  that declares a bootstrap block. Satisfies `cookie`, `html_regex`, and
+ *  `response_header` captures from the cookies / HTML / response headers the
+ *  stealth navigation minted — all one consistent session as the transport
+ *  cookies, so a token the later API POST checks against the session resolves.
  *  `dom_*` / storage sources need a live page and are left for the
  *  fetch-bootstrap rung (the compile prompt steers replay-safe session tokens
  *  to cookie/html_regex, which this covers). */
 async function stealthBootstrapState(
   sf: StealthFetch,
   bootstrap: NonNullable<ResolvedTool['workflow']['bootstrap']>,
-  tokens?: TokenCache,
 ): Promise<Record<string, unknown>> {
   const state: Record<string, unknown> = {};
   const captures = bootstrap.captures ?? [];
   const supported = captures.filter(
-    (c) =>
-      c.source === 'cookie' ||
-      c.source === 'html_regex' ||
-      c.source === 'response_header' ||
-      c.source === 'request_header' ||
-      c.source === 'request_url_regex' ||
-      c.source === 'request_body_regex',
+    (c) => c.source === 'cookie' || c.source === 'html_regex' || c.source === 'response_header',
   );
   if (supported.length === 0) return state;
-  const bootstrapTokens = tokens ?? (await sf.ensureBootstrapped());
+  const tokens = await sf.ensureBootstrapped();
   for (const cap of supported) {
     if (cap.source === 'cookie') {
-      const hit = bootstrapTokens.cookies.find((c) => c.name === cap.cookie);
+      const hit = tokens.cookies.find((c) => c.name === cap.cookie);
       if (hit) state[cap.name] = hit.value;
     } else if (cap.source === 'html_regex') {
-      const html = bootstrapTokens.bootstrapHtml ?? '';
+      const html = tokens.bootstrapHtml ?? '';
       try {
         const m = html.match(new RegExp(cap.pattern));
         const v = m?.[cap.group ?? 1];
@@ -1585,43 +1227,8 @@ async function stealthBootstrapState(
         // invalid regex — leave unset; substitution will surface STATE_MISSING
       }
     } else if (cap.source === 'response_header') {
-      const v = bootstrapTokens.bootstrapResponseHeaders?.[cap.header.toLowerCase()];
+      const v = tokens.bootstrapResponseHeaders?.[cap.header.toLowerCase()];
       if (v !== undefined && v !== '') state[cap.name] = v;
-    } else if (cap.source === 'request_header') {
-      const v = captureObservedRequestValueFromObserved(
-        bootstrapTokens.observedRequests ?? [],
-        cap,
-        (req) => headerValue(req.headers, cap.header),
-      );
-      if (v !== undefined && v !== null && v !== '') state[cap.name] = v;
-    } else if (cap.source === 'request_url_regex') {
-      const v = captureObservedRequestValueFromObserved(
-        bootstrapTokens.observedRequests ?? [],
-        cap,
-        (req) => {
-          try {
-            return req.url.match(new RegExp(cap.pattern))?.[cap.group ?? 1];
-          } catch {
-            return undefined;
-          }
-        },
-      );
-      if (v !== undefined && v !== null && v !== '') state[cap.name] = v;
-    } else if (cap.source === 'request_body_regex') {
-      const v = captureObservedRequestValueFromObserved(
-        bootstrapTokens.observedRequests ?? [],
-        cap,
-        (req) => {
-          if (typeof req.body !== 'string') return undefined;
-          try {
-            const match = req.body.match(new RegExp(cap.pattern));
-            return match?.[cap.group ?? 1] ?? match?.[0];
-          } catch {
-            return undefined;
-          }
-        },
-      );
-      if (v !== undefined && v !== null && v !== '') state[cap.name] = v;
     }
   }
   return state;
