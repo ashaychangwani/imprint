@@ -310,7 +310,12 @@ export function assertResumableAt(
 ): void {
   const fromIdx = TEACH_STEPS.indexOf(fromStep);
   if (fromIdx <= 0) return; // 'record' (index 0) or unknown — no prior steps required
-  const required = TEACH_STEPS.slice(0, fromIdx);
+  // `plan-prereqs` (shared-module planning) only runs — and is only recorded —
+  // for ≥2-tool runs, so a fully-completed single-tool run never has it. It must
+  // NOT be a hard prerequisite, or every `--from-step generate/compile-playbook/
+  // emit/register` would wrongly throw on single-tool sites. A ≥2-tool resume
+  // that genuinely needs the plan rebuilds it on demand (see teach.ts).
+  const required = TEACH_STEPS.slice(0, fromIdx).filter((s) => s !== 'plan-prereqs');
   const missing = required.filter((s) => !ws.completedSteps.includes(s));
   if (missing.length === 0) return;
   const reached = furthestCompletedStep(ws);

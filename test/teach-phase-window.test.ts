@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import {
+  TEACH_STEPS,
   type TeachState,
   type WorkflowState,
   assertResumableAt,
@@ -44,6 +45,26 @@ describe('assertResumableAt (phase dependency guard)', () => {
     const w = ws(['record', 'redact', 'replay-and-diff']);
     expect(() => assertResumableAt('s', 'k', w, 'generate')).toThrow(
       /Latest completed step: replay-and-diff/,
+    );
+  });
+
+  it('allows resuming a completed single-tool run (which never records plan-prereqs)', () => {
+    // Single-tool runs skip shared-module planning, so plan-prereqs is never in
+    // completedSteps even after a fully successful run. Resuming the per-tool
+    // compile phases must still be allowed — regression: --from-step generate
+    // used to throw "missing [plan-prereqs]" on every single-tool site.
+    const singleTool = TEACH_STEPS.filter((s) => s !== 'plan-prereqs');
+    for (const step of ['generate', 'compile-playbook', 'emit', 'register'] as const) {
+      expect(() => assertResumableAt('s', 'k', ws(singleTool), step)).not.toThrow();
+    }
+  });
+
+  it('still requires the non-skippable earlier steps (guard not neutered)', () => {
+    // Excluding plan-prereqs must not weaken the rest of the guard: the other
+    // earlier steps are still required and reported when missing.
+    const w = ws(['record', 'redact']);
+    expect(() => assertResumableAt('s', 'k', w, 'generate')).toThrow(
+      /missing required earlier step\(s\) \[replay-and-diff, triage, detect-candidates\]/,
     );
   });
 });

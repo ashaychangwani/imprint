@@ -245,10 +245,10 @@ imprint teach <site> --only <step>           # run exactly one phase (= --from-s
 Examples:
 
 ```bash
-imprint teach amex-fhr --only detect-candidates    # just re-detect candidate tools
-imprint teach amex-fhr --only plan-prereqs          # just rebuild shared modules (multi-tool sites)
-imprint teach amex-fhr --to-step triage             # process up to triage, then stop
-imprint teach amex-fhr --from-step generate          # recompile the tools from the persisted plan
+imprint teach google-flights --only detect-candidates    # just re-detect candidate tools
+imprint teach google-flights --only plan-prereqs          # just rebuild shared modules (multi-tool sites)
+imprint teach google-flights --to-step triage             # process up to triage, then stop
+imprint teach google-flights --from-step generate          # recompile the tools from the persisted plan
 ```
 
 Guard: `--from-step <step>` is **only allowed if a prior run reached or crossed that point** — every earlier phase must already be complete in `.teach-state.json`, otherwise the run errors with the furthest step it actually reached (starting mid-chain without the earlier outputs would be missing dependencies like the redacted/triaged session, classifications, or build plan). It's not combinable with `--from-session` (a separate fresh-input entry mode); use `--to-step` with `--from-session` to cap phases on a fresh recording.

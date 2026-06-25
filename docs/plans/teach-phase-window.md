@@ -34,10 +34,10 @@ Three flags on `imprint teach`, validated against the canonical `TEACH_STEPS`:
 - `--only <step>` — sugar for `--from-step X --to-step X` (exactly one phase).
 
 ```bash
-imprint teach amex-fhr --only detect-candidates    # just re-detect candidate tools
-imprint teach amex-fhr --only plan-prereqs          # just rebuild shared modules (multi-tool)
-imprint teach amex-fhr --to-step triage             # process up to triage, then stop
-imprint teach amex-fhr --from-step generate          # recompile the tools from the persisted plan
+imprint teach google-flights --only detect-candidates    # just re-detect candidate tools
+imprint teach google-flights --only plan-prereqs          # just rebuild shared modules (multi-tool)
+imprint teach google-flights --to-step triage             # process up to triage, then stop
+imprint teach google-flights --from-step generate          # recompile the tools from the persisted plan
 ```
 
 ## The dependency guard (the core requirement)

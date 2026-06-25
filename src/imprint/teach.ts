@@ -1512,10 +1512,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         playbooks: results.map((r) => r.playbook),
       });
     }
-  }
 
-  for (const result of results) {
-    updateCheckpoint(site, state, result.workflow.toolName, 'register');
+    // Record `register` complete only when registration actually ran. A
+    // `--to-step emit/generate/compile-playbook` window skips this block; marking
+    // register here anyway would make `.teach-state.json` claim platform
+    // integration happened when it didn't.
+    for (const result of results) {
+      updateCheckpoint(site, state, result.workflow.toolName, 'register');
+    }
   }
 
   // Drop the transient compile-time stealth token (shared across this site's
