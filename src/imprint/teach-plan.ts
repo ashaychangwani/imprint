@@ -77,8 +77,12 @@ export async function planAndBuildPrereqs(opts: {
   maxCyclesPerModule?: number;
   onProgress?: (msg: string) => void;
 }): Promise<PlanAndBuildPrereqsResult> {
-  // Gate: shared prereqs only make sense across ≥2 tools.
-  if (opts.candidates.length < 2) return { buildPlanPath: '', sharedModules: [] };
+  // Gate: shared prereqs only make sense across ≥2 tools — BUT the planner is also
+  // the only producer of the build-plan `authTool`, so a single authenticated tool
+  // (a detected login/2FA flow) must still run it, else the 2FA is detected yet
+  // never compiled into an auth tool.
+  const hasAuthFlow = opts.sharedContext?.twoFactorDetected === true;
+  if (opts.candidates.length < 2 && !hasAuthFlow) return { buildPlanPath: '', sharedModules: [] };
   if (buildPlanDisabled()) {
     log('IMPRINT_NO_BUILD_PLAN set — skipping build plan + shared prereqs');
     return { buildPlanPath: '', sharedModules: [] };

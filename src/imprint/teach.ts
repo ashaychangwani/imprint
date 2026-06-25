@@ -1295,13 +1295,19 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   // ── plan-prereqs: plan + build shared modules once before the fan-out ──
-  // Only engages for ≥2 selected tools that are about to be (re)generated.
-  // Single-tool runs and resumes-past-generate are unchanged.
+  // Engages for ≥2 selected tools (to plan shared modules) OR when the recording
+  // carries a login/2FA flow. The planner is the ONLY producer of the build-plan
+  // `authTool`, so a single authenticated tool must still run it — otherwise the
+  // 2FA is detected but never compiled into an auth tool. Resumes-past-generate
+  // are unchanged.
   const selectedCandidates = plans.map((pl) => pl.candidate).filter((c): c is ToolCandidate => !!c);
   const willGenerate = plans.some((pl) => STEPS.indexOf(pl.startFrom) <= STEPS.indexOf('generate'));
+  // Detected login/2FA → the planner must run (even for a single data tool) so it
+  // emits the build-plan `authTool` the auth-compile block below consumes.
+  const twoFactorDetected = plans.some((pl) => pl.sharedContext?.twoFactorDetected === true);
   let buildPlanPath = '';
   let sharedModulesManifest: SharedModuleManifestEntry[] = [];
-  if (selectedCandidates.length >= 2 && willGenerate && compileModel) {
+  if ((selectedCandidates.length >= 2 || twoFactorDetected) && willGenerate && compileModel) {
     const sidecar = buildPlanSidecarPath(site);
     const firstWs = state.workflows[plans[0]?.workflowKey ?? ''];
     // Reuse the cached plan only when resuming PAST plan-prereqs (e.g. --from-step
