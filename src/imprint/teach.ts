@@ -18,7 +18,6 @@ import {
 import * as p from '@clack/prompts';
 import type { OnDeadlineReached } from './agent.ts';
 import { compileAuthAgent } from './auth-compile-agent.ts';
-import { runWorkflowWithLadder } from './backend-ladder.ts';
 import {
   type SharedModuleManifestEntry,
   buildPlanSidecarPath,
@@ -103,7 +102,7 @@ import {
 import { planToolCompile } from './tool-plan.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
-import type { CronConfig, Playbook, Session, ToolResult, Workflow } from './types.ts';
+import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
 
 export {
   buildTeachStateFromSession,
@@ -119,16 +118,6 @@ export {
  * still use concurrency 1.
  */
 const COMPILE_CONCURRENCY = 2;
-
-/** Placeholder OTP used when teach *attempts* a 2FA completion unattended (no
- *  live user to supply a real code). The attempt is expected to be rejected;
- *  it proves the initiate→submit_otp chain is wired, not that login succeeded. */
-const ATTEMPT_OTP_PLACEHOLDER = '000000';
-
-/** Bounded push-poll attempts for an unattended teach 2FA attempt — fail fast
- *  instead of blocking the runtime default (≈3 min). Overridable via the same
- *  IMPRINT_AUTH_POLL_ATTEMPTS env the runtime reads. */
-const ATTEMPT_PUSH_POLL_ATTEMPTS = '3';
 
 /** Module logger — suppressed during teach's spinner phases via muteLog(). */
 const log = createLog('teach');
@@ -1278,10 +1267,47 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
             // which is far slower than an API replay. Give the agent room to write
             // and iterate a playbook, not just a workflow.json.
             maxDurationMs: 20 * 60 * 1000,
-            onProgress: (prog) =>
-              spinner.message(
-                `Auth compile: turn ${prog.turn} (cycle ${prog.verificationCycle}/${prog.maxVerificationCycles})`,
-              ),
+            onProgress: (prog) => spinner.message(`Auth compile: turn ${prog.turn}`),
+            // Interactive 2FA bridge: the agent (via the verification stage) reaches
+            // the OTP/push challenge, then asks the user — here — for the live second
+            // factor. Stop the spinner + unmute logs around the prompt so it renders
+            // cleanly, then restore. Omitted in --no-interactive (the agent falls
+            // back to an unattended placeholder attempt).
+            onPrompt: opts.noInteractive
+              ? undefined
+              : async (message, options) => {
+                  unmuteLog();
+                  spinner.stop('2FA required — your input needed.');
+                  let answer = '';
+                  if (options && options.length > 0) {
+                    const sel = await p.select({
+                      message,
+                      options: options.map((o) => ({ value: o, label: o })),
+                    });
+                    answer = p.isCancel(sel) ? '' : String(sel);
+                  } else {
+                    const txt = await p.text({ message, placeholder: 'type your answer' });
+                    answer = p.isCancel(txt) ? '' : String(txt ?? '');
+                  }
+                  muteLog();
+                  spinner.start('Completing 2FA verification');
+                  return answer;
+                },
+            // Cool-off bridge: wait out a rate-flag with NO login, informing the
+            // user. Bounded to 10 min; overridable via IMPRINT_AUTH_COOLOFF_MS.
+            onCooldown: async (minutes, reason) => {
+              const envMs = Number(process.env.IMPRINT_AUTH_COOLOFF_MS);
+              const ms = Number.isFinite(envMs)
+                ? Math.max(0, envMs)
+                : Math.min(Math.max(minutes, 1), 10) * 60_000;
+              unmuteLog();
+              p.log.info(
+                `Cooling off ~${Math.round(ms / 60000)} min before retrying the login${reason ? ` (${reason})` : ''} — no login fires during the wait.`,
+              );
+              muteLog();
+              spinner.start(`Cooling off (~${Math.round(ms / 60000)} min, no login)…`);
+              await new Promise((resolve) => setTimeout(resolve, ms));
+            },
           });
           unmuteLog();
 
@@ -1294,130 +1320,21 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
               outDir: pathDirname(authResult.workflowPath),
               force: true,
             });
-            spinner.stop(
-              `Auth tool compiled (${authResult.turns} turns, ${Math.round(authResult.durationMs / 1000)}s): ${authResult.workflowPath}`,
-            );
-
-            // The agent already tested initiate during compile; now do the
-            // interactive 2FA completion that needs user input. Read the 2FA type
-            // the agent committed to (it may refine the plan's guess).
-            let twoFactorType: string = authPlan.twoFactorType;
+            // The point of completing auth is a stored session token the data
+            // tools reuse. Confirm one was persisted before claiming success.
+            let sessionStored = false;
             try {
-              const compiledWf = JSON.parse(readFileSync(authResult.workflowPath, 'utf8'));
-              twoFactorType = compiledWf?.authConfig?.twoFactorType ?? twoFactorType;
+              const { loadSiteCredentials } = await import('./credential-store.ts');
+              const view = await loadSiteCredentials(site);
+              sessionStored = view.cookies.length > 0 || Object.keys(view.values).length > 0;
             } catch {
-              // fall back to the plan's 2FA type
+              /* non-fatal */
             }
-            const credsForRun = { site, cookies: [], values: teachCredentials.values };
-
-            if (twoFactorType !== 'none') {
-              muteLog();
-              spinner.start('Running auth initiate for 2FA verification');
-              const initLadder = await runWorkflowWithLadder({
-                workflowPath: authResult.workflowPath,
-                params: { action: 'initiate' },
-                credentials: credsForRun,
-              });
-              const initResult = initLadder.result;
-              unmuteLog();
-
-              if (!initResult.ok && initResult.error === 'AWAITING_2FA') {
-                spinner.stop(
-                  `2FA required (${twoFactorType}) — reached via ${initLadder.usedBackend}.`,
-                );
-                // Stateless state-chain: carry any token the initiate response
-                // captured (echoed as twoFactorContext) into the completion call.
-                const twoFactorContext = initResult.twoFactorContext;
-
-                // Decide what to submit. Interactive runs prompt the user for a
-                // real code / push approval. Non-interactive runs (and a
-                // cancelled / empty prompt) ATTEMPT the completion unattended:
-                // a placeholder OTP for `otp`, a bounded poll for `push`. The
-                // attempt almost always fails without a live second factor —
-                // that's expected; reaching + attempting 2FA is the bar.
-                let otpCode: string | undefined;
-                let attemptOnly = opts.noInteractive ?? false;
-                if (!opts.noInteractive) {
-                  const twoFaMessage =
-                    twoFactorType === 'push'
-                      ? 'Approve the push notification on your device, then press Enter (blank = attempt unattended).'
-                      : 'Enter the verification code (blank = attempt with a placeholder):';
-                  const userInput = await p.text({
-                    message: twoFaMessage,
-                    placeholder: twoFactorType === 'push' ? '(press Enter)' : '123456',
-                  });
-                  if (p.isCancel(userInput) || !userInput) {
-                    attemptOnly = true;
-                  } else if (typeof userInput === 'string') {
-                    otpCode = userInput;
-                  }
-                }
-                if (twoFactorType !== 'push' && !otpCode) {
-                  otpCode = ATTEMPT_OTP_PLACEHOLDER;
-                }
-
-                muteLog();
-                spinner.start(
-                  attemptOnly
-                    ? 'Attempting 2FA completion (unattended)'
-                    : 'Completing 2FA verification',
-                );
-                const completeAction = twoFactorType === 'push' ? 'complete' : 'submit_otp';
-                const completeParams: Record<string, string> = { action: completeAction };
-                if (completeAction === 'submit_otp' && otpCode) {
-                  completeParams.otp_code = otpCode;
-                }
-                // Bound the push poll for an unattended attempt so it fails fast.
-                const prevPollEnv = process.env.IMPRINT_AUTH_POLL_ATTEMPTS;
-                if (attemptOnly && twoFactorType === 'push' && prevPollEnv === undefined) {
-                  process.env.IMPRINT_AUTH_POLL_ATTEMPTS = ATTEMPT_PUSH_POLL_ATTEMPTS;
-                }
-                let completeResult: ToolResult;
-                try {
-                  const completeLadder = await runWorkflowWithLadder({
-                    workflowPath: authResult.workflowPath,
-                    params: completeParams,
-                    credentials: credsForRun,
-                    initialState: twoFactorContext,
-                  });
-                  completeResult = completeLadder.result;
-                } finally {
-                  if (attemptOnly && twoFactorType === 'push' && prevPollEnv === undefined) {
-                    // Must unset, not assign undefined — process.env coerces
-                    // assigned values to strings, so `= undefined` would leave
-                    // the literal "undefined".
-                    // biome-ignore lint/performance/noDelete: env cleanup requires delete
-                    delete process.env.IMPRINT_AUTH_POLL_ATTEMPTS;
-                  }
-                }
-                unmuteLog();
-                if (completeResult.ok) {
-                  spinner.stop('Auth verified — cookies persisted to credential store.');
-                } else if (attemptOnly) {
-                  // An unattended attempt with a placeholder code / no live
-                  // approval is EXPECTED to fail. Report it honestly as an
-                  // attempt — never spin it as success.
-                  spinner.stop(
-                    `2FA reached and attempted (${twoFactorType}); not completed without a live second factor.`,
-                  );
-                  p.log.info(
-                    `Unattended 2FA attempt: ${completeResult.error ?? 'rejected'}${
-                      completeResult.message ? ` — ${completeResult.message}` : ''
-                    }`,
-                  );
-                } else {
-                  spinner.stop('Auth verification failed — data tools may need manual login.');
-                  p.log.warn(
-                    `Auth completion failed: ${completeResult.message ?? 'unknown error'}`,
-                  );
-                }
-              } else if (initResult.ok) {
-                spinner.stop('Auth verified (no 2FA needed) — cookies persisted.');
-              } else {
-                spinner.stop('Auth initiate failed — data tools may need manual login.');
-                p.log.warn(`Auth error: ${initResult.message ?? initResult.error}`);
-              }
-            }
+            spinner.stop(
+              sessionStored
+                ? `Auth tool compiled + session stored (${authResult.turns} turns, ${Math.round(authResult.durationMs / 1000)}s) — data tools will reuse it.`
+                : `Auth tool compiled (${authResult.turns} turns) — no live session stored; data tools will be unverified until you run \`imprint login ${site}\`.`,
+            );
           }
         } catch (err) {
           unmuteLog();

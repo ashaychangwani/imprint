@@ -70,6 +70,11 @@ interface RunCompileMcpServerOptions {
 
 const DONE_SENTINEL = '.compile-done.json';
 const GIVE_UP_SENTINEL = '.compile-give-up.json';
+/** Auth mode only: a mid-loop checkpoint the agent reaches (run_verification /
+ *  prompt_user / wait_for_cooldown). The tool records the request here and the
+ *  agent STOPS; the orchestrator (teach) performs the action and resumes the
+ *  agent (`claude --resume`) with the result. One pending checkpoint per segment. */
+const CHECKPOINT_SENTINEL = '.compile-checkpoint.json';
 
 export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Promise<void> {
   const isAuthMode = !!opts.authToolPlan;
@@ -157,7 +162,66 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     },
   };
 
+  // Auth mode only: checkpoint tools. Each records its request to the checkpoint
+  // sentinel and instructs the agent to STOP; the orchestrator performs the
+  // action live (it owns the persistent browser session + the user TUI) and
+  // resumes the agent with the result. The agent never runs a live login itself.
+  const checkpointTools: Tool[] = isAuthMode
+    ? [
+        {
+          name: 'run_verification',
+          description:
+            'Hand the current workflow.json to the verification stage to run LIVE (the only thing that fires a real login). phase="initiate" sends the OTP/push (reaches AWAITING_2FA); phase="submit_otp" submits an otp_code; phase="complete" polls a push. After calling this you MUST stop — the orchestrator runs it and resumes you with the result as a new message. Do NOT call any other tool in the same turn.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              phase: { type: 'string', enum: ['initiate', 'submit_otp', 'complete'] },
+              otp_code: { type: 'string', description: 'For submit_otp only.' },
+            },
+            required: ['phase'],
+          },
+        },
+        {
+          name: 'prompt_user',
+          description:
+            'Ask the human (in the teach TUI) to supply the live second factor — e.g. enter the code they received, click the emailed link then confirm, or approve the push then confirm. Provide a clear message and optional choice options. After calling this you MUST stop; the orchestrator collects the answer and resumes you with it.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              message: { type: 'string', description: 'What to ask the user to do.' },
+              options: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional fixed choices; omit for free-text (e.g. the OTP code).',
+              },
+            },
+            required: ['message'],
+          },
+        },
+        {
+          name: 'wait_for_cooldown',
+          description:
+            'When a verification failed only because the site rate-flagged repeated logins (not a defect in your workflow), wait out a cool-off WITHOUT firing any login. After calling this you MUST stop; the orchestrator waits (informing the user) and resumes you so you can run_verification once more.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              minutes: { type: 'number', description: 'Cool-off minutes (5–10 typical).' },
+              reason: {
+                type: 'string',
+                description: 'Why you believe it is a cool-off, not a defect.',
+              },
+            },
+            required: ['minutes'],
+          },
+        },
+      ]
+    : [];
+
   let verificationFailures = 0;
+  /** One pending checkpoint per segment — refuse a second so the orchestrator
+   *  acts on exactly one request. Cleared implicitly: each segment is a fresh
+   *  process with the sentinel removed before spawn. */
+  let checkpointWritten = false;
 
   const server = new Server(
     { name: 'imprint-compile', version: '0.1.0' },
@@ -178,6 +242,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
           inputSchema: t.input_schema as Tool['inputSchema'],
         }),
       ),
+      ...checkpointTools,
       doneTool,
       giveUpTool,
     ],
@@ -351,6 +416,35 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
       };
     }
 
+    // Auth-mode checkpoint tools — record the request and end the segment. The
+    // orchestrator performs the action live and resumes the agent with the result.
+    if (name === 'run_verification' || name === 'prompt_user' || name === 'wait_for_cooldown') {
+      if (checkpointWritten) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: 'A checkpoint is already pending this turn. STOP now — do not call another tool; the orchestrator will act and resume you.',
+            },
+          ],
+        };
+      }
+      const checkpoint: Record<string, unknown> = { kind: name, ...args, timestamp: Date.now() };
+      const sentinel = pathJoin(opts.toolDir, CHECKPOINT_SENTINEL);
+      writeFileSync(sentinel, JSON.stringify(checkpoint, null, 2), 'utf8');
+      checkpointWritten = true;
+      log(`checkpoint(${name}) recorded; wrote ${sentinel}`);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `CHECKPOINT_RECORDED (${name}) — STOP now and reply briefly that you are waiting. The orchestrator will perform this and resume you with the result as a new message. Do not call any more tools.`,
+          },
+        ],
+      };
+    }
+
     // Custom give_up — writes sentinel and exits.
     if (name === 'give_up') {
       const reason = (args as { reason?: string }).reason ?? 'unknown';
@@ -417,4 +511,5 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
 export const COMPILE_SENTINELS = {
   done: DONE_SENTINEL,
   giveUp: GIVE_UP_SENTINEL,
+  checkpoint: CHECKPOINT_SENTINEL,
 } as const;
