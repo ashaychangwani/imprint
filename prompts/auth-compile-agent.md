@@ -37,7 +37,7 @@ The shaping tools (`read_session_summary`, `read_request`, `read_response_body`,
 4. **Verify phase 1.** Call `run_verification({ phase: "initiate" })`, then STOP. The orchestrator runs it live and resumes you with:
    - **reached the 2FA challenge (`AWAITING_2FA`)** → phase 1 works; the OTP/push is now with the user. Go to step 5.
    - **`ok` / full login (no-2FA site)** → done; the session is stored. Call `done`.
-   - **a failure** → decide: a site rate-flag (call `wait_for_cooldown`, then re-verify) vs a defect in your workflow (fix it with `write_file`, then re-verify). You have a **budget of 2 live `initiate` attempts total** — do not waste them; if you exhaust them, `give_up`.
+   - **a failure** → diagnose it (see Important constraints): a 403/"Access Denied" on the credential POST means the login-page sensor never ran → fix/add `bootstrap.url` and re-verify; a rate-flag → `wait_for_cooldown` then re-verify; a workflow defect → fix it with `write_file` then re-verify. Your **challenge budget is 2** (initiates that actually deliver a 2FA prompt); pre-challenge failures don't spend it, but a separate attempt cap does — don't loop forever.
 
 5. **Get the live second factor.** Call `prompt_user` with a clear message (and `options` if it's a choice), then STOP. The orchestrator collects the user's input and resumes you with it.
 
@@ -70,6 +70,7 @@ Read the credential POST with `read_request`:
   "toolKind": "authenticate",
   "intent": { "description": "Authenticate with <site> (<2fa_type> 2FA)" },
   "site": "<site>",
+  "bootstrap": { "url": "<the page where the user entered their credentials>", "waitUntil": "domcontentloaded", "waitMs": 4000 },
   "parameters": [
     { "name": "action", "type": "string", "description": "...", "default": "initiate" },
     { "name": "otp_code", "type": "string", "description": "..." }
@@ -98,6 +99,8 @@ Read the credential POST with `read_request`:
   }
 }
 ```
+
+**Always set a top-level `bootstrap.url` for a 2FA / bot-defended login.** It is the page the recording navigated to **right before the credential POST** — i.e. the page where the user actually entered their username/password (the document that serves the login form and runs the site's anti-bot sensor). Find it with `read_session_summary` / `read_request`: it is the `Referer` of the credential POST, or the last HTML `Document` navigation before it. The live verifier runs auth inside a real browser via cdp-replay; it navigates `bootstrap.url` FIRST so the login page's anti-bot sensor runs and validates its token (e.g. Akamai `_abck`) for the correct Origin. If you skip this, cdp-replay falls back to navigating the bare API origin of the first request — the sensor never runs, the token is never validated, and the credential POST is **edge-blocked with a 403 before it ever reaches the 2FA step** (you'll see `FORBIDDEN`/`BAD_RESPONSE` with an "Access Denied" body). Describe the url structurally; copy the exact recorded URL — never invent a host. (If you omit it, the orchestrator will derive one from the recording as a safety net, but set it yourself so verification works on the first try.)
 
 `twoFactorContext` lists the `${state.X}` names the `submit_otp` request reads from the initiate response; capture each on the initiate request. `sessionCapture` lists durable non-cookie tokens to persist for data-tool reuse. Both are derived from the recording, not invented.
 
@@ -165,8 +168,11 @@ Locators accept `by: role|aria_label|text|id|css`. Use the selectors/labels the 
 
 - **Shape from the recording; never log in yourself.** The ONLY way a live login fires is `run_verification`. Do not try to reach the live site any other way.
 - **One checkpoint per turn, then STOP.** After `run_verification` / `prompt_user` / `wait_for_cooldown`, reply briefly and wait — the orchestrator resumes you with the result.
-- **OTP budget = 2.** At most two live `initiate` attempts total (so the user sees at most two prompts). If `run_verification` reports the budget is exhausted, `give_up` honestly.
-- **Cool-off, don't hammer.** If a verification fails because the site rate-flagged repeated logins (401/AUTH_EXPIRED on a login that worked before, 403, rate-limit), call `wait_for_cooldown` rather than immediately re-verifying. If it failed because your workflow is wrong (BAD_RESPONSE, missing state, wrong `initiateRequestCount`), fix the artifacts and re-verify.
+- **Challenge budget = 2.** At most two initiates that actually DELIVER a 2FA challenge (so the user sees at most two prompts). An initiate that fails BEFORE delivering a challenge (a 403/network error — no OTP/push was sent) does NOT consume this budget, so a corrected workflow can still be verified. A separate attempt cap (default 5) bounds repeated failed tries. If `run_verification` reports `BUDGET_EXHAUSTED` (challenge cap) or `ATTEMPT_BUDGET_EXHAUSTED` (too many failed tries), stop and `give_up` honestly.
+- **Diagnose the failure, then act:**
+  - **`FORBIDDEN`/`BAD_RESPONSE` with an "Access Denied" body on the credential POST** = the login page's anti-bot sensor never ran, so its token (`_abck`) is invalid. **Fix or add the top-level `bootstrap.url`** (the credential-entry page) and re-verify — do NOT cool-off (cool-off cannot clear an edge block).
+  - **Rate-flagged** (401/AUTH_EXPIRED on a login that worked before, or a rate-limit) = call `wait_for_cooldown`, then re-verify once.
+  - **Your workflow is wrong** (missing `${state.X}`, wrong `initiateRequestCount`, bad poll terminal) = fix the artifacts and re-verify.
 - `initiateRequestCount` must divide the requests array: `requests[0..count-1]` run on `initiate`, the rest on `submit_otp`/`complete`.
 - Do NOT include analytics/telemetry/asset requests — only the login POST(s) and 2FA requests.
 - Never weaken a success marker to pass — an honest `give_up` is correct when the site won't authenticate via automation.

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve as pathResolve } from 'node:path';
 import { VERB_HELP } from '../src/cli.ts';
+import type { CompileAgentProgress } from '../src/imprint/compile-agent-types.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
 import { localSessionsDir, localSiteDir } from '../src/imprint/paths.ts';
 import {
@@ -15,6 +16,7 @@ import {
   assertCandidateToolName,
   buildTeachProviderPickerOptions,
   buildTeachStateFromSession,
+  formatAuthProgress,
   mapLimit,
   promptForTeachProvider,
   resolveTeachStatePath,
@@ -392,5 +394,72 @@ describe('mapLimit', () => {
 
     expect(started).toEqual([1, 2]);
     expect(completed).toEqual([2]);
+  });
+});
+
+describe('formatAuthProgress', () => {
+  const base = (over: Partial<CompileAgentProgress> = {}): CompileAgentProgress => ({
+    turn: 1,
+    phase: 'tool',
+    elapsedMs: 0,
+    budgetMs: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    verificationCycle: 1,
+    maxVerificationCycles: 1,
+    ...over,
+  });
+
+  it('plain progress shows just the cumulative turn', () => {
+    expect(formatAuthProgress(base({ turn: 29 }))).toBe('Auth compile: turn 29');
+  });
+
+  it('a failed verification surfaces phase, error, status, and attempt', () => {
+    const s = formatAuthProgress(
+      base({
+        turn: 30,
+        attempt: 2,
+        maxAttempts: 5,
+        lastVerification: {
+          phase: 'initiate',
+          ok: false,
+          error: 'FORBIDDEN',
+          status: 403,
+          checkpoint: 'run_verification',
+        },
+      }),
+    );
+    expect(s).toContain('turn 30');
+    expect(s).toContain('initiate FAILED');
+    expect(s).toContain('FORBIDDEN');
+    expect(s).toContain('HTTP 403');
+    expect(s).toContain('attempt 2/5');
+    expect(s).toContain('retrying');
+  });
+
+  it('a successful verification falls back to the plain turn line', () => {
+    const s = formatAuthProgress(
+      base({ turn: 31, lastVerification: { phase: 'complete', ok: true } }),
+    );
+    expect(s).toBe('Auth compile: turn 31');
+  });
+
+  it('omits the attempt suffix when attempt counts are absent', () => {
+    const s = formatAuthProgress(
+      base({ turn: 5, lastVerification: { phase: 'initiate', ok: false, error: 'NETWORK' } }),
+    );
+    expect(s).toContain('initiate FAILED');
+    expect(s).toContain('NETWORK');
+    expect(s).not.toContain('attempt');
+  });
+
+  it('the per-segment offset makes the turn monotonic (no reset across segments)', () => {
+    // Mirrors runAuthSegmentLoop's wrap: turn = offset + perSegmentTurn.
+    const wrap = (offset: number, perSegmentTurn: number): string =>
+      formatAuthProgress(base({ turn: offset + perSegmentTurn }));
+    // segment 1 ran 28 turns; segment 2 emits raw 1,2,3 → displayed 29,30,31.
+    expect(wrap(28, 1)).toBe('Auth compile: turn 29');
+    expect(wrap(28, 2)).toBe('Auth compile: turn 30');
+    expect(wrap(28, 3)).toBe('Auth compile: turn 31');
   });
 });

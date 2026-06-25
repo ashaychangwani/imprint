@@ -52,6 +52,28 @@ export interface CompileAgentProgress extends AgentProgress {
   verificationCycle: number;
   /** Hard cap on verification cycles (typically 5). */
   maxVerificationCycles: number;
+  // ── Auth segments only (all optional; data-compile + codex paths leave unset) ──
+  /** 1-based current segment index in the resumable auth loop. */
+  segment?: number;
+  /** Total segment budget (MAX_AUTH_SEGMENTS). */
+  maxSegments?: number;
+  /** Live `initiate` attempts spent so far (AuthVerifier.attemptsUsed). */
+  attempt?: number;
+  /** Attempt cap (AuthVerifier.maxInitiateAttempts). */
+  maxAttempts?: number;
+  /** The most recent live verification result, so the orchestrator's progress
+   *  line can surface a failure (e.g. a 403) the instant it happens instead of
+   *  only feeding it to the agent. Grounded purely in AuthPhaseResult fields. */
+  lastVerification?: {
+    phase: string;
+    ok: boolean;
+    status?: number;
+    error?: string;
+    backend?: string;
+    durationMs?: number;
+    /** Which checkpoint produced it — drives the "retrying" vs "cooling-off" hint. */
+    checkpoint?: 'run_verification' | 'prompt_user' | 'wait_for_cooldown';
+  };
 }
 
 /** A mid-loop checkpoint the auth compile agent reaches: it calls a checkpoint

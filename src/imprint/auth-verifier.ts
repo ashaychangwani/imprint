@@ -26,15 +26,43 @@ import type { CredentialStore } from './runtime.ts';
 
 const log = createLog('auth-verify');
 
-/** Default cap on live `initiate` logins per run — bounds how many OTPs/pushes
- *  the user ever sees. Overridable via IMPRINT_AUTH_MAX_INITIATE. */
+/** Test seam: the ladder runner AuthVerifier drives. Swappable so the budget /
+ *  challenge-counting logic can be unit-tested without a live browser. */
+type LadderRunner = typeof runWorkflowWithLadder;
+let ladderRunner: LadderRunner = runWorkflowWithLadder;
+export function __setAuthVerifierLadderForTest(fn: LadderRunner | null): void {
+  ladderRunner = fn ?? runWorkflowWithLadder;
+}
+
+/** Two budgets bound the live `initiate` phase:
+ *
+ *  - CHALLENGE budget (`maxInitiate`, env IMPRINT_AUTH_MAX_INITIATE, default 2):
+ *    how many initiates may actually REACH the user — a completed login (`ok`) or
+ *    an `AWAITING_2FA` (a challenge was delivered). This is what bounds how many
+ *    OTPs/pushes the user ever sees. It is a *lower bound* on pushes for a
+ *    multi-request initiate sequence: if the push is sent mid-sequence but a later
+ *    sub-request fails, the whole initiate is not counted — the attempt budget
+ *    backstops that.
+ *  - ATTEMPT budget (`maxInitiateAttempts`, env IMPRINT_AUTH_MAX_INITIATE_ATTEMPTS,
+ *    default 5): how many initiate tries total, INCLUDING ones that fail BEFORE any
+ *    challenge is delivered (an edge 403 / network error / bad request shape never
+ *    reaches the 2FA step, so it sends nothing). This is the runaway guard so a
+ *    login blocked pre-challenge can't loop forever without ever spending the
+ *    challenge budget. Clamped `>= maxInitiate` so it can never fire first.
+ *
+ *  Why two: a pre-challenge failure (e.g. an Akamai edge 403 on the credential
+ *  POST) sends ZERO OTPs/pushes, so it must NOT consume the user-visible challenge
+ *  budget — otherwise a transient block exhausts the budget and a subsequently
+ *  corrected workflow can never be verified in the same run. */
 const DEFAULT_MAX_INITIATE = 2;
+const DEFAULT_MAX_INITIATE_ATTEMPTS = 5;
 
 type AuthPhase = 'initiate' | 'submit_otp' | 'complete';
 
 export interface AuthPhaseResult {
   ok: boolean;
-  /** Error code when !ok (e.g. AWAITING_2FA, AUTH_EXPIRED, BAD_RESPONSE, BUDGET_EXHAUSTED). */
+  /** Error code when !ok (e.g. AWAITING_2FA, AUTH_EXPIRED, BAD_RESPONSE,
+   *  BUDGET_EXHAUSTED [challenge cap], ATTEMPT_BUDGET_EXHAUSTED [attempt cap]). */
   error?: string;
   message?: string;
   /** Which ladder rung ran it (fetch / cdp-replay / playbook / …). */
@@ -61,49 +89,82 @@ function parsePositiveInt(value: string | undefined): number | undefined {
 export class AuthVerifier {
   /** Per-run CDP pool — the ONE live session reused across phases. */
   private readonly cdpPool = new Map<string, CdpBrowserFetch>();
-  private initiateCount = 0;
+  /** Initiates that actually reached the user (completed login or AWAITING_2FA).
+   *  Bounded by `maxInitiate` — the user-visible OTP/push budget. */
+  private challengesIssued = 0;
+  /** All initiate tries, including ones that failed before any challenge was
+   *  delivered. Bounded by `maxInitiateAttempts` — the runaway guard. */
+  private initiateAttempts = 0;
   /** twoFactorContext echoed by the most recent initiate, threaded into the
    *  completion phase so submit_otp can resolve `${state.X}`. */
   private lastTwoFactorContext: Record<string, unknown> | undefined;
   private readonly maxInitiate: number;
+  /** Public so the orchestrator's progress line can show "attempt N/M". */
+  readonly maxInitiateAttempts: number;
 
   constructor(
     private readonly workflowPath: string,
     private readonly credentials: CredentialStore,
     maxInitiate?: number,
+    maxInitiateAttempts?: number,
   ) {
     this.maxInitiate =
       maxInitiate ??
       parsePositiveInt(process.env.IMPRINT_AUTH_MAX_INITIATE) ??
       DEFAULT_MAX_INITIATE;
+    // The attempt cap can never fire before the challenge budget is usable.
+    this.maxInitiateAttempts = Math.max(
+      this.maxInitiate,
+      maxInitiateAttempts ??
+        parsePositiveInt(process.env.IMPRINT_AUTH_MAX_INITIATE_ATTEMPTS) ??
+        DEFAULT_MAX_INITIATE_ATTEMPTS,
+    );
   }
 
-  /** Live initiate logins fired so far (each = one OTP/push to the user). */
+  /** User-visible challenges delivered so far (each ≈ one OTP/push the user saw). */
   get initiatesUsed(): number {
-    return this.initiateCount;
+    return this.challengesIssued;
+  }
+
+  /** All live initiate tries so far (incl. pre-challenge failures). */
+  get attemptsUsed(): number {
+    return this.initiateAttempts;
   }
 
   /** Run one auth phase live through the ladder, reusing the persistent session.
    *  `initiate` is budget-capped; the completion phases reuse the prior context. */
   async runPhase(phase: AuthPhase, opts?: { otp_code?: string }): Promise<AuthPhaseResult> {
     if (phase === 'initiate') {
-      if (this.initiateCount >= this.maxInitiate) {
+      // Gate 1: challenge budget — bounds OTPs/pushes the user actually sees.
+      if (this.challengesIssued >= this.maxInitiate) {
         return {
           ok: false,
           error: 'BUDGET_EXHAUSTED',
-          message: `Live-login budget of ${this.maxInitiate} reached — do NOT request another initiate. Either give_up, or only call run_verification for the completion phase if a challenge is already pending.`,
+          message: `Live-login budget of ${this.maxInitiate} delivered 2FA challenge(s) reached — do NOT request another initiate. Either give_up, or only call run_verification for the completion phase if a challenge is already pending.`,
           usedBackend: 'none',
           durationMs: 0,
         };
       }
-      this.initiateCount += 1;
+      // Gate 2: attempt budget — runaway guard for logins blocked BEFORE any
+      // challenge is delivered (edge 403 / network / bad request shape). These
+      // send nothing, so they don't spend the challenge budget, but they must
+      // not loop forever.
+      if (this.initiateAttempts >= this.maxInitiateAttempts) {
+        return {
+          ok: false,
+          error: 'ATTEMPT_BUDGET_EXHAUSTED',
+          message: `Made ${this.maxInitiateAttempts} live initiate attempt(s), none of which delivered a 2FA challenge — the login is being blocked before it reaches the 2FA step (edge/anti-bot block or a defect in the request shape). Stop and give_up; a fresh run with corrected artifacts is needed.`,
+          usedBackend: 'none',
+          durationMs: 0,
+        };
+      }
     }
 
     const params: Record<string, string> = { action: phase };
     if (phase === 'submit_otp' && opts?.otp_code) params.otp_code = opts.otp_code;
 
     const t0 = Date.now();
-    const ladder = await runWorkflowWithLadder({
+    const ladder = await ladderRunner({
       workflowPath: this.workflowPath,
       params,
       credentials: this.credentials,
@@ -126,6 +187,16 @@ export class AuthVerifier {
     const durationMs = Date.now() - t0;
 
     const r = ladder.result;
+    if (phase === 'initiate') {
+      // Every try counts toward the attempt cap…
+      this.initiateAttempts += 1;
+      // …but only a delivered challenge (completed login or AWAITING_2FA) counts
+      // toward the user-visible challenge budget. A pre-challenge failure (403,
+      // network, bad-response) sent no OTP/push, so it must not burn it. Strictly
+      // `ok || AWAITING_2FA` — AUTH_EXPIRED / RATE_LIMITED are non-transport but
+      // are NOT delivered challenges.
+      if (r.ok || r.error === 'AWAITING_2FA') this.challengesIssued += 1;
+    }
     if (!r.ok && r.error === 'AWAITING_2FA' && r.twoFactorContext) {
       this.lastTwoFactorContext = r.twoFactorContext;
     }

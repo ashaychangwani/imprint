@@ -66,6 +66,8 @@ Stored credentials can include named secrets, cookies, and declared durable stor
 
 **2FA tokens are not persisted.** OTP flows can return a short-lived token from the login response (e.g. a reauth `mfaId`) that the `submit_otp` call needs. This `twoFactorContext` is **echoed to the caller in the `AWAITING_2FA` result and passed back in** on the next call — it is never written to disk (unlike cookies and `localStorage`). The OTP code itself stays a runtime parameter and is never stored — and when `imprint teach` *attempts* an unattended completion it uses a throwaway placeholder (`000000`), never a real code. This stateless round-trip means the chained token lives only for the duration of the two-call exchange, in the caller's hands.
 
+**At most two real 2FA prompts per teach run.** During auth compilation the live verifier caps initiates that actually *deliver* a challenge at two (`IMPRINT_AUTH_MAX_INITIATE`), so a teach run can never spam your phone/inbox — you see at most two OTPs/pushes regardless of how many times the agent iterates. Login attempts that fail *before* delivering a challenge (e.g. an anti-bot edge 403, which sends nothing) don't count toward that user-visible cap but are bounded separately by an attempt cap (`IMPRINT_AUTH_MAX_INITIATE_ATTEMPTS`, default 5) so a blocked login can't loop.
+
 ## LLM data flow
 
 When you run `imprint teach`, `imprint generate`, or `imprint compile-playbook`, the auto-redacted session is sent to the provider you selected or auto-detected:

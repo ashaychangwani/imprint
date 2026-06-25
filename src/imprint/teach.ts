@@ -1267,7 +1267,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
             // which is far slower than an API replay. Give the agent room to write
             // and iterate a playbook, not just a workflow.json.
             maxDurationMs: 20 * 60 * 1000,
-            onProgress: (prog) => spinner.message(`Auth compile: turn ${prog.turn}`),
+            onProgress: (prog) => spinner.message(formatAuthProgress(prog)),
             // Interactive 2FA bridge: the agent (via the verification stage) reaches
             // the OTP/push challenge, then asks the user — here — for the live second
             // factor. Stop the spinner + unmute logs around the prompt so it renders
@@ -2648,6 +2648,25 @@ function formatCompileProgress(progress: CompileAgentProgress): string {
   const activity = describeAgentActivity(progress);
   const retry = progress.verificationCycle > 1 ? `, retry ${progress.verificationCycle - 1}` : '';
   return `Compiling • ${activity} (${formatElapsed(progress.elapsedMs)}${retry})`;
+}
+
+/** Build the auth-compile spinner line. Pure (formatting only). The turn is
+ *  monotonic across resumable segments (no per-segment reset). When the most
+ *  recent live verification FAILED, surface the reason (phase + error + HTTP
+ *  status) and which live-login attempt of the budget it was — so the user sees
+ *  what happened and why it's taking longer, not a silently-resetting counter. */
+export function formatAuthProgress(progress: CompileAgentProgress): string {
+  const base = `Auth compile: turn ${progress.turn}`;
+  const lv = progress.lastVerification;
+  if (lv && !lv.ok) {
+    const status = typeof lv.status === 'number' ? ` HTTP ${lv.status}` : '';
+    const attempt =
+      typeof progress.attempt === 'number' && typeof progress.maxAttempts === 'number'
+        ? `; attempt ${progress.attempt}/${progress.maxAttempts}`
+        : '';
+    return `${base} — verify ${lv.phase} FAILED (${lv.error ?? 'error'}${status})${attempt} — agent retrying`;
+  }
+  return base;
 }
 
 // ─── Quick backend probe (after emit) ────────────────────────────────────────

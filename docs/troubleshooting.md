@@ -116,6 +116,20 @@ The site is blocking API replay or needs browser-minted state. Three escalating 
    ```
    With a `playbook.yaml` present, the `auto` ladder escalates to a real DOM walk when API replay modes cannot satisfy the workflow.
 
+## Auth compile: no OTP/push arrives, or `verify initiate FAILED (... HTTP 403)`
+
+The credential POST is being **edge-blocked by anti-bot before it reaches the 2FA step**, so the site never sends a code or push. The teach spinner shows this inline, e.g. `Auth compile: turn 30 — verify initiate FAILED (FORBIDDEN HTTP 403); attempt 2/5 — agent retrying`. The cause is almost always that the live verifier (which runs the login inside `cdp-replay`'s real browser) navigated a non-login page, so the login page's anti-bot sensor never ran and its token (e.g. Akamai `_abck`) was never validated for the login Origin.
+
+Fix: the auth `workflow.json` needs a top-level **`bootstrap.url` pointing at the credential-entry page** — the page the recording navigated to right before the credential POST:
+
+```json
+{ "toolKind": "authenticate", "bootstrap": { "url": "https://www.example.com/login", "waitUntil": "domcontentloaded", "waitMs": 4000 }, "requests": [ ... ] }
+```
+
+The compile agent sets this automatically, and if it doesn't the orchestrator derives it from the recording (the credential POST's `Referer`, the Document hosting the login form, or the last document before the POST). If you're hand-editing a workflow and hit this, add the block yourself. A 403 here is **not** rate-limiting — a cool-off won't clear it.
+
+This failure does **not** consume the user-visible 2FA-challenge budget (`IMPRINT_AUTH_MAX_INITIATE`, default 2 — only initiates that actually deliver a prompt count). A separate attempt cap (`IMPRINT_AUTH_MAX_INITIATE_ATTEMPTS`, default 5) bounds repeated pre-challenge failures; once it's hit the agent gives up so a fresh run with corrected artifacts can try again.
+
 ## "STATE_MISSING"
 
 The workflow referenced a required `${state.NAME}` or cookie value that was not available yet. The error includes a `capability` that determines the fix:
