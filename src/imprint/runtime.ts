@@ -17,6 +17,7 @@ import {
   loadSiteCredentials,
   readSiteManifest,
   saveSiteCookies,
+  saveSiteSecret,
 } from './credential-store.ts';
 import type {
   RequestCapture,
@@ -370,6 +371,11 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   const stateCapabilities = collectStateCapabilities(opts.workflow);
   const params: Record<string, string | number | boolean> = { ...opts.params };
   let loginResponsePreview: string | undefined;
+  /** Latest response context, used to resolve authConfig.sessionCapture against
+   *  the final completion response when the login succeeds. */
+  let lastAuthResponseCtx:
+    | { parsed: unknown; text: string; headers: Headers; requestUrl: string }
+    | undefined;
 
   const runRequests = async (startIdx: number, endIdx: number): Promise<ToolResult | null> => {
     for (let i = startIdx; i < endIdx; i++) {
@@ -438,6 +444,9 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       } catch {
         // keep raw
       }
+      // Remember the latest response so sessionCapture can be resolved against
+      // the final completion response after the login finishes.
+      lastAuthResponseCtx = { parsed, text, headers: resp.headers, requestUrl: subbedReq.url };
       const aliases = evaluateLegacyExtract(req, parsed);
       responseSlots.push({ raw: parsed, aliases });
 
@@ -452,6 +461,37 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       Object.assign(state, captureResult.value);
     }
     return null;
+  };
+
+  // Persist durable session tokens (authConfig.sessionCapture) after a SUCCESSFUL
+  // login completion so data tools reuse them as ${credential.NAME} without
+  // re-running auth. Best-effort: a token that can't be resolved is skipped, not
+  // fatal. Cookies are persisted separately (saveSiteCookies). General — driven
+  // only by the declared captures + the recorded response shape.
+  const persistSessionCapture = async (): Promise<void> => {
+    const caps = authConfig?.sessionCapture ?? [];
+    if (caps.length === 0) return;
+    for (const cap of caps) {
+      let value: unknown;
+      if (lastAuthResponseCtx) {
+        const res = evaluateRequestCaptures([cap], {
+          parsed: lastAuthResponseCtx.parsed,
+          text: lastAuthResponseCtx.text,
+          headers: lastAuthResponseCtx.headers,
+          requestUrl: lastAuthResponseCtx.requestUrl,
+          cookieJar,
+        });
+        if (res.ok) value = res.value[cap.name];
+      }
+      if (value === undefined || value === null) value = state[cap.name];
+      if (value !== undefined && value !== null && String(value).length > 0) {
+        try {
+          await saveSiteSecret(opts.workflow.site, cap.name, String(value));
+        } catch {
+          /* non-fatal — cookies are the primary token */
+        }
+      }
+    }
   };
 
   if (action === 'initiate') {
@@ -566,6 +606,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     if (err) return err;
 
     await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+    await persistSessionCapture();
     return { ok: true, data: { authenticated: true } };
   }
 
@@ -574,6 +615,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     if (err) return err;
 
     await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+    await persistSessionCapture();
     return { ok: true, data: { authenticated: true } };
   }
 

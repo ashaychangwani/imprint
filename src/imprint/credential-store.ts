@@ -721,3 +721,11 @@ export async function saveSiteStorage(site: string, storage: StorageRecord[]): P
   const backend = await getCredentialBackend();
   await backend.setStorage?.(site, storage);
 }
+
+/** Persist a single durable secret value (e.g. a bearer/access token captured
+ *  from a completed login via authConfig.sessionCapture) so data tools reuse it
+ *  as `${credential.NAME}` without re-running auth. */
+export async function saveSiteSecret(site: string, name: string, value: string): Promise<void> {
+  const backend = await getCredentialBackend();
+  await backend.setSecret(site, name, value);
+}

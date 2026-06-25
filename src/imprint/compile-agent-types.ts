@@ -54,11 +54,29 @@ export interface CompileAgentProgress extends AgentProgress {
   maxVerificationCycles: number;
 }
 
+/** A mid-loop checkpoint the auth compile agent reaches: it calls a checkpoint
+ *  tool (which writes a sentinel) and then STOPS its turn. The orchestrator
+ *  (teach) performs the action — it owns the live browser session, the TUI, and
+ *  the cooldown — then resumes the agent (`claude --resume`) with the result as a
+ *  follow-up user message. Site/channel-agnostic. */
+export type AuthCheckpoint =
+  | { kind: 'run_verification'; phase: 'initiate' | 'submit_otp' | 'complete'; otp_code?: string }
+  | { kind: 'prompt_user'; message: string; options?: string[] }
+  | { kind: 'wait_for_cooldown'; minutes: number; reason?: string };
+
 export interface CompileAgentResult {
   /** True only if external verification passed. */
   success: boolean;
-  /** Why we stopped — done, give_up, timeout, soft_cap, error. */
-  outcome: 'done' | 'give_up' | 'timeout' | 'soft_cap' | 'error';
+  /** Why we stopped — done, give_up, timeout, soft_cap, error, or (auth segments)
+   *  checkpoint: the agent paused at a checkpoint tool for the orchestrator to act
+   *  and resume. */
+  outcome: 'done' | 'give_up' | 'timeout' | 'soft_cap' | 'error' | 'checkpoint';
+  /** Auth segments only: the checkpoint the agent reached (when outcome ===
+   *  'checkpoint'). The orchestrator performs it and resumes with the result. */
+  checkpoint?: AuthCheckpoint;
+  /** claude-cli session id (from the init event) — `--resume` target for the
+   *  next auth segment. */
+  sessionId?: string;
   /** Path to workflow.json if written. */
   workflowPath?: string;
   /** Path to parser.ts if written. */

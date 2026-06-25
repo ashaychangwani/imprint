@@ -31,7 +31,11 @@ import { type Span, context as otelContext } from '@opentelemetry/api';
 import type { OnDeadlineReached } from './agent.ts';
 import type { AuthCliCompileMode } from './auth-compile-tools.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
-import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
+import type {
+  AuthCheckpoint,
+  CompileAgentProgress,
+  CompileAgentResult,
+} from './compile-agent-types.ts';
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
@@ -108,6 +112,11 @@ interface CompileViaClaudeCliOptions {
   toolPlan?: string;
   /** Present → drive an auth compile rather than a data compile. */
   authMode?: AuthCliCompileMode;
+  /** Auth segments only: resume a prior segment's claude session with a new user
+   *  message (the orchestrator's result for the checkpoint the agent reached).
+   *  When set, `--resume <sessionId>` is used and `message` replaces the initial
+   *  prompt. Requires session persistence (auth mode keeps it on). */
+  resume?: { sessionId: string; message: string };
 }
 
 /** Options for the auth-compile entry point. A strict subset of the data
@@ -122,6 +131,8 @@ interface AuthCompileViaClaudeCliOptions {
   onProgress?: (p: CompileAgentProgress) => void;
   onDeadlineReached?: OnDeadlineReached;
   authMode: AuthCliCompileMode;
+  /** Resume a prior segment (see CompileViaClaudeCliOptions.resume). */
+  resume?: { sessionId: string; message: string };
 }
 
 /** Auth-compile entry point for claude-cli. Delegates to the same trace +
@@ -141,6 +152,7 @@ export function compileAuthViaClaudeCli(
     onProgress: opts.onProgress,
     onDeadlineReached: opts.onDeadlineReached,
     authMode: opts.authMode,
+    resume: opts.resume,
   });
 }
 
@@ -255,7 +267,11 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
   // Ensure tool dir exists and clear any prior sentinels — a stale
   // sentinel from a previous run would short-circuit our success detection.
   mkdirSync(opts.absoluteToolDir, { recursive: true });
-  for (const name of [COMPILE_SENTINELS.done, COMPILE_SENTINELS.giveUp]) {
+  for (const name of [
+    COMPILE_SENTINELS.done,
+    COMPILE_SENTINELS.giveUp,
+    COMPILE_SENTINELS.checkpoint,
+  ]) {
     const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
       try {
@@ -349,6 +365,16 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     },
   };
 
+  // Auth compiles run in resumable SEGMENTS: each segment ends when the agent
+  // reaches a checkpoint tool; the orchestrator acts and resumes the same
+  // session with the result. That needs session persistence ON (so --resume
+  // works) and, on a resume, `--resume <id>` + the result as the new prompt.
+  const promptArg = opts.resume ? opts.resume.message : initialPrompt;
+  const resumeArgs = opts.resume ? ['--resume', opts.resume.sessionId] : [];
+  // Data compiles are single-shot — keep session persistence OFF. Auth keeps it
+  // ON so the segment loop can resume.
+  const persistenceArgs = opts.authMode ? [] : ['--no-session-persistence'];
+
   const args = [
     '--print',
     '--output-format',
@@ -357,6 +383,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     '--strict-mcp-config',
     '--mcp-config',
     JSON.stringify(mcpConfig),
+    ...resumeArgs,
     '--system-prompt-file',
     opts.systemPromptPath,
     '--append-system-prompt',
@@ -375,17 +402,19 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     '200',
     '--permission-mode',
     'bypassPermissions',
-    '--no-session-persistence',
+    ...persistenceArgs,
     '--disable-slash-commands',
     // Cap thinking effort below `max` to reduce usage-policy false positives.
     '--effort',
     COMPILE_EFFORT_LEVEL,
     '--model',
     preferredAgentModel('claude-cli'),
-    initialPrompt,
+    promptArg,
   ];
 
-  log(`spawning claude (max-turns=200, mcp-server=${MCP_SERVER_NAME})`);
+  log(
+    `spawning claude (max-turns=200, mcp-server=${MCP_SERVER_NAME}${opts.resume ? `, resume=${opts.resume.sessionId.slice(0, 8)}` : ''})`,
+  );
 
   let child: ChildProcess;
   try {
@@ -444,6 +473,7 @@ async function driveStreamJson(
   let cacheReadInputTokens = 0;
   let cacheCreationInputTokens = 0;
   let turn = 0;
+  let capturedSessionId: string | undefined;
   let lastErrorEvent: StreamJsonEvent | null = null;
   let stderrBuf = '';
   let currentTurnSpan: Span | null = null;
@@ -535,6 +565,7 @@ async function driveStreamJson(
         }
 
         if (evt.type === 'system' && evt.subtype === 'init') {
+          if (evt.session_id) capturedSessionId = evt.session_id;
           log(`session_id=${evt.session_id ?? '(none)'}`);
           continue;
         }
@@ -638,6 +669,7 @@ async function driveStreamJson(
   // Inspect sentinels to determine outcome.
   const doneSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.done);
   const giveUpSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.giveUp);
+  const checkpointSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.checkpoint);
   const workflowPath = pathJoin(opts.absoluteToolDir, 'workflow.json');
   const parserPath = pathJoin(opts.absoluteToolDir, 'parser.ts');
   const parserTestPath = pathJoin(opts.absoluteToolDir, 'parser.test.ts');
@@ -674,6 +706,7 @@ async function driveStreamJson(
     | 'outputTokens'
     | 'cacheReadInputTokens'
     | 'cacheCreationInputTokens'
+    | 'sessionId'
   > = {
     workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
     parserPath: existsSync(parserPath) ? parserPath : undefined,
@@ -685,7 +718,30 @@ async function driveStreamJson(
     outputTokens,
     cacheReadInputTokens,
     cacheCreationInputTokens,
+    sessionId: capturedSessionId,
   };
+
+  // Auth segment: the agent paused at a checkpoint for the orchestrator to act.
+  // Take precedence over done/give_up (a well-behaved segment ends ONLY here).
+  if (opts.authMode && existsSync(checkpointSentinel)) {
+    let cp: AuthCheckpoint | undefined;
+    try {
+      const raw = readFileSync(checkpointSentinel, 'utf8').trim();
+      const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : undefined;
+      if (parsed && typeof parsed.kind === 'string') cp = parsed as unknown as AuthCheckpoint;
+    } catch (err) {
+      log(`failed to parse checkpoint sentinel: ${errMsg(err)}`);
+    }
+    if (cp) {
+      return {
+        success: false,
+        outcome: 'checkpoint',
+        checkpoint: cp,
+        message: `checkpoint:${cp.kind}`,
+        ...baseResult,
+      };
+    }
+  }
 
   // Wall-clock deadline exceeded?
   if (Date.now() > currentDeadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {

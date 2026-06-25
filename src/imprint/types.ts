@@ -264,6 +264,14 @@ const AuthConfigSchema = z
      *  `mfaId`). Because each MCP call is stateless, these are echoed back to
      *  the caller in the AWAITING_2FA result and passed in again on submit_otp. */
     twoFactorContext: z.array(z.string()).default([]),
+    /** Durable session tokens to persist after a SUCCESSFUL login completion so
+     *  DATA tools can reuse them without re-running auth (they re-auth only on
+     *  expiry / AUTH_EXPIRED). Cookies persist automatically; declare here only
+     *  the NON-cookie material a data request needs — a bearer / access / CSRF
+     *  token the completion response returns in its body or a header. Each
+     *  capture's resolved value is stored as a durable credential secret
+     *  (`${credential.NAME}`). Grounded in the recording; channel/site-agnostic. */
+    sessionCapture: z.array(RequestCaptureSchema).default([]),
   })
   .optional();
 export type AuthConfig = z.infer<typeof AuthConfigSchema>;

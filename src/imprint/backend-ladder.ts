@@ -1454,6 +1454,12 @@ export async function runWorkflowWithLadder(opts: {
    *  from a prior AWAITING_2FA result, threaded into every rung so a submit_otp
    *  completion request can resolve a token the initiate response returned. */
   initialState?: Record<string, unknown>;
+  /** Caller-owned CDP pool. When provided, cdp-replay pools its live Chrome here
+   *  (reused across calls that pass the SAME map) and the process-global idle
+   *  close is NOT armed — the caller owns the browser's lifecycle and must drain
+   *  it. Used by the auth verifier to keep ONE live session across 2FA phase 1
+   *  (send) → user input → phase 2 (verify) so the challenge isn't reset. */
+  cdpPool?: Map<string, CdpBrowserFetch>;
 }): Promise<LadderResult> {
   if (!existsSync(opts.workflowPath)) {
     throw new Error(`runWorkflowWithLadder: workflow.json not found at ${opts.workflowPath}`);
@@ -1543,8 +1549,11 @@ export async function runWorkflowWithLadder(opts: {
   // across this `bun test` process's calls; cancel any pending idle-close now
   // that we're about to use it again. The pool is torn down by an idle timer
   // (armed in `finally`) shortly after the LAST call — see compileCdpPool.
-  const cdpPool = compileCdpPool;
-  clearCompileCdpIdle();
+  // A caller-owned pool (auth verifier) opts out of the global idle close: that
+  // caller keeps the session alive across the user-input gap and drains it itself.
+  const usingCallerPool = opts.cdpPool !== undefined;
+  const cdpPool = opts.cdpPool ?? compileCdpPool;
+  if (!usingCallerPool) clearCompileCdpIdle();
 
   try {
     try {
@@ -1595,8 +1604,9 @@ export async function runWorkflowWithLadder(opts: {
           });
           // A backend that finishes AFTER the probe returned (it lost the race but
           // is still cold-starting Chrome) pools its browser late — arm the idle
-          // close so it's torn down rather than left lingering.
-          void inner.finally(() => armCompileCdpIdleClose()).catch(() => {});
+          // close so it's torn down rather than left lingering. (Caller-owned pool
+          // drains itself, so don't arm the global idle close for it.)
+          if (!usingCallerPool) void inner.finally(() => armCompileCdpIdleClose()).catch(() => {});
           const r = await Promise.race([
             inner,
             sleepMs(PROBE_TIMEOUT_MS).then(

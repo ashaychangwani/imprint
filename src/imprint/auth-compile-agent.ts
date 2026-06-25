@@ -29,10 +29,15 @@ import {
   authExternalVerification,
   buildAuthCompileTools,
 } from './auth-compile-tools.ts';
+import { type AuthPhaseResult, AuthVerifier } from './auth-verifier.ts';
 import type { AuthToolPlan } from './build-plan.ts';
 import { compileAuthViaClaudeCli } from './claude-cli-compile.ts';
 import { compileAuthViaCodexCli } from './codex-cli-compile.ts';
-import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
+import type {
+  AuthCheckpoint,
+  CompileAgentProgress,
+  CompileAgentResult,
+} from './compile-agent-types.ts';
 import {
   type LLMOptions,
   type ToolUseProvider,
@@ -58,7 +63,21 @@ interface CompileAuthAgentOptions {
   llmProvider?: ToolUseProvider;
   maxDurationMs?: number;
   onProgress?: (p: CompileAgentProgress) => void;
+  /** Interactive bridge for the agent's `prompt_user` checkpoint: shows the
+   *  agent-generated message (+ optional choices) in the teach TUI and returns
+   *  the user's input (the live OTP, a confirmation, etc.). When omitted
+   *  (--no-interactive), a placeholder is supplied so the run still ATTEMPTS the
+   *  completion unattended. */
+  onPrompt?: (message: string, options?: string[]) => Promise<string>;
+  /** Cool-off bridge for the agent's `wait_for_cooldown` checkpoint: wait the
+   *  given minutes (informing the user, firing NO login). Default sleeps. */
+  onCooldown?: (minutes: number, reason?: string) => Promise<void>;
 }
+
+/** Unattended OTP placeholder when no interactive prompt bridge is supplied. */
+const ATTEMPT_OTP_PLACEHOLDER = '000000';
+/** Runaway guard on the number of agent segments per auth run. */
+const MAX_AUTH_SEGMENTS = 16;
 
 /** Build the initial user message handed to the agent on its first turn.
  *  Shared verbatim by every provider path so the agent's framing is identical. */
@@ -108,20 +127,20 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
   } else {
     const resolved = resolveProvider(opts.llmConfig);
     if (resolved.name === 'claude-cli') {
-      return await compileAuthViaClaudeCli({
+      return await runAuthSegmentLoop({
+        site,
         session,
-        absoluteToolDir: toolDir,
         sessionPath: opts.sessionPath,
         systemPromptPath,
         deadlineMs,
         startTime,
+        toolDir,
+        authToolPlan,
+        teachCredentials: opts.teachCredentials,
+        initialPrompt: initialUserMessage,
         onProgress: opts.onProgress,
-        authMode: {
-          site,
-          authPlanJson: JSON.stringify(authToolPlan),
-          allowedTools: AUTH_COMPILE_TOOL_NAMES,
-          initialPrompt: initialUserMessage,
-        },
+        onPrompt: opts.onPrompt,
+        onCooldown: opts.onCooldown,
       });
     }
     if (resolved.name === 'codex-cli') {
@@ -250,6 +269,141 @@ Fix the issues in workflow.json, re-test with test_auth_workflow, and call done 
     cacheReadInputTokens: 0,
     cacheCreationInputTokens: 0,
   };
+}
+
+interface AuthSegmentLoopOptions {
+  site: string;
+  session: Session;
+  sessionPath: string;
+  systemPromptPath: string;
+  deadlineMs: number;
+  startTime: number;
+  toolDir: string;
+  authToolPlan: NonNullable<AuthToolPlan>;
+  teachCredentials: { site: string; values: Record<string, string> };
+  initialPrompt: string;
+  onProgress?: (p: CompileAgentProgress) => void;
+  onPrompt?: (message: string, options?: string[]) => Promise<string>;
+  onCooldown?: (minutes: number, reason?: string) => Promise<void>;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Render an AuthVerifier phase result into the message the agent receives on
+ *  resume — channel-agnostic, grounded only in the result. */
+function formatVerifyResult(phase: string, r: AuthPhaseResult): string {
+  if (r.ok) {
+    return `Verification phase "${phase}" SUCCEEDED via ${r.usedBackend}. The login completed and the session token is now stored for data tools. Call done with a one-line summary.`;
+  }
+  if (r.error === 'AWAITING_2FA') {
+    const ctxKeys = r.twoFactorContext ? Object.keys(r.twoFactorContext) : [];
+    return `Verification phase "${phase}" reached the 2FA challenge (AWAITING_2FA, type=${r.twoFactorType ?? 'unknown'}, via ${r.usedBackend}). The OTP/push has been delivered to the user${ctxKeys.length ? ` (carried token keys: ${ctxKeys.join(', ')})` : ''}. Now call prompt_user to ask them for the live second factor, then run_verification for the completion phase.`;
+  }
+  if (r.error === 'BUDGET_EXHAUSTED') {
+    return `Verification refused: ${r.message} Do not request another initiate — give_up if you cannot complete.`;
+  }
+  return `Verification phase "${phase}" FAILED: error=${r.error} via ${r.usedBackend}. ${r.message ?? ''}\nIf this looks like the site rate-flagging repeated logins, call wait_for_cooldown. If it's a defect in workflow.json, fix it and run_verification again.`;
+}
+
+/**
+ * Drive the claude-cli auth compile as a sequence of resumable SEGMENTS. The
+ * agent shapes from the recording, then pauses at checkpoint tools; this loop
+ * (the durable orchestrator) executes each checkpoint — run_verification on the
+ * persistent AuthVerifier session, prompt_user via the TUI bridge, or a
+ * cool-off wait — and resumes the same claude session with the result. The ONE
+ * stateful thing (the live browser) lives in the AuthVerifier and is drained at
+ * the end. Conversation state is carried by `--resume`, not retained here.
+ */
+async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<CompileAgentResult> {
+  const workflowPath = pathJoin(opts.toolDir, 'workflow.json');
+  const credsForRun = { site: opts.site, cookies: [], values: opts.teachCredentials.values };
+  const verifier = new AuthVerifier(workflowPath, credsForRun);
+  const authMode = {
+    site: opts.site,
+    authPlanJson: JSON.stringify(opts.authToolPlan),
+    allowedTools: AUTH_COMPILE_TOOL_NAMES,
+    initialPrompt: opts.initialPrompt,
+  };
+
+  const onPrompt = opts.onPrompt ?? (async () => ATTEMPT_OTP_PLACEHOLDER); // unattended: placeholder
+  const onCooldown =
+    opts.onCooldown ?? (async (minutes: number) => sleep(Math.min(minutes, 10) * 60_000));
+
+  let resume: { sessionId: string; message: string } | undefined;
+  let last: CompileAgentResult | undefined;
+  let totalTurns = 0;
+
+  try {
+    for (let seg = 0; seg < MAX_AUTH_SEGMENTS; seg++) {
+      const result = await compileAuthViaClaudeCli({
+        session: opts.session,
+        absoluteToolDir: opts.toolDir,
+        sessionPath: opts.sessionPath,
+        systemPromptPath: opts.systemPromptPath,
+        deadlineMs: opts.deadlineMs,
+        startTime: opts.startTime,
+        onProgress: opts.onProgress,
+        authMode,
+        resume,
+      });
+      last = result;
+      totalTurns += result.turns;
+
+      if (result.outcome !== 'checkpoint' || !result.checkpoint) break; // terminal
+      if (!result.sessionId) {
+        last = {
+          ...result,
+          outcome: 'error',
+          success: false,
+          message: 'checkpoint reached but no session id was captured — cannot resume the agent.',
+        };
+        break;
+      }
+
+      const cp: AuthCheckpoint = result.checkpoint;
+      let resultMsg: string;
+      try {
+        if (cp.kind === 'run_verification') {
+          const r = await verifier.runPhase(cp.phase, { otp_code: cp.otp_code });
+          resultMsg = formatVerifyResult(cp.phase, r);
+        } else if (cp.kind === 'prompt_user') {
+          const answer = await onPrompt(cp.message, cp.options);
+          resultMsg = `The user responded: ${answer || '(no input provided)'}`;
+        } else {
+          await onCooldown(cp.minutes, cp.reason);
+          resultMsg = `Cool-off of ~${cp.minutes} min complete (no login was fired during the wait). You may run_verification once more.`;
+        }
+      } catch (err) {
+        resultMsg = `The orchestrator could not perform ${cp.kind}: ${err instanceof Error ? err.message : String(err)}`;
+      }
+
+      resume = {
+        sessionId: result.sessionId,
+        message: `[orchestrator result for your ${cp.kind} request]\n${resultMsg}\n\nProceed: shape any next phase from the recording if needed, then call the appropriate next tool (run_verification / prompt_user / wait_for_cooldown / done / give_up).`,
+      };
+    }
+  } finally {
+    await verifier.drain();
+  }
+
+  if (!last) {
+    return {
+      success: false,
+      outcome: 'error',
+      message: 'Auth segment loop produced no result.',
+      conversationLogPath: pathJoin(opts.toolDir, '.compile-log.json'),
+      turns: 0,
+      durationMs: Date.now() - opts.startTime,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    };
+  }
+  // Surface the cumulative turn count across segments.
+  return { ...last, turns: totalTurns };
 }
 
 function buildMessageFromOutcome(result: AgentResult): string {

@@ -300,4 +300,55 @@ describe('initiate→submit_otp state chain (stateless)', () => {
     });
     expect(done.ok).toBe(false);
   });
+
+  it('persists a sessionCapture token from the completion response as a durable secret', async () => {
+    const backend = memBackend();
+    setBackendOverride(backend);
+    // OTP workflow whose completion (submit_otp) response returns a bearer token
+    // a data tool will reuse. authConfig.sessionCapture declares it durable.
+    const wf = (): Workflow =>
+      ({
+        toolName: 'authenticate_fix',
+        toolKind: 'authenticate',
+        intent: { description: 'auth' },
+        parameters: [
+          { name: 'action', type: 'string', description: 'phase', default: 'initiate' },
+          { name: 'otp_code', type: 'string', description: 'code' },
+        ],
+        requests: [
+          { method: 'POST', url: 'https://fix.example/login', headers: {} },
+          {
+            method: 'POST',
+            url: 'https://fix.example/otp',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            body: 'c=${param.otp_code}',
+          },
+        ],
+        site: 'fix',
+        authConfig: {
+          twoFactorType: 'otp',
+          initiateRequestCount: 1,
+          sessionCapture: [{ name: 'access_token', source: 'json', path: 'token' }],
+        },
+      }) as Workflow;
+
+    const fetchMock = (async (url: string) =>
+      String(url).includes('/otp')
+        ? new Response('{"token":"SYNTH-BEARER-1"}', {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        : new Response('{}', { status: 200 })) as unknown as typeof fetch;
+
+    const done = await executeWorkflow({
+      workflow: wf(),
+      params: { action: 'submit_otp', otp_code: 'SYNTH-OTP-9' },
+      credentials: creds,
+      fetchImpl: fetchMock,
+    });
+    expect(done.ok).toBe(true);
+    // The token from the completion response is now a durable credential a data
+    // tool resolves as ${credential.access_token} — no re-auth needed.
+    expect(await backend.getSecret('fix', 'access_token')).toBe('SYNTH-BEARER-1');
+  });
 });
