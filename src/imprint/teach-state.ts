@@ -382,7 +382,7 @@ export function resolveStepStartTarget(
  *  generate/compile-playbook output to resume from and would crash loading it.
  *  Tools excluded for either reason are returned in `skipped` so the caller can
  *  warn instead of silently dropping or crashing. */
-export interface MultiToolResumeSelection {
+interface MultiToolResumeSelection {
   plans: {
     workflowKey: string;
     candidate: WorkflowState['candidate'];
