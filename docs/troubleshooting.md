@@ -226,6 +226,35 @@ imprint teach <site> --from-session ~/.imprint/<site>/sessions/<ts>.json --provi
 
 If Phoenix is open at `http://localhost:6006` but empty, check that `PHOENIX_COLLECTOR_ENDPOINT` points at that URL and use `IMPRINT_TRACE_BATCH=false` for immediate local export. Drill into individual `agent.turn.N` spans to see per-turn token counts, and into `agent.tool.X` spans to find which tool call is slow. `IMPRINT_TRACE_LLM_IO=1` records prompts/responses; `IMPRINT_TRACE_TOOL_IO=1` records compile-agent tool arguments/results; `IMPRINT_TRACE_IO_MAX_CHARS=200000` raises the per-payload capture cap when the default is too small.
 
+## Re-running only specific phases of `imprint teach`
+
+A teach run is a chain of phases, persisted as checkpoints in `~/.imprint/<site>/.teach-state.json`:
+
+```
+record → redact → replay-and-diff → triage → detect-candidates → plan-prereqs → generate → compile-playbook → emit → register
+```
+
+To iterate on one phase without re-running the whole chain, use the phase-window flags:
+
+```bash
+imprint teach <site> --from-step <step>     # start at <step>, run to the end (reuses earlier phases' outputs)
+imprint teach <site> --to-step <step>        # stop after <step>
+imprint teach <site> --only <step>           # run exactly one phase (= --from-step X --to-step X)
+```
+
+Examples:
+
+```bash
+imprint teach amex-fhr --only detect-candidates    # just re-detect candidate tools
+imprint teach amex-fhr --only plan-prereqs          # just rebuild shared modules (multi-tool sites)
+imprint teach amex-fhr --to-step triage             # process up to triage, then stop
+imprint teach amex-fhr --from-step generate          # recompile the tools from the persisted plan
+```
+
+Guard: `--from-step <step>` is **only allowed if a prior run reached or crossed that point** — every earlier phase must already be complete in `.teach-state.json`, otherwise the run errors with the furthest step it actually reached (starting mid-chain without the earlier outputs would be missing dependencies like the redacted/triaged session, classifications, or build plan). It's not combinable with `--from-session` (a separate fresh-input entry mode); use `--to-step` with `--from-session` to cap phases on a fresh recording.
+
+Notes: the `replay-and-diff → triage → detect-candidates` analysis runs as one atomic block (its sub-steps share a parallel run), so stopping at any of them completes through detect-candidates. The per-tool compile (`generate → compile-playbook → emit`) likewise runs as a unit per tool; `--to-step` within it stops before `register` (platform integration) rather than mid-tool.
+
 ## "Build plan skipped" — the shared-module planner timed out
 
 In a multi-tool run the planning spinner steps through `Planning shared modules` → `calling planner LLM` as it works. If the single planner call can't finish in time, the spinner stops with `Build plan skipped.` followed by a warning line:

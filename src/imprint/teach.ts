@@ -87,6 +87,7 @@ import {
   loadTeachState,
   nextTeachStep as nextStep,
   pruneStalePendingTeachWorkflows,
+  resolveStepStartTarget,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
   saveTeachState,
@@ -142,6 +143,13 @@ interface TeachOptions {
   allTools?: boolean;
   /** Skip the replay-and-diff stage entirely. */
   skipReplay?: boolean;
+  /** Run only specific phases of the teach chain. `fromStep` resumes a PRIOR run
+   *  at that step (guarded — every earlier step must already be complete so its
+   *  output can be reused); `toStep` stops after that step. Together they bound a
+   *  window; fromStep===toStep runs a single phase. `fromStep` is non-interactive
+   *  (bypasses the resume prompt) and is not combined with `fromSession`. */
+  fromStep?: Step;
+  toStep?: Step;
 }
 
 interface TeachResult {
@@ -422,7 +430,32 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
 
-  if (opts.fromSession) {
+  if (opts.fromStep) {
+    // Non-interactive phase resume: start at a specific step, reusing a prior
+    // run's persisted outputs. resolveStepStartTarget picks the most-recent
+    // workflow and THROWS if it didn't reach far enough (the dependency guard).
+    const target = resolveStepStartTarget(site, state, opts.fromStep);
+    workflowKey = target.workflowKey;
+    startFrom = opts.fromStep;
+    sessionPath = resolveTeachStatePath(site, target.ws.sessionPath);
+    redactedPath = resolveTeachStatePath(site, target.ws.redactedPath);
+    // Resolve a derived artifact path (.triaged/.redacted) back to the original
+    // recording so earlier-than-redact restarts operate on the full session.
+    if (sessionPath) {
+      const original = sessionPath.replace(/\.triaged/g, '').replace(/\.redacted/g, '');
+      if (original !== sessionPath && isExistingFile(original)) {
+        sessionPath = original;
+        redactedPath = null;
+      }
+    }
+    if (!sessionPath && startFrom !== 'record') {
+      const orphan = discoverOrphanSession(site, state);
+      if (orphan) {
+        sessionPath = resolveTeachStatePath(site, orphan.sessionPath);
+        redactedPath = resolveTeachStatePath(site, orphan.redactedPath);
+      }
+    }
+  } else if (opts.fromSession) {
     startFrom = 'redact';
     sessionPath = pathResolve(opts.fromSession);
     usingFromSession = true;
@@ -479,6 +512,26 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   const startIdx = STEPS.indexOf(startFrom);
+  // Upper bound of the phase window: `--to-step`/`--only` stop the chain after a
+  // given step (default = the last step, i.e. run to the end). A phase runs only
+  // when it falls within [startFrom, toStep].
+  const stopIdx = opts.toStep ? STEPS.indexOf(opts.toStep) : STEPS.length - 1;
+  /** True when `step` is inside the [startFrom, toStep] window. Replaces the bare
+   *  `startIdx <= idx(step)` phase gates so a phase can also be skipped when it's
+   *  PAST the requested stop step. */
+  const inWindow = (step: Step): boolean => {
+    const i = STEPS.indexOf(step);
+    return startIdx <= i && i <= stopIdx;
+  };
+  /** Stop the run early when `--to-step`/`--only` bounded the window before the
+   *  normal end. Used at each phase-group boundary so the full-compile tail never
+   *  runs on a partial. Reports what ran; exits 0 (the CLI ignores the return). */
+  const finishEarly = (): never => {
+    p.outro(
+      `Ran teach phases ${startFrom} → ${STEPS[stopIdx]} for ${site}; stopped here (--to-step/--only).`,
+    );
+    process.exit(0);
+  };
   const spinner = p.spinner();
   let resolvedProviderName: ProviderName | null = null;
   const getProviderName = async (): Promise<ProviderName> => {
@@ -539,12 +592,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     );
   }
 
-  if (startIdx <= STEPS.indexOf('compile-playbook')) {
+  if (startIdx <= STEPS.indexOf('compile-playbook') && stopIdx >= STEPS.indexOf('triage')) {
     await getProviderName();
   }
 
   // ── 1. Record ──────────────────────────────────────────────────────
-  if (startIdx <= STEPS.indexOf('record')) {
+  if (inWindow('record')) {
     const startUrl = await resolveStartUrl(opts);
 
     spinner.start('Recording');
@@ -604,7 +657,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // ── 2. Redact ──────────────────────────────────────────────────────
   let teachCredentials: { site: string; values: Record<string, string> } | undefined;
   let credentialFindings: CredentialFinding[] = [];
-  if (startIdx <= STEPS.indexOf('redact')) {
+  if (inWindow('redact')) {
     sessionPath = requireSessionFile(sessionPath, {
       site,
       workflowKey,
@@ -723,10 +776,20 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // Run them in parallel so the user can select tools while replay runs.
   let siteClassifications: ClassifiedValue[] | undefined;
   let triageResult: TriageResult | undefined;
+  // Early stop: `--to-step record|redact` finishes before the analysis block.
+  if (stopIdx < STEPS.indexOf('replay-and-diff')) finishEarly();
+
   let plans: CandidateCompilePlan[];
 
-  let needsReplay = startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
-  const needsCandidates = startIdx <= STEPS.indexOf('detect-candidates');
+  // The replay→triage→detect-candidates analysis is one atomic block (the sub-
+  // steps share a parallel run + the triaged session), so the window can START
+  // within it but always completes through detect-candidates. It runs when the
+  // [startFrom, toStep] window overlaps [replay-and-diff, detect-candidates].
+  const runsAnalysis =
+    startIdx <= STEPS.indexOf('detect-candidates') && stopIdx >= STEPS.indexOf('replay-and-diff');
+  let needsReplay =
+    runsAnalysis && startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
+  const needsCandidates = runsAnalysis;
 
   if (needsReplay && !opts.noInteractive) {
     const runReplay = await p.confirm({
@@ -1045,15 +1108,30 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         triagedPath: toRelative(site, resolvedTriagedPath),
       });
     }
-    plans = [
-      {
-        workflowKey,
-        startFrom,
-        candidate: ws?.candidate,
-        sharedContext: ws?.sharedContext,
-      },
-    ];
+    // A `--from-step` resume into plan-prereqs/generate must reconstruct EVERY
+    // selected tool from the prior run (shared-module planning needs ≥2 tools,
+    // and a multi-tool generate resumes all of them) — not just the most-recent
+    // workflow. Confined to --from-step so interactive resume keeps its single-
+    // tool behavior. Each candidate-bearing workflow becomes a plan.
+    const allCandidatePlans = opts.fromStep
+      ? Object.entries(state.workflows)
+          .filter(([k, w]) => !k.startsWith('_pending_') && w.candidate)
+          .map(([k, w]) => ({
+            workflowKey: k,
+            startFrom,
+            candidate: w.candidate,
+            sharedContext: w.sharedContext,
+          }))
+      : [];
+    plans =
+      allCandidatePlans.length > 0
+        ? allCandidatePlans
+        : [{ workflowKey, startFrom, candidate: ws?.candidate, sharedContext: ws?.sharedContext }];
   }
+
+  // Early stop: `--to-step replay-and-diff|triage|detect-candidates` finishes
+  // after the analysis block, before shared-module planning / compile.
+  if (stopIdx < STEPS.indexOf('plan-prereqs')) finishEarly();
 
   const needsCompileProvider = plans.some(
     (plan) => STEPS.indexOf(plan.startFrom) <= STEPS.indexOf('compile-playbook'),
@@ -1203,6 +1281,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       }
     }
   }
+
+  // Early stop: `--to-step plan-prereqs` finishes after shared-module planning,
+  // before any tool (auth or data) compiles.
+  if (stopIdx < STEPS.indexOf('generate')) finishEarly();
 
   // ── auth-tool: agentic compile loop + interactive 2FA ──
   if (buildPlanPath && willGenerate) {
@@ -1396,7 +1478,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   const primaryResult = results[0] as TeachToolResult;
 
   // ── 6. Platform integration ────────────────────────────────────────
-  if (startIdx <= STEPS.indexOf('register')) {
+  if (inWindow('register')) {
     if (opts.noInteractive) {
       const imprintCommand = detectImprintCommand();
       const platforms: Platform[] = [

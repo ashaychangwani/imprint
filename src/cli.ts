@@ -113,7 +113,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay] [--from-step <step>] [--to-step <step>] [--only <step>]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
@@ -155,6 +155,20 @@ export const VERB_HELP: Record<string, VerbHelp> = {
         name: '--skip-replay',
         description:
           "Skip the replay-and-diff stage. Faster, but the compile agent won't be able to distinguish browser-minted values from constants, which may reduce workflow accuracy.",
+      },
+      {
+        name: '--from-step <step>',
+        description:
+          'Resume a prior run starting at <step> (record, redact, replay-and-diff, triage, detect-candidates, plan-prereqs, generate, compile-playbook, emit, register). Only allowed if a prior run reached/crossed that point — earlier phase outputs are reused. Not combinable with --from-session.',
+      },
+      {
+        name: '--to-step <step>',
+        description:
+          'Stop after <step> instead of running to the end. Combine with --from-step (or --from-session) to run a window of phases.',
+      },
+      {
+        name: '--only <step>',
+        description: 'Run exactly one phase: shorthand for --from-step <step> --to-step <step>.',
       },
     ],
     example: 'imprint teach google-flights --url https://flights.google.com',
@@ -1389,9 +1403,47 @@ async function main(argv: string[]): Promise<number> {
           timeout: { type: 'string' },
           'keep-test': { type: 'boolean' },
           'skip-replay': { type: 'boolean' },
+          'from-step': { type: 'string' },
+          'to-step': { type: 'string' },
+          only: { type: 'string' },
         },
         allowPositionals: false,
       });
+
+      // ── Phase-window flags: run only specific steps of the teach chain ──
+      // `--only X` = `--from-step X --to-step X`. Validate names against the
+      // canonical step list; --from-step resumes a prior run (guarded in teach.ts)
+      // so it can't combine with --from-session (a fresh-input entry mode).
+      const { TEACH_STEPS } = await import('./imprint/teach-state.ts');
+      const fromStep = values['from-step'] ?? values.only;
+      const toStep = values['to-step'] ?? values.only;
+      for (const [flag, val] of [
+        ['--from-step', fromStep],
+        ['--to-step', toStep],
+      ] as const) {
+        if (val !== undefined && !(TEACH_STEPS as readonly string[]).includes(val)) {
+          console.error(`error: invalid ${flag} "${val}" — valid steps: ${TEACH_STEPS.join(', ')}`);
+          return 2;
+        }
+      }
+      if (
+        fromStep &&
+        toStep &&
+        (TEACH_STEPS as readonly string[]).indexOf(fromStep) >
+          (TEACH_STEPS as readonly string[]).indexOf(toStep)
+      ) {
+        console.error(`error: --from-step "${fromStep}" comes after --to-step "${toStep}"`);
+        return 2;
+      }
+      if (fromStep && values['from-session']) {
+        console.error(
+          'error: --from-step resumes a prior run; it cannot combine with --from-session. Use --to-step with --from-session to cap phases on a fresh session.',
+        );
+        return 2;
+      }
+      // Pin types for teach() below.
+      const fromStepArg = fromStep as import('./imprint/teach-state.ts').TeachStep | undefined;
+      const toStepArg = toStep as import('./imprint/teach-state.ts').TeachStep | undefined;
 
       if (!site && values['no-interactive']) {
         console.error(
@@ -1455,6 +1507,8 @@ async function main(argv: string[]): Promise<number> {
               keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
               allTools: values['all-tools'],
               skipReplay: values['skip-replay'],
+              fromStep: fromStepArg,
+              toStep: toStepArg,
             }),
         );
       } finally {

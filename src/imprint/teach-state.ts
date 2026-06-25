@@ -287,3 +287,66 @@ export function friendlySessionTimestamp(sessionPath: string): string {
   if (!m) return pathBasename(sessionPath);
   return `${m[1]} ${m[2]}:${m[3]}`;
 }
+
+/** The furthest step (by TEACH_STEPS order) a workflow has completed, or null. */
+function furthestCompletedStep(ws: WorkflowState): TeachStep | null {
+  let bestIdx = -1;
+  for (const s of ws.completedSteps) {
+    const i = TEACH_STEPS.indexOf(s);
+    if (i > bestIdx) bestIdx = i;
+  }
+  return bestIdx >= 0 ? (TEACH_STEPS[bestIdx] as TeachStep) : null;
+}
+
+/** Throw unless `ws` has completed EVERY step before `fromStep` — i.e. a prior run
+ *  reached or crossed that point, so starting there won't be missing an earlier
+ *  phase's output (the redacted/triaged session, classifications, build plan, …).
+ *  Starting at `record` is always allowed (it produces everything fresh). */
+export function assertResumableAt(
+  site: string,
+  workflowKey: string,
+  ws: WorkflowState,
+  fromStep: TeachStep,
+): void {
+  const fromIdx = TEACH_STEPS.indexOf(fromStep);
+  if (fromIdx <= 0) return; // 'record' (index 0) or unknown — no prior steps required
+  const required = TEACH_STEPS.slice(0, fromIdx);
+  const missing = required.filter((s) => !ws.completedSteps.includes(s));
+  if (missing.length === 0) return;
+  const reached = furthestCompletedStep(ws);
+  const resumeAt: TeachStep = reached ? nextTeachStep(ws.completedSteps) : 'record';
+  throw new Error(
+    [
+      `Cannot start "${workflowKey}" (${site}) at "${fromStep}": the prior run is missing required ` +
+        `earlier step(s) [${missing.join(', ')}].`,
+      `  Latest completed step: ${reached ?? '(none)'}. Start at "${resumeAt}" or earlier, or run a full teach first.`,
+    ].join('\n'),
+  );
+}
+
+/** Pick which persisted workflow a `--from-step` run should resume (the
+ *  most-recently-updated one), and validate the guard via assertResumableAt.
+ *  Throws a clear, actionable error when there's no prior run or it didn't reach
+ *  far enough. */
+export function resolveStepStartTarget(
+  site: string,
+  state: TeachState,
+  fromStep: TeachStep,
+): { workflowKey: string; ws: WorkflowState } {
+  const entries = Object.entries(state.workflows);
+  if (entries.length === 0) {
+    throw new Error(
+      [
+        `Cannot start \`imprint teach ${site}\` at "${fromStep}": no prior teach run found for "${site}".`,
+        '  --from-step resumes a previous run; run a full `imprint teach` first (or omit --from-step).',
+      ].join('\n'),
+    );
+  }
+  // Most-recently-updated workflow — the run a developer just executed and wants
+  // to resume a single phase of.
+  const [workflowKey, ws] = entries.sort((a, b) =>
+    (b[1].updatedAt ?? '').localeCompare(a[1].updatedAt ?? ''),
+  )[0] as [string, WorkflowState];
+  assertResumableAt(site, workflowKey, ws, fromStep);
+  return { workflowKey, ws };
+}
