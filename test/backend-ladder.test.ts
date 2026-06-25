@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
@@ -28,6 +28,7 @@ import {
   runWorkflowWithLadder,
 } from '../src/imprint/backend-ladder.ts';
 import type { MintedJar } from '../src/imprint/cdp-browser-fetch.ts';
+import { type CredentialStore, executeWorkflow } from '../src/imprint/runtime.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import type { ConcreteBackend, ToolResult, Workflow } from '../src/imprint/types.ts';
@@ -1338,6 +1339,156 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
       adult_passengers_count: 1,
     });
     expect(closes).toBe(1);
+  });
+});
+
+describe('runWithLadder — Google Flights CDP reuse', () => {
+  const workflowPath = pathResolve(
+    process.cwd(),
+    'examples/google-flights/search_flights/workflow.json',
+  );
+  const googleFlightsWorkflow = JSON.parse(readFileSync(workflowPath, 'utf8')) as Workflow;
+  const googleJar: MintedJar = {
+    cookies: [],
+    ua: 'Chrome/148',
+    html: '<script>{"FdrFJe":"fixture-fsid","cfb2h":"fixture-bl"}</script>',
+    bootstrapEpoch: 1_700_000_000_000,
+    abckFlag: '?',
+    validated: true,
+  };
+
+  function batchExecuteFrame(payload: unknown): string {
+    return `)]}'\n\n${JSON.stringify([['wrb.fr', 'GetShoppingResults', JSON.stringify(payload)]])}\n`;
+  }
+
+  function itinerary(origin: string, destination: string, carrier: string, price: number): unknown {
+    const segment = new Array(25).fill(null);
+    segment[22] = [carrier, 101, null, carrier];
+    segment[23] = 123_456;
+    const leg = [
+      carrier,
+      [carrier],
+      [segment],
+      origin,
+      [2026, 10, 22],
+      [8, 0],
+      destination,
+      [2026, 10, 22],
+      [12, 0],
+      240,
+    ];
+    return [[leg, [[null, price], `fixture-flight-token-${origin}-${destination}-${carrier}`]]];
+  }
+
+  function googleFlightsTool(): ResolvedTool {
+    return {
+      site: 'google-flights',
+      dir: pathJoin(root, 'google-flights', 'search_flights'),
+      workflow: googleFlightsWorkflow,
+      toolFn: async (params, opts) => {
+        const o = opts as
+          | {
+              credentials?: CredentialStore;
+              fetchImpl?: typeof fetch;
+              initialState?: Record<string, unknown>;
+            }
+          | undefined;
+        return executeWorkflow({
+          workflow: googleFlightsWorkflow,
+          params: params as Record<string, string | number | boolean>,
+          credentials: o?.credentials,
+          fetchImpl: o?.fetchImpl,
+          initialState: o?.initialState,
+          workflowPath,
+        });
+      },
+    };
+  }
+
+  it('keeps one pooled CDP browser across different Google Flights route/options, even when one search fails parsing', async () => {
+    let createCount = 0;
+    let closes = 0;
+    let fetchCalls = 0;
+    const requestBodies: string[] = [];
+
+    __setCdpBrowserFetchFactoryForTest(() => {
+      createCount++;
+      return {
+        fetchImpl: (async (_input, init?: RequestInit) => {
+          fetchCalls++;
+          requestBodies.push(String(init?.body ?? ''));
+          if (fetchCalls === 2) {
+            return new Response(batchExecuteFrame([]), { status: 200 });
+          }
+          const payload =
+            fetchCalls === 1
+              ? itinerary('SJC', 'SAN', 'AS', 129)
+              : itinerary('SEA', 'LGA', 'DL', 239);
+          return new Response(batchExecuteFrame(payload), { status: 200 });
+        }) as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => googleJar,
+        close: async () => {
+          closes++;
+        },
+      };
+    });
+
+    const tool = googleFlightsTool();
+    const cdpPool = new Map();
+    const firstSearch = {
+      origin: 'SJC',
+      destination: 'SAN',
+      departure_date: '2026-09-09',
+      return_date: '2026-09-16',
+      trip_type: 'round_trip',
+      max_stops: 0,
+      airlines: 'AS',
+      max_price: 300,
+      outbound_times: '6-12',
+      return_times: '12-20',
+      max_duration: 360,
+      carry_on_bags: 1,
+    };
+    const secondSearch = {
+      origin: 'SEA',
+      destination: 'LGA',
+      departure_date: '2026-10-22',
+      return_date: '',
+      trip_type: 'one_way',
+      max_stops: 1,
+      airlines: 'DL',
+      max_price: 500,
+      outbound_times: '5-18',
+      return_times: '',
+      max_duration: 540,
+      carry_on_bags: 0,
+    };
+
+    const r1 = await runWithLadder(['cdp-replay'], tool, firstSearch, root, new Map(), {
+      cdpPool,
+    });
+    const r2 = await runWithLadder(['cdp-replay'], tool, secondSearch, root, new Map(), {
+      cdpPool,
+    });
+    const r3 = await runWithLadder(['cdp-replay'], tool, secondSearch, root, new Map(), {
+      cdpPool,
+    });
+
+    expect(r1.result.ok).toBe(true);
+    expect(r2.result.ok).toBe(false);
+    if (!r2.result.ok) expect(r2.result.error).toBe('BAD_RESPONSE');
+    expect(r3.result.ok).toBe(true);
+    expect(createCount).toBe(1);
+    expect(closes).toBe(0);
+    expect(cdpPool.has('google-flights')).toBe(true);
+    expect(requestBodies).toHaveLength(3);
+    expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('SJC');
+    expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('SAN');
+    expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('AS');
+    expect(decodeURIComponent(requestBodies[1] ?? '')).toContain('SEA');
+    expect(decodeURIComponent(requestBodies[1] ?? '')).toContain('LGA');
+    expect(decodeURIComponent(requestBodies[1] ?? '')).toContain('DL');
   });
 });
 
