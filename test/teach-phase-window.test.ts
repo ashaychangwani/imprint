@@ -11,6 +11,7 @@ import {
   type WorkflowState,
   analysisBlockRunsForWindow,
   assertResumableAt,
+  detectCandidatesCompletedSteps,
   isResumableAt,
   mergeAnalysisCompletedSteps,
   resolveStepStartTarget,
@@ -357,5 +358,43 @@ describe('mergeAnalysisCompletedSteps (re-detect must not regress progress)', ()
     const merged = mergeAnalysisCompletedSteps(['record', 'redact', 'generate']);
     expect(new Set(merged).size).toBe(merged.length);
     expect(merged).toContain('generate');
+  });
+});
+
+describe('detectCandidatesCompletedSteps (re-detect same recording vs fresh recording)', () => {
+  const completed = [...TEACH_STEPS]; // a fully-completed prior run (incl. plan-prereqs, register)
+  const wsRec = (sessionPath: string, steps: WorkflowState['completedSteps']): WorkflowState => ({
+    sessionPath,
+    completedSteps: steps,
+    startedAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+
+  it('returns just the analysis steps when there is no prior workflow', () => {
+    expect(detectCandidatesCompletedSteps(undefined, 'sessions/rec.json')).toEqual(
+      ANALYSIS_COMPLETED_STEPS,
+    );
+  });
+
+  it('preserves prior progress when re-detecting the SAME recording', () => {
+    const merged = detectCandidatesCompletedSteps(
+      wsRec('sessions/rec.json', completed),
+      'sessions/rec.json',
+    );
+    expect(merged).toContain('plan-prereqs');
+    expect(merged).toContain('register');
+  });
+
+  it('resets to analysis steps when a FRESH recording reuses the same toolName', () => {
+    // Different sessionPath => the prior plan-prereqs marker must NOT be inherited,
+    // or the alreadyPlanned shortcut would skip re-planning and compile the new
+    // recording against the previous recording's shared modules.
+    const result = detectCandidatesCompletedSteps(
+      wsRec('sessions/old-rec.json', completed),
+      'sessions/new-rec.json',
+    );
+    expect(result).toEqual(ANALYSIS_COMPLETED_STEPS);
+    expect(result).not.toContain('plan-prereqs');
+    expect(result).not.toContain('register');
   });
 });

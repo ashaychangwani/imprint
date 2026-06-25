@@ -446,6 +446,21 @@ export function mergeAnalysisCompletedSteps(prior: TeachStep[] | undefined): Tea
   return [...new Set<TeachStep>([...(prior ?? []), ...ANALYSIS_COMPLETED_STEPS])];
 }
 
+/** completedSteps to record for a freshly-detected candidate. Preserve the prior
+ *  workflow's progress (so a later `--from-step register` still sees
+ *  generate…register) ONLY when it came from the SAME recording — matched by
+ *  sessionPath. A fresh or different recording that happens to produce the same
+ *  toolName must reset to just the analysis steps: inheriting a stale `plan-prereqs`
+ *  marker would let the alreadyPlanned shortcut skip re-planning and compile the new
+ *  recording against the previous recording's `_shared/` modules. */
+export function detectCandidatesCompletedSteps(
+  prior: WorkflowState | undefined,
+  currentSessionPath: string,
+): TeachStep[] {
+  const sameRecording = prior !== undefined && prior.sessionPath === currentSessionPath;
+  return mergeAnalysisCompletedSteps(sameRecording ? prior.completedSteps : undefined);
+}
+
 /** Validate and resolve the `imprint teach` phase-window flags (`--from-step`,
  *  `--to-step`, `--only`) against the canonical step list. `--only X` expands to
  *  `--from-step X --to-step X`. Returns the resolved window, or an `error` string

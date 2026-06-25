@@ -81,12 +81,12 @@ import {
   type WorkflowState,
   analysisBlockRunsForWindow,
   buildTeachStateFromSession,
+  detectCandidatesCompletedSteps,
   discoverCompletedWorkflows,
   discoverOrphanSession,
   friendlySessionTimestamp,
   isExistingTeachFile as isExistingFile,
   loadTeachState,
-  mergeAnalysisCompletedSteps,
   nextTeachStep as nextStep,
   pruneStalePendingTeachWorkflows,
   resolveStepStartTarget,
@@ -1066,14 +1066,18 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         const candidatePlans = selected.map((candidate) => {
           checkpoint(site, state, candidate.toolName, {
             ...baseState,
-            // Merge, don't replace: a re-run of the analysis block
-            // (`--from-step`/`--only detect-candidates`, or interactive redo) reuses
-            // the tool's existing workflowKey, and checkpoint() replaces the whole
-            // WorkflowState. Writing only the analysis steps would regress a tool
-            // that already reached generate…register, silently dropping those steps
-            // (and breaking a later `--from-step register`).
-            completedSteps: mergeAnalysisCompletedSteps(
-              state.workflows[candidate.toolName]?.completedSteps,
+            // Preserve prior progress only when re-detecting the SAME recording, so
+            // a re-run of the analysis block (`--from-step`/`--only detect-candidates`,
+            // or interactive redo) doesn't regress a tool that already reached
+            // generate…register (which would break a later `--from-step register`).
+            // A fresh / different recording producing the same toolName must NOT
+            // inherit the old `plan-prereqs` marker, or the alreadyPlanned shortcut
+            // below would skip re-planning and compile against the previous
+            // recording's `_shared/` modules — detectCandidatesCompletedSteps gates
+            // on the recording's sessionPath.
+            completedSteps: detectCandidatesCompletedSteps(
+              state.workflows[candidate.toolName],
+              baseState.sessionPath,
             ),
             candidate,
             sharedContext,
