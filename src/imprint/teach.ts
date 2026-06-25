@@ -1193,8 +1193,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   // Early stop: `--to-step replay-and-diff|triage|detect-candidates` finishes
-  // after the analysis block, before shared-module planning / compile.
-  if (stopIdx < STEPS.indexOf('plan-prereqs')) await finishEarly();
+  // after the analysis block, before shared-module planning / compile. The block is
+  // atomic and always runs through detect-candidates, so report that as the last
+  // step (mirrors the compile exit reporting 'emit').
+  if (stopIdx < STEPS.indexOf('plan-prereqs')) await finishEarly('detect-candidates');
 
   const needsCompileProvider = plans.some(
     (plan) => STEPS.indexOf(plan.startFrom) <= STEPS.indexOf('compile-playbook'),
@@ -1259,9 +1261,16 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   });
 
   // ── Clean up stale tools from previous teach runs ──
+  // Skipped entirely on a `--from-step` resume: a resume is scoped to a subset of
+  // the site's tools (selectMultiToolResumePlans intentionally leaves other
+  // recordings' tools — and same-recording tools that didn't reach the step —
+  // alone), so "not in the resume set" does NOT mean "stale". Treating it as stale
+  // here would silently rmSync a tool the resume just promised to preserve. Cleanup
+  // only applies to a fresh run that produces a superseding tool set.
   const incomingToolNames = new Set(plans.map((pl) => pl.candidate?.toolName ?? pl.workflowKey));
-  const existingTools = discoverCompletedWorkflows(site);
-  const staleTools = existingTools.filter((name) => !incomingToolNames.has(name));
+  const staleTools = opts.fromStep
+    ? []
+    : discoverCompletedWorkflows(site).filter((name) => !incomingToolNames.has(name));
   if (staleTools.length > 0) {
     let shouldReplace = true;
     if (!opts.noInteractive) {
@@ -1291,10 +1300,16 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   if (selectedCandidates.length >= 2 && willGenerate && compileModel) {
     const sidecar = buildPlanSidecarPath(site);
     const firstWs = state.workflows[plans[0]?.workflowKey ?? ''];
+    // Reuse the cached plan only when resuming PAST plan-prereqs (e.g. --from-step
+    // generate). When plan-prereqs is the explicit target (`--only plan-prereqs` /
+    // `--from-step plan-prereqs`), the user is asking to rebuild shared modules, so
+    // force a fresh planner run instead of short-circuiting to the cached sidecar.
     const alreadyPlanned =
+      opts.fromStep !== 'plan-prereqs' &&
       plans.every((pl) =>
         state.workflows[pl.workflowKey]?.completedSteps.includes('plan-prereqs'),
-      ) && existsSync(sidecar);
+      ) &&
+      existsSync(sidecar);
     if (alreadyPlanned && firstWs) {
       // Resume past plan-prereqs — reuse the persisted plan + manifest.
       buildPlanPath = sidecar;
