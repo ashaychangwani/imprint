@@ -235,6 +235,12 @@ const WorkflowRequestSchema = z.object({
   extract: z.record(z.string()).optional(),
   captures: z.array(RequestCaptureSchema).optional(),
   effect: z.enum(['safe', 'idempotent', 'unsafe']).optional(),
+  /** When true, a non-2xx response from this request is logged and SKIPPED
+   *  instead of aborting the flow. For best-effort, non-load-bearing steps whose
+   *  failure must not block completion — e.g. a "remember this device" /
+   *  trusted-device registration that 4xxs when the device is already trusted, or
+   *  a telemetry beacon. The flow continues to the next (terminal) request. */
+  optional: z.boolean().optional(),
 });
 export type WorkflowRequest = z.infer<typeof WorkflowRequestSchema>;
 

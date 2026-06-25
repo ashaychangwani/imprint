@@ -978,6 +978,13 @@ async function runCdpReplay(
       baseUrl,
       bootstrapUrl,
       seedCookies,
+      // Run HEADED for authentication: a strong anti-bot edge (e.g. Akamai Bot
+      // Manager) fingerprints headless Chrome beyond the `HeadlessChrome` UA token
+      // we strip, so a cross-origin credential POST that 403s headless passes
+      // headed. Auth is interactive (the user is present to approve the 2FA), so a
+      // visible window is fine; data-tool cdp-replay stays headless.
+      // `IMPRINT_CDP_HEADED=1` forces headed for any rung.
+      headed: tool.workflow.toolKind === 'authenticate' || process.env.IMPRINT_CDP_HEADED === '1',
       // Cross-origin Set-Cookie re-injection only when the (auth) workflow
       // declares it — never a blanket default. See AuthConfig.crossOriginCookieReinjection.
       reinjectCrossOriginCookies: tool.workflow.authConfig?.crossOriginCookieReinjection ?? false,

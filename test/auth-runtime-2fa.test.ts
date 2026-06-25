@@ -391,3 +391,111 @@ describe('initiate→submit_otp state chain (stateless)', () => {
     expect(await backend.getSecret('fix', 'access_token')).toBe('SYNTH-BEARER-1');
   });
 });
+
+describe('predicate capture path (variable-order arrays)', () => {
+  setBackendOverride(memBackend());
+
+  it('selects the array element by a field match, not by index', async () => {
+    setBackendOverride(memBackend());
+    let usedBody = '';
+    const fetchMock = (async (url: string, init?: { body?: unknown }) => {
+      if (String(url).includes('/challenge')) {
+        // PUSH is NOT element [0] — a fixed `[0]` would capture the SMS token.
+        return new Response(
+          '{"challenges":[{"type":"sms","token":"SMS-WRONG"},{"type":"push","token":"PUSH-RIGHT"}]}',
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      usedBody = String(init?.body ?? '');
+      return new Response('{"ok":true}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const wf: Workflow = {
+      toolName: 'authenticate_fix',
+      toolKind: 'authenticate',
+      intent: { description: 'auth' },
+      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
+      site: 'fix',
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://fix.example/challenge',
+          headers: {},
+          captures: [{ name: 'pushTok', source: 'json', path: 'challenges[type=push].token' }],
+        },
+        {
+          method: 'POST',
+          url: 'https://fix.example/use',
+          headers: {},
+          body: 'tok=${state.pushTok}',
+        },
+      ],
+      authConfig: { twoFactorType: 'none', initiateRequestCount: 2 },
+    } as Workflow;
+
+    const r = await executeWorkflow({
+      workflow: wf,
+      params: { action: 'initiate' },
+      credentials: creds,
+      fetchImpl: fetchMock,
+    });
+    expect(r.ok).toBe(true);
+    expect(usedBody).toContain('PUSH-RIGHT');
+    expect(usedBody).not.toContain('SMS-WRONG');
+  });
+});
+
+describe('optional request flag', () => {
+  setBackendOverride(memBackend());
+
+  const wf = (trustOptional: boolean): Workflow =>
+    ({
+      toolName: 'authenticate_fix',
+      toolKind: 'authenticate',
+      intent: { description: 'auth' },
+      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
+      site: 'fix',
+      requests: [
+        { method: 'POST', url: 'https://fix.example/login', headers: {} },
+        { method: 'POST', url: 'https://fix.example/trust', headers: {}, optional: trustOptional },
+        { method: 'POST', url: 'https://fix.example/finish', headers: {} },
+      ],
+      authConfig: { twoFactorType: 'none', initiateRequestCount: 3 },
+    }) as Workflow;
+
+  // A best-effort step (e.g. "remember this device") that 4xx's on replay must not
+  // abort the login when flagged optional.
+  const fetchMock = (async (url: string) =>
+    String(url).includes('/trust')
+      ? new Response('{"error":"DEVICE_ALREADY_TRUSTED"}', { status: 400 })
+      : new Response('{"ok":true}', { status: 200 })) as unknown as typeof fetch;
+
+  it('skips a non-2xx optional request and continues to the final request', async () => {
+    setBackendOverride(memBackend());
+    const seen: string[] = [];
+    const wrapped = (async (url: string, init?: unknown) => {
+      seen.push(String(url));
+      return (fetchMock as (u: string, i?: unknown) => Promise<Response>)(url, init);
+    }) as unknown as typeof fetch;
+
+    const r = await executeWorkflow({
+      workflow: wf(true),
+      params: { action: 'initiate' },
+      credentials: creds,
+      fetchImpl: wrapped,
+    });
+    expect(r.ok).toBe(true);
+    expect(seen.some((u) => u.includes('/finish'))).toBe(true); // ran past the 400
+  });
+
+  it('aborts on the same non-2xx request when it is NOT optional', async () => {
+    setBackendOverride(memBackend());
+    const r = await executeWorkflow({
+      workflow: wf(false),
+      params: { action: 'initiate' },
+      credentials: creds,
+      fetchImpl: fetchMock,
+    });
+    expect(r.ok).toBe(false);
+  });
+});

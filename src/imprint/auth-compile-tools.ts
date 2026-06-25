@@ -73,10 +73,10 @@ export function buildAuthCompileTools(
     buildReadSessionSummaryTool(session, context),
     buildReadRequestTool(session),
     buildReadResponseBodyTool(session),
-    // Auth tools may emit a playbook.yaml: a browser-minted login (encrypted
-    // credential POST, recaptcha, per-load nonce) can't be API-replayed, so the
-    // login DOM steps run on the ladder's playbook rung in a real browser.
-    buildWriteFileTool(toolDir, ['playbook.yaml']),
+    // Auth runs on cdp-replay only (a real headed browser that replays the
+    // recorded requests in-page) — there is no playbook rung in the auth path, so
+    // the agent emits workflow.json only. No playbook.yaml in the write allowlist.
+    buildWriteFileTool(toolDir),
     buildReadFileTool(toolDir),
     buildRunBashTool(toolDir),
   ];

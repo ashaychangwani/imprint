@@ -419,6 +419,15 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
 
       if (resp.status >= 400) {
         const text = await safeText(resp);
+        // An OPTIONAL request (e.g. a "remember this device" registration that
+        // 4xxs when the device is already trusted, or a telemetry beacon) must
+        // not abort the flow — log and continue to the next (terminal) request.
+        if (req.optional) {
+          process.stderr.write(
+            `[imprint runtime] optional auth request ${i} (${subbedReq.url}) returned ${resp.status} — skipping, continuing\n`,
+          );
+          continue;
+        }
         return {
           ok: false,
           error: resp.status === 401 ? 'AUTH_EXPIRED' : 'BAD_RESPONSE',
@@ -899,16 +908,60 @@ function parsePlaceholderExpression(expr: string): ParsedPlaceholder | null {
   return null;
 }
 
-/** Lookup a dotted JSON path inside a parsed value. Supports nested objects + numeric array indices. */
+/** Lookup a JSON path inside a parsed value. Segments may be:
+ *   - an object key:            `reauth.mfaId`
+ *   - a numeric array index:    `items[0]` (bracket) or `items.0` (dot)
+ *   - a field-match predicate:  `challenges[type=push]`
+ *     → the FIRST array element whose `element[field]` stringifies to the value.
+ *  The predicate makes captures robust to non-deterministic array ordering — e.g.
+ *  a 2FA endpoint that returns its SMS/email/push challenges in a varying order, so
+ *  a fixed `challenges[0]` grabs the wrong one while `[type=push]` always selects
+ *  the push one. A bracketed token that is neither a number nor a `key=value`
+ *  predicate is treated as a literal object key. */
 function jsonpath(root: unknown, path: string): unknown {
-  const parts = path.split('.');
+  const tokens: Array<
+    | { kind: 'key'; v: string }
+    | { kind: 'index'; v: number }
+    | { kind: 'pred'; k: string; v: string }
+  > = [];
+  const re = /([^.[\]]+)|\[([^\]]*)\]/g;
+  let m: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex-exec loop
+  while ((m = re.exec(path)) !== null) {
+    if (m[1] !== undefined) {
+      tokens.push({ kind: 'key', v: m[1] });
+    } else {
+      const inner = m[2] ?? '';
+      if (/^\d+$/.test(inner)) {
+        tokens.push({ kind: 'index', v: Number.parseInt(inner, 10) });
+      } else {
+        const eq = inner.indexOf('=');
+        if (eq >= 0)
+          tokens.push({
+            kind: 'pred',
+            k: inner.slice(0, eq).trim(),
+            v: inner.slice(eq + 1).trim(),
+          });
+        else tokens.push({ kind: 'key', v: inner });
+      }
+    }
+  }
   let cur: unknown = root;
-  for (const p of parts) {
+  for (const t of tokens) {
     if (cur == null) return undefined;
-    if (Array.isArray(cur) && /^\d+$/.test(p)) {
-      cur = cur[Number.parseInt(p, 10)];
+    if (t.kind === 'index') {
+      if (!Array.isArray(cur)) return undefined;
+      cur = cur[t.v];
+    } else if (t.kind === 'pred') {
+      if (!Array.isArray(cur)) return undefined;
+      cur = cur.find(
+        (el) =>
+          el != null &&
+          typeof el === 'object' &&
+          String((el as Record<string, unknown>)[t.k]) === t.v,
+      );
     } else if (typeof cur === 'object') {
-      cur = (cur as Record<string, unknown>)[p];
+      cur = (cur as Record<string, unknown>)[t.v];
     } else {
       return undefined;
     }

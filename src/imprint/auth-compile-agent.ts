@@ -3,9 +3,10 @@
  * workflow.json, tests it against the live site, iterates until login works.
  *
  * Mirrors compile-agent.ts for data tools but with the auth-specific live-test
- * tool (test_auth_workflow) and lighter verification. Auth tools ride the same
- * backend ladder as data tools (including the playbook rung for browser-minted
- * logins); there is no bespoke login backend.
+ * tool (test_auth_workflow) and lighter verification. Authentication runs on a
+ * single rung — headed cdp-replay (a real visible browser that replays the
+ * recorded requests in-page); see AUTH_RUNGS in auth-verifier.ts. There is no
+ * bespoke login backend and no playbook rung in the auth path.
  *
  * Provider paths mirror compile-agent.ts exactly:
  *   - claude-cli / codex-cli: shell out with the auth toolset registered as a

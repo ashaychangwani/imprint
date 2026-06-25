@@ -164,6 +164,144 @@ function abckIsValidated(v: string | undefined): boolean {
   return !!v && v.split('~')[1] === '0';
 }
 
+/** The registrable domain (eTLD+1, approximated) of a host: the last two labels,
+ *  or last three when the penultimate label is a known two-part public suffix
+ *  (co.uk, com.au, …). Used to decide whether a cross-origin request is a SIBLING
+ *  subdomain under the SAME site (e.g. `global.americanexpress.com` vs
+ *  `www.americanexpress.com` → both `americanexpress.com`) versus a genuinely
+ *  third-party origin (analytics/CDN). Siblings share the page's anti-bot umbrella
+ *  and the recording proves they accept the credentialed cross-origin request, so
+ *  they must be issued IN-PAGE (live sensor + Chrome CORS) — not via plain fetch.
+ *  Site-agnostic: no host literals, derived purely from the URL structure. */
+function registrableDomain(host: string): string {
+  const labels = host.toLowerCase().split('.').filter(Boolean);
+  if (labels.length <= 2) return labels.join('.');
+  // Common multi-part public suffixes where eTLD+1 needs three labels.
+  const twoPartTld = new Set([
+    'co.uk',
+    'co.jp',
+    'co.kr',
+    'co.in',
+    'co.nz',
+    'co.za',
+    'com.au',
+    'com.br',
+    'com.cn',
+    'com.mx',
+    'com.sg',
+    'com.hk',
+    'com.tr',
+    'org.uk',
+    'gov.uk',
+    'ac.uk',
+    'net.au',
+    'org.au',
+  ]);
+  const lastTwo = labels.slice(-2).join('.');
+  if (twoPartTld.has(lastTwo)) return labels.slice(-3).join('.');
+  return lastTwo;
+}
+
+/** Two origins are SIBLINGS when they share a registrable domain but differ in
+ *  origin (subdomain and/or scheme). A request to a sibling origin is still under
+ *  the page's site/anti-bot umbrella, so it should ride the live in-page sensor +
+ *  Chrome's credentialed-CORS engine rather than escaping to plain fetch. */
+function isSiblingOrigin(originA: string, originB: string): boolean {
+  if (originA === originB) return false;
+  try {
+    const a = new URL(originA);
+    const b = new URL(originB);
+    const da = registrableDomain(a.hostname);
+    const db = registrableDomain(b.hostname);
+    return da.length > 0 && da === db;
+  } catch {
+    return false;
+  }
+}
+
+/** Build the in-page `fetch` expression that runs INSIDE the live trusted Chrome
+ *  document. credentials:'include' so the browser attaches the validated session
+ *  cookies AND the request rides the live anti-bot sensor (`_abck` re-validates
+ *  between calls). For a cross-origin SIBLING target (e.g. www → global) the
+ *  browser automatically attaches `Origin`/`Referer` and runs the real CORS
+ *  preflight — which the recording proves the server answers (ACAO names the page
+ *  origin, ACA-credentials:true). The browser also auto-supplies the sibling
+ *  origin's cookie jar, so we must NOT pass a manual Cookie header (it's stripped
+ *  by the caller anyway). `fullUrl` may be same-origin OR an absolute sibling URL.
+ *
+ *  Some SPAs monkeypatch window.fetch (AmEx's app.js throws from its patched
+ *  version), so we grab the native fetch from a hidden iframe whose fresh
+ *  browsing context has the unpatched global but shares the page cookie jar.
+ *  The iframe stays alive until the body is read, then is removed.
+ *
+ *  `sameOriginIframeSrc`: when set, the iframe is pointed at this SAME-ORIGIN URL
+ *  (and we await its load) instead of the default `about:blank`. This MATTERS for
+ *  a cross-origin (sibling) request: an `about:blank` / `srcdoc` iframe has an
+ *  OPAQUE origin (`"null"`), so a credentialed cross-origin fetch from it sends
+ *  `Origin: null` — which the server's credentialed ACAO (it names the page origin
+ *  exactly, never `*`) rejects → "Failed to fetch". An iframe loaded from a real
+ *  same-origin URL inherits the live document's true origin, so the fetch carries
+ *  the correct `Origin` (verified empirically: same-origin-src iframe → real
+ *  origin + native fetch + preflight 200; about:blank/srcdoc → `null`). For a
+ *  same-origin request the document origin already equals the request origin, so
+ *  `about:blank` (faster, no load wait) is fine and this stays unset. */
+function buildInPageFetchExpr(
+  fullUrl: string,
+  method: string,
+  headers: Record<string, string>,
+  body: string | null,
+  reqTimeoutMs: number,
+  sameOriginIframeSrc?: string,
+): string {
+  const iframeSetup = sameOriginIframeSrc
+    ? `
+          ifr = document.createElement('iframe');
+          ifr.style.display = 'none';
+          const _loaded = new Promise((res) => {
+            ifr.onload = () => res(true);
+            setTimeout(() => res(false), 5000);
+          });
+          ifr.src = ${JSON.stringify(sameOriginIframeSrc)};
+          document.body.appendChild(ifr);
+          await _loaded;
+          if (ifr.contentWindow && typeof ifr.contentWindow.fetch === 'function') {
+            _f = ifr.contentWindow.fetch.bind(ifr.contentWindow);
+          }`
+    : `
+          ifr = document.createElement('iframe');
+          ifr.style.display = 'none';
+          document.body.appendChild(ifr);
+          if (ifr.contentWindow && typeof ifr.contentWindow.fetch === 'function') {
+            _f = ifr.contentWindow.fetch.bind(ifr.contentWindow);
+          }`;
+  return `(async () => {
+      let ifr;
+      try {
+        let _f = fetch;
+        try {${iframeSetup}
+        } catch (_) {}
+        const ctrl = new AbortController();
+        const to = setTimeout(() => ctrl.abort(), ${reqTimeoutMs});
+        const r = await _f(${JSON.stringify(fullUrl)}, {
+          method: ${JSON.stringify(method)},
+          headers: ${JSON.stringify(headers)},
+          ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
+          credentials: 'include',
+          signal: ctrl.signal,
+        });
+        clearTimeout(to);
+        const text = await r.text();
+        const h = {};
+        r.headers.forEach((v, k) => { h[k] = v; });
+        if (ifr) ifr.remove();
+        return JSON.stringify({ ok: true, status: r.status, body: text, headers: h });
+      } catch (e) {
+        if (ifr) try { ifr.remove(); } catch (_) {}
+        return JSON.stringify({ ok: false, error: String(e) });
+      }
+    })()`;
+}
+
 /** Real-GPU launch flags so headless Chrome doesn't fall back to the SwiftShader
  *  software rasterizer (a behavioral-anti-bot tell). On macOS the Metal ANGLE
  *  backend yields the real GPU even headless; elsewhere request ANGLE and let
@@ -483,16 +621,49 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       });
     }
     const body = typeof init?.body === 'string' ? init.body : init?.body ? String(init.body) : null;
-
-    // Cross-origin requests (e.g. an `api.*` subdomain) can't go through the
-    // trusted page's `fetch` — the browser CORS-blocks them ("Failed to fetch").
-    // These endpoints are typically plain APIs NOT behind the same-origin
-    // anti-bot wall (the wall is on the page-origin .act/state-changing calls),
-    // so issue them with a normal fetch, carrying any cookies the browser holds
-    // for that origin. The trusted in-page path below is reserved for the
-    // page-origin requests that actually need the validated session.
     const requestOrigin = new URL(fullUrl).origin;
-    if (requestOrigin !== baseOrigin) {
+
+    // Run a request IN the live trusted page via Runtime.evaluate(fetch). Returns
+    // a structured payload (ok + status/body/headers, or ok:false + error string
+    // — the latter is how CORS rejections surface: the page sees "Failed to fetch"
+    // / "TypeError"). Shared by the same-origin path AND the cross-origin SIBLING
+    // path so both ride the live anti-bot sensor + Chrome's credentialed-CORS
+    // engine identically (incl. the iframe-escape for monkeypatched window.fetch).
+    const runInPageFetch = async (
+      sameOriginIframeSrc?: string,
+    ): Promise<
+      | { ok: true; status: number; body: string; headers: Record<string, string> }
+      | { ok: false; error: string }
+    > => {
+      const expr = buildInPageFetchExpr(
+        fullUrl,
+        method,
+        headers,
+        body,
+        reqTimeoutMs,
+        sameOriginIframeSrc,
+      );
+      const { result } = await withTimeout(
+        c.Runtime.evaluate({
+          expression: expr,
+          awaitPromise: true,
+          returnByValue: true,
+        }),
+        'CDP Runtime.evaluate(fetch)',
+        Math.max(cdpCommandTimeoutMs, reqTimeoutMs + 5_000),
+      );
+      return JSON.parse(result.value as string) as
+        | { ok: true; status: number; body: string; headers: Record<string, string> }
+        | { ok: false; error: string };
+    };
+
+    // Issue a request to a different origin via plain globalThis.fetch (carrying
+    // cookies harvested from the browser jar for that origin, through the same
+    // proxy as the browser). Used for genuinely third-party origins (analytics,
+    // CDNs) that are NOT under the page's anti-bot umbrella — and as the fallback
+    // when an in-page sibling fetch is genuinely CORS-blocked. Optionally
+    // re-injects the response Set-Cookie into the browser jar (auth opt-in).
+    const crossOriginPlainFetch = async (): Promise<Response> => {
       let cookieHeader: string | undefined;
       try {
         const { cookies } = await withTimeout(
@@ -512,7 +683,6 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       if (cookieHeader && !Object.keys(outHeaders).some((k) => k.toLowerCase() === 'cookie')) {
         outHeaders.cookie = cookieHeader;
       }
-      log(`cross-origin ${method} ${requestOrigin} via plain fetch`);
       // Route the cross-origin plain fetch through the SAME proxy as the browser
       // (Bun fetch `proxy` opt) so its egress IP matches the in-page traffic.
       const proxy = proxyUrl();
@@ -552,59 +722,61 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         }
       }
       return xResp;
+    };
+
+    // Cross-origin routing. A request to a SIBLING origin (same registrable domain
+    // as the live page, e.g. www → global on `americanexpress.com`) is still under
+    // the page's anti-bot umbrella: the recording shows AmEx CORS-allows the
+    // credentialed cross-origin POST (ACAO names the page origin, ACA-credentials
+    // true), and Akamai edge-403s the SAME request when it leaves the browser as a
+    // plain fetch (no live sensor, no isTrusted, no `Origin` the edge expects). So
+    // issue sibling-origin requests IN-PAGE from the live document — identical
+    // mechanism to the same-origin path (credentials:'include', iframe-escape) — so
+    // the browser attaches `Origin`/`Referer`, runs the real preflight, supplies the
+    // validated jar, and the `_abck` sensor re-validates. Fall back to plain fetch
+    // ONLY if the browser genuinely CORS-blocks it (in-page payload ok:false). A
+    // genuinely third-party origin (analytics/CDN) — NOT a sibling — keeps the plain
+    // fetch path: it isn't behind this site's wall and may not CORS-allow the page.
+    if (requestOrigin !== baseOrigin) {
+      if (isSiblingOrigin(requestOrigin, baseOrigin)) {
+        log(`cross-origin SIBLING ${method} ${requestOrigin} via in-page fetch`);
+        // Use a SAME-ORIGIN iframe (loaded from the page origin) for the unpatched
+        // fetch — NOT about:blank, whose opaque ("null") origin would make the
+        // cross-origin request send `Origin: null` and get CORS-rejected by a
+        // credentialed ACAO that names the page origin exactly. A real same-origin
+        // src gives the iframe the live document's true origin (empirically
+        // verified). `/favicon.ico` is a universal, cheap same-origin resource; its
+        // status is irrelevant — only that the iframe inherits the origin.
+        const sameOriginIframeSrc = `${baseOrigin}/favicon.ico`;
+        let payload:
+          | { ok: true; status: number; body: string; headers: Record<string, string> }
+          | { ok: false; error: string };
+        try {
+          payload = await runInPageFetch(sameOriginIframeSrc);
+        } catch (err) {
+          payload = { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        if (payload.ok) {
+          return new Response(payload.body, {
+            status: payload.status,
+            headers: new Headers(payload.headers),
+          });
+        }
+        // The in-page sibling fetch failed — almost always a genuine CORS block
+        // (the page can't read the cross-origin response). Fall back to plain
+        // fetch so the request still goes out (it just won't carry the live
+        // sensor; the ladder can then escalate if it 403s).
+        log(`cross-origin SIBLING in-page failed (${payload.error}); falling back to plain fetch`);
+        return crossOriginPlainFetch();
+      }
+      log(`cross-origin ${method} ${requestOrigin} via plain fetch`);
+      return crossOriginPlainFetch();
     }
 
     // Execute the fetch INSIDE the trusted page. credentials:'include' so the
-    // browser attaches the validated session cookies.
-    // Some sites monkeypatch window.fetch (e.g. AmEx's SPA throws from their
-    // patched version). Get the native fetch from a hidden iframe — its fresh
-    // browsing context has the unpatched global, but shares the page's cookie
-    // jar for same-origin requests. The iframe must stay alive until the
-    // response body is fully read, then gets cleaned up.
-    const expr = `(async () => {
-      let ifr;
-      try {
-        let _f = fetch;
-        try {
-          ifr = document.createElement('iframe');
-          ifr.style.display = 'none';
-          document.body.appendChild(ifr);
-          if (ifr.contentWindow && typeof ifr.contentWindow.fetch === 'function') {
-            _f = ifr.contentWindow.fetch.bind(ifr.contentWindow);
-          }
-        } catch (_) {}
-        const ctrl = new AbortController();
-        const to = setTimeout(() => ctrl.abort(), ${reqTimeoutMs});
-        const r = await _f(${JSON.stringify(fullUrl)}, {
-          method: ${JSON.stringify(method)},
-          headers: ${JSON.stringify(headers)},
-          ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
-          credentials: 'include',
-          signal: ctrl.signal,
-        });
-        clearTimeout(to);
-        const text = await r.text();
-        const h = {};
-        r.headers.forEach((v, k) => { h[k] = v; });
-        if (ifr) ifr.remove();
-        return JSON.stringify({ ok: true, status: r.status, body: text, headers: h });
-      } catch (e) {
-        if (ifr) try { ifr.remove(); } catch (_) {}
-        return JSON.stringify({ ok: false, error: String(e) });
-      }
-    })()`;
-    const { result } = await withTimeout(
-      c.Runtime.evaluate({
-        expression: expr,
-        awaitPromise: true,
-        returnByValue: true,
-      }),
-      'CDP Runtime.evaluate(fetch)',
-      Math.max(cdpCommandTimeoutMs, reqTimeoutMs + 5_000),
-    );
-    const payload = JSON.parse(result.value as string) as
-      | { ok: true; status: number; body: string; headers: Record<string, string> }
-      | { ok: false; error: string };
+    // browser attaches the validated session cookies. Uses the shared in-page
+    // mechanism (iframe-escape for monkeypatched window.fetch — e.g. AmEx's SPA).
+    const payload = await runInPageFetch();
     if (!payload.ok) {
       // Surface as a network-style failure so the ladder treats it like a fetch throw.
       throw new Error(`cdp-browser fetch failed: ${payload.error}`);
