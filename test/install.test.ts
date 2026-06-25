@@ -67,8 +67,10 @@ describe('checked-in examples', () => {
       const workflowPath = pathJoin(flightsRoot, toolDir.name, 'workflow.json');
       if (!existsSync(workflowPath)) continue;
       const workflow = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
-        bootstrap?: { captures?: { name: string; capability?: string }[] };
+        bootstrap?: { captures?: { name: string; capability?: string; required?: boolean }[] };
+        execution?: { minCallSpacingMs?: number };
         requests?: { url?: string }[];
+        toolName?: string;
       };
       const usesGooglePageTokens = JSON.stringify(workflow.requests ?? []).includes(
         '${state.f_sid}',
@@ -76,10 +78,16 @@ describe('checked-in examples', () => {
       if (!usesGooglePageTokens) continue;
 
       const captures = new Map(
-        (workflow.bootstrap?.captures ?? []).map((capture) => [capture.name, capture.capability]),
+        (workflow.bootstrap?.captures ?? []).map((capture) => [
+          capture.name,
+          { capability: capture.capability, required: capture.required },
+        ]),
       );
-      expect(captures.get('f_sid')).toBe('browser_bootstrap');
-      expect(captures.get('bl')).toBe('browser_bootstrap');
+      expect(captures.get('f_sid')).toEqual({ capability: 'browser_bootstrap', required: true });
+      expect(captures.get('bl')).toEqual({ capability: 'browser_bootstrap', required: true });
+      if (workflow.toolName === 'search_flights') {
+        expect(workflow.execution?.minCallSpacingMs).toBeGreaterThanOrEqual(2_000);
+      }
     }
   });
 });

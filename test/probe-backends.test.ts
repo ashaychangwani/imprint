@@ -20,7 +20,12 @@ import {
   rankSuccessfulBackends,
 } from '../src/imprint/probe-backends.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
-import { type BackendsCache, BackendsCacheSchema, WorkflowSchema } from '../src/imprint/types.ts';
+import {
+  type BackendsCache,
+  BackendsCacheSchema,
+  type Workflow,
+  WorkflowSchema,
+} from '../src/imprint/types.ts';
 
 let root: string;
 
@@ -38,6 +43,38 @@ function writeCache(site: string, cache: unknown): string {
   const path = pathResolve(dir, 'backends.json');
   writeFileSync(path, JSON.stringify(cache, null, 2));
   return path;
+}
+
+function backendCapabilityHash(workflow: unknown): string {
+  const parsed = WorkflowSchema.parse(workflow);
+  const caps = {
+    requestTransformModule: parsed.requestTransformModule ?? null,
+    bootstrap: parsed.bootstrap
+      ? {
+          url: parsed.bootstrap.url,
+          captures: parsed.bootstrap.captures ?? [],
+        }
+      : null,
+    requests: parsed.requests.map((r) => ({
+      method: r.method.toUpperCase(),
+      effect: r.effect ?? null,
+      stateRefs: stateRefsInWorkflowRequest(r),
+      captures: r.captures ?? [],
+    })),
+  };
+  return createHash('sha256').update(JSON.stringify(caps)).digest('hex');
+}
+
+function stateRefsInWorkflowRequest(workflowRequest: Workflow['requests'][number]): string[] {
+  const refs = new Set<string>();
+  const scan = (text: string | undefined): void => {
+    if (!text) return;
+    for (const match of text.matchAll(/\$\{state\.([A-Za-z0-9_]+)\}/g)) refs.add(match[1] ?? '');
+  };
+  scan(workflowRequest.url);
+  scan(workflowRequest.body);
+  for (const value of Object.values(workflowRequest.headers ?? {})) scan(value);
+  return [...refs].filter(Boolean).sort();
 }
 
 describe('BackendsCacheSchema', () => {
@@ -224,6 +261,96 @@ describe('loadBackendsCache', () => {
     if (status.status === 'stale') {
       expect(status.remediation).toBe('imprint probe-backends stale --tool tool');
     }
+  });
+
+  it('keeps v2 caches when only execution metadata changed', () => {
+    const dir = pathResolve(root, 'execution-only', 'execution-only');
+    mkdirSync(dir, { recursive: true });
+    const currentWorkflow = {
+      toolName: 'tool',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+      execution: { skipPlaybookFallback: true },
+      site: 'execution-only',
+    };
+    writeFileSync(pathResolve(dir, 'workflow.json'), JSON.stringify(currentWorkflow));
+    const cache: BackendsCache = {
+      probedAt: '2026-05-03T22:00:00.000Z',
+      imprintVersion: '0.4.6',
+      schemaVersion: 2,
+      workflowHash: createHash('sha256')
+        .update(JSON.stringify({ old: true }))
+        .digest('hex'),
+      capabilityHash: backendCapabilityHash(currentWorkflow),
+      preferredOrder: ['cdp-replay'],
+      results: { 'cdp-replay': { outcome: 'ok', durationMs: 30_000 } },
+    };
+    writeFileSync(pathResolve(dir, 'backends.json'), JSON.stringify(cache, null, 2));
+
+    expect(loadBackendsCache('execution-only', root, dir)?.preferredOrder).toEqual(['cdp-replay']);
+
+    const status = loadBackendsCacheStatus('execution-only', root, dir, {
+      warn: false,
+      toolName: 'tool',
+    });
+    expect(status.status).toBe('ok');
+  });
+
+  it('ignores v2 caches when only bootstrap capture capabilities changed', () => {
+    const dir = pathResolve(root, 'bootstrap-captures', 'bootstrap-captures');
+    mkdirSync(dir, { recursive: true });
+    const oldWorkflow = {
+      toolName: 'tool',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://example.com/api/search?f.sid=${state.f_sid}',
+          headers: {},
+        },
+      ],
+      bootstrap: { url: 'https://example.com/search' },
+      site: 'bootstrap-captures',
+    };
+    const currentWorkflow = {
+      ...oldWorkflow,
+      bootstrap: {
+        url: 'https://example.com/search',
+        captures: [
+          {
+            source: 'request_url_regex',
+            name: 'f_sid',
+            pattern: '[?&]f\\.sid=([^&]+)',
+            method: 'POST',
+            urlPattern: 'GetShoppingResults',
+            capability: 'browser_bootstrap',
+          },
+        ],
+      },
+    };
+    writeFileSync(pathResolve(dir, 'workflow.json'), JSON.stringify(currentWorkflow));
+    const cache: BackendsCache = {
+      probedAt: '2026-05-03T22:00:00.000Z',
+      imprintVersion: '0.4.6',
+      schemaVersion: 2,
+      workflowHash: createHash('sha256')
+        .update(JSON.stringify(WorkflowSchema.parse(oldWorkflow)))
+        .digest('hex'),
+      capabilityHash: backendCapabilityHash(oldWorkflow),
+      preferredOrder: ['fetch'],
+      results: { fetch: { outcome: 'ok', durationMs: 20 } },
+    };
+    writeFileSync(pathResolve(dir, 'backends.json'), JSON.stringify(cache, null, 2));
+
+    expect(loadBackendsCache('bootstrap-captures', root, dir)).toBeNull();
+
+    const status = loadBackendsCacheStatus('bootstrap-captures', root, dir, {
+      warn: false,
+      toolName: 'tool',
+    });
+    expect(status.status).toBe('stale');
   });
 
   it('accepts fresh v2 caches when workflow.json omits schema-defaulted capture fields', () => {

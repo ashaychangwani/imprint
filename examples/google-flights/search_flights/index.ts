@@ -120,11 +120,13 @@ const WORKFLOW: Workflow = {
   "requests": [
     {
       "method": "POST",
-      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=1708023&rt=c",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${state.reqid}&rt=c",
       "headers": {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         "X-Same-Domain": "1",
-        "Referer": "https://www.google.com/travel/flights",
+        "Referer": "https://www.google.com/travel/flights?q=${param.bootstrap_query}&curr=USD",
+        "Accept-Language": "en-US,en;q=0.9",
+        "X-Goog-BatchExecute-Bgr": "${state.bgr}",
         "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
       },
       "body": "f.req=${param.origin}|${param.destination}|${param.departure_date}|${param.return_date}|${param.trip_type}|${param.max_stops}|${param.airlines}|${param.max_price}|${param.outbound_times}|${param.return_times}|${param.max_duration}|${param.carry_on_bags}&",
@@ -133,30 +135,83 @@ const WORKFLOW: Workflow = {
   ],
   "site": "google-flights",
   "bootstrap": {
-    "url": "https://www.google.com/travel/flights",
+    "url": "https://www.google.com/travel/flights?q=${param.bootstrap_query}&curr=USD",
     "waitUntil": "domcontentloaded",
     "timeoutMs": 30000,
     "captures": [
       {
         "name": "f_sid",
-        "required": false,
+        "required": true,
         "capability": "browser_bootstrap",
-        "source": "html_regex",
-        "pattern": "\"FdrFJe\":\"([^\"]+)\"",
+        "source": "request_url_regex",
+        "pattern": "[?&]f\\.sid=([^&]+)",
+        "method": "POST",
+        "urlPattern": "FlightsFrontendService/GetShoppingResults",
+        "mode": "last",
         "group": 1
       },
       {
         "name": "bl",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "request_url_regex",
+        "pattern": "[?&]bl=([^&]+)",
+        "method": "POST",
+        "urlPattern": "FlightsFrontendService/GetShoppingResults",
+        "mode": "last",
+        "group": 1
+      },
+      {
+        "name": "bgr",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "request_header",
+        "header": "X-Goog-BatchExecute-Bgr",
+        "method": "POST",
+        "urlPattern": "FlightsFrontendService/GetShoppingResults",
+        "mode": "last"
+      },
+      {
+        "name": "reqid",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "request_url_regex",
+        "pattern": "[?&]_reqid=([^&]+)",
+        "method": "POST",
+        "urlPattern": "FlightsFrontendService/GetShoppingResults",
+        "mode": "last",
+        "group": 1
+      },
+      {
+        "name": "search_context_token",
         "required": false,
         "capability": "browser_bootstrap",
-        "source": "html_regex",
-        "pattern": "\"cfb2h\":\"([^\"]+)\"",
+        "source": "request_body_regex",
+        "pattern": "%5B%5Bnull%2Cnull%2Cnull%2C%5C%22(.+?)%5C%22%5D",
+        "method": "POST",
+        "urlPattern": "FlightsFrontendService/GetShoppingResults",
+        "mode": "last",
+        "group": 1
+      },
+      {
+        "name": "observed_search_body",
+        "required": false,
+        "capability": "browser_bootstrap",
+        "source": "request_body_regex",
+        "pattern": "^(f\\.req=.*)$",
+        "method": "POST",
+        "urlPattern": "FlightsFrontendService/GetShoppingResults",
+        "mode": "last",
         "group": 1
       }
     ]
   },
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
+  "execution": {
+    "minCallSpacingMs": 2000,
+    "skipPlaybookFallback": true
+  },
   "liveVerified": true
 };
 

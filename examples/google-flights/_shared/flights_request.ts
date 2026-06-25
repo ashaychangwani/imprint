@@ -8,9 +8,11 @@
 // with the date range living in the outer wrapper; Shopping/Booking use the full
 // 15-slot leg with DATE at [6]. Verified by decoding seq 97 vs seq 111.
 
-// Fresh searches emit wrapper `...,0,0,0,1]` and leg[14]=3 (proven seq 111/140).
-// In-page-refined searches use `...,0,1,0,1]` with return-leg[14]=1 (seq 194/425) —
-// a UI freshness flag, not a user param; we always emit the fresh form for shopping.
+// Fresh searches emit wrapper `...,0,0,0,1]` and use leg[14]=3 for normal
+// shopping legs. Return leg [14]=1 appears in booking / selected-leg flows, not
+// in the initial search request used by this tool.
+// In-page-refined searches use `...,0,1,0,1]` — a UI freshness flag, not a user
+// param; we always emit the fresh form for shopping.
 // Booking outbound legs use [14]=3, return legs [14]=1 (seq 764/811).
 
 function buildLeg(leg: any): any[] {
@@ -74,7 +76,11 @@ export function transform(
   let payload: any;
 
   if (rpc === 'GetShoppingResults') {
-    payload = [[], sp, 0, 0, 0, 1];
+    const searchContext =
+      typeof p.searchContextToken === 'string' && p.searchContextToken
+        ? [null, null, null, p.searchContextToken]
+        : [];
+    payload = [searchContext, sp, 0, 0, 0, 1];
   } else if (rpc === 'GetCalendarPicker') {
     const legs = sp[13];
     if (Array.isArray(legs)) sp[13] = legs.map((l: any) => (Array.isArray(l) ? l.slice(0, 4) : l));

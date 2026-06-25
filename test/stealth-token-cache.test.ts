@@ -26,13 +26,46 @@ describe('stealth-token-cache', () => {
   it('round-trips a fresh token', () => {
     const dir = scratchDir();
     try {
-      const token = tokenAt(5);
+      const token: TokenCache = {
+        ...tokenAt(5),
+        bootstrapHtml: '<html>fixture</html>',
+        bootstrapResponseHeaders: { 'x-bootstrap': 'yes' },
+        observedRequests: [
+          {
+            method: 'POST',
+            url: 'https://example.com/api/bootstrap',
+            headers: { 'X-Browser-Minted': 'token' },
+            response: {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+              body: '{"stale":true}',
+            },
+          },
+        ],
+        userAgent: 'RealChrome/148',
+        clientHints: { 'sec-ch-ua-platform': '"Linux"' },
+      };
       saveCachedToken(dir, token);
       const loaded = loadCachedToken(dir, 600);
       expect(loaded).not.toBeNull();
       expect(loaded?.cookies).toEqual(token.cookies);
       expect(loaded?.sensorHeaders).toEqual(token.sensorHeaders);
       expect(loaded?.bootstrappedAt).toBe(token.bootstrappedAt);
+      expect(loaded?.bootstrapHtml).toBe(token.bootstrapHtml);
+      expect(loaded?.bootstrapResponseHeaders).toEqual(token.bootstrapResponseHeaders);
+      expect(loaded?.observedRequests).toEqual([
+        {
+          method: 'POST',
+          url: 'https://example.com/api/bootstrap',
+          headers: { 'X-Browser-Minted': 'token' },
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        },
+      ]);
+      expect(loaded?.userAgent).toBe(token.userAgent);
+      expect(loaded?.clientHints).toEqual(token.clientHints);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

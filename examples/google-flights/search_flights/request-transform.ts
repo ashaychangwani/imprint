@@ -62,13 +62,56 @@ function num(v: unknown): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+function buildBootstrapQuery(params: Params): string {
+  const origin = params.origin != null ? String(params.origin) : '';
+  const destination = params.destination != null ? String(params.destination) : '';
+  const departureDate = params.departure_date != null ? String(params.departure_date) : '';
+  const tripType = String(params.trip_type ?? 'round_trip').toLowerCase();
+  if (tripType === 'one_way' || tripType === 'oneway' || tripType === '2') {
+    return `One way flights from ${origin} to ${destination} on ${departureDate}`;
+  }
+  if (params.return_date) {
+    return `Round trip flights from ${origin} to ${destination} departing ${departureDate} returning ${params.return_date}`;
+  }
+  return `Flights from ${origin} to ${destination} on ${departureDate}`;
+}
+
+export function prepareParams(params?: Params): Params {
+  const p: Params = params ?? {};
+  return {
+    ...p,
+    bootstrap_query: buildBootstrapQuery(p),
+  };
+}
+
+function hasNonDefaultFilters(params: Params): boolean {
+  if (params.max_stops != null && params.max_stops !== '' && Number(params.max_stops) !== 3) {
+    return true;
+  }
+  return Boolean(
+    params.airlines ||
+      num(params.max_price) ||
+      params.outbound_times ||
+      params.return_times ||
+      num(params.max_duration) ||
+      num(params.carry_on_bags),
+  );
+}
+
 export function transform(
   method: string,
   url: string,
   responses: Record<string, any>,
   params?: Params,
+  state?: Record<string, unknown>,
 ): { url: string; body: string } {
   const p: Params = params ?? {};
+  const observedSearchBody =
+    typeof state?.observed_search_body === 'string' ? state.observed_search_body : undefined;
+  if (observedSearchBody && !hasNonDefaultFilters(p)) {
+    return { url, body: observedSearchBody };
+  }
+
   const tripType = mapTripType(p.trip_type);
   const stops = p.max_stops != null && p.max_stops !== '' ? mapStops(p.max_stops) : 0;
   const { alliances, carriers } = parseAirlines(p.airlines);
@@ -113,6 +156,8 @@ export function transform(
     // CONFIG[10] wire form is [1, <carry-on count>]; shared builder emits
     // [carryOn, checked], so map count -> checked slot, constant 1 -> first.
     bags: carryOn != null ? { carryOn: 1, checked: carryOn } : undefined,
+    searchContextToken:
+      typeof state?.search_context_token === 'string' ? state.search_context_token : undefined,
   };
 
   return sharedTransform(method, url, responses, mapped);

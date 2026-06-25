@@ -25,7 +25,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join as pathJoin } from 'node:path';
-import { type MintedJar, jarCookiesValidated } from './cdp-browser-fetch.ts';
+import {
+  type MintedJar,
+  jarCookiesValidated,
+  jarHasAkamaiValidationSignals,
+} from './cdp-browser-fetch.ts';
 import { createLog } from './log.ts';
 
 const log = createLog('cdp-jar');
@@ -55,27 +59,32 @@ function jarPath(siteDir: string): string {
  *  The cached `ua` is reused for replay verbatim; a UA drift (Chrome auto-update
  *  mid-window) is rare and self-heals reactively on a replay 403, so we do NOT
  *  launch Chrome just to gate on UA here. */
-export function loadJar(siteDir: string): MintedJar | null {
+export function loadJar(siteDir: string, bootstrapUrl?: string): MintedJar | null {
   const p = jarPath(siteDir);
   if (!existsSync(p)) return null;
   try {
     const raw = JSON.parse(readFileSync(p, 'utf8')) as Partial<MintedJar>;
     if (!raw || !Array.isArray(raw.cookies) || typeof raw.bootstrapEpoch !== 'number') return null;
+    if (bootstrapUrl && raw.bootstrapUrl && raw.bootstrapUrl !== bootstrapUrl) {
+      log('cached jar bootstrap URL differs from current workflow page — re-mint');
+      return null;
+    }
     const ageSeconds = (Date.now() - raw.bootstrapEpoch) / 1000;
     const maxAge = jarMaxAgeSeconds();
     if (ageSeconds >= maxAge) {
       log(`cached jar in ${siteDir} is ${Math.round(ageSeconds)}s old (>= ${maxAge}s) — re-mint`);
       return null;
     }
-    // Validated = `_abck~0~` OR `bm_sv` present (the latter survives `_abck`
-    // rotating back to `~-1~`). Fall back to the abckFlag check for caches
-    // written before the `validated` field existed.
-    const validated = raw.validated ?? raw.abckFlag === '0';
-    if (!validated) {
+    // Akamai jars must be validated (`_abck~0~` OR `bm_sv`). Non-Akamai jars
+    // may still be valid generic bootstrap artifacts (HTML captures + ordinary
+    // cookies), so do not discard them just because they lack Akamai markers.
+    // Fall back to cookie inspection for caches written before `validated`.
+    const validated = raw.validated ?? jarCookiesValidated(raw.cookies);
+    if (!validated && jarHasAkamaiValidationSignals(raw.cookies)) {
       log(`cached jar not validated (_abck~${raw.abckFlag}~, no bm_sv) — re-mint`);
       return null;
     }
-    return raw as MintedJar;
+    return stripDurableObservedResponseBodies(raw as MintedJar);
   } catch {
     return null;
   }
@@ -87,11 +96,28 @@ export function saveJar(siteDir: string, jar: MintedJar): void {
     mkdirSync(siteDir, { recursive: true });
     const p = jarPath(siteDir);
     const tmp = `${p}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(jar)}\n`, 'utf8');
+    writeFileSync(tmp, `${JSON.stringify(stripDurableObservedResponseBodies(jar))}\n`, 'utf8');
     renameSync(tmp, p);
   } catch (err) {
     log(`failed to persist jar to ${siteDir}: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+function stripDurableObservedResponseBodies(jar: MintedJar): MintedJar {
+  if (!jar.observedRequests) return jar;
+  return {
+    ...jar,
+    observedRequests: jar.observedRequests.map((req) => {
+      if (!req.response || req.response.body === undefined) return req;
+      return {
+        ...req,
+        response: {
+          status: req.response.status,
+          headers: req.response.headers,
+        },
+      };
+    }),
+  };
 }
 
 /** Remove a cached jar (best-effort) — call on a replay 401/403/428/429 so the
@@ -203,6 +229,7 @@ export function seedJarFromRecording(
   }));
   const abck = cookies.find((c) => c.name === '_abck')?.value;
   const abckFlag = abck?.split('~')[1] ?? '?';
+  const hasAkamaiValidationSignals = jarHasAkamaiValidationSignals(cookies);
   // Validated = `_abck~0~` OR a `bm_sv` cookie (Akamai's validated-session
   // marker). `_abck` rotates back to `~-1~` after clearing a request, so a real
   // working recording often ends with `_abck~-1~` + `bm_sv` — that jar replays
@@ -241,19 +268,87 @@ export function seedJarFromRecording(
   // captured HTML. Without this (the old `html: ''`), any workflow whose
   // requests reference `${state.X}` from an html_regex capture STATE_MISSINGs.
   const html = pickBootstrapHtml(session.requests ?? [], bootstrapUrl);
+  const observedRequests = collectObservedRequests(session.requests ?? []);
   saveJar(siteDir, {
     cookies,
     ua,
     html,
+    observedRequests,
+    ...(bootstrapUrl ? { bootstrapUrl } : {}),
     bootstrapEpoch: Math.round(newestMtime),
     abckFlag,
     validated: true, // gated above on jarCookiesValidated
     source: 'recording',
   });
+  const validationLabel = hasAkamaiValidationSignals ? 'bm_sv-validated' : 'generic-bootstrap';
   log(
-    `seeded jar from recording ${newest} (${cookies.length} cookies, _abck~${abckFlag}~, bm_sv-validated, ua=${ua ? `${ua.slice(0, 40)}…` : '(none)'}, html=${html.length}b)`,
+    `seeded jar from recording ${newest} (${cookies.length} cookies, _abck~${abckFlag}~, ${validationLabel}, ua=${ua ? `${ua.slice(0, 40)}…` : '(none)'}, html=${html.length}b)`,
   );
   return true;
+}
+
+function collectObservedRequests(
+  requests: Array<{
+    requestHeaders?: unknown;
+    headers?: unknown;
+    body?: unknown;
+    url?: string;
+    method?: string;
+    resourceType?: string;
+    response?: {
+      status?: number;
+      headers?: Record<string, string>;
+      body?: string;
+    };
+  }>,
+): NonNullable<MintedJar['observedRequests']> {
+  const observed: NonNullable<MintedJar['observedRequests']> = [];
+  for (const r of requests) {
+    if (!r.url) continue;
+    const headers = normalizeHeaders(r.requestHeaders ?? r.headers);
+    observed.push({
+      method: (r.method ?? 'GET').toUpperCase(),
+      url: r.url,
+      headers,
+      source: 'browser',
+      ...(typeof r.body === 'string' ? { body: r.body } : {}),
+      ...(typeof r.resourceType === 'string' ? { resourceType: r.resourceType } : {}),
+      ...(typeof r.response?.status === 'number'
+        ? {
+            response: {
+              status: r.response.status,
+              headers: r.response.headers ?? {},
+            },
+          }
+        : {}),
+    });
+    if (observed.length > 100) observed.shift();
+  }
+  return observed;
+}
+
+function normalizeHeaders(raw: unknown): Record<string, string> {
+  if (Array.isArray(raw)) {
+    const entries = raw
+      .map((x) =>
+        x &&
+        typeof x === 'object' &&
+        'name' in x &&
+        'value' in x &&
+        typeof x.name === 'string' &&
+        typeof x.value === 'string'
+          ? [x.name, x.value]
+          : null,
+      )
+      .filter((x): x is [string, string] => x !== null);
+    return Object.fromEntries(entries);
+  }
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'string') out[k] = v;
+  }
+  return out;
 }
 
 /**

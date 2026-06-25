@@ -142,6 +142,9 @@ export function extract(
   let frames: Array<{ rpcid: string | null; payload: any }> = [];
   if (typeof rawResponse === 'string') {
     frames = decodeBatchExecute(rawResponse);
+    if (frames.length === 0) {
+      throw new Error('Google Flights GetBookingResults response did not contain a batchexecute payload');
+    }
   } else if (rawResponse != null) {
     frames = [{ rpcid: null, payload: rawResponse }];
   }
@@ -170,6 +173,11 @@ export function extract(
 
   const segments = [...segMap.values()];
   const fareOptions = [...fareMap.values()];
+  if (segments.length === 0 && fareOptions.length === 0) {
+    throw new Error(
+      'Google Flights GetBookingResults payload did not contain recognizable booking details',
+    );
+  }
   const prices = fareOptions.map((f) => f.priceUSD);
 
   return {
