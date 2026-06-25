@@ -340,12 +340,35 @@ function workflowHash(workflow: ResolvedTool['workflow']): string {
 
 function capabilityHash(workflow: ResolvedTool['workflow']): string {
   const caps = {
-    bootstrap: Boolean(workflow.bootstrap),
-    captures: workflow.requests.flatMap((r) =>
-      (r.captures ?? []).map((c) => `${c.source}:${c.name}:${c.capability}`),
-    ),
+    requestTransformModule: workflow.requestTransformModule ?? null,
+    bootstrap: workflow.bootstrap
+      ? {
+          url: workflow.bootstrap.url,
+          captures: workflow.bootstrap.captures ?? [],
+        }
+      : null,
+    requests: workflow.requests.map((r) => ({
+      method: r.method.toUpperCase(),
+      effect: r.effect ?? null,
+      stateRefs: stateRefsInWorkflowRequest(r),
+      captures: r.captures ?? [],
+    })),
   };
   return createHash('sha256').update(JSON.stringify(caps)).digest('hex');
+}
+
+function stateRefsInWorkflowRequest(
+  request: ResolvedTool['workflow']['requests'][number],
+): string[] {
+  const refs = new Set<string>();
+  const scan = (text: string | undefined): void => {
+    if (!text) return;
+    for (const match of text.matchAll(/\$\{state\.([A-Za-z0-9_]+)\}/g)) refs.add(match[1] ?? '');
+  };
+  scan(request.url);
+  scan(request.body);
+  for (const value of Object.values(request.headers ?? {})) scan(value);
+  return [...refs].filter(Boolean).sort();
 }
 
 /** Read backends.json with status information. Runtime can still fall back to

@@ -169,8 +169,8 @@ When an API call gets blocked, Imprint doesn't jump to DOM replay. It escalates 
     │               + API
     ▼
   cdp-replay       ~2-35s    API calls run inside a live, trusted Chrome —
-    │                        a protected POST refreshes its anti-bot token
-    │                        between calls (multi-step state-changing flows)
+    │                        reuses browser-observed request state and refreshes
+    │                        anti-bot tokens between protected POSTs
     ▼
   stealth-fetch    ~1-12s    Defeats Akamai, Cloudflare, DataDome
     │
@@ -178,7 +178,7 @@ When an API call gets blocked, Imprint doesn't jump to DOM replay. It escalates 
   playbook         ~9s       Full DOM replay — universal fallback
 ```
 
-The full order is `fetch → fetch-bootstrap → cdp-replay → stealth-fetch → playbook`; `auto` mode walks it and stops at the first backend that works.
+The full order is `fetch → fetch-bootstrap → cdp-replay → stealth-fetch → playbook`; `auto` mode walks it and stops at the first backend that works. Workflows that declare browser-observed request captures can start at `cdp-replay`, so MCP sessions reuse the same Chrome instead of paying a cold bootstrap on each route/date.
 
 For bot-protected sites, `imprint probe-backends <site> --tool <toolName>` writes a `backends.json` preference cache so cron and MCP start from the known-good backend instead of rediscovering blocked rungs. Use `imprint probe-backends <site> --all` to refresh every tool in a multi-tool site; `imprint mcp status` reports stale or invalid backend caches before they quietly fall back to the default ladder. Execution-only workflow changes keep the cached backend order when the backend capability hash still matches. CDP replay records both cold and warm timings when it succeeds: a timeout-safe cold start may rank by its fast warm runtime, but a cold start above the preferred threshold stays behind cold-safe backends in durable cache order.
 

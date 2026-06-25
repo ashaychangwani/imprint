@@ -11,10 +11,12 @@ import {
 function withTempHome<T>(fn: (home: string) => T): T {
   const home = mkdtempSync(pathJoin(tmpdir(), 'imprint-chromium-home-'));
   const oldHome = process.env.HOME;
+  const oldHermesHome = process.env.HERMES_HOME;
   const oldChromiumPath = process.env.CHROMIUM_PATH;
   const oldPlaywrightBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
   process.env.HOME = home;
   process.env.PLAYWRIGHT_BROWSERS_PATH = pathJoin(home, '.cache', 'ms-playwright');
+  Reflect.deleteProperty(process.env, 'HERMES_HOME');
   Reflect.deleteProperty(process.env, 'CHROMIUM_PATH');
   try {
     return fn(home);
@@ -22,6 +24,8 @@ function withTempHome<T>(fn: (home: string) => T): T {
     rmSync(home, { recursive: true, force: true });
     if (oldHome === undefined) Reflect.deleteProperty(process.env, 'HOME');
     else process.env.HOME = oldHome;
+    if (oldHermesHome === undefined) Reflect.deleteProperty(process.env, 'HERMES_HOME');
+    else process.env.HERMES_HOME = oldHermesHome;
     if (oldChromiumPath === undefined) Reflect.deleteProperty(process.env, 'CHROMIUM_PATH');
     else process.env.CHROMIUM_PATH = oldChromiumPath;
     if (oldPlaywrightBrowsersPath === undefined) {

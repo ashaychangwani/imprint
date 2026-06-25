@@ -186,7 +186,7 @@ function buildServer(
     {
       capabilities: { tools: {} },
       instructions:
-        'Imprint runs deterministic workflows captured from real browser sessions. Tools prefer fetch API replay, may use gated fetch-bootstrap only for declared browser-minted state, then cdp-replay (API requests run inside a live trusted Chrome so a protected POST refreshes its anti-bot token between calls) for multi-step state-changing flows, then stealth-fetch for bot-defense state, and playbook only for full DOM interaction. Error codes: AUTH_EXPIRED (401, run `imprint login <site>`); STATE_MISSING (required cookie/state was unavailable or ambiguous); FORBIDDEN (403); RATE_LIMITED (429, back off); BAD_RESPONSE (other 4xx/5xx); NETWORK (fetch failed); UNKNOWN (everything else).',
+        'Imprint runs deterministic workflows captured from real browser sessions. Tools prefer fetch API replay, front-load cdp-replay when a workflow needs reusable live-browser request state, may use gated fetch-bootstrap for one-shot browser-minted state, then stealth-fetch for bot-defense state, and playbook only for full DOM interaction. Error codes: AUTH_EXPIRED (401, run `imprint login <site>`); STATE_MISSING (required cookie/state was unavailable or ambiguous); FORBIDDEN (403); RATE_LIMITED (429, back off); BAD_RESPONSE (other 4xx/5xx); NETWORK (fetch failed); UNKNOWN (everything else).',
     },
   );
 
@@ -286,8 +286,10 @@ function buildServer(
               skipBootstrapSplice: shouldSkipBootstrapSplice(tool.preferredOrder),
             },
           );
-          // Reset the idle timer for this site's pooled Chrome.
-          if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
+          // Reset the idle timer for this site's pooled Chrome. The pool may be
+          // retained even when a CDP-backed workflow response failed; that keeps
+          // later calls warm, but still needs an idle reap.
+          if (cdpPool.has(tool.site)) {
             const prev = cdpIdleTimers.get(tool.site);
             if (prev) clearTimeout(prev);
             const timer = setTimeout(() => {

@@ -28,6 +28,7 @@
  * trusted browser session.
  */
 
+import { Buffer } from 'node:buffer';
 import CDP from 'chrome-remote-interface';
 import { launchChromium, proxyUrl } from './chromium.ts';
 import { createLog } from './log.ts';
@@ -52,6 +53,23 @@ export interface MintedJar {
   /** The bootstrap page HTML, so callers can satisfy html_regex captures
    *  (e.g. csrf / csp-nonce scraped from the page) without the browser. */
   html: string;
+  /** Browser-generated requests observed while the bootstrap page loaded. Lets
+   *  workflows capture replay headers minted by page JavaScript for later XHRs. */
+  observedRequests?: Array<{
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body?: string;
+    resourceType?: string;
+    source?: 'browser' | 'replay';
+    response?: {
+      status: number;
+      headers: Record<string, string>;
+      body?: string;
+    };
+  }>;
+  /** Exact page URL used to create the page-specific HTML / observed requests. */
+  bootstrapUrl?: string;
   /** Date.now() at mint — the jar's validity is bounded (~2h fixed for Akamai). */
   bootstrapEpoch: number;
   /** The final `_abck` status field at capture (`0` = validated, `-1` = pending).
@@ -98,6 +116,11 @@ export function jarCookiesValidated(cookies: Array<{ name: string; value: string
 }
 
 export interface CdpBrowserFetch {
+  /** Actual page URL used to bootstrap this browser session. */
+  readonly bootstrapUrl: string;
+  /** Reuse the same Chrome process for a new bootstrap page. The next
+   *  ensure/mint call navigates there and refreshes page-observed request state. */
+  setBootstrapUrl(bootstrapUrl: string): void;
   /** typeof fetch — executes the request inside the live trusted Chrome page. */
   readonly fetchImpl: typeof fetch;
   /** Force the bootstrap navigation + `_abck` validation now; returns the
@@ -228,7 +251,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   // and never establishes the sensor session). Fall back to the origin root,
   // which loads a real page and runs the Akamai sensor JS.
   const baseLooksLikeApi = /\.act(\?|$)|\/api\//i.test(opts.baseUrl);
-  const navUrl = opts.bootstrapUrl ?? (baseLooksLikeApi ? `${baseOrigin}/` : opts.baseUrl);
+  let navUrl = opts.bootstrapUrl ?? (baseLooksLikeApi ? `${baseOrigin}/` : opts.baseUrl);
   const abckWaitMs = (opts.abckWaitSeconds ?? 25) * 1000;
   const reqTimeoutMs = opts.requestTimeoutMs ?? 60_000;
   const cdpCommandTimeoutMs = opts.cdpCommandTimeoutMs ?? 20_000;
@@ -238,6 +261,18 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   let client: CdpClient | null = null;
   let bootstrapped = false;
   let appliedUa: string | undefined;
+  let forceDocumentReset = false;
+  const observedRequests: NonNullable<MintedJar['observedRequests']> = [];
+  const observedByRequestId = new Map<string, NonNullable<MintedJar['observedRequests']>[number]>();
+  const pendingResponseCaptures = new Set<Promise<void>>();
+  let networkObserversAttached = false;
+  const replayRequestKeys = new Set<string>();
+
+  function resetObservedRequests(): void {
+    observedRequests.length = 0;
+    observedByRequestId.clear();
+    pendingResponseCaptures.clear();
+  }
 
   async function close(): Promise<void> {
     const c = client;
@@ -288,6 +323,65 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       await withTimeout(Runtime.enable(), 'CDP Runtime.enable', cdpCommandTimeoutMs);
       await withTimeout(Network.enable(), 'CDP Network.enable', cdpCommandTimeoutMs);
       await withTimeout(Page.enable(), 'CDP Page.enable', cdpCommandTimeoutMs);
+      if (!networkObserversAttached) {
+        networkObserversAttached = true;
+        Network.requestWillBeSent((params) => {
+          const req = params.request;
+          const headers: Record<string, string> = {};
+          for (const [k, v] of Object.entries(req.headers ?? {})) {
+            if (typeof v === 'string') headers[k] = v;
+          }
+          const postData = (req as { postData?: unknown }).postData;
+          const entry: NonNullable<MintedJar['observedRequests']>[number] = {
+            method: req.method,
+            url: req.url,
+            headers,
+            source: replayRequestKeys.delete(observedRequestKey(req.method, req.url, postData))
+              ? 'replay'
+              : 'browser',
+            ...(typeof postData === 'string' ? { body: postData } : {}),
+            ...(typeof params.type === 'string' ? { resourceType: params.type } : {}),
+          };
+          observedRequests.push(entry);
+          observedByRequestId.set(params.requestId, entry);
+          if (observedRequests.length > 100) observedRequests.shift();
+        });
+        Network.responseReceived((params) => {
+          const entry = observedByRequestId.get(params.requestId);
+          if (!entry) return;
+          const headers: Record<string, string> = {};
+          for (const [k, v] of Object.entries(params.response.headers ?? {})) {
+            if (typeof v === 'string') headers[k] = v;
+          }
+          entry.response = {
+            status: params.response.status,
+            headers,
+          };
+        });
+        Network.loadingFinished((params) => {
+          const entry = observedByRequestId.get(params.requestId);
+          if (!entry || !shouldCaptureObservedBody(entry)) return;
+          const pending = (async () => {
+            try {
+              const bodyResult = await withTimeout(
+                Network.getResponseBody({ requestId: params.requestId }),
+                'CDP Network.getResponseBody',
+                shortCdpTimeoutMs,
+              );
+              if (!entry.response) {
+                entry.response = { status: 200, headers: {} };
+              }
+              entry.response.body = bodyResult.base64Encoded
+                ? Buffer.from(bodyResult.body, 'base64').toString('utf8')
+                : bodyResult.body;
+            } catch {
+              // best-effort — response reuse simply won't match without a body
+            }
+          })();
+          pendingResponseCaptures.add(pending);
+          void pending.finally(() => pendingResponseCaptures.delete(pending));
+        });
+      }
       // Plant the high-trust seed cookies (the recording's validated Akamai jar)
       // BEFORE navigating, so the first request to the protected origin carries the
       // trusted session. A synthetic mint can reach `_abck~0~` yet still get its
@@ -349,6 +443,20 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       // loads normally. Bound the CDP command and proceed regardless — _abck
       // polling below tolerates a partial load.
       try {
+        if (forceDocumentReset) {
+          forceDocumentReset = false;
+          await withTimeout(
+            Page.navigate({ url: 'about:blank' }),
+            'CDP Page.navigate(about:blank)',
+            Math.max(1, Math.min(abckWaitMs, 5_000)),
+          );
+          await withTimeout(
+            Page.loadEventFired(),
+            'CDP Page.loadEventFired(about:blank)',
+            Math.max(1, Math.min(abckWaitMs, 2_000)),
+          ).catch(() => {});
+          await sleep(250);
+        }
         await withTimeout(
           Page.navigate({ url: navUrl }),
           'CDP Page.navigate',
@@ -377,6 +485,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       const start = Date.now();
       let i = 0;
       let status = '?';
+      let absentAbckChecks = 0;
       let pos = { x: rand(120, 1100), y: rand(120, 600) };
       while (Date.now() - start < abckWaitMs) {
         try {
@@ -439,7 +548,16 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         }
         await sleep(rand(180, 520)); // non-uniform dwell between interaction bursts
         const abck = await getCookie(client, '_abck');
-        status = abck?.split('~')[1] ?? '?';
+        if (abck === undefined) {
+          absentAbckChecks++;
+          if (absentAbckChecks >= 2) {
+            status = 'absent';
+            break;
+          }
+        } else {
+          absentAbckChecks = 0;
+          status = abck.split('~')[1] ?? '?';
+        }
         if (abckIsValidated(abck)) break;
         i++;
       }
@@ -533,6 +651,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
     // Execute the fetch INSIDE the trusted page. credentials:'include' so the
     // browser attaches the validated session cookies.
+    replayRequestKeys.add(observedRequestKey(method, fullUrl, body));
     const expr = `(async () => {
       try {
         const ctrl = new AbortController();
@@ -576,6 +695,17 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   }) as typeof fetch;
 
   return {
+    get bootstrapUrl() {
+      return navUrl;
+    },
+    setBootstrapUrl(nextBootstrapUrl: string): void {
+      if (nextBootstrapUrl === navUrl) return;
+      log(`retargeting pooled Chrome bootstrap (${navUrl} → ${nextBootstrapUrl})`);
+      navUrl = nextBootstrapUrl;
+      bootstrapped = false;
+      forceDocumentReset = true;
+      resetObservedRequests();
+    },
     fetchImpl,
     async ensureBootstrapped() {
       const c = await ensure();
@@ -595,6 +725,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     },
     async mintJar(): Promise<MintedJar> {
       const c = await ensure();
+      await settlePendingResponseCaptures(pendingResponseCaptures, shortCdpTimeoutMs);
       const cookies: MintedJar['cookies'] = [];
       try {
         const res = await withTimeout(
@@ -637,6 +768,8 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         cookies,
         ua: appliedUa ?? '',
         html,
+        observedRequests: observedRequests.slice(),
+        bootstrapUrl: navUrl,
         bootstrapEpoch: Date.now(),
         abckFlag: abck?.split('~')[1] ?? '?',
         validated: jarCookiesValidated(cookies),
@@ -649,6 +782,29 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function shouldCaptureObservedBody(
+  entry: NonNullable<MintedJar['observedRequests']>[number],
+): boolean {
+  const type = entry.resourceType?.toLowerCase();
+  if (type && type !== 'xhr' && type !== 'fetch') return false;
+  return true;
+}
+
+function observedRequestKey(method: string, url: string, body: unknown): string {
+  return `${method.toUpperCase()} ${url} ${typeof body === 'string' ? body : ''}`;
+}
+
+async function settlePendingResponseCaptures(
+  pending: Set<Promise<void>>,
+  timeoutMs: number,
+): Promise<void> {
+  if (pending.size === 0) return;
+  await Promise.race([
+    Promise.allSettled([...pending]),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
 }
 
 async function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs: number): Promise<T> {

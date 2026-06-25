@@ -64,7 +64,7 @@ describe('Google Flights example parsers', () => {
 });
 
 describe('Google Flights request transforms', () => {
-  it('marks a round-trip return shopping leg with the current browser classifier', () => {
+  it('uses the fresh-shopping classifier for both explicit round-trip legs', () => {
     const { body } = transformSearch(
       'POST',
       'https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults',
@@ -86,6 +86,73 @@ describe('Google Flights request transforms', () => {
     const legs = filters[13] as unknown[][];
 
     expect(legs[0]?.[14]).toBe(3);
-    expect(legs[1]?.[14]).toBe(1);
+    expect(legs[1]?.[14]).toBe(3);
+  });
+
+  it('threads the browser-minted search context token into shopping requests', () => {
+    const { body } = transformSearch(
+      'POST',
+      'https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults',
+      {},
+      {
+        origin: 'SFO',
+        destination: 'JFK',
+        departure_date: '2026-10-23',
+        return_date: '',
+        trip_type: 'one_way',
+        max_stops: 3,
+      },
+      { search_context_token: 'browser-minted-search-token' },
+    );
+
+    const encoded = body.replace(/^f\.req=/, '').replace(/&$/, '');
+    const outer = JSON.parse(decodeURIComponent(encoded)) as [null, string];
+    const payload = JSON.parse(outer[1]) as unknown[];
+
+    expect(payload[0]).toEqual([null, null, null, 'browser-minted-search-token']);
+  });
+
+  it('uses the browser-observed shopping body for unfiltered searches', () => {
+    const observedBody = 'f.req=%5Bnull%2C%22native-browser-body%22%5D&';
+    const { body } = transformSearch(
+      'POST',
+      'https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults',
+      {},
+      {
+        origin: 'SFO',
+        destination: 'LGA',
+        departure_date: '2026-10-23',
+        return_date: '',
+        trip_type: 'one_way',
+        max_stops: 3,
+      },
+      { observed_search_body: observedBody, search_context_token: 'browser-minted-search-token' },
+    );
+
+    expect(body).toBe(observedBody);
+  });
+
+  it('falls back to generated shopping bodies when filters need to be applied', () => {
+    const observedBody = 'f.req=%5Bnull%2C%22native-browser-body%22%5D&';
+    const { body } = transformSearch(
+      'POST',
+      'https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults',
+      {},
+      {
+        origin: 'SFO',
+        destination: 'LGA',
+        departure_date: '2026-10-23',
+        return_date: '',
+        trip_type: 'one_way',
+        max_stops: 0,
+      },
+      { observed_search_body: observedBody, search_context_token: 'browser-minted-search-token' },
+    );
+
+    expect(body).not.toBe(observedBody);
+    const encoded = body.replace(/^f\.req=/, '').replace(/&$/, '');
+    const outer = JSON.parse(decodeURIComponent(encoded)) as [null, string];
+    const payload = JSON.parse(outer[1]) as unknown[];
+    expect(payload[0]).toEqual([null, null, null, 'browser-minted-search-token']);
   });
 });

@@ -275,6 +275,51 @@ describe('seedJarFromRecording', () => {
     );
   });
 
+  it('seeds observed browser request headers from the recording', () => {
+    writeSession('2026-06-02T00-00-00-000Z.json', {
+      cookieSnapshots: [
+        {
+          label: 'end',
+          cookies: [{ name: 'NID', value: 'n', domain: '.google.com', path: '/' }],
+        },
+      ],
+      requests: [
+        { requestHeaders: { 'User-Agent': 'RealChrome/148' } },
+        {
+          url: 'https://www.google.com/_/FlightsFrontendUi/data/GetShoppingResults',
+          method: 'POST',
+          body: 'f.req=abc&',
+          requestHeaders: {
+            'X-Goog-BatchExecute-Bgr': 'browser-minted-bgr',
+            'User-Agent': 'RealChrome/148',
+          },
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            body: ")]}'\n\n123\n[]",
+          },
+        },
+      ],
+    });
+    expect(seedJarFromRecording(siteDir, undefined, 'https://www.google.com/travel/flights')).toBe(
+      true,
+    );
+    const j = loadJar(siteDir, 'https://www.google.com/travel/flights');
+    expect(j?.bootstrapUrl).toBe('https://www.google.com/travel/flights');
+    expect(j?.observedRequests?.[0]).toMatchObject({
+      method: 'POST',
+      url: 'https://www.google.com/_/FlightsFrontendUi/data/GetShoppingResults',
+      body: 'f.req=abc&',
+      headers: {
+        'X-Goog-BatchExecute-Bgr': 'browser-minted-bgr',
+      },
+      response: {
+        status: 200,
+      },
+    });
+    expect(loadJar(siteDir, 'https://www.google.com/travel/flights?different=1')).toBeNull();
+  });
+
   it('prefers the recorded response for the exact bootstrapUrl over the largest body', () => {
     const bootstrapBody = '<html>bootstrap nonce="11111111111111111111111111111111"</html>';
     const biggerOtherBody = `<html>${'x'.repeat(5000)} other</html>`;
