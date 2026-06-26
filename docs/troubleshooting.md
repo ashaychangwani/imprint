@@ -169,6 +169,20 @@ Some sites' logins can't be replayed as API requests — the credential POST bod
 - **Orphan Chrome?** Playbook browsers close at the end of each run. If a run was killed mid-flight, check `pgrep -fl "Chrome.*--headless"` and kill leftovers.
 - If a site moves its login form, re-teach so the agent re-records the steps.
 
+## "Auth tool was planned but no credentials are available — skipping auth compile"
+
+Before compiling the auth tool, teach needs the login credentials. It uses, in order: credentials extracted from the recording, then the credential store, then — when interactive — it **prompts you** for exactly the credentials the detection LLM identified for this login (`authTool.credentialNames`), pre-filling the username it saw in the recording. This warning means all of those came up empty.
+
+The usual cause is a **hosted/redirect login (Auth0, Okta, …)**: the password is submitted as a full-page navigation (no XHR body to extract) and Imprint masks password fields at capture time, so the recording legitimately has no password to recover — only the username. Run interactively and enter the password at the prompt, or set it up front and resume:
+
+```
+imprint credential set <site> username
+imprint credential set <site> password
+imprint teach <site> --from-step generate
+```
+
+The live one-time **2FA code is never prompted for here** — it's deliberately excluded from `credentialNames` and entered during verification (see the playbook-rung section above). Already-stored credentials are reused automatically on later runs.
+
 ## "RATE_LIMITED" / 429
 
 Back off. The cron schedule is probably too aggressive — every 5 minutes is fine for most sites; every 30 seconds is not.

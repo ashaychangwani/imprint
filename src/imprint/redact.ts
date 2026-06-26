@@ -15,7 +15,7 @@
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import type { Replacement } from './credential-extract.ts';
 import { hasFreeformRedactionHint, redactFreeformText } from './freeform-redact.ts';
-import { isSensitiveHeader, isSensitiveKey } from './sensitive-keys.ts';
+import { isAlwaysSecretHeader, isSensitiveHeader, isSensitiveKey } from './sensitive-keys.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
 const USER_INTERACTION_TYPES = new Set(['click', 'input', 'change', 'submit']);
@@ -71,14 +71,30 @@ export function detectPageMintedHeaders(session: Session): string[] {
     }
   }
 
+  // A header value counts as "produced" (a persisted/minted token, NOT a baked-in
+  // app constant) when its value — or, for an auth-scheme header, the bare token
+  // after the `Bearer `/`Basic ` prefix — was set by a prior Set-Cookie or appears
+  // in a storage snapshot. The scheme-strip closes the gap where a per-user JWT
+  // lives in localStorage as the bare token but is sent as `Authorization: Bearer
+  // <token>`: without it, an already-authenticated (`--persist-profile`) recording
+  // would mis-classify that per-user token as a page constant.
+  const isProduced = (value: string): boolean => {
+    if (producedValues.has(value)) return true;
+    const sp = value.indexOf(' ');
+    return sp > 0 && producedValues.has(value.slice(sp + 1));
+  };
+
   const pageMinted = new Set<string>();
   for (const req of session.requests) {
     if (req.timestamp >= cutoff) break;
     for (const [name, value] of Object.entries(req.headers)) {
       const lower = name.toLowerCase();
       if (!isSensitiveHeader(name)) continue;
+      // An inherently per-session auth header (Authorization / session token) is
+      // never a public page constant — never exempt it, even pre-interaction.
+      if (isAlwaysSecretHeader(name)) continue;
       if (MULTI_VALUE_HEADERS.has(lower)) continue;
-      if (producedValues.has(value)) continue;
+      if (isProduced(value)) continue;
       pageMinted.add(lower);
     }
   }
@@ -386,6 +402,18 @@ interface RedactOptions {
   replacements?: Replacement[];
   /** Internal escape hatch for benchmarks/tests that compare structured-only redaction. */
   freeform?: boolean;
+  /**
+   * Gate the blanket sensitive-header redaction (Authorization / Cookie /
+   * Set-Cookie / X-API-Key / X-CSRF / …). Default **false**: the compile agent
+   * must SEE auth / session / gateway header values to reason about them and
+   * wire each as a contracted input — it cannot reason about a value it cannot
+   * read, and blinding it is the root cause of dropped auth/session inputs.
+   * Credential placeholdering (`replacements`) and free-form PII redaction still
+   * run regardless. Set true (or `IMPRINT_REDACT_SENSITIVE_HEADERS=1`) to restore
+   * the old blind-the-agent behavior. The emit-time secret guard
+   * (`assertNoRawSecrets`) backstops this by blocking raw secrets from artifacts.
+   */
+  redactSensitiveHeaders?: boolean;
 }
 
 /** Produce a scrubbed copy of a session safe to send to an LLM. */
@@ -403,7 +431,18 @@ export function redactSession(
   };
   const keepHeaders = new Set((opts.keepHeaders ?? []).map((h) => h.toLowerCase()));
   const useFreeform = opts.freeform ?? true;
+  // Default OFF: keep auth/session/gateway header values visible to the compile
+  // agent (see RedactOptions.redactSensitiveHeaders). Explicit opt wins; else the
+  // env gate re-enables the legacy blanket redaction; else off.
+  const redactSensitiveHeaders =
+    opts.redactSensitiveHeaders ?? process.env.IMPRINT_REDACT_SENSITIVE_HEADERS === '1';
   const markerContext = createMarkerContext();
+  const passthroughHeaders = (
+    headers: Record<string, string>,
+  ): { redacted: Record<string, string>; redactionsCount: number } => ({
+    redacted: headers,
+    redactionsCount: 0,
+  });
 
   // Group replacements by request seq.
   const replacementsBySeq = new Map<number, Replacement[]>();
@@ -420,7 +459,9 @@ export function redactSession(
     touched += urlR.redactionsCount;
     stats.freeformRedactions += urlR.freeformRedactions;
 
-    const headersR = redactHeaders(req.headers, keepHeaders, markerContext);
+    const headersR = redactSensitiveHeaders
+      ? redactHeaders(req.headers, keepHeaders, markerContext)
+      : passthroughHeaders(req.headers);
     touched += headersR.redactionsCount;
 
     let body = req.body;
@@ -452,7 +493,9 @@ export function redactSession(
 
     let response = req.response;
     if (response) {
-      const respHeadersR = redactHeaders(response.headers, keepHeaders, markerContext);
+      const respHeadersR = redactSensitiveHeaders
+        ? redactHeaders(response.headers, keepHeaders, markerContext)
+        : passthroughHeaders(response.headers);
       touched += respHeadersR.redactionsCount;
       let respBody = response.body;
       if (respBody) {

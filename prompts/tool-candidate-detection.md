@@ -62,7 +62,11 @@ Rules:
    session confirmation) in `authCompletionSeqs`. These seqs must NOT appear
    in any candidate's `requestSeqs` — they belong to the auth flow, not data
    tools. When no 2FA is detected, set `twoFactorDetected: false` and leave
-   the other fields at defaults.
+   the other fields at defaults. `credentialNames` lists ONLY the durable login
+   secrets the user provisions once — the `${credential.*}` fields submitted in
+   the login request(s), typically `username` + `password`. NEVER put the live
+   one-time 2FA code in `credentialNames`: it is captured by
+   `twoFactorType`/`twoFactorContext` and entered fresh at runtime, not stored.
 4. When multiple requests contain `${credential.*}` placeholders (multiple
    login attempts in the recording), check each request's `status` and
    `responsePreview` to determine which attempt(s) actually succeeded. A

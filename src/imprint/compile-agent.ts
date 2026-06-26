@@ -108,11 +108,8 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
   // Resolve the shared modules + token contracts the plan assigned this tool, so
   // the in-process verifier can assert modules are imported and require a chained
   // test for each producer-sourced token param.
-  const { assignedSharedModules, tokenParams, emittedTokens } = resolvePlanSliceFromFile(
-    opts.buildPlanPath,
-    opts.candidate?.toolName,
-    opts.sharedModules,
-  );
+  const { assignedSharedModules, tokenParams, emittedTokens, requiredInputs } =
+    resolvePlanSliceFromFile(opts.buildPlanPath, opts.candidate?.toolName, opts.sharedModules);
 
   // 1. Load + validate the session
   let session: Session = loadJsonFile(
@@ -354,6 +351,8 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         assignedSharedModules,
         tokenParams,
         emittedTokens,
+        requiredInputs,
+        credentialValues: opts.teachCredentials?.values,
       },
     );
 

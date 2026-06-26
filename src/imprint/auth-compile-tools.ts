@@ -87,8 +87,17 @@ export function buildAuthCompileTools(
 /** Lightweight structural checks after the agent calls done(). The agent has
  *  already proven the workflow works live (AWAITING_2FA / ok:true from
  *  run_verification); this just guards the artifact's shape. Returns a list
- *  of failure strings (empty = passed). */
-export function authExternalVerification(toolDir: string): string[] {
+ *  of failure strings (empty = passed).
+ *
+ *  `requiredSessionCaptures` carries the build plan's authTool captures: every
+ *  durable token a downstream DATA tool consumes via `${credential.<name>}`
+ *  (`usedAs` names the header it injects). For each one, the auth workflow MUST
+ *  declare a matching `authConfig.sessionCapture` so the login persists it —
+ *  otherwise the data tool's contracted auth header can never resolve at runtime. */
+export function authExternalVerification(
+  toolDir: string,
+  requiredSessionCaptures: Array<{ name: string; usedAs?: string }> = [],
+): string[] {
   const failures: string[] = [];
   const workflowPath = pathJoin(toolDir, 'workflow.json');
 
@@ -167,6 +176,31 @@ export function authExternalVerification(toolDir: string): string[] {
       const refs = [...uncovered].map((n) => `\${state.${n}}`).join(', ');
       failures.push(
         `submit_otp requests reference ${refs} but those are neither listed in authConfig.twoFactorContext nor captured on an initiate-phase request — they will be undefined on the stateless submit_otp call`,
+      );
+    }
+  }
+
+  // Downstream auth contract: every durable token a DATA tool consumes via
+  // ${credential.<name>} (a build-plan authTool capture whose usedAs is a header)
+  // must be persisted by a matching authConfig.sessionCapture, or the data tool's
+  // contracted auth header can never resolve at runtime. Cookies persist
+  // automatically, so only the NON-cookie header contracts are checked here.
+  const headerContracts = requiredSessionCaptures.filter((c) => {
+    const u = (c.usedAs ?? '').toLowerCase();
+    // Cookies persist automatically via the jar — only NON-cookie header tokens
+    // need a sessionCapture.
+    return u.startsWith('header:') && u !== 'header:cookie' && u !== 'header:set-cookie';
+  });
+  if (headerContracts.length > 0) {
+    const persisted = new Set((authConfig?.sessionCapture ?? []).map((c) => c.name));
+    const missing = headerContracts.filter((c) => !persisted.has(c.name));
+    if (missing.length > 0) {
+      failures.push(
+        `the build plan's data tools consume ${missing
+          .map((c) => `\`\${credential.${c.name}}\` (used as ${c.usedAs})`)
+          .join(', ')} but workflow.authConfig.sessionCapture does not persist ${
+          missing.length === 1 ? 'it' : 'them'
+        }. Add a sessionCapture for each so a SUCCESSFUL login stores the token as a durable credential the data tools can reuse — grounded in the login completion response (a body field or a response header), never invented.`,
       );
     }
   }

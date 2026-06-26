@@ -716,7 +716,13 @@ async function main(argv: string[]): Promise<number> {
         return 2;
       }
       const keepHeaders = values['keep-header'] ?? [];
-      const { session: scrubbed, stats } = redactSession(session, { keepHeaders });
+      // `imprint redact` produces a file to SHARE (bug reports, fixtures), so it
+      // applies the strongest scrub including sensitive headers — unlike the
+      // compile path, which keeps headers visible to the agent by default.
+      const { session: scrubbed, stats } = redactSession(session, {
+        keepHeaders,
+        redactSensitiveHeaders: true,
+      });
       const outPath = sessionPath.replace(/\.json$/, '.redacted.json');
       writeFileSync(outPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
       console.log(`[imprint] redacted → ${outPath}`);

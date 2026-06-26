@@ -249,6 +249,18 @@ const SENSITIVE_HEADERS = [
 
 const SENSITIVE_HEADER_SET = new Set(SENSITIVE_HEADERS.map((h) => h.toLowerCase()));
 
+/** Sensitive headers that are INHERENTLY per-session/per-user auth — they carry a
+ *  credential, never public app config. Unlike `x-api-key` / `x-csrf-token` (which a
+ *  site can legitimately bake into its JS as a constant), an `Authorization` /
+ *  session-token header is never a "page-minted constant", so it must never be
+ *  exempted from the emit-time secret guard. Used by `detectPageMintedHeaders`. */
+const ALWAYS_SECRET_HEADER_SET = new Set([
+  'authorization',
+  'proxy-authorization',
+  'x-auth-token',
+  'x-session-token',
+]);
+
 export const normalizeKey = _normalize;
 
 /** True if the key name suggests a sensitive value (auth, payment, PII). */
@@ -287,4 +299,10 @@ export function passwordLikeTokens(): readonly string[] {
 
 export function isSensitiveHeader(header: string): boolean {
   return SENSITIVE_HEADER_SET.has(header.toLowerCase());
+}
+
+/** True for a header that inherently carries a per-session/per-user credential
+ *  (Authorization / session token) — never a public page constant. */
+export function isAlwaysSecretHeader(header: string): boolean {
+  return ALWAYS_SECRET_HEADER_SET.has(header.toLowerCase());
 }

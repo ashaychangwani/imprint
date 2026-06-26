@@ -828,6 +828,20 @@ function resolvePlaceholder(
     return { ok: true, value: encodePart(v, template, match, context) };
   }
 
+  if (parsed.kind === 'generated') {
+    const v = generateValue(parsed.name);
+    if (v === null) {
+      return missingState({
+        name: parsed.name,
+        source: 'workflow',
+        capability: 'unsupported',
+        failure: 'unsupported_workflow',
+        message: `Workflow placeholder ${match} uses an unknown generated kind "${parsed.name}" (expected uuid | epoch_ms | epoch_s | iso8601 | nonce)`,
+      });
+    }
+    return { ok: true, value: encodePart(v, template, match, context) };
+  }
+
   if (parsed.kind === 'param') {
     if (!(parsed.name in runtime.params)) {
       const available = Object.keys(runtime.params);
@@ -893,7 +907,7 @@ function resolvePlaceholder(
 }
 
 type ParsedPlaceholder =
-  | { kind: 'param' | 'credential' | 'env' | 'state' | 'cookie'; name: string }
+  | { kind: 'param' | 'credential' | 'env' | 'state' | 'cookie' | 'generated'; name: string }
   | { kind: 'response'; index: number; path: string };
 
 function parsePlaceholderExpression(expr: string): ParsedPlaceholder | null {
@@ -907,15 +921,38 @@ function parsePlaceholderExpression(expr: string): ParsedPlaceholder | null {
     return { kind: bracket[1] as 'state' | 'cookie', name: bracket[2] };
   }
 
-  const dotted = expr.match(/^(param|credential|env|state|cookie)\.([A-Za-z0-9_.-]+)$/);
+  const dotted = expr.match(/^(param|credential|env|state|cookie|generated)\.([A-Za-z0-9_.-]+)$/);
   if (dotted?.[1] && dotted[2]) {
     return {
-      kind: dotted[1] as 'param' | 'credential' | 'env' | 'state' | 'cookie',
+      kind: dotted[1] as 'param' | 'credential' | 'env' | 'state' | 'cookie' | 'generated',
       name: dotted[2],
     };
   }
 
   return null;
+}
+
+/** Mint a fresh per-call value for a `${generated.KIND}` placeholder. Resolved
+ *  anew on EVERY substitution so two occurrences in one request can differ and a
+ *  later call never reuses an earlier value. Returns null for an unknown kind. */
+function generateValue(kind: string): string | null {
+  switch (kind) {
+    case 'uuid':
+      return crypto.randomUUID();
+    case 'epoch_ms':
+      return String(Date.now());
+    case 'epoch_s':
+      return String(Math.floor(Date.now() / 1000));
+    case 'iso8601':
+      return new Date().toISOString();
+    case 'nonce': {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    default:
+      return null;
+  }
 }
 
 /** Lookup a JSON path inside a parsed value. Segments may be:

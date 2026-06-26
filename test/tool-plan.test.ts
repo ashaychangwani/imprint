@@ -119,6 +119,7 @@ describe('buildToolPlanPayload', () => {
           },
           emitsTokens: [],
           tokenParams: [],
+          requiredInputs: [],
         },
       ],
     };

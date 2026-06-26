@@ -40,7 +40,12 @@ import {
   deriveLoginCredentials,
   extractCredentials,
 } from './credential-extract.ts';
-import { getCredentialBackend, readSiteManifest, upsertManifestEntry } from './credential-store.ts';
+import {
+  getCredentialBackend,
+  loadSiteCredentials,
+  readSiteManifest,
+  upsertManifestEntry,
+} from './credential-store.ts';
 import { emit } from './emit.ts';
 import {
   type Platform,
@@ -64,7 +69,11 @@ import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import { loadCredentialStore } from './runtime.ts';
-import { isSensitiveCredentialKey, passwordLikeTokens } from './sensitive-keys.ts';
+import {
+  isSensitiveCredentialKey,
+  isUsernameLikeKey,
+  passwordLikeTokens,
+} from './sensitive-keys.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import {
   listSessionsInDir,
@@ -1419,9 +1428,47 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           );
         }
       }
+
+      // The recording can't always yield credentials — hosted/redirect logins
+      // (Auth0, Okta, …) submit the password as a page navigation (no XHR body),
+      // and the capture listener masks password fields. Before skipping, reuse
+      // anything already stored, then — when interactive — prompt for exactly the
+      // credentials the detection LLM identified for this login
+      // (authPlan.credentialNames; the live 2FA code is intentionally not in that
+      // list — it's entered during verification).
       if (!teachCredentials) {
+        const view = await loadSiteCredentials(site).catch(() => null);
+        if (view && Object.keys(view.values).length > 0) {
+          teachCredentials = { site, values: view.values };
+          p.log.info(
+            `Using stored credentials for "${site}": ${Object.keys(view.values).join(', ')}`,
+          );
+        }
+      }
+      if (!teachCredentials && !opts.noInteractive && authPlan.credentialNames.length > 0) {
+        let detectedUsername: string | undefined;
+        if (sessionPath && existsSync(sessionPath)) {
+          try {
+            detectedUsername = detectRecordedUsername(
+              SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8'))),
+            );
+          } catch {
+            /* best-effort pre-fill only */
+          }
+        }
+        teachCredentials = await promptForCredentials({
+          site,
+          names: authPlan.credentialNames,
+          detectedUsername,
+        });
+      }
+
+      if (!teachCredentials) {
+        const hint = opts.noInteractive
+          ? ` Set them with \`imprint credential set ${site} <name>\` (${authPlan.credentialNames.join(', ') || 'the login credentials'}), then resume with \`imprint teach ${site} --from-step generate\`.`
+          : '';
         p.log.warn(
-          `Auth tool "${authPlan.toolName}" was planned but no credentials are available — skipping auth compile. Data tools will attempt inline login.`,
+          `Auth tool "${authPlan.toolName}" was planned but no credentials are available — skipping auth compile.${hint} Data tools will attempt inline login.`,
         );
       } else {
         spinner.start(`Compiling auth tool: ${authPlan.toolName}`);
@@ -2431,6 +2478,103 @@ async function persistFinding(opts: {
   p.log.success(
     `Stored credentials for "${opts.site}" — ${opts.finding.usernameName}, ${opts.finding.passwordName} (backend: ${backend.id})`,
   );
+}
+
+/** The identifier the user actually typed into a login form, recovered from the
+ *  recording's DOM submit events. The capture listener masks password fields
+ *  (`[redacted]`) but leaves the username/email visible, so this is the one
+ *  credential value a hosted-login recording reliably carries — used to pre-fill
+ *  the interactive credential prompt. */
+export function detectRecordedUsername(session: Session): string | undefined {
+  for (const ev of session.events ?? []) {
+    if (ev.type !== 'submit') continue;
+    try {
+      const detail = JSON.parse(ev.detail) as {
+        fields?: Array<{ name?: string; type?: string; value?: string }>;
+      };
+      for (const f of detail.fields ?? []) {
+        if (
+          f.name &&
+          f.value &&
+          f.type !== 'password' &&
+          isUsernameLikeKey(f.name) &&
+          !/^\[redacted\]$/i.test(f.value)
+        ) {
+          return f.value;
+        }
+      }
+    } catch {
+      // ignore malformed details
+    }
+  }
+  return undefined;
+}
+
+/** Prompt the user for the login credentials the detection LLM identified for
+ *  this site (`authPlan.credentialNames`), then persist them. Used when the
+ *  recording couldn't yield them automatically — hosted/redirect logins submit
+ *  the password as a page navigation (no XHR body) and password fields are masked
+ *  at capture. We ask for EXACTLY the names the LLM named (it saw the login flow);
+ *  the live one-time 2FA code is intentionally absent from that list and is
+ *  entered during verification. Sensitive names get a masked input; a username is
+ *  pre-filled from the recording. Returns the stored values, or undefined if the
+ *  list is empty or the user cancels (no partial store). */
+async function promptForCredentials(opts: {
+  site: string;
+  names: string[];
+  detectedUsername?: string;
+}): Promise<{ site: string; values: Record<string, string> } | undefined> {
+  const { site, names, detectedUsername } = opts;
+  if (names.length === 0) return undefined;
+
+  p.note(
+    [
+      "This login's credentials weren't captured in the recording.",
+      'Hosted logins (Auth0, Okta, …) submit the password as a page navigation,',
+      'and Imprint masks password fields at capture time — so there is nothing to',
+      'extract. Enter them now to compile the auth tool; they go straight to your',
+      'local credential manager (OS keychain when available, encrypted file else).',
+    ].join('\n'),
+    'Credentials needed',
+  );
+
+  const values: Record<string, string> = {};
+  const backend = await getCredentialBackend();
+  for (const name of names) {
+    const sensitive = isSensitiveCredentialKey(name);
+    const usernameLike = isUsernameLikeKey(name);
+    const answer = sensitive
+      ? await p.password({
+          message: `Enter ${name} for "${site}"`,
+          mask: '*',
+          validate: (v) => (!v || v.length === 0 ? 'Cannot be empty.' : undefined),
+        })
+      : await p.text({
+          message: `Enter ${name} for "${site}"`,
+          initialValue: usernameLike ? (detectedUsername ?? '') : '',
+          validate: (v) => (!v || v.length === 0 ? 'Cannot be empty.' : undefined),
+        });
+    if (p.isCancel(answer)) {
+      p.log.warn('Credential entry cancelled — skipping auth compile.');
+      return undefined;
+    }
+    const value = String(answer);
+    values[name] = value;
+    await backend.setSecret(site, name, value);
+    upsertManifestEntry(site, {
+      name,
+      kind: sensitive ? 'password' : usernameLike ? 'username' : 'opaque',
+      description: usernameLike
+        ? 'Login identifier'
+        : sensitive
+          ? 'Login password'
+          : 'Login credential',
+    });
+  }
+  p.log.success(
+    `Stored ${Object.keys(values).length} credential(s) for "${site}": ${Object.keys(values).join(', ')}`,
+  );
+  return { site, values };
 }
 
 // ─── Checkpoint helpers ─────────────────────────────────────────────────────

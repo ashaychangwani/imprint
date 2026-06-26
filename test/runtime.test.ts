@@ -74,6 +74,34 @@ describe('substituteString', () => {
     );
     expect(out).toBe('https://x.test/?p=bar&c=PATRON_xyz&t=TOK');
   });
+
+  it('resolves ${generated.uuid} to a fresh UUID each call', () => {
+    const a = substituteString('${generated.uuid}', {}, STORE, []);
+    const b = substituteString('${generated.uuid}', {}, STORE, []);
+    expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(a).not.toBe(b);
+  });
+
+  it('resolves each generated kind to its shape', () => {
+    expect(substituteString('${generated.epoch_ms}', {}, STORE, [])).toMatch(/^\d{13}$/);
+    expect(substituteString('${generated.epoch_s}', {}, STORE, [])).toMatch(/^\d{10}$/);
+    expect(substituteString('${generated.iso8601}', {}, STORE, [])).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
+    );
+    expect(substituteString('${generated.nonce}', {}, STORE, [])).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it('mints two distinct values for two ${generated.X} in one template', () => {
+    const out = substituteString('${generated.uuid}|${generated.uuid}', {}, STORE, []);
+    const [a, b] = out.split('|');
+    expect(a).not.toBe(b);
+  });
+
+  it('throws on an unknown generated kind', () => {
+    expect(() => substituteString('${generated.bogus}', {}, STORE, [])).toThrow(
+      /unknown generated kind/i,
+    );
+  });
 });
 
 describe('executeWorkflow', () => {

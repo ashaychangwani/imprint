@@ -104,6 +104,8 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
   let assignedSharedModules: PlanSlice['assignedSharedModules'] = [];
   let tokenParams: PlanSlice['tokenParams'] = [];
   let emittedTokens: PlanSlice['emittedTokens'] = [];
+  let requiredInputs: PlanSlice['requiredInputs'] = [];
+  let credentialValues: Record<string, string> = {};
 
   if (isAuthMode) {
     const site = opts.site ?? session.site;
@@ -122,14 +124,16 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
       sharedModules: opts.sharedModules,
     });
 
-    // Resolve the shared modules + producer→consumer token contracts the plan
-    // assigned this tool, so verification can assert modules are imported and
-    // require a chained test for each producer-sourced token param.
-    ({ assignedSharedModules, tokenParams, emittedTokens } = resolvePlanSliceFromFile(
-      opts.buildPlanPath,
-      opts.candidate?.toolName,
-      opts.sharedModules,
-    ));
+    // Resolve the shared modules + producer→consumer token contracts + the general
+    // dependency contract the plan assigned this tool, so verification can assert
+    // modules are imported, require a chained test for each producer-sourced token
+    // param, and inject/gate the contracted inputs.
+    ({ assignedSharedModules, tokenParams, emittedTokens, requiredInputs } =
+      resolvePlanSliceFromFile(opts.buildPlanPath, opts.candidate?.toolName, opts.sharedModules));
+    // Credential values for the emit-time secret guard (loaded for the data path,
+    // never passed on argv).
+    const creds = await loadCredentialStore(opts.site ?? session.site);
+    credentialValues = creds?.values ?? {};
   }
 
   // The custom done/give_up tools live alongside in MCP space.
@@ -260,7 +264,10 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
       // Auth mode: lightweight structural verification (the agent already proved
       // the workflow works live via run_verification). No param/live stamps.
       if (isAuthMode) {
-        const failures = authExternalVerification(opts.toolDir);
+        const failures = authExternalVerification(
+          opts.toolDir,
+          (opts.authToolPlan?.captures ?? []).map((c) => ({ name: c.name, usedAs: c.usedAs })),
+        );
         if (failures.length === 0) {
           const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
           writeFileSync(
@@ -340,6 +347,8 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
           assignedSharedModules,
           tokenParams,
           emittedTokens,
+          requiredInputs,
+          credentialValues,
         });
       if (warnings.length > 0) {
         log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);

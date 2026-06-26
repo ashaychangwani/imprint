@@ -17,6 +17,7 @@ import { TimeoutError, withTimeout } from './concurrency.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
 import { localSiteDir } from './paths.ts';
+import { detectPageMintedHeaders } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { type ClassifiedValue, looksLikeToken } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
@@ -92,6 +93,67 @@ const TokenParamSchema = z.object({
   sourceField: z.string().min(1),
 });
 
+// ─── General dependency contract (requiredInputs) ─────────────────────────────
+
+/** Where an input ultimately comes from. The general superset of the legacy
+ *  opaque-token chain: `producer_tool` is one source among several. */
+const InputSourceSchema = z.enum([
+  'user_param', // a value the caller supplies as an MCP tool param
+  'producer_tool', // an opaque token minted by a sibling tool's response
+  'auth', // a durable session token captured by the authenticate tool
+  'browser_state', // a value an earlier response / the originating page mints
+  'generated', // a fresh per-call value (uuid / epoch / nonce …)
+  'static', // a recording-stable constant (NEVER a raw secret)
+]);
+
+/** How the input is wired into workflow.json at the recorded `location`. */
+const InputWiringSchema = z.enum([
+  'param', // ${param.X}
+  'credential', // ${credential.X}
+  'state', // ${state.X}
+  'response', // ${response[N].path}
+  'generated', // ${generated.KIND}
+  'literal', // verbatim literal (static / generated fallback)
+]);
+
+/** Shape of a per-call generated value, inferred from the recorded value's form. */
+const GeneratedKindSchema = z.enum(['uuid', 'epoch_ms', 'epoch_s', 'iso8601', 'nonce']).optional();
+type GeneratedKind = z.infer<typeof GeneratedKindSchema>;
+
+/** ONE input a tool's request needs and where it comes from — covering EVERY
+ *  dependency class, not just cross-tool tokens: a user param, a producer tool's
+ *  output, an auth/session token, browser/bootstrap state, a generated per-call
+ *  value, or a static constant. This is the general contract the planner declares
+ *  and the deriver grounds from the recording, replacing the header-blind
+ *  "keep headers minimal" heuristic that dropped auth/session inputs. */
+const RequiredInputSchema = z.object({
+  /** "header:<name>" | "url_param:<k>" | "body:$.<path>" | "referer". */
+  location: z.string().min(1),
+  source: InputSourceSchema,
+  wiring: InputWiringSchema,
+  /** user_param / param-wired → the MCP param name. */
+  param: z.string().optional(),
+  /** producer_tool → sibling tool that mints this value … */
+  producerTool: z.string().optional(),
+  /** … and the field of its parser output to read. */
+  producerField: z.string().optional(),
+  /** auth → resolves to ${credential.<credentialName>} (an authTool capture). */
+  credentialName: z.string().optional(),
+  /** browser_state → resolves to ${state.<stateName>}. */
+  stateName: z.string().optional(),
+  /** generated → the per-call shape. */
+  generated: GeneratedKindSchema,
+  /** static / generated fallback — a verbatim literal. NEVER a raw secret. */
+  literal: z.string().optional(),
+  /** browser_state / referer → the originating page to bootstrap from. */
+  bootstrapUrl: z.string().optional(),
+  /** The recorded seq this input was observed on (grounds the deriver + the
+   *  emit-time guard's value→placeholder map). */
+  recordedSeq: z.number().int().nonnegative().optional(),
+  note: z.string().default(''),
+});
+export type RequiredInput = z.infer<typeof RequiredInputSchema>;
+
 const PerToolPlanSchema = z.object({
   toolName: z.string().regex(/^[a-z][a-z0-9_]*$/),
   usesSharedModules: z.array(z.string()).default([]),
@@ -105,6 +167,11 @@ const PerToolPlanSchema = z.object({
   emitsTokens: z.array(EmittedTokenSchema).default([]),
   /** Opaque-token chain — consumer side: params minted by a sibling producer. */
   tokenParams: z.array(TokenParamSchema).default([]),
+  /** General dependency contract: EVERY input this tool's request needs and where
+   *  each comes from (auth / producer / browser_state / generated / static / user
+   *  param). `producer_tool` entries are kept in sync with the legacy
+   *  `tokenParams`/`emitsTokens` arrays by `validateBuildPlan`. */
+  requiredInputs: z.array(RequiredInputSchema).default([]),
 });
 type PerToolPlan = z.infer<typeof PerToolPlanSchema>;
 
@@ -205,6 +272,84 @@ export const BuildPlanSchema = z
             path: ['perTool', i, 'tokenParams', j, 'sourceField'],
             message: `producer "${tp.sourceTool}" does not declare emitted field "${tp.sourceField}" (add it to that tool's emitsTokens)`,
           });
+        }
+      }
+    }
+    // General dependency contract validation. `validateBuildPlan` backfills the
+    // producer_tool ⇄ tokenParams/emitsTokens duals and the auth ⇄ authTool
+    // captures BEFORE parse, so these cross-references hold for every plan that
+    // reaches the schema (LLM-emitted or read from a written sidecar).
+    const authCaptureNames = new Set((value.authTool?.captures ?? []).map((c) => c.name));
+    for (const [i, t] of value.perTool.entries()) {
+      for (const [j, ri] of t.requiredInputs.entries()) {
+        const at = (field: string) => ['perTool', i, 'requiredInputs', j, field];
+        const fail = (field: string, message: string) =>
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: at(field), message });
+        switch (ri.source) {
+          case 'user_param':
+            if (!ri.param)
+              fail('param', `requiredInput at ${ri.location} (user_param) needs a param`);
+            break;
+          case 'producer_tool':
+            if (!ri.producerTool) {
+              fail(
+                'producerTool',
+                `requiredInput at ${ri.location} (producer_tool) needs a producerTool`,
+              );
+            } else if (ri.producerTool === t.toolName) {
+              fail(
+                'producerTool',
+                `requiredInput at ${ri.location} cannot source from its own tool "${t.toolName}"`,
+              );
+            } else if (!toolNames.has(ri.producerTool)) {
+              fail(
+                'producerTool',
+                `requiredInput at ${ri.location} references unknown producer tool "${ri.producerTool}"`,
+              );
+            } else if (
+              ri.producerField &&
+              !emittedByTool.get(ri.producerTool)?.has(ri.producerField)
+            ) {
+              fail(
+                'producerField',
+                `producer "${ri.producerTool}" does not declare emitted field "${ri.producerField}" (add it to that tool's emitsTokens)`,
+              );
+            }
+            break;
+          case 'auth':
+            if (!ri.credentialName) {
+              fail(
+                'credentialName',
+                `requiredInput at ${ri.location} (auth) needs a credentialName`,
+              );
+            } else if (!authCaptureNames.has(ri.credentialName)) {
+              fail(
+                'credentialName',
+                `auth requiredInput at ${ri.location} references "${ri.credentialName}" which is not declared in authTool.captures[].name`,
+              );
+            }
+            break;
+          case 'browser_state':
+            // The bootstrap-page (referer) case carries a bootstrapUrl instead of a
+            // substitutable ${state.X}; any other browser_state slot needs a stateName.
+            if (ri.location !== 'referer' && !ri.stateName) {
+              fail(
+                'stateName',
+                `requiredInput at ${ri.location} (browser_state) needs a stateName`,
+              );
+            }
+            break;
+          case 'generated':
+            if (!ri.generated)
+              fail(
+                'generated',
+                `requiredInput at ${ri.location} (generated) needs a generated kind`,
+              );
+            break;
+          case 'static':
+            if (ri.literal === undefined)
+              fail('literal', `requiredInput at ${ri.location} (static) needs a literal`);
+            break;
         }
       }
     }
@@ -433,6 +578,15 @@ function resolveEmittedTokens(
   return plan.perTool.find((t) => t.toolName === toolName)?.emitsTokens ?? [];
 }
 
+/** The general dependency contract the build plan declared for a tool — EVERY
+ *  input its request needs and where each comes from. Threaded into the compile
+ *  agent (read_build_plan) and the verifier (`injectContractedInputs` + the
+ *  contracted-input gate). Empty when the plan declared none, so a tool that
+ *  needs no extra inputs behaves exactly as before. */
+export function resolveRequiredInputs(plan: BuildPlan, toolName: string): RequiredInput[] {
+  return plan.perTool.find((t) => t.toolName === toolName)?.requiredInputs ?? [];
+}
+
 /** Read a build-plan sidecar and project it to one tool's slice in the shape
  *  every compile driver needs: the shared modules it must import (with verified
  *  flags from `manifest`) plus the producer/consumer token-contract arrays.
@@ -447,15 +601,22 @@ export function resolvePlanSliceFromFile(
   assignedSharedModules: AssignedSharedModule[] | undefined;
   tokenParams: Array<{ param: string; sourceTool: string; sourceField: string }>;
   emittedTokens: Array<{ field: string; shape: string }>;
+  requiredInputs: RequiredInput[];
 } {
   const plan = buildPlanPath && toolName ? readBuildPlanFile(buildPlanPath) : null;
   if (!plan || !toolName) {
-    return { assignedSharedModules: undefined, tokenParams: [], emittedTokens: [] };
+    return {
+      assignedSharedModules: undefined,
+      tokenParams: [],
+      emittedTokens: [],
+      requiredInputs: [],
+    };
   }
   return {
     assignedSharedModules: resolveAssignedModules(plan, toolName, manifest),
     tokenParams: resolveTokenParams(plan, toolName),
     emittedTokens: resolveEmittedTokens(plan, toolName),
+    requiredInputs: resolveRequiredInputs(plan, toolName),
   };
 }
 
@@ -471,7 +632,20 @@ export function topoLevelsForTools<T extends { toolName: string }>(
   return kahnLevels(
     tools,
     (t) => t.toolName,
-    (t) => (plan ? resolveTokenParams(plan, t.toolName).map((tp) => tp.sourceTool) : []),
+    (t) => {
+      if (!plan) return [];
+      const deps = new Set<string>();
+      for (const tp of resolveTokenParams(plan, t.toolName)) deps.add(tp.sourceTool);
+      // General contract edges: a producer_tool input depends on its producer; any
+      // auth input depends on the authenticate tool (filtered out by kahnLevels
+      // when the auth tool isn't in `tools` — auth runs in teach's own phase, this
+      // is belt-and-suspenders so a co-scheduled auth tool still orders first).
+      for (const ri of resolveRequiredInputs(plan, t.toolName)) {
+        if (ri.source === 'producer_tool' && ri.producerTool) deps.add(ri.producerTool);
+        if (ri.source === 'auth' && plan.authTool?.toolName) deps.add(plan.authTool.toolName);
+      }
+      return deps;
+    },
   );
 }
 
@@ -480,13 +654,140 @@ export function topoLevelsForTools<T extends { toolName: string }>(
 export function readBuildPlanFile(path: string): BuildPlan | null {
   if (!existsSync(path)) return null;
   try {
-    return BuildPlanSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+    // Route through normalizeRawPlan so a hand-edited / version-skewed sidecar with
+    // one malformed requiredInput drops only that row instead of failing the whole
+    // plan to null (the sidecar is a documented, user-inspectable artifact).
+    return BuildPlanSchema.parse(normalizeRawPlan(JSON.parse(readFileSync(path, 'utf8'))));
   } catch {
     return null;
   }
 }
 
 // ─── Validation ─────────────────────────────────────────────────────────────
+
+/* biome-ignore lint/suspicious/noExplicitAny: raw, pre-schema plan normalization */
+type RawAny = any;
+
+/**
+ * Normalize a RAW (pre-schema) plan object so the general dependency contract is
+ * internally consistent before `BuildPlanSchema.parse` runs its cross-tool
+ * `superRefine`. Two jobs, both total (never throws — degrades instead):
+ *  1. Backfill the producer_tool ⇄ legacy `tokenParams`/`emitsTokens` duals so a
+ *     planner that declared only `requiredInputs` (or only the legacy arrays)
+ *     still validates and the fan-out ordering sees the edge.
+ *  2. Drop a `requiredInput` that can't be made schema-valid (e.g. a producer_tool
+ *     row pointing at an unknown tool, an auth row with no matching capture, a
+ *     generated row with no kind) so one malformed hint can't throw the whole plan
+ *     away — the grounded ones are re-injected by `reconcileRequiredInputs`.
+ * Returns a deep clone; the caller's input is never mutated.
+ */
+function normalizeRawPlan(input: unknown): unknown {
+  if (typeof input !== 'object' || input === null) return input;
+  let cloned: RawAny;
+  try {
+    cloned = JSON.parse(JSON.stringify(input));
+  } catch {
+    return input;
+  }
+  const perTool: RawAny[] = Array.isArray(cloned.perTool) ? cloned.perTool : [];
+  const byName = new Map<string, RawAny>();
+  for (const t of perTool) {
+    if (t && typeof t.toolName === 'string') byName.set(t.toolName, t);
+  }
+  const authCaptureNames = new Set<string>(
+    (Array.isArray(cloned.authTool?.captures) ? cloned.authTool.captures : [])
+      .map((c: RawAny) => (c && typeof c.name === 'string' ? c.name : ''))
+      .filter(Boolean),
+  );
+  const ensureArr = (obj: RawAny, key: string): RawAny[] => {
+    if (!Array.isArray(obj[key])) obj[key] = [];
+    return obj[key];
+  };
+
+  for (const t of perTool) {
+    if (!t || typeof t.toolName !== 'string') continue;
+    if (!Array.isArray(t.requiredInputs)) continue;
+    const kept: RawAny[] = [];
+    for (const ri of t.requiredInputs) {
+      if (!ri || typeof ri !== 'object' || typeof ri.location !== 'string') continue;
+      switch (ri.source) {
+        case 'user_param':
+          if (typeof ri.param !== 'string' || !ri.param) continue;
+          break;
+        case 'producer_tool': {
+          const producerTool = ri.producerTool;
+          // producerField is OPTIONAL in the schema — only the producer tool must be
+          // a real sibling. Keep a producerField-less row (it still carries the
+          // build-order edge in topoLevelsForTools); only the legacy-dual backfill
+          // needs the field.
+          if (
+            typeof producerTool !== 'string' ||
+            !producerTool ||
+            producerTool === t.toolName ||
+            !byName.has(producerTool)
+          )
+            continue;
+          const producerField = ri.producerField;
+          if (typeof producerField === 'string' && producerField) {
+            // Backfill the legacy duals so the edge survives the gate too.
+            const param = typeof ri.param === 'string' && ri.param ? ri.param : producerField;
+            const tokenParams = ensureArr(t, 'tokenParams');
+            if (
+              !tokenParams.some(
+                (tp: RawAny) => tp && tp.param === param && tp.sourceTool === producerTool,
+              )
+            ) {
+              tokenParams.push({ param, sourceTool: producerTool, sourceField: producerField });
+            }
+            const producer = byName.get(producerTool);
+            const emits = ensureArr(producer, 'emitsTokens');
+            if (!emits.some((e: RawAny) => e && e.field === producerField)) {
+              emits.push({
+                field: producerField,
+                shape: typeof ri.note === 'string' ? ri.note : '',
+              });
+            }
+          }
+          break;
+        }
+        case 'auth':
+          if (typeof ri.credentialName !== 'string' || !authCaptureNames.has(ri.credentialName))
+            continue;
+          break;
+        case 'browser_state':
+          if (ri.location !== 'referer' && (typeof ri.stateName !== 'string' || !ri.stateName))
+            continue;
+          break;
+        case 'generated':
+          if (typeof ri.generated !== 'string') continue;
+          break;
+        case 'static':
+          if (ri.literal === undefined) continue;
+          break;
+        default:
+          continue; // unknown source
+      }
+      kept.push(ri);
+    }
+    t.requiredInputs = kept;
+  }
+  return cloned;
+}
+
+/** Stable order + dedupe for a tool's requiredInputs, so the written sidecar JSON
+ *  is deterministic across runs. */
+function dedupeSortRequiredInputs(inputs: RequiredInput[]): RequiredInput[] {
+  const seen = new Set<string>();
+  const out: RequiredInput[] = [];
+  for (const ri of inputs) {
+    const key = `${ri.location}|${ri.source}|${ri.wiring}|${ri.param ?? ''}|${ri.producerTool ?? ''}|${ri.producerField ?? ''}|${ri.credentialName ?? ''}|${ri.stateName ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ri);
+  }
+  out.sort((a, b) => a.location.localeCompare(b.location) || a.source.localeCompare(b.source));
+  return out;
+}
 
 /** Parse + normalize an LLM/disk plan. When `selected` is provided, drops
  *  perTool entries for tools that weren't selected and backfills a minimal
@@ -496,7 +797,7 @@ export function validateBuildPlan(
   input: unknown,
   selected?: Array<ToolCandidate | string>,
 ): BuildPlan {
-  const plan = BuildPlanSchema.parse(input);
+  const plan = BuildPlanSchema.parse(normalizeRawPlan(input));
   if (selected && selected.length > 0) {
     const names = new Set(selected.map((t) => (typeof t === 'string' ? t : t.toolName)));
     plan.perTool = plan.perTool.filter((t) => names.has(t.toolName));
@@ -510,6 +811,10 @@ export function validateBuildPlan(
     if (plan.perTool.length === 0) {
       throw new Error('Build plan has no perTool entries for the selected tools.');
     }
+  }
+  // Deterministic requiredInputs ordering for stable sidecar JSON.
+  for (const t of plan.perTool) {
+    t.requiredInputs = dedupeSortRequiredInputs(t.requiredInputs);
   }
   return plan;
 }
@@ -760,6 +1065,516 @@ export function reconcileTokenContracts(
   return result;
 }
 
+// ─── General dependency-contract derivation (all sources) ─────────────────────
+
+/** A grounded `requiredInput` derived DETERMINISTICALLY from the recording, plus
+ *  the consumer tool it belongs to and (for auth) the authTool capture to ensure
+ *  exists. The general analogue of `TokenContractHint` — covering auth / browser
+ *  state / generated / static inputs, not just cross-tool tokens. */
+export interface RequiredInputHint {
+  consumerTool: string;
+  input: RequiredInput;
+  /** auth only: the authenticate-tool capture that mints this value. Ensures the
+   *  superRefine auth↔capture invariant holds even if the planner drops it. */
+  authCapture?: { name: string; source: string; locator: string; usedAs: string };
+}
+
+/** Snake_case identifier for a credential/state name, preferring a precomputed
+ *  `suggestedStateName` from the diff, else derived from the `location`. */
+function nameFromLocationOrSuggestion(location: string, suggested?: string): string {
+  if (suggested?.length) return toIdentifier(suggested);
+  const raw = location
+    .replace(/^(url_param|header|body):?/, '')
+    .replace(/^\$\.?/, '')
+    .replace(/^x-/i, '');
+  const ident = raw
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+  return ident || 'token';
+}
+
+/** Best-effort auth capture (source + locator) from a producer response path
+ *  ("$.access_token" → json; "response_header:Set-Cookie" → response_header). The
+ *  auth-compile agent refines/verifies this live; the deriver only seeds it so the
+ *  capture name exists for the data tool's ${credential.X} reference. */
+function authCaptureFromProducerPath(
+  name: string,
+  producerPath: string | undefined,
+  usedAs: string,
+): { name: string; source: string; locator: string; usedAs: string } {
+  const path = producerPath ?? '';
+  if (path.startsWith('response_header:')) {
+    return {
+      name,
+      source: 'response_header',
+      locator: path.slice('response_header:'.length),
+      usedAs,
+    };
+  }
+  if (path.startsWith('$')) {
+    return { name, source: 'json', locator: path, usedAs };
+  }
+  // "body(substring)" / unknown — seed a json capture; the auth agent verifies live.
+  return { name, source: 'json', locator: path || '$', usedAs };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ISO8601_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+
+/** Infer the per-call shape of a `browser_minted` value from its form. Returns a
+ *  GeneratedKind, or null when no recognizable shape (caller falls back to a
+ *  captured browser_state). Site-agnostic — by VALUE shape, never a header name. */
+function generatedKindOf(value: string | undefined): NonNullable<GeneratedKind> | null {
+  if (!value) return null;
+  if (UUID_RE.test(value)) return 'uuid';
+  if (ISO8601_RE.test(value)) return 'iso8601';
+  if (/^\d{13}$/.test(value)) return 'epoch_ms';
+  if (/^\d{10}$/.test(value)) return 'epoch_s';
+  if (looksLikeToken(value) && /^[A-Za-z0-9._-]+$/.test(value)) return 'nonce';
+  return null;
+}
+
+function isCookieHeaderName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower === 'cookie' || lower === 'set-cookie';
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** The page a request was issued from — its `Referer` header, else the last
+ *  recorded Document `navigation` before it. Structural generalization of the
+ *  bootstrap-page heuristic the auth compile prompt uses (no host literals).
+ *  Returns undefined when neither signal is available. */
+export function findOriginatingPage(session: Session, seq: number): string | undefined {
+  const req = session.requests.find((r) => r.seq === seq);
+  if (!req) return undefined;
+  const referer =
+    req.headers.Referer ?? req.headers.referer ?? req.headers.Referrer ?? req.headers.referrer;
+  if (referer && /^https?:\/\//i.test(referer)) return referer;
+  let best: { ts: number; url: string } | undefined;
+  for (const ev of session.events) {
+    if (ev.type !== 'navigation' || ev.timestamp > req.timestamp) continue;
+    if (!/^https?:\/\//i.test(ev.detail)) continue;
+    if (!best || ev.timestamp > best.ts) best = { ts: ev.timestamp, url: ev.detail };
+  }
+  return best?.url;
+}
+
+/**
+ * Deterministically derive the general dependency contract — EVERY non-param input
+ * a tool needs and where each comes from — from the dual-pass classifications, the
+ * login flow, and the recorded headers. The structural cure for the header-blind
+ * "keep headers minimal" heuristic that silently dropped auth/session/gateway
+ * inputs. Pure; mirrors `deriveTokenContractHints` but is header-AWARE and never
+ * emits a user `param` for a header.
+ *
+ * Source rules (purely structural — classification + provenance + value shape,
+ * never a header name or URL pattern):
+ *  - value produced by the LOGIN flow's response (`producerSeq ∈ loginRequestSeqs`)
+ *    → `auth` (wired `${credential.X}`), seeding the authenticate-tool capture;
+ *  - cross-tool `server_derived` (producer owned by another selected tool)
+ *    → `producer_tool` (delegated to `deriveTokenContractHints`, re-tagged);
+ *  - `browser_minted` header with no network producer → `browser_state` when the
+ *    value is reused across the session, else `generated` (kind from value shape),
+ *    falling back to `browser_state` when no shape is recognizable. Ephemerality is
+ *    aggregated per slot (most-ephemeral-wins): a sibling `browser_minted` instance
+ *    overrides an alignment-artifact `constant`, and a `constant` whose value is
+ *    intrinsically per-call by shape (uuid/epoch/iso8601) or is server-minted
+ *    elsewhere is routed to `generated`/`browser_state`, never baked as a literal;
+ *  - high-entropy `constant` header with no provenance → `static` (verbatim literal);
+ *  - page-minted sensitive headers (app constants present before first interaction)
+ *    → `static`, even when the blocked replay produced no classification for them.
+ * Cookies are excluded throughout (the credential jar manages them automatically).
+ */
+export function deriveRequiredInputHints(payload: {
+  selectedTools: Array<{
+    toolName: string;
+    requestSeqs: number[];
+    likelyParams?: Array<{ name: string }>;
+  }>;
+  loginRequestSeqs: number[];
+  ephemeralValues: Array<{
+    classification: string;
+    originalSeq: number;
+    location: string;
+    producerSeq?: number;
+    producerPath?: string;
+    value?: string;
+    suggestedStateName?: string;
+  }>;
+  recordedHeaders: Array<{
+    seq: number;
+    /** The request's own URL (for the cross-origin bootstrap check). */
+    url?: string;
+    /** The page this request was issued from (Referer / last navigation). */
+    originatingUrl?: string;
+    headers: Record<string, string>;
+  }>;
+  pageMintedHeaders: string[];
+}): RequiredInputHint[] {
+  const ownersBySeq = new Map<number, Set<string>>();
+  for (const t of payload.selectedTools) {
+    for (const s of t.requestSeqs) {
+      const set = ownersBySeq.get(s);
+      if (set) set.add(t.toolName);
+      else ownersBySeq.set(s, new Set([t.toolName]));
+    }
+  }
+  const soleOwner = (seq: number): string | undefined => {
+    const set = ownersBySeq.get(seq);
+    return set && set.size === 1 ? [...set][0] : undefined;
+  };
+  const loginSeqs = new Set(payload.loginRequestSeqs);
+
+  const hints: RequiredInputHint[] = [];
+  const seen = new Set<string>(); // consumerTool|location — one decision per slot
+  const push = (h: RequiredInputHint): void => {
+    const key = `${h.consumerTool}|${h.input.location}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    hints.push(h);
+  };
+
+  // 1. Cross-tool opaque tokens → producer_tool params (reuse the existing
+  //    detector; only nameable edges become params, matching reconcileTokenContracts).
+  for (const th of deriveTokenContractHints({
+    selectedTools: payload.selectedTools,
+    ephemeralValues: payload.ephemeralValues,
+  })) {
+    if (!th.nameable) continue;
+    push({
+      consumerTool: th.consumerTool,
+      input: {
+        location: th.consumerLocation,
+        source: 'producer_tool',
+        wiring: 'param',
+        param: th.consumerParam,
+        producerTool: th.producerTool,
+        producerField: th.producerField,
+        note: '',
+      },
+    });
+  }
+
+  // Count value reuse per (header location → value) across in-scope requests so a
+  // browser_minted value used in multiple requests is captured once, not regenerated.
+  const headerValueCounts = new Map<string, number>();
+  for (const rh of payload.recordedHeaders) {
+    for (const [name, value] of Object.entries(rh.headers)) {
+      const key = `header:${name}\t${value}`;
+      headerValueCounts.set(key, (headerValueCounts.get(key) ?? 0) + 1);
+    }
+  }
+
+  // Aggregate ephemerality per (consumerTool, location) BEFORE deciding. The
+  // dual-pass diff classifies each instance independently, and request-alignment
+  // artifacts can mislabel a single instance `constant` (when it happens to align
+  // to a replay request carrying the same value) even though sibling instances of
+  // the same header are `browser_minted`. Most-ephemeral-wins: if ANY instance of a
+  // slot is browser_minted, the slot is ephemeral — so one mislabeled `constant`
+  // instance can't route a per-call value into the static (baked-literal) branch.
+  const browserMintedSlots = new Set<string>();
+  for (const ev of payload.ephemeralValues) {
+    if (ev.classification !== 'browser_minted') continue;
+    const tool = soleOwner(ev.originalSeq);
+    if (tool) browserMintedSlots.add(`${tool}\t${ev.location}`);
+  }
+
+  // Opaque token VALUES some response minted (a non-login producer). A value proven
+  // server-derived anywhere is session/server state everywhere — never a bakeable
+  // deploy constant — even at a sibling instance the diff happened to label
+  // `constant` with no local producer. Gated on looksLikeToken so an incidental
+  // low-entropy echo (a client-id string, a UI label) isn't swept in.
+  const serverMintedTokenValues = new Set<string>();
+  for (const ev of payload.ephemeralValues) {
+    if (
+      ev.producerSeq != null &&
+      !loginSeqs.has(ev.producerSeq) &&
+      ev.value &&
+      looksLikeToken(ev.value)
+    ) {
+      serverMintedTokenValues.add(ev.value);
+    }
+  }
+
+  // 2. Classification-driven rules.
+  for (const ev of payload.ephemeralValues) {
+    const consumerTool = soleOwner(ev.originalSeq);
+    if (!consumerTool) continue;
+
+    // auth — minted by the login flow's response (any NON-cookie location). A
+    // login-minted value sent back as a Cookie persists automatically via the
+    // credential jar, so it needs no ${credential.X} sessionCapture contract —
+    // seeding one would wrongly fail the auth verifier and inject a Cookie header
+    // on the data side.
+    const evHeader = ev.location.toLowerCase().startsWith('header:')
+      ? ev.location.slice('header:'.length)
+      : '';
+    if (ev.producerSeq != null && loginSeqs.has(ev.producerSeq) && !isCookieHeaderName(evHeader)) {
+      const name = nameFromLocationOrSuggestion(ev.location, ev.suggestedStateName);
+      push({
+        consumerTool,
+        input: {
+          location: ev.location,
+          source: 'auth',
+          wiring: 'credential',
+          credentialName: name,
+          recordedSeq: ev.originalSeq,
+          note: '',
+        },
+        authCapture: authCaptureFromProducerPath(name, ev.producerPath, ev.location),
+      });
+      continue;
+    }
+
+    // browser_state / generated / static apply to the commonly-dropped HEADER slots.
+    if (!ev.location.toLowerCase().startsWith('header:')) continue;
+    const headerName = ev.location.slice('header:'.length);
+    if (isCookieHeaderName(headerName)) continue;
+
+    // Ephemeral if THIS instance is browser_minted OR any sibling instance of the
+    // same slot is (most-ephemeral-wins, see browserMintedSlots above).
+    const ephemeral =
+      ev.classification === 'browser_minted' ||
+      browserMintedSlots.has(`${consumerTool}\t${ev.location}`);
+
+    if (ephemeral) {
+      const reused = (headerValueCounts.get(`${ev.location}\t${ev.value ?? ''}`) ?? 0) >= 2;
+      const kind = generatedKindOf(ev.value);
+      if (!reused && kind) {
+        push({
+          consumerTool,
+          input: {
+            location: ev.location,
+            source: 'generated',
+            wiring: 'generated',
+            generated: kind,
+            recordedSeq: ev.originalSeq,
+            note: '',
+          },
+        });
+      } else {
+        const name = nameFromLocationOrSuggestion(ev.location, ev.suggestedStateName);
+        push({
+          consumerTool,
+          input: {
+            location: ev.location,
+            source: 'browser_state',
+            wiring: 'state',
+            stateName: name,
+            recordedSeq: ev.originalSeq,
+            note: '',
+          },
+        });
+      }
+      continue;
+    }
+
+    if (
+      ev.classification === 'constant' &&
+      ev.producerSeq == null &&
+      looksLikeToken(ev.value ?? '')
+    ) {
+      // A "constant"-classified header value reaches here only with no local
+      // producer. Two structural vetoes keep a per-call or session value from being
+      // baked as a verbatim literal — the bug class this contract exists to prevent.
+      const kind = generatedKindOf(ev.value);
+      const strongKind = kind != null && kind !== 'nonce'; // uuid / epoch_ms|s / iso8601
+      if (strongKind) {
+        // Intrinsically per-call by shape — a UUID/timestamp is never a deploy
+        // constant, so a flat `constant` label here is an alignment artifact (the
+        // replay never varied it). Generate fresh per call instead of baking.
+        push({
+          consumerTool,
+          input: {
+            location: ev.location,
+            source: 'generated',
+            wiring: 'generated',
+            generated: kind,
+            recordedSeq: ev.originalSeq,
+            note: '',
+          },
+        });
+      } else if (ev.value && serverMintedTokenValues.has(ev.value)) {
+        // The same opaque value is server-minted elsewhere → session/server state
+        // that expires; capture it live rather than shipping a dead literal.
+        const name = nameFromLocationOrSuggestion(ev.location, ev.suggestedStateName);
+        push({
+          consumerTool,
+          input: {
+            location: ev.location,
+            source: 'browser_state',
+            wiring: 'state',
+            stateName: name,
+            recordedSeq: ev.originalSeq,
+            note: '',
+          },
+        });
+      } else {
+        // Genuine high-entropy deploy constant: no per-call shape, no server
+        // provenance — safe to emit verbatim.
+        push({
+          consumerTool,
+          input: {
+            location: ev.location,
+            source: 'static',
+            wiring: 'literal',
+            literal: ev.value,
+            recordedSeq: ev.originalSeq,
+            note: '',
+          },
+        });
+      }
+    }
+  }
+
+  // 3. Page-minted sensitive headers (app constants) → static, even with no
+  //    classification (the case the blocked replay never produces a diff for).
+  const pageMinted = new Set(payload.pageMintedHeaders.map((h) => h.toLowerCase()));
+  if (pageMinted.size > 0) {
+    for (const rh of payload.recordedHeaders) {
+      const consumerTool = soleOwner(rh.seq);
+      if (!consumerTool) continue;
+      for (const [name, value] of Object.entries(rh.headers)) {
+        if (!pageMinted.has(name.toLowerCase()) || isCookieHeaderName(name)) continue;
+        push({
+          consumerTool,
+          input: {
+            location: `header:${name}`,
+            source: 'static',
+            wiring: 'literal',
+            literal: value,
+            recordedSeq: rh.seq,
+            note: 'page-minted app constant',
+          },
+        });
+      }
+    }
+  }
+
+  // 4. Originating-page bootstrap. A tool that needs browser_state, or whose
+  //    request runs CROSS-ORIGIN from the page it was issued on, must navigate
+  //    that page first so its context / anti-bot token is minted for the right
+  //    Origin. Emit ONE referer requiredInput per tool carrying the bootstrapUrl;
+  //    the compile agent sets workflow.bootstrap.url (the injector backfills it).
+  const toolsNeedingState = new Set(
+    hints
+      .filter((h) => h.input.source === 'browser_state' && h.input.location !== 'referer')
+      .map((h) => h.consumerTool),
+  );
+  const bootstrapByTool = new Map<string, string>();
+  for (const rh of payload.recordedHeaders) {
+    const consumerTool = soleOwner(rh.seq);
+    if (!consumerTool || !rh.originatingUrl || bootstrapByTool.has(consumerTool)) continue;
+    const apiOrigin = rh.url ? originOf(rh.url) : null;
+    const pageOrigin = originOf(rh.originatingUrl);
+    const crossOrigin = apiOrigin != null && pageOrigin != null && apiOrigin !== pageOrigin;
+    if (crossOrigin || toolsNeedingState.has(consumerTool)) {
+      bootstrapByTool.set(consumerTool, rh.originatingUrl);
+    }
+  }
+  for (const [consumerTool, bootstrapUrl] of bootstrapByTool) {
+    push({
+      consumerTool,
+      input: {
+        location: 'referer',
+        source: 'browser_state',
+        wiring: 'state',
+        bootstrapUrl,
+        note: 'originating page — navigate before API replay',
+      },
+    });
+  }
+
+  return hints;
+}
+
+/** Loose perTool shape for reconciling requiredInputs in place (mirrors
+ *  `LoosePerToolPlan` but for the general contract). */
+interface LooseRequiredInputPerTool {
+  toolName: string;
+  authRecipe?: unknown;
+  requiredInputs?: Array<Record<string, unknown>>;
+}
+
+/**
+ * Reconcile a parsed planner plan against the deterministically-derived
+ * requiredInput hints, IN PLACE, before validation — the general analogue of
+ * `reconcileTokenContracts`. One decision per (consumerTool, location) slot:
+ *  - if the planner already declared an input for that slot, trust it (only seed a
+ *    missing auth capture so the superRefine invariant holds);
+ *  - else inject the grounded hint so a planner shortcut can't drop an input the
+ *    recording proves the request needs.
+ * Auth hints also ensure `authTool.captures` carries the minting capture. No-op
+ * when `hints` is empty, so sites needing no extra inputs behave exactly as before.
+ */
+export function reconcileRequiredInputs(
+  parsed: unknown,
+  hints: RequiredInputHint[],
+  selectedToolNames: Set<string>,
+): { injected: number; repaired: number; warnings: string[] } {
+  const result = { injected: 0, repaired: 0, warnings: [] as string[] };
+  if (hints.length === 0 || typeof parsed !== 'object' || parsed === null) return result;
+  const obj = parsed as {
+    perTool?: LooseRequiredInputPerTool[];
+    authTool?: { captures?: Array<Record<string, unknown>> } | null;
+  };
+  if (!Array.isArray(obj.perTool)) obj.perTool = [];
+  const byName = new Map<string, LooseRequiredInputPerTool>();
+  for (const t of obj.perTool) {
+    if (t && typeof t.toolName === 'string') byName.set(t.toolName, t);
+  }
+  const ensure = (name: string): LooseRequiredInputPerTool => {
+    let e = byName.get(name);
+    if (!e) {
+      e = { toolName: name, authRecipe: {} };
+      obj.perTool?.push(e);
+      byName.set(name, e);
+    }
+    return e;
+  };
+  const ensureAuthCapture = (cap: NonNullable<RequiredInputHint['authCapture']>): void => {
+    if (!obj.authTool || typeof obj.authTool !== 'object') return; // no auth tool — can't seed
+    if (!Array.isArray(obj.authTool.captures)) obj.authTool.captures = [];
+    if (!obj.authTool.captures.some((c) => c && c.name === cap.name)) {
+      obj.authTool.captures.push({ ...cap });
+      result.repaired++;
+    }
+  };
+
+  for (const h of hints) {
+    if (!selectedToolNames.has(h.consumerTool)) continue;
+    // An auth hint with no auth tool in the plan can't be honored — skip (degrades
+    // to the legacy no-contract behavior rather than producing an invalid plan).
+    if (h.input.source === 'auth' && !obj.authTool) {
+      result.warnings.push(
+        `${h.consumerTool} needs an auth input at ${h.input.location} but the plan declares no authenticate tool; leaving it to the compile-time gate`,
+      );
+      continue;
+    }
+    const tool = ensure(h.consumerTool);
+    if (!Array.isArray(tool.requiredInputs)) tool.requiredInputs = [];
+    const existing = tool.requiredInputs.find((ri) => ri && ri.location === h.input.location);
+    if (existing) {
+      // Slot already declared — trust the planner; only seed a missing auth capture.
+      if (h.input.source === 'auth' && h.authCapture) ensureAuthCapture(h.authCapture);
+      continue;
+    }
+    if (h.input.source === 'auth' && h.authCapture) ensureAuthCapture(h.authCapture);
+    tool.requiredInputs.push({ ...h.input });
+    result.injected++;
+  }
+  return result;
+}
+
 // ─── Planner payload ────────────────────────────────────────────────────────
 
 interface BuildPlanRequestPayload {
@@ -807,6 +1622,11 @@ interface BuildPlanPayload {
    *  dual-pass diff (see `deriveTokenContractHints`). Fed to the planner as
    *  grounded contracts to declare. */
   tokenContractHints: TokenContractHint[];
+  /** General dependency-contract hints grounded from the recording — EVERY
+   *  non-param input each tool needs (auth / producer_tool / browser_state /
+   *  generated / static). Fed to the planner as authoritative; a dropped one is
+   *  re-injected by `reconcileRequiredInputs` (see `deriveRequiredInputHints`). */
+  requiredInputHints: RequiredInputHint[];
   requests: BuildPlanRequestPayload[];
 }
 
@@ -871,6 +1691,34 @@ export function buildBuildPlanPayload(opts: {
     likelyParams: c.likelyParams,
   }));
 
+  // Recorded headers for the in-scope requests (ALL request headers + each
+  // request's URL and originating page). The deriver uses these for value-reuse
+  // counting (browser_state-vs-generated — must see EVERY header, not just
+  // sensitive ones, or a reused non-sensitive functional header like x-request-id
+  // is wrongly treated as per-call generated), the page-minted static rule, and the
+  // cross-origin bootstrap check. NOT serialized into the planner payload, so the
+  // raw values never reach the LLM.
+  const recordedHeaders = session.requests
+    .filter((r) => scope.has(r.seq))
+    .map((r) => ({
+      seq: r.seq,
+      url: r.url,
+      originatingUrl: findOriginatingPage(session, r.seq),
+      headers: { ...r.headers },
+    }));
+
+  // Full classifications (incl. the recorded value) for the deterministic derivers;
+  // the payload's slim `ephemeralValues` stays value-less (no raw value to the LLM).
+  const fullEphemeral = (classifications ?? []).map((c) => ({
+    classification: c.classification,
+    originalSeq: c.originalSeq,
+    location: c.location,
+    producerSeq: c.producerSeq,
+    producerPath: c.producerPath,
+    value: c.value1,
+    suggestedStateName: c.suggestedStateName,
+  }));
+
   return {
     site: session.site,
     url: session.url,
@@ -884,16 +1732,18 @@ export function buildBuildPlanPayload(opts: {
       selectedTools,
       // Any classification carrying producer provenance — server_derived OR a
       // stable constant whose opaque value was found in a sibling response.
-      ephemeralValues: (classifications ?? [])
-        .filter((c) => c.producerSeq != null)
-        .map((c) => ({
-          classification: c.classification,
-          originalSeq: c.originalSeq,
-          location: c.location,
-          producerSeq: c.producerSeq,
-          producerPath: c.producerPath,
-          value: c.value1,
-        })),
+      ephemeralValues: fullEphemeral.filter((c) => c.producerSeq != null),
+    }),
+    requiredInputHints: deriveRequiredInputHints({
+      selectedTools,
+      loginRequestSeqs: sharedContext?.loginRequestSeqs ?? [],
+      ephemeralValues: fullEphemeral,
+      recordedHeaders,
+      // Page-minted = a sensitive header the site bakes into its JS (present before
+      // the first interaction, not from a Set-Cookie/storage token — the
+      // scheme-stripped detector excludes a persisted bearer). Safe to emit as a
+      // verbatim static literal; a per-user token is never page-minted.
+      pageMintedHeaders: detectPageMintedHeaders(session),
     }),
     requests,
   };
@@ -969,7 +1819,7 @@ export async function generateBuildPlan(opts: {
         'imprint.plan.timeout_ms': opts.timeoutMs ?? 0,
       });
       narrate(
-        `planning ${opts.candidates.length} tool(s): ${payload.requests.length} request(s), ${payload.ephemeralValues.length} ephemeral value(s), ${payload.tokenContractHints.length} token edge(s), ${payload.narration.length} narration line(s); ${Math.round(payloadJson.length / 1024)} KB payload + ${Math.round(systemPrompt.length / 1024)} KB prompt → ${opts.llmConfig?.provider ?? 'auto'}/${opts.llmConfig?.model ?? 'default'}${opts.timeoutMs ? ` (timeout ${Math.round(opts.timeoutMs / 1000)}s)` : ''}`,
+        `planning ${opts.candidates.length} tool(s): ${payload.requests.length} request(s), ${payload.ephemeralValues.length} ephemeral value(s), ${payload.tokenContractHints.length} token edge(s), ${payload.requiredInputHints.length} required-input hint(s), ${payload.narration.length} narration line(s); ${Math.round(payloadJson.length / 1024)} KB payload + ${Math.round(systemPrompt.length / 1024)} KB prompt → ${opts.llmConfig?.provider ?? 'auto'}/${opts.llmConfig?.model ?? 'default'}${opts.timeoutMs ? ` (timeout ${Math.round(opts.timeoutMs / 1000)}s)` : ''}`,
       );
 
       const llm = resolveProvider(opts.llmConfig ?? {});
@@ -1024,11 +1874,29 @@ export async function generateBuildPlan(opts: {
       }
       for (const w of reconciled.warnings) narrate(`token contract: ${w}`);
 
+      // Same safety net for the GENERAL dependency contract: re-inject any grounded
+      // requiredInput the planner dropped (auth / producer / browser_state /
+      // generated / static), and seed missing auth captures.
+      const reconciledInputs = reconcileRequiredInputs(
+        parsed,
+        payload.requiredInputHints,
+        selectedNames,
+      );
+      if (reconciledInputs.injected > 0 || reconciledInputs.repaired > 0) {
+        narrate(
+          `required inputs: ${payload.requiredInputHints.length} hint(s) → injected ${reconciledInputs.injected}, repaired ${reconciledInputs.repaired}`,
+        );
+      }
+      for (const w of reconciledInputs.warnings) narrate(`required input: ${w}`);
+
       const plan = validateBuildPlan(parsed, opts.candidates);
       setSpanAttributes(span, {
         'imprint.plan.token_edge_count': payload.tokenContractHints.length,
         'imprint.plan.token_injected': reconciled.injected,
         'imprint.plan.token_repaired': reconciled.repaired,
+        'imprint.plan.required_input_hint_count': payload.requiredInputHints.length,
+        'imprint.plan.required_input_injected': reconciledInputs.injected,
+        'imprint.plan.required_input_repaired': reconciledInputs.repaired,
         'imprint.plan.shared_module_count': plan.sharedModules.length,
         'imprint.plan.tool_count': plan.perTool.length,
         'imprint.plan.duration_ms': result.durationMs,

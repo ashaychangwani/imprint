@@ -89,6 +89,21 @@ function buildAuthInitialMessage(opts: {
   authToolPlan: NonNullable<AuthToolPlan>;
 }): string {
   const { site, toolName, toolDir, authToolPlan } = opts;
+  const headerCaptures = (authToolPlan.captures ?? []).filter((c) => {
+    const u = (c.usedAs ?? '').toLowerCase();
+    // Cookies persist automatically — only surface NON-cookie header contracts.
+    return u.startsWith('header:') && u !== 'header:cookie' && u !== 'header:set-cookie';
+  });
+  const sessionCaptureNote =
+    headerCaptures.length > 0
+      ? `\n- sessionCapture contracts (data tools consume these as \${credential.<name>}): ${headerCaptures
+          .map(
+            (c) => `${c.name} (used as ${c.usedAs}; seed source ${c.source}, locator ${c.locator})`,
+          )
+          .join(
+            '; ',
+          )}\n  → For each, add an authConfig.sessionCapture that reads this token from the login COMPLETION response (verify the real source/locator against the recorded response; the seed is a hint). Verification fails without it.`
+      : '';
   return `A new auth compile task is starting.
 
 Site: ${site}
@@ -99,7 +114,7 @@ Auth tool plan:
 - loginRequestSeqs: ${JSON.stringify(authToolPlan.loginRequestSeqs)}
 - twoFactorRequestSeqs: ${JSON.stringify(authToolPlan.twoFactorRequestSeqs)}
 - twoFactorType: ${authToolPlan.twoFactorType}
-- credentialNames: ${JSON.stringify(authToolPlan.credentialNames)}
+- credentialNames: ${JSON.stringify(authToolPlan.credentialNames)}${sessionCaptureNote}
 - notes: ${authToolPlan.notes || '(none)'}
 
 Begin by calling read_session_summary to orient yourself, then examine the login requests and write workflow.json per the system prompt.`;
@@ -231,7 +246,10 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
       break;
     }
 
-    const failures = authExternalVerification(toolDir);
+    const failures = authExternalVerification(
+      toolDir,
+      (authToolPlan.captures ?? []).map((c) => ({ name: c.name, usedAs: c.usedAs })),
+    );
 
     if (failures.length === 0) {
       message = result.doneSummary ?? 'Auth tool compiled';

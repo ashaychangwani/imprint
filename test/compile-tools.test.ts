@@ -2,14 +2,18 @@ import { describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
+import type { RequiredInput } from '../src/imprint/build-plan.ts';
 import {
+  assertNoRawSecrets,
   buildCompileTools,
   classifyIntegrationOutcome,
   classifyParamCoverage,
+  contractedInputGate,
   crossReferenceReferencedStateCaptures,
   detectTokenSources,
   externalVerification,
   extractTestBlocks,
+  injectContractedInputs,
   isBotDefenseFailure,
   parseJUnitResults,
   typecheckArtifacts,
@@ -2153,5 +2157,393 @@ describe('crossReferenceReferencedStateCaptures (Fix 2)', () => {
     });
     const { failures } = crossReferenceReferencedStateCaptures(wf, sessionWithLandingPage());
     expect(failures).toHaveLength(0);
+  });
+});
+
+// ─── Emit-time secret guard + contracted-input injection/gate (Threads B/C) ───
+
+function secretSession(): Session {
+  return {
+    site: 'test',
+    startedAt: '2026-06-26T00:00:00.000Z',
+    url: 'https://www.example.com/',
+    imprintVersion: '0.1.0',
+    requests: [
+      {
+        // Pre-interaction request: X-App-Key is a page-minted app constant.
+        seq: 5,
+        timestamp: 10,
+        method: 'GET',
+        url: 'https://api.example.com/bootstrap',
+        headers: { 'X-App-Key': 'synthetic-appkey-001' },
+        resourceType: 'Fetch',
+        response: { status: 200, headers: {}, mimeType: 'application/json', body: '{}' },
+      },
+      {
+        // Post-interaction request: Authorization + Cookie are per-user secrets.
+        seq: 10,
+        timestamp: 100,
+        method: 'GET',
+        url: 'https://api.example.com/data',
+        headers: {
+          Authorization: 'Bearer secrettoken1234567890abcdef',
+          'X-App-Key': 'synthetic-appkey-001',
+          Cookie: 'session=cookievalue1234567890',
+        },
+        resourceType: 'Fetch',
+        response: { status: 200, headers: {}, mimeType: 'application/json', body: '{}' },
+      },
+    ],
+    events: [{ seq: 0, timestamp: 50, type: 'click', detail: '{"selector":"#go"}' }],
+    narration: [],
+    // Clean-start recording (no cookies/storage before login) — page-minted
+    // detection is sound here, so X-App-Key is exempt as an app constant.
+    cookieSnapshots: [
+      { takenAt: '2026-06-26T00:00:00.000Z', timestamp: 0, label: 'start', cookies: [] },
+    ],
+    storageSnapshots: [],
+  };
+}
+
+/** An ALREADY-AUTHENTICATED (`--persist-profile`) recording: a per-user bearer the
+ *  SPA persisted in localStorage is sent as `Authorization: Bearer <token>` before
+ *  the first interaction. The page-minted heuristic must NOT exempt it — the
+ *  scheme-stripped storage check recognizes the stored token. */
+function authedStartSession(): Session {
+  return {
+    site: 'test',
+    startedAt: '2026-06-26T00:00:00.000Z',
+    url: 'https://www.example.com/',
+    imprintVersion: '0.1.0',
+    requests: [
+      {
+        seq: 1,
+        timestamp: 10,
+        method: 'GET',
+        url: 'https://api.example.com/data',
+        headers: { Authorization: 'Bearer realuserjwt1234567890abcdef' },
+        resourceType: 'Fetch',
+        response: { status: 200, headers: {}, mimeType: 'application/json', body: '{}' },
+      },
+    ],
+    events: [{ seq: 0, timestamp: 5000, type: 'click', detail: '{"selector":"#go"}' }],
+    narration: [],
+    cookieSnapshots: [
+      { takenAt: '2026-06-26T00:00:00.000Z', timestamp: 0, label: 'start', cookies: [] },
+    ],
+    storageSnapshots: [
+      {
+        takenAt: '2026-06-26T00:00:00.000Z',
+        timestamp: 0,
+        label: 'start',
+        origin: 'https://www.example.com',
+        localStorage: { access_token: 'realuserjwt1234567890abcdef' },
+        sessionStorage: {},
+      },
+    ],
+  };
+}
+
+describe('assertNoRawSecrets', () => {
+  it('blocks a persisted per-user bearer in an ALREADY-AUTHED recording (scheme-stripped, not exempt)', () => {
+    // Regression for the critical under-block: the bearer is sent pre-interaction as
+    // "Bearer <token>", but its bare token is in start localStorage, so
+    // detectPageMintedHeaders does NOT mark it page-minted and the raw token is caught.
+    const session = authedStartSession();
+    const workflowJson = JSON.stringify({
+      requests: [{ headers: { Authorization: 'Bearer realuserjwt1234567890abcdef' } }],
+    });
+    const r = assertNoRawSecrets({ workflowJson, session });
+    expect(r.failures.length).toBe(1);
+  });
+
+  it('blocks a pre-interaction Authorization token even with NO captured storage (always-secret header)', () => {
+    // Hardening: a bearer minted from uncaptured storage (IndexedDB) in an
+    // already-authed recording is still caught — Authorization is inherently
+    // per-session auth and is never treated as a page-minted constant.
+    const session = authedStartSession();
+    session.storageSnapshots = []; // simulate the token living in uncaptured storage
+    const workflowJson = JSON.stringify({
+      requests: [{ headers: { Authorization: 'Bearer realuserjwt1234567890abcdef' } }],
+    });
+    const r = assertNoRawSecrets({ workflowJson, session });
+    expect(r.failures.length).toBe(1);
+  });
+
+  it('blocks a raw sensitive-header value that leaked into workflow.json', () => {
+    const session = secretSession();
+    const workflowJson = JSON.stringify({
+      requests: [{ headers: { Authorization: 'Bearer secrettoken1234567890abcdef' } }],
+    });
+    const r = assertNoRawSecrets({ workflowJson, session });
+    expect(r.failures.length).toBe(1);
+    expect(r.failures[0]).toMatch(/raw secret/i);
+  });
+
+  it('auto-rewrites a known value to its contracted placeholder', () => {
+    const session = secretSession();
+    const workflowJson = JSON.stringify({
+      requests: [{ headers: { Authorization: 'Bearer secrettoken1234567890abcdef' } }],
+    });
+    const r = assertNoRawSecrets({
+      workflowJson,
+      session,
+      placeholderByValue: new Map([
+        ['Bearer secrettoken1234567890abcdef', '${credential.access_token}'],
+      ]),
+    });
+    expect(r.rewrites).toBe(1);
+    expect(r.failures).toEqual([]);
+    expect(r.workflowJson).toContain('${credential.access_token}');
+    expect(r.workflowJson).not.toContain('secrettoken1234567890abcdef');
+  });
+
+  it('allows a static literal (page-minted app constant), not a leak', () => {
+    const session = secretSession();
+    const workflowJson = JSON.stringify({
+      requests: [{ headers: { 'X-App-Key': 'synthetic-appkey-001' } }],
+    });
+    const r = assertNoRawSecrets({
+      workflowJson,
+      session,
+      allowedLiterals: new Set(['synthetic-appkey-001']),
+    });
+    expect(r.failures).toEqual([]);
+  });
+
+  it('does NOT block a hardcoded page-minted app key even without a contract (no regression)', () => {
+    // The compile-agent prompt tells the agent to hardcode page-minted keys like
+    // x-api-key verbatim. The single-tool generate path has no requiredInputs, so
+    // the guard must rely on the page-minted detector to avoid blocking them.
+    const session = secretSession();
+    const workflowJson = JSON.stringify({
+      requests: [{ headers: { 'X-App-Key': 'synthetic-appkey-001' } }],
+    });
+    const r = assertNoRawSecrets({ workflowJson, session });
+    expect(r.failures).toEqual([]);
+  });
+
+  it('still blocks a hardcoded session cookie (cookies are never page-minted)', () => {
+    const session = secretSession();
+    const workflowJson = JSON.stringify({
+      requests: [{ headers: { Cookie: 'session=cookievalue1234567890' } }],
+    });
+    const r = assertNoRawSecrets({ workflowJson, session });
+    expect(r.failures.length).toBe(1);
+  });
+
+  it('blocks a raw secret in parser.ts (never rewritten)', () => {
+    const session = secretSession();
+    const r = assertNoRawSecrets({
+      workflowJson: '{}',
+      parserSrc: 'const t = "Bearer secrettoken1234567890abcdef";',
+      session,
+    });
+    expect(r.failures.some((f) => f.includes('parser.ts'))).toBe(true);
+  });
+});
+
+describe('injectContractedInputs', () => {
+  it('injects a dropped credential header into the matching request', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [{ method: 'GET', url: 'https://api.example.com/data', headers: {} }],
+    };
+    const ri: RequiredInput[] = [
+      {
+        location: 'header:Authorization',
+        source: 'auth',
+        wiring: 'credential',
+        credentialName: 'access_token',
+        recordedSeq: 10,
+        note: '',
+      },
+    ];
+    const res = injectContractedInputs(workflow, ri, session);
+    expect(res.injected).toBe(1);
+    expect(workflow.requests[0]?.headers).toEqual({
+      Authorization: '${credential.access_token}',
+    });
+  });
+
+  it('sets workflow.bootstrap.url from a referer input', () => {
+    const session = secretSession();
+    const workflow: {
+      requests: Array<{ method?: string; url?: string; headers?: Record<string, string> }>;
+      bootstrap?: { url?: string };
+    } = { requests: [] };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'referer',
+          source: 'browser_state',
+          wiring: 'state',
+          bootstrapUrl: 'https://www.example.com/checkout',
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.bootstrapSet).toBe(true);
+    expect(workflow.bootstrap?.url).toBe('https://www.example.com/checkout');
+  });
+
+  it('does not overwrite a header the agent already wired', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [
+        { method: 'GET', url: 'https://api.example.com/data', headers: { Authorization: 'keep' } },
+      ],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'header:Authorization',
+          source: 'auth',
+          wiring: 'credential',
+          credentialName: 'access_token',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(0);
+    expect(workflow.requests[0]?.headers.Authorization).toBe('keep');
+  });
+
+  it('does not inject a browser_state header when no capture produces it', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [{ method: 'GET', url: 'https://api.example.com/data', headers: {} }],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'header:X-State',
+          source: 'browser_state',
+          wiring: 'state',
+          stateName: 'x_state',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(0);
+  });
+});
+
+describe('contractedInputGate', () => {
+  it('blocks when a non-producer contracted input is unwired', () => {
+    const gate = contractedInputGate('{"requests":[{"headers":{}}]}', [
+      {
+        location: 'header:Authorization',
+        source: 'auth',
+        wiring: 'credential',
+        credentialName: 'access_token',
+        note: '',
+      },
+    ]);
+    expect(gate.unresolved).toBe(1);
+    expect(gate.failures.length).toBe(1);
+  });
+
+  it('passes when the wiring is present', () => {
+    const gate = contractedInputGate(
+      JSON.stringify({ requests: [{ headers: { Authorization: '${credential.access_token}' } }] }),
+      [
+        {
+          location: 'header:Authorization',
+          source: 'auth',
+          wiring: 'credential',
+          credentialName: 'access_token',
+          note: '',
+        },
+      ],
+    );
+    expect(gate.unresolved).toBe(0);
+    expect(gate.failures).toEqual([]);
+  });
+
+  it('treats a missing referer bootstrap as a non-blocking warning', () => {
+    const gate = contractedInputGate('{"requests":[]}', [
+      {
+        location: 'referer',
+        source: 'browser_state',
+        wiring: 'state',
+        bootstrapUrl: 'https://www.example.com/checkout',
+        note: '',
+      },
+    ]);
+    expect(gate.failures).toEqual([]);
+    expect(gate.warnings.length).toBe(1);
+    expect(gate.unresolved).toBe(0);
+  });
+
+  it('does not gate producer_tool params (handled by the param machinery)', () => {
+    const gate = contractedInputGate('{"requests":[{"headers":{}}]}', [
+      {
+        location: 'url_param:hotel_id',
+        source: 'producer_tool',
+        wiring: 'param',
+        param: 'hotel_id',
+        producerTool: 'search',
+        producerField: 'hotelToken',
+        note: '',
+      },
+    ]);
+    expect(gate.failures).toEqual([]);
+  });
+});
+
+describe('classifyIntegrationOutcome contract-gap', () => {
+  it('classifies a contract gap as failed, NOT waived-bot, even with a bot line', () => {
+    const verdict = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: false,
+      combined: 'Access Denied\n_abck sensor\nFORBIDDEN',
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+      contractGap: true,
+    });
+    expect(verdict.outcome).toBe('failed');
+  });
+
+  it('still waives a genuine bot block when there is no contract gap', () => {
+    const verdict = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: false,
+      combined: '_abck status after interaction: ~-1~',
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+      contractGap: false,
+    });
+    expect(verdict.outcome).toBe('waived-bot');
+  });
+});
+
+describe('reveal_request tool', () => {
+  it('returns the UNREDACTED request + response read from the recording on disk', async () => {
+    const session = secretSession();
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-reveal-'));
+    const sessionPath = pathJoin(dir, 'session.json');
+    writeFileSync(sessionPath, JSON.stringify(session), 'utf8');
+    try {
+      const tools = buildCompileTools(session, dir, sessionPath, {});
+      const reveal = tools.find((t) => t.name === 'reveal_request');
+      expect(reveal).toBeDefined();
+      const out = await reveal?.handler({ seqs: [10] });
+      const parsed = JSON.parse(out?.result ?? '[]');
+      expect(parsed[0].headers.Authorization).toBe('Bearer secrettoken1234567890abcdef');
+      expect(parsed[0].headers.Cookie).toBe('session=cookievalue1234567890');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
