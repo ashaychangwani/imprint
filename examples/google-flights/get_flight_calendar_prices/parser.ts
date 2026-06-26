@@ -17,9 +17,8 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 // [0] is an ISO date string. We scan every nested array so we are robust to the
 // list living at payload[1] (the recorded shape) or being flattened.
 function collectEntries(payload: unknown): CalendarEntry[] {
-  const entries: CalendarEntry[] = [];
-  const seen = new Set<string>();
-  if (!Array.isArray(payload)) return entries;
+  const entries = new Map<string, CalendarEntry>();
+  if (!Array.isArray(payload)) return [];
 
   const consider = (item: unknown) => {
     if (!Array.isArray(item)) return;
@@ -33,9 +32,10 @@ function collectEntries(payload: unknown): CalendarEntry[] {
       price = (priceContainer[0] as unknown[])[1];
     }
     if (typeof price !== 'number') return; // no fare found for that date -> omit
-    if (seen.has(dep)) return;
-    seen.add(dep);
-    entries.push({ departureDate: dep, returnDate: ret, lowestPriceUSD: price });
+    const existing = entries.get(dep);
+    if (!existing || price < existing.lowestPriceUSD) {
+      entries.set(dep, { departureDate: dep, returnDate: ret, lowestPriceUSD: price });
+    }
   };
 
   for (const top of payload) {
@@ -45,7 +45,7 @@ function collectEntries(payload: unknown): CalendarEntry[] {
       for (const inner of top) consider(inner);
     }
   }
-  return entries;
+  return [...entries.values()];
 }
 
 export function extract(

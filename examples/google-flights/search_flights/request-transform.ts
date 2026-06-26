@@ -13,7 +13,7 @@ const ALLIANCES = new Set(['ONEWORLD', 'SKYTEAM', 'STAR_ALLIANCE']);
 function mapTripType(v: unknown): number {
   if (v == null || v === '') return 1;
   if (typeof v === 'number') return v;
-  const s = String(v).toLowerCase();
+  const s = String(v).trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (s === 'one_way' || s === 'oneway' || s === '2') return 2;
   if (s === 'multi_city' || s === 'multicity' || s === '3') return 3;
   return 1; // round_trip
@@ -69,7 +69,9 @@ export function transform(
   params?: Params,
 ): { url: string; body: string } {
   const p: Params = params ?? {};
-  const tripType = mapTripType(p.trip_type);
+  const requestedTripType = mapTripType(p.trip_type);
+  const hasReturnDate = p.return_date != null && String(p.return_date).trim() !== '';
+  const tripType = requestedTripType === 1 && !hasReturnDate ? 2 : requestedTripType;
   const stops = p.max_stops != null && p.max_stops !== '' ? mapStops(p.max_stops) : 0;
   const { alliances, carriers } = parseAirlines(p.airlines);
   const maxDur = num(p.max_duration);
