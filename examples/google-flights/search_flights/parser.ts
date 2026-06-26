@@ -147,6 +147,11 @@ export function extract(
       const frames = decodeBatchExecute(rawResponse);
       payload = frames[0]?.payload;
     }
+    if (payload == null) {
+      throw new Error(
+        'Google Flights GetShoppingResults response did not contain a batchexecute payload',
+      );
+    }
   } else {
     payload = rawResponse;
   }
@@ -162,6 +167,11 @@ export function extract(
   }
 
   const itineraries = [...byToken.values()];
+  if (itineraries.length === 0) {
+    throw new Error(
+      'Google Flights GetShoppingResults payload did not contain recognizable itineraries',
+    );
+  }
   return {
     count: itineraries.length,
     itineraries,

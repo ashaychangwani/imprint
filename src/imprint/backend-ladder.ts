@@ -163,6 +163,10 @@ export function __resetCompileCdpPoolForTest(): void {
   compileCdpPool.clear();
 }
 
+function cdpToolResultImpliesDeadSession(result: ToolResult): boolean {
+  return !result.ok && result.error === 'NETWORK';
+}
+
 /** Freshness window for the file-backed compile-time stealth token. Matches
  *  stealth-fetch's in-process `maxTokenAgeSeconds` default so a reused token is
  *  not immediately considered stale by `createStealthFetch`. */
@@ -972,7 +976,7 @@ async function runCdpReplay(
     } else {
       if (ownsSession) {
         await cf.close();
-      } else if (cdpPool) {
+      } else if (cdpPool && cdpToolResultImpliesDeadSession(result)) {
         cdpPool.delete(poolKey);
         log('cdp-replay: evicted degraded session from pool');
         await cf.close();
