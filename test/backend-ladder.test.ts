@@ -1343,6 +1343,86 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
   });
 });
 
+describe('cdp-replay cookie seeding by toolKind', () => {
+  function cdpTool(site: string, toolKind?: 'authenticate'): ResolvedTool {
+    return {
+      site,
+      dir: pathJoin(root, site, 'tool'),
+      workflow: {
+        toolName: `tool_${site}`,
+        ...(toolKind ? { toolKind } : {}),
+        intent: { description: 'x' },
+        parameters: [],
+        requests: [{ method: 'GET', url: `https://${site}.example.com/api/x`, headers: {} }],
+        site,
+        bootstrap: { url: `https://${site}.example.com/login` },
+      },
+      toolFn: async () => ({ ok: true, data: { via: 'cdp-replay' } }),
+    };
+  }
+
+  // A validated jar with an anti-bot cookie sitting in the site dir — the exact
+  // shape `saveJar` leaves behind after any prior cdp-replay run.
+  function seedJarOnDisk(site: string): void {
+    const siteDir = pathJoin(root, site);
+    mkdirSync(siteDir, { recursive: true });
+    const jar: MintedJar = {
+      cookies: [{ name: '_abck', value: 'SEED~0~SEED', domain: `.${site}.example.com`, path: '/' }],
+      ua: 'JarUA/148',
+      html: '',
+      bootstrapEpoch: Date.now(),
+      abckFlag: '0',
+      validated: true,
+    };
+    writeFileSync(pathJoin(siteDir, '.cdp-jar.json'), `${JSON.stringify(jar)}\n`, 'utf8');
+  }
+
+  function captureSeed(): { seen: () => Array<{ name: string }> | undefined } {
+    let seedSeen: Array<{ name: string }> | undefined;
+    __setCdpBrowserFetchFactoryForTest((opts) => {
+      seedSeen = opts.seedCookies;
+      return {
+        fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => ({
+          cookies: [],
+          ua: 'X',
+          html: '',
+          bootstrapEpoch: Date.now(),
+          abckFlag: '0',
+          validated: true,
+        }),
+        close: async () => {},
+      };
+    });
+    return { seen: () => seedSeen };
+  }
+
+  it('a data tool seeds cached jar cookies into the cdp browser (control)', async () => {
+    seedJarOnDisk('data');
+    const cap = captureSeed();
+    const r = await runWithLadder(['cdp-replay'], cdpTool('data'), {}, root, new Map());
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(cap.seen()?.map((c) => c.name)).toEqual(['_abck']);
+  });
+
+  it('an authenticate tool starts clean — never seeds a prior session/anti-bot cookie', async () => {
+    // Regression: seeding a stale Akamai `_abck` from a prior run poisons the live
+    // sensor so the cross-origin credential POST is edge-403'd. Auth = fresh session.
+    seedJarOnDisk('auth');
+    const cap = captureSeed();
+    const r = await runWithLadder(
+      ['cdp-replay'],
+      cdpTool('auth', 'authenticate'),
+      {},
+      root,
+      new Map(),
+    );
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(cap.seen()).toBeUndefined();
+  });
+});
+
 describe('runWithLadder — Google Flights CDP reuse', () => {
   const workflowPath = pathResolve(
     process.cwd(),

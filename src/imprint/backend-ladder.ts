@@ -965,14 +965,24 @@ async function runCdpReplay(
     cf = pooled;
   } else {
     let seedCookies: MintedJar['cookies'] | undefined;
-    try {
-      const rec = newestRecording(siteDir);
-      let cached = loadJar(siteDir);
-      if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
-      if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
-      if (cached?.cookies.length) seedCookies = cached.cookies;
-    } catch {
-      // best-effort
+    // An authentication flow establishes a BRAND-NEW session and must start from a
+    // clean cookie slate. Seeding a prior run's cookies — especially anti-bot tokens
+    // (e.g. Akamai `_abck`/`bm_sz`) carried over from a cached `.cdp-jar.json` or an
+    // old recording — poisons the live sensor: the page still validates a fresh
+    // `_abck` to `~0~`, but the cross-origin credential POST is edge-403'd ("Failed
+    // to fetch", no ACAO). saveJar persists each cdp-replay session, so seeding would
+    // otherwise re-arm itself every run (initiate writes a jar that the next initiate
+    // seeds → cascade of 403s). Data tools still seed (they reuse an authed session).
+    if (tool.workflow.toolKind !== 'authenticate') {
+      try {
+        const rec = newestRecording(siteDir);
+        let cached = loadJar(siteDir);
+        if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
+        if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
+        if (cached?.cookies.length) seedCookies = cached.cookies;
+      } catch {
+        // best-effort
+      }
     }
     cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({
       baseUrl,
