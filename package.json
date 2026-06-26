@@ -19,6 +19,7 @@
     "src/",
     "prompts/",
     "examples/",
+    "tsconfig.json",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
