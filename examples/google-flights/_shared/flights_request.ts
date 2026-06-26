@@ -19,8 +19,10 @@ function buildLeg(leg: any): any[] {
   out[1] = [[[leg?.dest, 0]]];
   out[2] = leg?.times ?? null;
   out[3] = leg?.stops ?? 0;
-  out[4] = leg?.alliances ?? null;
-  out[5] = leg?.carriers ?? null;
+  // Google uses slot 4 for included alliances and carrier codes. Slot 5 is an
+  // exclusion list; putting carrier codes there inverts the filter.
+  out[4] = leg?.includeAirlines ?? leg?.alliances ?? null;
+  out[5] = leg?.excludeAirlines ?? null;
   out[6] = leg?.date ?? null;
   out[7] = leg?.duration ?? null;
   out[8] = Array.isArray(leg?.selected)

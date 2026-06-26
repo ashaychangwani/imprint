@@ -19,7 +19,13 @@ interface Itinerary {
   flight_token: string;
 }
 
+interface AirlineFilter {
+  code: string;
+  name: string;
+}
+
 const AIRPORT = /^[A-Z]{3}$/;
+const ALLIANCE_CODES = new Set(['ONEWORLD', 'SKYTEAM', 'STAR_ALLIANCE']);
 
 // A leg is [carrierCode, [carrierNames], [segments], originIATA, [departDate],
 // [departTime], destIATA, [arriveDate], [arriveTime], durationMinutes, ...].
@@ -77,6 +83,38 @@ function walk(node: unknown, found: unknown[][]): void {
     return; // don't recurse into a matched itinerary
   }
   for (const child of node) walk(child, found);
+}
+
+function isPairList(node: unknown): node is string[][] {
+  return (
+    Array.isArray(node) &&
+    node.length > 0 &&
+    node.every(
+      (item) =>
+        Array.isArray(item) && typeof item[0] === 'string' && typeof item[1] === 'string',
+    )
+  );
+}
+
+function toFilters(pairs: string[][]): AirlineFilter[] {
+  return pairs.map((pair) => ({ code: pair[0] as string, name: pair[1] as string }));
+}
+
+function collectAirlineFilters(
+  node: unknown,
+  found: { alliances: AirlineFilter[]; carriers: AirlineFilter[] },
+): void {
+  if (!Array.isArray(node)) return;
+  if (
+    node.length >= 2 &&
+    isPairList(node[0]) &&
+    isPairList(node[1]) &&
+    node[0].some((pair) => ALLIANCE_CODES.has(pair[0] as string))
+  ) {
+    found.alliances = toFilters(node[0]);
+    found.carriers = toFilters(node[1]);
+  }
+  for (const child of node) collectAirlineFilters(child, found);
 }
 
 function normalize(it: unknown[]): Itinerary {
@@ -158,6 +196,11 @@ export function extract(
 
   const found: unknown[][] = [];
   if (payload != null) walk(payload, found);
+  const availableAirlineFilters = {
+    alliances: [] as AirlineFilter[],
+    carriers: [] as AirlineFilter[],
+  };
+  if (payload != null) collectAirlineFilters(payload, availableAirlineFilters);
 
   const byToken = new Map<string, Itinerary>();
   for (const it of found) {
@@ -175,5 +218,11 @@ export function extract(
   return {
     count: itineraries.length,
     itineraries,
+    resultScope: {
+      exhaustive: false,
+      note:
+        'Google Flights GetShoppingResults returns a limited sorted subset. A carrier can be available in availableAirlineFilters without appearing in itineraries; call search_flights again with airlines=<code> to fetch that carrier.',
+    },
+    availableAirlineFilters,
   };
 }

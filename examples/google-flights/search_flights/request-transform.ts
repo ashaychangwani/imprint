@@ -1,14 +1,12 @@
 // Adapter around the shared FlightsFrontendService body builder.
 // The tool exposes flat snake_case params (origin, destination, departure_date,
 // max_stops, …); the shared encoder consumes a structured camelCase shape
-// ({ tripType, legs:[{origin,dest,date,times,stops,alliances,carriers,duration}],
+// ({ tripType, legs:[{origin,dest,date,times,stops,includeAirlines,duration}],
 // maxPrice, bags }). We map between them here and delegate the byte-for-byte
 // positional encoding to the shared module (required reuse).
 import { transform as sharedTransform } from '../_shared/flights_request.ts';
 
 type Params = Record<string, string | number | boolean | undefined | null>;
-
-const ALLIANCES = new Set(['ONEWORLD', 'SKYTEAM', 'STAR_ALLIANCE']);
 
 function mapTripType(v: unknown): number {
   if (v == null || v === '') return 1;
@@ -42,18 +40,14 @@ function parseTimes(v: unknown): number[] | null {
   return [Number(m[1]), Number(m[2]), 0, 23];
 }
 
-function parseAirlines(v: unknown): { alliances: string[] | null; carriers: string[] | null } {
-  if (v == null || v === '') return { alliances: null, carriers: null };
-  const parts = String(v)
+function parseAirlines(v: unknown): string[] | null {
+  if (v == null || v === '') return null;
+  const includeAirlines = String(v)
     .split(',')
     .map((x) => x.trim())
-    .filter(Boolean);
-  const alliances = parts.filter((p) => ALLIANCES.has(p.toUpperCase())).map((p) => p.toUpperCase());
-  const carriers = parts.filter((p) => !ALLIANCES.has(p.toUpperCase()));
-  return {
-    alliances: alliances.length ? alliances : null,
-    carriers: carriers.length ? carriers : null,
-  };
+    .filter(Boolean)
+    .map((p) => p.toUpperCase());
+  return includeAirlines.length ? includeAirlines : null;
 }
 
 function num(v: unknown): number | undefined {
@@ -73,7 +67,7 @@ export function transform(
   const hasReturnDate = p.return_date != null && String(p.return_date).trim() !== '';
   const tripType = requestedTripType === 1 && !hasReturnDate ? 2 : requestedTripType;
   const stops = p.max_stops != null && p.max_stops !== '' ? mapStops(p.max_stops) : 0;
-  const { alliances, carriers } = parseAirlines(p.airlines);
+  const includeAirlines = parseAirlines(p.airlines);
   const maxDur = num(p.max_duration);
   const duration = maxDur != null ? [maxDur] : null;
 
@@ -87,8 +81,7 @@ export function transform(
       date: p.departure_date ? String(p.departure_date) : null,
       times: parseTimes(p.outbound_times),
       stops,
-      alliances,
-      carriers,
+      includeAirlines,
       duration,
     },
   ];
@@ -101,8 +94,7 @@ export function transform(
       date: String(p.return_date),
       times: parseTimes(p.return_times),
       stops,
-      alliances,
-      carriers,
+      includeAirlines,
       duration,
     });
   }
