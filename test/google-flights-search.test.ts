@@ -93,6 +93,28 @@ describe('Google Flights search request transform', () => {
     expect(searchParams[2]).toBe(1);
     expect(searchParams[13]).toHaveLength(2);
   });
+
+  it('encodes carrier filters as included airlines instead of excluded airlines', () => {
+    const result = transformSearch(
+      'POST',
+      url,
+      {},
+      {
+        origin: 'BOS',
+        destination: 'BOM',
+        departure_date: '2026-10-12',
+        return_date: '',
+        trip_type: 'one-way',
+        airlines: 'EK,TK,STAR_ALLIANCE',
+      },
+    );
+    const payload = decodeFreqBody(result.body);
+    const searchParams = payload[1] as unknown[];
+    const firstLeg = (searchParams[13] as unknown[])[0] as unknown[];
+
+    expect(firstLeg[4]).toEqual(['EK', 'TK', 'STAR_ALLIANCE']);
+    expect(firstLeg[5]).toBeNull();
+  });
 });
 
 describe('Google Flights calendar parser', () => {
