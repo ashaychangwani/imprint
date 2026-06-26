@@ -20,6 +20,7 @@ import type { AgentTool } from './agent.ts';
 import { inferAppApiHosts } from './app-api-hosts.ts';
 import {
   type AssignedSharedModule,
+  type RequiredInput,
   type SharedModuleManifestEntry,
   planSliceForTool,
   readBuildPlanFile,
@@ -33,14 +34,17 @@ import {
   groundingForEvents,
   inputProvenance,
 } from './param-grounding.ts';
+import { detectPageMintedHeaders } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
-import type { ClassifiedValue } from './session-diff.ts';
+import { isSensitiveHeader } from './sensitive-keys.ts';
+import { type ClassifiedValue, looksLikeToken } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   type BootstrapCapture,
   type CapturedRequest,
   type RequestCapture,
   type Session,
+  SessionSchema,
   WorkflowSchema,
 } from './types.ts';
 
@@ -65,6 +69,7 @@ export function buildCompileTools(
   const tools = [
     buildReadSessionSummaryTool(session, context),
     buildReadRequestTool(session),
+    buildRevealRequestTool(sessionPath),
     buildDiffRequestForEventTool(session, context),
     buildReadResponseBodyTool(session),
     buildSearchResponseBodyTool(session),
@@ -85,7 +90,7 @@ export function buildCompileTools(
   return tools;
 }
 
-interface CompileToolContext {
+export interface CompileToolContext {
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
   classifications?: ClassifiedValue[];
@@ -108,7 +113,7 @@ function buildReadBuildPlanTool(
   return {
     name: 'read_build_plan',
     description:
-      "Read this tool's slice of the shared build plan: shared modules to import (instead of re-implementing), parser guidance, the parameter checklist, the auth recipe to replicate inline, and the opaque-token contract (fields this tool must EMIT for siblings, and params it CONSUMES from siblings).",
+      "Read this tool's slice of the shared build plan: shared modules to import (instead of re-implementing), parser guidance, the parameter checklist, the auth recipe (when dependsOnAuth is true, a standalone authenticate tool handles login — skip request[0] login), and the opaque-token contract (fields this tool must EMIT for siblings, and params it CONSUMES from siblings).",
     input_schema: { type: 'object', properties: {}, required: [] },
     handler: async () => {
       const plan = readBuildPlanFile(buildPlanPath);
@@ -118,6 +123,7 @@ function buildReadBuildPlanTool(
       const assigned = resolveAssignedModules(plan, toolName, manifest).filter((m) => m.verified);
       const emitsTokens = slice.tool.emitsTokens ?? [];
       const tokenParams = slice.tool.tokenParams ?? [];
+      const requiredInputs = slice.tool.requiredInputs ?? [];
       const tokenNotes: string[] = [];
       if (emitsTokens.length > 0) {
         tokenNotes.push(
@@ -133,6 +139,31 @@ function buildReadBuildPlanTool(
           `CONSUMER CONTRACT: param \`${tp.param}\` is an opaque token minted by the \`${tp.sourceTool}\` tool's \`${tp.sourceField}\` output. Write a CHAINED \`param:${tp.param}\` integration test that calls \`runWorkflowWithLadder\` on \`../${tp.sourceTool}/workflow.json\`, reads \`${tp.sourceField}\` from its result, and passes THAT fresh value (not the recorded constant) into this tool — then asserts the response is non-empty. On producer bot/infra error, rethrow so the suite waives.`,
         );
       }
+      // Per-source wiring guidance for the general dependency contract. These are
+      // the inputs the request NEEDS — emit each with the stated wiring; use
+      // reveal_request to read the recorded value before deciding. The verifier
+      // injects a dropped one and BLOCKS if a non-producer input stays unwired.
+      const inputNotes = requiredInputs.map((ri) => {
+        switch (ri.source) {
+          case 'auth':
+            return `CONTRACTED INPUT @ ${ri.location}: a durable session token from login — wire it as \`\${credential.${ri.credentialName}}\` (the authenticate tool persists it). Do NOT hardcode the recorded token.`;
+          case 'producer_tool': {
+            const fieldNote = ri.producerField ? `'s \`${ri.producerField}\` output` : '';
+            const paramName = ri.param ?? ri.producerField ?? 'the value';
+            return `CONTRACTED INPUT @ ${ri.location}: an opaque token minted by the \`${ri.producerTool}\` tool${fieldNote} — expose it as param \`${paramName}\` and chain it (see CONSUMER CONTRACT above).`;
+          }
+          case 'browser_state':
+            return ri.location === 'referer'
+              ? `CONTRACTED INPUT: this request originates from ${ri.bootstrapUrl} — set workflow.bootstrap.url to that page so its context/anti-bot token is minted before API replay.`
+              : `CONTRACTED INPUT @ ${ri.location}: a value an earlier response / the page mints — capture it and wire it as \`\${state.${ri.stateName}}\` (add the capture/bootstrap that produces it).`;
+          case 'generated':
+            return `CONTRACTED INPUT @ ${ri.location}: a fresh per-call value — wire it as \`\${generated.${ri.generated}}\` (minted anew each call). Do NOT freeze the recorded value.`;
+          case 'static':
+            return `CONTRACTED INPUT @ ${ri.location}: a page-minted app constant — emit it verbatim as the recorded literal. It is functional, not boilerplate; do not drop it.`;
+          default:
+            return `CONTRACTED INPUT @ ${ri.location}: wire it as \`\${param.${ri.param}}\`.`;
+        }
+      });
       return {
         result: JSON.stringify(
           {
@@ -146,13 +177,16 @@ function buildReadBuildPlanTool(
             parserGuidance: slice.tool.parserGuidance,
             paramChecklist: slice.tool.paramChecklist,
             authRecipe: slice.tool.authRecipe,
+            dependsOnAuth: slice.tool.dependsOnAuth ?? false,
             emitsTokens,
             tokenParams,
+            requiredInputs,
             note:
               assigned.length > 0
                 ? 'Import the listed shared modules via their importPath (request-transform → set workflow.json "requestTransformModule"; parser-helper/types → import from parser.ts) instead of re-implementing their logic. The verifier fails this tool if an assigned module is not imported.'
                 : 'No shared modules assigned — build this tool self-contained.',
             tokenContract: tokenNotes.length > 0 ? tokenNotes : undefined,
+            contractedInputs: inputNotes.length > 0 ? inputNotes : undefined,
           },
           null,
           2,
@@ -164,7 +198,10 @@ function buildReadBuildPlanTool(
 
 // ─── Tool: read_session_summary ──────────────────────────────────────────────
 
-function buildReadSessionSummaryTool(session: Session, context: CompileToolContext): AgentTool {
+export function buildReadSessionSummaryTool(
+  session: Session,
+  context: CompileToolContext,
+): AgentTool {
   return {
     name: 'read_session_summary',
     description:
@@ -787,7 +824,7 @@ function safeUrl(s: string): URL | null {
 
 // ─── Tool: read_request ──────────────────────────────────────────────────────
 
-function buildReadRequestTool(session: Session): AgentTool {
+export function buildReadRequestTool(session: Session): AgentTool {
   return {
     name: 'read_request',
     description: 'Get the full request including method, URL, headers, and body for a given seq.',
@@ -820,6 +857,77 @@ function buildReadRequestTool(session: Session): AgentTool {
       };
 
       return { result: JSON.stringify(summary, null, 2) };
+    },
+  };
+}
+
+// ─── Tool: reveal_request ─────────────────────────────────────────────────────
+
+/** Read the raw recording from disk, bypassing the in-memory (possibly-redacted)
+ *  session. Cached per path so repeated reveals don't re-parse a large file. */
+let revealCachePath = '';
+let revealCacheSession: Session | null = null;
+function loadRawRecording(sessionPath: string): Session | null {
+  if (revealCachePath === sessionPath && revealCacheSession) return revealCacheSession;
+  try {
+    const parsed = SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8')));
+    revealCachePath = sessionPath;
+    revealCacheSession = parsed;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** Expose the unredacted request + response for one or more recorded seqs,
+ *  read straight from the recording on disk. The session summary / read_request
+ *  may hide sensitive-header values when the redaction gate is enabled; this tool
+ *  lets the agent read the REAL value of an auth/session/gateway header (or a body
+ *  field) on demand, so it can decide whether to wire it as a credential
+ *  reference, a captured state value, or a generated value. The agent must still
+ *  emit the placeholder the contract specifies — never a raw secret. */
+function buildRevealRequestTool(sessionPath: string): AgentTool {
+  return {
+    name: 'reveal_request',
+    description:
+      'Reveal the FULL UNREDACTED request + response (URL, all headers incl. Authorization/Cookie/X-CSRF/app keys, body, response headers + body) for one or more recorded seq(s), read straight from the recording on disk — bypassing any redaction the session summary applies. Use this BEFORE deciding how to wire an auth/session/gateway header or an opaque body field: read the real value, judge whether it is a credential (→ ${credential.X}), a value another recorded response mints (→ capture/${state.X} or a producer token), a per-call generated value (→ ${generated.X}), or a true constant. NEVER copy a raw secret into workflow.json/parser.ts — emit the placeholder; the emit-time guard blocks raw secrets.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        seqs: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Request sequence number(s) to reveal.',
+        },
+      },
+      required: ['seqs'],
+    },
+    handler: async (input: unknown) => {
+      const { seqs } = input as { seqs: number[] };
+      const raw = loadRawRecording(sessionPath);
+      if (!raw) {
+        return { result: `could not read the recording at ${sessionPath}`, isError: true };
+      }
+      const out = (Array.isArray(seqs) ? seqs : [seqs]).map((seq) => {
+        const req = raw.requests.find((r) => r.seq === seq);
+        if (!req) return { seq, error: 'not found' };
+        return {
+          seq,
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+          body: req.body,
+          response: req.response
+            ? {
+                status: req.response.status,
+                headers: req.response.headers,
+                mimeType: req.response.mimeType,
+                body: req.response.body,
+              }
+            : undefined,
+        };
+      });
+      return { result: JSON.stringify(out, null, 2) };
     },
   };
 }
@@ -876,7 +984,7 @@ function buildDiffRequestForEventTool(session: Session, context: CompileToolCont
 
 // ─── Tool: read_response_body ────────────────────────────────────────────────
 
-function buildReadResponseBodyTool(session: Session): AgentTool {
+export function buildReadResponseBodyTool(session: Session): AgentTool {
   return {
     name: 'read_response_body',
     description:
@@ -1004,11 +1112,18 @@ function buildSearchResponseBodyTool(session: Session): AgentTool {
 
 // ─── Tool: write_file ────────────────────────────────────────────────────────
 
-function buildWriteFileTool(toolDir: string): AgentTool {
+export function buildWriteFileTool(toolDir: string, extraAllowed: string[] = []): AgentTool {
+  const allowed = [
+    'workflow.json',
+    'parser.ts',
+    'parser.test.ts',
+    'request-transform.ts',
+    'integration.test.ts',
+    ...extraAllowed,
+  ];
   return {
     name: 'write_file',
-    description:
-      'Write a file to the generated tool directory. Allowed paths: workflow.json, parser.ts, parser.test.ts, notes/*.md',
+    description: `Write a file to the generated tool directory. Allowed paths: ${allowed.join(', ')}, notes/*.md`,
     input_schema: {
       type: 'object',
       properties: {
@@ -1027,13 +1142,6 @@ function buildWriteFileTool(toolDir: string): AgentTool {
         };
       }
 
-      const allowed = [
-        'workflow.json',
-        'parser.ts',
-        'parser.test.ts',
-        'request-transform.ts',
-        'integration.test.ts',
-      ];
       const isNotes = relativePath.startsWith('notes/') && relativePath.endsWith('.md');
       if (!allowed.includes(relativePath) && !isNotes) {
         return {
@@ -1058,7 +1166,7 @@ function buildWriteFileTool(toolDir: string): AgentTool {
 
 // ─── Tool: read_file ─────────────────────────────────────────────────────────
 
-function buildReadFileTool(toolDir: string): AgentTool {
+export function buildReadFileTool(toolDir: string): AgentTool {
   return {
     name: 'read_file',
     description: 'Read a file in the generated tool directory.',
@@ -1115,7 +1223,7 @@ function buildReadFileTool(toolDir: string): AgentTool {
 
 // ─── Tool: run_bash ──────────────────────────────────────────────────────────
 
-function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): AgentTool {
+export function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): AgentTool {
   return {
     name: 'run_bash',
     description: 'Run a shell command in the generated tool directory with a timeout.',
@@ -1711,6 +1819,11 @@ export function classifyIntegrationOutcome(input: {
   passedTests: ReadonlySet<string>;
   referencedStateBroken: boolean;
   failedCaptureNames: ReadonlySet<string>;
+  /** A contracted input the plan declared is still missing/unresolved in the
+   *  workflow. A live failure then is a CONTRACT GAP — a workflow-correctness
+   *  error to fix — not a bot block to waive. Checked with the same pre-bot-defense
+   *  precedence as the capture-fail branch. */
+  contractGap?: boolean;
 }): IntegrationVerdict {
   const { combined } = input;
   const baselineLiveVerified =
@@ -1761,6 +1874,20 @@ export function classifyIntegrationOutcome(input: {
       outcome: 'failed',
       captureFailName: name,
       captureFailFromKnown: input.failedCaptureNames.has(name),
+    };
+  }
+  // Contract gap — a declared contracted input is still unwired/unresolved, so the
+  // live failure is a capture/lowering gap to FIX, not anti-bot to waive. Same
+  // pre-bot-defense precedence as the capture-fail branch: a bot-block line in the
+  // log doesn't reclassify a contract gap as waived-bot.
+  if (input.contractGap) {
+    return {
+      ...base,
+      outcome: 'failed',
+      firstError:
+        firstError === 'unknown' ? 'contract-gap (a contracted input is unwired)' : firstError,
+      captureFailName: null,
+      captureFailFromKnown: false,
     };
   }
   // A verifier TIMEOUT truncated a paced suite — that's infra, NEVER a bot block.
@@ -2406,6 +2533,339 @@ function parseBodyForFieldExtraction(
   return null;
 }
 
+// ─── Emit-time secret guard (Thread C) ────────────────────────────────────────
+
+/** Collect the raw secret values present in a recording: every sensitive-header
+ *  value (Authorization / X-CSRF / …), each individual cookie value from Cookie /
+ *  Set-Cookie, on both requests and responses. Filtered to token-shaped values so
+ *  an incidental `lang=en` cookie isn't treated as a secret. PAGE-MINTED sensitive
+ *  headers (app keys/gateway constants the site bakes into its JS) are EXCLUDED:
+ *  they are public app config the compile agent is told to hardcode verbatim, NOT
+ *  per-user secrets, so blocking them would break legitimate tools. `imprint record`
+ *  uses a fresh browser profile, so a per-user token only appears AFTER the recorded
+ *  login (post-interaction) and is never page-minted; the one already-authenticated
+ *  (`--persist-profile`) case — a persisted bearer in storage sent as `Bearer
+ *  <token>` — is caught because detectPageMintedHeaders scheme-strips the stored
+ *  token. Cookies are never page-minted, so a hardcoded cookie value is always
+ *  caught regardless. Structural — keyed on the recording's own values + the
+ *  existing page-minted detector, never a header-name literal. */
+function collectSensitiveHeaderValues(session: Session): Set<string> {
+  const out = new Set<string>();
+  const pageMinted = new Set(detectPageMintedHeaders(session));
+  const add = (v: string | undefined) => {
+    if (!v) return;
+    if (looksLikeToken(v)) out.add(v);
+    // A scheme-prefixed value ("Bearer <jwt>" / "Basic <b64>") has whitespace, so
+    // looksLikeToken rejects the whole string — also capture the token segment(s).
+    if (/\s/.test(v)) {
+      for (const seg of v.split(/\s+/)) if (looksLikeToken(seg)) out.add(seg);
+    }
+  };
+  const scan = (headers: Record<string, string> | undefined) => {
+    for (const [name, value] of Object.entries(headers ?? {})) {
+      if (!isSensitiveHeader(name)) continue;
+      const lower = name.toLowerCase();
+      if (pageMinted.has(lower)) continue; // public app constant — not a secret
+      if (lower === 'cookie') {
+        for (const part of value.split(';')) {
+          const eq = part.indexOf('=');
+          if (eq > 0) add(part.slice(eq + 1).trim());
+        }
+      } else if (lower === 'set-cookie') {
+        for (const cookie of splitSetCookieHeader(value)) {
+          const first = cookie.split(';', 1)[0] ?? '';
+          const eq = first.indexOf('=');
+          if (eq > 0) add(first.slice(eq + 1).trim());
+        }
+      } else {
+        add(value);
+      }
+    }
+  };
+  for (const req of session.requests) {
+    scan(req.headers);
+    scan(req.response?.headers);
+  }
+  return out;
+}
+
+/**
+ * Emit-time secret guard. Because the compile agent now SEES raw sensitive-header
+ * values (the redaction gate is off by default), enforce that the emitted
+ * artifacts contain ONLY placeholders — never a raw secret. Structural: the set
+ * of "secrets" is keyed on the recording's own sensitive-header values plus any
+ * known credential values the caller supplies — no hard-coded literals.
+ *
+ * For each known secret value that appears verbatim in workflow.json:
+ *   - if `placeholderByValue` maps it to a placeholder, auto-rewrite it (the
+ *     intended wiring the agent should have used), counted in `rewrites`;
+ *   - otherwise it is a leak with no safe rewrite → blocking failure.
+ * parser.ts is never rewritten (it is code, not a template) — any secret there
+ * always blocks. Returns the (possibly-rewritten) workflow JSON text.
+ */
+export function assertNoRawSecrets(opts: {
+  workflowJson: string;
+  parserSrc?: string;
+  session: Session;
+  /** Raw secret value → intended placeholder, built by the caller from credential
+   *  replacements and resolved contracted inputs. Keys are also treated as secrets
+   *  to block (so a short credential value with no rewrite still fails). */
+  placeholderByValue?: Map<string, string>;
+  /** Values a `static` contracted input declares as intentionally-verbatim app
+   *  constants (page-minted keys). Excluded from the block set — emitting them is
+   *  the contract, not a leak. */
+  allowedLiterals?: Set<string>;
+}): { workflowJson: string; failures: string[]; rewrites: number } {
+  const failures: string[] = [];
+  let workflowJson = opts.workflowJson;
+  let rewrites = 0;
+
+  const placeholderByValue = opts.placeholderByValue ?? new Map<string, string>();
+  // Auto-rewrite known values to their placeholder. Longest-first so a value that
+  // is a prefix of another doesn't get partially clobbered.
+  const rewriteEntries = [...placeholderByValue.entries()]
+    .filter(([value, placeholder]) => value.length >= 4 && value !== placeholder)
+    .sort((a, b) => b[0].length - a[0].length);
+  for (const [value, placeholder] of rewriteEntries) {
+    if (workflowJson.includes(value)) {
+      workflowJson = workflowJson.split(value).join(placeholder);
+      rewrites++;
+    }
+  }
+
+  // The block set: recording-derived sensitive-header values + every known
+  // secret (placeholder keys). After rewriting, any survivor is an unguarded leak.
+  // Static literals (page-minted app constants the contract emits verbatim) are
+  // excluded — they are not per-user secrets.
+  const allowedLiterals = opts.allowedLiterals ?? new Set<string>();
+  const secrets = collectSensitiveHeaderValues(opts.session);
+  for (const value of placeholderByValue.keys()) {
+    if (value.length >= 4) secrets.add(value);
+  }
+  for (const lit of allowedLiterals) secrets.delete(lit);
+  const seen = new Set<string>();
+  const checkText = (text: string | undefined, where: string) => {
+    if (!text) return;
+    for (const secret of secrets) {
+      if (seen.has(secret)) continue;
+      if (text.includes(secret)) {
+        seen.add(secret);
+        failures.push(
+          `${where} contains a raw secret value from the recording (a sensitive-header or credential value). Never hardcode a secret — wire it as the contracted placeholder instead: ${'${credential.NAME}'} for a durable auth token, ${'${state.NAME}'} for a value an earlier response/bootstrap produces, ${'${response[N].path}'} for a sibling-tool token, or ${'${generated.KIND}'} for a per-call value. Use reveal_request to read the value, then read_build_plan for its contracted wiring.`,
+        );
+      }
+    }
+  };
+  checkText(workflowJson, 'workflow.json');
+  checkText(opts.parserSrc, 'parser.ts');
+
+  return { workflowJson, failures, rewrites };
+}
+
+// ─── Contracted-input injection + gate (Threads B/C) ──────────────────────────
+
+interface RawWorkflowRequest {
+  method?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  captures?: Array<{ name?: string }>;
+}
+interface RawWorkflow {
+  requests?: RawWorkflowRequest[];
+  bootstrap?: { url?: string; captures?: Array<{ name?: string }> };
+}
+
+/** The placeholder (or verbatim literal) a contracted input wires in at its
+ *  recorded location. Returns null for `referer` (a bootstrap, not a substitution)
+ *  and for `response` (the response index isn't known at plan time). */
+function wiringToken(ri: RequiredInput): string | null {
+  switch (ri.wiring) {
+    case 'credential':
+      return ri.credentialName ? `\${credential.${ri.credentialName}}` : null;
+    case 'state':
+      return ri.stateName ? `\${state.${ri.stateName}}` : null;
+    case 'generated':
+      return ri.generated ? `\${generated.${ri.generated}}` : null;
+    case 'param':
+      return ri.param ? `\${param.${ri.param}}` : null;
+    case 'literal':
+      return ri.literal ?? null;
+    default:
+      return null;
+  }
+}
+
+function headerNameOf(location: string): string | null {
+  return location.toLowerCase().startsWith('header:') ? location.slice('header:'.length) : null;
+}
+
+function looseUrlPath(url: string): string {
+  const q = url.indexOf('?');
+  const noQuery = q >= 0 ? url.slice(0, q) : url;
+  const m = noQuery.match(/^https?:\/\/[^/]+(\/.*)?$/i);
+  return m ? (m[1] ?? '/') : noQuery;
+}
+
+/** All ${state.X} capture names already declared in the workflow (request + bootstrap
+ *  captures) — gates browser_state header injection so we never add a `${state.X}`
+ *  that has no producer. */
+function declaredCaptureNames(workflow: RawWorkflow): Set<string> {
+  const names = new Set<string>();
+  for (const r of workflow.requests ?? []) {
+    for (const c of r.captures ?? []) if (c?.name) names.add(c.name);
+  }
+  for (const c of workflow.bootstrap?.captures ?? []) if (c?.name) names.add(c.name);
+  return names;
+}
+
+/**
+ * Deterministically inject a DROPPED contracted input into the workflow before the
+ * live test — the safety net behind the prompt-guided CONTRACTED-HEADERS rule.
+ * Conservative: only fills always-resolvable header wirings (credential / static
+ * literal / generated, plus browser_state when a matching capture already exists)
+ * and sets `workflow.bootstrap.url` from a referer hint. Param-wired inputs
+ * (producer_tool / user_param) are left to the existing param machinery. A header
+ * is injected only when ABSENT from every request, into the request(s) matching the
+ * input's recorded method + path (or all requests when no anchor matches). Mutates
+ * `workflow`; returns what it changed.
+ */
+export function injectContractedInputs(
+  workflow: RawWorkflow,
+  requiredInputs: RequiredInput[],
+  session: Session,
+): { injected: number; bootstrapSet: boolean } {
+  let injected = 0;
+  let bootstrapSet = false;
+  const requests = Array.isArray(workflow.requests) ? workflow.requests : [];
+  const captureNames = declaredCaptureNames(workflow);
+
+  for (const ri of requiredInputs) {
+    // Bootstrap (originating page) — set workflow.bootstrap.url if absent.
+    if (ri.location === 'referer') {
+      if (ri.bootstrapUrl && !workflow.bootstrap?.url) {
+        workflow.bootstrap = { ...(workflow.bootstrap ?? {}), url: ri.bootstrapUrl };
+        bootstrapSet = true;
+      }
+      continue;
+    }
+    const header = headerNameOf(ri.location);
+    if (!header || requests.length === 0) continue; // only header inputs are injected here
+    if (ri.source === 'producer_tool' || ri.source === 'user_param') continue; // params: handled elsewhere
+    // browser_state needs a producer — only inject the header when its capture exists.
+    if (ri.source === 'browser_state' && !(ri.stateName && captureNames.has(ri.stateName)))
+      continue;
+    const token = wiringToken(ri);
+    if (token == null) continue;
+    // Skip if any request already carries this header (the agent wired it; a wrong
+    // raw value is handled by the emit-time guard's rewrite, not here).
+    const already = requests.some((r) =>
+      Object.keys(r.headers ?? {}).some((h) => h.toLowerCase() === header.toLowerCase()),
+    );
+    if (already) continue;
+    // Target the request(s) matching the input's recorded method + path; fall back
+    // to every request when there's no usable anchor.
+    const rec =
+      ri.recordedSeq != null ? session.requests.find((r) => r.seq === ri.recordedSeq) : undefined;
+    const targets = rec
+      ? requests.filter(
+          (r) =>
+            (r.method ?? 'GET').toUpperCase() === rec.method.toUpperCase() &&
+            looseUrlPath(r.url ?? '') === looseUrlPath(rec.url),
+        )
+      : [];
+    const dest = targets.length > 0 ? targets : requests;
+    for (const r of dest) {
+      if (!r.headers || typeof r.headers !== 'object') r.headers = {};
+      r.headers[header] = token;
+    }
+    injected++;
+  }
+  return { injected, bootstrapSet };
+}
+
+/** Build the value→placeholder map the emit-time guard uses to auto-rewrite a
+ *  stray raw secret, from the recording's values at each contracted header
+ *  location plus known credential values. Static literals are returned separately
+ *  as `allowedLiterals` (intentionally-verbatim app constants, never a "leak"). */
+function buildSecretPlaceholderMap(
+  requiredInputs: RequiredInput[],
+  session: Session,
+  credentialValues: Record<string, string>,
+): { placeholderByValue: Map<string, string>; allowedLiterals: Set<string> } {
+  const placeholderByValue = new Map<string, string>();
+  const allowedLiterals = new Set<string>();
+  for (const ri of requiredInputs) {
+    const header = headerNameOf(ri.location);
+    if (ri.source === 'static') {
+      if (ri.literal) allowedLiterals.add(ri.literal);
+      continue;
+    }
+    if (!header || ri.recordedSeq == null) continue;
+    const token = wiringToken(ri);
+    if (token == null || ri.wiring === 'literal') continue;
+    const rec = session.requests.find((r) => r.seq === ri.recordedSeq);
+    const recordedValue = Object.entries(rec?.headers ?? {}).find(
+      ([h]) => h.toLowerCase() === header.toLowerCase(),
+    )?.[1];
+    if (recordedValue) placeholderByValue.set(recordedValue, token);
+  }
+  for (const [name, value] of Object.entries(credentialValues)) {
+    if (value) placeholderByValue.set(value, `\${credential.${name}}`);
+  }
+  return { placeholderByValue, allowedLiterals };
+}
+
+/** The contracted-input gate (Thread B). After injection, every NON-producer,
+ *  non-referer requiredInput must have its wiring present in the workflow text;
+ *  a referer input wants `bootstrap.url` set (non-blocking — the ladder still has
+ *  the cdp/stealth rungs). Returns blocking failures + the count still unresolved
+ *  (fed to `classifyIntegrationOutcome` so a doomed live call is `contract-gap`,
+ *  not `waived-bot`). */
+export function contractedInputGate(
+  workflowJson: string,
+  requiredInputs: RequiredInput[],
+): { failures: string[]; warnings: string[]; unresolved: number } {
+  const failures: string[] = [];
+  const warnings: string[] = [];
+  let unresolved = 0;
+  let bootstrapSet: boolean | null = null;
+  for (const ri of requiredInputs) {
+    if (ri.location === 'referer') {
+      if (bootstrapSet === null) {
+        try {
+          bootstrapSet = Boolean((JSON.parse(workflowJson) as RawWorkflow).bootstrap?.url);
+        } catch {
+          bootstrapSet = false;
+        }
+      }
+      if (!bootstrapSet) {
+        warnings.push(
+          `the recording shows this tool's request originates from ${ri.bootstrapUrl ?? 'a different page'} — set workflow.bootstrap.url to that page so its context/anti-bot token is minted before API replay (the runtime falls through to cdp-replay otherwise).`,
+        );
+      }
+      continue;
+    }
+    if (ri.source === 'producer_tool' || ri.source === 'user_param') continue;
+    const token = wiringToken(ri);
+    if (token == null) continue;
+    if (!workflowJson.includes(token)) {
+      unresolved++;
+      const how =
+        ri.source === 'auth'
+          ? `wire it as \`${token}\` (the authenticate tool persists it via sessionCapture)`
+          : ri.source === 'browser_state'
+            ? `wire it as \`${token}\` and add the capture/bootstrap that produces it`
+            : ri.source === 'generated'
+              ? `wire it as \`${token}\` (a fresh value is minted per call)`
+              : 'emit it verbatim as the recorded constant';
+      failures.push(
+        `the build plan contracts an input at ${ri.location} (${ri.source}) that the request needs, but workflow.json does not wire it — ${how}. Use reveal_request to read the recorded value and read_build_plan for the contract.`,
+      );
+    }
+  }
+  return { failures, warnings, unresolved };
+}
+
 export async function externalVerification(
   toolDir: string,
   session: Session,
@@ -2431,6 +2891,15 @@ export async function externalVerification(
      *  search seq) used by the hardcoded-body check to widen its variation
      *  pool beyond the tool's own load-bearing seqs. */
     dependencyRequestSeqs?: number[];
+    /** The general dependency contract for this tool: every non-param input its
+     *  request needs (auth / browser_state / generated / static / referer) and how
+     *  to wire each. The verifier deterministically injects a dropped contracted
+     *  input, then BLOCKS if a non-producer input's wiring is still absent. */
+    requiredInputs?: RequiredInput[];
+    /** Known credential values (name → value) for the emit-time secret guard, so a
+     *  hardcoded credential is auto-rewritten to its ${credential.X} placeholder or
+     *  blocked. Best-effort: provided on the teach path, empty otherwise. */
+    credentialValues?: Record<string, string>;
   } = {},
 ): Promise<{
   failures: string[];
@@ -2464,6 +2933,62 @@ export async function externalVerification(
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   const parserPath = pathJoin(toolDir, 'parser.ts');
   const parserTestPath = pathJoin(toolDir, 'parser.test.ts');
+
+  // Contracted-input injection + emit-time secret guard + the contracted-input
+  // gate. Runs FIRST so every downstream check and the live test see the final,
+  // contracted, placeholder-only workflow. Injection is the deterministic safety
+  // net behind the prompt-guided CONTRACTED-HEADERS rule; the guard enforces no
+  // raw secret survives (Phase 0 makes the agent SEE them); the gate blocks a
+  // still-missing contracted input. `unresolvedContractInputs` makes a doomed
+  // live call classify as `contract-gap` rather than `waived-bot`.
+  let unresolvedContractInputs = 0;
+  if (existsSync(workflowPath)) {
+    try {
+      const rawWorkflow = JSON.parse(readFileSync(workflowPath, 'utf8')) as RawWorkflow;
+      const requiredInputs = opts.requiredInputs ?? [];
+      const inj = injectContractedInputs(rawWorkflow, requiredInputs, session);
+      let workflowJson = JSON.stringify(rawWorkflow, null, 2);
+
+      const parserSrcForGuard = existsSync(parserPath)
+        ? readFileSync(parserPath, 'utf8')
+        : undefined;
+      const { placeholderByValue, allowedLiterals } = buildSecretPlaceholderMap(
+        requiredInputs,
+        session,
+        opts.credentialValues ?? {},
+      );
+      const guard = assertNoRawSecrets({
+        workflowJson,
+        parserSrc: parserSrcForGuard,
+        session,
+        placeholderByValue,
+        allowedLiterals,
+      });
+      workflowJson = guard.workflowJson;
+      failures.push(...guard.failures);
+
+      if (inj.injected > 0 || inj.bootstrapSet || guard.rewrites > 0) {
+        writeFileSync(workflowPath, workflowJson, 'utf8');
+        if (inj.injected > 0)
+          warnings.push(
+            `injected ${inj.injected} contracted input(s) the plan declared but the workflow had dropped.`,
+          );
+        if (inj.bootstrapSet)
+          warnings.push('set workflow.bootstrap.url from the recording originating page.');
+        if (guard.rewrites > 0)
+          warnings.push(
+            `emit-time guard rewrote ${guard.rewrites} raw secret value(s) to their contracted placeholder.`,
+          );
+      }
+
+      const gate = contractedInputGate(workflowJson, requiredInputs);
+      failures.push(...gate.failures);
+      warnings.push(...gate.warnings);
+      unresolvedContractInputs = gate.unresolved;
+    } catch {
+      // Malformed workflow.json — the schema check below surfaces it.
+    }
+  }
 
   if (!existsSync(workflowPath)) {
     failures.push('workflow.json was not written');
@@ -2741,6 +3266,7 @@ export async function externalVerification(
       passedTests: run.passed,
       referencedStateBroken: false, // the broken-capture case is handled above
       failedCaptureNames,
+      contractGap: unresolvedContractInputs > 0,
     });
     integrationOutcome = verdict.outcome;
 

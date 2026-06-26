@@ -403,6 +403,93 @@ function collectFormSubmitUsernames(events: CapturedEvent[]): Set<string> {
   return out;
 }
 
+/** Fallback credential extraction for logins the username+password pairer
+ *  misses — passwordless / OTP-only flows (e.g. email + emailed code, magic
+ *  link) where the only "credential" the user supplies is an identifier, and
+ *  the second factor replaces the password. Driven by the build plan's
+ *  `authTool`: we look ONLY in the declared login request(s) and map each
+ *  planner-declared `credentialNames` entry to a value, gated by either an
+ *  exact field-name match or a username-like field whose value the user
+ *  actually typed into a form submit (DOM confirmation) — so a stray email
+ *  from analytics is never mistaken for a credential. Returns the values plus
+ *  redaction replacements so the redacted session can show `${credential.X}`.
+ *  Form-urlencoded bodies only (the common shape for these legacy forms). */
+export function deriveLoginCredentials(
+  session: Session,
+  loginRequestSeqs: number[],
+  credentialNames: string[],
+): { values: Record<string, string>; replacements: Replacement[] } {
+  const values: Record<string, string> = {};
+  const replacements: Replacement[] = [];
+  if (loginRequestSeqs.length === 0 || credentialNames.length === 0) {
+    return { values, replacements };
+  }
+  const typedInDom = collectFormSubmitUsernames(session.events);
+  const seqs = new Set(loginRequestSeqs);
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const req of session.requests) {
+    if (!seqs.has(req.seq) || !req.body) continue;
+    const pairs = parseFormBody(req.body);
+    if (pairs.length === 0) continue;
+    for (const name of credentialNames) {
+      if (values[name]) continue;
+      // 1. Exact-ish field-name match (e.g. credentialName "email" → key "email").
+      let hit = pairs.find((p) => norm(p.key) === norm(name) && p.value.length > 0);
+      // 2. A username-like field whose value the user actually typed (DOM-confirmed).
+      if (!hit) {
+        hit = pairs.find(
+          (p) => isUsernameKey(p.key) && p.value.length > 0 && typedInDom.has(p.value),
+        );
+      }
+      if (hit) {
+        values[name] = hit.value;
+        replacements.push({
+          requestSeq: req.seq,
+          location: { kind: 'body-form', key: hit.key },
+          originalValue: hit.value,
+          placeholder: `\${credential.${name}}`,
+        });
+      }
+    }
+  }
+  return { values, replacements };
+}
+
+/** Swap form-field values in a session's request bodies for their
+ *  `${credential.X}` placeholders, in place. Used to back-fill credential
+ *  placeholders into an already-redacted session once the build plan has
+ *  identified passwordless credential fields (see `deriveLoginCredentials`).
+ *  Preserves the original key encoding; only the value is replaced. */
+export function applyCredentialPlaceholders(session: Session, replacements: Replacement[]): void {
+  const bySeq = new Map<number, Map<string, string>>();
+  for (const r of replacements) {
+    if (r.location.kind !== 'body-form') continue;
+    const m = bySeq.get(r.requestSeq) ?? new Map<string, string>();
+    m.set(r.location.key, r.placeholder);
+    bySeq.set(r.requestSeq, m);
+  }
+  for (const req of session.requests) {
+    const keys = bySeq.get(req.seq);
+    if (!keys || !req.body) continue;
+    req.body = req.body
+      .split('&')
+      .map((pair) => {
+        const eq = pair.indexOf('=');
+        if (eq === -1) return pair;
+        const rawK = pair.slice(0, eq);
+        let k: string;
+        try {
+          k = decodeURIComponent(rawK);
+        } catch {
+          k = rawK;
+        }
+        const placeholder = keys.get(k);
+        return placeholder ? `${rawK}=${placeholder}` : pair;
+      })
+      .join('&');
+  }
+}
+
 /** Parse `a=1&b=2` into pairs, URL-decoding both sides. Best-effort: bad
  *  pairs get skipped. */
 export function parseFormBody(body: string): Array<{ key: string; value: string }> {

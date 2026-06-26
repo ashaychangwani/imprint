@@ -261,8 +261,8 @@ describe('redactSession', () => {
     storageSnapshots: [],
   };
 
-  it('scrubs request bodies, headers, and cookies', () => {
-    const { session, stats } = redactSession(baseSession);
+  it('scrubs request bodies, headers, and cookies when redactSensitiveHeaders is on', () => {
+    const { session, stats } = redactSession(baseSession, { redactSensitiveHeaders: true });
 
     expect(stats.totalRedactions).toBeGreaterThan(0);
     expect(stats.cookiesRedacted).toBe(1);
@@ -281,6 +281,37 @@ describe('redactSession', () => {
     expect(snap.cookies[0]?.value).toMatch(/^\[REDACTED:v3:id=\d+:len=16\]$/);
     expect(snap.cookies[0]?.name).toBe('session'); // names kept
     expect(snap.cookies[0]?.domain).toBe('.example.com');
+  });
+
+  it('keeps sensitive request/response headers VISIBLE by default (redaction gate off)', () => {
+    // The compile agent must see auth/session/gateway header values to wire them
+    // as contracted inputs. The default no longer blinds it. Credential
+    // placeholdering still runs (verified separately).
+    const { session } = redactSession(baseSession);
+    const req = session.requests[0];
+    expect(req).toBeDefined();
+    if (!req) return;
+    expect(req.headers.Cookie).toBe('session=abc');
+    expect(req.response?.headers['Set-Cookie']).toBe('session=newvalue');
+  });
+
+  it('re-enables sensitive-header redaction via IMPRINT_REDACT_SENSITIVE_HEADERS=1', () => {
+    const prev = process.env.IMPRINT_REDACT_SENSITIVE_HEADERS;
+    process.env.IMPRINT_REDACT_SENSITIVE_HEADERS = '1';
+    try {
+      const { session } = redactSession(baseSession);
+      const req = session.requests[0];
+      expect(req).toBeDefined();
+      if (!req) return;
+      expect(req.headers.Cookie).toMatch(/^session=\[REDACTED:v3:id=\d+:len=3\]$/);
+    } finally {
+      if (prev === undefined) {
+        // biome-ignore lint/performance/noDelete: env cleanup requires delete
+        delete process.env.IMPRINT_REDACT_SENSITIVE_HEADERS;
+      } else {
+        process.env.IMPRINT_REDACT_SENSITIVE_HEADERS = prev;
+      }
+    }
   });
 
   it('preserves the rest of the session shape', () => {

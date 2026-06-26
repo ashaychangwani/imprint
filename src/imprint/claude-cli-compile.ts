@@ -29,8 +29,13 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
 import type { OnDeadlineReached } from './agent.ts';
+import type { AuthCliCompileMode } from './auth-compile-tools.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
-import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
+import type {
+  AuthCheckpoint,
+  CompileAgentProgress,
+  CompileAgentResult,
+} from './compile-agent-types.ts';
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
@@ -105,6 +110,50 @@ interface CompileViaClaudeCliOptions {
   sharedModules?: SharedModuleManifestEntry[];
   /** Per-tool implementation plan injected into the agent's initial message. */
   toolPlan?: string;
+  /** Present → drive an auth compile rather than a data compile. */
+  authMode?: AuthCliCompileMode;
+  /** Auth segments only: resume a prior segment's claude session with a new user
+   *  message (the orchestrator's result for the checkpoint the agent reached).
+   *  When set, `--resume <sessionId>` is used and `message` replaces the initial
+   *  prompt. Requires session persistence (auth mode keeps it on). */
+  resume?: { sessionId: string; message: string };
+}
+
+/** Options for the auth-compile entry point. A strict subset of the data
+ *  options — the auth-specific bits live in `authMode`. */
+interface AuthCompileViaClaudeCliOptions {
+  session: Session;
+  absoluteToolDir: string;
+  sessionPath: string;
+  systemPromptPath: string;
+  deadlineMs: number;
+  startTime: number;
+  onProgress?: (p: CompileAgentProgress) => void;
+  onDeadlineReached?: OnDeadlineReached;
+  authMode: AuthCliCompileMode;
+  /** Resume a prior segment (see CompileViaClaudeCliOptions.resume). */
+  resume?: { sessionId: string; message: string };
+}
+
+/** Auth-compile entry point for claude-cli. Delegates to the same trace +
+ *  usage-policy-retry + stream-json driver as the data path; the only
+ *  differences (MCP args, allowedTools, prompts, verification) are carried by
+ *  `authMode` and resolved inside runClaudeCliAttempt. */
+export function compileAuthViaClaudeCli(
+  opts: AuthCompileViaClaudeCliOptions,
+): Promise<CompileAgentResult> {
+  return compileViaClaudeCli({
+    session: opts.session,
+    absoluteToolDir: opts.absoluteToolDir,
+    sessionPath: opts.sessionPath,
+    systemPromptPath: opts.systemPromptPath,
+    deadlineMs: opts.deadlineMs,
+    startTime: opts.startTime,
+    onProgress: opts.onProgress,
+    onDeadlineReached: opts.onDeadlineReached,
+    authMode: opts.authMode,
+    resume: opts.resume,
+  });
 }
 
 interface StreamJsonEvent {
@@ -218,7 +267,11 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
   // Ensure tool dir exists and clear any prior sentinels — a stale
   // sentinel from a previous run would short-circuit our success detection.
   mkdirSync(opts.absoluteToolDir, { recursive: true });
-  for (const name of [COMPILE_SENTINELS.done, COMPILE_SENTINELS.giveUp]) {
+  for (const name of [
+    COMPILE_SENTINELS.done,
+    COMPILE_SENTINELS.giveUp,
+    COMPILE_SENTINELS.checkpoint,
+  ]) {
     const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
       try {
@@ -236,38 +289,62 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
   const sessionPathAbs = opts.sessionPath.startsWith('/')
     ? opts.sessionPath
     : pathJoin(REPO_ROOT, opts.sessionPath);
-  const mcpConfig = {
-    mcpServers: {
-      [MCP_SERVER_NAME]: {
-        command: bunPath,
-        args: [
-          'run',
-          CLI_PATH,
-          '__mcp-compile-server',
-          '--session-path',
-          sessionPathAbs,
-          '--tool-dir',
-          opts.absoluteToolDir,
-          ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
-          ...(opts.sharedContext
-            ? ['--shared-context-json', JSON.stringify(opts.sharedContext)]
-            : []),
-          ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
-          ...(opts.sharedModules
-            ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)]
-            : []),
-        ],
-        alwaysLoad: true,
-      },
-    },
-  };
 
-  const { assignedSharedModules } = resolvePlanSliceFromFile(
-    opts.buildPlanPath,
-    opts.candidate?.toolName,
-    opts.sharedModules,
-  );
-  const initialPrompt = `A new compile task is starting.
+  // Auth and data compiles share the spawn + stream-json driver below; only the
+  // MCP server args, the pre-approved tool list, and the initial prompt differ.
+  let mcpServerArgs: string[];
+  let allowedToolNames: string[];
+  let initialPrompt: string;
+
+  if (opts.authMode) {
+    mcpServerArgs = [
+      'run',
+      CLI_PATH,
+      '__mcp-compile-server',
+      '--session-path',
+      sessionPathAbs,
+      '--tool-dir',
+      opts.absoluteToolDir,
+      '--site',
+      opts.authMode.site,
+      '--auth-plan-json',
+      opts.authMode.authPlanJson,
+    ];
+    allowedToolNames = [...opts.authMode.allowedTools, 'done', 'give_up'];
+    initialPrompt = opts.authMode.initialPrompt;
+  } else {
+    mcpServerArgs = [
+      'run',
+      CLI_PATH,
+      '__mcp-compile-server',
+      '--session-path',
+      sessionPathAbs,
+      '--tool-dir',
+      opts.absoluteToolDir,
+      ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
+      ...(opts.sharedContext ? ['--shared-context-json', JSON.stringify(opts.sharedContext)] : []),
+      ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
+      ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
+    ];
+    allowedToolNames = [
+      'read_session_summary',
+      'read_request',
+      'read_response_body',
+      'search_response_body',
+      'read_file',
+      'write_file',
+      'run_bash',
+      'run_tests',
+      'read_build_plan',
+      'done',
+      'give_up',
+    ];
+    const { assignedSharedModules } = resolvePlanSliceFromFile(
+      opts.buildPlanPath,
+      opts.candidate?.toolName,
+      opts.sharedModules,
+    );
+    initialPrompt = `A new compile task is starting.
 
 Session path: ${sessionPathAbs}
 Tool directory: ${opts.absoluteToolDir}
@@ -276,6 +353,27 @@ ${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModul
 ${formatToolPlan(opts.toolPlan)}
 
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
+  }
+
+  const mcpConfig = {
+    mcpServers: {
+      [MCP_SERVER_NAME]: {
+        command: bunPath,
+        args: mcpServerArgs,
+        alwaysLoad: true,
+      },
+    },
+  };
+
+  // Auth compiles run in resumable SEGMENTS: each segment ends when the agent
+  // reaches a checkpoint tool; the orchestrator acts and resumes the same
+  // session with the result. That needs session persistence ON (so --resume
+  // works) and, on a resume, `--resume <id>` + the result as the new prompt.
+  const promptArg = opts.resume ? opts.resume.message : initialPrompt;
+  const resumeArgs = opts.resume ? ['--resume', opts.resume.sessionId] : [];
+  // Data compiles are single-shot — keep session persistence OFF. Auth keeps it
+  // ON so the segment loop can resume.
+  const persistenceArgs = opts.authMode ? [] : ['--no-session-persistence'];
 
   const args = [
     '--print',
@@ -285,6 +383,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     '--strict-mcp-config',
     '--mcp-config',
     JSON.stringify(mcpConfig),
+    ...resumeArgs,
     '--system-prompt-file',
     opts.systemPromptPath,
     '--append-system-prompt',
@@ -294,28 +393,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     '',
     // Pre-approve every tool from our MCP server so no permission prompt
     // fires in non-interactive print mode.
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__read_session_summary`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__read_request`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__read_response_body`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__search_response_body`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__read_file`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__write_file`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__run_bash`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__run_tests`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__read_build_plan`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__done`,
-    '--allowedTools',
-    `mcp__${MCP_SERVER_NAME}__give_up`,
+    ...allowedToolNames.flatMap((name) => ['--allowedTools', `mcp__${MCP_SERVER_NAME}__${name}`]),
     // Bound the run. softTurnCap=100 in the in-process loop × up to 5
     // verification cycles = 500 hard ceiling there. Verification is now
     // in-tool so we pick a single bound that comfortably exceeds typical runs
@@ -324,17 +402,19 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     '200',
     '--permission-mode',
     'bypassPermissions',
-    '--no-session-persistence',
+    ...persistenceArgs,
     '--disable-slash-commands',
     // Cap thinking effort below `max` to reduce usage-policy false positives.
     '--effort',
     COMPILE_EFFORT_LEVEL,
     '--model',
     preferredAgentModel('claude-cli'),
-    initialPrompt,
+    promptArg,
   ];
 
-  log(`spawning claude (max-turns=200, mcp-server=${MCP_SERVER_NAME})`);
+  log(
+    `spawning claude (max-turns=200, mcp-server=${MCP_SERVER_NAME}${opts.resume ? `, resume=${opts.resume.sessionId.slice(0, 8)}` : ''})`,
+  );
 
   let child: ChildProcess;
   try {
@@ -393,6 +473,7 @@ async function driveStreamJson(
   let cacheReadInputTokens = 0;
   let cacheCreationInputTokens = 0;
   let turn = 0;
+  let capturedSessionId: string | undefined;
   let lastErrorEvent: StreamJsonEvent | null = null;
   let stderrBuf = '';
   let currentTurnSpan: Span | null = null;
@@ -484,6 +565,7 @@ async function driveStreamJson(
         }
 
         if (evt.type === 'system' && evt.subtype === 'init') {
+          if (evt.session_id) capturedSessionId = evt.session_id;
           log(`session_id=${evt.session_id ?? '(none)'}`);
           continue;
         }
@@ -587,6 +669,7 @@ async function driveStreamJson(
   // Inspect sentinels to determine outcome.
   const doneSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.done);
   const giveUpSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.giveUp);
+  const checkpointSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.checkpoint);
   const workflowPath = pathJoin(opts.absoluteToolDir, 'workflow.json');
   const parserPath = pathJoin(opts.absoluteToolDir, 'parser.ts');
   const parserTestPath = pathJoin(opts.absoluteToolDir, 'parser.test.ts');
@@ -623,6 +706,7 @@ async function driveStreamJson(
     | 'outputTokens'
     | 'cacheReadInputTokens'
     | 'cacheCreationInputTokens'
+    | 'sessionId'
   > = {
     workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
     parserPath: existsSync(parserPath) ? parserPath : undefined,
@@ -634,7 +718,30 @@ async function driveStreamJson(
     outputTokens,
     cacheReadInputTokens,
     cacheCreationInputTokens,
+    sessionId: capturedSessionId,
   };
+
+  // Auth segment: the agent paused at a checkpoint for the orchestrator to act.
+  // Take precedence over done/give_up (a well-behaved segment ends ONLY here).
+  if (opts.authMode && existsSync(checkpointSentinel)) {
+    let cp: AuthCheckpoint | undefined;
+    try {
+      const raw = readFileSync(checkpointSentinel, 'utf8').trim();
+      const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : undefined;
+      if (parsed && typeof parsed.kind === 'string') cp = parsed as unknown as AuthCheckpoint;
+    } catch (err) {
+      log(`failed to parse checkpoint sentinel: ${errMsg(err)}`);
+    }
+    if (cp) {
+      return {
+        success: false,
+        outcome: 'checkpoint',
+        checkpoint: cp,
+        message: `checkpoint:${cp.kind}`,
+        ...baseResult,
+      };
+    }
+  }
 
   // Wall-clock deadline exceeded?
   if (Date.now() > currentDeadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {

@@ -11,6 +11,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
+import type { AuthCliCompileMode } from './auth-compile-tools.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
@@ -56,6 +57,8 @@ interface CompileViaCodexCliOptions {
   sharedModules?: SharedModuleManifestEntry[];
   /** Per-tool implementation plan injected into the agent's initial message. */
   toolPlan?: string;
+  /** Present → drive an auth compile rather than a data compile. */
+  authMode?: AuthCliCompileMode;
 }
 
 interface CodexJsonEvent {
@@ -139,19 +142,6 @@ async function compileViaCodexCliImpl(
   const sessionPathAbs = pathIsAbsolute(opts.sessionPath)
     ? opts.sessionPath
     : pathJoin(REPO_ROOT, opts.sessionPath);
-  const mcpArgs = [
-    'run',
-    CLI_PATH,
-    '__mcp-compile-server',
-    '--session-path',
-    sessionPathAbs,
-    '--tool-dir',
-    opts.absoluteToolDir,
-    ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
-    ...(opts.sharedContext ? ['--shared-context-json', JSON.stringify(opts.sharedContext)] : []),
-    ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
-    ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
-  ];
 
   let systemPrompt: string;
   try {
@@ -160,12 +150,52 @@ async function compileViaCodexCliImpl(
     return finalErrorResult(opts, `failed to read system prompt: ${errMsg(err)}`);
   }
 
-  const { assignedSharedModules } = resolvePlanSliceFromFile(
-    opts.buildPlanPath,
-    opts.candidate?.toolName,
-    opts.sharedModules,
-  );
-  const initialPrompt = `<system_instructions>
+  // Auth and data compiles share the spawn + JSONL driver below; only the MCP
+  // server args and the initial prompt body differ.
+  let mcpArgs: string[];
+  let initialPrompt: string;
+
+  if (opts.authMode) {
+    mcpArgs = [
+      'run',
+      CLI_PATH,
+      '__mcp-compile-server',
+      '--session-path',
+      sessionPathAbs,
+      '--tool-dir',
+      opts.absoluteToolDir,
+      '--site',
+      opts.authMode.site,
+      '--auth-plan-json',
+      opts.authMode.authPlanJson,
+    ];
+    initialPrompt = `<system_instructions>
+${systemPrompt}
+</system_instructions>
+
+${opts.authMode.initialPrompt}
+
+Use the imprint-compile MCP tools to inspect the session, write workflow.json, test it live, and call done() when the auth works.`;
+  } else {
+    mcpArgs = [
+      'run',
+      CLI_PATH,
+      '__mcp-compile-server',
+      '--session-path',
+      sessionPathAbs,
+      '--tool-dir',
+      opts.absoluteToolDir,
+      ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
+      ...(opts.sharedContext ? ['--shared-context-json', JSON.stringify(opts.sharedContext)] : []),
+      ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
+      ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
+    ];
+    const { assignedSharedModules } = resolvePlanSliceFromFile(
+      opts.buildPlanPath,
+      opts.candidate?.toolName,
+      opts.sharedModules,
+    );
+    initialPrompt = `<system_instructions>
 ${systemPrompt}
 </system_instructions>
 
@@ -178,6 +208,7 @@ ${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModul
 ${formatToolPlan(opts.toolPlan)}
 
 Use the imprint-compile MCP tools to inspect the session, write artifacts, run tests, and call done(). Begin by calling read_session_summary, then proceed per the system instructions.`;
+  }
 
   const model = preferredAgentModel('codex-cli');
   const initialTokenCount = resolveTraceTokenCount(null, initialPrompt);

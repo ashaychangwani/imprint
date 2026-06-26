@@ -16,6 +16,7 @@ import { createLog } from './log.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { isTelemetryRequest } from './telemetry.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
+import { TwoFactorTypeSchema } from './types.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
@@ -94,8 +95,26 @@ export const SharedCompileContextSchema = z.object({
   credentialNames: z.array(z.string()).default([]),
   tokenExtractionNotes: z.string().default(''),
   sharedHelperNotes: z.string().default(''),
+  twoFactorDetected: z.boolean().default(false),
+  twoFactorType: TwoFactorTypeSchema,
+  twoFactorRequestSeqs: z.array(z.number().int().nonnegative()).default([]),
+  authCompletionSeqs: z.array(z.number().int().nonnegative()).default([]),
+  /** OTP only: names of initiate-response fields the completion request reads
+   *  (chained as ${state.X}); listed structurally from the recording. */
+  twoFactorContext: z.array(z.string()).default([]),
+  twoFactorNotes: z.string().default(''),
 });
 export type SharedCompileContext = z.infer<typeof SharedCompileContextSchema>;
+
+/** True when the recording carries an auth flow worth compiling into a standalone
+ *  `authenticate_<site>` tool — credentials were submitted, with OR without 2FA.
+ *  Drives the build planner to emit `authTool` so the login runs ONCE and the
+ *  site's data tools reuse one stored session, instead of every data tool
+ *  replaying the login inline (which hammers the site at compile time). */
+export function sharedContextHasAuth(ctx: SharedCompileContext | undefined): boolean {
+  if (!ctx) return false;
+  return ctx.twoFactorDetected || ctx.loginRequestSeqs.length > 0 || ctx.credentialNames.length > 0;
+}
 
 export const ToolCandidateSchema = z.object({
   toolName: z.string().regex(/^[a-z][a-z0-9_]*$/),

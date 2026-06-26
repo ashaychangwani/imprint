@@ -60,12 +60,14 @@ import {
   WorkflowSchema,
 } from './types.ts';
 
+type UsedBackend = ConcreteBackend;
+
 interface LadderResult {
   result: ToolResult;
-  usedBackend: ConcreteBackend;
+  usedBackend: UsedBackend;
   /** One entry per rung that was tried. */
   attempts: Array<{
-    backend: ConcreteBackend;
+    backend: UsedBackend;
     outcome: 'ok' | 'escalate' | 'failed' | 'unavailable';
     detail: string;
     durationMs: number;
@@ -75,8 +77,20 @@ interface LadderResult {
 const log = createLog('backend');
 
 const DEFAULT_LADDER: ConcreteBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
-const DEFAULT_PLAYBOOK_BACKEND_TIMEOUT_MS = 75_000;
-const DEFAULT_PLAYBOOK_BACKEND_STEP_TIMEOUT_MS = 20_000;
+
+const NON_TRANSPORT_ERRORS = new Set(['AWAITING_2FA', 'AUTH_EXPIRED', 'RATE_LIMITED']);
+
+function isProbeReachable(result: ToolResult): boolean {
+  if (result.ok) return true;
+  return NON_TRANSPORT_ERRORS.has(result.error);
+}
+// Generous enough to clear an anti-bot interstitial (Cloudflare/Akamai
+// "checking your browser", which can hold the navigation 10-30s) before the
+// real page's `load` fires. Login pages are exactly where these challenges
+// gate, so a 20s per-step cap was too tight and stranded otherwise-correct
+// login playbooks at the navigate step. Overridable via env for tuning.
+const DEFAULT_PLAYBOOK_BACKEND_TIMEOUT_MS = 150_000;
+const DEFAULT_PLAYBOOK_BACKEND_STEP_TIMEOUT_MS = 45_000;
 
 /** Process-scoped memo of the backend that last succeeded for a site on the
  *  compile/test path (`runWorkflowWithLadder`). Lets the param-coverage suite
@@ -269,6 +283,12 @@ export async function runWithLadder(
      *  The mcp-server owns one map and ties its lifetime to `cdpPool` (a memoized
      *  cdp-replay is only fast while its Chrome is pooled). */
     winnerCache?: Map<string, ConcreteBackend>;
+    /** Seed state for `${state.X}` substitution, merged UNDER any state a rung
+     *  mints itself (bootstrap captures win on key overlap). The auth 2FA bridge
+     *  uses it: the caller echoes the AWAITING_2FA `twoFactorContext` back on
+     *  submit_otp so a body-returned token (e.g. a reauth mfaId) resolves on the
+     *  stateless second call. Undefined for every non-auth call → no effect. */
+    initialState?: Record<string, unknown>;
   },
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
@@ -329,14 +349,17 @@ export async function runWithLadder(
           // Egress the plain `fetch` rung through IMPRINT_PROXY when set, so even
           // the first rung (and GET-only tools) use the residential proxy IP.
           const proxyFetch = makeProxyFetch();
-          result = await tool.toolFn(params, proxyFetch ? { fetchImpl: proxyFetch } : undefined);
+          const fetchOpts: Record<string, unknown> = {};
+          if (proxyFetch) fetchOpts.fetchImpl = proxyFetch;
+          if (options?.initialState) fetchOpts.initialState = options.initialState;
+          result = await tool.toolFn(params, fetchOpts);
           break;
         }
         case 'fetch-bootstrap':
-          result = await runFetchBootstrap(tool, params);
+          result = await runFetchBootstrap(tool, params, options?.initialState);
           break;
         case 'cdp-replay':
-          result = await runCdpReplay(tool, params, options?.cdpPool);
+          result = await runCdpReplay(tool, params, options?.cdpPool, options?.initialState);
           break;
         case 'stealth-fetch': {
           const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
@@ -347,9 +370,15 @@ export async function runWithLadder(
           // workflow escalating here from fetch-bootstrap loses the
           // ${state.X} its requests need — the gap that made bootstrap-block
           // tools on anti-bot sites unverifiable.
-          const initialState = tool.workflow.bootstrap
+          const bootstrapState = tool.workflow.bootstrap
             ? await stealthBootstrapState(sf, tool.workflow.bootstrap)
             : undefined;
+          // Merge the caller-seeded state (e.g. the echoed 2FA context) UNDER
+          // freshly-minted bootstrap state — bootstrap captures win on overlap.
+          const initialState =
+            options?.initialState || bootstrapState
+              ? { ...options?.initialState, ...bootstrapState }
+              : undefined;
           result = await tool.toolFn(paramsWithDefaults, { fetchImpl: sf.fetchImpl, initialState });
           break;
         }
@@ -364,7 +393,11 @@ export async function runWithLadder(
             site: tool.site,
             stepTimeoutMs: playbookBackendStepTimeoutMs(),
             maxDurationMs: playbookBackendTimeoutMs(),
+            // A login playbook mints a fresh session — persist it so downstream
+            // data tools reuse the cookies.
+            persistCookies: tool.workflow.toolKind === 'authenticate',
           });
+          result = reshapePlaybookAuthResult(result, tool.workflow, paramsWithDefaults);
           break;
         }
       }
@@ -448,8 +481,27 @@ export async function runWithLadder(
       continue;
     }
 
-    // AUTH_EXPIRED needs a re-login; RATE_LIMITED needs backoff. Neither
-    // is fixed by switching transport.
+    // For an AUTHENTICATE tool, AUTH_EXPIRED means the login attempt itself
+    // failed — e.g. a browser-minted credential POST (encrypted body, per-load
+    // nonce, recaptcha) replayed via an API rung sends a stale/invalid body and
+    // 401s. That is NOT terminal: escalate so the playbook rung (a real browser
+    // that re-mints the login) gets a shot. For a DATA tool AUTH_EXPIRED stays
+    // terminal (the session expired — switching transport won't help).
+    if (tool.workflow.toolKind === 'authenticate' && result.error === 'AUTH_EXPIRED') {
+      attempts.push({
+        backend,
+        outcome: 'escalate',
+        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        durationMs,
+      });
+      log(
+        `${backend}: AUTH_EXPIRED in ${durationMs}ms — escalating (auth login failed, try next rung)`,
+      );
+      continue;
+    }
+
+    // AUTH_EXPIRED (data tools) needs a re-login; RATE_LIMITED needs backoff.
+    // Neither is fixed by switching transport.
     attempts.push({
       backend,
       outcome: 'failed',
@@ -741,6 +793,7 @@ function jarLikelyStale(result: ToolResult): boolean {
 async function runFetchBootstrap(
   tool: ResolvedTool,
   params: Record<string, string | number | boolean>,
+  callerState?: Record<string, unknown>,
 ): Promise<ToolResult> {
   let baseUrl: string;
   try {
@@ -836,7 +889,7 @@ async function runFetchBootstrap(
 
     const result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
-      initialState: captureResult.state,
+      initialState: { ...callerState, ...captureResult.state },
       fetchImpl: makeJarUaFetch(jar.ua),
     });
 
@@ -876,6 +929,7 @@ async function runCdpReplay(
   tool: ResolvedTool,
   params: Record<string, string | number | boolean>,
   cdpPool?: Map<string, CdpBrowserFetch>,
+  callerState?: Record<string, unknown>,
 ): Promise<ToolResult> {
   let baseUrl: string;
   try {
@@ -911,19 +965,39 @@ async function runCdpReplay(
     cf = pooled;
   } else {
     let seedCookies: MintedJar['cookies'] | undefined;
-    try {
-      const rec = newestRecording(siteDir);
-      let cached = loadJar(siteDir);
-      if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
-      if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
-      if (cached?.cookies.length) seedCookies = cached.cookies;
-    } catch {
-      // best-effort
+    // An authentication flow establishes a BRAND-NEW session and must start from a
+    // clean cookie slate. Seeding a prior run's cookies — especially anti-bot tokens
+    // (e.g. Akamai `_abck`/`bm_sz`) carried over from a cached `.cdp-jar.json` or an
+    // old recording — poisons the live sensor: the page still validates a fresh
+    // `_abck` to `~0~`, but the cross-origin credential POST is edge-403'd ("Failed
+    // to fetch", no ACAO). saveJar persists each cdp-replay session, so seeding would
+    // otherwise re-arm itself every run (initiate writes a jar that the next initiate
+    // seeds → cascade of 403s). Data tools still seed (they reuse an authed session).
+    if (tool.workflow.toolKind !== 'authenticate') {
+      try {
+        const rec = newestRecording(siteDir);
+        let cached = loadJar(siteDir);
+        if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
+        if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
+        if (cached?.cookies.length) seedCookies = cached.cookies;
+      } catch {
+        // best-effort
+      }
     }
     cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({
       baseUrl,
       bootstrapUrl,
       seedCookies,
+      // Run HEADED for authentication: a strong anti-bot edge (e.g. Akamai Bot
+      // Manager) fingerprints headless Chrome beyond the `HeadlessChrome` UA token
+      // we strip, so a cross-origin credential POST that 403s headless passes
+      // headed. Auth is interactive (the user is present to approve the 2FA), so a
+      // visible window is fine; data-tool cdp-replay stays headless.
+      // `IMPRINT_CDP_HEADED=1` forces headed for any rung.
+      headed: tool.workflow.toolKind === 'authenticate' || process.env.IMPRINT_CDP_HEADED === '1',
+      // Cross-origin Set-Cookie re-injection only when the (auth) workflow
+      // declares it — never a blanket default. See AuthConfig.crossOriginCookieReinjection.
+      reinjectCrossOriginCookies: tool.workflow.authConfig?.crossOriginCookieReinjection ?? false,
     });
   }
 
@@ -959,7 +1033,7 @@ async function runCdpReplay(
 
     const result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
-      initialState: captureResult.state,
+      initialState: { ...callerState, ...captureResult.state },
       fetchImpl: cf.fetchImpl,
     });
 
@@ -973,6 +1047,23 @@ async function runCdpReplay(
       } finally {
         if (!cdpPool && ownsSession) await cf.close();
       }
+    } else if (cdpPool && result.error === 'AWAITING_2FA') {
+      // Cross-phase 2FA continuity: AWAITING_2FA is the EXPECTED, healthy outcome
+      // of the initiate phase — NOT a failure. Keep the live browser pooled so the
+      // completion phase reuses the EXACT page that minted the challenge: the
+      // server-side challenge state and any single-use in-page tokens are bound to
+      // THIS session, so a fresh browser would reset them and the poll/complete
+      // would 401. The caller (AuthVerifier) owns this pool and drains it in its
+      // `finally`. Without this carve-out the generic `else` below evicts+closes
+      // the session here and phase 2 silently starts cold → "tokens missing" 401.
+      if (ownsSession) cdpPool.set(poolKey, cf);
+      try {
+        const postJar = await cf.mintJar();
+        saveJar(siteDir, postJar);
+      } catch {
+        // best-effort
+      }
+      // Deliberately do NOT close cf — the pool retains it for the completion phase.
     } else {
       if (ownsSession) {
         await cf.close();
@@ -1328,6 +1419,50 @@ function playbookPath(assetRoot: string, site: string, toolDir?: string): string
 }
 
 /**
+ * For a 2FA authenticate tool whose login runs on the playbook rung, the
+ * playbook's success marker is the **2FA challenge state** (per the
+ * auth-compile contract), not full authentication. Reshape that `ok: true`
+ * into the same `AWAITING_2FA` signal the API rungs emit so every consumer
+ * (teach, mcp-server) handles playbook- and API-reached 2FA uniformly — and
+ * carry any best-effort `twoFactorContext` token the playbook captured (named
+ * per `authConfig.twoFactorContext`) across the stateless initiate→submit_otp
+ * gap. Only fires on the login/initiate action; submit_otp/complete run via
+ * the fetch path, not the playbook.
+ */
+export function reshapePlaybookAuthResult(
+  result: ToolResult,
+  workflow: Workflow,
+  params: Record<string, string | number | boolean>,
+): ToolResult {
+  const authCfg = workflow.authConfig;
+  const action = String(params.action ?? 'initiate');
+  if (
+    !result.ok ||
+    workflow.toolKind !== 'authenticate' ||
+    !authCfg ||
+    authCfg.twoFactorType === 'none' ||
+    action === 'submit_otp' ||
+    action === 'complete'
+  ) {
+    return result;
+  }
+  const data = (result.data ?? {}) as Record<string, unknown>;
+  const ctx: Record<string, unknown> = {};
+  for (const name of authCfg.twoFactorContext ?? []) {
+    if (data && typeof data === 'object' && name in data && data[name] != null) {
+      ctx[name] = data[name];
+    }
+  }
+  return {
+    ok: false,
+    error: 'AWAITING_2FA',
+    twoFactorType: authCfg.twoFactorType,
+    twoFactorContext: Object.keys(ctx).length > 0 ? ctx : undefined,
+    message: `2FA required (${authCfg.twoFactorType}) — login reached the 2FA challenge via the playbook rung.`,
+  };
+}
+
+/**
  * Compile-time integration-test convenience: dispatch a request through
  * `runWithLadder` using only a `workflow.json` path. Avoids requiring an
  * emitted `index.ts` (which doesn't exist when integration.test.ts runs
@@ -1356,6 +1491,23 @@ export async function runWorkflowWithLadder(opts: {
   /** Optional credential override; otherwise loaded from the credential
    *  store by executeWorkflow. */
   credentials?: CredentialStore;
+  /** Seed state for `${state.X}` (auth 2FA bridge): the echoed twoFactorContext
+   *  from a prior AWAITING_2FA result, threaded into every rung so a submit_otp
+   *  completion request can resolve a token the initiate response returned. */
+  initialState?: Record<string, unknown>;
+  /** Caller-owned CDP pool. When provided, cdp-replay pools its live Chrome here
+   *  (reused across calls that pass the SAME map) and the process-global idle
+   *  close is NOT armed — the caller owns the browser's lifecycle and must drain
+   *  it. Used by the auth verifier to keep ONE live session across 2FA phase 1
+   *  (send) → user input → phase 2 (verify) so the challenge isn't reset. */
+  cdpPool?: Map<string, CdpBrowserFetch>;
+  /** Pin execution to a single rung, bypassing the parallel probe AND the winner
+   *  memo. The 2FA auth verifier sets this to `cdp-replay`: only cdp-replay keeps
+   *  one live browser in `cdpPool` (which the AWAITING_2FA carve-out retains), so
+   *  phase 2 can reuse the exact session that minted the challenge. Left to the
+   *  probe, the FASTEST rung returning AWAITING_2FA wins (often fetch /
+   *  fetch-bootstrap), which can't persist the session → completion 401s. */
+  forceBackend?: ConcreteBackend;
 }): Promise<LadderResult> {
   if (!existsSync(opts.workflowPath)) {
     throw new Error(`runWorkflowWithLadder: workflow.json not found at ${opts.workflowPath}`);
@@ -1396,7 +1548,14 @@ export async function runWorkflowWithLadder(opts: {
     },
   };
 
-  const ladder: ConcreteBackend[] = ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
+  // Authenticate tools may need the playbook rung: a login whose POST body is
+  // browser-minted (encrypted credentials) can't be API-replayed, so the login
+  // DOM steps must run in a real browser. runWithLadder skips playbook when no
+  // playbook.yaml exists, so including it is safe for tools without one.
+  const ladder: ConcreteBackend[] =
+    workflow.toolKind === 'authenticate'
+      ? ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']
+      : ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
 
   const memoKey = `${tool.site}::${workflow.toolName}`;
   const memoWinner = compileWinningBackend.get(memoKey);
@@ -1438,14 +1597,30 @@ export async function runWorkflowWithLadder(opts: {
   // across this `bun test` process's calls; cancel any pending idle-close now
   // that we're about to use it again. The pool is torn down by an idle timer
   // (armed in `finally`) shortly after the LAST call — see compileCdpPool.
-  const cdpPool = compileCdpPool;
-  clearCompileCdpIdle();
+  // A caller-owned pool (auth verifier) opts out of the global idle close: that
+  // caller keeps the session alive across the user-input gap and drains it itself.
+  const usingCallerPool = opts.cdpPool !== undefined;
+  const cdpPool = opts.cdpPool ?? compileCdpPool;
+  if (!usingCallerPool) clearCompileCdpIdle();
 
   try {
     try {
       await paceCompileRequest(new URL(pickBaseUrl(tool)).origin);
     } catch {
       // no parseable base URL → nothing to pace
+    }
+
+    // ── Pinned rung: skip the probe + memo entirely ─────────────────────────
+    // A caller that requires a specific rung (the 2FA auth verifier → cdp-replay
+    // for cross-phase session continuity) runs ONLY that rung, with no fallback —
+    // falling to another rung would lose the live session and defeat the pin.
+    if (opts.forceBackend) {
+      log(`forced backend: ${opts.forceBackend} (probe + memo skipped)`);
+      return await runWithLadder([opts.forceBackend], tool, opts.params, assetRoot, stealthCache, {
+        skipBootstrapSplice: true,
+        cdpPool,
+        initialState: opts.initialState,
+      });
     }
 
     // ── First call: parallel probe (45s deadline) ───────────────────────────
@@ -1486,11 +1661,13 @@ export async function runWorkflowWithLadder(opts: {
           const inner = runWithLadder([b], tool, opts.params, assetRoot, stealthCache, {
             skipBootstrapSplice: true,
             cdpPool,
+            initialState: opts.initialState,
           });
           // A backend that finishes AFTER the probe returned (it lost the race but
           // is still cold-starting Chrome) pools its browser late — arm the idle
-          // close so it's torn down rather than left lingering.
-          void inner.finally(() => armCompileCdpIdleClose()).catch(() => {});
+          // close so it's torn down rather than left lingering. (Caller-owned pool
+          // drains itself, so don't arm the global idle close for it.)
+          if (!usingCallerPool) void inner.finally(() => armCompileCdpIdleClose()).catch(() => {});
           const r = await Promise.race([
             inner,
             sleepMs(PROBE_TIMEOUT_MS).then(
@@ -1506,6 +1683,14 @@ export async function runWorkflowWithLadder(opts: {
         }),
       );
 
+      // For an authenticate tool, AUTH_EXPIRED is NOT a reachable winner — it
+      // means the login failed, and the playbook rung (only reached via the
+      // sequential fallback below) is the browser-minted login's actual path.
+      // Treating it as "reachable" would let a cdp-replay 401 win the probe and
+      // the playbook would never run. AWAITING_2FA stays reachable (it IS success).
+      const isAuthTool = tool.workflow.toolKind === 'authenticate';
+      const probeReachable = (r: ToolResult): boolean =>
+        isProbeReachable(r) && !(isAuthTool && !r.ok && r.error === 'AUTH_EXPIRED');
       const digest = settled.map((s, i) => {
         const b = probeBackends[i];
         if (s.status === 'rejected')
@@ -1514,16 +1699,18 @@ export async function runWorkflowWithLadder(opts: {
             120,
           );
         const { result: lr, durationMs } = s.value;
-        return lr.result.ok
-          ? `${b}: OK in ${durationMs}ms`
-          : `${b}: ${lr.result.error} — ${lr.result.message.slice(0, 200)} (${durationMs}ms)`;
+        const r = lr.result;
+        if (r.ok) return `${b}: OK in ${durationMs}ms`;
+        return probeReachable(r)
+          ? `${b}: ${r.error} in ${durationMs}ms`
+          : `${b}: ${r.error} — ${r.message.slice(0, 200)} (${durationMs}ms)`;
       });
 
       type ProbeEntry = { backend: ConcreteBackend; result: LadderResult; durationMs: number };
       const winners = settled
         .filter(
           (s): s is PromiseFulfilledResult<ProbeEntry> =>
-            s.status === 'fulfilled' && s.value.result.result.ok,
+            s.status === 'fulfilled' && probeReachable(s.value.result.result),
         )
         .map((s) => s.value);
 
@@ -1536,16 +1723,17 @@ export async function runWorkflowWithLadder(opts: {
         return best.result;
       }
 
-      log(`parallel probe: all backends failed\n  ${digest.join('\n  ')}`);
-      return {
-        result: {
-          ok: false as const,
-          error: 'NETWORK' as const,
-          message: `All backends failed during parallel probe: ${digest.join('; ')}`,
-        },
-        usedBackend: ladder[ladder.length - 1] ?? 'fetch',
-        attempts: [],
-      };
+      log(
+        `parallel probe: all backends failed — falling through to sequential ladder\n  ${digest.join('\n  ')}`,
+      );
+      const seqResult = await runWithLadder(ladder, tool, opts.params, assetRoot, stealthCache, {
+        cdpPool,
+        initialState: opts.initialState,
+      });
+      if (probeReachable(seqResult.result)) {
+        compileWinningBackend.set(memoKey, seqResult.usedBackend);
+      }
+      return seqResult;
     }
 
     // ── Memo hit: start at the memoized winner, keep all later rungs ─────
@@ -1562,8 +1750,9 @@ export async function runWorkflowWithLadder(opts: {
     const result = await runWithLadder(memoLadder, tool, opts.params, assetRoot, stealthCache, {
       skipBootstrapSplice: true,
       cdpPool,
+      initialState: opts.initialState,
     });
-    if (result.result.ok) {
+    if (isProbeReachable(result.result)) {
       compileWinningBackend.set(memoKey, result.usedBackend);
     } else {
       compileWinningBackend.delete(memoKey);

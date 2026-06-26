@@ -32,7 +32,11 @@ import { imprintHomeDir, localSharedDir } from './paths.ts';
 import { buildSharedModule } from './prereq-builder.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { ClassifiedValue } from './session-diff.ts';
-import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
+import {
+  type SharedCompileContext,
+  type ToolCandidate,
+  sharedContextHasAuth,
+} from './tool-candidates.ts';
 import { SessionSchema } from './types.ts';
 
 const log = createLog('teach-plan');
@@ -77,8 +81,12 @@ export async function planAndBuildPrereqs(opts: {
   maxCyclesPerModule?: number;
   onProgress?: (msg: string) => void;
 }): Promise<PlanAndBuildPrereqsResult> {
-  // Gate: shared prereqs only make sense across ≥2 tools.
-  if (opts.candidates.length < 2) return { buildPlanPath: '', sharedModules: [] };
+  // Gate: shared prereqs only make sense across ≥2 tools — BUT the planner is also
+  // the only producer of the build-plan `authTool`, so a single authenticated tool
+  // (any detected login, with or without 2FA) must still run it, else the login is
+  // detected yet never compiled into a reusable auth tool.
+  const hasAuthFlow = sharedContextHasAuth(opts.sharedContext);
+  if (opts.candidates.length < 2 && !hasAuthFlow) return { buildPlanPath: '', sharedModules: [] };
   if (buildPlanDisabled()) {
     log('IMPRINT_NO_BUILD_PLAN set — skipping build plan + shared prereqs');
     return { buildPlanPath: '', sharedModules: [] };
@@ -120,6 +128,7 @@ export async function planAndBuildPrereqs(opts: {
   const plan: BuildPlan = {
     sharedModules: generated.sharedModules,
     perTool: generated.perTool,
+    authTool: generated.authTool,
   };
 
   // Persist immediately so a crash mid-build still leaves a readable plan.
@@ -187,6 +196,10 @@ export async function planAndBuildPrereqs(opts: {
       usesSharedModules: t.usesSharedModules.filter((p) => verifiedPaths.has(p)),
       parserGuidance: correctGuidanceForPrunedModules(t.parserGuidance, verifiedPaths),
     })),
+    // Carry the auth tool through pruning — it is independent of shared modules,
+    // and dropping it here silently disables auth compilation for any site that
+    // has shared modules (the auth gate reads authTool from this sidecar).
+    authTool: plan.authTool,
   };
   writeBuildPlanSidecar(opts.site, prunedPlan);
 

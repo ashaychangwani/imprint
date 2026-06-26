@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  SharedCompileContextSchema,
   buildSharedCompileContext,
   buildToolCandidatePayload,
   primaryToolCandidate,
+  sharedContextHasAuth,
   validateToolCandidateDetection,
 } from '../src/imprint/tool-candidates.ts';
 import type { Session } from '../src/imprint/types.ts';
@@ -500,5 +502,26 @@ describe('tool candidate validation', () => {
     });
 
     expect(detection.candidates[0]?.likelyParams[0]?.type).toBeUndefined();
+  });
+});
+
+describe('sharedContextHasAuth', () => {
+  const base = SharedCompileContextSchema.parse({});
+
+  it('false for undefined or a no-auth recording', () => {
+    expect(sharedContextHasAuth(undefined)).toBe(false);
+    expect(sharedContextHasAuth(base)).toBe(false);
+  });
+
+  it('true when a login was recorded (no 2FA) — so an auth tool is still built', () => {
+    expect(sharedContextHasAuth({ ...base, loginRequestSeqs: [42] })).toBe(true);
+  });
+
+  it('true when credentials were detected', () => {
+    expect(sharedContextHasAuth({ ...base, credentialNames: ['username'] })).toBe(true);
+  });
+
+  it('true when 2FA was detected', () => {
+    expect(sharedContextHasAuth({ ...base, twoFactorDetected: true })).toBe(true);
   });
 });

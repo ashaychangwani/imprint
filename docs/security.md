@@ -49,6 +49,21 @@ This is a best-effort tool — we deliberately undersell it. It will NOT catch:
 
 If you're using Imprint on a site with unusual auth, **audit the redacted session manually** before generating against it.
 
+## Sensitive headers are visible to the compile agent by default
+
+To wire an auth/session/gateway header (`Authorization`, `Cookie`, `X-API-Key`, `X-CSRF-Token`, …) as a contracted input, the compile agent has to be able to *read* its value — it cannot reason about a value it cannot see, and blinding it was the root cause of dropped auth/session inputs that shipped broken tools. So the redaction pass the compile agent's session goes through **no longer redacts sensitive-header values by default**:
+
+- **Credential placeholdering still runs** — values the credential-extract pass identified (the password/username the user typed) are rewritten to `${credential.X}` before the agent ever sees them.
+- **Free-form PII redaction still runs** — emails, phone numbers, and other value-pattern matches in bodies and event details are still scrubbed.
+- **Only the blanket sensitive-*header* scrub is off.** Re-enable the legacy behavior with `IMPRINT_REDACT_SENSITIVE_HEADERS=1` (or `redactSensitiveHeaders: true` programmatically). `imprint redact` — the command that produces a file to *share* — always applies the full scrub including headers, regardless of this gate.
+
+Two guards keep this from leaking secrets into shipped artifacts:
+
+- **`reveal_request`** — an on-demand compile tool that returns the fully-unredacted request + response for a recorded seq, read straight from the recording on disk. The agent uses it to inspect a real header/body value before deciding how to wire it, and is instructed to emit the contracted placeholder, never the raw value.
+- **Emit-time secret guard (`assertNoRawSecrets`)** — after the agent writes `workflow.json`/`parser.ts` (and after any deterministic input injection), Imprint scans the artifacts for raw values of the recording's own sensitive headers + known credential values. A match that maps to a contracted input is auto-rewritten to its placeholder; an unmapped match **blocks** the compile with an actionable error. Page-minted app constants (an `x-api-key`/gateway key the site bakes into its JS, identified by the same detector the redaction allowlist uses) are NOT treated as secrets — they are public config the agent is meant to hardcode; a per-user token is never page-minted (it appears only after the recorded login, and a persisted bearer is recognized via its stored token). The guarantee: shipped `workflow.json`/`parser.ts` contain only placeholders, never a raw per-user secret.
+
+Because the agent now sees raw values, **`~/.imprint/<site>/<tool>/.compile-log.json`** (the full compile-agent conversation) may contain raw sensitive-header values from the recording. Treat it like the recording itself — local-only and sensitive, never committed. (The shipped `workflow.json`/`parser.ts` are still placeholder-only, enforced by the emit-time guard above.)
+
 ## Credential storage
 
 `imprint login` writes per-site credentials through the credential backend. On desktops this uses the OS keychain when available; on headless machines it falls back to a libsodium-encrypted file under the OS-specific config directory. Earlier plaintext JSON stores remain readable for migration only.
@@ -60,6 +75,14 @@ imprint credential migrate
 
 Stored credentials can include named secrets, cookies, and declared durable storage keys. Credentials never leave your machine unless you explicitly export an encrypted `.imprintbundle`. The LLM compile step works on redacted sessions only.
 
+**Authenticate tools run their login in a real local browser (headed `cdp-replay`)** — the recorded credential POST + 2FA requests are replayed in-page from the live login document over TLS, the same bytes your own browser would send. Credentials stay placeholders (`${credential.*}`) in the saved `workflow.json`; the real values are read from the credential backend at runtime and are never written to the artifacts, logs, or any LLM prompt. The resulting session cookies (plus any declared `sessionCapture` token) are persisted back to the credential store for the site's data tools. (Diagnostic screenshots, written only to a temp dir on failure and never committed, can show a logged-in page — treat them as sensitive.) The browser window is visible during an auth run (auth is interactive — you approve the 2FA push/OTP) and closes at the end of the run.
+
+**Serialized session state for the OTP step is stored like cookies.** Because `initiate` and `submit_otp` are separate stateless calls, an authenticate tool persists the post-login browser session — cookies **and** per-origin `localStorage` (`saveSiteStorage`) — so the second call can rehydrate it. `localStorage` is treated exactly like cookies: stored in the **same credential backend** (OS keyring or encrypted file, never plaintext on disk for those backends), gated to `toolKind === 'authenticate'`, never sent to any LLM, and only ever exported inside an encrypted `.imprintbundle` you create explicitly. `sessionStorage` is **not** captured (Playwright's `storageState()` omits it). Treat persisted `localStorage` as session-bearing material with the same sensitivity as cookies.
+
+**2FA tokens are not persisted.** OTP flows can return a short-lived token from the login response (e.g. a reauth `mfaId`) that the `submit_otp` call needs. This `twoFactorContext` is **echoed to the caller in the `AWAITING_2FA` result and passed back in** on the next call — it is never written to disk (unlike cookies and `localStorage`). The OTP code itself stays a runtime parameter and is never stored — and when `imprint teach` *attempts* an unattended completion it uses a throwaway placeholder (`000000`), never a real code. This stateless round-trip means the chained token lives only for the duration of the two-call exchange, in the caller's hands.
+
+**At most two real 2FA prompts per teach run.** During auth compilation the live verifier caps initiates that actually *deliver* a challenge at two (`IMPRINT_AUTH_MAX_INITIATE`), so a teach run can never spam your phone/inbox — you see at most two OTPs/pushes regardless of how many times the agent iterates. Login attempts that fail *before* delivering a challenge (e.g. an anti-bot edge 403, which sends nothing) don't count toward that user-visible cap but are bounded separately by an attempt cap (`IMPRINT_AUTH_MAX_INITIATE_ATTEMPTS`, default 5) so a blocked login can't loop.
+
 ## LLM data flow
 
 When you run `imprint teach`, `imprint generate`, or `imprint compile-playbook`, the auto-redacted session is sent to the provider you selected or auto-detected:
@@ -67,7 +90,7 @@ When you run `imprint teach`, `imprint generate`, or `imprint compile-playbook`,
 1. **CLI providers** (`claude-cli`, `codex-cli`, `cursor-cli` for playbook compile) send prompts through the locally installed CLI and that provider's account/session.
 2. **Anthropic API** sends directly to Anthropic using `ANTHROPIC_API_KEY`.
 
-The compile agent's session summary includes inline request/response data for candidate-scoped requests (the requests relevant to the tool being compiled plus auth dependencies). Response bodies are smart-truncated and subject to a 30 KB summary budget. All inline data comes from the already-redacted session — credential values appear as `${credential.X}` placeholders and sensitive values as `[REDACTED:v3:id=N:len=L]` markers.
+The compile agent's session summary includes inline request/response data for candidate-scoped requests (the requests relevant to the tool being compiled plus auth dependencies). Response bodies are smart-truncated and subject to a 30 KB summary budget. All inline data comes from the redacted session — credential values appear as `${credential.X}` placeholders and free-form PII as redaction markers. Sensitive-header values (auth/session/gateway tokens, cookies) are visible by default so the agent can wire them as contracted inputs (see "Sensitive headers are visible to the compile agent by default" above); the emit-time guard ensures they never survive into the shipped artifacts.
 
 **Credential pass-through during teach.** When `imprint teach` extracts credentials during the redact step, it passes them to the compile agent's integration tests via the `IMPRINT_TEACH_CREDENTIALS` environment variable. This is a process-scoped JSON payload (`{ site, values }`) that lives only in the subprocess tree — it is never written to disk, logged, or sent to the LLM. The runtime merges these values into the credential store at test execution time so integration tests can verify workflows end-to-end.
 

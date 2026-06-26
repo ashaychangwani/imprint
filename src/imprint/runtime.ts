@@ -12,7 +12,13 @@ import {
   RuntimeCookieJar,
   extractSetCookieHeaders,
 } from './cookie-jar.ts';
-import { type StorageRecord, loadSiteCredentials, readSiteManifest } from './credential-store.ts';
+import {
+  type StorageRecord,
+  loadSiteCredentials,
+  readSiteManifest,
+  saveSiteCookies,
+  saveSiteSecret,
+} from './credential-store.ts';
 import type {
   RequestCapture,
   StateCapability,
@@ -92,6 +98,10 @@ interface ResponseSlot {
 }
 
 export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promise<ToolResult<T>> {
+  if (opts.workflow.toolKind === 'authenticate') {
+    return executeAuthWorkflow(opts) as Promise<ToolResult<T>>;
+  }
+
   const fetchFn = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.requestTimeoutMs ?? 30_000;
 
@@ -342,6 +352,350 @@ function emptyStore(site: string): CredentialStore {
   return { site, cookies: [], values: {}, storage: [] };
 }
 
+async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
+  const fetchFn = opts.fetchImpl ?? fetch;
+  const timeoutMs = opts.requestTimeoutMs ?? 30_000;
+  const action = String(opts.params?.action ?? 'initiate');
+  const authConfig = opts.workflow.authConfig;
+  const initiateCount = authConfig?.initiateRequestCount ?? opts.workflow.requests.length;
+
+  const credentials =
+    opts.credentials ??
+    (await loadCredentialStore(opts.workflow.site)) ??
+    emptyStore(opts.workflow.site);
+
+  const cookieJar = new RuntimeCookieJar(credentials.cookies);
+  const liveCredentials: CredentialStore = { ...credentials, cookies: cookieJar.toJSON() };
+  const responseSlots: ResponseSlot[] = [];
+  const state: Record<string, unknown> = { ...(opts.initialState ?? {}) };
+  const stateCapabilities = collectStateCapabilities(opts.workflow);
+  const params: Record<string, string | number | boolean> = { ...opts.params };
+  let loginResponsePreview: string | undefined;
+  /** Latest response context, used to resolve authConfig.sessionCapture against
+   *  the final completion response when the login succeeds. */
+  let lastAuthResponseCtx:
+    | { parsed: unknown; text: string; headers: Headers; requestUrl: string }
+    | undefined;
+
+  const runRequests = async (startIdx: number, endIdx: number): Promise<ToolResult | null> => {
+    for (let i = startIdx; i < endIdx; i++) {
+      const req = opts.workflow.requests[i];
+      if (!req) continue;
+
+      let subbedReq: SubstitutedRequest;
+      const subbedResult = substituteRequest(req, {
+        params,
+        credentials: liveCredentials,
+        responseSlots,
+        state,
+        cookieJar,
+        stateCapabilities,
+        requestUrlTemplate: req.url,
+      });
+      if (!subbedResult.ok) return subbedResult.result;
+      subbedReq = subbedResult.value;
+
+      const cookieHeader = cookieJar.getCookieHeader(subbedReq.url);
+      if (cookieHeader && !hasHeader(subbedReq.headers, 'cookie'))
+        subbedReq.headers.cookie = cookieHeader;
+
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+      let resp: Response;
+      try {
+        resp = await fetchFn(subbedReq.url, {
+          method: subbedReq.method,
+          headers: subbedReq.headers,
+          body: subbedReq.body,
+          signal: controller.signal,
+          redirect: 'follow',
+        });
+      } catch (err) {
+        clearTimeout(timeoutHandle);
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: 'NETWORK', message: `Auth request ${i} failed: ${msg}` };
+      }
+      clearTimeout(timeoutHandle);
+
+      if (resp.status >= 400) {
+        const text = await safeText(resp);
+        // An OPTIONAL request (e.g. a "remember this device" registration that
+        // 4xxs when the device is already trusted, or a telemetry beacon) must
+        // not abort the flow — log and continue to the next (terminal) request.
+        if (req.optional) {
+          process.stderr.write(
+            `[imprint runtime] optional auth request ${i} (${subbedReq.url}) returned ${resp.status} — skipping, continuing\n`,
+          );
+          continue;
+        }
+        return {
+          ok: false,
+          error: resp.status === 401 ? 'AUTH_EXPIRED' : 'BAD_RESPONSE',
+          message: `Auth request ${i} (${subbedReq.method} ${subbedReq.url}) returned ${resp.status}: ${text.slice(0, 500)}`,
+          // Surface the concrete status + body so the auth compile agent sees the
+          // server's actual error (e.g. a 401 "tokens missing" vs a 400 schema
+          // error) without re-running — see run_verification's result.
+          status: resp.status,
+          responseBodyPreview: text.slice(0, 500),
+        };
+      }
+
+      try {
+        for (const sc of extractSetCookieHeaders(resp.headers))
+          cookieJar.setCookieFromHeader(sc, subbedReq.url);
+        liveCredentials.cookies = cookieJar.toJSON();
+      } catch {
+        // Non-fatal
+      }
+
+      const text = await safeText(resp);
+      // Capture the last login-phase response for shape comparison
+      if (i < initiateCount) loginResponsePreview = text.slice(0, 500);
+
+      let parsed: unknown = text;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        // keep raw
+      }
+      // Remember the latest response so sessionCapture can be resolved against
+      // the final completion response after the login finishes.
+      lastAuthResponseCtx = { parsed, text, headers: resp.headers, requestUrl: subbedReq.url };
+      const aliases = evaluateLegacyExtract(req, parsed);
+      responseSlots.push({ raw: parsed, aliases });
+
+      const captureResult = evaluateRequestCaptures(req.captures ?? [], {
+        parsed,
+        text,
+        headers: resp.headers,
+        requestUrl: subbedReq.url,
+        cookieJar,
+      });
+      if (!captureResult.ok) return captureResult.result;
+      Object.assign(state, captureResult.value);
+    }
+    return null;
+  };
+
+  // Persist durable session tokens (authConfig.sessionCapture) after a SUCCESSFUL
+  // login completion so data tools reuse them as ${credential.NAME} without
+  // re-running auth. Best-effort: a token that can't be resolved is skipped, not
+  // fatal. Cookies are persisted separately (saveSiteCookies). General — driven
+  // only by the declared captures + the recorded response shape.
+  const persistSessionCapture = async (): Promise<void> => {
+    const caps = authConfig?.sessionCapture ?? [];
+    if (caps.length === 0) return;
+    for (const cap of caps) {
+      let value: unknown;
+      if (lastAuthResponseCtx) {
+        const res = evaluateRequestCaptures([cap], {
+          parsed: lastAuthResponseCtx.parsed,
+          text: lastAuthResponseCtx.text,
+          headers: lastAuthResponseCtx.headers,
+          requestUrl: lastAuthResponseCtx.requestUrl,
+          cookieJar,
+        });
+        if (res.ok) value = res.value[cap.name];
+      }
+      if (value === undefined || value === null) value = state[cap.name];
+      if (value !== undefined && value !== null && String(value).length > 0) {
+        try {
+          await saveSiteSecret(opts.workflow.site, cap.name, String(value));
+        } catch {
+          /* non-fatal — cookies are the primary token */
+        }
+      }
+    }
+  };
+
+  if (action === 'initiate') {
+    const err = await runRequests(0, initiateCount);
+    if (err) return err;
+
+    if (authConfig && authConfig.twoFactorType !== 'none') {
+      await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+      // Stateless state-chain bridge: each MCP call is a fresh executeAuthWorkflow
+      // with a fresh `state`, so a token the login response returned in its body
+      // (e.g. a reauth mfaId) would be lost before submit_otp. Project the
+      // declared twoFactorContext names out of the captured state and echo them
+      // to the caller, who passes them back as initialState on the next call.
+      const ctx: Record<string, unknown> = {};
+      for (const name of authConfig.twoFactorContext ?? []) {
+        if (name in state) ctx[name] = state[name];
+      }
+      return {
+        ok: false,
+        error: 'AWAITING_2FA',
+        twoFactorType: authConfig.twoFactorType,
+        twoFactorContext: Object.keys(ctx).length > 0 ? ctx : undefined,
+        loginResponsePreview,
+        message: `2FA required (${authConfig.twoFactorType}). ${
+          authConfig.twoFactorType === 'push'
+            ? 'Approve the push notification on your device, then call again with action=complete.'
+            : 'Enter the code and call again with action=submit_otp, otp_code, and the echoed twoFactorContext.'
+        }`,
+      };
+    }
+
+    await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+    return { ok: true, data: { authenticated: true }, loginResponsePreview };
+  }
+
+  if (action === 'complete') {
+    if (authConfig?.twoFactorType === 'push' && authConfig.pollEndpoint) {
+      // The recorded default is generous (≈3 min) for a real run where a human
+      // approves the push. An unattended *attempt* (e.g. `imprint teach
+      // --no-interactive`) wants a short bound so it fails fast instead of
+      // blocking. IMPRINT_AUTH_POLL_ATTEMPTS lets any caller cap the poll
+      // without mutating the artifact; the runtime default stays generous.
+      const pollOverride = parsePositiveInt(process.env.IMPRINT_AUTH_POLL_ATTEMPTS);
+      const pollMax = pollOverride ?? authConfig.maxPollAttempts ?? 60;
+      const pollInterval = authConfig.pollIntervalMs ?? 3000;
+      const pollMethod = authConfig.pollMethod ?? 'POST';
+      // Many poll/status endpoints reject an empty body (they need the recorded
+      // JSON payload, e.g. `{mfaId,...}`). Substitute the declared pollBody once
+      // (state is fixed during the completion phase) against the same runtime as
+      // any request, so `${state.X}`/`${credential.X}`/`${param.X}` resolve.
+      const pollContentType =
+        authConfig.pollBody !== undefined
+          ? (authConfig.pollContentType ?? 'application/json')
+          : undefined;
+      let pollBody: string | undefined;
+      if (authConfig.pollBody !== undefined) {
+        const ctLower = (pollContentType ?? '').toLowerCase();
+        const bodyCtx: SubstitutionContext = ctLower.includes('json')
+          ? 'json-body'
+          : ctLower.includes('urlencoded') || authConfig.pollBody.includes('=')
+            ? 'form-body'
+            : 'opaque-body';
+        const pollBodyResult = substituteStringInternal(
+          authConfig.pollBody,
+          {
+            params,
+            credentials: liveCredentials,
+            responseSlots,
+            state,
+            cookieJar,
+            stateCapabilities,
+            requestUrlTemplate: authConfig.pollEndpoint,
+          },
+          bodyCtx,
+        );
+        if (!pollBodyResult.ok) return pollBodyResult.result;
+        pollBody = pollBodyResult.value;
+      }
+      let approved = false;
+      for (let attempt = 0; attempt < pollMax; attempt++) {
+        await sleep(pollInterval);
+        const cookieHeader = cookieJar.getCookieHeader(authConfig.pollEndpoint);
+        const pollHeaders: Record<string, string> = {};
+        if (cookieHeader) pollHeaders.cookie = cookieHeader;
+        if (pollContentType) pollHeaders['content-type'] = pollContentType;
+        // Bound each poll the same way as a normal request: without a timeout a
+        // pollEndpoint that accepts the connection but never responds hangs this
+        // single fetch forever, so the poll budget never advances and `complete`
+        // hangs indefinitely. An abort throws → caught below → next attempt.
+        const pollController = new AbortController();
+        const pollTimeout = setTimeout(() => pollController.abort(), timeoutMs);
+        try {
+          const pollResp = await fetchFn(authConfig.pollEndpoint, {
+            method: pollMethod,
+            headers: pollHeaders,
+            body: pollBody,
+            signal: pollController.signal,
+          });
+          if (pollResp.ok) {
+            const body = await safeText(pollResp);
+            let newSessionCookie = false;
+            try {
+              for (const sc of extractSetCookieHeaders(pollResp.headers)) {
+                cookieJar.setCookieFromHeader(sc, authConfig.pollEndpoint);
+                newSessionCookie = true;
+              }
+              liveCredentials.cookies = cookieJar.toJSON();
+            } catch {
+              /* non-fatal */
+            }
+            // Approval is recognized from the recording, not from hardcoded
+            // strings: `pollTerminal` is a capture the compile agent grounds in
+            // the recorded *approved* poll response (and which is absent on the
+            // pending ones). It is "done" once that capture yields a value.
+            // Fallback when no terminal was declared: a fresh session Set-Cookie
+            // appeared, the universal sign of a completed login.
+            if (authConfig.pollTerminal) {
+              let parsed: unknown = body;
+              try {
+                parsed = JSON.parse(body);
+              } catch {
+                /* keep raw */
+              }
+              const term = evaluateRequestCaptures([authConfig.pollTerminal], {
+                parsed,
+                text: body,
+                headers: pollResp.headers,
+                requestUrl: authConfig.pollEndpoint,
+                cookieJar,
+              });
+              if (term.ok && Object.keys(term.value).length > 0) {
+                approved = true;
+                break;
+              }
+            } else if (newSessionCookie) {
+              approved = true;
+              break;
+            }
+          }
+        } catch {
+          // retry (a network error or a timed-out abort falls through to the
+          // next poll attempt rather than failing the whole completion)
+        } finally {
+          clearTimeout(pollTimeout);
+        }
+      }
+      if (!approved) {
+        return {
+          ok: false,
+          error: 'UNKNOWN',
+          message: `Push notification was not approved after ${pollMax} attempts.`,
+        };
+      }
+    }
+
+    const err = await runRequests(initiateCount, opts.workflow.requests.length);
+    if (err) return err;
+
+    await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+    await persistSessionCapture();
+    return { ok: true, data: { authenticated: true } };
+  }
+
+  if (action === 'submit_otp') {
+    const err = await runRequests(initiateCount, opts.workflow.requests.length);
+    if (err) return err;
+
+    await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+    await persistSessionCapture();
+    return { ok: true, data: { authenticated: true } };
+  }
+
+  return {
+    ok: false,
+    error: 'UNKNOWN',
+    message: `Unknown auth action: ${action}. Use 'initiate', 'complete', or 'submit_otp'.`,
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Parse a strictly-positive integer from an env string; undefined otherwise. */
+function parsePositiveInt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 interface SubstitutedRequest {
   method: string;
   url: string;
@@ -474,6 +828,20 @@ function resolvePlaceholder(
     return { ok: true, value: encodePart(v, template, match, context) };
   }
 
+  if (parsed.kind === 'generated') {
+    const v = generateValue(parsed.name);
+    if (v === null) {
+      return missingState({
+        name: parsed.name,
+        source: 'workflow',
+        capability: 'unsupported',
+        failure: 'unsupported_workflow',
+        message: `Workflow placeholder ${match} uses an unknown generated kind "${parsed.name}" (expected uuid | epoch_ms | epoch_s | iso8601 | nonce)`,
+      });
+    }
+    return { ok: true, value: encodePart(v, template, match, context) };
+  }
+
   if (parsed.kind === 'param') {
     if (!(parsed.name in runtime.params)) {
       const available = Object.keys(runtime.params);
@@ -539,7 +907,7 @@ function resolvePlaceholder(
 }
 
 type ParsedPlaceholder =
-  | { kind: 'param' | 'credential' | 'env' | 'state' | 'cookie'; name: string }
+  | { kind: 'param' | 'credential' | 'env' | 'state' | 'cookie' | 'generated'; name: string }
   | { kind: 'response'; index: number; path: string };
 
 function parsePlaceholderExpression(expr: string): ParsedPlaceholder | null {
@@ -553,10 +921,10 @@ function parsePlaceholderExpression(expr: string): ParsedPlaceholder | null {
     return { kind: bracket[1] as 'state' | 'cookie', name: bracket[2] };
   }
 
-  const dotted = expr.match(/^(param|credential|env|state|cookie)\.([A-Za-z0-9_.-]+)$/);
+  const dotted = expr.match(/^(param|credential|env|state|cookie|generated)\.([A-Za-z0-9_.-]+)$/);
   if (dotted?.[1] && dotted[2]) {
     return {
-      kind: dotted[1] as 'param' | 'credential' | 'env' | 'state' | 'cookie',
+      kind: dotted[1] as 'param' | 'credential' | 'env' | 'state' | 'cookie' | 'generated',
       name: dotted[2],
     };
   }
@@ -564,16 +932,83 @@ function parsePlaceholderExpression(expr: string): ParsedPlaceholder | null {
   return null;
 }
 
-/** Lookup a dotted JSON path inside a parsed value. Supports nested objects + numeric array indices. */
+/** Mint a fresh per-call value for a `${generated.KIND}` placeholder. Resolved
+ *  anew on EVERY substitution so two occurrences in one request can differ and a
+ *  later call never reuses an earlier value. Returns null for an unknown kind. */
+function generateValue(kind: string): string | null {
+  switch (kind) {
+    case 'uuid':
+      return crypto.randomUUID();
+    case 'epoch_ms':
+      return String(Date.now());
+    case 'epoch_s':
+      return String(Math.floor(Date.now() / 1000));
+    case 'iso8601':
+      return new Date().toISOString();
+    case 'nonce': {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    default:
+      return null;
+  }
+}
+
+/** Lookup a JSON path inside a parsed value. Segments may be:
+ *   - an object key:            `reauth.mfaId`
+ *   - a numeric array index:    `items[0]` (bracket) or `items.0` (dot)
+ *   - a field-match predicate:  `challenges[type=push]`
+ *     → the FIRST array element whose `element[field]` stringifies to the value.
+ *  The predicate makes captures robust to non-deterministic array ordering — e.g.
+ *  a 2FA endpoint that returns its SMS/email/push challenges in a varying order, so
+ *  a fixed `challenges[0]` grabs the wrong one while `[type=push]` always selects
+ *  the push one. A bracketed token that is neither a number nor a `key=value`
+ *  predicate is treated as a literal object key. */
 function jsonpath(root: unknown, path: string): unknown {
-  const parts = path.split('.');
+  const tokens: Array<
+    | { kind: 'key'; v: string }
+    | { kind: 'index'; v: number }
+    | { kind: 'pred'; k: string; v: string }
+  > = [];
+  const re = /([^.[\]]+)|\[([^\]]*)\]/g;
+  let m: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex-exec loop
+  while ((m = re.exec(path)) !== null) {
+    if (m[1] !== undefined) {
+      tokens.push({ kind: 'key', v: m[1] });
+    } else {
+      const inner = m[2] ?? '';
+      if (/^\d+$/.test(inner)) {
+        tokens.push({ kind: 'index', v: Number.parseInt(inner, 10) });
+      } else {
+        const eq = inner.indexOf('=');
+        if (eq >= 0)
+          tokens.push({
+            kind: 'pred',
+            k: inner.slice(0, eq).trim(),
+            v: inner.slice(eq + 1).trim(),
+          });
+        else tokens.push({ kind: 'key', v: inner });
+      }
+    }
+  }
   let cur: unknown = root;
-  for (const p of parts) {
+  for (const t of tokens) {
     if (cur == null) return undefined;
-    if (Array.isArray(cur) && /^\d+$/.test(p)) {
-      cur = cur[Number.parseInt(p, 10)];
+    if (t.kind === 'index') {
+      if (!Array.isArray(cur)) return undefined;
+      cur = cur[t.v];
+    } else if (t.kind === 'pred') {
+      if (!Array.isArray(cur)) return undefined;
+      cur = cur.find(
+        (el) =>
+          el != null &&
+          typeof el === 'object' &&
+          String((el as Record<string, unknown>)[t.k]) === t.v,
+      );
     } else if (typeof cur === 'object') {
-      cur = (cur as Record<string, unknown>)[p];
+      cur = (cur as Record<string, unknown>)[t.v];
     } else {
       return undefined;
     }
@@ -650,7 +1085,7 @@ function requestEffect(req: WorkflowRequest): 'safe' | 'idempotent' | 'unsafe' {
   return method === 'GET' || method === 'HEAD' ? 'safe' : 'unsafe';
 }
 
-function collectStatePlaceholders(req: WorkflowRequest): string[] {
+export function collectStatePlaceholders(req: WorkflowRequest): string[] {
   const templates = [req.url, ...Object.values(req.headers), req.body ?? ''];
   const names = new Set<string>();
   for (const template of templates) {

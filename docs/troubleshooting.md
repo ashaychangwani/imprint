@@ -116,6 +116,20 @@ The site is blocking API replay or needs browser-minted state. Three escalating 
    ```
    With a `playbook.yaml` present, the `auto` ladder escalates to a real DOM walk when API replay modes cannot satisfy the workflow.
 
+## Auth compile: no OTP/push arrives, or `verify initiate FAILED (... HTTP 403)`
+
+The credential POST is being **edge-blocked by anti-bot before it reaches the 2FA step**, so the site never sends a code or push. The teach spinner shows this inline, e.g. `Auth compile: turn 30 — verify initiate FAILED (FORBIDDEN HTTP 403); attempt 2/5 — agent retrying`. The cause is almost always that the live verifier (which runs the login inside `cdp-replay`'s real browser) navigated a non-login page, so the login page's anti-bot sensor never ran and its token (e.g. Akamai `_abck`) was never validated for the login Origin.
+
+Fix: the auth `workflow.json` needs a top-level **`bootstrap.url` pointing at the credential-entry page** — the page the recording navigated to right before the credential POST:
+
+```json
+{ "toolKind": "authenticate", "bootstrap": { "url": "https://www.example.com/login", "waitUntil": "domcontentloaded", "waitMs": 4000 }, "requests": [ ... ] }
+```
+
+The compile agent sets this automatically, and if it doesn't the orchestrator derives it from the recording (the credential POST's `Referer`, the Document hosting the login form, or the last document before the POST). If you're hand-editing a workflow and hit this, add the block yourself. A 403 here is **not** rate-limiting — a cool-off won't clear it.
+
+This failure does **not** consume the user-visible 2FA-challenge budget (`IMPRINT_AUTH_MAX_INITIATE`, default 2 — only initiates that actually deliver a prompt count). A separate attempt cap (`IMPRINT_AUTH_MAX_INITIATE_ATTEMPTS`, default 5) bounds repeated pre-challenge failures; once it's hit the agent gives up so a fresh run with corrected artifacts can try again.
+
 ## "STATE_MISSING"
 
 The workflow referenced a required `${state.NAME}` or cookie value that was not available yet. The error includes a `capability` that determines the fix:
@@ -139,6 +153,35 @@ imprint login <site> --from-session ~/.imprint/<site>/sessions/<ts>.json
 ```
 
 This refreshes the site's credential backend entry. Modern credential backends store cookies, named secrets, and declared durable storage values in the OS keychain when available, with an encrypted fallback for headless systems. The legacy JSON path is still read for migration, but new credentials should be managed with `imprint login` and `imprint credential *`.
+
+## Authenticate tool that logs in through a real browser (`playbook` rung)
+
+Some sites' logins can't be replayed as API requests — the credential POST body is computed by the page's own JS per session (encrypted credential blobs, per-load nonces). For these the compile agent emits a **`playbook.yaml`** alongside `workflow.json`: the recorded login DOM steps (type username/password, submit). The login then runs on the ladder's `playbook` rung — a real stealth browser that lets the page mint a fresh valid request — exactly like any other tool that needs the playbook backend. There is no separate login backend or `loginBackend` field.
+
+- **It needs the credentials in the store.** The playbook fills the `${credential.*}` fields it references (typically `username` + `password`). Set them with `imprint credential set <site>`.
+- **Wrong landing fails honestly.** The playbook's success marker is grounded in the recording; if a site routes an automated login to an account-setup/enrollment page instead of the recorded authenticated page, the tool reports failure rather than a false success.
+- **2FA is one of two structural shapes** (`twoFactorType` = `push` or `otp` — the delivery channel doesn't matter; SMS, email, and authenticator-app codes are all `otp`).
+- **Push.** `authenticate_<site>` with `action: initiate` performs the login, then `action: complete` (after you approve the push) finishes; polling is bounded by `maxPollAttempts × pollIntervalMs` and ends on a recording-grounded marker (or a fresh session cookie). Set `IMPRINT_AUTH_POLL_ATTEMPTS=<n>` to cap the poll (e.g. an unattended `imprint teach` attempt uses a short bound so it fails fast).
+- **OTP (any out-of-band code) is two calls.** `action: initiate` reaches the code step and returns `AWAITING_2FA` (with a `twoFactorContext` object if the login returned a token to chain); call again with `action: submit_otp`, `otp_code: "123456"`, **and** that same `twoFactorContext` passed back verbatim. A login that reaches the OTP screen on the **playbook** rung surfaces as `AWAITING_2FA` too (the ladder reshapes the playbook's 2FA-challenge success into the same signal).
+- **Session reuse across the two calls.** After the login the browser's session cookies **and per-origin `localStorage`** are persisted to the credential store; the `submit_otp`/`complete` call rehydrates them so the second stateless call resumes the session.
+- **Unattended `imprint teach` *attempts* the 2FA.** Even with `--no-interactive` (no human to supply a code), teach drives the completion: a placeholder `otp_code` (`000000`) for `otp`, a bounded poll for `push`. It almost always fails without a live second factor — that's expected and reported honestly. Reaching *and* attempting the 2FA is the bar, not completing it.
+- **Still not supported:** a browser-minted login whose OTP must be typed into the *same live page* holding **non-serializable in-page JS state** (live WebCrypto handles, closures) — cookies + `localStorage` round-trip, but the original page's JS heap does not. Such a tool is still *attempted* (and fails honestly); the compile agent does not give up over it, because reaching the 2FA challenge is the compile-time goal.
+- **Orphan Chrome?** Playbook browsers close at the end of each run. If a run was killed mid-flight, check `pgrep -fl "Chrome.*--headless"` and kill leftovers.
+- If a site moves its login form, re-teach so the agent re-records the steps.
+
+## "Auth tool was planned but no credentials are available — skipping auth compile"
+
+Before compiling the auth tool, teach needs the login credentials. It uses, in order: credentials extracted from the recording, then the credential store, then — when interactive — it **prompts you** for exactly the credentials the detection LLM identified for this login (`authTool.credentialNames`), pre-filling the username it saw in the recording. This warning means all of those came up empty.
+
+The usual cause is a **hosted/redirect login (Auth0, Okta, …)**: the password is submitted as a full-page navigation (no XHR body to extract) and Imprint masks password fields at capture time, so the recording legitimately has no password to recover — only the username. Run interactively and enter the password at the prompt, or set it up front and resume:
+
+```
+imprint credential set <site> username
+imprint credential set <site> password
+imprint teach <site> --from-step generate
+```
+
+The live one-time **2FA code is never prompted for here** — it's deliberately excluded from `credentialNames` and entered during verification (see the playbook-rung section above). Already-stored credentials are reused automatically on later runs.
 
 ## "RATE_LIMITED" / 429
 
@@ -210,6 +253,35 @@ imprint teach <site> --from-session ~/.imprint/<site>/sessions/<ts>.json --provi
 ```
 
 If Phoenix is open at `http://localhost:6006` but empty, check that `PHOENIX_COLLECTOR_ENDPOINT` points at that URL and use `IMPRINT_TRACE_BATCH=false` for immediate local export. Drill into individual `agent.turn.N` spans to see per-turn token counts, and into `agent.tool.X` spans to find which tool call is slow. `IMPRINT_TRACE_LLM_IO=1` records prompts/responses; `IMPRINT_TRACE_TOOL_IO=1` records compile-agent tool arguments/results; `IMPRINT_TRACE_IO_MAX_CHARS=200000` raises the per-payload capture cap when the default is too small.
+
+## Re-running only specific phases of `imprint teach`
+
+A teach run is a chain of phases, persisted as checkpoints in `~/.imprint/<site>/.teach-state.json`:
+
+```
+record → redact → replay-and-diff → triage → detect-candidates → plan-prereqs → generate → compile-playbook → emit → register
+```
+
+To iterate on one phase without re-running the whole chain, use the phase-window flags:
+
+```bash
+imprint teach <site> --from-step <step>     # start at <step>, run to the end (reuses earlier phases' outputs)
+imprint teach <site> --to-step <step>        # stop after <step>
+imprint teach <site> --only <step>           # run exactly one phase (= --from-step X --to-step X)
+```
+
+Examples:
+
+```bash
+imprint teach google-flights --only detect-candidates    # just re-detect candidate tools
+imprint teach google-flights --only plan-prereqs          # just rebuild shared modules (multi-tool sites)
+imprint teach google-flights --to-step triage             # process up to triage, then stop
+imprint teach google-flights --from-step generate          # recompile the tools from the persisted plan
+```
+
+Guard: `--from-step <step>` is **only allowed if a prior run reached or crossed that point** — every earlier phase must already be complete in `.teach-state.json`, otherwise the run errors with the furthest step it actually reached (starting mid-chain without the earlier outputs would be missing dependencies like the redacted/triaged session, classifications, or build plan). It's not combinable with `--from-session` (a separate fresh-input entry mode); use `--to-step` (which must be `redact` or later, since `--from-session` enters the chain at `redact`) with `--from-session` to cap phases on a fresh recording.
+
+Notes: the `replay-and-diff → triage → detect-candidates` analysis runs as one atomic block (its sub-steps share a parallel run), so stopping at any of them completes through detect-candidates. Because that block is atomic, `--only replay-and-diff` (and `--only triage` / `--only detect-candidates`) always run through detect-candidates; pairing one with `--skip-replay` reuses the prior `.classifications.json` instead of re-replaying, rather than being a no-op. The per-tool compile (`generate → compile-playbook → emit`) likewise runs as one atomic unit per tool: a `--to-step`/`--only` landing inside it runs the **whole** compile (its summary reports `→ emit`) and stops before `register` (platform integration) rather than mid-tool. `--from-step` *can* still resume mid-compile — each phase loads the prior phase's artifact from disk, so `--from-step compile-playbook` is valid.
 
 ## "Build plan skipped" — the shared-module planner timed out
 

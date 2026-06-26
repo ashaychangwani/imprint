@@ -52,13 +52,53 @@ export interface CompileAgentProgress extends AgentProgress {
   verificationCycle: number;
   /** Hard cap on verification cycles (typically 5). */
   maxVerificationCycles: number;
+  // ── Auth segments only (all optional; data-compile + codex paths leave unset) ──
+  /** 1-based current segment index in the resumable auth loop. */
+  segment?: number;
+  /** Total segment budget (MAX_AUTH_SEGMENTS). */
+  maxSegments?: number;
+  /** Live `initiate` attempts spent so far (AuthVerifier.attemptsUsed). */
+  attempt?: number;
+  /** Attempt cap (AuthVerifier.maxInitiateAttempts). */
+  maxAttempts?: number;
+  /** The most recent live verification result, so the orchestrator's progress
+   *  line can surface a failure (e.g. a 403) the instant it happens instead of
+   *  only feeding it to the agent. Grounded purely in AuthPhaseResult fields. */
+  lastVerification?: {
+    phase: string;
+    ok: boolean;
+    status?: number;
+    error?: string;
+    backend?: string;
+    durationMs?: number;
+    /** Which checkpoint produced it — drives the "retrying" vs "cooling-off" hint. */
+    checkpoint?: 'run_verification' | 'prompt_user' | 'wait_for_cooldown';
+  };
 }
+
+/** A mid-loop checkpoint the auth compile agent reaches: it calls a checkpoint
+ *  tool (which writes a sentinel) and then STOPS its turn. The orchestrator
+ *  (teach) performs the action — it owns the live browser session, the TUI, and
+ *  the cooldown — then resumes the agent (`claude --resume`) with the result as a
+ *  follow-up user message. Site/channel-agnostic. */
+export type AuthCheckpoint =
+  | { kind: 'run_verification'; phase: 'initiate' | 'submit_otp' | 'complete'; otp_code?: string }
+  | { kind: 'prompt_user'; message: string; options?: string[] }
+  | { kind: 'wait_for_cooldown'; minutes: number; reason?: string };
 
 export interface CompileAgentResult {
   /** True only if external verification passed. */
   success: boolean;
-  /** Why we stopped — done, give_up, timeout, soft_cap, error. */
-  outcome: 'done' | 'give_up' | 'timeout' | 'soft_cap' | 'error';
+  /** Why we stopped — done, give_up, timeout, soft_cap, error, or (auth segments)
+   *  checkpoint: the agent paused at a checkpoint tool for the orchestrator to act
+   *  and resume. */
+  outcome: 'done' | 'give_up' | 'timeout' | 'soft_cap' | 'error' | 'checkpoint';
+  /** Auth segments only: the checkpoint the agent reached (when outcome ===
+   *  'checkpoint'). The orchestrator performs it and resumes with the result. */
+  checkpoint?: AuthCheckpoint;
+  /** claude-cli session id (from the init event) — `--resume` target for the
+   *  next auth segment. */
+  sessionId?: string;
   /** Path to workflow.json if written. */
   workflowPath?: string;
   /** Path to parser.ts if written. */

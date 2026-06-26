@@ -23,6 +23,7 @@ import {
   pickProbeWinner,
   prefersCdpReplayFirst,
   renderWorkflowRequests,
+  reshapePlaybookAuthResult,
   resolveLadder,
   runWithLadder,
   runWorkflowWithLadder,
@@ -1342,6 +1343,86 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
   });
 });
 
+describe('cdp-replay cookie seeding by toolKind', () => {
+  function cdpTool(site: string, toolKind?: 'authenticate'): ResolvedTool {
+    return {
+      site,
+      dir: pathJoin(root, site, 'tool'),
+      workflow: {
+        toolName: `tool_${site}`,
+        ...(toolKind ? { toolKind } : {}),
+        intent: { description: 'x' },
+        parameters: [],
+        requests: [{ method: 'GET', url: `https://${site}.example.com/api/x`, headers: {} }],
+        site,
+        bootstrap: { url: `https://${site}.example.com/login` },
+      },
+      toolFn: async () => ({ ok: true, data: { via: 'cdp-replay' } }),
+    };
+  }
+
+  // A validated jar with an anti-bot cookie sitting in the site dir — the exact
+  // shape `saveJar` leaves behind after any prior cdp-replay run.
+  function seedJarOnDisk(site: string): void {
+    const siteDir = pathJoin(root, site);
+    mkdirSync(siteDir, { recursive: true });
+    const jar: MintedJar = {
+      cookies: [{ name: '_abck', value: 'SEED~0~SEED', domain: `.${site}.example.com`, path: '/' }],
+      ua: 'JarUA/148',
+      html: '',
+      bootstrapEpoch: Date.now(),
+      abckFlag: '0',
+      validated: true,
+    };
+    writeFileSync(pathJoin(siteDir, '.cdp-jar.json'), `${JSON.stringify(jar)}\n`, 'utf8');
+  }
+
+  function captureSeed(): { seen: () => Array<{ name: string }> | undefined } {
+    let seedSeen: Array<{ name: string }> | undefined;
+    __setCdpBrowserFetchFactoryForTest((opts) => {
+      seedSeen = opts.seedCookies;
+      return {
+        fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => ({
+          cookies: [],
+          ua: 'X',
+          html: '',
+          bootstrapEpoch: Date.now(),
+          abckFlag: '0',
+          validated: true,
+        }),
+        close: async () => {},
+      };
+    });
+    return { seen: () => seedSeen };
+  }
+
+  it('a data tool seeds cached jar cookies into the cdp browser (control)', async () => {
+    seedJarOnDisk('data');
+    const cap = captureSeed();
+    const r = await runWithLadder(['cdp-replay'], cdpTool('data'), {}, root, new Map());
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(cap.seen()?.map((c) => c.name)).toEqual(['_abck']);
+  });
+
+  it('an authenticate tool starts clean — never seeds a prior session/anti-bot cookie', async () => {
+    // Regression: seeding a stale Akamai `_abck` from a prior run poisons the live
+    // sensor so the cross-origin credential POST is edge-403'd. Auth = fresh session.
+    seedJarOnDisk('auth');
+    const cap = captureSeed();
+    const r = await runWithLadder(
+      ['cdp-replay'],
+      cdpTool('auth', 'authenticate'),
+      {},
+      root,
+      new Map(),
+    );
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(cap.seen()).toBeUndefined();
+  });
+});
+
 describe('runWithLadder — Google Flights CDP reuse', () => {
   const workflowPath = pathResolve(
     process.cwd(),
@@ -1803,5 +1884,75 @@ describe('pickBaseUrl', () => {
   it('throws for empty requests', () => {
     const tool = toolWith([]);
     expect(() => pickBaseUrl(tool)).toThrow('has no requests');
+  });
+});
+
+describe('reshapePlaybookAuthResult', () => {
+  const authWorkflow = (over: Partial<Workflow['authConfig']> = {}): Workflow =>
+    ({
+      toolName: 'authenticate_fix',
+      toolKind: 'authenticate',
+      intent: { description: 'auth' },
+      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
+      requests: [{ method: 'POST', url: 'https://fix.example/login', headers: {} }],
+      site: 'fix',
+      authConfig: {
+        twoFactorType: 'otp',
+        initiateRequestCount: 1,
+        twoFactorContext: ['SecurityCode'],
+        ...over,
+      },
+    }) as Workflow;
+
+  const okResult = (data: Record<string, unknown>): ToolResult => ({ ok: true, data });
+
+  it('reshapes a 2FA playbook ok:true into AWAITING_2FA carrying the captured token', () => {
+    const r = reshapePlaybookAuthResult(
+      okResult({ authenticated: true, SecurityCode: 'SYNTH-SEC-1' }),
+      authWorkflow(),
+      { action: 'initiate' },
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected AWAITING_2FA');
+    expect(r.error).toBe('AWAITING_2FA');
+    expect(r.twoFactorType).toBe('otp');
+    expect(r.twoFactorContext).toEqual({ SecurityCode: 'SYNTH-SEC-1' });
+  });
+
+  it('reshapes with undefined twoFactorContext when no token was captured', () => {
+    const r = reshapePlaybookAuthResult(okResult({ authenticated: true }), authWorkflow(), {
+      action: 'initiate',
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected AWAITING_2FA');
+    expect(r.error).toBe('AWAITING_2FA');
+    expect(r.twoFactorContext).toBeUndefined();
+  });
+
+  it('leaves a no-2FA authenticate ok:true untouched (full login)', () => {
+    const r = reshapePlaybookAuthResult(
+      okResult({ authenticated: true }),
+      authWorkflow({ twoFactorType: 'none' }),
+      { action: 'initiate' },
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it('does NOT reshape submit_otp/complete actions (those run via fetch)', () => {
+    for (const action of ['submit_otp', 'complete']) {
+      const r = reshapePlaybookAuthResult(okResult({ authenticated: true }), authWorkflow(), {
+        action,
+      });
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  it('passes through a failed result and non-authenticate tools unchanged', () => {
+    const failed: ToolResult = { ok: false, error: 'NETWORK', message: 'boom' };
+    expect(reshapePlaybookAuthResult(failed, authWorkflow(), { action: 'initiate' })).toBe(failed);
+
+    const dataTool = { ...authWorkflow(), toolKind: 'read' } as unknown as Workflow;
+    const ok = okResult({ x: 1 });
+    expect(reshapePlaybookAuthResult(ok, dataTool, { action: 'initiate' })).toBe(ok);
   });
 });

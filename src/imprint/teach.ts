@@ -17,6 +17,7 @@ import {
 } from 'node:path';
 import * as p from '@clack/prompts';
 import type { OnDeadlineReached } from './agent.ts';
+import { compileAuthAgent } from './auth-compile-agent.ts';
 import {
   type SharedModuleManifestEntry,
   buildPlanSidecarPath,
@@ -27,6 +28,7 @@ import {
   type CompileAgentProgress,
   type TriageResult,
   compilePlaybook,
+  findAuthAdjacentSeqs,
   findCredentialBearingSeqs,
   generate,
   triageRequests,
@@ -34,10 +36,16 @@ import {
 import { mapLimit, mapLimitSettled } from './concurrency.ts';
 import {
   type CredentialFinding,
-  type Replacement,
+  applyCredentialPlaceholders,
+  deriveLoginCredentials,
   extractCredentials,
 } from './credential-extract.ts';
-import { getCredentialBackend, readSiteManifest, upsertManifestEntry } from './credential-store.ts';
+import {
+  getCredentialBackend,
+  loadSiteCredentials,
+  readSiteManifest,
+  upsertManifestEntry,
+} from './credential-store.ts';
 import { emit } from './emit.ts';
 import {
   type Platform,
@@ -61,7 +69,11 @@ import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import { loadCredentialStore } from './runtime.ts';
-import { isSensitiveCredentialKey, passwordLikeTokens } from './sensitive-keys.ts';
+import {
+  isSensitiveCredentialKey,
+  isUsernameLikeKey,
+  passwordLikeTokens,
+} from './sensitive-keys.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import {
   listSessionsInDir,
@@ -76,7 +88,9 @@ import {
   type TeachStep as Step,
   type TeachState,
   type WorkflowState,
+  analysisBlockRunsForWindow,
   buildTeachStateFromSession,
+  detectCandidatesCompletedSteps,
   discoverCompletedWorkflows,
   discoverOrphanSession,
   friendlySessionTimestamp,
@@ -84,9 +98,11 @@ import {
   loadTeachState,
   nextTeachStep as nextStep,
   pruneStalePendingTeachWorkflows,
+  resolveStepStartTarget,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
   saveTeachState,
+  selectMultiToolResumePlans,
   toRelativeTeachStatePath as toRelative,
 } from './teach-state.ts';
 import {
@@ -95,9 +111,10 @@ import {
   buildSharedCompileContext as buildCandidateSharedCompileContext,
   detectToolCandidates,
   primaryToolCandidate,
+  sharedContextHasAuth,
 } from './tool-candidates.ts';
 import { planToolCompile } from './tool-plan.ts';
-import { setSpanAttributes, traced } from './tracing.ts';
+import { setSpanAttributes, shutdownTracing, traced } from './tracing.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
 import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
 
@@ -139,6 +156,13 @@ interface TeachOptions {
   allTools?: boolean;
   /** Skip the replay-and-diff stage entirely. */
   skipReplay?: boolean;
+  /** Run only specific phases of the teach chain. `fromStep` resumes a PRIOR run
+   *  at that step (guarded — every earlier step must already be complete so its
+   *  output can be reused); `toStep` stops after that step. Together they bound a
+   *  window; fromStep===toStep runs a single phase. `fromStep` is non-interactive
+   *  (bypasses the resume prompt) and is not combined with `fromSession`. */
+  fromStep?: Step;
+  toStep?: Step;
 }
 
 interface TeachResult {
@@ -419,7 +443,43 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
 
-  if (opts.fromSession) {
+  if (opts.fromStep === 'record') {
+    // `--from-step record` / `--only record` is a non-interactive fresh start:
+    // record produces everything, so it needs no prior run (assertResumableAt
+    // always allows 'record'). Leave workflowKey/sessionPath null so a fresh
+    // _pending_ run is minted below, exactly like a normal new run — bypassing
+    // resolveStepStartTarget, which requires a prior run for any later step but
+    // would wrongly reject 'record' on a fresh site.
+    startFrom = 'record';
+  } else if (opts.fromStep) {
+    // Non-interactive phase resume: start at a specific step, reusing a prior
+    // run's persisted outputs. resolveStepStartTarget picks the most-recent
+    // workflow and THROWS if it didn't reach far enough (the dependency guard).
+    const target = resolveStepStartTarget(site, state, opts.fromStep);
+    workflowKey = target.workflowKey;
+    startFrom = opts.fromStep;
+    sessionPath = resolveTeachStatePath(site, target.ws.sessionPath);
+    redactedPath = resolveTeachStatePath(site, target.ws.redactedPath);
+    // Resolve a derived artifact path (.triaged/.redacted) back to the original
+    // recording so earlier-than-redact restarts operate on the full session.
+    if (sessionPath) {
+      const original = sessionPath.replace(/\.triaged/g, '').replace(/\.redacted/g, '');
+      if (original !== sessionPath && isExistingFile(original)) {
+        sessionPath = original;
+        redactedPath = null;
+      }
+    }
+    // startFrom is never 'record' here (handled by the branch above), so an
+    // unresolved session means a completed workflow with no stored path — recover
+    // the latest recording on disk.
+    if (!sessionPath) {
+      const orphan = discoverOrphanSession(site, state);
+      if (orphan) {
+        sessionPath = resolveTeachStatePath(site, orphan.sessionPath);
+        redactedPath = resolveTeachStatePath(site, orphan.redactedPath);
+      }
+    }
+  } else if (opts.fromSession) {
     startFrom = 'redact';
     sessionPath = pathResolve(opts.fromSession);
     usingFromSession = true;
@@ -476,6 +536,51 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   const startIdx = STEPS.indexOf(startFrom);
+  // Upper bound of the phase window: `--to-step`/`--only` stop the chain after a
+  // given step (default = the last step, i.e. run to the end). A phase runs only
+  // when it falls within [startFrom, toStep].
+  const stopIdx = opts.toStep ? STEPS.indexOf(opts.toStep) : STEPS.length - 1;
+  // Backwards-window guard for the one path the CLI validation can't see: an
+  // interactive resume (continue/redo) can pick a startFrom AFTER --to-step (e.g.
+  // `--to-step redact`, then "continue" a workflow whose next step is generate),
+  // producing an empty window that would silently run nothing and print a
+  // backwards "generate → redact" summary. (Explicit --from-step/--to-step
+  // ordering is already validated in resolveTeachPhaseWindow.)
+  if (opts.toStep && startIdx > stopIdx) {
+    throw new Error(
+      `The workflow resumes at "${startFrom}", which is after --to-step "${opts.toStep}" — nothing would run. ` +
+        `Re-run without --to-step, or with --to-step "${startFrom}" or later.`,
+    );
+  }
+  /** True when `step` is inside the [startFrom, toStep] window. Replaces the bare
+   *  `startIdx <= idx(step)` phase gates so a phase can also be skipped when it's
+   *  PAST the requested stop step. */
+  const inWindow = (step: Step): boolean => {
+    const i = STEPS.indexOf(step);
+    return startIdx <= i && i <= stopIdx;
+  };
+  /** Stop the run early when `--to-step`/`--only` bounded the window before the
+   *  normal end. Used at each phase-group boundary so the full-compile tail never
+   *  runs on a partial. Reports what ran; exits 0 (the CLI ignores the return). */
+  const finishEarly = async (lastStep?: Step): Promise<never> => {
+    // `lastStep` overrides the reported stop when the actual last phase differs
+    // from stopIdx — the per-tool compile is atomic, so a --to-step inside it
+    // (generate/compile-playbook) actually runs through emit. Report it honestly.
+    p.outro(
+      `Ran teach phases ${startFrom} → ${lastStep ?? STEPS[stopIdx]} for ${site}; stopped here (--to-step/--only).`,
+    );
+    // Flush OpenTelemetry spans before exiting: process.exit(0) bypasses the CLI's
+    // shutdownTracing() (run in its .then() handler), which would otherwise lose
+    // batched spans for windowed (--to-step/--only) runs when IMPRINT_TRACE=1.
+    // Guard the flush so a shutdown error can't prevent the exit (this is typed
+    // Promise<never> and callers rely on it never returning).
+    try {
+      await shutdownTracing();
+    } catch {
+      /* best-effort flush — exit regardless */
+    }
+    process.exit(0);
+  };
   const spinner = p.spinner();
   let resolvedProviderName: ProviderName | null = null;
   const getProviderName = async (): Promise<ProviderName> => {
@@ -536,12 +641,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     );
   }
 
-  if (startIdx <= STEPS.indexOf('compile-playbook')) {
+  if (startIdx <= STEPS.indexOf('compile-playbook') && stopIdx >= STEPS.indexOf('triage')) {
     await getProviderName();
   }
 
   // ── 1. Record ──────────────────────────────────────────────────────
-  if (startIdx <= STEPS.indexOf('record')) {
+  if (inWindow('record')) {
     const startUrl = await resolveStartUrl(opts);
 
     spinner.start('Recording');
@@ -600,7 +705,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
   // ── 2. Redact ──────────────────────────────────────────────────────
   let teachCredentials: { site: string; values: Record<string, string> } | undefined;
-  if (startIdx <= STEPS.indexOf('redact')) {
+  let credentialFindings: CredentialFinding[] = [];
+  if (inWindow('redact')) {
     sessionPath = requireSessionFile(sessionPath, {
       site,
       workflowKey,
@@ -619,29 +725,13 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     );
 
     // Extract credentials from the raw session BEFORE redaction so we can
-    // both stash the values in the credential manager AND swap them for
-    // ${credential.X} placeholders in the redacted artifact.
-    const { findings, replacements } = extractCredentials(session);
-    let confirmedReplacements: Replacement[] = [];
-    if (findings.length > 0) {
-      const result = await promptAndPersistCredentials({
-        site,
-        findings,
-        replacements,
-        noInteractive: opts.noInteractive ?? false,
-      });
-      confirmedReplacements = result.replacements;
-      if (result.confirmedFinding) {
-        const f = result.confirmedFinding;
-        teachCredentials = {
-          site,
-          values: {
-            [f.usernameName ?? 'username']: f.usernameValue,
-            [f.passwordName ?? 'password']: f.passwordValue,
-          },
-        };
-      }
-    }
+    // swap their values for ${credential.X} placeholders in the redacted
+    // artifact.  ALL credential values are redacted for security.  The
+    // actual storage prompt is deferred until after detect-candidates so
+    // the LLM can determine which login attempt actually succeeded.
+    const extracted = extractCredentials(session);
+    credentialFindings = extracted.findings;
+    const { replacements } = extracted;
 
     spinner.start('Redacting credentials');
     redactedPath = sessionPath.replace(/\.json$/, '.redacted.json');
@@ -652,7 +742,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       async (span) => {
         const pageMintedHeaders = detectPageMintedHeaders(session);
         const redaction = redactSession(session, {
-          replacements: confirmedReplacements,
+          replacements,
           keepHeaders: pageMintedHeaders,
         });
         writeFileSync(
@@ -694,7 +784,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     // hand-editing.
     const warnings: string[] = [];
     const unpairedPasswordSeqs = findUnpairedPasswordRequests(session);
-    if (unpairedPasswordSeqs.length > 0 && confirmedReplacements.length === 0) {
+    if (unpairedPasswordSeqs.length > 0 && replacements.length === 0) {
       warnings.push('credentials_not_paired');
       const seqList = unpairedPasswordSeqs.slice(0, 5).join(', ');
       const more = unpairedPasswordSeqs.length > 5 ? ', …' : '';
@@ -719,7 +809,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     redactedPath = sessionPath ? sessionPath.replace(/\.json$/, '.redacted.json') : null;
   }
 
-  if (startIdx <= STEPS.indexOf('generate')) {
+  // Only require the redacted session once a phase that consumes it is in the
+  // window. A `--to-step record|redact` window stops before replay-and-diff (the
+  // first consumer), so `.redacted.json` may not exist yet — the finishEarly()
+  // just below handles the clean stop. Without the stopIdx guard, `--to-step
+  // record` throws on the missing file before ever reaching that early-exit.
+  if (startIdx <= STEPS.indexOf('generate') && stopIdx >= STEPS.indexOf('replay-and-diff')) {
     redactedPath = requireSessionFile(redactedPath, {
       site,
       workflowKey,
@@ -735,10 +830,19 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // Run them in parallel so the user can select tools while replay runs.
   let siteClassifications: ClassifiedValue[] | undefined;
   let triageResult: TriageResult | undefined;
+  // Early stop: `--to-step record|redact` finishes before the analysis block.
+  if (stopIdx < STEPS.indexOf('replay-and-diff')) await finishEarly();
+
   let plans: CandidateCompilePlan[];
 
-  let needsReplay = startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
-  const needsCandidates = startIdx <= STEPS.indexOf('detect-candidates');
+  // The replay→triage→detect-candidates analysis is one atomic block (the sub-
+  // steps share a parallel run + the triaged session), so the window can START
+  // within it but always completes through detect-candidates. It runs when the
+  // [startFrom, toStep] window overlaps [replay-and-diff, detect-candidates].
+  const runsAnalysis = analysisBlockRunsForWindow(startIdx, stopIdx);
+  let needsReplay =
+    runsAnalysis && startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
+  const needsCandidates = runsAnalysis;
 
   if (needsReplay && !opts.noInteractive) {
     const runReplay = await p.confirm({
@@ -828,6 +932,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           mp.pause();
           mp.clear();
           const credentialSeqs = findCredentialBearingSeqs(triageSession);
+          const authAdjacentSeqs = findAuthAdjacentSeqs(triageSession, credentialSeqs);
+          const allLoginSeqs = [...new Set([...credentialSeqs, ...authAdjacentSeqs])];
           spinner.start('Triaging requests');
           localTriageResult = await triageRequests(
             triageSession,
@@ -835,13 +941,19 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
               provider: providerName,
               model,
             },
-            credentialSeqs.length > 0
+            allLoginSeqs.length > 0
               ? {
                   sharedContext: {
-                    loginRequestSeqs: credentialSeqs,
+                    loginRequestSeqs: allLoginSeqs,
                     credentialNames: [],
                     tokenExtractionNotes: '',
                     sharedHelperNotes: '',
+                    twoFactorDetected: false,
+                    twoFactorType: 'none' as const,
+                    twoFactorRequestSeqs: [],
+                    authCompletionSeqs: [],
+                    twoFactorContext: [],
+                    twoFactorNotes: '',
                   },
                 }
               : {},
@@ -894,6 +1006,62 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         mp.resume();
 
         const sharedContext = buildCandidateSharedCompileContext(detection, selected);
+
+        // ── Credential prompt (deferred until here so the LLM decides which login succeeded) ──
+        const llmLoginSeqs = new Set(detection.sharedContext?.loginRequestSeqs ?? []);
+        if (credentialFindings.length > 0 && llmLoginSeqs.size > 0) {
+          const isPlaceholder = (v: string) => /^\$\{credential\./.test(v);
+          const validFindings = credentialFindings.filter(
+            (f) =>
+              llmLoginSeqs.has(f.requestSeq) &&
+              !isPlaceholder(f.usernameValue) &&
+              !isPlaceholder(f.passwordValue),
+          );
+          if (validFindings.length > 0) {
+            // De-dup by username — keep the last (most recent password)
+            const byUser = new Map<string, CredentialFinding>();
+            for (const f of validFindings) byUser.set(f.usernameValue, f);
+            const candidates = [...byUser.values()];
+            const finding = candidates[candidates.length - 1] as CredentialFinding;
+
+            const maskedUser = maskUsername(finding.usernameValue);
+            p.note(
+              [
+                'Detected a successful login in this recording.',
+                `  username: ${maskedUser}`,
+                `  password: ${'*'.repeat(Math.min(finding.passwordValue.length, 16))}`,
+                `  request:  ${finding.requestLabel}`,
+                '',
+                'Imprint will store these credentials in your local credential manager',
+                '(OS keychain when available, libsodium-encrypted file otherwise).',
+              ].join('\n'),
+              'Credential capture',
+            );
+
+            let shouldStore = true;
+            if (!opts.noInteractive) {
+              const proceed = await p.confirm({
+                message: `Save credentials for "${site}" to the credential manager?`,
+                initialValue: true,
+              });
+              shouldStore = !p.isCancel(proceed) && !!proceed;
+            }
+
+            if (shouldStore) {
+              await persistFinding({ site, finding });
+              teachCredentials = {
+                site,
+                values: {
+                  [finding.usernameName]: finding.usernameValue,
+                  [finding.passwordName]: finding.passwordValue,
+                },
+              };
+            } else {
+              p.log.warn('Skipping credential save — workflow will not be able to log in.');
+            }
+          }
+        }
+
         const pendingKey = workflowKey.startsWith('_pending_') ? workflowKey : null;
         const rawSessionPath = requireSessionFile(sessionPath, {
           site,
@@ -908,7 +1076,19 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         const candidatePlans = selected.map((candidate) => {
           checkpoint(site, state, candidate.toolName, {
             ...baseState,
-            completedSteps: ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+            // Preserve prior progress only when re-detecting the SAME recording, so
+            // a re-run of the analysis block (`--from-step`/`--only detect-candidates`,
+            // or interactive redo) doesn't regress a tool that already reached
+            // generate…register (which would break a later `--from-step register`).
+            // A fresh / different recording producing the same toolName must NOT
+            // inherit the old `plan-prereqs` marker, or the alreadyPlanned shortcut
+            // below would skip re-planning and compile against the previous
+            // recording's `_shared/` modules — detectCandidatesCompletedSteps gates
+            // on the recording's sessionPath.
+            completedSteps: detectCandidatesCompletedSteps(
+              state.workflows[candidate.toolName],
+              baseState.sessionPath,
+            ),
             candidate,
             sharedContext,
           });
@@ -993,15 +1173,44 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         triagedPath: toRelative(site, resolvedTriagedPath),
       });
     }
-    plans = [
-      {
-        workflowKey,
-        startFrom,
-        candidate: ws?.candidate,
-        sharedContext: ws?.sharedContext,
-      },
-    ];
+    // A `--from-step` resume into plan-prereqs/generate reconstructs the prior
+    // run's tools from persisted state (shared-module planning needs ≥2 tools, and
+    // a multi-tool generate resumes all of them) — not just the most-recent
+    // workflow. selectMultiToolResumePlans scopes this to the same recording as the
+    // resume target and to tools that actually reached `startFrom`'s prerequisites,
+    // so a sibling from a different run can't be compiled against the wrong session
+    // and one that failed earlier can't crash loading a missing artifact. Confined
+    // to --from-step so interactive resume keeps its single-tool behavior.
+    const allCandidatePlans: CandidateCompilePlan[] = [];
+    if (opts.fromStep) {
+      const selection = selectMultiToolResumePlans(state, workflowKey, startFrom);
+      for (const { workflowKey: skippedKey, reason } of selection.skipped) {
+        p.log.warn(
+          reason === 'different-recording'
+            ? `Skipping tool "${skippedKey}" for --from-step ${startFrom}: it belongs to a different recording than the resume target.`
+            : `Skipping tool "${skippedKey}" for --from-step ${startFrom}: its prior run didn't reach "${startFrom}" — resume an earlier step or re-run it.`,
+        );
+      }
+      for (const sel of selection.plans) {
+        allCandidatePlans.push({
+          workflowKey: sel.workflowKey,
+          startFrom,
+          candidate: sel.candidate,
+          sharedContext: sel.sharedContext,
+        });
+      }
+    }
+    plans =
+      allCandidatePlans.length > 0
+        ? allCandidatePlans
+        : [{ workflowKey, startFrom, candidate: ws?.candidate, sharedContext: ws?.sharedContext }];
   }
+
+  // Early stop: `--to-step replay-and-diff|triage|detect-candidates` finishes
+  // after the analysis block, before shared-module planning / compile. The block is
+  // atomic and always runs through detect-candidates, so report that as the last
+  // step (mirrors the compile exit reporting 'emit').
+  if (stopIdx < STEPS.indexOf('plan-prereqs')) await finishEarly('detect-candidates');
 
   const needsCompileProvider = plans.some(
     (plan) => STEPS.indexOf(plan.startFrom) <= STEPS.indexOf('compile-playbook'),
@@ -1046,17 +1255,36 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     );
   }
 
-  const compileSessionPath = requireSessionFile(redactedPath, {
+  // Prefer the triaged session for compile (data AND auth tools). Triage keeps
+  // every load-bearing, auth, and DOM-event the agents need (events are kept in
+  // full) while dropping the bulk of telemetry/asset/noise requests — e.g. 415
+  // vs 4396 requests on a big multi-tool site. Handing the agent the entire
+  // redacted recording instead makes it burn its turn/time budget exploring
+  // thousands of irrelevant requests (the amex auth compile never converged on a
+  // playbook because of this). The detect-candidates summary already triages;
+  // this aligns the compile session with it.
+  const triagedCandidate = redactedPath?.replace(/\.redacted\.json$/, '.triaged.json');
+  const sessionForCompile =
+    triagedCandidate && existsSync(triagedCandidate) ? triagedCandidate : redactedPath;
+  const useTriaged = sessionForCompile === triagedCandidate;
+  const compileSessionPath = requireSessionFile(sessionForCompile, {
     site,
     workflowKey: plans[0]?.workflowKey ?? workflowKey,
     startFrom,
-    kind: 'redacted',
+    kind: useTriaged ? 'triaged' : 'redacted',
   });
 
   // ── Clean up stale tools from previous teach runs ──
+  // Skipped entirely on a `--from-step` resume: a resume is scoped to a subset of
+  // the site's tools (selectMultiToolResumePlans intentionally leaves other
+  // recordings' tools — and same-recording tools that didn't reach the step —
+  // alone), so "not in the resume set" does NOT mean "stale". Treating it as stale
+  // here would silently rmSync a tool the resume just promised to preserve. Cleanup
+  // only applies to a fresh run that produces a superseding tool set.
   const incomingToolNames = new Set(plans.map((pl) => pl.candidate?.toolName ?? pl.workflowKey));
-  const existingTools = discoverCompletedWorkflows(site);
-  const staleTools = existingTools.filter((name) => !incomingToolNames.has(name));
+  const staleTools = opts.fromStep
+    ? []
+    : discoverCompletedWorkflows(site).filter((name) => !incomingToolNames.has(name));
   if (staleTools.length > 0) {
     let shouldReplace = true;
     if (!opts.noInteractive) {
@@ -1077,19 +1305,32 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   // ── plan-prereqs: plan + build shared modules once before the fan-out ──
-  // Only engages for ≥2 selected tools that are about to be (re)generated.
-  // Single-tool runs and resumes-past-generate are unchanged.
+  // Engages for ≥2 selected tools (to plan shared modules) OR when the recording
+  // carries ANY login (with or without 2FA). The planner is the ONLY producer of
+  // the build-plan `authTool`, so an authenticated single-tool site must still run
+  // it — otherwise the login is detected but never compiled into a reusable auth
+  // tool, and every data tool re-logs-in inline (hammering the site at compile
+  // time). Resumes-past-generate are unchanged.
   const selectedCandidates = plans.map((pl) => pl.candidate).filter((c): c is ToolCandidate => !!c);
   const willGenerate = plans.some((pl) => STEPS.indexOf(pl.startFrom) <= STEPS.indexOf('generate'));
+  // Detected login/auth → the planner must run (even for a single data tool) so it
+  // emits the build-plan `authTool` the auth-compile block below consumes.
+  const authDetected = plans.some((pl) => sharedContextHasAuth(pl.sharedContext));
   let buildPlanPath = '';
   let sharedModulesManifest: SharedModuleManifestEntry[] = [];
-  if (selectedCandidates.length >= 2 && willGenerate && compileModel) {
+  if ((selectedCandidates.length >= 2 || authDetected) && willGenerate && compileModel) {
     const sidecar = buildPlanSidecarPath(site);
     const firstWs = state.workflows[plans[0]?.workflowKey ?? ''];
+    // Reuse the cached plan only when resuming PAST plan-prereqs (e.g. --from-step
+    // generate). When plan-prereqs is the explicit target (`--only plan-prereqs` /
+    // `--from-step plan-prereqs`), the user is asking to rebuild shared modules, so
+    // force a fresh planner run instead of short-circuiting to the cached sidecar.
     const alreadyPlanned =
+      opts.fromStep !== 'plan-prereqs' &&
       plans.every((pl) =>
         state.workflows[pl.workflowKey]?.completedSteps.includes('plan-prereqs'),
-      ) && existsSync(sidecar);
+      ) &&
+      existsSync(sidecar);
     if (alreadyPlanned && firstWs) {
       // Resume past plan-prereqs — reuse the persisted plan + manifest.
       buildPlanPath = sidecar;
@@ -1140,6 +1381,191 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
   }
 
+  // Early stop: `--to-step plan-prereqs` finishes after shared-module planning,
+  // before any tool (auth or data) compiles.
+  if (stopIdx < STEPS.indexOf('generate')) await finishEarly();
+
+  // ── auth-tool: agentic compile loop + interactive 2FA ──
+  if (buildPlanPath && willGenerate) {
+    const buildPlan = readBuildPlanFile(buildPlanPath);
+    if (buildPlan?.authTool) {
+      const authPlan = buildPlan.authTool;
+      const redactedSession = SessionSchema.parse(
+        JSON.parse(readFileSync(compileSessionPath, 'utf8')),
+      );
+      // Passwordless / OTP-only logins (e.g. email + emailed code, magic link)
+      // carry no password for the username+password extractor to pair, so
+      // teachCredentials is empty. Derive the planner-declared credential values
+      // from the recorded login request(s), persist them, and back-fill
+      // ${credential.X} into the redacted session the agent reads.
+      if (!teachCredentials && sessionPath && existsSync(sessionPath)) {
+        try {
+          const rawForCreds = SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8')));
+          const derived = deriveLoginCredentials(
+            rawForCreds,
+            authPlan.loginRequestSeqs,
+            authPlan.credentialNames,
+          );
+          if (Object.keys(derived.values).length > 0) {
+            const backend = await getCredentialBackend();
+            for (const [name, value] of Object.entries(derived.values)) {
+              await backend.setSecret(site, name, value);
+              upsertManifestEntry(site, {
+                name,
+                kind: 'username',
+                description: 'Login identifier',
+              });
+            }
+            applyCredentialPlaceholders(redactedSession, derived.replacements);
+            teachCredentials = { site, values: derived.values };
+            p.log.success(
+              `Derived ${Object.keys(derived.values).length} credential(s) for passwordless login: ${Object.keys(derived.values).join(', ')}`,
+            );
+          }
+        } catch (err) {
+          p.log.warn(
+            `Credential derivation failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
+      // The recording can't always yield credentials — hosted/redirect logins
+      // (Auth0, Okta, …) submit the password as a page navigation (no XHR body),
+      // and the capture listener masks password fields. Before skipping, reuse
+      // anything already stored, then — when interactive — prompt for exactly the
+      // credentials the detection LLM identified for this login
+      // (authPlan.credentialNames; the live 2FA code is intentionally not in that
+      // list — it's entered during verification).
+      if (!teachCredentials) {
+        const view = await loadSiteCredentials(site).catch(() => null);
+        if (view && Object.keys(view.values).length > 0) {
+          teachCredentials = { site, values: view.values };
+          p.log.info(
+            `Using stored credentials for "${site}": ${Object.keys(view.values).join(', ')}`,
+          );
+        }
+      }
+      if (!teachCredentials && !opts.noInteractive && authPlan.credentialNames.length > 0) {
+        let detectedUsername: string | undefined;
+        if (sessionPath && existsSync(sessionPath)) {
+          try {
+            detectedUsername = detectRecordedUsername(
+              SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8'))),
+            );
+          } catch {
+            /* best-effort pre-fill only */
+          }
+        }
+        teachCredentials = await promptForCredentials({
+          site,
+          names: authPlan.credentialNames,
+          detectedUsername,
+        });
+      }
+
+      if (!teachCredentials) {
+        const hint = opts.noInteractive
+          ? ` Set them with \`imprint credential set ${site} <name>\` (${authPlan.credentialNames.join(', ') || 'the login credentials'}), then resume with \`imprint teach ${site} --from-step generate\`.`
+          : '';
+        p.log.warn(
+          `Auth tool "${authPlan.toolName}" was planned but no credentials are available — skipping auth compile.${hint} Data tools will attempt inline login.`,
+        );
+      } else {
+        spinner.start(`Compiling auth tool: ${authPlan.toolName}`);
+        try {
+          muteLog();
+          const authResult = await compileAuthAgent({
+            site,
+            session: redactedSession,
+            sessionPath: compileSessionPath,
+            authToolPlan: authPlan,
+            teachCredentials,
+            llmConfig: { provider: compileProviderName },
+            // Browser-minted logins compile on the playbook rung — each live test
+            // launches a real browser (navigate + anti-bot settle + form submit),
+            // which is far slower than an API replay. Give the agent room to write
+            // and iterate a playbook, not just a workflow.json.
+            maxDurationMs: 20 * 60 * 1000,
+            onProgress: (prog) => spinner.message(formatAuthProgress(prog)),
+            // Interactive 2FA bridge: the agent (via the verification stage) reaches
+            // the OTP/push challenge, then asks the user — here — for the live second
+            // factor. Stop the spinner + unmute logs around the prompt so it renders
+            // cleanly, then restore. Omitted in --no-interactive (the agent falls
+            // back to an unattended placeholder attempt).
+            onPrompt: opts.noInteractive
+              ? undefined
+              : async (message, options) => {
+                  unmuteLog();
+                  spinner.stop('2FA required — your input needed.');
+                  let answer = '';
+                  if (options && options.length > 0) {
+                    const sel = await p.select({
+                      message,
+                      options: options.map((o) => ({ value: o, label: o })),
+                    });
+                    answer = p.isCancel(sel) ? '' : String(sel);
+                  } else {
+                    const txt = await p.text({ message, placeholder: 'type your answer' });
+                    answer = p.isCancel(txt) ? '' : String(txt ?? '');
+                  }
+                  muteLog();
+                  spinner.start('Completing 2FA verification');
+                  return answer;
+                },
+            // Cool-off bridge: wait out a rate-flag with NO login, informing the
+            // user. Bounded to 10 min; overridable via IMPRINT_AUTH_COOLOFF_MS.
+            onCooldown: async (minutes, reason) => {
+              const envMs = Number(process.env.IMPRINT_AUTH_COOLOFF_MS);
+              const ms = Number.isFinite(envMs)
+                ? Math.max(0, envMs)
+                : Math.min(Math.max(minutes, 1), 10) * 60_000;
+              unmuteLog();
+              p.log.info(
+                `Cooling off ~${Math.round(ms / 60000)} min before retrying the login${reason ? ` (${reason})` : ''} — no login fires during the wait.`,
+              );
+              muteLog();
+              spinner.start(`Cooling off (~${Math.round(ms / 60000)} min, no login)…`);
+              await new Promise((resolve) => setTimeout(resolve, ms));
+            },
+          });
+          unmuteLog();
+
+          if (!authResult.success || !authResult.workflowPath) {
+            spinner.stop('Auth tool compilation failed.');
+            p.log.warn(`Auth agent: ${authResult.message}\nData tools will attempt inline login.`);
+          } else {
+            emit({
+              workflowPath: authResult.workflowPath,
+              outDir: pathDirname(authResult.workflowPath),
+              force: true,
+            });
+            // The point of completing auth is a stored session token the data
+            // tools reuse. Confirm one was persisted before claiming success.
+            let sessionStored = false;
+            try {
+              const { loadSiteCredentials } = await import('./credential-store.ts');
+              const view = await loadSiteCredentials(site);
+              sessionStored = view.cookies.length > 0 || Object.keys(view.values).length > 0;
+            } catch {
+              /* non-fatal */
+            }
+            spinner.stop(
+              sessionStored
+                ? `Auth tool compiled + session stored (${authResult.turns} turns, ${Math.round(authResult.durationMs / 1000)}s) — data tools will reuse it.`
+                : `Auth tool compiled (${authResult.turns} turns) — no live session stored; data tools will be unverified until you run \`imprint login ${site}\`.`,
+            );
+          }
+        } catch (err) {
+          unmuteLog();
+          spinner.stop('Auth tool compilation failed.');
+          p.log.warn(
+            `Auth tool failed: ${err instanceof Error ? err.message : String(err)}\nData tools will attempt inline login.`,
+          );
+        }
+      }
+    }
+  }
+
   // Mute raw `[imprint …]` logs from the compile subtree while the spinner /
   // MultiProgress is live. This covers single-tool runs too: they drive the
   // shared spinner and would otherwise leak compile.ts diagnostics into it,
@@ -1166,6 +1592,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     });
   } finally {
     unmuteLog();
+    // Drop the transient compile-time stealth token (shared across this site's
+    // per-tool `bun test` processes) now that every tool has compiled. In the
+    // finally so it runs on compile failure too: otherwise a thrown compile (or
+    // the `results.length === 0` throw below, or any later throw / early exit)
+    // would leak a file holding a live session token on disk.
+    clearCachedToken(localSiteDir(site));
   }
 
   if (results.length === 0) {
@@ -1189,7 +1621,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   const primaryResult = results[0] as TeachToolResult;
 
   // ── 6. Platform integration ────────────────────────────────────────
-  if (startIdx <= STEPS.indexOf('register')) {
+  if (inWindow('register')) {
     if (opts.noInteractive) {
       const imprintCommand = detectImprintCommand();
       const platforms: Platform[] = [
@@ -1223,16 +1655,15 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         playbooks: results.map((r) => r.playbook),
       });
     }
-  }
 
-  for (const result of results) {
-    updateCheckpoint(site, state, result.workflow.toolName, 'register');
+    // Record `register` complete only when registration actually ran. A
+    // `--to-step emit/generate/compile-playbook` window skips this block; marking
+    // register here anyway would make `.teach-state.json` claim platform
+    // integration happened when it didn't.
+    for (const result of results) {
+      updateCheckpoint(site, state, result.workflow.toolName, 'register');
+    }
   }
-
-  // Drop the transient compile-time stealth token (shared across this site's
-  // per-tool `bun test` processes). It holds a live session token and is no
-  // longer needed once every tool has compiled.
-  clearCachedToken(localSiteDir(site));
 
   // Surface any tools that shipped without a passing live integration test
   // (waived during compile due to anti-bot / infra). These rely on the runtime
@@ -1251,6 +1682,15 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
   }
 
+  // `--to-step emit/generate/compile-playbook` runs the per-tool compile but stops
+  // before register (platform integration) — inWindow('register') already skipped
+  // it above. Finish with the phase-window summary instead of the normal "Done!"
+  // outro, after clearCachedToken + unverified warnings have run so the compile
+  // token is cleaned up and waivers are still surfaced.
+  // The per-tool compile is atomic (generate→compile-playbook→emit), so any
+  // --to-step landing inside it ran through emit — report that, not the requested
+  // mid-compile stopIdx.
+  if (stopIdx < STEPS.indexOf('register')) await finishEarly('emit');
   p.outro(
     `Done! ${results.length} tool${results.length === 1 ? '' : 's'} ready: ${results.map((r) => r.workflow.toolName).join(', ')}${
       unverified.length > 0 ? ` (${unverified.length} unverified — see warnings above)` : ''
@@ -1607,6 +2047,14 @@ async function compileSelectedCandidate(opts: {
   const workflowDir = localToolDir(site, toolName);
   mkdirSync(workflowDir, { recursive: true });
 
+  // The per-tool compile (generate → compile-playbook → emit) is ATOMIC by design:
+  // each phase gates on startIdx ONLY (not the window's stopIdx), so once started it
+  // runs through emit. Stopping mid-compile would leave artifact gaps the result
+  // tail (results array, register, audit) assumes exist — see the "Granularity"
+  // section of docs/plans/teach-phase-window.md. `--from-step` can RESUME mid-compile
+  // (each `else` branch loads the prior phase's artifact from disk); `--to-step`
+  // within the compile runs the whole unit and stops before register. Do NOT add a
+  // stopIdx gate here without also handling partial-artifact results downstream.
   // ── Step 1: plan THEN execute (workflow.json) ──
   let genResult: { workflow: Workflow; workflowPath: string } | undefined;
   if (startIdx <= STEPS.indexOf('generate')) {
@@ -1858,95 +2306,11 @@ async function siteReplayAndDiff(
 // can reuse them without an import cycle). Re-exported here for existing callers.
 export { mapLimit, mapLimitSettled };
 
-// ─── Credential capture (interactive) ───────────────────────────────────────
+// ─── Credential capture helpers ─────────────────────────────────────────────
 
-interface CredentialPromptResult {
-  replacements: Replacement[];
-  confirmedFinding?: CredentialFinding;
-}
-
-async function promptAndPersistCredentials(opts: {
-  site: string;
-  findings: CredentialFinding[];
-  replacements: Replacement[];
-  noInteractive: boolean;
-}): Promise<CredentialPromptResult> {
-  // De-duplicate findings by username+password value so a re-recorded session
-  // with the same login attempt across multiple seqs only prompts once.
-  const seen = new Set<string>();
-  const unique: CredentialFinding[] = [];
-  for (const f of opts.findings) {
-    const key = `${f.usernameValue}${f.passwordValue}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(f);
-  }
-  if (unique.length === 0) return { replacements: opts.replacements };
-
-  const summary = unique
-    .map(
-      (f, i) =>
-        `  ${i + 1}. ${f.requestLabel}\n     username: ${f.usernameValue}\n     password: ${'*'.repeat(Math.min(f.passwordValue.length, 16))}`,
-    )
-    .join('\n');
-  p.note(
-    [
-      `Detected ${unique.length} login form submission(s) in this recording.`,
-      'Imprint will store the credentials in your local credential manager (OS keychain when',
-      'available, libsodium-encrypted file otherwise) and rewrite their values to',
-      '${credential.username} / ${credential.password} placeholders before sending the',
-      'session to the LLM. The plaintext values never enter the workflow artifact.',
-      '',
-      summary,
-    ].join('\n'),
-    'Credential capture',
-  );
-
-  if (opts.noInteractive) {
-    // Persist silently in non-interactive mode — keeps automated runs working.
-    const finding = unique[0] as CredentialFinding;
-    await persistFinding({ site: opts.site, finding });
-    return { replacements: opts.replacements, confirmedFinding: finding };
-  }
-
-  const proceed = await p.confirm({
-    message: `Save credentials for "${opts.site}" to the credential manager?`,
-    initialValue: true,
-  });
-  if (p.isCancel(proceed) || !proceed) {
-    p.log.warn('Skipping credential save — workflow will not be able to log in.');
-    return { replacements: [] };
-  }
-
-  // For v1 we only support one set of credentials per site (flat
-  // username/password names). If multiple distinct logins were found,
-  // ask which one to persist.
-  let chosen: CredentialFinding | undefined = unique[0];
-  if (unique.length > 1) {
-    const pick = await p.select({
-      message: 'Which login should be stored?',
-      options: unique.map((f, i) => ({
-        value: String(i),
-        label: `${i + 1}. ${f.requestLabel} — ${f.usernameValue}`,
-      })),
-    });
-    if (p.isCancel(pick)) {
-      p.log.warn('Skipped.');
-      return { replacements: [] };
-    }
-    chosen = unique[Number.parseInt(pick as string, 10)];
-  }
-
-  if (!chosen) return { replacements: opts.replacements };
-
-  await persistFinding({ site: opts.site, finding: chosen });
-
-  return {
-    replacements: opts.replacements.filter(
-      (r) => r.originalValue === chosen?.usernameValue || r.originalValue === chosen?.passwordValue,
-    ),
-    confirmedFinding: chosen,
-  };
+function maskUsername(raw: string): string {
+  if (raw.length <= 4) return '***';
+  return `${raw.slice(0, 3)}${'*'.repeat(raw.length - 3)}`;
 }
 
 /** Find request seqs whose body contains a password-shaped key (per the
@@ -2114,6 +2478,103 @@ async function persistFinding(opts: {
   p.log.success(
     `Stored credentials for "${opts.site}" — ${opts.finding.usernameName}, ${opts.finding.passwordName} (backend: ${backend.id})`,
   );
+}
+
+/** The identifier the user actually typed into a login form, recovered from the
+ *  recording's DOM submit events. The capture listener masks password fields
+ *  (`[redacted]`) but leaves the username/email visible, so this is the one
+ *  credential value a hosted-login recording reliably carries — used to pre-fill
+ *  the interactive credential prompt. */
+export function detectRecordedUsername(session: Session): string | undefined {
+  for (const ev of session.events ?? []) {
+    if (ev.type !== 'submit') continue;
+    try {
+      const detail = JSON.parse(ev.detail) as {
+        fields?: Array<{ name?: string; type?: string; value?: string }>;
+      };
+      for (const f of detail.fields ?? []) {
+        if (
+          f.name &&
+          f.value &&
+          f.type !== 'password' &&
+          isUsernameLikeKey(f.name) &&
+          !/^\[redacted\]$/i.test(f.value)
+        ) {
+          return f.value;
+        }
+      }
+    } catch {
+      // ignore malformed details
+    }
+  }
+  return undefined;
+}
+
+/** Prompt the user for the login credentials the detection LLM identified for
+ *  this site (`authPlan.credentialNames`), then persist them. Used when the
+ *  recording couldn't yield them automatically — hosted/redirect logins submit
+ *  the password as a page navigation (no XHR body) and password fields are masked
+ *  at capture. We ask for EXACTLY the names the LLM named (it saw the login flow);
+ *  the live one-time 2FA code is intentionally absent from that list and is
+ *  entered during verification. Sensitive names get a masked input; a username is
+ *  pre-filled from the recording. Returns the stored values, or undefined if the
+ *  list is empty or the user cancels (no partial store). */
+async function promptForCredentials(opts: {
+  site: string;
+  names: string[];
+  detectedUsername?: string;
+}): Promise<{ site: string; values: Record<string, string> } | undefined> {
+  const { site, names, detectedUsername } = opts;
+  if (names.length === 0) return undefined;
+
+  p.note(
+    [
+      "This login's credentials weren't captured in the recording.",
+      'Hosted logins (Auth0, Okta, …) submit the password as a page navigation,',
+      'and Imprint masks password fields at capture time — so there is nothing to',
+      'extract. Enter them now to compile the auth tool; they go straight to your',
+      'local credential manager (OS keychain when available, encrypted file else).',
+    ].join('\n'),
+    'Credentials needed',
+  );
+
+  const values: Record<string, string> = {};
+  const backend = await getCredentialBackend();
+  for (const name of names) {
+    const sensitive = isSensitiveCredentialKey(name);
+    const usernameLike = isUsernameLikeKey(name);
+    const answer = sensitive
+      ? await p.password({
+          message: `Enter ${name} for "${site}"`,
+          mask: '*',
+          validate: (v) => (!v || v.length === 0 ? 'Cannot be empty.' : undefined),
+        })
+      : await p.text({
+          message: `Enter ${name} for "${site}"`,
+          initialValue: usernameLike ? (detectedUsername ?? '') : '',
+          validate: (v) => (!v || v.length === 0 ? 'Cannot be empty.' : undefined),
+        });
+    if (p.isCancel(answer)) {
+      p.log.warn('Credential entry cancelled — skipping auth compile.');
+      return undefined;
+    }
+    const value = String(answer);
+    values[name] = value;
+    await backend.setSecret(site, name, value);
+    upsertManifestEntry(site, {
+      name,
+      kind: sensitive ? 'password' : usernameLike ? 'username' : 'opaque',
+      description: usernameLike
+        ? 'Login identifier'
+        : sensitive
+          ? 'Login password'
+          : 'Login credential',
+    });
+  }
+  p.log.success(
+    `Stored ${Object.keys(values).length} credential(s) for "${site}": ${Object.keys(values).join(', ')}`,
+  );
+  return { site, values };
 }
 
 // ─── Checkpoint helpers ─────────────────────────────────────────────────────
@@ -2525,6 +2986,25 @@ function formatCompileProgress(progress: CompileAgentProgress): string {
   const activity = describeAgentActivity(progress);
   const retry = progress.verificationCycle > 1 ? `, retry ${progress.verificationCycle - 1}` : '';
   return `Compiling • ${activity} (${formatElapsed(progress.elapsedMs)}${retry})`;
+}
+
+/** Build the auth-compile spinner line. Pure (formatting only). The turn is
+ *  monotonic across resumable segments (no per-segment reset). When the most
+ *  recent live verification FAILED, surface the reason (phase + error + HTTP
+ *  status) and which live-login attempt of the budget it was — so the user sees
+ *  what happened and why it's taking longer, not a silently-resetting counter. */
+export function formatAuthProgress(progress: CompileAgentProgress): string {
+  const base = `Auth compile: turn ${progress.turn}`;
+  const lv = progress.lastVerification;
+  if (lv && !lv.ok) {
+    const status = typeof lv.status === 'number' ? ` HTTP ${lv.status}` : '';
+    const attempt =
+      typeof progress.attempt === 'number' && typeof progress.maxAttempts === 'number'
+        ? `; attempt ${progress.attempt}/${progress.maxAttempts}`
+        : '';
+    return `${base} — verify ${lv.phase} FAILED (${lv.error ?? 'error'}${status})${attempt} — agent retrying`;
+  }
+  return base;
 }
 
 // ─── Quick backend probe (after emit) ────────────────────────────────────────

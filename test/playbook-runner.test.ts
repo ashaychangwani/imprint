@@ -6,8 +6,12 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { extractResult, runPlaybook } from '../src/imprint/playbook-runner.ts';
-import type { Playbook, PlaybookResult } from '../src/imprint/types.ts';
+import {
+  extractPlaybookCaptures,
+  extractResult,
+  runPlaybook,
+} from '../src/imprint/playbook-runner.ts';
+import type { Playbook, PlaybookCapture, PlaybookResult } from '../src/imprint/types.ts';
 
 const MIN_PLAYBOOK: Playbook = {
   toolName: 'test_tool',
@@ -154,6 +158,47 @@ describe('runPlaybook', () => {
     if (r.ok) return;
     expect(r.error).toBe('NETWORK');
     expect(r.message).toContain('Playbook step 1/1 (navigate) timed out');
+  });
+
+  it('extracts a best-effort 2FA-chain token from a matching XHR (Component D)', () => {
+    // A login playbook's OTP-send step mints a single-use token in its response;
+    // extractPlaybookCaptures pulls it out so the runtime can carry it across the
+    // stateless initiate→submit_otp gap. All values synthetic.
+    const captures: PlaybookCapture[] = [
+      { name: 'SecurityCode', url_pattern: '/otp/send', extract: 'data.securityCode' },
+    ];
+    const captured = [
+      { url: 'https://fix.example/login', method: 'POST', status: 200, body: '{"step":"otp"}' },
+      {
+        url: 'https://fix.example/otp/send',
+        method: 'POST',
+        status: 200,
+        body: '{"data":{"securityCode":"SYNTH-SEC-1"}}',
+      },
+    ];
+    expect(extractPlaybookCaptures(captures, captured)).toEqual({ SecurityCode: 'SYNTH-SEC-1' });
+  });
+
+  it('skips captures with no matching XHR or a failed status (best-effort)', () => {
+    const captures: PlaybookCapture[] = [
+      { name: 'SecurityCode', url_pattern: '/otp/send', extract: 'data.securityCode' },
+      { name: 'Other', url_pattern: '/never', extract: 'x' },
+    ];
+    const captured = [
+      // matches the URL but 4xx → skipped (a failed mint isn't a usable token)
+      { url: 'https://fix.example/otp/send', method: 'POST', status: 500, body: '{"err":1}' },
+    ];
+    // Both skipped → empty object, never throws. Missing token degrades to an
+    // attempt that fails honestly downstream.
+    expect(extractPlaybookCaptures(captures, captured)).toEqual({});
+  });
+
+  it('passes the whole parsed body when capture extract is "*"', () => {
+    const captures: PlaybookCapture[] = [{ name: 'blob', url_pattern: '/mint', extract: '*' }];
+    const captured = [
+      { url: 'https://fix.example/mint', method: 'GET', status: 200, body: 'raw-non-json-token' },
+    ];
+    expect(extractPlaybookCaptures(captures, captured)).toEqual({ blob: 'raw-non-json-token' });
   });
 
   it('does not hang when the failure screenshot stalls', async () => {
