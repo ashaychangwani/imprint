@@ -62,7 +62,8 @@
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "X-API-Key": "${state.southwest_api_key}",
         "X-App-ID": "air-booking",
-        "X-Channel-ID": "southwest"
+        "X-Channel-ID": "southwest",
+        "X-User-Experience-ID": "00000000-0000-4000-8000-000000000000"
       },
       "body": "{\"adultPassengersCount\":\"${param.adult_passengers_count}\",\"adultsCount\":\"${param.adult_passengers_count}\",\"departureDate\":\"${param.departure_date}\",\"departureTimeOfDay\":\"ALL_DAY\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"fareType\":\"${param.fare_type}\",\"int\":\"HOMEQBOMAIR\",\"originationAirportCode\":\"${param.origin_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"\",\"returnDate\":\"\",\"returnTimeOfDay\":\"ALL_DAY\",\"tripType\":\"oneway\",\"application\":\"air-booking\",\"site\":\"southwest\"}"
     }

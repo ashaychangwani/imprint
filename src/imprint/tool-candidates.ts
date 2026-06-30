@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
 import { inferAppApiHosts } from './app-api-hosts.ts';
+import { getEndpointKey } from './endpoint-key.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
@@ -473,10 +474,7 @@ function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
 function distinctEndpointFamilies(payload: ToolCandidatePayload): number {
   const counts = new Map<string, number>();
   for (const r of payload.requests) {
-    const url = safeUrl(r.url);
-    if (!url) continue;
-    const rpc = /[?&]rpcids?=([^&]+)/.exec(url.search)?.[1];
-    const key = rpc ? `rpc:${decodeURIComponent(rpc)}` : `${r.method} ${url.pathname}`;
+    const key = getEndpointKey(r as unknown as CapturedRequest);
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   let families = 0;

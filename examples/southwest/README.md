@@ -7,7 +7,7 @@
 - **The full backend ladder in action.** `fetch` returns 403 (Akamai), `stealth-fetch` mints sensor tokens via a brief Playwright bootstrap then succeeds in ~10s/call.
 - **`probe-backends` skipping the futile rung.** The cached `backends.json` orders the ladder `stealth-fetch → playbook` so cron doesn't burn 200ms on a fetch attempt every tick.
 - **`notifyWhen: price_below`** pushing only on real drops, with the `pricePath` extracting from real Southwest response shape.
-- **The fresh-UUID header trick** — Southwest rejects stale `X-User-Experience-ID`; stealth-fetch regenerates per call.
+- **The fresh-UUID header trick** — Southwest rejects stale `X-User-Experience-ID`; the workflow declares it with a placeholder UUID and stealth-fetch regenerates it per call.
 - **Public bootstrap config capture.** The workflow fetches Southwest's public bootstrap `data.js` and captures the current `api-keys.prod` value, so installed examples do not require a `SOUTHWEST_API_KEY` environment variable.
 - **Multi-path `pricePath`** — `cron.json`'s notifyWhen lists both the raw API shape (when stealth-fetch wins) and the playbook's reshaped output, so the push fires regardless of which backend produced the result.
 
@@ -73,7 +73,7 @@ These came up during bring-up; documented so the next person knows they're handl
 - **Vanilla Playwright gets a 403.** `navigator.webdriver` is the tell. Stealth plugin patches it.
 - **Token GC race.** Playwright GCs response bodies aggressively. Runner reads inside the response handler and drains pending text() promises before extracting.
 - **`networkidle` hangs on SPAs.** Persistent connections never go idle. Runner uses `domcontentloaded` + the explicit `wait_for`.
-- **Stale `X-User-Experience-ID`.** stealth-fetch regenerates a fresh UUID per call AND auto-injects if the workflow dropped it.
+- **Stale `X-User-Experience-ID`.** The workflow declares it with a placeholder UUID; stealth-fetch regenerates it per call.
 
 ## Not in this demo
 

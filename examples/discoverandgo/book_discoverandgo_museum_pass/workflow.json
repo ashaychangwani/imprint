@@ -35,5 +35,12 @@
       }
     }
   ],
+  "authConfig": {
+    "sessionCapture": [
+      { "name": "patron_id", "source": "json", "path": "patronID" },
+      { "name": "session_id", "source": "json", "path": "session" },
+      { "name": "patron_email", "source": "json", "path": "patronEmail" }
+    ]
+  },
   "site": "discoverandgo"
 }

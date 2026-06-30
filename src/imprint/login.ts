@@ -1,14 +1,17 @@
 /** `imprint login` — extract cookies + per-site values from a captured
  *  session.json into the credential manager. */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join as pathJoin } from 'node:path';
 import {
   type StorageRecord,
   getCredentialBackend,
   setManifestStorageKeys,
   upsertManifestEntry,
 } from './credential-store.ts';
-import { type Session, SessionSchema } from './types.ts';
+import { localSiteDir } from './paths.ts';
+import { captureHeader, jsonpath } from './request-capture.ts';
+import { type RequestCapture, type Session, SessionSchema, WorkflowSchema } from './types.ts';
 
 interface LoginOptions {
   site: string;
@@ -21,8 +24,6 @@ interface LoginResult {
   cookieCount: number;
   storageCount: number;
   values: Record<string, string>;
-  /** Pattern names that matched and contributed values. */
-  matchedExtractors: string[];
 }
 
 export async function login(opts: LoginOptions): Promise<LoginResult> {
@@ -31,7 +32,7 @@ export async function login(opts: LoginOptions): Promise<LoginResult> {
 
   const cookies = collectCookies(session);
   const storage = collectStorage(session);
-  const { values, matched } = extractKnownValues(session);
+  const values = extractCredentials(opts.site, session);
 
   const backend = await getCredentialBackend();
   await backend.setCookies(opts.site, cookies);
@@ -47,7 +48,7 @@ export async function login(opts: LoginOptions): Promise<LoginResult> {
     upsertManifestEntry(opts.site, {
       name,
       kind: 'opaque',
-      description: `Extracted via ${matched.join('+') || 'login'}`,
+      description: 'Captured from the recorded login response (authConfig.sessionCapture)',
     });
   }
 
@@ -56,7 +57,6 @@ export async function login(opts: LoginOptions): Promise<LoginResult> {
     cookieCount: cookies.length,
     storageCount: storage.length,
     values,
-    matchedExtractors: matched,
   };
 }
 
@@ -89,78 +89,86 @@ function collectStorage(session: Session): StorageRecord[] {
   return Array.from(byKey.values());
 }
 
-/** Per-site extractors pull named values out of recognized auth shapes;
- *  ordered list, first match wins. */
-const EXTRACTORS: Array<{
-  name: string;
-  match: (session: Session) => Record<string, string> | null;
-}> = [
-  {
-    name: 'discoverandgo:Login',
-    // D&G's Login POST returns a JSON object with patronID.
-    match: (session) => {
-      const loginReq = session.requests.find(
-        (r) =>
-          r.method === 'POST' &&
-          r.url.includes('epass_server.php') &&
-          (r.body?.includes('method=Login') ?? false),
+/** Gather every durable `authConfig.sessionCapture` declared by the site's
+ *  compiled workflows (`~/.imprint/<site>/<tool>/workflow.json`). Deduped by
+ *  name (first workflow to declare a capture wins). Returns `[]` when the site
+ *  has no compiled tools or none declare captures — there is no per-site code,
+ *  so a new authed site works as soon as its workflow declares what it needs. */
+function collectSessionCaptures(site: string): RequestCapture[] {
+  const siteDir = localSiteDir(site);
+  let entries: string[];
+  try {
+    entries = readdirSync(siteDir);
+  } catch {
+    return [];
+  }
+  const captures: RequestCapture[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    let workflow: ReturnType<typeof WorkflowSchema.parse>;
+    try {
+      workflow = WorkflowSchema.parse(
+        JSON.parse(readFileSync(pathJoin(siteDir, entry, 'workflow.json'), 'utf8')),
       );
-      if (!loginReq?.response?.body) return null;
-      try {
-        const body = JSON.parse(loginReq.response.body) as {
-          patronID?: string;
-          session?: string;
-          patronEmail?: string;
-        };
-        const out: Record<string, string> = {};
-        if (body.patronID) out.patron_id = body.patronID;
-        if (body.session) out.session_id = body.session;
-        if (body.patronEmail) out.patron_email = body.patronEmail;
-        return Object.keys(out).length ? out : null;
-      } catch {
-        return null;
-      }
-    },
-  },
-  {
-    name: 'southwest:security_token',
-    // Southwest's POST /api/security/v4/security/token returns auth tokens
-    // and account info we want available to follow-up requests.
-    match: (session) => {
-      const loginReq = session.requests.find(
-        (r) =>
-          r.method === 'POST' &&
-          r.url.includes('/api/security/v4/security/token') &&
-          (r.body?.includes('username=') ?? false),
-      );
-      if (!loginReq?.response?.body) return null;
-      try {
-        const body = JSON.parse(loginReq.response.body) as Record<string, unknown>;
-        const out: Record<string, string> = {};
-        const accountNumber = body['customers.userInformation.accountNumber'];
-        const primaryEmail = body['customers.userInformation.primaryEmail'];
-        if (typeof accountNumber === 'string') out.account_number = accountNumber;
-        if (typeof primaryEmail === 'string') out.primary_email = primaryEmail;
-        return Object.keys(out).length ? out : null;
-      } catch {
-        return null;
-      }
-    },
-  },
-];
-
-function extractKnownValues(session: Session): {
-  values: Record<string, string>;
-  matched: string[];
-} {
-  const values: Record<string, string> = {};
-  const matched: string[] = [];
-  for (const ext of EXTRACTORS) {
-    const v = ext.match(session);
-    if (v) {
-      Object.assign(values, v);
-      matched.push(ext.name);
+    } catch {
+      continue; // not a tool dir, unreadable, or not a valid workflow
+    }
+    for (const capture of workflow.authConfig?.sessionCapture ?? []) {
+      if (seen.has(capture.name)) continue;
+      seen.add(capture.name);
+      captures.push(capture);
     }
   }
-  return { values, matched };
+  return captures;
+}
+
+/** Resolve one declared capture against the recorded session — taking the value
+ *  from the first response in which it resolves — using the SAME capture helpers
+ *  the runtime uses, so a locator behaves identically here and during replay.
+ *  Cookie-source captures are skipped (cookies are persisted wholesale by
+ *  `collectCookies`). */
+function resolveCapture(session: Session, capture: RequestCapture): string | undefined {
+  for (const req of session.requests) {
+    const response = req.response;
+    if (!response) continue;
+    const body = response.body ?? '';
+    let value: unknown;
+    switch (capture.source) {
+      case 'json': {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(body);
+        } catch {
+          continue; // this response isn't JSON; try the next one
+        }
+        value = jsonpath(parsed, capture.path);
+        break;
+      }
+      case 'response_header':
+        value = captureHeader(new Headers(response.headers ?? {}), capture.header, capture.mode);
+        break;
+      case 'text_regex': {
+        const match = body.match(new RegExp(capture.pattern));
+        value = match?.[capture.group ?? 1];
+        break;
+      }
+      case 'cookie':
+        continue; // cookies are persisted by collectCookies, not as secrets here
+    }
+    if (value !== undefined && value !== null && value !== '') {
+      return Array.isArray(value) ? value.join(',') : String(value);
+    }
+  }
+  return undefined;
+}
+
+/** Resolve all of a site's declared `sessionCapture` credential slots from the
+ *  recording. Fully generic — no per-site logic. Exported for tests. */
+export function extractCredentials(site: string, session: Session): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const capture of collectSessionCaptures(site)) {
+    const value = resolveCapture(session, capture);
+    if (value !== undefined) values[capture.name] = value;
+  }
+  return values;
 }

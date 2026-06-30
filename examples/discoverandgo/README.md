@@ -49,7 +49,7 @@ imprint cron discoverandgo --once
 ## Notes
 
 - Discover & Go's auth model is patron-ID + session cookies. The session cookie expires; re-run `imprint login` if you start seeing AUTH_EXPIRED.
-- `imprint login` parses the `patronID` out of the recorded `epass_server.php?method=Login` POST and stores it in the credential store as `patron_id`. The booking `workflow.json` then references it via `${credential.patron_id}` — no Login call is replayed at runtime.
+- `imprint login` resolves the workflow's `authConfig.sessionCapture` declarations against the recorded Login response — `patron_id ← patronID`, `session_id ← session`, `patron_email ← patronEmail` — and stores each in the credential store. The resolver is fully generic; the per-site field mapping lives in `workflow.json`, not in imprint's code. The booking `workflow.json` then references `${credential.patron_id}` — no Login call is replayed at runtime.
 
 ## Not in this demo
 
