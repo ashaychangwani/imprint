@@ -99,6 +99,20 @@ describe('validateBuildPlan', () => {
     expect(plan.perTool[0]?.authRecipe.required).toBe(false);
   });
 
+  it('accepts authTool: null (planner signals "no auth") instead of discarding the plan', () => {
+    // Regression: the planner emits `authTool: null` for a no-auth site. The schema accepts an
+    // omitted authTool but NOT null, so without normalization this threw a ZodError at ["authTool"]
+    // and the ENTIRE build plan (shared modules + every requiredInput contract) was discarded,
+    // silently degrading the site to independent compilation.
+    const plan = validateBuildPlan({
+      sharedModules: [],
+      perTool: [{ toolName: 'search_flights' }],
+      authTool: null,
+    });
+    expect(plan.authTool).toBeUndefined();
+    expect(plan.perTool).toHaveLength(1);
+  });
+
   it('rejects duplicate shared module paths', () => {
     const plan = basePlan();
     plan.sharedModules.push({ ...plan.sharedModules[0] } as BuildPlan['sharedModules'][number]);
@@ -910,7 +924,11 @@ describe('deriveRequiredInputHints', () => {
     expect(hints.find((h) => h.input.location === 'header:X-Ts')?.input.generated).toBe('epoch_ms');
   });
 
-  it('classifies a REUSED browser_minted header as browser_state (captured once)', () => {
+  it('drops a reused browser_minted header with NO upstream (un-capturable → runtime-supplied)', () => {
+    // browser_minted = varied across replay runs AND found in no response, so there is no producer
+    // to capture from. A ${state.X} for it would be unsatisfiable; the live browser (cdp-replay)
+    // supplies it at runtime — so it must NOT be contracted as browser_state. (This is the fix for
+    // the X-Goog-BatchExecute-Bgr / sec-ch-ua over-contracting that hard-blocked compile.)
     const hints = deriveRequiredInputHints({
       selectedTools,
       loginRequestSeqs: [],
@@ -929,10 +947,75 @@ describe('deriveRequiredInputHints', () => {
       ],
       pageMintedHeaders: [],
     });
-    const bs = hints.find((h) => h.input.location === 'header:X-Client-Token');
+    expect(hints.find((h) => h.input.location === 'header:X-Client-Token')).toBeUndefined();
+  });
+
+  it('keeps an ephemeral header as browser_state when the SAME value HAS an upstream', () => {
+    // The browser_minted instance has no producer of its own, but the identical value is proven
+    // server-derived on a sibling request → a real capture source exists → contract it (mirrors the
+    // already-correct constant/server-minted route).
+    const hints = deriveRequiredInputHints({
+      selectedTools,
+      loginRequestSeqs: [],
+      ephemeralValues: [
+        {
+          classification: 'browser_minted',
+          originalSeq: 10,
+          location: 'header:X-Tok',
+          value: 'tok-ZZ12345abcdef',
+          suggestedStateName: 'x_tok',
+        },
+        {
+          classification: 'server_derived',
+          originalSeq: 20,
+          location: 'header:X-Tok',
+          producerSeq: 99,
+          producerPath: '$.tok',
+          value: 'tok-ZZ12345abcdef',
+        },
+      ],
+      // Reused across calls so it isn't mistaken for a per-call generated nonce — a stable session
+      // token that the server mints (server_derived sibling) and is replayed on later requests.
+      recordedHeaders: [
+        { seq: 10, headers: { 'X-Tok': 'tok-ZZ12345abcdef' } },
+        { seq: 20, headers: { 'X-Tok': 'tok-ZZ12345abcdef' } },
+      ],
+      pageMintedHeaders: [],
+    });
+    const bs = hints.find(
+      (h) => h.consumerTool === 'search' && h.input.location === 'header:X-Tok',
+    );
     expect(bs?.input.source).toBe('browser_state');
     expect(bs?.input.wiring).toBe('state');
-    expect(bs?.input.stateName).toBe('x_client_token');
+  });
+
+  it('contracts a URL-query session token (f.sid) from the bootstrap page as browser_state', () => {
+    // Regression: f.sid/bl are server_derived from the page GET (a NON-tool, NON-login
+    // producer). They used to fall through every branch (the guard was header-only, and
+    // the constant branch requires producerSeq==null) → no contract → the agent baked the
+    // literal, which rots. Now they must be browser_state so the URL templates ${state.X}
+    // + a bootstrap capture on EVERY tool.
+    const hints = deriveRequiredInputHints({
+      selectedTools: [{ toolName: 'search', requestSeqs: [10], likelyParams: [] }],
+      loginRequestSeqs: [],
+      ephemeralValues: [
+        {
+          classification: 'server_derived',
+          originalSeq: 10,
+          location: 'url_param:f.sid',
+          producerSeq: 1, // the bootstrap page GET — owned by no selected tool
+          producerPath: 'body(substring)',
+          value: '9164497699118584868',
+          suggestedStateName: 'f_sid',
+        },
+      ],
+      recordedHeaders: [],
+      pageMintedHeaders: [],
+    });
+    const h = hints.find((x) => x.input.location === 'url_param:f.sid');
+    expect(h?.input.source).toBe('browser_state');
+    expect(h?.input.wiring).toBe('state');
+    expect(h?.input.stateName).toBe('f_sid');
   });
 
   it('classifies a high-entropy constant header with no producer as static', () => {
@@ -1047,8 +1130,11 @@ describe('deriveRequiredInputHints', () => {
       pageMintedHeaders: [],
     });
     const cid = hints.find((h) => h.input.location === 'header:X-Cid');
+    // Guarantee under test: most-ephemeral-wins never bakes the slot as a dead static literal.
+    // With no upstream and no per-call shape, the ephemeral value is now dropped (runtime-supplied)
+    // rather than contracted — so "not static" is the assertion that survives the new rule (a broken
+    // most-ephemeral-wins would route the constant sibling to a static literal and fail here).
     expect(cid?.input.source).not.toBe('static');
-    expect(cid?.input.source === 'generated' || cid?.input.source === 'browser_state').toBe(true);
   });
 
   it('flags a page-minted header as static even with NO classification (blocked replay)', () => {
@@ -1425,10 +1511,11 @@ describe('buildBuildPlanPayload requiredInputHints (end-to-end)', () => {
     };
   }
 
-  it('classifies a REUSED NON-sensitive functional header as browser_state, not generated', () => {
-    // Regression: the reuse map must see ALL request headers, not just the
-    // sensitive subset — else a reused x-trace-id (UUID shape) is wrongly emitted
-    // as per-call `generated` instead of captured-once `browser_state`.
+  it('does NOT emit a per-call generated hint for a REUSED browser_minted header (reuse-map regression)', () => {
+    // Regression: the reuse map must see ALL request headers, not just the sensitive subset — else a
+    // reused x-trace-id (UUID shape) is wrongly emitted as per-call `generated`. With reuse detected
+    // it is NOT regenerated; and since it is browser_minted with no upstream it is dropped as
+    // runtime-supplied rather than contracted as an unsatisfiable browser_state.
     const uuid = '550e8400-e29b-41d4-a716-446655440000';
     const session: Session = {
       site: 'demo',
@@ -1476,7 +1563,8 @@ describe('buildBuildPlanPayload requiredInputHints (end-to-end)', () => {
       classifications,
     });
     const hint = payload.requiredInputHints.find((h) => h.input.location === 'header:x-trace-id');
-    expect(hint?.input.source).toBe('browser_state');
+    // Dropped, not generated: a defined hint here would mean reuse wasn't detected (→ generated).
+    expect(hint).toBeUndefined();
   });
 });
 

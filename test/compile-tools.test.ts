@@ -2498,6 +2498,74 @@ describe('contractedInputGate', () => {
     ]);
     expect(gate.failures).toEqual([]);
   });
+
+  it('matches a quote-containing static literal wired as a header value (JSON-escaping regression)', () => {
+    // google-flights x-goog header: the literal carries internal double-quotes, so it is escaped
+    // (" → \") when serialized. The gate must search for the escaped form, not the raw literal.
+    const literal = '["en-US","US","USD",2,null,[420],null,null,7,[]]';
+    const workflowJson = JSON.stringify({
+      requests: [{ headers: { 'x-goog-ext-259736195-jspb': literal } }],
+    });
+    const gate = contractedInputGate(workflowJson, [
+      {
+        location: 'header:x-goog-ext-259736195-jspb',
+        source: 'static',
+        wiring: 'literal',
+        literal,
+        note: '',
+      },
+    ]);
+    expect(gate.failures).toEqual([]);
+    expect(gate.unresolved).toBe(0);
+  });
+
+  it('still blocks a quote-containing static literal that is genuinely absent', () => {
+    const literal = '["en-US","US","USD",2,null,[420],null,null,7,[]]';
+    const gate = contractedInputGate('{"requests":[{"headers":{}}]}', [
+      {
+        location: 'header:x-goog-ext-259736195-jspb',
+        source: 'static',
+        wiring: 'literal',
+        literal,
+        note: '',
+      },
+    ]);
+    expect(gate.unresolved).toBe(1);
+    expect(gate.failures.length).toBe(1);
+  });
+
+  it('warns (does not block) a browser_state input with no capture declared anywhere', () => {
+    const gate = contractedInputGate('{"requests":[{"headers":{}}]}', [
+      {
+        location: 'header:X-Goog-BatchExecute-Bgr',
+        source: 'browser_state',
+        wiring: 'state',
+        stateName: 'x_goog_batch_execute_bgr',
+        note: '',
+      },
+    ]);
+    expect(gate.failures).toEqual([]);
+    expect(gate.warnings.length).toBe(1);
+    expect(gate.unresolved).toBe(0);
+  });
+
+  it('still blocks a browser_state input whose capture IS declared but the wiring is dropped', () => {
+    // capture 'sid' exists, but no request references ${state.sid} → a real dropped wiring.
+    const workflowJson = JSON.stringify({
+      requests: [{ headers: {}, captures: [{ name: 'sid', source: 'json', path: '$.sid' }] }],
+    });
+    const gate = contractedInputGate(workflowJson, [
+      {
+        location: 'header:X-Sid',
+        source: 'browser_state',
+        wiring: 'state',
+        stateName: 'sid',
+        note: '',
+      },
+    ]);
+    expect(gate.unresolved).toBe(1);
+    expect(gate.failures.length).toBe(1);
+  });
 });
 
 describe('classifyIntegrationOutcome contract-gap', () => {

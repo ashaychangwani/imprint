@@ -689,6 +689,11 @@ function normalizeRawPlan(input: unknown): unknown {
   } catch {
     return input;
   }
+  // The planner legitimately signals "no auth tool" as `authTool: null`. The schema accepts an
+  // omitted authTool (undefined) but NOT null, so a raw null fails validation and discards the
+  // ENTIRE build plan — shared modules and every requiredInput contract with it — silently
+  // degrading a no-auth multi-tool site to independent compilation. Normalize null → omitted.
+  if (cloned.authTool === null) cloned.authTool = undefined;
   const perTool: RawAny[] = Array.isArray(cloned.perTool) ? cloned.perTool : [];
   const byName = new Map<string, RawAny>();
   for (const t of perTool) {
@@ -1310,14 +1315,19 @@ export function deriveRequiredInputHints(payload: {
     const consumerTool = soleOwner(ev.originalSeq);
     if (!consumerTool) continue;
 
+    // Location class, computed once. browser_state / generated / static apply to
+    // commonly-dropped HEADER *and* URL-QUERY slots — URL-query session tokens
+    // (Google's f.sid / bl) must be contracted too, else nothing forces `${state.X}`
+    // + a bootstrap capture and the agent bakes the literal (which rots: bl is a
+    // deploy version). Cookies stay header-only.
+    const locLower = ev.location.toLowerCase();
+    const isHeaderLoc = locLower.startsWith('header:');
+    const isQueryLoc = locLower.startsWith('url_param:');
+    const evHeader = isHeaderLoc ? ev.location.slice('header:'.length) : '';
+
     // auth — minted by the login flow's response (any NON-cookie location). A
     // login-minted value sent back as a Cookie persists automatically via the
-    // credential jar, so it needs no ${credential.X} sessionCapture contract —
-    // seeding one would wrongly fail the auth verifier and inject a Cookie header
-    // on the data side.
-    const evHeader = ev.location.toLowerCase().startsWith('header:')
-      ? ev.location.slice('header:'.length)
-      : '';
+    // credential jar, so it needs no ${credential.X} sessionCapture contract.
     if (ev.producerSeq != null && loginSeqs.has(ev.producerSeq) && !isCookieHeaderName(evHeader)) {
       const name = nameFromLocationOrSuggestion(ev.location, ev.suggestedStateName);
       push({
@@ -1335,10 +1345,40 @@ export function deriveRequiredInputHints(payload: {
       continue;
     }
 
-    // browser_state / generated / static apply to the commonly-dropped HEADER slots.
-    if (!ev.location.toLowerCase().startsWith('header:')) continue;
-    const headerName = ev.location.slice('header:'.length);
-    if (isCookieHeaderName(headerName)) continue;
+    // Page/bootstrap session state — a header/url-query value pulled from a NON-login
+    // response whose producer is NOT a selected tool (e.g. f.sid / bl scraped from the
+    // flights bootstrap page, producerPath "body(substring)"). Cross-tool tokens have a
+    // tool producer (handled as producer_tool above); login tokens are auth above. These
+    // fall through every other branch (not browser_minted; producerSeq != null skips the
+    // constant branch), so without this they get NO contract and the agent bakes the
+    // rotting literal. Contract as browser_state so every tool templates `${state.X}` +
+    // a bootstrap capture. (A missing capture degrades to a gate warning, never a block.)
+    if (
+      (isHeaderLoc || isQueryLoc) &&
+      !(isHeaderLoc && isCookieHeaderName(evHeader)) &&
+      ev.producerSeq != null &&
+      !loginSeqs.has(ev.producerSeq) &&
+      soleOwner(ev.producerSeq) == null &&
+      ev.value != null &&
+      looksLikeToken(ev.value)
+    ) {
+      const name = nameFromLocationOrSuggestion(ev.location, ev.suggestedStateName);
+      push({
+        consumerTool,
+        input: {
+          location: ev.location,
+          source: 'browser_state',
+          wiring: 'state',
+          stateName: name,
+          recordedSeq: ev.originalSeq,
+          note: '',
+        },
+      });
+      continue;
+    }
+
+    if (!isHeaderLoc && !isQueryLoc) continue;
+    if (isHeaderLoc && isCookieHeaderName(evHeader)) continue;
 
     // Ephemeral if THIS instance is browser_minted OR any sibling instance of the
     // same slot is (most-ephemeral-wins, see browserMintedSlots above).
@@ -1361,7 +1401,9 @@ export function deriveRequiredInputHints(payload: {
             note: '',
           },
         });
-      } else {
+      } else if (ev.value && serverMintedTokenValues.has(ev.value)) {
+        // Ephemeral AND the same value appears in a response somewhere → a real upstream exists, so
+        // it is capturable session/server state. Contract it; the agent derives the capture.
         const name = nameFromLocationOrSuggestion(ev.location, ev.suggestedStateName);
         push({
           consumerTool,
@@ -1375,6 +1417,12 @@ export function deriveRequiredInputHints(payload: {
           },
         });
       }
+      // else: ephemeral with NO upstream. browser_minted means the value varied across replay runs
+      // and was found in no response (session-diff.ts), and it is not a recognized generated shape
+      // we could mint — so a `${state.X}` for it would be unsatisfiable, and baking a per-call value
+      // is dead. Only the live browser can supply it (cdp-replay runs the request in real Chrome),
+      // so do NOT contract it; leave it runtime-supplied. Covers internal per-call tokens
+      // (X-Goog-BatchExecute-Bgr) and browser-emitted client hints (sec-ch-ua-*) under one rule.
       continue;
     }
 

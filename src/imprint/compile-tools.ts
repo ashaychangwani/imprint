@@ -2829,6 +2829,20 @@ export function contractedInputGate(
   const warnings: string[] = [];
   let unresolved = 0;
   let bootstrapSet: boolean | null = null;
+  // Lazily-parsed set of every ${state.X} capture the workflow declares — used to tell a
+  // browser_state contract that HAS a producer (a dropped wiring → block) from one that has
+  // none (un-producible from the workflow; the live cdp-replay rung supplies it → warn).
+  let declaredCaptures: Set<string> | null = null;
+  const captureNames = (): Set<string> => {
+    if (declaredCaptures === null) {
+      try {
+        declaredCaptures = declaredCaptureNames(JSON.parse(workflowJson) as RawWorkflow);
+      } catch {
+        declaredCaptures = new Set<string>();
+      }
+    }
+    return declaredCaptures;
+  };
   for (const ri of requiredInputs) {
     if (ri.location === 'referer') {
       if (bootstrapSet === null) {
@@ -2848,7 +2862,30 @@ export function contractedInputGate(
     if (ri.source === 'producer_tool' || ri.source === 'user_param') continue;
     const token = wiringToken(ri);
     if (token == null) continue;
-    if (!workflowJson.includes(token)) {
+    // `workflowJson` is serialized JSON, so a literal stored as a string value has its special
+    // characters escaped (`"` → `\"`). Placeholder tokens (${state.X}, ${param.X}, …) never
+    // contain such characters, but a static literal can — match it in the same JSON-escaped form
+    // it actually takes, or a quote-containing constant (e.g. `["en-US","US",…]`) can never be
+    // found and the gate false-fails a correctly-wired input.
+    const needle = ri.wiring === 'literal' ? JSON.stringify(token).slice(1, -1) : token;
+    if (!workflowJson.includes(needle)) {
+      // A browser_state contract with no capture declared anywhere is not a dropped wiring — it is
+      // a value only the live browser can supply (the planner shouldn't emit these post-fix, but
+      // the LLM planner can still add one that reconcileRequiredInputs trusts). The cdp-replay rung
+      // runs the request in a real Chrome, so warn instead of hard-blocking (mirrors the
+      // injectContractedInputs browser_state guard). NOT counted as unresolved, so the live call is
+      // not pre-classified as a doomed contract-gap.
+      if (
+        ri.source === 'browser_state' &&
+        ri.wiring === 'state' &&
+        ri.stateName &&
+        !captureNames().has(ri.stateName)
+      ) {
+        warnings.push(
+          `the build plan contracts browser_state at ${ri.location} as \`${token}\`, but no capture produces it — the live browser rung (cdp-replay) supplies it at runtime. Add a capture/bootstrap that mints \`${token}\` only if a fetch-only replay must run without a browser.`,
+        );
+        continue;
+      }
       unresolved++;
       const how =
         ri.source === 'auth'
