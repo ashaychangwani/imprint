@@ -29,7 +29,12 @@
  */
 
 import CDP from 'chrome-remote-interface';
-import { launchChromium, proxyUrl } from './chromium.ts';
+import {
+  __registerChromePid,
+  __unregisterChromePid,
+  launchChromium,
+  proxyUrl,
+} from './chromium.ts';
 import { createLog } from './log.ts';
 
 const log = createLog('cdp-browser');
@@ -374,6 +379,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   async function close(): Promise<void> {
     const c = client;
     const ch = chrome;
+    const chromePid = chrome?.process.pid;
     client = null;
     chrome = null;
     bootstrapped = false;
@@ -385,8 +391,10 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     }
     try {
       await withTimeout(Promise.resolve(ch?.close()), 'Chromium close', 3_000);
+      // Unregister the PID after successful close so exit handler doesn't try to kill it.
+      if (chromePid !== undefined) __unregisterChromePid(chromePid);
     } catch {
-      /* ignore */
+      /* ignore — PID stays registered; exit handler will kill it */
     }
   }
 
@@ -411,6 +419,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           cdpCommandTimeoutMs,
         );
         await withTimeout(chrome.ready, 'Chromium CDP readiness', cdpCommandTimeoutMs);
+        // Register the Chrome PID for exit-time cleanup (leak prevention for
+        // probe subprocesses that exit before the idle-close timer fires).
+        if (chrome.process.pid !== undefined) __registerChromePid(chrome.process.pid);
       }
       if (!client) {
         const connectCdp = cdpConnectorForTest ?? ((port: number) => CDP({ port }));

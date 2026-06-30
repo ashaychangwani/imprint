@@ -19,6 +19,40 @@ import { dirname as pathDirname, join as pathJoin } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isDebug } from './log.ts';
 
+/** Track launched Chrome PIDs so we can kill survivors on process exit. Set on
+ *  spawn, removed on clean close. Any PIDs left when the process exits are
+ *  SIGKILLed — the leak-prevention backstop for probe subprocesses that call
+ *  process.exit(0) before a pool's idle-close timer fires. Lives here (the
+ *  Chrome-launch module, a dependency leaf) rather than in backend-ladder so the
+ *  ladder→cdp-browser-fetch import does not form a cycle. */
+const chromeProcessPids = new Set<number>();
+
+/** Register a Chrome PID for exit-time cleanup. Called on launch. */
+export function __registerChromePid(pid: number): void {
+  chromeProcessPids.add(pid);
+}
+
+/** Unregister a Chrome PID after clean close. */
+export function __unregisterChromePid(pid: number): void {
+  chromeProcessPids.delete(pid);
+}
+
+/** Kill all tracked Chrome PIDs on process exit. The 'exit' event DOES fire on
+ *  process.exit(0) (unlike beforeExit), but handlers cannot be async — just
+ *  SIGKILL the tracked PIDs synchronously and let the OS reap them. Harmless
+ *  when a PID is already dead (ESRCH). Does NOT fire under `bun test` force-exit
+ *  (that skips process event handlers), but the verifier's runCommand
+ *  process-group reap covers that path. */
+process.on('exit', () => {
+  for (const pid of chromeProcessPids) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Already dead or not owned by this process — ignore.
+    }
+  }
+});
+
 interface LaunchOptions {
   /** CDP port. If omitted, picks a free ephemeral port. */
   port?: number;
