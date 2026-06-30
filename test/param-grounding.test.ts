@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { getEndpointKey } from '../src/imprint/endpoint-key.ts';
 import {
   decodeBodyForDiff,
   endpointsForSeqs,
@@ -7,7 +8,7 @@ import {
   inputProvenance,
   structuralDiff,
 } from '../src/imprint/param-grounding.ts';
-import type { Session } from '../src/imprint/types.ts';
+import type { CapturedRequest, Session } from '../src/imprint/types.ts';
 
 // Synthetic batchexecute f.req body wrapping an inner payload.
 const freq = (inner: unknown): string =>
@@ -45,6 +46,11 @@ const session = {
 describe('decodeBodyForDiff', () => {
   it('unwraps an f.req batchexecute envelope to the inner payload', () => {
     expect(decodeBodyForDiff(freq(['q', [1, 2]]))).toEqual(['q', [1, 2]]);
+  });
+  it('handles f.req wrapping a flat JSON object (google-hotels sub-shape)', () => {
+    const flatObj = { hotelId: '123', checkIn: '2026-07-01' };
+    const wrapped = `f.req=${encodeURIComponent(JSON.stringify(flatObj))}`;
+    expect(decodeBodyForDiff(wrapped)).toEqual(flatObj);
   });
   it('parses a raw JSON body and a flat form body', () => {
     expect(decodeBodyForDiff('{"a":1}')).toEqual({ a: 1 });
@@ -163,5 +169,42 @@ describe('inputProvenance', () => {
     expect(p).toHaveLength(1);
     expect(p[0]?.valueSample).toBe('550e8400-e29b-41d4-a716-446655440000');
     expect(p[0]?.selfChain).toBe(true);
+  });
+});
+
+describe('getEndpointKey', () => {
+  it('extracts rpcid from a batchexecute URL', () => {
+    const r: CapturedRequest = {
+      seq: 1,
+      timestamp: 1,
+      method: 'POST',
+      url: 'https://x.test/batchexecute?rpcids=H028ib&source=prime',
+      headers: {},
+      resourceType: 'Fetch',
+    };
+    expect(getEndpointKey(r)).toBe('rpc:H028ib');
+  });
+
+  it('uses METHOD + pathname for plain requests', () => {
+    const r: CapturedRequest = {
+      seq: 1,
+      timestamp: 1,
+      method: 'POST',
+      url: 'https://x.test/api/foo?bar=baz',
+      headers: {},
+      resourceType: 'Fetch',
+    };
+    expect(getEndpointKey(r)).toBe('POST /api/foo');
+  });
+
+  it('defaults method to GET when absent', () => {
+    const r = {
+      seq: 1,
+      timestamp: 1,
+      url: 'https://x.test/api/bar',
+      headers: {},
+      resourceType: 'Fetch',
+    } as CapturedRequest;
+    expect(getEndpointKey(r)).toBe('GET /api/bar');
   });
 });

@@ -22,17 +22,27 @@ const USER_INTERACTION_TYPES = new Set(['click', 'input', 'change', 'submit']);
 const MULTI_VALUE_HEADERS = new Set(['cookie', 'set-cookie']);
 
 /**
+ * Well-known XSSI (cross-site script inclusion) guards that sites prepend to
+ * JSON responses to prevent them being parsed as script tags in HTML contexts.
+ */
+const XSSI_GUARDS = [")]}'", 'while(1);', 'for(;;);'];
+
+/**
  * Detect a structured RPC envelope (XSSI-guarded or length-prefixed) whose body
- * is NOT top-level JSON but carries doubly-encoded JSON as string payloads —
- * e.g. Google `batchexecute` (`)]}'` guard + `<len>\n[...]` frames). Running the
- * flat-text freeform scanner over such a body injects `[REDACTED]` into bare
- * numeric IDs/coordinates inside the inner JSON and makes it unparseable, so the
- * freeform fallback must skip these. The structure-aware key-based redaction
- * still applies to any clean-JSON bodies; this only gates the flat-text scan.
+ * is NOT top-level JSON but carries doubly-encoded JSON as string payloads.
+ * Examples include Google `batchexecute` (`)]}'\n` guard + `<len>\n[...]` frames),
+ * Facebook Graph API (`for(;;);` guard), and other structured RPC transports.
+ * Running the flat-text freeform scanner over such a body injects `[REDACTED]`
+ * into bare numeric IDs/coordinates inside the inner JSON and makes it
+ * unparseable, so the freeform fallback must skip these. The structure-aware
+ * key-based redaction still applies to any clean-JSON bodies; this only gates
+ * the flat-text scan.
  */
 export function looksLikeRpcEnvelope(body: string): boolean {
   const head = body.slice(0, 64).trimStart();
-  if (head.startsWith(")]}'")) return true; // anti-XSSI guard: )]}' and )]}',
+  for (const guard of XSSI_GUARDS) {
+    if (head.startsWith(guard)) return true; // )]}' covers )]}'NNN variants
+  }
   if (/^\d{1,9}\r?\n\[/.test(head)) return true; // length-prefixed frame: 219006\n[
   return false;
 }
@@ -580,14 +590,6 @@ export function redactSession(
     return { ...ev, detail };
   });
 
-  // Flag site-specific patterns that survive.
-  if (
-    session.requests.some(
-      (r) => r.body?.includes('patronPassword') || r.url.includes('patronPassword'),
-    )
-  ) {
-    stats.warnings.push('Discover & Go patronPassword detected and redacted.');
-  }
   if (
     session.requests.some(
       (r) => r.body?.toLowerCase().includes('password') || r.url.toLowerCase().includes('password'),

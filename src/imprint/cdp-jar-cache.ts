@@ -25,6 +25,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join as pathJoin } from 'node:path';
+import { AKAMAI_SENSOR_COOKIE, abckFlag } from './bot-defense.ts';
 import { type MintedJar, jarCookiesValidated } from './cdp-browser-fetch.ts';
 import { createLog } from './log.ts';
 
@@ -201,15 +202,15 @@ export function seedJarFromRecording(
     secure: c.secure as boolean | undefined,
     sameSite: c.sameSite as string | undefined,
   }));
-  const abck = cookies.find((c) => c.name === '_abck')?.value;
-  const abckFlag = abck?.split('~')[1] ?? '?';
+  const abck = cookies.find((c) => c.name === AKAMAI_SENSOR_COOKIE)?.value;
+  const abckFlagValue = abckFlag(abck);
   // Validated = `_abck~0~` OR a `bm_sv` cookie (Akamai's validated-session
   // marker). `_abck` rotates back to `~-1~` after clearing a request, so a real
   // working recording often ends with `_abck~-1~` + `bm_sv` — that jar replays
   // fine (verified live: 609KB results). Gating on `_abck==='0'` alone wrongly
   // rejects such recordings.
   if (!jarCookiesValidated(cookies)) {
-    log(`newest recording is not validated (_abck~${abckFlag}~, no bm_sv) — not seeding`);
+    log(`newest recording is not validated (_abck~${abckFlagValue}~, no bm_sv) — not seeding`);
     return false;
   }
   let ua = '';
@@ -246,12 +247,12 @@ export function seedJarFromRecording(
     ua,
     html,
     bootstrapEpoch: Math.round(newestMtime),
-    abckFlag,
+    abckFlag: abckFlagValue,
     validated: true, // gated above on jarCookiesValidated
     source: 'recording',
   });
   log(
-    `seeded jar from recording ${newest} (${cookies.length} cookies, _abck~${abckFlag}~, bm_sv-validated, ua=${ua ? `${ua.slice(0, 40)}…` : '(none)'}, html=${html.length}b)`,
+    `seeded jar from recording ${newest} (${cookies.length} cookies, _abck~${abckFlagValue}~, bm_sv-validated, ua=${ua ? `${ua.slice(0, 40)}…` : '(none)'}, html=${html.length}b)`,
   );
   return true;
 }

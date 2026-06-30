@@ -1103,9 +1103,6 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `[imprint] ${Object.keys(result.values).length} value${Object.keys(result.values).length === 1 ? '' : 's'} extracted: ${Object.keys(result.values).join(', ') || '(none)'}`,
       );
-      if (result.matchedExtractors.length > 0) {
-        console.log(`[imprint] extractors matched: ${result.matchedExtractors.join(', ')}`);
-      }
       console.log('');
       console.log(
         `[imprint] credentials are loaded automatically by \`imprint cron ${site}\` and \`imprint mcp-server\` — no extra wiring needed.`,

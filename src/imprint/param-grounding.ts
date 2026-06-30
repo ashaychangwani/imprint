@@ -9,16 +9,16 @@
  * request a filter-toggle event triggers differs from the prior equivalent
  * request at exactly the position that param controls.
  *
- * This module makes that differential deterministic and site-agnostic: for each
- * UI event, find the request it triggered, diff it against the most recent
- * comparable request (same endpoint), and report the changed paths. The compile
- * agent (and the precomputed hint surfaced to it) then maps each diff to a
- * `likelyParam` — the semantic step the model is good at — instead of guessing
- * at an encoding. Decoding is generic (JSON body, an `f.req=`-embedded JSON
- * envelope as used by Google's batchexecute, or plain form fields), so this is
- * not specific to any one site.
+ * This module makes that differential deterministic: for each UI event, find the
+ * request it triggered, diff it against the most recent comparable request (same
+ * endpoint), and report the changed paths. The compile agent (and the precomputed
+ * hint surfaced to it) then maps each diff to a `likelyParam` — the semantic step
+ * the model is good at — instead of guessing at an encoding. Decoding uses a
+ * pluggable envelope registry (batchexecute is one registered handler), raw JSON
+ * bodies, or plain form fields.
  */
 
+import { getEndpointKey } from './endpoint-key.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
 interface GroundingChange {
@@ -43,11 +43,47 @@ interface EventGrounding {
 /** First request after `eventSeq`, within a window, that has a decodable body. */
 const TRIGGER_WINDOW = 12;
 
+/** Envelope handlers for unwrapping nested request bodies. Each handler provides
+ *  a detection predicate and an unwrapping function. Handlers are tried in order;
+ *  first handler whose `detect` returns true and whose `unwrap` returns non-
+ *  undefined wins. */
+interface EnvelopeHandler {
+  detect(formParams: URLSearchParams): boolean;
+  unwrap(formParams: URLSearchParams): unknown;
+}
+
+const ENVELOPE_HANDLERS: EnvelopeHandler[] = [
+  {
+    // Google batchexecute envelope: f.req=[[["rpcid","<inner-json-string>",…]]]
+    detect: (formParams) => formParams.get('f.req') != null,
+    unwrap: (formParams) => {
+      const freq = formParams.get('f.req');
+      if (!freq) return undefined;
+      try {
+        const env = JSON.parse(freq);
+        // Unwrap [[["rpcid","<inner json string>", …]]] to the inner payload.
+        const innerStr = env?.[0]?.[0]?.[1];
+        if (typeof innerStr === 'string') {
+          try {
+            return JSON.parse(innerStr);
+          } catch {
+            // Fall through to return the outer envelope if inner parse fails.
+            // This preserves the f.req-wraps-a-flat-object sub-shape that
+            // google-hotels/search_hotels relies on.
+            return env;
+          }
+        }
+        return env;
+      } catch {
+        return undefined;
+      }
+    },
+  },
+];
+
 /** Decode a request body into a comparable structure. Handles, in order:
- *  a raw JSON body; an `f.req=<json>` form field whose value is a JSON envelope
- *  (batchexecute) — unwrapping `[[["rpcid","<inner-json-string>",…]]]` to the
- *  inner payload when present; otherwise a flat form-field map; else the raw
- *  string. Never throws. */
+ *  a raw JSON body; registered envelope handlers (batchexecute is one example);
+ *  otherwise a flat form-field map; else the raw string. Never throws. */
 export function decodeBodyForDiff(body: string | undefined): unknown {
   if (!body) return undefined;
   const trimmed = body.trim();
@@ -61,24 +97,14 @@ export function decodeBodyForDiff(body: string | undefined): unknown {
   // form-encoded?
   if (/(^|&)[\w.]+=/.test(trimmed)) {
     const params = new URLSearchParams(trimmed);
-    const freq = params.get('f.req');
-    if (freq != null) {
-      try {
-        const env = JSON.parse(freq);
-        // batchexecute envelope: [[["rpcid","<inner json string>", …]]]
-        const innerStr = env?.[0]?.[0]?.[1];
-        if (typeof innerStr === 'string') {
-          try {
-            return JSON.parse(innerStr);
-          } catch {
-            return env;
-          }
-        }
-        return env;
-      } catch {
-        /* f.req not JSON */
+    // Try registered envelope handlers.
+    for (const handler of ENVELOPE_HANDLERS) {
+      if (handler.detect(params)) {
+        const unwrapped = handler.unwrap(params);
+        if (unwrapped !== undefined) return unwrapped;
       }
     }
+    // Fall through to flat form field map.
     const out: Record<string, string> = {};
     for (const [k, v] of params) out[k] = v;
     return out;
@@ -118,23 +144,6 @@ export function structuralDiff(
   };
   out.push({ path: path || '(root)', before: cap(a), after: cap(b) });
   return out;
-}
-
-/** A stable key grouping "comparable" requests: the batchexecute rpcid when
- *  present, else METHOD + URL path (query stripped). */
-function endpointKey(req: CapturedRequest): string {
-  const url = req.url ?? '';
-  // Accept both `rpcids=` (Google batchexecute, plural) and a singular `rpcid=`
-  // in the URL query, matching tool-candidates' endpoint-family keying — so a
-  // batchexecute-style endpoint never collapses distinct rpcs to one path key.
-  const rpc = /[?&]rpcids?=([^&]+)/.exec(url);
-  if (rpc) return `rpc:${decodeURIComponent(rpc[1] ?? '')}`;
-  try {
-    const u = new URL(url);
-    return `${req.method ?? 'GET'} ${u.pathname}`;
-  } catch {
-    return `${req.method ?? 'GET'} ${url.split('?')[0]}`;
-  }
 }
 
 function bodyOf(req: CapturedRequest): string | undefined {
@@ -189,19 +198,19 @@ export function groundEvent(
     const decoded = decodeBodyForDiff(bodyOf(r));
     if (decoded === undefined) return false;
     if (relevantEndpoints && relevantEndpoints.size > 0)
-      return relevantEndpoints.has(endpointKey(r));
+      return relevantEndpoints.has(getEndpointKey(r));
     // Fallback: structured body + not an obvious telemetry endpoint.
     return isStructured(decoded) && !TELEMETRY.test(r.url ?? '');
   });
   if (!triggered) return { eventSeq, label, changes: [] };
 
-  const key = endpointKey(triggered);
+  const key = getEndpointKey(triggered);
   const prior = [...reqs]
     .reverse()
     .find(
       (r) =>
         r.seq < triggered.seq &&
-        endpointKey(r) === key &&
+        getEndpointKey(r) === key &&
         decodeBodyForDiff(bodyOf(r)) !== undefined,
     );
 
@@ -260,7 +269,7 @@ export function endpointsForSeqs(session: Session, seqs: number[]): Set<string> 
   const set = new Set<string>();
   for (const seq of seqs) {
     const r = session.requests.find((x) => x.seq === seq);
-    if (r) set.add(endpointKey(r));
+    if (r) set.add(getEndpointKey(r));
   }
   return set;
 }
@@ -345,7 +354,7 @@ export function inputProvenance(session: Session, candidateSeqs: number[]): Inpu
     if (!r) continue;
     const decoded = decodeBodyForDiff(bodyOf(r));
     if (decoded == null || typeof decoded !== 'object') continue;
-    const ep = endpointKey(r);
+    const ep = getEndpointKey(r);
     for (const { path, val } of leafStrings(decoded)) {
       if (!isIdLike(val)) continue;
       const key = `${ep}|${path}`;
@@ -358,8 +367,8 @@ export function inputProvenance(session: Session, candidateSeqs: number[]): Inpu
         valueSample: val.length > 40 ? `${val.slice(0, 40)}…` : val,
         requestSeq: seq,
         sourceSeq: src.seq,
-        sourceEndpoint: endpointKey(src),
-        selfChain: endpointKey(src) === ep,
+        sourceEndpoint: getEndpointKey(src),
+        selfChain: getEndpointKey(src) === ep,
       });
     }
   }

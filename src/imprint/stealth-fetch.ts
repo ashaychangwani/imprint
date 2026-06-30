@@ -11,6 +11,7 @@
  */
 
 import type { Browser, BrowserContext, Page } from 'playwright';
+import { AKAMAI_SENSOR_COOKIE, isAbckValidated } from './bot-defense.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { createLog } from './log.ts';
 
@@ -325,16 +326,10 @@ export function createStealthFetch(
       });
     }
     // Regenerate per-call UUIDs (captured statics get rejected as stale).
-    // Always inject x-user-experience-id — Southwest requires it even
-    // when the recorded workflow omits it.
-    const present = new Set(Object.keys(headers).map((k) => k.toLowerCase()));
     for (const k of Object.keys(headers)) {
       if (FRESH_UUID_HEADERS.has(k.toLowerCase())) {
         headers[k] = crypto.randomUUID();
       }
-    }
-    if (!present.has('x-user-experience-id')) {
-      headers['X-User-Experience-ID'] = crypto.randomUUID();
     }
     const result = await fetchWithRetry(url, {
       method: typeof init?.method === 'string' ? init.method : 'GET',
@@ -420,13 +415,6 @@ function mergeCookieHeader(browserCookie: string, runtimeCookie: string | undefi
  * token to persist + share across `bun test` processes without re-implementing
  * the Playwright bootstrap.
  */
-/** Akamai _abck cookie validation marker. Format: `<token>~<status>~…`;
- *  status `0` = sensor-validated (requests pass), `-1` = not yet validated
- *  (state-changing POSTs get tarpitted). */
-function abckIsValidated(cookieValue: string | undefined): boolean {
-  if (!cookieValue) return false;
-  return cookieValue.split('~')[1] === '0';
-}
 
 /** Drive human-like interaction (mouse moves + scroll) and poll until the
  *  Akamai _abck cookie validates (`~0~`), or until `maxSeconds` elapse. Returns
@@ -459,13 +447,13 @@ async function driveSensorValidation(
     await page.waitForTimeout(800);
     let abck: string | undefined;
     try {
-      abck = (await context.cookies()).find((c) => c.name === '_abck')?.value;
+      abck = (await context.cookies()).find((c) => c.name === AKAMAI_SENSOR_COOKIE)?.value;
     } catch {
       // best-effort
     }
     // Absent _abck → site doesn't use Akamai's scheme; nothing to wait for.
     if (abck === undefined && i >= 2) return false;
-    if (abckIsValidated(abck)) return true;
+    if (isAbckValidated(abck)) return true;
     i++;
   }
   return false;
@@ -625,10 +613,6 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
     // by the sensor — that's what we capture.
     const probeHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
-      'X-API-Key': 'x',
-      'X-App-ID': 'x',
-      'X-Channel-ID': 'x',
-      'X-User-Experience-ID': 'x',
     };
     const probeSentKeys = new Set([
       ...Array.from(STANDARD_HEADERS),

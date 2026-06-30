@@ -222,6 +222,22 @@ describe('redactBody — structured RPC envelopes', () => {
     expect(r.freeformRedactions).toBe(0);
     expect(r.redacted).toBe(body);
   });
+
+  it('leaves a while(1); XSSI-guarded envelope untouched', () => {
+    const body = `while(1);${frame}`;
+    const r = redactBody(body, 'application/json', undefined, undefined, true, undefined);
+    expect(r.freeformRedactions).toBe(0);
+    expect(r.redacted).toBe(body);
+    expect(r.redacted).not.toContain('[REDACTED]');
+  });
+
+  it('leaves a for(;;); XSSI-guarded envelope untouched', () => {
+    const body = `for(;;);${frame}`;
+    const r = redactBody(body, 'application/json', undefined, undefined, true, undefined);
+    expect(r.freeformRedactions).toBe(0);
+    expect(r.redacted).toBe(body);
+    expect(r.redacted).not.toContain('[REDACTED]');
+  });
 });
 
 describe('redactSession', () => {

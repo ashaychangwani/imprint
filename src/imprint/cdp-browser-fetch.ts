@@ -29,6 +29,7 @@
  */
 
 import CDP from 'chrome-remote-interface';
+import { AKAMAI_SENSOR_COOKIE, abckFlag, isAbckValidated } from './bot-defense.ts';
 import {
   __registerChromePid,
   __unregisterChromePid,
@@ -83,8 +84,8 @@ export interface MintedJar {
  *  and survives `_abck` rotating back to `~-1~`). Shared by the cdp mint and the
  *  recording-seed paths so both judge "validated" identically. */
 export function jarCookiesValidated(cookies: Array<{ name: string; value: string }>): boolean {
-  const abck = cookies.find((c) => c.name === '_abck')?.value;
-  if (abck && abck.split('~')[1] === '0') return true;
+  const abck = cookies.find((c) => c.name === AKAMAI_SENSOR_COOKIE)?.value;
+  if (isAbckValidated(abck)) return true;
   return cookies.some((c) => c.name === 'bm_sv');
 }
 
@@ -163,10 +164,6 @@ export function __setCdpBrowserFetchHooksForTest(
 ): void {
   chromiumLauncherForTest = hooks?.launchChromium ?? null;
   cdpConnectorForTest = hooks?.connectCdp ?? null;
-}
-
-function abckIsValidated(v: string | undefined): boolean {
-  return !!v && v.split('~')[1] === '0';
 }
 
 /** The registrable domain (eTLD+1, approximated) of a host: the last two labels,
@@ -581,9 +578,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           // non-fatal
         }
         await sleep(rand(180, 520)); // non-uniform dwell between interaction bursts
-        const abck = await getCookie(client, '_abck');
-        status = abck?.split('~')[1] ?? '?';
-        if (abckIsValidated(abck)) break;
+        const abck = await getCookie(client, AKAMAI_SENSOR_COOKIE);
+        status = abckFlag(abck);
+        if (isAbckValidated(abck)) break;
         i++;
       }
       log(`_abck status after interaction: ~${status}~`);
@@ -855,13 +852,13 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       } catch {
         // best-effort — html_regex captures will miss
       }
-      const abck = cookies.find((ck) => ck.name === '_abck')?.value;
+      const abck = cookies.find((ck) => ck.name === AKAMAI_SENSOR_COOKIE)?.value;
       return {
         cookies,
         ua: appliedUa ?? '',
         html,
         bootstrapEpoch: Date.now(),
-        abckFlag: abck?.split('~')[1] ?? '?',
+        abckFlag: abckFlag(abck),
         validated: jarCookiesValidated(cookies),
         source: 'mint',
       };
