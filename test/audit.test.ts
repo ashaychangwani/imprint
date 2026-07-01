@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   type AuditReport,
   AuditReportSchema,
+  auditHasCorrectSignal,
   buildAuditInitialPrompt,
   buildTokenDepNote,
   buildUnverifiedParamNote,
@@ -306,6 +307,44 @@ describe('ungradeableToolNames', () => {
       ],
     });
     expect(ungradeableToolNames(report)).toEqual(['blocked_tool', 'untouched_tool']);
+  });
+
+  it('treats parameter verdicts as gradeable signal', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'param_graded_tool',
+          invocations: [{ ok: false, verdict: 'infra' }],
+          parameters: [{ name: 'sort', verdict: 'works' }],
+        },
+        {
+          name: 'param_defect_tool',
+          invocations: [{ ok: false, verdict: 'bad_params' }],
+          parameters: [{ name: 'airline', verdict: 'no_op' }],
+        },
+        {
+          name: 'still_ungradeable',
+          invocations: [{ ok: false, verdict: 'infra' }],
+          parameters: [{ name: 'seat', verdict: 'untestable' }],
+        },
+      ],
+    });
+    expect(ungradeableToolNames(report)).toEqual(['still_ungradeable']);
+  });
+});
+
+describe('auditHasCorrectSignal', () => {
+  it('counts working parameter verdicts as positive audit signal', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [{ ok: false, verdict: 'infra' }],
+          parameters: [{ name: 'bags', verdict: 'works' }],
+        },
+      ],
+    });
+    expect(auditHasCorrectSignal(report)).toBe(true);
   });
 });
 

@@ -1635,6 +1635,24 @@ test('param:hotel_id selects the hotel', async () => {
     expect(unchained).toEqual(['hotel_id']);
     expect(paramVerification).toEqual([]);
   });
+
+  it('checks declared token params even when likelyParams omitted them', () => {
+    const { paramVerification, unchained } = classifyParamCoverage({
+      likelyParams: [],
+      integrationSrc: chainedSrc,
+      passedTests: new Set(['param:hotel_id uses a fresh token minted by search_hotels']),
+      integrationOutcome: 'passed',
+      tokenSources,
+    });
+    expect(unchained).toEqual([]);
+    expect(paramVerification).toEqual([
+      {
+        name: 'hotel_id',
+        verified: true,
+        sourcedFrom: { tool: 'search_hotels', field: 'hotel_id' },
+      },
+    ]);
+  });
 });
 
 describe('detectTokenSources', () => {

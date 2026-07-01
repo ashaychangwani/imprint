@@ -2027,10 +2027,18 @@ export function classifyParamCoverage(opts: {
   const tautological: string[] = [];
   const unchained: string[] = [];
   const tokenByName = new Map((opts.tokenSources ?? []).map((t) => [t.param, t]));
+  const coverageParams = [...opts.likelyParams];
+  const coveredNames = new Set(coverageParams.map((p) => p.name));
+  for (const ts of opts.tokenSources ?? []) {
+    if (!coveredNames.has(ts.param)) {
+      coverageParams.push({ name: ts.param });
+      coveredNames.add(ts.param);
+    }
+  }
   const blocks = extractTestBlocks(opts.integrationSrc);
   const waived =
     opts.integrationOutcome === 'waived-bot' || opts.integrationOutcome === 'waived-infra';
-  for (const lp of opts.likelyParams) {
+  for (const lp of coverageParams) {
     const token = `param:${lp.name}`;
     const passedLive = [...opts.passedTests].some((n) => n.includes(token));
     const block = blocks.find((b) => b.title.includes(token));

@@ -199,15 +199,28 @@ export function computeAuditScore(report: AuditReport, minScore: number): AuditS
   };
 }
 
-/** Tools the auditor could never grade (every invocation was infra/bad_params,
- *  or it ran none). Surfaced in the report so an un-exercisable tool is visible
- *  rather than silently excluded from the score. */
-export function ungradeableToolNames(report: AuditReport): string[] {
-  return report.tools
-    .filter(
-      (t) => !t.invocations.some((i) => i.verdict === 'correct' || i.verdict === 'tool_broken'),
+function toolHasGradeableAuditSignal(tool: AuditReport['tools'][number]): boolean {
+  return (
+    tool.invocations.some((i) => i.verdict === 'correct' || i.verdict === 'tool_broken') ||
+    tool.parameters.some(
+      (p) => p.verdict === 'works' || p.verdict === 'no_op' || p.verdict === 'broken',
     )
-    .map((t) => t.name);
+  );
+}
+
+export function auditHasCorrectSignal(report: AuditReport): boolean {
+  return report.tools.some(
+    (t) =>
+      t.invocations.some((i) => i.verdict === 'correct') ||
+      t.parameters.some((p) => p.verdict === 'works'),
+  );
+}
+
+/** Tools the auditor could never grade (every invocation was infra/bad_params
+ *  and every parameter was untestable/absent). Surfaced in the report so an
+ *  un-exercisable tool is visible rather than silently excluded from the score. */
+export function ungradeableToolNames(report: AuditReport): string[] {
+  return report.tools.filter((t) => !toolHasGradeableAuditSignal(t)).map((t) => t.name);
 }
 
 /** Advertised parameters the auditor could not differentially test (opaque enum
@@ -332,9 +345,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         .filter((t) => t.workflow.liveVerified === false)
         .map((t) => t.workflow.toolName)
         .filter((name) => ungradeableNames.includes(name));
-      const anyCorrectAcrossAudit = drive.report.tools.some((t) =>
-        t.invocations.some((i) => i.verdict === 'correct'),
-      );
+      const anyCorrectAcrossAudit = auditHasCorrectSignal(drive.report);
       let verdict = rawScore.verdict;
       // Timeout takes precedence over inconclusive downgrade.
       if (drive.timedOut) {
