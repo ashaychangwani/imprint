@@ -2861,6 +2861,24 @@ describe('injectContractedInputs', () => {
     expect(repaired[0]?.literal).toBe('synthetic-appkey-001');
   });
 
+  it('repairs recorded static header placeholder literals from the recorded request', () => {
+    const session = secretSession();
+    const repaired = repairRequiredInputStaticLiterals(
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: '<recorded static header from seq 10>',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(repaired[0]?.literal).toBe('synthetic-appkey-001');
+  });
+
   it('injects a dropped credential header into the matching request', () => {
     const session = secretSession();
     const workflow = {
@@ -2920,6 +2938,35 @@ describe('injectContractedInputs', () => {
           method: 'GET',
           url: 'https://api.example.com/data',
           headers: { 'X-App-Key': '<recorded seq 10 header X-App-Key>' },
+        },
+      ],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(1);
+    expect(workflow.requests[0]?.headers['X-App-Key']).toBe('real-grounded-app-key');
+  });
+
+  it('replaces an existing recorded static header placeholder with the grounded literal', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/data',
+          headers: { 'X-App-Key': '<recorded static header from seq 10>' },
         },
       ],
     };
