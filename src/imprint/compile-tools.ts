@@ -57,6 +57,18 @@ const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 // without it, so leftover test files won't blow up under default `bun test`.
 const SESSION_PATH_ENV = 'IMPRINT_SESSION_PATH';
 
+function parseRequiredKeysFromTokenShape(shape: string | undefined): string[] {
+  if (!shape) return [];
+  const match = /\brequiredKeys\s*=\s*\[([^\]]+)\]/i.exec(shape);
+  if (!match) return [];
+  const rawKeys = match[1];
+  if (!rawKeys) return [];
+  return rawKeys
+    .split(',')
+    .map((part) => part.trim().replace(/^['"`]|['"`]$/g, ''))
+    .filter(Boolean);
+}
+
 export function buildCompileTools(
   session: Session,
   toolDir: string,
@@ -135,8 +147,14 @@ function buildReadBuildPlanTool(
         );
       }
       for (const tp of tokenParams) {
+        const producerShape = plan.perTool
+          .find((t) => t.toolName === tp.sourceTool)
+          ?.emitsTokens.find((e) => e.field === tp.sourceField)?.shape;
+        const shapeNote = producerShape
+          ? ` The producer declares shape: ${producerShape}. If that shape contains requiredKeys=[...], request-transform.ts must decode/unpack the fresh value and reference each required key in the outgoing request.`
+          : '';
         tokenNotes.push(
-          `CONSUMER CONTRACT: param \`${tp.param}\` is an opaque token minted by the \`${tp.sourceTool}\` tool's \`${tp.sourceField}\` output. Write a CHAINED \`param:${tp.param}\` integration test that calls \`runWorkflowWithLadder\` on \`../${tp.sourceTool}/workflow.json\`, reads \`${tp.sourceField}\` from its result, and passes THAT fresh value (not the recorded constant) into this tool — then asserts the response is non-empty. On producer bot/infra error, rethrow so the suite waives.`,
+          `CONSUMER CONTRACT: param \`${tp.param}\` is an opaque token minted by the \`${tp.sourceTool}\` tool's \`${tp.sourceField}\` output.${shapeNote} Write a CHAINED \`param:${tp.param}\` integration test that calls \`runWorkflowWithLadder\` on \`../${tp.sourceTool}/workflow.json\` directly inside the \`param:${tp.param}\` test block, reads \`${tp.sourceField}\` from the producer's ACTUAL output shape (top-level field, or an item in any returned collection such as flights/items/results), and passes THAT fresh value (not the recorded constant) into this tool — then asserts the response is non-empty. When several params come from the same producer, mint once and choose one producer item containing all sibling fields so the values stay from the same result. On producer bot/infra error, rethrow so the suite waives; if the producer ran but the field is absent, fix the producer parser/output contract instead of waiving. Do not fabricate a fallback value or mutate producer.result.data to make the test pass.`,
         );
       }
       // Per-source wiring guidance for the general dependency contract. These are
@@ -1838,9 +1856,22 @@ export function classifyIntegrationOutcome(input: {
       ).map((m) => m[1] as string),
     ),
   );
-  const firstErrorMatch = combined.match(/\b(NETWORK|FORBIDDEN|RATE_LIMITED)\b[^\n]{0,200}/);
+  const firstErrorMatch = combined.match(
+    /\b(NETWORK|FORBIDDEN|RATE_LIMITED|BAD_RESPONSE)\b[^\n]{0,200}/,
+  );
   const firstError = firstErrorMatch?.[0]?.trim() ?? 'unknown';
   const base = { baselineLiveVerified, firstError, exhaustedBackends };
+  const deterministicBadResponse =
+    /\bBAD_RESPONSE\b/i.test(combined) ||
+    /\breturned\s+(?:400|422)\b/i.test(combined) ||
+    /\bHTTP\s+(?:400|422)\b/i.test(combined);
+  const botOrRateEvidence =
+    isBotDefenseFailure(combined) ||
+    /\b(FORBIDDEN|RATE_LIMITED)\b/i.test(combined) ||
+    /\b(?:403|429|503)\b/.test(combined) ||
+    /\b(?:captcha|challenge|access denied|unusual traffic|verify (?:you are|you're) human|bot defense|anti[- ]?bot|rate.?limit|too many requests)\b/i.test(
+      combined,
+    );
 
   if (input.exitCode === 0) {
     return {
@@ -1886,6 +1917,49 @@ export function classifyIntegrationOutcome(input: {
       outcome: 'failed',
       firstError:
         firstError === 'unknown' ? 'contract-gap (a contracted input is unwired)' : firstError,
+      captureFailName: null,
+      captureFailFromKnown: false,
+    };
+  }
+  // A generated request that contains literal `undefined` in a URL/body/header is
+  // not an infrastructure failure. It means a workflow/request-transform evaluated
+  // a placeholder before runtime substitution (for example parsing
+  // `${state.token}` out of an already-templated URL and passing the missing value
+  // onward). Keep this before timeout/bot waivers so the agent fixes the template.
+  if (
+    /\b(?:https?:\/\/\S*undefined\S*|[?&][A-Za-z0-9_.-]+=undefined\b|=\$\{[^}]+\}.*undefined\b|returned 500:[\s\S]{0,300}\bundefined\b)/i.test(
+      combined,
+    )
+  ) {
+    return {
+      ...base,
+      outcome: 'failed',
+      firstError:
+        firstError === 'unknown' ? 'literal undefined emitted into request template' : firstError,
+      captureFailName: null,
+      captureFailFromKnown: false,
+    };
+  }
+  // A suite may hit the verifier timeout after already producing a concrete test
+  // assertion failure. That is not infrastructure uncertainty: the tool returned
+  // data, but a declared invariant (often a producer→consumer token contract)
+  // failed. Keep this before the generic timeout waiver so broken contracts do
+  // not ship as `waived-chain` merely because a later/parallel live call timed
+  // out.
+  if (/\berror:\s*expect\s*\(/.test(combined) || /\bAssertionError\b/.test(combined)) {
+    return { ...base, outcome: 'failed', captureFailName: null, captureFailFromKnown: false };
+  }
+  // HTTP 400/422 BAD_RESPONSE with no challenge/rate-limit evidence is a
+  // deterministic request-contract failure, not infrastructure uncertainty. This
+  // is especially important for chained producer→consumer tests: if a fresh
+  // producer value reaches the consumer and every backend rejects the consumer
+  // request as malformed, the compiler must fix the emitted token shape or
+  // request transform instead of waiving the suite because a later call timed out.
+  if (deterministicBadResponse && !botOrRateEvidence) {
+    return {
+      ...base,
+      outcome: 'failed',
+      firstError: firstError === 'unknown' ? 'BAD_RESPONSE without bot/rate evidence' : firstError,
       captureFailName: null,
       captureFailFromKnown: false,
     };
@@ -2919,6 +2993,16 @@ export async function externalVerification(
      *  require a chained `param:<name>` test (mint a fresh value from the producer)
      *  and are stamped with `sourcedFrom` on success. */
     tokenParams?: Array<{ param: string; sourceTool: string; sourceField: string }>;
+    /** Producer-side emitted token shapes for each consumer token param. When a
+     *  producer emits a composite requiredKeys=[...] value, the consumer request
+     *  transform must unpack those keys instead of silently falling back to a
+     *  recorded scalar default. */
+    tokenParamShapes?: Array<{
+      param: string;
+      sourceTool: string;
+      sourceField: string;
+      shape: string;
+    }>;
     /** Fields the build plan requires THIS tool's parser to emit for sibling
      *  consumers (producer side). The verifier fails the tool if a declared field
      *  is not emitted, so the producer/consumer field name can't silently diverge
@@ -2970,6 +3054,7 @@ export async function externalVerification(
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   const parserPath = pathJoin(toolDir, 'parser.ts');
   const parserTestPath = pathJoin(toolDir, 'parser.test.ts');
+  const requestTransformPath = pathJoin(toolDir, 'request-transform.ts');
 
   // Contracted-input injection + emit-time secret guard + the contracted-input
   // gate. Runs FIRST so every downstream check and the live test see the final,
@@ -3492,6 +3577,49 @@ export async function externalVerification(
         }. Emit ${
           missing.length === 1 ? 'it' : 'each'
         } in every result item under the EXACT field name (the full value a consumer needs, never a bare fragment) — see read_build_plan "emitsTokens".`,
+      );
+    }
+
+    const missingShapeKeys = (opts.emittedTokens ?? []).flatMap((emitted) => {
+      const requiredKeys = parseRequiredKeysFromTokenShape(emitted.shape);
+      return requiredKeys
+        .filter(
+          (key) =>
+            !new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(parserSrc),
+        )
+        .map((key) => ({ field: emitted.field, key }));
+    });
+    if (missingShapeKeys.length > 0) {
+      failures.push(
+        `the build plan requires emitted token shape keys ${missingShapeKeys
+          .map(({ field, key }) => `\`${field}.${key}\``)
+          .join(', ')} via requiredKeys=[...], but parser.ts does not reference ${
+          missingShapeKeys.length === 1 ? 'that key' : 'those keys'
+        }. Emit the full composite value the consumer unpacks, and add parser tests that decode one emitted token and assert each required key is present.`,
+      );
+    }
+  }
+
+  if ((opts.tokenParamShapes?.length ?? 0) > 0 && existsSync(requestTransformPath)) {
+    const transformSrc = readFileSync(requestTransformPath, 'utf8');
+    const missingConsumerKeys = (opts.tokenParamShapes ?? []).flatMap((token) => {
+      const requiredKeys = parseRequiredKeysFromTokenShape(token.shape);
+      return requiredKeys
+        .filter(
+          (key) =>
+            !new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(transformSrc),
+        )
+        .map((key) => ({ ...token, key }));
+    });
+    if (missingConsumerKeys.length > 0) {
+      failures.push(
+        `the build plan says consumer token param shape keys ${missingConsumerKeys
+          .map(({ param, key }) => `\`${param}.${key}\``)
+          .join(
+            ', ',
+          )} are required by the producer's requiredKeys=[...] contract, but request-transform.ts does not reference ${
+          missingConsumerKeys.length === 1 ? 'that key' : 'those keys'
+        }. Decode/unpack the producer's actual \`sourceField\` value and use every required key in the outgoing request; do not treat a composite producer token as a plain string or fall back to the recorded default.`,
       );
     }
   }

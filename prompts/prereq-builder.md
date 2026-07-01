@@ -45,11 +45,13 @@ You receive `{ site, url, module, availableDependencies, sources, implementation
   const SESSION_PATH = process.env.IMPRINT_SESSION_PATH;
   if (!SESSION_PATH) throw new Error('IMPRINT_SESSION_PATH not set — run via imprint teach.');
   const session = JSON.parse(readFileSync(SESSION_PATH, 'utf8')) as {
-    requests: Array<{ seq: number; url: string; method: string; response?: { body?: string } }>;
+    requests: Array<{ seq: number; url: string; method: string; body?: string; requestBody?: string; response?: { body?: string } }>;
   };
   const SOURCE_SEQ = 0; // ← a seq from module.sourceSeqs
   const req = session.requests.find((r) => r.seq === SOURCE_SEQ);
+  const recordedRequestBody = req?.body ?? req?.requestBody;
   ```
+- Recorded request bodies may be stored as either `body` or `requestBody` depending on the session writer/version. Shared-module tests that read the session file MUST use `req.body ?? req.requestBody` instead of assuming only one field.
 - At least 3 meaningful `expect()` assertions referencing real recorded values. No tautologies (`expect(true).toBe(true)` is rejected).
 - For `request-transform`: strip the signing param from a recorded URL, call `transform`, and assert the regenerated param equals the recorded value.
 - For `parser-helper`: call the helper on a recorded `responseBody` and assert concrete fields.

@@ -391,9 +391,7 @@ export async function triageRequests(
     ...(context.candidate?.dependencySeqs ?? []),
     ...(context.sharedContext?.loginRequestSeqs ?? []),
   ]);
-  const candidates = session.requests.filter(
-    (r) => TRIAGE_RESOURCE_TYPES.has(r.resourceType) || preserveSeqs.has(r.seq),
-  );
+  const candidates = selectTriageCandidateRequests(session, preserveSeqs);
 
   return await traced(
     'compile.triage_requests',
@@ -511,6 +509,18 @@ export function buildTriageEventContexts(session: Session): TriageEventContext[]
       type: event.type,
       detail: truncate(event.detail, TRIAGE_BODY_LIMIT) ?? '',
     }));
+}
+
+export function selectTriageCandidateRequests(
+  session: Session,
+  preserveSeqs: Iterable<number> = [],
+): Session['requests'] {
+  const preserve = new Set(preserveSeqs);
+  return session.requests.filter((request) => {
+    if (preserve.has(request.seq)) return true;
+    if (!TRIAGE_RESOURCE_TYPES.has(request.resourceType)) return false;
+    return !isTelemetryRequest(request);
+  });
 }
 
 export function rescueActionAlignedRepeatedSeqs(

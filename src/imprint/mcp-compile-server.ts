@@ -103,6 +103,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
   let compileTools: ReturnType<typeof buildCompileTools>;
   let assignedSharedModules: PlanSlice['assignedSharedModules'] = [];
   let tokenParams: PlanSlice['tokenParams'] = [];
+  let tokenParamShapes: PlanSlice['tokenParamShapes'] = [];
   let emittedTokens: PlanSlice['emittedTokens'] = [];
   let requiredInputs: PlanSlice['requiredInputs'] = [];
   let credentialValues: Record<string, string> = {};
@@ -128,7 +129,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     // dependency contract the plan assigned this tool, so verification can assert
     // modules are imported, require a chained test for each producer-sourced token
     // param, and inject/gate the contracted inputs.
-    ({ assignedSharedModules, tokenParams, emittedTokens, requiredInputs } =
+    ({ assignedSharedModules, tokenParams, tokenParamShapes, emittedTokens, requiredInputs } =
       resolvePlanSliceFromFile(opts.buildPlanPath, opts.candidate?.toolName, opts.sharedModules));
     // Credential values for the emit-time secret guard (loaded for the data path,
     // never passed on argv).
@@ -346,6 +347,7 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
           dependencyRequestSeqs: opts.candidate?.dependencySeqs,
           assignedSharedModules,
           tokenParams,
+          tokenParamShapes,
           emittedTokens,
           requiredInputs,
           credentialValues,

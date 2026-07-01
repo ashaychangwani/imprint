@@ -17,7 +17,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { z } from 'zod';
-import { preferredAgentModel } from './llm.ts';
+import { type ProviderName, preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
 import { discoverTools } from './tool-loader.ts';
@@ -30,13 +30,10 @@ const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
 const PROMPTS_DIR = pathJoin(REPO_ROOT, 'prompts');
 
 /** Default wall-clock cap for an audit session. This is a CAP, not a fixed
- *  duration: a fast site (e.g. marriott's plain-fetch tools) finishes its full
- *  differential param sweep in ~2 min and exits early. The cap only bites on
- *  slow sites — those whose tools replay via cdp (a real Chrome per call,
- *  ~60-90s each) AND expose many parameters, so the per-param sweep needs far
- *  more than the old 20 min (southwest, with 62KB search payloads across ~14
- *  params, was killed mid-sweep at 20 min despite both tools being live). 45 min
- *  lets those complete while still bounding a genuinely hung session. */
+ *  duration: fast sites finish their full differential param sweep and exit
+ *  early. The cap only bites on genuinely blocked or high-latency sites. Cold
+ *  cdp-replay startup can be expensive, but warm calls usually reuse the live
+ *  browser pool and should not be treated as equally expensive. */
 const DEFAULT_AUDIT_TIMEOUT_MS = 45 * 60_000;
 
 /** One invocation the auditor performed against a tool. */
@@ -53,8 +50,8 @@ const InvocationSchema = z.object({
  *   - `works`       — the result changed as the description promises.
  *   - `no_op`       — the result was unchanged → the parameter is inert.
  *   - `broken`      — the result changed wrongly (corrupted/emptied/nonsense).
- *   - `untestable`  — no distinct valid value could be constructed, or the tool
- *                     is state-changing / bot-defended so probing is unsafe.
+ *   - `untestable`  — no distinct valid value could be constructed, the tool is
+ *                     state-changing, or repeated paced probes stayed blocked.
  *  `works` grades correct; `no_op`/`broken` grade as defects ("no-op is not a
  *  free pass"); `untestable` is surfaced but not scored. */
 const ParameterAuditSchema = z.object({
@@ -234,6 +231,7 @@ interface RunAuditOptions {
   site: string;
   minScore: number;
   outPath: string;
+  provider?: ProviderName;
   model?: string;
   timeoutMs?: number;
   json?: boolean;
@@ -257,7 +255,8 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         );
       }
 
-      const model = opts.model ?? preferredAgentModel('claude-cli');
+      const provider = opts.provider ?? 'claude-cli';
+      const model = opts.model ?? preferredAgentModel(provider);
       const timeoutMs = opts.timeoutMs ?? DEFAULT_AUDIT_TIMEOUT_MS;
       const systemPromptPath = pathJoin(PROMPTS_DIR, 'audit-agent.md');
       if (!existsSync(systemPromptPath)) {
@@ -299,6 +298,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
 
       const drive = await driveAudit({
         site: opts.site,
+        provider,
         model,
         timeoutMs,
         systemPromptPath,
@@ -385,7 +385,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         'imprint.audit.turns': drive.turns,
         ...(drive.totalCostUsd != null ? { 'imprint.audit.cost_usd': drive.totalCostUsd } : {}),
         ...llmSpanAttributes({
-          provider: 'claude-cli',
+          provider,
           model,
           // `|| undefined`: when no usage was captured (e.g. spawn failure → 0
           // tokens), suppress a bogus $0 cost instead of emitting it.
@@ -452,7 +452,7 @@ interface TokenDep {
   sourceField: string;
 }
 
-/** Build the auditor instruction for producer-sourced token params: chain the
+/** Build the auditor instruction for producer-sourced params: chain the
  *  producer first, read its field, feed the consumer — never fabricate. Pure so
  *  it can be unit-tested without spawning the audit session. */
 export function buildTokenDepNote(tokenDeps: TokenDep[]): string {
@@ -461,13 +461,14 @@ export function buildTokenDepNote(tokenDeps: TokenDep[]): string {
     (d) =>
       `- ${d.tool}(${d.param}) ← first call ${d.sourceTool}, then pass its \`${d.sourceField}\` output value`,
   );
-  return `\n\nSome parameters are opaque tokens/ids minted by ANOTHER tool — you cannot fabricate them. For each below, call the producer tool first, read the named output field from its result, and pass that exact value to the consumer (reuse it across calls; no need to re-fetch each time):\n${lines.join(
+  return `\n\nSome parameters are values minted or derived by ANOTHER tool — you cannot fabricate them. For each below, call the producer tool first, read the named output field from its result, and pass that exact value to the consumer (reuse it across calls; no need to re-fetch each time):\n${lines.join(
     '\n',
   )}\nIf you cannot obtain such a value because the producer is blocked, classify the consumer call \`bad_params\`, never \`tool_broken\`.`;
 }
 
 interface DriveAuditOptions {
   site: string;
+  provider: ProviderName;
   model: string;
   timeoutMs: number;
   systemPromptPath: string;
@@ -511,7 +512,7 @@ function emptyDriveAuditResult(): DriveAuditResult {
 }
 
 /**
- * Spawn a headless `claude` session against the site's real MCP server, drive
+ * Spawn a headless audit session against the site's real MCP server, drive
  * it to completion, and recover the structured report from the final assistant
  * message. The real `mcp-server` has no write/submit tool, so the report must
  * ride back in the model's text — we extract the last fenced ```json block (or
@@ -519,6 +520,15 @@ function emptyDriveAuditResult(): DriveAuditResult {
  * degrades to an empty (→ inconclusive) report rather than crashing the gate.
  */
 async function driveAudit(opts: DriveAuditOptions): Promise<DriveAuditResult> {
+  if (opts.provider === 'codex-cli') return driveAuditWithCodex(opts);
+  if (opts.provider !== 'claude-cli') {
+    log(`audit provider "${opts.provider}" is not supported — use claude-cli or codex-cli`);
+    return emptyDriveAuditResult();
+  }
+  return driveAuditWithClaude(opts);
+}
+
+async function driveAuditWithClaude(opts: DriveAuditOptions): Promise<DriveAuditResult> {
   // Distinct from the persistent `imprint-<site>` server that `imprint teach`
   // registers with Claude Code: a same-named inline server collides and claude
   // marks ours "disabled" (even under --strict-mcp-config), leaving the auditor
@@ -545,24 +555,9 @@ async function driveAudit(opts: DriveAuditOptions): Promise<DriveAuditResult> {
     allowedToolArgs.push('--allowedTools', `mcp__${serverName}__${name}`);
   }
 
-  const unverifiedNote =
-    opts.unverifiedParams.length > 0
-      ? `\n\nThese parameters shipped WITHOUT a passing compile-time verification, so they are the HIGHEST priority for your per-parameter differential pass: ${opts.unverifiedParams
-          .map((u) => `${u.tool}(${u.params.join(', ')})`)
-          .join(
-            '; ',
-          )}. Give each one a \`parameters\` verdict (works / no_op / broken / untestable) like any other — do not let an unverified parameter pass without a differential test. (Per the ONE-invocation rule, a state-changing or bot-defended tool is the exception: mark its parameters \`untestable\` rather than probing.)`
-      : '';
+  const unverifiedNote = buildUnverifiedParamNote(opts.unverifiedParams);
 
-  const initialPrompt = `Audit every MCP tool connected to you for the site "${opts.site}".
-
-There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set, judge the result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt. You MAY add one or two edge-case invocations ONLY for tools that are cheap reads not behind an anti-bot/rate defense.
-
-ANTI-BOT / STATE-CHANGING TOOLS — ONE invocation only. If a tool drives a state-changing call (a search/booking .act-style POST) or its origin is bot-defended (the first call is slow/tarpitted, or returns 403/429/challenge/anti-bot), do EXACTLY ONE realistic invocation for that tool and move on — do NOT add edge cases. Repeated state-changing calls trip the site's per-IP rate defense, which then tarpits EVERY later call across all tools and ruins the whole audit. One clean read per such tool is enough to grade it; extra probes only convert a passing audit into a tarpitted one.
-
-IMPORTANT: Call tools strictly sequentially — issue exactly one tool call, wait for its result, then issue the next. Never issue tool calls in parallel or batch them in one turn. Many target sites share an anti-bot defense across endpoints, so a parallel burst trips a site-wide rate-limit (HTTP 429) that then poisons every later call. If a call returns a 429 / rate-limit / anti-bot result, classify it \`infra\` and pause before the next call.${unverifiedNote}${buildTokenDepNote(opts.tokenDeps)}
-
-When you are done, end your final message with exactly one fenced \`\`\`json block containing the full report and nothing after it.`;
+  const initialPrompt = buildAuditInitialPrompt(opts, unverifiedNote);
 
   const args = [
     '--print',
@@ -641,6 +636,118 @@ When you are done, end your final message with exactly one fenced \`\`\`json blo
     cacheCreationInputTokens: session.cacheCreationInputTokens,
     totalCostUsd: session.totalCostUsd,
   };
+}
+
+async function driveAuditWithCodex(opts: DriveAuditOptions): Promise<DriveAuditResult> {
+  const serverName = `imprint-audit-${opts.site}`;
+  const bunPath = process.execPath;
+  const mcpArgs = ['run', CLI_PATH, 'mcp-server', opts.site];
+
+  const unverifiedNote = buildUnverifiedParamNote(opts.unverifiedParams);
+  const initialPrompt = `<system_instructions>
+${await Bun.file(opts.systemPromptPath).text()}
+</system_instructions>
+
+${buildAuditInitialPrompt(opts, unverifiedNote)}`;
+
+  const args = [
+    '-a',
+    'never',
+    'exec',
+    '--json',
+    '--ephemeral',
+    '--ignore-user-config',
+    '--ignore-rules',
+    '--skip-git-repo-check',
+    '-C',
+    REPO_ROOT,
+    '-s',
+    'workspace-write',
+    '-m',
+    opts.model,
+    '-c',
+    `mcp_servers.${serverName}.command=${JSON.stringify(bunPath)}`,
+    '-c',
+    `mcp_servers.${serverName}.args=${JSON.stringify(mcpArgs)}`,
+    '-c',
+    `mcp_servers.${serverName}.default_tools_approval_mode=${JSON.stringify('approve')}`,
+    '-c',
+    `mcp_servers.${serverName}.tool_timeout_sec=300`,
+    '-c',
+    'shell_environment_policy.inherit=all',
+    '-',
+  ];
+
+  log(`spawning codex (model=${opts.model}, mcp-server=${serverName})`);
+
+  let child: ChildProcess;
+  try {
+    child = spawn('codex', args, {
+      cwd: REPO_ROOT,
+      env: { ...process.env, IMPRINT_AUDIT_PACING_MS: '5000' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    log(`failed to spawn codex-cli: ${errMsg(err)}`);
+    return emptyDriveAuditResult();
+  }
+
+  try {
+    child.stdin?.end(initialPrompt);
+  } catch (err) {
+    log(`failed to send prompt to codex-cli: ${errMsg(err)}`);
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      // already gone
+    }
+    return emptyDriveAuditResult();
+  }
+
+  const session = await collectCodexAssistantText(child, opts.timeoutMs);
+  const report = extractReport(session.text);
+  if (!report) {
+    log(
+      session.timedOut
+        ? 'audit hit the deadline before producing a report — treating as timeout'
+        : 'no valid audit report recovered from the auditor — treating as inconclusive',
+    );
+  }
+  return {
+    report: report ?? AuditReportSchema.parse({}),
+    reportRecovered: report !== undefined,
+    timedOut: session.timedOut,
+    turns: session.turns,
+    transcript: session.transcript,
+    inputTokens: session.inputTokens,
+    outputTokens: session.outputTokens,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    totalCostUsd: null,
+  };
+}
+
+export function buildUnverifiedParamNote(
+  unverifiedParams: Array<{ tool: string; params: string[] }>,
+): string {
+  if (unverifiedParams.length === 0) return '';
+  return `\n\nThese parameters shipped WITHOUT a passing compile-time verification, so they are the HIGHEST priority for your per-parameter differential pass: ${unverifiedParams
+    .map((u) => `${u.tool}(${u.params.join(', ')})`)
+    .join(
+      '; ',
+    )}. Give each one a \`parameters\` verdict (works / no_op / broken / untestable) like any other — do not let an unverified parameter pass without a differential test. Only skip probing when the tool is genuinely state-changing / irreversible, or when repeated paced attempts for that parameter stay blocked by infrastructure. A bot-defended idempotent read is still testable after the warm browser session is established.`;
+}
+
+export function buildAuditInitialPrompt(opts: DriveAuditOptions, unverifiedNote: string): string {
+  return `Audit every MCP tool connected to you for the site "${opts.site}".
+
+There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set, judge the result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt.
+
+Parameter coverage is mandatory for idempotent read tools. A cold cdp-replay/browser-backed first call may be slow because it launches or warms a trusted browser session, but later calls usually reuse that warm session and are much cheaper. Do NOT use the first call's cold-start latency as a reason to skip parameter probes. For search/list/calendar/lookup/quote/read tools, keep making paced sequential differential calls until each advertised parameter has a verdict, unless the same parameter remains blocked by infrastructure after repeated paced retries. For genuinely state-changing or irreversible tools (book/pay/send/cancel/delete/order), make only the safe baseline call and mark parameters untestable with that state-changing reason.
+
+IMPORTANT: Call tools strictly sequentially — issue exactly one tool call, wait for its result, then issue the next. Never issue tool calls in parallel or batch them in one turn. Many target sites share an anti-bot defense across endpoints, so a parallel burst trips a site-wide rate-limit (HTTP 429) that then poisons every later call. If a call returns a 429 / rate-limit / anti-bot result, classify it \`infra\` and pause before the next call.${unverifiedNote}${buildTokenDepNote(opts.tokenDeps)}
+
+When you are done, end your final message with exactly one fenced \`\`\`json block containing the full report and nothing after it.`;
 }
 
 /** Everything recovered from one audit session: the text to extract the report
@@ -812,6 +919,126 @@ async function collectAssistantText(
   };
 }
 
+async function collectCodexAssistantText(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<AuditSessionResult> {
+  const chunks: string[] = [];
+  let stdoutBuf = '';
+  let stderrBuf = '';
+  let killed = false;
+  let turns = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  const t0 = Date.now();
+  const elapsedStr = (): string => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+
+  const timer = setTimeout(() => {
+    killed = true;
+    log(`audit exceeded ${formatDeadline(timeoutMs)} deadline, terminating codex`);
+    try {
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!child.killed) child.kill('SIGKILL');
+      }, 5000);
+    } catch {
+      // already gone
+    }
+  }, timeoutMs);
+
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdoutBuf += chunk.toString('utf8');
+    while (true) {
+      const nl = stdoutBuf.indexOf('\n');
+      if (nl < 0) break;
+      const line = stdoutBuf.slice(0, nl).trim();
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      if (!line) continue;
+
+      let evt: CodexStreamJsonEvent;
+      try {
+        evt = JSON.parse(line) as CodexStreamJsonEvent;
+      } catch {
+        continue;
+      }
+
+      if (evt.type === 'thread.started') {
+        log(`thread_id=${evt.thread_id ?? '(none)'}`);
+        continue;
+      }
+
+      if (evt.type === 'turn.started') {
+        turns++;
+        log(`[${elapsedStr()}] turn ${turns} started`);
+        continue;
+      }
+
+      if (evt.type === 'turn.completed') {
+        inputTokens += evt.usage?.input_tokens ?? 0;
+        outputTokens += evt.usage?.output_tokens ?? 0;
+        log(`[${elapsedStr()}] turn ${turns} completed`);
+        continue;
+      }
+
+      if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
+        const text = codexAuditAgentText(evt.item);
+        if (text && evt.type === 'item.completed') {
+          chunks.push(text);
+          const preview = text.replace(/\s+/g, ' ').slice(0, 120);
+          log(`[${elapsedStr()}] assistant: ${preview}`);
+          continue;
+        }
+        const toolName = codexAuditToolName(evt.item);
+        if (toolName) {
+          const label = evt.type === 'item.started' ? 'tool_use' : 'tool_result';
+          log(`[${elapsedStr()}] ${label}: ${toolName}`);
+        }
+        continue;
+      }
+
+      if (evt.type === 'error' || evt.type === 'turn.failed') {
+        log(`[${elapsedStr()}] codex error: ${evt.message ?? evt.error?.message ?? line}`);
+      }
+    }
+  });
+
+  child.stderr?.on('data', (chunk: Buffer) => {
+    const s = chunk.toString('utf8');
+    stderrBuf += s;
+    log(`[codex stderr] ${s.trim()}`);
+  });
+
+  await new Promise<void>((resolve) => {
+    child.once('exit', () => resolve());
+    child.once('error', (err) => {
+      log(`codex process error: ${errMsg(err)}`);
+      resolve();
+    });
+  });
+  clearTimeout(timer);
+  if (killed) log('audit session was terminated by the deadline guard');
+  if (stdoutBuf.trim()) log(`unflushed codex stdout tail (${stdoutBuf.length} bytes) discarded`);
+  if (stderrBuf.trim() && chunks.length === 0) {
+    chunks.push(stderrBuf);
+  }
+
+  const transcript = chunks.join('\n\n');
+  return {
+    text: transcript,
+    transcript,
+    timedOut: killed,
+    turns,
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    totalCostUsd: null,
+  };
+}
+
 interface StreamUsage {
   input_tokens?: number;
   output_tokens?: number;
@@ -837,6 +1064,51 @@ interface StreamJsonEvent {
   usage?: StreamUsage;
   total_cost_usd?: number;
   result?: string;
+}
+
+interface CodexStreamJsonEvent {
+  type: string;
+  thread_id?: string;
+  item?: {
+    type?: string;
+    text?: string;
+    content?: unknown;
+    name?: string;
+    tool_name?: string;
+    tool?: string;
+    server?: string;
+    command?: string[];
+    status?: string;
+  };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+  message?: string;
+  error?: { message?: string };
+}
+
+function codexAuditAgentText(item: NonNullable<CodexStreamJsonEvent['item']>): string | undefined {
+  if (item.type === 'agent_message' && typeof item.text === 'string') return item.text;
+  if (item.type === 'message' && typeof item.text === 'string') return item.text;
+  if (item.type === 'assistant_message' && typeof item.text === 'string') return item.text;
+  if (typeof item.content === 'string' && item.type?.includes('message')) return item.content;
+  if (Array.isArray(item.content)) {
+    const text = item.content
+      .map((part) =>
+        part && typeof part === 'object' && 'text' in part
+          ? String((part as { text?: unknown }).text ?? '')
+          : '',
+      )
+      .filter(Boolean)
+      .join('\n');
+    return text || undefined;
+  }
+  return undefined;
+}
+
+function codexAuditToolName(item: NonNullable<CodexStreamJsonEvent['item']>): string | undefined {
+  return item.name ?? item.tool_name ?? item.tool ?? item.command?.[0];
 }
 
 /**

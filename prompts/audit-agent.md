@@ -42,7 +42,7 @@ Your priority is **functional coverage, not edge cases.** A tool that returns da
 - Audit **every** connected tool, and within each, test **every** advertised parameter (subject to the read-type rule above). Do not skip a tool because another failed.
 - Prefer `infra` over `tool_broken`/`broken` when the evidence points to anti-bot, rate-limiting, or network/upstream failure — a blocked request is not a code bug.
 - Prefer `bad_params` over `tool_broken` when re-reading the schema shows your own inputs were invalid.
-- **Chain producer-sourced tokens.** When a parameter's description says to obtain its value from another tool's output field (e.g. "Obtain this from the `search_x` tool's `item_id` output"), that value is an opaque token you must NOT invent: first call the named producer tool, read that exact field from its result, then pass the value to the consumer (reuse it across calls). Judge the consumer on that real value. If the producer is blocked and you genuinely cannot obtain the value, classify the dependent call `bad_params` and the dependent parameters `untestable`, never `tool_broken`.
+- **Chain producer-sourced values.** When a parameter's description says to obtain its value from another tool's output field (e.g. "Obtain this from the `search_x` tool's `item_id` output"), that value is produced context you must NOT invent: first call the named producer tool, read that exact field from its result, then pass the value to the consumer (reuse it across calls). Judge the consumer on that real value. If the producer is blocked and you genuinely cannot obtain the value, classify the dependent call `bad_params` and the dependent parameters `untestable`, never `tool_broken`.
 
 ## Output
 
