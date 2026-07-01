@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
 import { TimeoutError, withTimeout } from './concurrency.ts';
+import { compactUrlForLlm } from './llm-url.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
 import { localSiteDir } from './paths.ts';
@@ -29,6 +30,7 @@ const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
 const BODY_LIMIT = 800;
 const RESPONSE_PREVIEW_LIMIT = 500;
 const HEADER_LIMIT = 600;
+const MAX_PLANNER_EPHEMERAL_VALUES = 600;
 const log = createLog('build-plan');
 
 // ─── Schema ─────────────────────────────────────────────────────────────────
@@ -977,7 +979,7 @@ export function deriveTokenContractHints(payload: {
     // key — NOT an opaque JSPB index path (e.g. "body[0][10]" -> "0").
     const nameable = known.includes(param) || /^[A-Za-z][A-Za-z0-9_]*$/.test(param);
     const producerField = fieldNameFromPath(ev.producerPath);
-    const key = `${consumerTool} ${param} ${producerTool} ${producerField}`;
+    const key = `${consumerTool}\u0000${param}\u0000${producerTool}\u0000${producerField}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({
@@ -1732,7 +1734,7 @@ export function buildBuildPlanPayload(opts: {
         seq: r.seq,
         timestamp: r.timestamp,
         method: r.method,
-        url: r.url,
+        url: compactUrlForLlm(r.url),
         resourceType: r.resourceType,
         status: r.response?.status,
         mimeType: r.response?.mimeType,
@@ -1747,7 +1749,12 @@ export function buildBuildPlanPayload(opts: {
     buildPlanRequestGroupKey,
   );
 
-  const ephemeralValues = (classifications ?? [])
+  const plannerEphemeralClassifications = selectPlannerEphemeralClassifications(
+    classifications ?? [],
+    scope,
+  );
+
+  const ephemeralValues = plannerEphemeralClassifications
     // Non-constant values, plus stable constants that carry recovered producer
     // provenance (server-provided per-entity tokens) — both are signals for the planner.
     .filter((c) => c.classification !== 'constant' || c.producerSeq != null)
@@ -1799,7 +1806,7 @@ export function buildBuildPlanPayload(opts: {
 
   return {
     site: session.site,
-    url: session.url,
+    url: compactUrlForLlm(session.url),
     narration: session.narration.map((n) => ({ timestamp: n.timestamp, text: n.text })),
     sharedContext,
     selectedTools,
@@ -1825,6 +1832,40 @@ export function buildBuildPlanPayload(opts: {
     }),
     requests,
   };
+}
+
+function selectPlannerEphemeralClassifications(
+  classifications: ClassifiedValue[],
+  scope: Set<number>,
+): ClassifiedValue[] {
+  const relevant = classifications.filter(
+    (c) => scope.has(c.originalSeq) || (c.producerSeq != null && scope.has(c.producerSeq)),
+  );
+
+  const selected = relevant.filter((c) => c.classification !== 'constant' || c.producerSeq != null);
+  if (selected.length <= MAX_PLANNER_EPHEMERAL_VALUES) return selected;
+
+  const score = (c: ClassifiedValue): number => {
+    let out = 0;
+    if (c.producerSeq != null) out += 100;
+    if (c.producerPath) out += 25;
+    if (c.suggestedStateName) out += 10;
+    if (c.location.startsWith('header:')) out += 8;
+    if (c.location.startsWith('url_param:')) out += 6;
+    if (c.location.startsWith('body')) out += 4;
+    if (c.classification === 'server_derived') out += 3;
+    if (c.classification === 'browser_minted') out += 2;
+    return out;
+  };
+
+  return [...selected]
+    .sort(
+      (a, b) =>
+        score(b) - score(a) ||
+        a.originalSeq - b.originalSeq ||
+        a.location.localeCompare(b.location),
+    )
+    .slice(0, MAX_PLANNER_EPHEMERAL_VALUES);
 }
 
 function buildPlanRequestGroupKey(request: BuildPlanRequestPayload): unknown[] {
@@ -1891,13 +1932,16 @@ export async function generateBuildPlan(opts: {
       setSpanAttributes(span, {
         'imprint.plan.request_count': payload.requests.length,
         'imprint.plan.ephemeral_count': payload.ephemeralValues.length,
+        'imprint.plan.ephemeral_total_count': (opts.classifications ?? []).filter(
+          (c) => c.classification !== 'constant' || c.producerSeq != null,
+        ).length,
         'imprint.plan.narration_count': payload.narration.length,
         'imprint.plan.payload_chars': payloadJson.length,
         'imprint.plan.prompt_chars': systemPrompt.length,
         'imprint.plan.timeout_ms': opts.timeoutMs ?? 0,
       });
       narrate(
-        `planning ${opts.candidates.length} tool(s): ${payload.requests.length} request(s), ${payload.ephemeralValues.length} ephemeral value(s), ${payload.tokenContractHints.length} token edge(s), ${payload.requiredInputHints.length} required-input hint(s), ${payload.narration.length} narration line(s); ${Math.round(payloadJson.length / 1024)} KB payload + ${Math.round(systemPrompt.length / 1024)} KB prompt → ${opts.llmConfig?.provider ?? 'auto'}/${opts.llmConfig?.model ?? 'default'}${opts.timeoutMs ? ` (timeout ${Math.round(opts.timeoutMs / 1000)}s)` : ''}`,
+        `planning ${opts.candidates.length} tool(s): ${payload.requests.length} request(s), ${payload.ephemeralValues.length}/${(opts.classifications ?? []).filter((c) => c.classification !== 'constant' || c.producerSeq != null).length} ephemeral value(s), ${payload.tokenContractHints.length} token edge(s), ${payload.requiredInputHints.length} required-input hint(s), ${payload.narration.length} narration line(s); ${Math.round(payloadJson.length / 1024)} KB payload + ${Math.round(systemPrompt.length / 1024)} KB prompt → ${opts.llmConfig?.provider ?? 'auto'}/${opts.llmConfig?.model ?? 'default'}${opts.timeoutMs ? ` (timeout ${Math.round(opts.timeoutMs / 1000)}s)` : ''}`,
       );
 
       const llm = resolveProvider(opts.llmConfig ?? {});

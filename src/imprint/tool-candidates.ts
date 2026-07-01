@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { inferAppApiHosts } from './app-api-hosts.ts';
 import { getEndpointKey } from './endpoint-key.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
+import { compactUrlForLlm } from './llm-url.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
@@ -206,10 +207,12 @@ export async function detectToolCandidates(
       const payload = buildToolCandidatePayload(session, {
         trustSessionScope: opts.trustSessionScope,
       });
+      const payloadChars = JSON.stringify(payload).length;
 
       setSpanAttributes(span, {
         'imprint.events_considered': payload.events.length,
         'imprint.requests_considered': payload.requests.length,
+        'imprint.detect.payload_chars': payloadChars,
       });
 
       if (payload.requests.length === 0) {
@@ -223,7 +226,7 @@ export async function detectToolCandidates(
       }
 
       log(
-        `detecting candidate tools from ${payload.events.length} event(s), ${payload.requests.length} request(s)…`,
+        `detecting candidate tools from ${payload.events.length} event(s), ${payload.requests.length} request(s); ${Math.round(payloadChars / 1024)} KB payload…`,
       );
       const llm = resolveProvider(llmConfig ?? {});
       const runOnce = async (): Promise<{
@@ -389,7 +392,7 @@ export function buildToolCandidatePayload(
           seq: request.seq,
           timestamp: request.timestamp,
           method: request.method,
-          url: request.url,
+          url: compactUrlForLlm(request.url),
           resourceType: request.resourceType,
           status: request.response?.status,
           mimeType: request.response?.mimeType,
@@ -409,7 +412,7 @@ export function buildToolCandidatePayload(
 
   return {
     site: session.site,
-    url: session.url,
+    url: compactUrlForLlm(session.url),
     narration: session.narration.map((n) => ({
       seq: n.seq,
       timestamp: n.timestamp,

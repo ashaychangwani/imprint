@@ -9,6 +9,8 @@ interface TelemetryRequestLike {
 
 const HARD_TELEMETRY_PATH_PATTERN =
   /\/(log|gen_204|jserror|ping|beacon|csi|batchlog|metrics|stats|collect|analytics|adsct|pagead|ccm)(?=$|[/?])/i;
+const HARD_TELEMETRY_HOST_PATTERN =
+  /(^|[.-])(analytics|telemetry|metrics?|quantummetric|smetrics|demdex|qualtrics|liveramp)([.-]|$)/i;
 const TERMINAL_EVENT_PATH_PATTERN = /\/events?\/?$/i;
 const EVENT_COLLECTOR_BODY_PATTERNS = [
   /"app_(?:version|build)"/i,
@@ -31,6 +33,7 @@ export function isTelemetryRequest(request: TelemetryRequestLike): boolean {
     return false;
   }
 
+  if (HARD_TELEMETRY_HOST_PATTERN.test(url.hostname)) return true;
   if (isTelemetryPath(url.pathname)) return true;
   if (!TERMINAL_EVENT_PATH_PATTERN.test(url.pathname)) return false;
   if (request.method.toUpperCase() !== 'POST') return false;

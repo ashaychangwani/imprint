@@ -409,6 +409,43 @@ describe('buildBuildPlanPayload', () => {
     expect(payload.ephemeralValues).toHaveLength(1);
     expect(payload.ephemeralValues[0]?.classification).toBe('browser_minted');
   });
+
+  it('caps noisy planner ephemeral classifications while preserving producer-linked entries', () => {
+    const noisy: ClassifiedValue[] = Array.from({ length: 700 }, (_, i) => ({
+      originalSeq: i % 2 === 0 ? 10 : 11,
+      location: `body:$.noise${i}`,
+      classification: 'browser_minted',
+      value1: `value-${i}`,
+      value2: `other-${i}`,
+    }));
+    const producerLinked: ClassifiedValue[] = Array.from({ length: 5 }, (_, i) => ({
+      originalSeq: 10,
+      location: `header:x-token-${i}`,
+      classification: 'server_derived',
+      value1: `token-${i}`,
+      value2: `token-other-${i}`,
+      producerSeq: 11,
+      producerPath: `$.tokens[${i}]`,
+      suggestedStateName: `token_${i}`,
+    }));
+
+    const payload = buildBuildPlanPayload({
+      session: session(),
+      candidates: [candidate('search_flights', [10]), candidate('search_hotels', [11])],
+      classifications: [...noisy, ...producerLinked],
+    });
+
+    expect(payload.ephemeralValues).toHaveLength(600);
+    for (const linked of producerLinked) {
+      expect(payload.ephemeralValues).toContainEqual(
+        expect.objectContaining({
+          location: linked.location,
+          producerSeq: linked.producerSeq,
+          producerPath: linked.producerPath,
+        }),
+      );
+    }
+  });
 });
 
 describe('opaque-token contract (emitsTokens / tokenParams)', () => {

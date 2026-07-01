@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import type { BuildPlan } from '../src/imprint/build-plan.ts';
 import { formatToolPlan } from '../src/imprint/compile-agent-types.ts';
 import type { ToolCandidate } from '../src/imprint/tool-candidates.ts';
-import { buildToolPlanPayload } from '../src/imprint/tool-plan.ts';
+import { buildToolPlanPayload, validateToolPlan } from '../src/imprint/tool-plan.ts';
 import type { Session } from '../src/imprint/types.ts';
 
 describe('formatToolPlan', () => {
@@ -17,6 +17,63 @@ describe('formatToolPlan', () => {
     expect(out).toContain('IMPLEMENTATION PLAN');
     expect(out).toContain('### Parameters');
     expect(out).toContain('origin → query `from` in seq 12');
+  });
+});
+
+describe('validateToolPlan', () => {
+  it('rejects placeholder and JSON fragments that are not implementation plans', () => {
+    expect(validateToolPlan('{credential.username}')).toEqual({
+      valid: false,
+      reason: 'looks like a credential placeholder, not a plan',
+    });
+    expect(validateToolPlan('${credential.username}')).toEqual({
+      valid: false,
+      reason: 'looks like a credential placeholder, not a plan',
+    });
+    expect(validateToolPlan('{"success":true,"data":[]}')).toEqual({
+      valid: false,
+      reason: 'looks like JSON, not markdown plan',
+    });
+  });
+
+  it('rejects markdown that is missing required planning sections', () => {
+    const plan = [
+      '### Parameters',
+      '- `origin` maps to query `from` in seq 10.',
+      '',
+      '### Requests',
+      '- GET /search?from=${param.origin}.',
+      '',
+      '### Edge cases',
+      '- Empty results return an empty array.',
+    ].join('\n');
+
+    expect(validateToolPlan(plan)).toEqual({
+      valid: false,
+      reason: 'missing required section(s): ### Response parsing',
+    });
+  });
+
+  it('accepts a complete markdown implementation plan', () => {
+    const plan = [
+      '### Parameters',
+      '- `origin` maps to query `from` in seq 10, recorded value `SFO`.',
+      '- anchor: seq 10 query `from=SFO` controls query key `from`.',
+      '',
+      '### Requests',
+      '- GET https://example.com/search?from=${param.origin}.',
+      '',
+      '### Response parsing',
+      '- Parse seq 10 response JSON at `items[]`.',
+      '',
+      '### Shared modules',
+      'none',
+      '',
+      '### Edge cases',
+      '- Empty results return an empty array.',
+    ].join('\n');
+
+    expect(validateToolPlan(plan)).toEqual({ valid: true });
   });
 });
 

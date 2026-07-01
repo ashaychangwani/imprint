@@ -22,6 +22,7 @@ import {
   resolveAssignedModules,
 } from './build-plan.ts';
 import { withTimeout } from './concurrency.ts';
+import { compactUrlForLlm } from './llm-url.ts';
 import { type ProviderName, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
@@ -148,7 +149,7 @@ export function buildToolPlanPayload(opts: {
         seq: r.seq,
         timestamp: r.timestamp,
         method: r.method,
-        url: r.url,
+        url: compactUrlForLlm(r.url),
         status: r.response?.status,
         mimeType: r.response?.mimeType,
         headers: truncate(JSON.stringify(r.headers), HEADER_LIMIT) ?? '{}',
@@ -164,7 +165,7 @@ export function buildToolPlanPayload(opts: {
 
   return {
     site: session.site,
-    url: session.url,
+    url: compactUrlForLlm(session.url),
     tool: {
       toolName: candidate.toolName,
       description: candidate.description,
@@ -266,8 +267,12 @@ export async function planToolCompile(opts: {
           'tool planner',
         );
         const plan = stripCodeFences(result.text).trim();
-        if (plan.length === 0) {
+        const validation = validateToolPlan(plan);
+        if (!validation.valid) {
           setSpanAttributes(span, { 'imprint.tool_plan.skipped': true });
+          log(
+            `tool planning skipped for ${opts.toolName} (${validation.reason}) — compiling without a plan`,
+          );
           return undefined;
         }
 
@@ -290,6 +295,27 @@ export async function planToolCompile(opts: {
       }
     },
   );
+}
+
+export function validateToolPlan(plan: string): { valid: true } | { valid: false; reason: string } {
+  const trimmed = plan.trim();
+  if (trimmed.length === 0) return { valid: false, reason: 'empty plan' };
+  if (/^(?:\$\{credential\.[A-Za-z0-9_]+\}|\{credential\.[A-Za-z0-9_]+\})$/.test(trimmed)) {
+    return { valid: false, reason: 'looks like a credential placeholder, not a plan' };
+  }
+  if (/^\{[\s\S]*\}$/.test(trimmed) || /^\[[\s\S]*\]$/.test(trimmed)) {
+    return { valid: false, reason: 'looks like JSON, not markdown plan' };
+  }
+
+  const requiredSections = ['### Parameters', '### Requests', '### Response parsing'];
+  const missing = requiredSections.filter((section) => !trimmed.includes(section));
+  if (missing.length > 0) {
+    return { valid: false, reason: `missing required section(s): ${missing.join(', ')}` };
+  }
+  if (trimmed.length < 200)
+    return { valid: false, reason: 'too short to be an implementation plan' };
+
+  return { valid: true };
 }
 
 function toolPlanDisabled(): boolean {
