@@ -75,10 +75,30 @@ Request entries may include `repeatCount`, `repeatedSeqs`, and `lastTimestamp` w
 5. **When in doubt, include it.** A false positive (including a noise request) is cheaper than a false negative (excluding the result-bearing XHR). The downstream compilation LLM can ignore noise, but it can't work with data it never sees.
 6. **Aim for 5-50 requests** out of potentially hundreds. If you're selecting more than 50, you're probably not filtering aggressively enough. If fewer than 3, double-check you haven't dropped the key data-fetch.
 
+## Deciding what's destructive
+
+A request is **destructive** when re-issuing it causes an irreversible, outward-facing side effect:
+- **Placing an order** (food, merchandise, tickets)
+- **Charging a payment** (submitting a credit-card transaction, confirming a purchase)
+- **Sending a message** (email, SMS, chat, notification push)
+- **Deleting a resource** (account, record, reservation cancellation that cannot be undone)
+- **Confirming a reservation** (hotel booking, appointment, seat assignment)
+
+A request is **NOT destructive** if the mutation is reversible or has no outward effect:
+- Adding to cart, removing from cart, updating quantities
+- Saving preferences, toggling settings
+- Login, session creation, token refresh
+- Search, browse, filter, paginate
+
+When in doubt about whether a request is destructive, err on the side of flagging it. A false positive (flagging a reversible mutation as destructive) only adds a dry-run skip during testing. A false negative (missing a real order placement) causes real orders during compile-verify.
+
 ## Output
 
-A JSON array of `seq` numbers, and ONLY that array (no prose before or after, no code fences):
+A JSON object with two fields, and ONLY that object (no prose before or after, no code fences):
 
-[3, 17, 42, 98]
+{ "keep": [3, 17, 42, 98], "destructive": [42] }
 
-The order does not matter. The downstream system will sort by seq.
+- **`keep`**: seq numbers of all relevant requests (same selection criteria as above).
+- **`destructive`**: subset of `keep` — seq numbers whose re-issuance would cause an irreversible outward-facing side effect. Must be a subset of `keep` (a request cannot be destructive without being kept). If no requests are destructive, use an empty array: `"destructive": []`.
+
+The order within each array does not matter. The downstream system will sort by seq.

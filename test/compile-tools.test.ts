@@ -2051,6 +2051,18 @@ describe('isBotDefenseFailure', () => {
       'Akamai cached-jar re-mint log (precedes retry)',
       '[imprint cdp-jar] cached jar not validated (_abck~-1~, no bm_sv) — re-mint',
     ],
+    [
+      'server auth 403 Session Expired (not bot defense)',
+      '[imprint backend] fetch: FORBIDDEN in 227ms\nRequest 0 returned 403: Session Expired or Invalid Source\nerror: FORBIDDEN',
+    ],
+    [
+      'server auth 403 invalid session',
+      '403 Forbidden\n{"error":"invalid session","message":"Session token has expired, please re-authenticate"}',
+    ],
+    [
+      'server auth 403 not authenticated',
+      '403 Not Authenticated — login required to access this resource',
+    ],
   ] as const;
   for (const [name, text] of notBlocked) {
     it(`does NOT treat "${name}" as bot defense`, () => {

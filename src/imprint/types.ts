@@ -28,6 +28,10 @@ const CapturedRequestSchema = z.object({
       mimeType: z.string().optional(),
     })
     .optional(),
+  /** Set by triage when re-issuing this request would cause an irreversible /
+   *  outward-facing side effect (place order, charge, send, delete). Carried on
+   *  the triaged session so replay can skip it and compile can flag the tool. */
+  destructive: z.boolean().optional(),
 });
 export type CapturedRequest = z.infer<typeof CapturedRequestSchema>;
 
@@ -241,6 +245,15 @@ const WorkflowRequestSchema = z.object({
    *  trusted-device registration that 4xxs when the device is already trusted, or
    *  a telemetry beacon. The flow continues to the next (terminal) request. */
   optional: z.boolean().optional(),
+  /** Irreversible / outward-facing side effect if issued (place an order,
+   *  charge a card, send a message, delete a resource). Distinct from
+   *  `effect: 'unsafe'` — a mutating-but-reversible op (add-to-cart, set
+   *  quantity) is NOT destructive. Set by triage classification (carried via
+   *  the recorded request). Production runtime still executes these; only the
+   *  teach compile-verify + audit contexts short-circuit them (see
+   *  `IMPRINT_DRY_RUN_DESTRUCTIVE` in runtime's executeWorkflow) so testing
+   *  never triggers the real action. */
+  destructive: z.boolean().optional(),
 });
 export type WorkflowRequest = z.infer<typeof WorkflowRequestSchema>;
 

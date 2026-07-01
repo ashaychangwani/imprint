@@ -82,6 +82,7 @@ This is a **public** repo. Real credentials, session tokens, cookie values, pers
 - A real recording you collected for end-to-end verification stays on your laptop only. The contents of `~/.imprint/`, credential store files under `~/.config/imprint/`, the `imprint teach` output for any account you actually log into, and `*.imprintbundle` files are all sensitive — keep them out of the repo and out of PR comments.
 - The pre-commit hook (`.githooks/pre-commit`) runs `gitleaks` and a tight regex pass. It is **fail-closed**: if gitleaks isn't installed it blocks the commit and tells you how to install it. Do not bypass with `--no-verify`. Install: `brew install gitleaks` (or see `https://github.com/gitleaks/gitleaks#installing`). Enable hooks once per clone: `git config core.hooksPath .githooks`.
 - If you discover a leak that already shipped to a remote: stop, tell the user, and rotate the credential. Force-pushing a rewrite over remote history doesn't undo a public exposure.
+- **NEVER delete session recordings** (`~/.imprint/<site>/sessions/`). These are irreplaceable artifacts that require a human to re-record. When cleaning teach output, remove only the compiled tool directories — never `rm -rf ~/.imprint/<site>` wholesale. If you need a fresh compile, delete individual tool folders or the compiled artifacts, but preserve the `sessions/` directory.
 
 ## Debugging teach runs
 
