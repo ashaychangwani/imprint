@@ -2200,6 +2200,29 @@ describe('classifyIntegrationOutcome (Fix A — liveVerified decoupled from the 
     expect(v.baselineLiveVerified).toBe(false);
   });
 
+  it('does not waive a generated test that omits a required workflow parameter', () => {
+    const combined = [
+      '[imprint backend] trying fetch…',
+      '[imprint backend] fetch: UNKNOWN in 67ms — non-escalatable, returning',
+      '[imprint backend] cdp-replay: UNKNOWN in 32128ms — non-escalatable, returning',
+      '[imprint backend] parallel probe: all backends failed',
+      '  fetch: UNKNOWN — Missing required parameter: reservation_context (Opaque reservation context emitted by list_upcoming_trips.) (74ms)',
+      '  cdp-replay: UNKNOWN — Missing required parameter: reservation_context (Opaque reservation context emitted by list_upcoming_trips.) (32128ms)',
+      'error: producer get_seat_map failed: {"ok":false,"error":"NETWORK","message":"All backends failed during parallel probe"}',
+      '(fail) param:seat_change_context uses a fresh token minted by get_seat_map [32240.63ms]',
+    ].join('\n');
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: false,
+      combined,
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.outcome).toBe('failed');
+    expect(v.firstError).toBe('missing required workflow parameter');
+  });
+
   it('does not waive deterministic BAD_RESPONSE 400 without bot or rate evidence', () => {
     const combined = [
       '[imprint backend] trying fetch…',

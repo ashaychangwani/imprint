@@ -1949,6 +1949,19 @@ export function classifyIntegrationOutcome(input: {
   if (/\berror:\s*expect\s*\(/.test(combined) || /\bAssertionError\b/.test(combined)) {
     return { ...base, outcome: 'failed', captureFailName: null, captureFailFromKnown: false };
   }
+  // Missing required parameters are generated-test/workflow contract bugs, not
+  // infrastructure. This often appears when a chained producer test calls the
+  // producer without first minting its own required upstream token; waiving it
+  // would stamp the consumer as compiled while the chain was never exercised.
+  if (/\bMissing required parameter:\s*[A-Za-z0-9_.-]+/i.test(combined)) {
+    return {
+      ...base,
+      outcome: 'failed',
+      firstError: 'missing required workflow parameter',
+      captureFailName: null,
+      captureFailFromKnown: false,
+    };
+  }
   // HTTP 400/422 BAD_RESPONSE with no challenge/rate-limit evidence is a
   // deterministic request-contract failure, not infrastructure uncertainty. This
   // is especially important for chained producer→consumer tests: if a fresh
