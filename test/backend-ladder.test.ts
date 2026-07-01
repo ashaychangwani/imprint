@@ -1432,18 +1432,26 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
   const googleJar: MintedJar = {
     cookies: [],
     ua: 'Chrome/148',
-    html: '<script>{"FdrFJe":"fixture-fsid","cfb2h":"fixture-bl"}</script>',
+    html: '<script>{"FdrFJe":"123456","cfb2h":"fixture-bl"}</script>',
     bootstrapEpoch: 1_700_000_000_000,
     abckFlag: '?',
     validated: true,
   };
 
   function batchExecuteFrame(payload: unknown): string {
-    return `)]}'\n\n${JSON.stringify([['wrb.fr', 'GetShoppingResults', JSON.stringify(payload)]])}\n`;
+    const frame = JSON.stringify([['wrb.fr', 'GetShoppingResults', JSON.stringify(payload)]]);
+    return `)]}'\n${frame.length}\n${frame}`;
   }
 
   function itinerary(origin: string, destination: string, carrier: string, price: number): unknown {
     const segment = new Array(25).fill(null);
+    segment[3] = origin;
+    segment[6] = destination;
+    segment[8] = [8, 0];
+    segment[10] = [12, 0];
+    segment[11] = 240;
+    segment[20] = [2026, 10, 22];
+    segment[21] = [2026, 10, 22];
     segment[22] = [carrier, 101, null, carrier];
     segment[23] = 123_456;
     const leg = [
@@ -1523,13 +1531,12 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
       departure_date: '2026-09-09',
       return_date: '2026-09-16',
       trip_type: 'round_trip',
-      max_stops: 0,
+      stops: 'nonstop_only',
       airlines: 'AS',
       max_price: 300,
-      outbound_times: '6-12',
-      return_times: '12-20',
-      max_duration: 360,
-      carry_on_bags: 1,
+      outbound_time_range: '6-12',
+      max_duration_minutes: 360,
+      bags: 1,
     };
     const secondSearch = {
       origin: 'SEA',
@@ -1537,13 +1544,12 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
       departure_date: '2026-10-22',
       return_date: '',
       trip_type: 'one_way',
-      max_stops: 1,
+      stops: 'one_stop_or_fewer',
       airlines: 'DL',
       max_price: 500,
-      outbound_times: '5-18',
-      return_times: '',
-      max_duration: 540,
-      carry_on_bags: 0,
+      outbound_time_range: '5-18',
+      max_duration_minutes: 540,
+      bags: 0,
     };
 
     const r1 = await runWithLadder(['cdp-replay'], tool, firstSearch, root, new Map(), {

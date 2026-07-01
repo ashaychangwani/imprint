@@ -1,228 +1,231 @@
-// Parser for Google Flights GetShoppingResults (batchexecute RPC).
-// Decodes the envelope with the shared helper, then walks the deeply-nested
-// positional payload to find itinerary records and normalize them.
-import { decodeBatchExecute, extractRpcPayload } from '../_shared/batchexecute.ts';
+import { extractWrbRecords, parseNestedPayload } from '../_shared/google_batchexecute_parser.ts';
+import type { FlightItinerary, FlightLeg } from '../_shared/google_flights_types.ts';
 
-interface Itinerary {
-  airlines: string[];
-  flightNumbers: string[];
+type AnyArray = unknown[];
+type SelectedFlight = {
   origin: string;
   destination: string;
-  departDate: string | null;
-  departTime: string | null;
-  arriveDate: string | null;
-  arriveTime: string | null;
-  durationMinutes: number | null;
+  date: string;
+  carrier: string;
+  flightNumber: string;
+};
+
+type SearchItinerary = FlightItinerary & {
+  origin: string;
+  destination: string;
+  departure_date?: string;
+  departure_time?: string;
+  arrival_date?: string;
+  arrival_time?: string;
+  duration_minutes?: number;
   stops: number;
-  priceUSD: number | null;
-  co2Grams: number | null;
-  flight_token: string;
+  layovers: Array<{ airport?: string; airport_name?: string; duration_minutes?: number }>;
+  carriers: Array<{ code?: string; name?: string }>;
+  segments: FlightLeg[];
+  price?: number;
+  currency?: string;
+  itinerary_token: string;
+  selection_token: string;
+  selected_flights: string;
+};
+
+function isArray(value: unknown): value is AnyArray {
+  return Array.isArray(value);
 }
 
-interface AirlineFilter {
-  code: string;
-  name: string;
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-const AIRPORT = /^[A-Z]{3}$/;
-const ALLIANCE_CODES = new Set(['ONEWORLD', 'SKYTEAM', 'STAR_ALLIANCE']);
-
-// A leg is [carrierCode, [carrierNames], [segments], originIATA, [departDate],
-// [departTime], destIATA, [arriveDate], [arriveTime], durationMinutes, ...].
-function isLeg(leg: unknown): leg is unknown[] {
-  if (!Array.isArray(leg)) return false;
-  return (
-    typeof leg[0] === 'string' &&
-    Array.isArray(leg[1]) &&
-    typeof leg[3] === 'string' &&
-    AIRPORT.test(leg[3] as string) &&
-    typeof leg[6] === 'string' &&
-    AIRPORT.test(leg[6] as string)
-  );
+function asNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-// node[0] is either a single leg or an array of legs; node[1] is
-// [[null, <priceUSD>], "<base64 flight token>"].
-function legsOf(node: unknown[]): unknown[][] {
-  const head = node[0];
-  if (isLeg(head)) return [head as unknown[]];
-  if (Array.isArray(head)) return head.filter(isLeg) as unknown[][];
-  return [];
+function formatDate(value: unknown): string | undefined {
+  if (!isArray(value)) return undefined;
+  const [year, month, day] = value;
+  if (typeof year !== 'number' || typeof month !== 'number' || typeof day !== 'number') return undefined;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function isItinerary(node: unknown): node is unknown[] {
-  if (!Array.isArray(node)) return false;
-  if (legsOf(node).length === 0) return false;
-  const priceTok = node[1];
-  if (!Array.isArray(priceTok)) return false;
-  const priceArr = priceTok[0];
-  const token = priceTok[1];
-  if (!Array.isArray(priceArr)) return false;
-  if (typeof token !== 'string' || token.length < 20) return false;
-  return true;
+function formatTime(value: unknown): string | undefined {
+  if (!isArray(value)) return undefined;
+  const hour = value[0];
+  const minute = value[1] ?? 0;
+  if (typeof hour !== 'number' || typeof minute !== 'number') return undefined;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
-function fmtTime(t: unknown): string | null {
-  if (!Array.isArray(t) || t.length === 0) return null;
-  const h = typeof t[0] === 'number' ? t[0] : 0;
-  const m = typeof t[1] === 'number' ? t[1] : 0;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+function parseSegment(segment: AnyArray): FlightLeg | null {
+  const origin = asString(segment[3]);
+  const destination = asString(segment[6]);
+  if (!origin || !destination) return null;
+  const flight = isArray(segment[22]) ? segment[22] : [];
+  return {
+    origin,
+    destination,
+    departureDate: formatDate(segment[20]),
+    departureTime: formatTime(segment[8]),
+    arrivalDate: formatDate(segment[21]),
+    arrivalTime: formatTime(segment[10]),
+    airline: asString(flight[3]),
+    carrierCode: asString(flight[0]),
+    flightNumber: asString(flight[1]),
+    durationMinutes: asNumber(segment[11]),
+    stops: 0,
+  };
 }
 
-function fmtDate(d: unknown): string | null {
-  if (!Array.isArray(d) || d.length < 3) return null;
-  const [y, mo, day] = d as number[];
-  if (typeof y !== 'number') return null;
-  return `${y}-${String(mo).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+function parseLayovers(value: unknown): Array<{ airport?: string; airport_name?: string; duration_minutes?: number }> {
+  if (!isArray(value)) return [];
+  return value
+    .filter(isArray)
+    .map((item) => ({
+      duration_minutes: asNumber(item[0]),
+      airport: asString(item[1]) ?? asString(item[2]),
+      airport_name: asString(item[4]) ?? asString(item[6]),
+    }))
+    .filter((item) => item.airport || item.airport_name || item.duration_minutes !== undefined);
 }
 
-function walk(node: unknown, found: unknown[][]): void {
-  if (!Array.isArray(node)) return;
-  if (isItinerary(node)) {
-    found.push(node);
-    return; // don't recurse into a matched itinerary
-  }
-  for (const child of node) walk(child, found);
-}
-
-function isPairList(node: unknown): node is string[][] {
-  return (
-    Array.isArray(node) &&
-    node.length > 0 &&
-    node.every(
-      (item) =>
-        Array.isArray(item) && typeof item[0] === 'string' && typeof item[1] === 'string',
-    )
-  );
-}
-
-function toFilters(pairs: string[][]): AirlineFilter[] {
-  return pairs.map((pair) => ({ code: pair[0] as string, name: pair[1] as string }));
-}
-
-function collectAirlineFilters(
-  node: unknown,
-  found: { alliances: AirlineFilter[]; carriers: AirlineFilter[] },
-): void {
-  if (!Array.isArray(node)) return;
-  if (
-    node.length >= 2 &&
-    isPairList(node[0]) &&
-    isPairList(node[1]) &&
-    node[0].some((pair) => ALLIANCE_CODES.has(pair[0] as string))
-  ) {
-    found.alliances = toFilters(node[0]);
-    found.carriers = toFilters(node[1]);
-  }
-  for (const child of node) collectAirlineFilters(child, found);
-}
-
-function normalize(it: unknown[]): Itinerary {
-  const legs = legsOf(it);
-  const priceTok = it[1] as unknown[];
-  const priceArr = priceTok[0] as unknown[];
-  const token = priceTok[1] as string;
-
-  const airlines = new Set<string>();
-  const flightNumbers: string[] = [];
-  let durationMinutes = 0;
-  let stops = 0;
-  let co2 = 0;
-
-  for (const leg of legs) {
-    const names = leg[1];
-    if (Array.isArray(names)) {
-      for (const n of names) if (typeof n === 'string') airlines.add(n);
-    }
-    if (typeof leg[9] === 'number') durationMinutes += leg[9] as number;
-    const segs = leg[2];
-    if (Array.isArray(segs)) {
-      stops += Math.max(0, segs.length - 1);
-      for (const seg of segs) {
-        if (!Array.isArray(seg)) continue;
-        const fn = seg[22];
-        if (Array.isArray(fn) && typeof fn[0] === 'string' && fn[1] != null) {
-          flightNumbers.push(`${fn[0]}${fn[1]}`);
-          if (typeof fn[3] === 'string') airlines.add(fn[3]);
-        }
-        // best-effort CO2 (grams): large numeric near the end of the segment.
-        const cand = seg[seg.length - 2];
-        if (typeof cand === 'number' && cand > 1000 && cand < 10_000_000) co2 += cand;
-      }
+function normalizeSelectedFlight(value: unknown): SelectedFlight | null {
+  if (Array.isArray(value)) {
+    const [origin, date, destination, ignored, carrier, flightNumber] = value;
+    void ignored;
+    if (typeof origin === 'string' && typeof date === 'string' && typeof destination === 'string' && typeof carrier === 'string' && flightNumber != null) {
+      return { origin, destination, date, carrier, flightNumber: String(flightNumber) };
     }
   }
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const origin = obj.origin;
+    const destination = obj.destination;
+    const date = obj.date ?? obj.departureDate;
+    const carrier = obj.carrier ?? obj.carrierCode;
+    const flightNumber = obj.flightNumber ?? obj.flight_number;
+    if (typeof origin === 'string' && typeof destination === 'string' && typeof date === 'string' && typeof carrier === 'string' && flightNumber != null) {
+      return { origin, destination, date, carrier, flightNumber: String(flightNumber) };
+    }
+  }
+  return null;
+}
 
-  const firstLeg = legs[0] ?? [];
-  const lastLeg = legs[legs.length - 1] ?? [];
-  const price = priceArr.find((v) => typeof v === 'number') as number | undefined;
+function parsePriorSelectedFlights(raw: unknown): SelectedFlight[] {
+  if (Array.isArray(raw)) return raw.map(normalizeSelectedFlight).filter((item): item is SelectedFlight => Boolean(item));
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    return parsePriorSelectedFlights(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+function selectedFlightsFromSegments(segments: FlightLeg[], priorSelectedFlights: SelectedFlight[]): string {
+  const selected = segments
+    .map((segment) => ({
+      origin: segment.origin,
+      destination: segment.destination,
+      date: segment.departureDate ?? '',
+      carrier: segment.carrierCode ?? '',
+      flightNumber: segment.flightNumber ?? '',
+    }))
+    .filter((flight) => flight.origin && flight.destination && flight.date && flight.carrier && flight.flightNumber);
+  return JSON.stringify([...priorSelectedFlights, ...selected]);
+}
+
+function looksLikeItinerary(value: AnyArray): boolean {
+  const summary = value[0];
+  const priceAndToken = value[1];
+  return isArray(summary)
+    && isArray(summary[2])
+    && isArray(priceAndToken)
+    && isArray(priceAndToken[0])
+    && typeof priceAndToken[1] === 'string';
+}
+
+function parseItinerary(value: AnyArray, priorSelectedFlights: SelectedFlight[]): SearchItinerary | null {
+  if (!looksLikeItinerary(value)) return null;
+  const summary = value[0] as AnyArray;
+  const priceAndToken = value[1] as AnyArray;
+  const rawSegments = summary[2] as AnyArray;
+  const segments = rawSegments.filter(isArray).map(parseSegment).filter((item): item is FlightLeg => item !== null);
+  if (segments.length === 0) return null;
+
+  const token = asString(priceAndToken[1]);
+  if (!token) return null;
+  const first = segments[0]!;
+  const last = segments[segments.length - 1]!;
+  const carrierCode = asString(summary[0]);
+  const carrierNames = isArray(summary[1]) ? summary[1].filter((item): item is string => typeof item === 'string') : [];
+  const amount = isArray(priceAndToken[0]) ? asNumber(priceAndToken[0][1]) : undefined;
+  const selected_flights = selectedFlightsFromSegments(segments, priorSelectedFlights);
 
   return {
-    airlines: [...airlines],
-    flightNumbers,
-    origin: typeof firstLeg[3] === 'string' ? (firstLeg[3] as string) : '',
-    destination: typeof lastLeg[6] === 'string' ? (lastLeg[6] as string) : '',
-    departDate: fmtDate(firstLeg[4]),
-    departTime: fmtTime(firstLeg[5]),
-    arriveDate: fmtDate(lastLeg[7]),
-    arriveTime: fmtTime(lastLeg[8]),
-    durationMinutes: durationMinutes || null,
-    stops,
-    priceUSD: price ?? null,
-    co2Grams: co2 || null,
-    flight_token: token,
+    origin: first.origin,
+    destination: last.destination,
+    departure_date: first.departureDate,
+    departure_time: first.departureTime,
+    arrival_date: last.arrivalDate,
+    arrival_time: last.arrivalTime,
+    duration_minutes: asNumber(summary[9]),
+    stops: Math.max(0, segments.length - 1),
+    layovers: parseLayovers(summary[13]),
+    carriers: [{ code: carrierCode, name: carrierNames[0] }].filter((carrier) => carrier.code || carrier.name),
+    legs: segments,
+    segments,
+    price: amount,
+    currency: 'USD',
+    itinerary_token: token,
+    selection_token: token,
+    selected_flights,
   };
+}
+
+function walk(value: unknown, visit: (array: AnyArray) => void): void {
+  if (!isArray(value)) return;
+  visit(value);
+  for (const item of value) walk(item, visit);
+}
+
+function decode(rawResponse: unknown): { payloads: unknown[]; hadRecords: boolean } {
+  if (typeof rawResponse !== 'string') return { payloads: [parseNestedPayload(rawResponse)], hadRecords: true };
+  const records = extractWrbRecords(rawResponse);
+  if (records.length === 0) return { payloads: [parseNestedPayload(rawResponse)], hadRecords: false };
+  return { payloads: records.map((record) => parseNestedPayload(record.payload)), hadRecords: true };
 }
 
 export function extract(
   rawResponse: unknown,
-  _context?: { params: Record<string, string | number | boolean>; responses: unknown[] },
+  context?: { params: Record<string, string | number | boolean>; responses: unknown[] },
 ): unknown {
-  let payload: unknown;
-  if (typeof rawResponse === 'string') {
-    payload =
-      extractRpcPayload(rawResponse, 'GetShoppingResults') ?? extractRpcPayload(rawResponse);
-    if (payload == null) {
-      const frames = decodeBatchExecute(rawResponse);
-      payload = frames[0]?.payload;
-    }
-    if (payload == null) {
-      throw new Error(
-        'Google Flights GetShoppingResults response did not contain a batchexecute payload',
-      );
-    }
-  } else {
-    payload = rawResponse;
+  const { payloads: decodedPayloads, hadRecords } = decode(rawResponse);
+  const itineraries: SearchItinerary[] = [];
+  const seen = new Set<string>();
+  const maxDuration = Number(context?.params?.max_duration_minutes ?? 0);
+  const priorSelectedFlights = parsePriorSelectedFlights(context?.params?.selected_flights);
+
+  for (const decoded of decodedPayloads) {
+    walk(decoded, (array) => {
+      const itinerary = parseItinerary(array, priorSelectedFlights);
+      if (!itinerary) return;
+      if (seen.has(itinerary.selection_token)) return;
+      seen.add(itinerary.selection_token);
+      if (Number.isFinite(maxDuration) && maxDuration > 0 && (itinerary.duration_minutes ?? 0) > maxDuration) return;
+      itineraries.push(itinerary);
+    });
   }
 
-  const found: unknown[][] = [];
-  if (payload != null) walk(payload, found);
-  const availableAirlineFilters = {
-    alliances: [] as AirlineFilter[],
-    carriers: [] as AirlineFilter[],
-  };
-  if (payload != null) collectAirlineFilters(payload, availableAirlineFilters);
-
-  const byToken = new Map<string, Itinerary>();
-  for (const it of found) {
-    const norm = normalize(it);
-    if (!norm.flight_token) continue;
-    if (!byToken.has(norm.flight_token)) byToken.set(norm.flight_token, norm);
+  if (typeof rawResponse === 'string' && !hadRecords) {
+    throw new Error('Google Flights GetShoppingResults response did not contain a batchexecute payload');
   }
 
-  const itineraries = [...byToken.values()];
   if (itineraries.length === 0) {
-    throw new Error(
-      'Google Flights GetShoppingResults payload did not contain recognizable itineraries',
-    );
+    throw new Error('Google Flights GetShoppingResults payload did not contain recognizable itineraries');
   }
+
   return {
+    query: context?.params ?? {},
     count: itineraries.length,
     itineraries,
-    resultScope: {
-      exhaustive: false,
-      note:
-        'Google Flights GetShoppingResults returns a limited sorted subset. A carrier can be available in availableAirlineFilters without appearing in itineraries; call search_flights again with airlines=<code> to fetch that carrier.',
-    },
-    availableAirlineFilters,
   };
 }

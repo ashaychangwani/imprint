@@ -1138,6 +1138,7 @@ async function main(argv: string[]): Promise<number> {
         options: {
           'min-score': { type: 'string' },
           out: { type: 'string' },
+          provider: { type: 'string' },
           model: { type: 'string' },
           timeout: { type: 'string' },
           json: { type: 'boolean' },
@@ -1170,6 +1171,11 @@ async function main(argv: string[]): Promise<number> {
 
       const { runAudit } = await import('./imprint/audit.ts');
       const { localAuditReportPath } = await import('./imprint/paths.ts');
+      const provider = values.provider;
+      if (provider !== undefined && provider !== 'claude-cli' && provider !== 'codex-cli') {
+        console.error(`error: unknown audit provider '${provider}' — valid: claude-cli, codex-cli`);
+        return 2;
+      }
       const outPath = values.out ?? localAuditReportPath(site);
       const score = await tracedWithCostRollup(
         'cli.audit',
@@ -1177,6 +1183,7 @@ async function main(argv: string[]): Promise<number> {
         {
           'imprint.site': site,
           'imprint.min_score': minScore,
+          'imprint.provider': provider ?? 'claude-cli',
           'imprint.model': values.model ?? 'auto',
         },
         () =>
@@ -1184,6 +1191,7 @@ async function main(argv: string[]): Promise<number> {
             site,
             minScore,
             outPath,
+            provider,
             model: values.model,
             timeoutMs: auditTimeoutMs,
             json: values.json,

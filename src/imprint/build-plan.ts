@@ -567,6 +567,28 @@ export function resolveTokenParams(
   return plan.perTool.find((t) => t.toolName === toolName)?.tokenParams ?? [];
 }
 
+function resolveConsumerTokenShapes(
+  plan: BuildPlan,
+  toolName: string,
+): Array<{ param: string; sourceTool: string; sourceField: string; shape: string }> {
+  const tool = plan.perTool.find((t) => t.toolName === toolName);
+  if (!tool) return [];
+  return tool.tokenParams.flatMap((tp) => {
+    const producer = plan.perTool.find((t) => t.toolName === tp.sourceTool);
+    const emitted = producer?.emitsTokens.find((e) => e.field === tp.sourceField);
+    return emitted
+      ? [
+          {
+            param: tp.param,
+            sourceTool: tp.sourceTool,
+            sourceField: tp.sourceField,
+            shape: emitted.shape,
+          },
+        ]
+      : [];
+  });
+}
+
 /** The fields a tool's parser MUST emit for sibling consumers (producer side).
  *  Threaded into `externalVerification` so the gate fails a producer that does
  *  not emit a declared field. Empty when the plan declared none. Internal —
@@ -600,6 +622,12 @@ export function resolvePlanSliceFromFile(
 ): {
   assignedSharedModules: AssignedSharedModule[] | undefined;
   tokenParams: Array<{ param: string; sourceTool: string; sourceField: string }>;
+  tokenParamShapes: Array<{
+    param: string;
+    sourceTool: string;
+    sourceField: string;
+    shape: string;
+  }>;
   emittedTokens: Array<{ field: string; shape: string }>;
   requiredInputs: RequiredInput[];
 } {
@@ -608,6 +636,7 @@ export function resolvePlanSliceFromFile(
     return {
       assignedSharedModules: undefined,
       tokenParams: [],
+      tokenParamShapes: [],
       emittedTokens: [],
       requiredInputs: [],
     };
@@ -615,6 +644,7 @@ export function resolvePlanSliceFromFile(
   return {
     assignedSharedModules: resolveAssignedModules(plan, toolName, manifest),
     tokenParams: resolveTokenParams(plan, toolName),
+    tokenParamShapes: resolveConsumerTokenShapes(plan, toolName),
     emittedTokens: resolveEmittedTokens(plan, toolName),
     requiredInputs: resolveRequiredInputs(plan, toolName),
   };

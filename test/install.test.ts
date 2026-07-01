@@ -346,10 +346,12 @@ export async function searchBrowserSite() {
       {
         site: 'google-flights',
         toolNames: [
-          'get_flight_booking_details',
+          'get_flight_booking_options',
           'get_flight_calendar_prices',
-          'lookup_airport',
+          'get_flight_location_details',
+          'lookup_flight_locations',
           'search_flights',
+          'validate_flight_itinerary',
         ],
       },
       {

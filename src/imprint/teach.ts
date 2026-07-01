@@ -126,12 +126,9 @@ export {
 
 /**
  * How many compile agents run in parallel when more than one tool is selected.
- * Kept at 2 (not 3): bursts of near-identical reverse-engineering requests in a
- * short window raise the model's usage-policy safety-filter false-positive rate,
- * so we trade a little wall-clock for fewer spurious refusals. Single-tool runs
- * still use concurrency 1.
+ * Single-tool runs still use concurrency 1.
  */
-const COMPILE_CONCURRENCY = 2;
+const COMPILE_CONCURRENCY = 3;
 
 /** Module logger — suppressed during teach's spinner phases via muteLog(). */
 const log = createLog('teach');

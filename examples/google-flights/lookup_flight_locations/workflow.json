@@ -1,0 +1,64 @@
+{
+  "toolName": "lookup_flight_locations",
+  "site": "google-flights",
+  "intent": {
+    "description": "Search Google Flights location autocomplete for airports, cities, and travel places by text query.",
+    "userSaid": "searched for a round trip flight; multi city from SJC to SAN to LAX to SFO; searched for a multi city flight"
+  },
+  "parameters": [
+    {
+      "name": "query",
+      "type": "string",
+      "description": "Partial or full airport, city, or place query typed by the user.",
+      "default": "san di",
+      "verified": true
+    },
+    {
+      "name": "location_types",
+      "type": "string",
+      "description": "Optional type filter. Use default for recorded Google Flights location types, or all to include the expanded region/county type.",
+      "default": "default",
+      "verified": true
+    }
+  ],
+  "bootstrap": {
+    "url": "https://www.google.com/travel/flights",
+    "waitUntil": "load",
+    "waitMs": 1000,
+    "captures": [
+      {
+        "source": "html_regex",
+        "name": "f_sid",
+        "pattern": "(?:\\\\?\"|&quot;)FdrFJe(?:\\\\?\"|&quot;)\\s*:\\s*(?:\\\\?\"|&quot;)(-?[0-9]+)",
+        "group": 1,
+        "required": true,
+        "capability": "browser_bootstrap"
+      },
+      {
+        "source": "html_regex",
+        "name": "bl",
+        "pattern": "(?:\\\\?\"|&quot;)cfb2h(?:\\\\?\"|&quot;)\\s*:\\s*(?:\\\\?\"|&quot;)(boq_travel-frontend-flights-ui_[^\\\\\"&]+)",
+        "group": 1,
+        "required": true,
+        "capability": "browser_bootstrap"
+      }
+    ]
+  },
+  "requestTransformModule": "./request-transform.ts",
+  "parserModule": "./parser.ts",
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/batchexecute?rpcids=H028ib&source-path=%2Ftravel%2Fflights&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&rt=c",
+      "headers": {
+        "X-Same-Domain": "1",
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "Referer": "https://www.google.com/travel/flights",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=${param.query}&location_types=${param.location_types}",
+      "effect": "safe"
+    }
+  ],
+  "liveVerified": true
+}

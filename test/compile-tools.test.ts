@@ -672,6 +672,167 @@ describe('extract', () => {
     }
   });
 
+  it('fails a producer whose composite emitted token omits declared required shape keys', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-emits-shape-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+    const session: Session = {
+      site: 'emits-shape-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          { toolName: 'search_items', intent: { description: 'x' }, requests: [], site: 'x' },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+      writeFileSync(
+        pathJoin(exampleDir, 'parser.ts'),
+        [
+          'export function extract(b: { items: string[] }) {',
+          '  return { selected_item: JSON.stringify({ itemId: b.items[0] }) };',
+          '}',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const misses = await externalVerification(exampleDir, session, sessionPath, {
+        emittedTokens: [
+          {
+            field: 'selected_item',
+            shape: 'serialized JSON object; requiredKeys=[itemId,variantId,sessionHandle]',
+          },
+        ],
+      });
+      expect(misses.failures.some((f) => f.includes('selected_item.variantId'))).toBe(true);
+      expect(misses.failures.some((f) => f.includes('selected_item.sessionHandle'))).toBe(true);
+
+      writeFileSync(
+        pathJoin(exampleDir, 'parser.ts'),
+        [
+          'export function extract(b: { items: string[] }) {',
+          '  const itemId = b.items[0];',
+          "  const variantId = 'v1';",
+          "  const sessionHandle = 's1';",
+          '  return { selected_item: JSON.stringify({ itemId, variantId, sessionHandle }) };',
+          '}',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const hits = await externalVerification(exampleDir, session, sessionPath, {
+        emittedTokens: [
+          {
+            field: 'selected_item',
+            shape: 'serialized JSON object; requiredKeys=[itemId,variantId,sessionHandle]',
+          },
+        ],
+      });
+      expect(hits.failures.some((f) => f.includes('requiredKeys'))).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails a consumer whose transform ignores required producer token shape keys', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-consumer-shape-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+    const session: Session = {
+      site: 'consumer-shape-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/details',
+      imprintVersion: '0.1.0',
+      requests: [],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          { toolName: 'get_item', intent: { description: 'x' }, requests: [], site: 'x' },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+      writeFileSync(
+        pathJoin(exampleDir, 'request-transform.ts'),
+        [
+          'export function transform(_m: string, url: string, _r: unknown[], params?: Record<string, unknown>) {',
+          "  const token = typeof params?.selected_item === 'string' ? params.selected_item : 'recorded';",
+          '  return { url, body: String(token) };',
+          '}',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const misses = await externalVerification(exampleDir, session, sessionPath, {
+        tokenParamShapes: [
+          {
+            param: 'selected_item',
+            sourceTool: 'search_items',
+            sourceField: 'selected_item',
+            shape: 'serialized JSON object; requiredKeys=[itemId,variantId,sessionHandle]',
+          },
+        ],
+      });
+      expect(misses.failures.some((f) => f.includes('selected_item.itemId'))).toBe(true);
+      expect(misses.failures.some((f) => f.includes('selected_item.variantId'))).toBe(true);
+      expect(misses.failures.some((f) => f.includes('selected_item.sessionHandle'))).toBe(true);
+
+      writeFileSync(
+        pathJoin(exampleDir, 'request-transform.ts'),
+        [
+          'export function transform(_m: string, url: string, _r: unknown[], params?: Record<string, unknown>) {',
+          "  const raw = typeof params?.selected_item === 'string' ? JSON.parse(params.selected_item) : params?.selected_item;",
+          '  const itemId = raw.itemId;',
+          '  const variantId = raw.variantId;',
+          '  const sessionHandle = raw.sessionHandle;',
+          '  return { url, body: JSON.stringify({ itemId, variantId, sessionHandle }) };',
+          '}',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const hits = await externalVerification(exampleDir, session, sessionPath, {
+        tokenParamShapes: [
+          {
+            param: 'selected_item',
+            sourceTool: 'search_items',
+            sourceField: 'selected_item',
+            shape: 'serialized JSON object; requiredKeys=[itemId,variantId,sessionHandle]',
+          },
+        ],
+      });
+      expect(hits.failures.some((f) => f.includes('request-transform.ts'))).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails when likelyParams are in parameters but not referenced in requests', async () => {
     const repoRoot = pathJoin(import.meta.dir, '..');
     const scratchRoot = pathJoin(repoRoot, '.context');
@@ -1474,6 +1635,24 @@ test('param:hotel_id selects the hotel', async () => {
     expect(unchained).toEqual(['hotel_id']);
     expect(paramVerification).toEqual([]);
   });
+
+  it('checks declared token params even when likelyParams omitted them', () => {
+    const { paramVerification, unchained } = classifyParamCoverage({
+      likelyParams: [],
+      integrationSrc: chainedSrc,
+      passedTests: new Set(['param:hotel_id uses a fresh token minted by search_hotels']),
+      integrationOutcome: 'passed',
+      tokenSources,
+    });
+    expect(unchained).toEqual([]);
+    expect(paramVerification).toEqual([
+      {
+        name: 'hotel_id',
+        verified: true,
+        sourcedFrom: { tool: 'search_hotels', field: 'hotel_id' },
+      },
+    ]);
+  });
 });
 
 describe('detectTokenSources', () => {
@@ -1973,6 +2152,99 @@ describe('classifyIntegrationOutcome (Fix A — liveVerified decoupled from the 
       failedCaptureNames: new Set(),
     });
     expect(v.outcome).toBe('waived-infra');
+  });
+
+  it('does not waive a timeout when the suite already produced an assertion failure', () => {
+    const combined = [
+      '[imprint backend] parallel probe: winner=cdp-replay (30902ms)',
+      '  cdp-replay: OK in 30902ms',
+      '51 |   expect(first?.selected_flight_token).toBeTruthy();',
+      '                                            ^',
+      'error: expect(received).toBeTruthy()',
+      'Received: undefined',
+      '(fail) param:selected_flight_token uses a fresh token minted by search_flights [30931.91ms]',
+      '(fail) live API call returns booking option data [60003.69ms]',
+      '  ^ this test timed out after 60000ms.',
+    ].join('\n');
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: true,
+      combined,
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.baselineLiveVerified).toBe(true);
+    expect(v.outcome).toBe('failed');
+  });
+
+  it('does not waive literal undefined emitted into a request URL as infra', () => {
+    const combined = [
+      '[imprint backend] trying fetch…',
+      '[imprint backend] fetch: STATE_MISSING in 25ms — escalating to fetch-bootstrap',
+      '[imprint backend] fetch-bootstrap: FORBIDDEN in 30492ms — escalating',
+      '[imprint backend] trying cdp-replay…',
+      '[imprint backend] cdp-replay: BAD_RESPONSE in 30368ms — escalating',
+      '[imprint backend] ladder exhausted: all 4 rungs escalated',
+      'error: Akamai bot defense blocked live verification: {"ok":false,"error":"BAD_RESPONSE","message":"Request 0 (POST https://www.example.com/api/search?f.sid=undefined&bl=undefined&rt=c) returned 500"}',
+    ].join('\n');
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: true,
+      combined,
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.outcome).toBe('failed');
+    expect(v.baselineLiveVerified).toBe(false);
+  });
+
+  it('does not waive deterministic BAD_RESPONSE 400 without bot or rate evidence', () => {
+    const combined = [
+      '[imprint backend] trying fetch…',
+      '[imprint backend] fetch: BAD_RESPONSE in 91ms — escalating (a higher-trust rung may pass)',
+      '[imprint backend] trying cdp-replay…',
+      '[imprint backend] cdp-replay: BAD_RESPONSE in 402ms — escalating (a higher-trust rung may pass)',
+      '[imprint backend] trying stealth-fetch…',
+      '[imprint backend] stealth-fetch: BAD_RESPONSE in 527ms — escalating (a higher-trust rung may pass)',
+      '[imprint backend] ladder exhausted: all 3 rungs escalated; returning last error from stealth-fetch',
+      'error: {"ok":false,"error":"BAD_RESPONSE","message":"Request 0 (POST https://api.example.com/details) returned 400: bad request body"}',
+      '(fail) param:selected_item uses a fresh value minted by search_items [1012.43ms]',
+      '(fail) live API call returns data [60003.69ms]',
+      '  ^ this test timed out after 60000ms.',
+    ].join('\n');
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: true,
+      combined,
+      passedTests: new Set(['baseline returns data']),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.baselineLiveVerified).toBe(true);
+    expect(v.outcome).toBe('failed');
+    expect(v.firstError).toContain('BAD_RESPONSE');
+  });
+
+  it('still waives BAD_RESPONSE when explicit bot evidence is present', () => {
+    const combined = [
+      '[imprint backend] trying fetch…',
+      '[imprint backend] fetch: BAD_RESPONSE in 30000ms — escalating (a higher-trust rung may pass)',
+      '[imprint cdp-browser] _abck status after interaction: ~-1~',
+      '[imprint backend] cdp-replay: BAD_RESPONSE in 30000ms — escalating (a higher-trust rung may pass)',
+      '[imprint backend] ladder exhausted: all 2 rungs escalated; returning last error from cdp-replay',
+      'error: {"ok":false,"error":"BAD_RESPONSE","message":"Request 0 returned 400 after anti-bot challenge"}',
+    ].join('\n');
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: false,
+      combined,
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.outcome).toBe('waived-bot');
   });
 
   it('classifies a clean exit as passed + baseline verified', () => {

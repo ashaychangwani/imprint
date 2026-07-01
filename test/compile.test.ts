@@ -20,6 +20,7 @@ import {
   findCredentialBearingSeqs,
   rescueActionAlignedRepeatedSeqs,
   resolveDefaultCompilePlaybookPath,
+  selectTriageCandidateRequests,
   shrinkSession,
 } from '../src/imprint/compile.ts';
 import type { Session } from '../src/imprint/types.ts';
@@ -213,6 +214,50 @@ describe('buildTriageEventContexts', () => {
     });
 
     expect(buildTriageEventContexts(session).map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+describe('selectTriageCandidateRequests', () => {
+  it('drops obvious telemetry before LLM triage while preserving required seqs', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/log?format=json',
+          headers: {},
+          body: '{"event_name":"click"}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '' },
+        },
+        {
+          seq: 2,
+          timestamp: 200,
+          method: 'POST',
+          url: 'https://example.com/api/search',
+          headers: {},
+          body: '{"query":"sfo"}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{"results":[]}' },
+        },
+        {
+          seq: 3,
+          timestamp: 300,
+          method: 'POST',
+          url: 'https://example.com/log?format=json',
+          headers: {},
+          body: '{"event_name":"login"}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '' },
+        },
+      ],
+    });
+
+    expect(selectTriageCandidateRequests(session).map((request) => request.seq)).toEqual([2]);
+    expect(selectTriageCandidateRequests(session, [3]).map((request) => request.seq)).toEqual([
+      2, 3,
+    ]);
   });
 });
 

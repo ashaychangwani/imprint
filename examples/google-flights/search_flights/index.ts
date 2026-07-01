@@ -3,7 +3,7 @@
  *
  * Tool: search_flights
  * Site: google-flights
- * Intent: Search Google Flights for itineraries between two airports with dates, trip type, and filters (stops, airlines, price, times, duration, bags).
+ * Intent: Search Google Flights for one-way, round-trip, or multi-city flight options with filters.
  *
  * To regenerate: imprint emit ~/.imprint/google-flights/search_flights/workflow.json --force
  */
@@ -19,99 +19,124 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "search_flights",
   "intent": {
-    "description": "Search Google Flights for itineraries between two airports with dates, trip type, and filters (stops, airlines, price, times, duration, bags).",
-    "userSaid": "searched for a round trip flight; searched for a one way flight; played with the stops and the airlines filters; added bags; played with the price and time filters; played with the duration filter; did a multi city flight query"
+    "description": "Search Google Flights for one-way, round-trip, or multi-city flight options with filters.",
+    "userSaid": "searched for a round trip flight; searched for a one way flight; played with the stops and the airlines filters; added bags; played with the price and time filters; played with the duration filter"
   },
   "parameters": [
     {
+      "name": "trip_type",
+      "type": "string",
+      "description": "Ticket type such as round_trip, one_way, or multi_city.",
+      "default": "round_trip",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
       "name": "origin",
       "type": "string",
-      "description": "Origin airport/city IATA code, e.g. SJC",
+      "description": "Origin airport code, city code, or place identifier for one-way and round-trip searches.",
+      "default": "SJC",
       "verified": false,
       "verifyNote": "annotated"
     },
     {
       "name": "destination",
       "type": "string",
-      "description": "Destination airport/city IATA code, e.g. SAN",
+      "description": "Destination airport code, city code, or place identifier for one-way and round-trip searches.",
+      "default": "SAN",
       "verified": false,
       "verifyNote": "annotated"
     },
     {
       "name": "departure_date",
       "type": "string",
-      "description": "Outbound date in YYYY-MM-DD",
+      "description": "Departure date in YYYY-MM-DD format.",
+      "default": "2026-07-12",
       "verified": false,
       "verifyNote": "annotated"
     },
     {
       "name": "return_date",
       "type": "string",
-      "description": "Return date in YYYY-MM-DD (omit/empty for one way)",
+      "description": "Return date in YYYY-MM-DD format for round-trip searches.",
+      "default": "2026-07-16",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "itinerary",
+      "type": "string",
+      "description": "Multi-city itinerary as semicolon-separated origin,destination,date legs, such as SFO,LAX,2026-09-01;LAX,JFK,2026-09-04. Supplying this value selects multi-city search semantics.",
       "default": "",
       "verified": false,
       "verifyNote": "annotated"
     },
     {
-      "name": "trip_type",
+      "name": "selection_token",
       "type": "string",
-      "description": "round_trip, one_way, or multi_city",
-      "default": "round_trip",
+      "description": "Selection token from a prior search_flights result. For staged round-trip or multi-city selection, pass this with selected_flights to fetch the next leg options.",
+      "default": "",
+      "verified": true
+    },
+    {
+      "name": "selected_flights",
+      "type": "string",
+      "description": "JSON array of already selected leg tuples from a prior search_flights result. For staged round-trip or multi-city selection, pass this with selection_token to fetch the next leg options and emit a complete selected_flights array.",
+      "default": "",
+      "verified": true
+    },
+    {
+      "name": "adults",
+      "type": "number",
+      "description": "Number of adult passengers.",
+      "default": 1,
       "verified": false,
       "verifyNote": "annotated"
     },
     {
-      "name": "max_stops",
-      "type": "number",
-      "description": "Max stops: 0=nonstop, 1=<=1 stop, 2=<=2 stops, 3=any",
-      "default": 3,
+      "name": "stops",
+      "type": "string",
+      "description": "Stops filter for routes with both nonstop and connecting options, such as any, nonstop_only, one_stop_or_fewer, or two_stops_or_fewer.",
+      "default": "any",
       "verified": false,
       "verifyNote": "annotated"
     },
     {
       "name": "airlines",
       "type": "string",
-      "description": "Comma-separated alliance (ONEWORLD/SKYTEAM/STAR_ALLIANCE) or 2-letter carrier codes (e.g. AS,WN). Empty = no filter",
+      "description": "Comma-separated airline or alliance codes to include, such as AS, AA, WN, ONEWORLD, SKYTEAM, or STAR_ALLIANCE.",
       "default": "",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "bags",
+      "type": "number",
+      "description": "Number of bags to include in fare filtering.",
+      "default": 0,
       "verified": false,
       "verifyNote": "annotated"
     },
     {
       "name": "max_price",
       "type": "number",
-      "description": "Maximum total price in USD (0 = no filter)",
+      "description": "Maximum fare price in USD.",
       "default": 0,
       "verified": false,
       "verifyNote": "annotated"
     },
     {
-      "name": "outbound_times",
+      "name": "outbound_time_range",
       "type": "string",
-      "description": "Outbound departure window in hours, e.g. '6-23' (empty = no filter)",
+      "description": "Outbound departure or arrival time constraints encoded as start and end hours, such as 2-21.",
       "default": "",
       "verified": false,
       "verifyNote": "annotated"
     },
     {
-      "name": "return_times",
-      "type": "string",
-      "description": "Return departure window in hours, e.g. '6-23' (empty = no filter)",
-      "default": "",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "max_duration",
+      "name": "max_duration_minutes",
       "type": "number",
-      "description": "Maximum total trip duration in minutes, e.g. 540 (0 = no filter)",
-      "default": 0,
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "carry_on_bags",
-      "type": "number",
-      "description": "Number of carry-on bags to filter/price by (0 = no filter)",
+      "description": "Maximum flight duration in minutes.",
       "default": 0,
       "verified": false,
       "verifyNote": "annotated"
@@ -120,29 +145,30 @@ const WORKFLOW: Workflow = {
   "requests": [
     {
       "method": "POST",
-      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=1708023&rt=c",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.nonce}&rt=c",
       "headers": {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         "X-Same-Domain": "1",
-        "Referer": "https://www.google.com/travel/flights",
+        "Referer": "https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA2LTA4agcIARIDU0pDcgcIARIDU0FOGh4SCjIwMjYtMDYtMTFqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ",
+        "Accept-Language": "en-US,en;q=0.9",
+        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
         "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
       },
-      "body": "f.req=${param.origin}|${param.destination}|${param.departure_date}|${param.return_date}|${param.trip_type}|${param.max_stops}|${param.airlines}|${param.max_price}|${param.outbound_times}|${param.return_times}|${param.max_duration}|${param.carry_on_bags}&",
+      "body": "trip_type=${param.trip_type}&origin=${param.origin}&destination=${param.destination}&departure_date=${param.departure_date}&return_date=${param.return_date}&itinerary=${param.itinerary}&selection_token=${param.selection_token}&selected_flights=${param.selected_flights}&adults=${param.adults}&stops=${param.stops}&airlines=${param.airlines}&bags=${param.bags}&max_price=${param.max_price}&outbound_time_range=${param.outbound_time_range}&max_duration_minutes=${param.max_duration_minutes}",
       "effect": "safe"
     }
   ],
   "site": "google-flights",
   "bootstrap": {
-    "url": "https://www.google.com/travel/flights",
+    "url": "https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA2LTA4agcIARIDU0pDcgcIARIDU0FOGh4SCjIwMjYtMDYtMTFqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ",
     "waitUntil": "domcontentloaded",
-    "timeoutMs": 30000,
     "captures": [
       {
         "name": "f_sid",
         "required": true,
         "capability": "browser_bootstrap",
         "source": "html_regex",
-        "pattern": "\"FdrFJe\":\"([^\"]+)\"",
+        "pattern": "\"FdrFJe\":\"(-?\\d+)\"",
         "group": 1
       },
       {
@@ -161,30 +187,36 @@ const WORKFLOW: Workflow = {
 };
 
 export interface SearchFlightsInput {
-  /** Origin airport/city IATA code, e.g. SJC */
-  origin: string;
-  /** Destination airport/city IATA code, e.g. SAN */
-  destination: string;
-  /** Outbound date in YYYY-MM-DD */
-  departure_date: string;
-  /** Return date in YYYY-MM-DD (omit/empty for one way) */
-  return_date?: string;
-  /** round_trip, one_way, or multi_city */
+  /** Ticket type such as round_trip, one_way, or multi_city. */
   trip_type?: string;
-  /** Max stops: 0=nonstop, 1=<=1 stop, 2=<=2 stops, 3=any */
-  max_stops?: number;
-  /** Comma-separated alliance (ONEWORLD/SKYTEAM/STAR_ALLIANCE) or 2-letter carrier codes (e.g. AS,WN). Empty = no filter */
+  /** Origin airport code, city code, or place identifier for one-way and round-trip searches. */
+  origin?: string;
+  /** Destination airport code, city code, or place identifier for one-way and round-trip searches. */
+  destination?: string;
+  /** Departure date in YYYY-MM-DD format. */
+  departure_date?: string;
+  /** Return date in YYYY-MM-DD format for round-trip searches. */
+  return_date?: string;
+  /** Multi-city itinerary as semicolon-separated origin,destination,date legs, such as SFO,LAX,2026-09-01;LAX,JFK,2026-09-04. Supplying this value selects multi-city search semantics. */
+  itinerary?: string;
+  /** Selection token from a prior search_flights result. For staged round-trip or multi-city selection, pass this with selected_flights to fetch the next leg options. */
+  selection_token?: string;
+  /** JSON array of already selected leg tuples from a prior search_flights result. For staged round-trip or multi-city selection, pass this with selection_token to fetch the next leg options and emit a complete selected_flights array. */
+  selected_flights?: string;
+  /** Number of adult passengers. */
+  adults?: number;
+  /** Stops filter for routes with both nonstop and connecting options, such as any, nonstop_only, one_stop_or_fewer, or two_stops_or_fewer. */
+  stops?: string;
+  /** Comma-separated airline or alliance codes to include, such as AS, AA, WN, ONEWORLD, SKYTEAM, or STAR_ALLIANCE. */
   airlines?: string;
-  /** Maximum total price in USD (0 = no filter) */
+  /** Number of bags to include in fare filtering. */
+  bags?: number;
+  /** Maximum fare price in USD. */
   max_price?: number;
-  /** Outbound departure window in hours, e.g. '6-23' (empty = no filter) */
-  outbound_times?: string;
-  /** Return departure window in hours, e.g. '6-23' (empty = no filter) */
-  return_times?: string;
-  /** Maximum total trip duration in minutes, e.g. 540 (0 = no filter) */
-  max_duration?: number;
-  /** Number of carry-on bags to filter/price by (0 = no filter) */
-  carry_on_bags?: number;
+  /** Outbound departure or arrival time constraints encoded as start and end hours, such as 2-21. */
+  outbound_time_range?: string;
+  /** Maximum flight duration in minutes. */
+  max_duration_minutes?: number;
 }
 
 export async function searchFlights(
@@ -193,18 +225,22 @@ export async function searchFlights(
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
-    return_date: input.return_date ?? "",
     trip_type: input.trip_type ?? "round_trip",
-    max_stops: input.max_stops ?? 3,
+    origin: input.origin ?? "SJC",
+    destination: input.destination ?? "SAN",
+    departure_date: input.departure_date ?? "2026-07-12",
+    return_date: input.return_date ?? "2026-07-16",
+    itinerary: input.itinerary ?? "",
+    selection_token: input.selection_token ?? "",
+    selected_flights: input.selected_flights ?? "",
+    adults: input.adults ?? 1,
+    stops: input.stops ?? "any",
     airlines: input.airlines ?? "",
+    bags: input.bags ?? 0,
     max_price: input.max_price ?? 0,
-    outbound_times: input.outbound_times ?? "",
-    return_times: input.return_times ?? "",
-    max_duration: input.max_duration ?? 0,
-    carry_on_bags: input.carry_on_bags ?? 0,
-    origin: input.origin,
-    destination: input.destination,
-    departure_date: input.departure_date,
+    outbound_time_range: input.outbound_time_range ?? "",
+    max_duration_minutes: input.max_duration_minutes ?? 0,
+
   };
   return executeWorkflow({
     workflow: WORKFLOW,

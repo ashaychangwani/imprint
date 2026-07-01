@@ -74,9 +74,9 @@ export function buildJsonSchema(
   const properties: Record<string, { type: string; description: string }> = {};
   const required: string[] = [];
   for (const p of parameters) {
-    // Producer-sourced token params: tell the orchestrating LLM where to mint the
-    // value so it calls the producer once and reuses it, rather than fabricating
-    // an opaque token (which the tool would reject).
+    // Producer-sourced params: tell the orchestrating LLM where to mint/derive
+    // the value so it calls the producer once and reuses it, rather than
+    // fabricating context the consumer would reject or misinterpret.
     const description = p.sourcedFrom
       ? `${p.description} Obtain this value from the \`${p.sourcedFrom.tool}\` tool's \`${p.sourcedFrom.field}\` output — call \`${p.sourcedFrom.tool}\` first and reuse the value across calls (no need to re-fetch each time).`
       : p.description;

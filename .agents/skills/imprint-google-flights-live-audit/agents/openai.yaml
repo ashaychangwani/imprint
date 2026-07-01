@@ -1,0 +1,4 @@
+interface:
+  display_name: "Google Flights Live Audit"
+  short_description: "Audit and repair Google Flights tools"
+  default_prompt: "Use $imprint-google-flights-live-audit to verify and fix Google Flights search and booking tools."

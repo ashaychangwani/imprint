@@ -2,7 +2,10 @@ import { describe, expect, it } from 'bun:test';
 import {
   type AuditReport,
   AuditReportSchema,
+  auditHasCorrectSignal,
+  buildAuditInitialPrompt,
   buildTokenDepNote,
+  buildUnverifiedParamNote,
   computeAuditScore,
   extractReport,
   ungradeableToolNames,
@@ -305,6 +308,44 @@ describe('ungradeableToolNames', () => {
     });
     expect(ungradeableToolNames(report)).toEqual(['blocked_tool', 'untouched_tool']);
   });
+
+  it('treats parameter verdicts as gradeable signal', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'param_graded_tool',
+          invocations: [{ ok: false, verdict: 'infra' }],
+          parameters: [{ name: 'sort', verdict: 'works' }],
+        },
+        {
+          name: 'param_defect_tool',
+          invocations: [{ ok: false, verdict: 'bad_params' }],
+          parameters: [{ name: 'airline', verdict: 'no_op' }],
+        },
+        {
+          name: 'still_ungradeable',
+          invocations: [{ ok: false, verdict: 'infra' }],
+          parameters: [{ name: 'seat', verdict: 'untestable' }],
+        },
+      ],
+    });
+    expect(ungradeableToolNames(report)).toEqual(['still_ungradeable']);
+  });
+});
+
+describe('auditHasCorrectSignal', () => {
+  it('counts working parameter verdicts as positive audit signal', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [{ ok: false, verdict: 'infra' }],
+          parameters: [{ name: 'bags', verdict: 'works' }],
+        },
+      ],
+    });
+    expect(auditHasCorrectSignal(report)).toBe(true);
+  });
 });
 
 describe('AuditReportSchema', () => {
@@ -399,6 +440,40 @@ describe('buildTokenDepNote', () => {
     // Must steer the auditor away from a tool_broken verdict it can't fairly assign.
     expect(note).toContain('bad_params');
     expect(note).toContain('never `tool_broken`');
+  });
+});
+
+describe('audit prompt construction', () => {
+  it('does not tell the auditor to skip bot-defended read parameter probes', () => {
+    const prompt = buildAuditInitialPrompt(
+      {
+        site: 'example',
+        provider: 'codex-cli',
+        model: 'test-model',
+        timeoutMs: 60_000,
+        systemPromptPath: '/tmp/prompt.md',
+        toolNames: ['search_items'],
+        unverifiedParams: [],
+        tokenDeps: [],
+      },
+      '',
+    );
+
+    expect(prompt).toContain('cold cdp-replay/browser-backed first call may be slow');
+    expect(prompt).toContain('later calls usually reuse that warm session');
+    expect(prompt).toContain('Do NOT use the first call');
+    expect(prompt).toContain('search/list/calendar/lookup/quote/read tools');
+    expect(prompt).not.toContain('ANTI-BOT / STATE-CHANGING TOOLS — ONE invocation only');
+    expect(prompt).not.toContain('Do EXACTLY ONE realistic invocation');
+  });
+
+  it('prioritizes unverified params without exempting bot-defended idempotent reads', () => {
+    const note = buildUnverifiedParamNote([{ tool: 'search_items', params: ['query', 'sort'] }]);
+
+    expect(note).toContain('search_items(query, sort)');
+    expect(note).toContain('do not let an unverified parameter pass without a differential test');
+    expect(note).toContain('bot-defended idempotent read is still testable');
+    expect(note).not.toContain('Per the ONE-invocation rule');
   });
 });
 
