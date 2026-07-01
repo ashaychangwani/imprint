@@ -2818,6 +2818,12 @@ function headerNameOf(location: string): string | null {
   return location.toLowerCase().startsWith('header:') ? location.slice('header:'.length) : null;
 }
 
+function urlParamNameOf(location: string): string | null {
+  return location.toLowerCase().startsWith('url_param:')
+    ? location.slice('url_param:'.length)
+    : null;
+}
+
 function recordedHeaderValue(session: Session, ri: RequiredInput): string | null {
   const header = headerNameOf(ri.location);
   if (!header || ri.recordedSeq == null) return null;
@@ -2827,6 +2833,22 @@ function recordedHeaderValue(session: Session, ri: RequiredInput): string | null
       ([h]) => h.toLowerCase() === header.toLowerCase(),
     )?.[1] ?? null
   );
+}
+
+function parseLooseUrl(url: string): URL | null {
+  try {
+    return new URL(url, 'https://imprint.local');
+  } catch {
+    return null;
+  }
+}
+
+function recordedUrlParamValue(session: Session, ri: RequiredInput): string | null {
+  const param = urlParamNameOf(ri.location);
+  if (!param || ri.recordedSeq == null) return null;
+  const rec = session.requests.find((r) => r.seq === ri.recordedSeq);
+  if (!rec?.url) return null;
+  return parseLooseUrl(rec.url)?.searchParams.get(param) ?? null;
 }
 
 export function repairRequiredInputStaticLiterals(
@@ -2840,7 +2862,7 @@ export function repairRequiredInputStaticLiterals(
     ) {
       return ri;
     }
-    const recorded = recordedHeaderValue(session, ri);
+    const recorded = recordedHeaderValue(session, ri) ?? recordedUrlParamValue(session, ri);
     return recorded ? { ...ri, literal: recorded } : ri;
   });
 }
@@ -2850,6 +2872,14 @@ function looseUrlPath(url: string): string {
   const noQuery = q >= 0 ? url.slice(0, q) : url;
   const m = noQuery.match(/^https?:\/\/[^/]+(\/.*)?$/i);
   return m ? (m[1] ?? '/') : noQuery;
+}
+
+function setLooseUrlParam(url: string, name: string, value: string): string | null {
+  const parsed = parseLooseUrl(url);
+  if (!parsed) return null;
+  const absolute = /^[a-z][a-z0-9+.-]*:/i.test(url);
+  parsed.searchParams.set(name, value);
+  return absolute ? parsed.toString() : `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
 /** All ${state.X} capture names already declared in the workflow (request + bootstrap
@@ -2895,7 +2925,8 @@ export function injectContractedInputs(
       continue;
     }
     const header = headerNameOf(ri.location);
-    if (!header || requests.length === 0) continue; // only header inputs are injected here
+    const urlParam = urlParamNameOf(ri.location);
+    if ((!header && !urlParam) || requests.length === 0) continue;
     if (ri.source === 'producer_tool' || ri.source === 'user_param') continue; // params: handled elsewhere
     // browser_state needs a producer — only inject the header when its capture exists.
     if (ri.source === 'browser_state' && !(ri.stateName && captureNames.has(ri.stateName)))
@@ -2914,6 +2945,22 @@ export function injectContractedInputs(
         )
       : [];
     const dest = targets.length > 0 ? targets : requests;
+    if (urlParam) {
+      let changed = false;
+      for (const r of dest) {
+        if (!r.url) continue;
+        const parsed = parseLooseUrl(r.url);
+        const existing = parsed?.searchParams.get(urlParam);
+        if (existing != null && !looksLikePlannerPlaceholderLiteral(existing)) continue;
+        const nextUrl = setLooseUrlParam(r.url, urlParam, token);
+        if (!nextUrl || nextUrl === r.url) continue;
+        r.url = nextUrl;
+        changed = true;
+      }
+      if (changed) injected++;
+      continue;
+    }
+    if (!header) continue;
     let repairedPlaceholder = false;
     if (ri.source === 'static' && !looksLikePlannerPlaceholderLiteral(token)) {
       for (const r of dest) {

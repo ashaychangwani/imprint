@@ -1589,7 +1589,9 @@ export function looksLikePlannerPlaceholderLiteral(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const trimmed = value.trim();
   if (!/^<[\s\S]{0,240}>$/.test(trimmed)) return false;
-  return /^<\s*recorded\b[\s\S]{0,220}>$/i.test(trimmed);
+  return (
+    /\b(recorded|captured)\b/i.test(trimmed) && /\b(seq|request|header|value)\b/i.test(trimmed)
+  );
 }
 
 /**

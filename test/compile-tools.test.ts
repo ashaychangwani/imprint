@@ -2665,7 +2665,7 @@ function secretSession(): Session {
         seq: 10,
         timestamp: 100,
         method: 'GET',
-        url: 'https://api.example.com/data',
+        url: 'https://api.example.com/data?search_token=recorded-search-token-001',
         headers: {
           Authorization: 'Bearer secrettoken1234567890abcdef',
           'X-App-Key': 'synthetic-appkey-001',
@@ -2879,6 +2879,43 @@ describe('injectContractedInputs', () => {
     expect(repaired[0]?.literal).toBe('synthetic-appkey-001');
   });
 
+  it('repairs planner prose static header placeholders from the recorded request', () => {
+    const session = secretSession();
+    const repaired = repairRequiredInputStaticLiterals(
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: '<static header value recorded at seq 10>',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(repaired[0]?.literal).toBe('synthetic-appkey-001');
+  });
+
+  it('repairs static url_param placeholders from the recorded request URL', () => {
+    const session = secretSession();
+    const repaired = repairRequiredInputStaticLiterals(
+      [
+        {
+          location: 'url_param:search_token',
+          source: 'static',
+          wiring: 'literal',
+          literal:
+            '<search_token captured at seq 10; prefer reservation_context.manage_reservation_search_token when chained>',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(repaired[0]?.literal).toBe('recorded-search-token-001');
+  });
+
   it('injects a dropped credential header into the matching request', () => {
     const session = secretSession();
     const workflow = {
@@ -2986,6 +3023,93 @@ describe('injectContractedInputs', () => {
     );
     expect(res.injected).toBe(1);
     expect(workflow.requests[0]?.headers['X-App-Key']).toBe('real-grounded-app-key');
+  });
+
+  it('injects a dropped static url_param into the matching request', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [{ method: 'GET', url: 'https://api.example.com/data', headers: {} }],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'url_param:search_token',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'recorded-search-token-001',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(1);
+    expect(workflow.requests[0]?.url).toBe(
+      'https://api.example.com/data?search_token=recorded-search-token-001',
+    );
+  });
+
+  it('replaces an existing static url_param placeholder with the grounded literal', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/data?search_token=%3Csearch_token+captured+at+seq+10%3E',
+          headers: {},
+        },
+      ],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'url_param:search_token',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'recorded-search-token-001',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(1);
+    expect(workflow.requests[0]?.url).toBe(
+      'https://api.example.com/data?search_token=recorded-search-token-001',
+    );
+  });
+
+  it('does not overwrite an existing concrete url_param', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/data?search_token=keep-existing',
+          headers: {},
+        },
+      ],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'url_param:search_token',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'recorded-search-token-001',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(0);
+    expect(workflow.requests[0]?.url).toBe(
+      'https://api.example.com/data?search_token=keep-existing',
+    );
   });
 
   it('sets workflow.bootstrap.url from a referer input', () => {
