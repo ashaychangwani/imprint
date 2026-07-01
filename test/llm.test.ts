@@ -7,6 +7,8 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  classifyCliFailure,
+  cliStderrTail,
   codexAnalyzeArgs,
   collectCliProcessOutput,
   detectProvider,
@@ -109,6 +111,32 @@ describe('collectCliProcessOutput', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('ok');
     expect(result.stderr.length).toBe(2048 * 1024);
+  });
+});
+
+describe('CLI provider failure diagnostics', () => {
+  it('classifies input-too-large errors without depending on a provider name', () => {
+    expect(
+      classifyCliFailure(
+        'Error: turn/start failed: Input exceeds the maximum length of 1048576 characters.',
+      ),
+    ).toBe('input_too_large');
+  });
+
+  it('classifies Claude subscription access failures', () => {
+    expect(
+      classifyCliFailure(
+        'Your organization has disabled Claude subscription access for Claude Code. Use an Anthropic API key instead.',
+      ),
+    ).toBe('subscription_access_disabled');
+  });
+
+  it('keeps only the stderr tail for verbose CLI failures', () => {
+    const stderr = `${'prompt echo '.repeat(500)}final error`;
+    const tail = cliStderrTail(stderr, 32);
+
+    expect(tail.length).toBe(32);
+    expect(tail.endsWith('final error')).toBe(true);
   });
 });
 

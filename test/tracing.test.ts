@@ -3,6 +3,7 @@ import {
   estimateTokensFromText,
   llmSpanAttributes,
   resolveTraceTokenCount,
+  sanitizeTraceErrorMessage,
   totalPromptTokens,
   traceBatchEnabled,
   traceInputOutputAttributes,
@@ -111,6 +112,13 @@ describe('trace I/O controls', () => {
     expect(attrs['imprint.trace.output.chars']).toBe(6);
     expect(attrs['imprint.trace.output.truncated']).toBe(true);
     expect(attrs['imprint.trace.output.max_chars']).toBe(0);
+  });
+});
+
+describe('trace error diagnostics', () => {
+  it('caps verbose error messages before recording them on spans', () => {
+    expect(sanitizeTraceErrorMessage('abcdef', 4)).toBe('abcd\n...[truncated 2 chars]');
+    expect(sanitizeTraceErrorMessage('abcdef', 0)).toBe('...[truncated 6 chars]');
   });
 });
 

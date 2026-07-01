@@ -22,6 +22,7 @@ import {
   resolveDefaultCompilePlaybookPath,
   selectTriageCandidateRequests,
   shrinkSession,
+  triageBodySnippet,
 } from '../src/imprint/compile.ts';
 import type { Session } from '../src/imprint/types.ts';
 
@@ -214,6 +215,19 @@ describe('buildTriageEventContexts', () => {
     });
 
     expect(buildTriageEventContexts(session).map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+describe('triageBodySnippet', () => {
+  it('keeps textual request bodies for triage', () => {
+    expect(triageBodySnippet('{"query":"sfo"}')).toBe('{"query":"sfo"}');
+  });
+
+  it('omits non-text request bodies before sending triage prompts to an LLM', () => {
+    const binaryish = `x\u009c\u0003\u0000\u0000\u0000\u0001\u001f\u008b${'a'.repeat(100)}`;
+    expect(triageBodySnippet(binaryish)).toBe(
+      `[non-text request body omitted; original length ${binaryish.length}]`,
+    );
   });
 });
 

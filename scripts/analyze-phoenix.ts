@@ -262,6 +262,60 @@ function printCompileSpan(span: SpanNode, allSpans: SpanNode[]): void {
   console.log('');
 }
 
+function spanToolName(span: SpanNode): string {
+  return attrStr(parseAttrs(span.attributes), 'imprint.tool_name') ?? '(unknown)';
+}
+
+function spanStartMs(span: SpanNode): number {
+  const ms = Date.parse(span.startTime);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function spanEndMs(span: SpanNode): number {
+  const ms = Date.parse(span.endTime);
+  return Number.isFinite(ms) ? ms : spanStartMs(span) + span.latencyMs;
+}
+
+function maxConcurrentSpans(spans: SpanNode[]): number {
+  const events: Array<{ at: number; delta: number }> = [];
+  for (const span of spans) {
+    events.push({ at: spanStartMs(span), delta: 1 });
+    events.push({ at: spanEndMs(span), delta: -1 });
+  }
+  events.sort((a, b) => a.at - b.at || a.delta - b.delta);
+  let active = 0;
+  let max = 0;
+  for (const event of events) {
+    active += event.delta;
+    max = Math.max(max, active);
+  }
+  return max;
+}
+
+function printCompileCriticalPath(compileSpans: SpanNode[]): void {
+  const totalToolMs = compileSpans.reduce((sum, span) => sum + span.latencyMs, 0);
+  const firstStart = Math.min(...compileSpans.map(spanStartMs));
+  const lastEnd = Math.max(...compileSpans.map(spanEndMs));
+  const wallMs =
+    Number.isFinite(firstStart) && Number.isFinite(lastEnd) && lastEnd > firstStart
+      ? lastEnd - firstStart
+      : Math.max(...compileSpans.map((span) => span.latencyMs));
+  const effectiveConcurrency = wallMs > 0 ? totalToolMs / wallMs : 1;
+  const sorted = [...compileSpans].sort((a, b) => b.latencyMs - a.latencyMs);
+
+  console.log('\nCompile critical path:');
+  console.log(
+    `  Tool wall time: ${formatDuration(wallMs)} | summed tool time: ${formatDuration(totalToolMs)} | effective concurrency: ${effectiveConcurrency.toFixed(2)}x | max observed concurrency: ${maxConcurrentSpans(compileSpans)}x`,
+  );
+  console.log('  Slowest tools:');
+  for (const span of sorted.slice(0, 5)) {
+    const share = wallMs > 0 ? (span.latencyMs / wallMs) * 100 : 0;
+    console.log(
+      `    ${spanToolName(span)}: ${formatDuration(span.latencyMs)} (${share.toFixed(0)}% of compile wall) [${span.statusCode}]`,
+    );
+  }
+}
+
 async function analyzeTrace(traceId: string) {
   const spans = await getTraceSpans(traceId);
   const root = spans.find((s) => !s.parentId);
@@ -283,6 +337,7 @@ async function analyzeTrace(traceId: string) {
   // Compile traces: per-tool compile breakdown.
   const compileSpans = spans.filter((s) => s.name === 'compile.generate');
   if (compileSpans.length > 0) {
+    printCompileCriticalPath(compileSpans);
     console.log(`\nCompile spans (${compileSpans.length}):\n`);
     for (const span of compileSpans) printCompileSpan(span, spans);
   } else if (!auditSpan) {

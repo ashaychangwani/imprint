@@ -413,7 +413,7 @@ export async function triageRequests(
           status: r.response?.status,
           mimeType: r.response?.mimeType,
           headers: truncateHeaders(r.headers),
-          body: truncate(r.body, TRIAGE_BODY_LIMIT),
+          body: triageBodySnippet(r.body),
           bodyDigest: requestContextDigest(r.body),
           bodyLength: r.body?.length,
           responseBodyDigest: requestContextDigest(r.response?.body),
@@ -603,6 +603,25 @@ function truncateHeaders(headers: Record<string, string>): string {
   const serialized = JSON.stringify(headers);
   if (serialized.length <= HEADER_TRUNCATE_LIMIT) return serialized;
   return `${serialized.slice(0, HEADER_TRUNCATE_LIMIT)}…`;
+}
+
+export function triageBodySnippet(body: string | undefined): string | undefined {
+  if (body === undefined) return undefined;
+  if (isLikelyText(body)) return truncate(body, TRIAGE_BODY_LIMIT);
+  return `[non-text request body omitted; original length ${body.length}]`;
+}
+
+function isLikelyText(value: string): boolean {
+  if (value.length === 0) return true;
+  const sample = value.slice(0, Math.min(value.length, TRIAGE_BODY_LIMIT));
+  let suspicious = 0;
+  for (const ch of sample) {
+    const code = ch.charCodeAt(0);
+    if (ch === '\uFFFD' || (code < 32 && ch !== '\n' && ch !== '\r' && ch !== '\t')) {
+      suspicious++;
+    }
+  }
+  return suspicious <= 4 && suspicious / sample.length <= 0.02;
 }
 
 // ─── compilePlaybook (playbook.yaml) ─────────────────────────────────────────

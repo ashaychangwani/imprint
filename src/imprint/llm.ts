@@ -260,14 +260,7 @@ class ClaudeCliProvider implements LLMProvider {
           exited: proc.exited,
         });
 
-        if (exitCode !== 0) {
-          throw enrichClaudeCliError(
-            new Error(`claude-cli exited with code ${exitCode}\n${stderr}`),
-            {
-              model: this.model,
-            },
-          );
-        }
+        if (exitCode !== 0) throw cliExitError('claude-cli', exitCode, stderr);
 
         let parsed: {
           result?: string;
@@ -380,14 +373,7 @@ ${cliFinalArtifactInstruction()}`;
           exited: proc.exited,
         });
 
-        if (exitCode !== 0) {
-          throw enrichCodexCliError(
-            new Error(`codex-cli exited with code ${exitCode}\n${stderr}`),
-            {
-              model: this.model,
-            },
-          );
-        }
+        if (exitCode !== 0) throw cliExitError('codex-cli', exitCode, stderr);
 
         const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
 
@@ -429,6 +415,105 @@ export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string):
   return extractJsonObject(stdout) ?? stdout;
 }
 
+export type CliFailureCode =
+  | 'not_found'
+  | 'input_too_large'
+  | 'subscription_access_disabled'
+  | 'authentication'
+  | 'authorization'
+  | 'rate_limited'
+  | 'model_unavailable'
+  | 'unknown';
+
+const CLI_STDERR_TAIL_LIMIT = 2000;
+
+export class CliProviderError extends Error {
+  readonly provider: ProviderName;
+  readonly exitCode: number;
+  readonly errorCode: CliFailureCode;
+  readonly stderrTail: string;
+  readonly stderrChars: number;
+
+  constructor(opts: {
+    provider: ProviderName;
+    exitCode: number;
+    errorCode: CliFailureCode;
+    stderrTail: string;
+    stderrChars: number;
+  }) {
+    super(
+      `${opts.provider} failed: exit_code=${opts.exitCode} error_code=${opts.errorCode} stderr_tail_chars=${opts.stderrTail.length} stderr_chars=${opts.stderrChars}`,
+    );
+    this.name = 'CliProviderError';
+    this.provider = opts.provider;
+    this.exitCode = opts.exitCode;
+    this.errorCode = opts.errorCode;
+    this.stderrTail = opts.stderrTail;
+    this.stderrChars = opts.stderrChars;
+  }
+}
+
+function cliExitError(provider: ProviderName, exitCode: number, stderr: string): CliProviderError {
+  return new CliProviderError({
+    provider,
+    exitCode,
+    errorCode: classifyCliFailure(stderr),
+    stderrTail: cliStderrTail(stderr),
+    stderrChars: stderr.length,
+  });
+}
+
+export function classifyCliFailure(stderr: string): CliFailureCode {
+  const lc = stderr.toLowerCase();
+  if (lc.includes('enoent') || lc.includes('command not found')) return 'not_found';
+  if (
+    lc.includes('input exceeds the maximum length') ||
+    lc.includes('input_too_large') ||
+    lc.includes('maximum length')
+  ) {
+    return 'input_too_large';
+  }
+  if (
+    lc.includes('disabled claude subscription access') ||
+    lc.includes('subscription access') ||
+    lc.includes('use an anthropic api key instead')
+  ) {
+    return 'subscription_access_disabled';
+  }
+  if (lc.includes('rate limit') || lc.includes('rate_limit') || lc.includes('429')) {
+    return 'rate_limited';
+  }
+  if (
+    lc.includes('unauthorized') ||
+    lc.includes('not authenticated') ||
+    lc.includes('login') ||
+    lc.includes('401')
+  ) {
+    return 'authentication';
+  }
+  if (
+    lc.includes('forbidden') ||
+    lc.includes('access denied') ||
+    lc.includes('permission denied') ||
+    lc.includes('403')
+  ) {
+    return 'authorization';
+  }
+  if (
+    lc.includes('model not found') ||
+    lc.includes('model unavailable') ||
+    lc.includes('unsupported model')
+  ) {
+    return 'model_unavailable';
+  }
+  return 'unknown';
+}
+
+export function cliStderrTail(stderr: string, limit = CLI_STDERR_TAIL_LIMIT): string {
+  if (stderr.length <= limit) return stderr;
+  return stderr.slice(stderr.length - limit);
+}
+
 async function traceAnalyze(
   provider: ProviderName,
   model: string,
@@ -459,7 +544,20 @@ async function traceAnalyze(
         : {}),
     },
     async (span) => {
-      const result = await fn();
+      let result: AnalyzeResult;
+      try {
+        result = await fn();
+      } catch (err) {
+        if (err instanceof CliProviderError) {
+          setSpanAttributes(span, {
+            'imprint.llm.provider_error_code': err.errorCode,
+            'imprint.llm.provider_exit_code': err.exitCode,
+            'imprint.llm.stderr_tail_chars': err.stderrTail.length,
+            'imprint.llm.stderr_chars': err.stderrChars,
+          });
+        }
+        throw err;
+      }
       // Providers report `inputTokens` as the *uncached* input only; the cached
       // portion lives in the cache fields. `llmCostAttributes` expects the TOTAL
       // prompt tokens (it derives uncached = total − cacheRead − cacheWrite), so
@@ -728,11 +826,7 @@ ${cliFinalArtifactInstruction()}`;
           exited: proc.exited,
         });
 
-        if (exitCode !== 0) {
-          throw enrichCursorCliError(
-            new Error(`cursor-cli exited with code ${exitCode}\n${stderr}`),
-          );
-        }
+        if (exitCode !== 0) throw cliExitError('cursor-cli', exitCode, stderr);
 
         const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
 
