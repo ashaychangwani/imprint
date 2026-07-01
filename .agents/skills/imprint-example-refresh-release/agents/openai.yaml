@@ -1,0 +1,4 @@
+interface:
+  display_name: "Example Refresh Release"
+  short_description: "Refresh examples and cut patch releases"
+  default_prompt: "Use $imprint-example-refresh-release to refresh checked-in examples from generated tools and publish a patch release."
