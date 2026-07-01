@@ -4,7 +4,8 @@ import { extract as extractSearch } from '../examples/google-flights/search_flig
 import { transform as transformSearch } from '../examples/google-flights/search_flights/request-transform.ts';
 
 function batchExecuteFrame(rpcid: string, payload: unknown): string {
-  return `)]}'\n\n${JSON.stringify([['wrb.fr', rpcid, JSON.stringify(payload)]])}\n`;
+  const frame = JSON.stringify([['wrb.fr', rpcid, JSON.stringify(payload)]]);
+  return `)]}'\n${frame.length}\n${frame}`;
 }
 
 function decodeFreqBody(body: string): unknown[] {
@@ -16,6 +17,13 @@ function decodeFreqBody(body: string): unknown[] {
 
 function searchItinerary(airlineCode: string, airlineName: string, token: string): unknown[] {
   const segment = new Array(24).fill(null);
+  segment[3] = 'BOS';
+  segment[6] = 'BOM';
+  segment[8] = [21, 50];
+  segment[10] = [5, 15];
+  segment[11] = 1315;
+  segment[20] = [2026, 10, 12];
+  segment[21] = [2026, 10, 14];
   segment[22] = [airlineCode, '82', null, airlineName];
   const leg = [
     airlineCode,
@@ -44,7 +52,7 @@ describe('Google Flights search parser', () => {
     expect(() => extractSearch(raw)).toThrow(/recognizable itineraries/);
   });
 
-  it('surfaces available carrier filters even when the itinerary subset omits them', () => {
+  it('surfaces carrier details from recognized itineraries', () => {
     const raw = batchExecuteFrame('GetShoppingResults', [
       searchItinerary('TK', 'Turkish Airlines', 'tok_turkish_airlines_12345'),
       [
@@ -59,19 +67,15 @@ describe('Google Flights search parser', () => {
       ],
     ]);
 
-    const result = extractSearch(raw) as {
+    const result = extractSearch(raw, { params: {}, responses: [] }) as {
       count: number;
-      resultScope: { exhaustive: boolean };
-      availableAirlineFilters: {
-        carriers: Array<{ code: string; name: string }>;
-      };
+      itineraries: Array<{ carriers: Array<{ code?: string; name?: string }> }>;
     };
 
     expect(result.count).toBe(1);
-    expect(result.resultScope.exhaustive).toBe(false);
-    expect(result.availableAirlineFilters.carriers).toContainEqual({
-      code: 'EK',
-      name: 'Emirates',
+    expect(result.itineraries[0]?.carriers).toContainEqual({
+      code: 'TK',
+      name: 'Turkish Airlines',
     });
   });
 });
@@ -83,18 +87,13 @@ describe('Google Flights search request transform', () => {
   it.each(['one_way', 'one-way', 'one way', 'One way', '2'])(
     'encodes %s as a one-way search',
     (tripType) => {
-      const result = transformSearch(
-        'POST',
-        url,
-        {},
-        {
-          origin: 'SJC',
-          destination: 'SAN',
-          departure_date: '2026-07-21',
-          return_date: '',
-          trip_type: tripType,
-        },
-      );
+      const result = transformSearch('POST', url, [], {
+        origin: 'SJC',
+        destination: 'SAN',
+        departure_date: '2026-07-21',
+        return_date: '',
+        trip_type: tripType,
+      });
       const payload = decodeFreqBody(result.body);
       const searchParams = payload[1] as unknown[];
 
@@ -104,18 +103,13 @@ describe('Google Flights search request transform', () => {
   );
 
   it('treats missing return date as one-way even when workflow defaults say round trip', () => {
-    const result = transformSearch(
-      'POST',
-      url,
-      {},
-      {
-        origin: 'SJC',
-        destination: 'SAN',
-        departure_date: '2026-07-21',
-        return_date: '',
-        trip_type: 'round_trip',
-      },
-    );
+    const result = transformSearch('POST', url, [], {
+      origin: 'SJC',
+      destination: 'SAN',
+      departure_date: '2026-07-21',
+      return_date: '',
+      trip_type: 'round_trip',
+    });
     const payload = decodeFreqBody(result.body);
     const searchParams = payload[1] as unknown[];
 
@@ -124,18 +118,13 @@ describe('Google Flights search request transform', () => {
   });
 
   it('keeps round-trip encoding when a return date is supplied', () => {
-    const result = transformSearch(
-      'POST',
-      url,
-      {},
-      {
-        origin: 'SJC',
-        destination: 'SAN',
-        departure_date: '2026-07-21',
-        return_date: '2026-07-28',
-        trip_type: 'round trip',
-      },
-    );
+    const result = transformSearch('POST', url, [], {
+      origin: 'SJC',
+      destination: 'SAN',
+      departure_date: '2026-07-21',
+      return_date: '2026-07-28',
+      trip_type: 'round trip',
+    });
     const payload = decodeFreqBody(result.body);
     const searchParams = payload[1] as unknown[];
 
@@ -144,19 +133,14 @@ describe('Google Flights search request transform', () => {
   });
 
   it('encodes carrier filters as included airlines instead of excluded airlines', () => {
-    const result = transformSearch(
-      'POST',
-      url,
-      {},
-      {
-        origin: 'BOS',
-        destination: 'BOM',
-        departure_date: '2026-10-12',
-        return_date: '',
-        trip_type: 'one-way',
-        airlines: 'EK,TK,STAR_ALLIANCE',
-      },
-    );
+    const result = transformSearch('POST', url, [], {
+      origin: 'BOS',
+      destination: 'BOM',
+      departure_date: '2026-10-12',
+      return_date: '',
+      trip_type: 'one-way',
+      airlines: 'EK,TK,STAR_ALLIANCE',
+    });
     const payload = decodeFreqBody(result.body);
     const searchParams = payload[1] as unknown[];
     const firstLeg = (searchParams[13] as unknown[])[0] as unknown[];
@@ -177,17 +161,35 @@ describe('Google Flights calendar parser', () => {
       ],
     ]);
 
-    const result = extractCalendar(raw, { params: { origin: 'SJC', destination: 'SAN' } }) as {
-      prices: Record<string, number>;
-      calendar: Array<{ departureDate: string; returnDate: string | null; lowestPriceUSD: number }>;
+    const result = extractCalendar(raw, {
+      params: { origin: 'SJC', destination: 'SAN' },
+      responses: [],
+    }) as unknown as {
+      items: Array<{
+        departureDate: string;
+        returnDate?: string;
+        price?: number;
+        currency?: string;
+        tripLength?: string;
+        selectionToken?: string;
+      }>;
     };
 
-    expect(result.prices['2026-07-22']).toBe(139);
-    expect(result.calendar).toContainEqual({
+    expect(result.items).toContainEqual({
       departureDate: '2026-07-22',
       returnDate: '2026-08-02',
-      lowestPriceUSD: 139,
+      price: 139,
+      currency: 'USD',
+      tripLength: '11 nights',
+      selectionToken: 'token-b',
     });
-    expect(result.prices['2026-07-23']).toBe(117);
+    expect(result.items).toContainEqual({
+      departureDate: '2026-07-23',
+      returnDate: '2026-07-30',
+      price: 117,
+      currency: 'USD',
+      tripLength: '7 nights',
+      selectionToken: 'token-c',
+    });
   });
 });

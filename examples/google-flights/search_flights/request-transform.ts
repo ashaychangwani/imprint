@@ -1,113 +1,268 @@
-// Adapter around the shared FlightsFrontendService body builder.
-// The tool exposes flat snake_case params (origin, destination, departure_date,
-// max_stops, …); the shared encoder consumes a structured camelCase shape
-// ({ tripType, legs:[{origin,dest,date,times,stops,includeAirlines,duration}],
-// maxPrice, bags }). We map between them here and delegate the byte-for-byte
-// positional encoding to the shared module (required reuse).
-import { transform as sharedTransform } from '../_shared/flights_request.ts';
+import { transform as transportTransform } from '../_shared/google_flights_transport.ts';
 
-type Params = Record<string, string | number | boolean | undefined | null>;
+type Params = Record<string, string | number | boolean>;
 
-function mapTripType(v: unknown): number {
-  if (v == null || v === '') return 1;
-  if (typeof v === 'number') return v;
-  const s = String(v).trim().toLowerCase().replace(/[\s-]+/g, '_');
-  if (s === 'one_way' || s === 'oneway' || s === '2') return 2;
-  if (s === 'multi_city' || s === 'multicity' || s === '3') return 3;
-  return 1; // round_trip
+type MultiCityLeg = { origin: string; destination: string; date: string };
+type SegmentTuple = [string, string, string, null, string, string];
+
+function asString(params: Params | undefined, key: string, fallback = ''): string {
+  const value = params?.[key];
+  return value === undefined || value === null ? fallback : String(value);
 }
 
-// User semantics (per likelyParam): 0=nonstop, 1=≤1 stop, 2=≤2 stops, 3=any.
-// Google wire encoding: 1=nonstop, 2=≤1, 3=≤2, 0=any.
-function mapStops(v: unknown): number {
-  switch (Number(v)) {
-    case 0:
-      return 1;
-    case 1:
+function asNumber(params: Params | undefined, key: string, fallback: number): number {
+  const value = params?.[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function location(value: string): [string, number] {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('/m/')) return [trimmed, 5];
+  return [trimmed.toUpperCase(), 0];
+}
+
+function locGroup(value: string): [[[string, number]]] {
+  return [[location(value)]];
+}
+
+function tripTypeCode(value: string): number {
+  switch (value.trim().toLowerCase()) {
+    case 'one_way':
+    case 'one-way':
+    case 'one way':
+    case '2':
       return 2;
-    case 2:
+    case 'multi_city':
+    case 'multi-city':
+    case 'multi city':
+    case '3':
       return 3;
+    case 'round_trip':
+    case 'round-trip':
+    case 'round trip':
+    case '1':
     default:
-      return 0; // any (default / 3)
+      return 1;
   }
 }
 
-// "6-23" -> [depMin, depMax, arrMin, arrMax]; arrival defaults to full day.
-function parseTimes(v: unknown): number[] | null {
-  if (v == null || v === '') return null;
-  const m = /^(\d{1,2})-(\d{1,2})$/.exec(String(v).trim());
-  if (!m) return null;
-  return [Number(m[1]), Number(m[2]), 0, 23];
+function stopCode(value: string): number {
+  switch (value.trim().toLowerCase()) {
+    case 'nonstop_only':
+    case 'nonstop':
+    case 'non_stop':
+      return 1;
+    case 'one_stop_or_fewer':
+    case 'one stop or fewer':
+      return 2;
+    case 'two_stops_or_fewer':
+    case 'two stops or fewer':
+      return 3;
+    case 'any':
+    default:
+      return 0;
+  }
 }
 
-function parseAirlines(v: unknown): string[] | null {
-  if (v == null || v === '') return null;
-  const includeAirlines = String(v)
-    .split(',')
-    .map((x) => x.trim())
-    .filter(Boolean)
-    .map((p) => p.toUpperCase());
-  return includeAirlines.length ? includeAirlines : null;
+function parseTimeRange(value: string): [number, number] | null {
+  const match = value.trim().match(/^(\d{1,2})(?::\d{2})?-(\d{1,2})(?::\d{2})?$/);
+  if (!match) return null;
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return [start, end];
 }
 
-function num(v: unknown): number | undefined {
-  if (v == null || v === '') return undefined;
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
+function airlineList(value: string): string[] | null {
+  const items = value.split(',').map((item) => item.trim().toUpperCase()).filter(Boolean);
+  return items.length > 0 ? items : null;
+}
+
+function normalizeSegment(value: unknown): SegmentTuple | null {
+  if (Array.isArray(value)) {
+    const [origin, date, destination, ignored, carrier, flightNumber] = value;
+    if (typeof origin === 'string' && typeof date === 'string' && typeof destination === 'string' && typeof carrier === 'string' && String(flightNumber)) {
+      return [origin, date, destination, ignored === null ? null : null, carrier, String(flightNumber)];
+    }
+  }
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const origin = obj.origin;
+    const date = obj.date ?? obj.departureDate;
+    const destination = obj.destination;
+    const carrier = obj.carrier ?? obj.carrierCode;
+    const flightNumber = obj.flightNumber ?? obj.flight_number;
+    if (typeof origin === 'string' && typeof date === 'string' && typeof destination === 'string' && typeof carrier === 'string' && flightNumber != null) {
+      return [origin, date, destination, null, carrier, String(flightNumber)];
+    }
+  }
+  return null;
+}
+
+function parseSelectedFlights(raw: unknown): SegmentTuple[] {
+  if (Array.isArray(raw)) return raw.map(normalizeSegment).filter((item): item is SegmentTuple => Boolean(item));
+  if (typeof raw !== 'string') return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  try {
+    return parseSelectedFlights(JSON.parse(trimmed));
+  } catch {
+    return [];
+  }
+}
+
+function sameCode(left: string, right: string): boolean {
+  return left.trim().toUpperCase() === right.trim().toUpperCase();
+}
+
+function dateDeltaDays(left: string, right: string): number | null {
+  const leftTime = Date.parse(`${left}T00:00:00Z`);
+  const rightTime = Date.parse(`${right}T00:00:00Z`);
+  if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) return null;
+  return Math.round((rightTime - leftTime) / 86_400_000);
+}
+
+function groupSelectedSegments(segments: SegmentTuple[]): SegmentTuple[][] {
+  const groups: SegmentTuple[][] = [];
+  for (const segment of segments) {
+    const current = groups[groups.length - 1];
+    const previous = current?.[current.length - 1];
+    const startsReturnToGroupOrigin = current ? sameCode(segment[2], current[0]![0]) : false;
+    const dateDelta = previous ? dateDeltaDays(previous[1], segment[1]) : null;
+    const continuesConnection = previous
+      && sameCode(segment[0], previous[2])
+      && (dateDelta === null || (dateDelta >= 0 && dateDelta <= 1))
+      && !startsReturnToGroupOrigin;
+    if (current && continuesConnection) {
+      current.push(segment);
+    } else {
+      groups.push([segment]);
+    }
+  }
+  return groups;
+}
+
+function leg(
+  origin: string,
+  destination: string,
+  date: string,
+  stops: number,
+  airlines: string[] | null,
+  timeRange: [number, number] | null,
+  bags: number,
+  legFlag = 3,
+  selectedSegments: SegmentTuple[] | null = null,
+): unknown[] {
+  return [
+    locGroup(origin),
+    locGroup(destination),
+    timeRange,
+    stops,
+    airlines,
+    null,
+    date,
+    bags > 0 ? [bags * 90] : null,
+    selectedSegments,
+    null,
+    null,
+    null,
+    null,
+    null,
+    stops || airlines || timeRange || bags > 0 ? 1 : legFlag,
+  ];
+}
+
+function parseMultiCityLegs(value: string): MultiCityLeg[] {
+  const legs: MultiCityLeg[] = [];
+  for (const part of value.split(';').map((item) => item.trim()).filter(Boolean)) {
+    const [origin, destination, date] = part.split(',').map((item) => item.trim());
+    if (origin && destination && date) legs.push({ origin, destination, date });
+  }
+  return legs;
+}
+
+function buildInner(params?: Params): unknown[] {
+  const itinerary = asString(params, 'itinerary', '');
+  let tripCode = itinerary.trim() ? 3 : tripTypeCode(asString(params, 'trip_type', 'round_trip'));
+  if (tripCode === 1 && !asString(params, 'return_date', '').trim()) tripCode = 2;
+  const adults = Math.max(1, asNumber(params, 'adults', 1));
+  const bags = Math.max(0, asNumber(params, 'bags', 0));
+  const stops = stopCode(asString(params, 'stops', 'any'));
+  const airlines = airlineList(asString(params, 'airlines', ''));
+  const maxPrice = asNumber(params, 'max_price', 0);
+  const maxDuration = asNumber(params, 'max_duration_minutes', 0);
+  const outboundTimeRange = parseTimeRange(asString(params, 'outbound_time_range', ''));
+  const returnTimeRange = parseTimeRange(asString(params, 'return_time_range', ''));
+  const selectedFlightGroups = groupSelectedSegments(parseSelectedFlights(params?.selected_flights));
+  const selectionToken = asString(params, 'selection_token', '');
+
+  let legs: unknown[];
+  if (tripCode === 3) {
+    const parsedLegs = parseMultiCityLegs(itinerary);
+    const sourceLegs = parsedLegs.length > 0
+      ? parsedLegs
+      : [{ origin: asString(params, 'origin', 'SJC'), destination: asString(params, 'destination', 'SAN'), date: asString(params, 'departure_date', '2026-07-12') }];
+    legs = sourceLegs.map((item, index) => {
+      const selectedSegments = selectedFlightGroups[index];
+      return leg(item.origin, item.destination, item.date, stops, airlines, outboundTimeRange, bags, 1, selectedSegments ?? null);
+    });
+  } else {
+    const origin = asString(params, 'origin', 'SJC');
+    const destination = asString(params, 'destination', 'SAN');
+    const departureDate = asString(params, 'departure_date', '2026-07-12');
+    legs = [leg(origin, destination, departureDate, stops, airlines, outboundTimeRange, bags, 3)];
+    if (tripCode === 1) {
+      const returnDate = asString(params, 'return_date', '2026-07-16');
+      legs.push(leg(destination, origin, returnDate, stops, airlines, returnTimeRange, bags, 1));
+    }
+  }
+
+  const filters = [
+    null,
+    null,
+    tripCode,
+    null,
+    [],
+    adults,
+    [adults, 0, 0, 0],
+    maxPrice > 0 ? [null, maxPrice] : null,
+    null,
+    null,
+    maxDuration > 0 ? [1, 1] : null,
+    null,
+    null,
+    legs,
+    null,
+    null,
+    null,
+    1,
+  ];
+
+  if (selectionToken && selectedFlightGroups.length > 0) return [[null, selectionToken], filters, 0, 0, 0, 1];
+  return [[], filters, 0, 0, 0, 1];
 }
 
 export function transform(
   method: string,
   url: string,
-  responses: Record<string, any>,
+  responses: unknown[],
   params?: Params,
-): { url: string; body: string } {
-  const p: Params = params ?? {};
-  const requestedTripType = mapTripType(p.trip_type);
-  const hasReturnDate = p.return_date != null && String(p.return_date).trim() !== '';
-  const tripType = requestedTripType === 1 && !hasReturnDate ? 2 : requestedTripType;
-  const stops = p.max_stops != null && p.max_stops !== '' ? mapStops(p.max_stops) : 0;
-  const includeAirlines = parseAirlines(p.airlines);
-  const maxDur = num(p.max_duration);
-  const duration = maxDur != null ? [maxDur] : null;
-
-  const origin = p.origin != null ? String(p.origin) : '';
-  const destination = p.destination != null ? String(p.destination) : '';
-
-  const legs: any[] = [
-    {
-      origin,
-      dest: destination,
-      date: p.departure_date ? String(p.departure_date) : null,
-      times: parseTimes(p.outbound_times),
-      stops,
-      includeAirlines,
-      duration,
+): { url: string; body: string; headers: Record<string, string> } {
+  return transportTransform(method, url, responses, {
+    fReq: [null, JSON.stringify(buildInner(params))],
+    sourcePath: '/travel/flights',
+    referer: 'https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA2LTA4agcIARIDU0pDcgcIARIDU0FOGh4SCjIwMjYtMDYtMTFqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      'X-Same-Domain': '1',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'sec-ch-ua-full-version': '"148.0.7778.96"',
+      'x-goog-ext-259736195-jspb': '["en-US","US","USD",2,null,[420],null,null,7,[]]',
     },
-  ];
-
-  // Append a return leg for round-trip / multi-city when a return date exists.
-  if (tripType !== 2 && p.return_date) {
-    legs.push({
-      origin: destination,
-      dest: origin,
-      date: String(p.return_date),
-      times: parseTimes(p.return_times),
-      stops,
-      includeAirlines,
-      duration,
-    });
-  }
-
-  const carryOn = num(p.carry_on_bags);
-  const mapped: Record<string, any> = {
-    tripType,
-    legs,
-    maxPrice: num(p.max_price),
-    // CONFIG[10] wire form is [1, <carry-on count>]; shared builder emits
-    // [carryOn, checked], so map count -> checked slot, constant 1 -> first.
-    bags: carryOn != null ? { carryOn: 1, checked: carryOn } : undefined,
-  };
-
-  return sharedTransform(method, url, responses, mapped);
+  }) as { url: string; body: string; headers: Record<string, string> };
 }

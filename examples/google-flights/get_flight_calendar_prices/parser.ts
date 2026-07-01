@@ -1,86 +1,93 @@
-// Parse a Google Flights GetCalendarPicker batchexecute response into a
-// date->price calendar for the route. Decoding of the )]}' envelope is delegated
-// to the shared batchexecute helper (imported per the build plan).
-import { decodeBatchExecute } from '../_shared/batchexecute.ts';
+import { extractWrbRecords, parseNestedPayload } from '../_shared/google_batchexecute_parser.ts';
+import type { CalendarPrice } from '../_shared/google_flights_types.ts';
 
-type CalendarEntry = {
-  departureDate: string;
-  returnDate: string | null;
-  lowestPriceUSD: number;
+type CalendarOutput = {
+  items: CalendarPrice[];
+  count: number;
+  currency: string;
 };
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+function asArray(value: unknown): unknown[] | null {
+  return Array.isArray(value) ? value : null;
+}
 
-// The GetCalendarPicker wrb.fr payload is shaped:
-//   [ <metadata>, [ [depDate, retDate, [[null, price], token], 1], ... ] ]
-// The metadata entry is skipped naturally because we only keep array items whose
-// [0] is an ISO date string. We scan every nested array so we are robust to the
-// list living at payload[1] (the recorded shape) or being flattened.
-function collectEntries(payload: unknown): CalendarEntry[] {
-  const entries = new Map<string, CalendarEntry>();
-  if (!Array.isArray(payload)) return [];
+function parsePayload(rawResponse: unknown): unknown[] | null {
+  if (Array.isArray(rawResponse)) return rawResponse;
 
-  const consider = (item: unknown) => {
-    if (!Array.isArray(item)) return;
-    const dep = item[0];
-    if (typeof dep !== 'string' || !ISO_DATE.test(dep)) return;
-    const ret = typeof item[1] === 'string' && ISO_DATE.test(item[1]) ? (item[1] as string) : null;
-    // price lives at item[2][0][1]
-    const priceContainer = item[2];
-    let price: unknown = null;
-    if (Array.isArray(priceContainer) && Array.isArray(priceContainer[0])) {
-      price = (priceContainer[0] as unknown[])[1];
-    }
-    if (typeof price !== 'number') return; // no fare found for that date -> omit
-    const existing = entries.get(dep);
-    if (!existing || price < existing.lowestPriceUSD) {
-      entries.set(dep, { departureDate: dep, returnDate: ret, lowestPriceUSD: price });
-    }
-  };
+  if (typeof rawResponse !== 'string') return null;
 
-  for (const top of payload) {
-    if (Array.isArray(top)) {
-      // top may itself be the list of date entries, or a single entry.
-      consider(top);
-      for (const inner of top) consider(inner);
-    }
-  }
-  return [...entries.values()];
+  const records = extractWrbRecords(rawResponse);
+  const record = records.find((entry) => Array.isArray(parseNestedPayload(entry.payload)));
+  if (!record) return null;
+
+  const payload = parseNestedPayload(record.payload);
+  return asArray(payload);
+}
+
+function dateDiffDays(start: string, end: string): number | undefined {
+  const startMs = Date.parse(`${start}T00:00:00Z`);
+  const endMs = Date.parse(`${end}T00:00:00Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return undefined;
+  return Math.round((endMs - startMs) / 86_400_000);
+}
+
+function readCurrency(token: string | undefined): string {
+  if (!token) return 'USD';
+  return token.includes('VVNE') || token.includes('USD') ? 'USD' : 'USD';
 }
 
 export function extract(
   rawResponse: unknown,
-  context?: { params?: Record<string, string | number | boolean>; responses?: unknown[] },
-): unknown {
-  const raw = typeof rawResponse === 'string' ? rawResponse : JSON.stringify(rawResponse ?? '');
-  const frames = decodeBatchExecute(raw);
+  context?: { params: Record<string, string | number | boolean>; responses: unknown[] },
+): CalendarOutput {
+  const payload = parsePayload(rawResponse);
+  const rows = asArray(payload?.[1]) ?? [];
 
-  let payload: unknown = null;
-  for (const f of frames) {
-    const candidate = collectEntries(f.payload);
-    if (candidate.length > 0) {
-      payload = f.payload;
-      break;
-    }
-  }
-  // If no frame produced entries, still attempt the first frame's payload so an
-  // empty (zero-result) response yields an empty calendar rather than throwing.
-  if (payload == null && frames.length > 0) payload = frames[0]?.payload ?? null;
+  const parsedItems = rows
+    .map((row): CalendarPrice | null => {
+      const entry = asArray(row);
+      if (!entry) return null;
 
-  const entries = collectEntries(payload).sort((a, b) =>
-    a.departureDate < b.departureDate ? -1 : a.departureDate > b.departureDate ? 1 : 0,
+      const departureDate = typeof entry[0] === 'string' ? entry[0] : '';
+      const returnDate = typeof entry[1] === 'string' ? entry[1] : undefined;
+      const priceBlock = asArray(entry[2]);
+      const priceTuple = asArray(priceBlock?.[0]);
+      const rawPrice = priceTuple?.[1];
+      const price = typeof rawPrice === 'number' ? rawPrice : undefined;
+      const selectionToken = typeof priceBlock?.[1] === 'string' ? priceBlock[1] : undefined;
+
+      if (!departureDate && !returnDate && price === undefined && !selectionToken) return null;
+      if (!departureDate) return null;
+
+      const nights = returnDate ? dateDiffDays(departureDate, returnDate) : undefined;
+      const requestedTripLength = context?.params?.trip_length;
+      const tripLength = nights !== undefined ? `${nights} nights` : requestedTripLength ? String(requestedTripLength) : undefined;
+
+      return {
+        departureDate,
+        returnDate,
+        price,
+        currency: readCurrency(selectionToken),
+        tripLength,
+        selectionToken,
+      };
+    })
+    .filter((item): item is CalendarPrice => item !== null);
+  const items = Array.from(
+    parsedItems
+      .reduce((bestByDeparture, item) => {
+        const current = bestByDeparture.get(item.departureDate);
+        if (!current || (item.price ?? Number.POSITIVE_INFINITY) < (current.price ?? Number.POSITIVE_INFINITY)) {
+          bestByDeparture.set(item.departureDate, item);
+        }
+        return bestByDeparture;
+      }, new Map<string, CalendarPrice>())
+      .values(),
   );
 
-  const prices: Record<string, number> = {};
-  for (const e of entries) prices[e.departureDate] = e.lowestPriceUSD;
-
-  const params = context?.params ?? {};
   return {
-    origin: params.origin != null ? String(params.origin).toUpperCase() : null,
-    destination: params.destination != null ? String(params.destination).toUpperCase() : null,
-    currency: 'USD',
-    count: entries.length,
-    prices,
-    calendar: entries,
+    items,
+    count: items.length,
+    currency: items[0]?.currency ?? 'USD',
   };
 }

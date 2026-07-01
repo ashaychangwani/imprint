@@ -51,9 +51,9 @@ When `HERMES_HOME` is set, Imprint writes Hermes MCP entries to `$HERMES_HOME/co
 
 ## See It in Action
 
-**Teach once.** `imprint teach google-flights` records one real search and compiles a **4-tool** MCP server from that single session — the compile agent reverse-engineers Google's `batchexecute` wire format itself and wires the search→booking token chain, with no hand-written request code. Here is the actual run (6 recordings → 4 tools, every tool live-verified):
+**Teach once.** `imprint teach google-flights` records real browser flows and compiles a **6-tool** MCP server — the compile agent reverse-engineers Google's `batchexecute` wire format itself and wires the staged search→booking token chain, with no hand-written request code. Here is the actual run behind the example snapshot:
 
-![imprint teach google-flights — a real run: six recordings compiled into four live-verified MCP tools](web/public/imprint-teach.gif)
+![imprint teach google-flights — a real run compiled into live-verified MCP tools](web/public/imprint-teach.gif)
 
 **Then your agent calls those tools** like any other — real-time results through a live trusted-Chrome (`cdp-replay`) backend:
 
@@ -65,7 +65,9 @@ $ claude "cheapest nonstop SJC→SAN the first week of July, with a carry-on"
   Delta      DL2901   SJC→SAN   7:10a→8:44a   nonstop   $169
 ```
 
-The suite was one-shot compiled from one recording and audited at **92.6%**, every tool live-verified. *(The terminal above is a faithful replay — regenerate/record it with `bun scripts/demo-teach.ts`.)*
+The current example snapshot includes six live-verified tools, including staged
+multi-city search and booking. *(The terminal above is a faithful replay —
+regenerate/record it with `bun scripts/demo-teach.ts`.)*
 
 ---
 
@@ -210,7 +212,7 @@ Every example below was **one-shot compiled from a single real browser-session r
 
 | Example | Tools | Audit | What it shows |
 |:--|:--|:--|:--|
-| [**google-flights**](examples/google-flights) | 4 | 92.6% | `batchexecute` wire-format decode + search→booking producer-token chain, live `cdp-replay` |
+| [**google-flights**](examples/google-flights) | 6 | live-verified | `batchexecute` wire-format decode + staged multi-city search→booking token chain, live `cdp-replay` |
 | [**google-hotels**](examples/google-hotels) | 4 | 91.7% | autocomplete → search → reviews/booking producer-token chaining |
 
 Other examples:

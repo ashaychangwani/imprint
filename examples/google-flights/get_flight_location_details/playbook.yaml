@@ -1,0 +1,59 @@
+toolName: get_flight_location_details
+summary: Resolve a selected Google Flights airport, city, or place into normalized location metadata.
+parameters:
+  - name: location_id
+    type: string
+    description: Airport code such as SJC or place id such as /m/0d9jr.
+  - name: location_type
+    type: string
+    description: Location id type, such as airport_code or google_place_id.
+steps:
+  - action: navigate
+    url: https://www.google.com/travel/flights
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: role
+        value: textbox
+        name: Where from?
+      - by: aria_label
+        value_pattern: Where from
+      - by: text
+        value_pattern: Where from
+      - by: css
+        value: input[aria-label^="Where from"]
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: role
+        value: textbox
+        name: Where else?
+      - by: aria_label
+        value_pattern: Where else
+      - by: aria_label
+        value_pattern: Where from
+      - by: css
+        value: input[type="text"]
+    value: ${location_id}
+    wait_for:
+      xhr: rpcids=H028ib
+  - action: click
+    locators:
+      - by: role
+        value: option
+        name: ${location_id}
+      - by: aria_label
+        value_pattern: ${location_id}
+      - by: text
+        value_pattern: ${location_id}
+      - by: css
+        value: ul.DFGgtd li
+    wait_for:
+      xhr: rpcids=tDoGIe
+result:
+  source: xhr
+  url_pattern: rpcids=tDoGIe
+  extract: "0.2"
+  return_as: location_details
+notes: The selected-location response is a Google batchexecute payload; downstream parsing should strip the JSON prefix, find the wrb.fr record for tDoGIe, then parse its inner JSON string for coordinates, image URLs, display names, descriptions, canonical IDs, and country metadata.

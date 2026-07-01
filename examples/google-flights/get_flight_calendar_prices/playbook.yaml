@@ -1,56 +1,89 @@
 toolName: get_flight_calendar_prices
-summary: Open the Google Flights date picker for a route to capture the calendar grid of lowest prices by departure/return date.
+summary: Get Google Flights calendar fare prices for a route after opening the date picker.
 parameters:
   - name: origin
     type: string
-    description: Origin airport code, e.g. SJC
+    description: Origin airport code, city code, or place identifier.
   - name: destination
     type: string
-    description: Destination airport code, e.g. SAN
+    description: Destination airport code, city code, or place identifier.
+  - name: trip_type
+    type: string
+    description: Trip type such as round_trip or one_way.
+    default: round_trip
   - name: start_date
     type: string
-    description: Start of date window YYYY-MM-DD (used to filter the returned calendar range; the picker returns a fixed window starting near today)
+    description: Start of date range in YYYY-MM-DD format.
   - name: end_date
     type: string
-    description: End of date window YYYY-MM-DD (used to filter the returned calendar range)
+    description: End of date range in YYYY-MM-DD format.
+  - name: trip_length
+    type: string
+    description: Optional desired trip length or min/max nights for round-trip calendars.
+    default: "7 nights"
 steps:
   - action: navigate
-    url: https://www.google.com/travel/flights
+    url: "https://www.google.com/travel/flights"
     wait_for: networkidle
   - action: click
     locators:
       - by: role
-        value: combobox
-        name: "Where from?"
-      - by: aria_label
-        value: "Where from?"
+        value: button
+        name: Round trip
+      - by: text
+        value: Round trip
+      - by: css
+        value: "div.TQYpgc.gInvKb div.VfPpkd-aPP78e"
     wait_for:
       sleep_ms: 300
-  - action: type
-    locators:
-      - by: aria_label
-        value: "Where from?"
-      - by: aria_label
-        value: "Where else?"
-    value: ${origin}
-    wait_for:
-      sleep_ms: 500
   - action: click
     locators:
-      - by: aria_label
-        value_pattern: ${origin}
       - by: role
         value: option
+        name: Round trip
+      - by: text
+        value: Round trip
       - by: css
-        value: "ul.DFGgtd > li.n4HaVc"
+        value: "ul[aria-label='Select your ticket type.'] li"
     wait_for: visible
   - action: click
     locators:
-      - by: role
-        value: combobox
-        name: "Where to?"
+      - by: aria_label
+        value: Where from?
+      - by: text
+        value_pattern: Where from
+      - by: css
+        value: "input[aria-label^='Where from']"
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: aria_label
+        value: Where else?
+      - by: aria_label
+        value_pattern: Where from
+      - by: css
+        value: "input.II2One"
+    value: "${origin}"
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: "${origin}"
+      - by: text
+        value_pattern: "${origin}"
+      - by: css
+        value: "ul.DFGgtd li"
+    wait_for: visible
+  - action: click
+    locators:
       - by: aria_label
         value: "Where to? "
+      - by: text
+        value_pattern: Where to
+      - by: css
+        value: "input[aria-label^='Where to']"
     wait_for:
       sleep_ms: 300
   - action: type
@@ -58,40 +91,34 @@ steps:
       - by: aria_label
         value: "Where to? "
       - by: aria_label
-        value: "Where else?"
-    value: ${destination}
+        value: Where else?
+      - by: css
+        value: "input.II2One"
+    value: "${destination}"
     wait_for:
       sleep_ms: 500
   - action: click
     locators:
       - by: aria_label
-        value_pattern: ${destination}
-      - by: role
-        value: option
+        value_pattern: "${destination}"
+      - by: text
+        value_pattern: "${destination}"
       - by: css
-        value: "ul.DFGgtd > li.n4HaVc"
+        value: "ul.DFGgtd li"
     wait_for: visible
   - action: click
     locators:
       - by: aria_label
         value: Departure
+      - by: text
+        value_pattern: Departure
       - by: css
-        value: "div.GYgkab.YICvqf > div.NA5Egc.ESCxub > input.TP4Lpb.eoY5cb"
+        value: "input[aria-label='Departure']"
     wait_for:
-      xhr: /GetCalendarPicker
+      xhr: GetCalendarPicker
 result:
   source: xhr
-  url_pattern: /GetCalendarPicker
-  extract: "[1][]"
+  url_pattern: GetCalendarPicker
+  extract: "wrb.fr"
   return_as: calendar_prices
-notes: >-
-  The GetCalendarPicker response is a Google batchexecute payload: strip the )]}' prefix, split on
-  numeric length-prefix lines, and JSON.parse the "wrb.fr" envelope's third element (a JSON-encoded
-  string). Inside that decoded array, index [1] is the list of date entries; each entry is
-  [departureDate (YYYY-MM-DD), returnDate (YYYY-MM-DD), [[null, lowestPriceUSD], opaqueFlightToken], 1].
-  Build a departureDate->lowestPriceUSD map and filter to [start_date, end_date]. The extract path
-  "[1][]" is relative to the decoded wrb.fr payload, not the raw HTTP body. start_date/end_date are
-  client-side filters: the picker returns a fixed forward window (~from today) and is opened simply by
-  clicking the Departure field — no date is typed to drive the request. The request is authorized by a
-  per-page f.sid plus X-Goog-BatchExecute-Bgr header that must be captured fresh from the page bootstrap
-  (navigate step), not parameterized.
+notes: Google Flights returns the calendar response inside a batchexecute/WIZ envelope; downstream parsing must strip the JSON prefix, parse the wrb.fr payload string, and map each fare row as departure date, return date, price amount, encoded selection token, and availability flag. The captured calendar for SJC to SAN returned rows shaped like date, return date, price tuple, and flag, e.g. 2026-06-08 to 2026-06-15 at 242 USD.

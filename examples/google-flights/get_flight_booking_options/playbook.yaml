@@ -1,0 +1,46 @@
+toolName: get_flight_booking_options
+summary: Get booking and fare details for a selected Google Flights itinerary.
+parameters:
+  - name: selection_token
+    type: string
+    description: Encoded flight selection token returned by search results for the chosen itinerary or leg.
+  - name: trip_type
+    type: string
+    description: Ticket type for the selected itinerary, such as one_way, round_trip, or multi_city.
+  - name: selected_flights
+    type: string
+    description: Comma-separated selected leg identifiers such as carrier, flight number, date, origin, and destination when required.
+steps:
+  - action: navigate
+    url: "https://www.google.com/travel/flights"
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: role
+        value: button
+        name: "${trip_type}"
+      - by: aria_label
+        value_pattern: "${trip_type}"
+      - by: text
+        value_pattern: "${trip_type}"
+      - by: css
+        value: "div.TQYpgc.gInvKb"
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: text
+        value_pattern: "${selected_flights}"
+      - by: aria_label
+        value_pattern: "${selected_flights}"
+      - by: css
+        value: "div.mxvQLc.ceis6c div.zxVSec.YMlIz"
+    wait_for:
+      xhr: "GetBookingResults"
+      method: POST
+result:
+  source: xhr
+  url_pattern: "FlightsFrontendService/GetBookingResults"
+  extract: "[]"
+  return_as: booking_options
+notes: "Run after a Google Flights search has rendered matching results. For round_trip or multi_city selections, selected_flights should identify the complete visible itinerary or the next required leg option; Google may issue GetShoppingResults for intermediate leg selection before the final GetBookingResults response."

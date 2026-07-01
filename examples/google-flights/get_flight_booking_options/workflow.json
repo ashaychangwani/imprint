@@ -1,0 +1,85 @@
+{
+  "toolName": "get_flight_booking_options",
+  "intent": {
+    "description": "Get booking and fare details for a selected Google Flights itinerary.",
+    "userSaid": "clicked one of the one-way fares to find more details and booking details; saw the options for another flight; chose round trip fares; kept exploring round trip fare details; clicked the option for the first leg; clicked the option for the second leg and came to the booking options page"
+  },
+  "site": "google-flights",
+  "parameters": [
+    {
+      "name": "selected_flights",
+      "type": "string",
+      "description": "JSON array of selected segment tuples [origin, departureDate, destination, null, carrierCode, flightNumber]. For round-trip and multi-city booking, pass the complete ordered array of selected legs; a single first-leg value is treated as a one-way booking.",
+      "verified": true,
+      "sourcedFrom": {
+        "tool": "search_flights",
+        "field": "selected_flights"
+      }
+    }
+  ],
+  "bootstrap": {
+    "url": "https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA2LTA4agcIARIDU0pDcgcIARIDU0FOGh4SCjIwMjYtMDYtMTFqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ",
+    "waitUntil": "domcontentloaded",
+    "waitMs": 500,
+    "timeoutMs": 30000,
+    "captures": [
+      {
+        "source": "html_regex",
+        "name": "f_sid",
+        "pattern": "(?:FdrFJe|f\\.sid)[^0-9-]{0,80}(-?[0-9]{10,})",
+        "group": 1,
+        "required": true,
+        "capability": "browser_bootstrap"
+      },
+      {
+        "source": "html_regex",
+        "name": "bl",
+        "pattern": "\"cfb2h\":\"([^\"]+)\"",
+        "group": 1,
+        "required": true,
+        "capability": "browser_bootstrap"
+      }
+    ]
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "{\"selected_flights\":\"${param.selected_flights}\"}",
+      "effect": "safe"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "{\"selected_flights\":\"${param.selected_flights}\"}",
+      "effect": "safe"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetBookingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "{\"selected_flights\":\"${param.selected_flights}\"}",
+      "effect": "safe"
+    }
+  ],
+  "requestTransformModule": "./request-transform.ts",
+  "parserModule": "./parser.ts",
+  "liveVerified": true
+}
