@@ -22,6 +22,7 @@ import {
   type AssignedSharedModule,
   type RequiredInput,
   type SharedModuleManifestEntry,
+  looksLikePlannerPlaceholderLiteral,
   planSliceForTool,
   readBuildPlanFile,
   resolveAssignedModules,
@@ -2120,10 +2121,13 @@ export function classifyParamCoverage(opts: {
 export function hasLiveBaselineWorkflowTest(integrationSrc: string): boolean {
   const requiresOk = /expect\s*\(\s*result\.ok\s*\)\s*\.\s*(?:toBe|toEqual)\s*\(\s*true\s*\)/;
   const throwsOnFailure = /if\s*\(\s*!result\.ok\s*\)\s*\{[\s\S]{0,500}\bthrow\b/;
+  const returnsOnFailedResult =
+    /if\s*\([^)]*![^)]*\.result\.ok[\s\S]{0,200}\)\s*(?:\{[\s\S]{0,300}\breturn\b|return\b)/;
   return extractTestBlocks(integrationSrc).some(
     (block) =>
       !block.title.includes('param:') &&
       /\brunWorkflowWithLadder\s*\(/.test(block.body) &&
+      !returnsOnFailedResult.test(block.body) &&
       (requiresOk.test(block.body) || throwsOnFailure.test(block.body)),
   );
 }
@@ -2814,6 +2818,33 @@ function headerNameOf(location: string): string | null {
   return location.toLowerCase().startsWith('header:') ? location.slice('header:'.length) : null;
 }
 
+function recordedHeaderValue(session: Session, ri: RequiredInput): string | null {
+  const header = headerNameOf(ri.location);
+  if (!header || ri.recordedSeq == null) return null;
+  const rec = session.requests.find((r) => r.seq === ri.recordedSeq);
+  return (
+    Object.entries(rec?.headers ?? {}).find(
+      ([h]) => h.toLowerCase() === header.toLowerCase(),
+    )?.[1] ?? null
+  );
+}
+
+export function repairRequiredInputStaticLiterals(
+  requiredInputs: RequiredInput[],
+  session: Session,
+): RequiredInput[] {
+  return requiredInputs.map((ri) => {
+    if (
+      ri.source !== 'static' ||
+      (ri.literal !== undefined && !looksLikePlannerPlaceholderLiteral(ri.literal))
+    ) {
+      return ri;
+    }
+    const recorded = recordedHeaderValue(session, ri);
+    return recorded ? { ...ri, literal: recorded } : ri;
+  });
+}
+
 function looseUrlPath(url: string): string {
   const q = url.indexOf('?');
   const noQuery = q >= 0 ? url.slice(0, q) : url;
@@ -2871,12 +2902,6 @@ export function injectContractedInputs(
       continue;
     const token = wiringToken(ri);
     if (token == null) continue;
-    // Skip if any request already carries this header (the agent wired it; a wrong
-    // raw value is handled by the emit-time guard's rewrite, not here).
-    const already = requests.some((r) =>
-      Object.keys(r.headers ?? {}).some((h) => h.toLowerCase() === header.toLowerCase()),
-    );
-    if (already) continue;
     // Target the request(s) matching the input's recorded method + path; fall back
     // to every request when there's no usable anchor.
     const rec =
@@ -2889,6 +2914,31 @@ export function injectContractedInputs(
         )
       : [];
     const dest = targets.length > 0 ? targets : requests;
+    let repairedPlaceholder = false;
+    if (ri.source === 'static' && !looksLikePlannerPlaceholderLiteral(token)) {
+      for (const r of dest) {
+        for (const [h, value] of Object.entries(r.headers ?? {})) {
+          if (
+            h.toLowerCase() === header.toLowerCase() &&
+            looksLikePlannerPlaceholderLiteral(value)
+          ) {
+            if (!r.headers || typeof r.headers !== 'object') r.headers = {};
+            r.headers[h] = token;
+            repairedPlaceholder = true;
+          }
+        }
+      }
+    }
+    if (repairedPlaceholder) {
+      injected++;
+      continue;
+    }
+    // Skip if any request already carries this header (the agent wired it; a wrong
+    // raw value is handled by the emit-time guard's rewrite, not here).
+    const already = requests.some((r) =>
+      Object.keys(r.headers ?? {}).some((h) => h.toLowerCase() === header.toLowerCase()),
+    );
+    if (already) continue;
     for (const r of dest) {
       if (!r.headers || typeof r.headers !== 'object') r.headers = {};
       r.headers[header] = token;
@@ -3108,7 +3158,7 @@ export async function externalVerification(
   if (existsSync(workflowPath)) {
     try {
       const rawWorkflow = JSON.parse(readFileSync(workflowPath, 'utf8')) as RawWorkflow;
-      const requiredInputs = opts.requiredInputs ?? [];
+      const requiredInputs = repairRequiredInputStaticLiterals(opts.requiredInputs ?? [], session);
       const inj = injectContractedInputs(rawWorkflow, requiredInputs, session);
       let workflowJson = JSON.stringify(rawWorkflow, null, 2);
 

@@ -17,6 +17,7 @@ import {
   injectContractedInputs,
   isBotDefenseFailure,
   parseJUnitResults,
+  repairRequiredInputStaticLiterals,
   typecheckArtifacts,
 } from '../src/imprint/compile-tools.ts';
 import { type Session, WorkflowSchema } from '../src/imprint/types.ts';
@@ -1640,6 +1641,17 @@ test('baseline accepts bot failure', async () => {
   expect(result.data).toBeTruthy();
 });
 `;
+    const producerForgivingSrc = `import { expect, test } from 'bun:test';
+import { runWorkflowWithLadder } from 'imprint/backend-ladder';
+
+test('baseline skips when producer state is missing', async () => {
+  const producer = await runWorkflowWithLadder({ workflowPath: PRODUCER, params: {} });
+  if (!producer.result.ok && String(producer.result.message ?? '').includes('STATE_MISSING')) return;
+  if (!producer.result.ok) throw new Error(JSON.stringify(producer.result));
+  const { result } = await runWorkflowWithLadder({ workflowPath: WP, params: { token: 'fresh' } });
+  expect(result.ok).toBe(true);
+});
+`;
     const throwingSrc = `import { expect, test } from 'bun:test';
 import { runWorkflowWithLadder } from 'imprint/backend-ladder';
 
@@ -1652,6 +1664,7 @@ test('baseline throws on failure', async () => {
 });
 `;
     expect(hasLiveBaselineWorkflowTest(forgivingSrc)).toBe(false);
+    expect(hasLiveBaselineWorkflowTest(producerForgivingSrc)).toBe(false);
     expect(hasLiveBaselineWorkflowTest(throwingSrc)).toBe(true);
   });
 
@@ -2812,6 +2825,24 @@ describe('assertNoRawSecrets', () => {
 });
 
 describe('injectContractedInputs', () => {
+  it('repairs placeholder static requiredInput literals from the recorded request', () => {
+    const session = secretSession();
+    const repaired = repairRequiredInputStaticLiterals(
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: '<recorded static anti-bot header value from seq 10>',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(repaired[0]?.literal).toBe('synthetic-appkey-001');
+  });
+
   it('injects a dropped credential header into the matching request', () => {
     const session = secretSession();
     const workflow = {
@@ -2832,6 +2863,35 @@ describe('injectContractedInputs', () => {
     expect(workflow.requests[0]?.headers).toEqual({
       Authorization: '${credential.access_token}',
     });
+  });
+
+  it('replaces an existing placeholder static header with the grounded literal', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/data',
+          headers: { 'X-App-Key': '<recorded static anti-bot header value from seq 10>' },
+        },
+      ],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(1);
+    expect(workflow.requests[0]?.headers['X-App-Key']).toBe('real-grounded-app-key');
   });
 
   it('sets workflow.bootstrap.url from a referer input', () => {

@@ -1352,6 +1352,68 @@ describe('reconcileRequiredInputs', () => {
     expect(res.injected).toBe(0);
   });
 
+  it('repairs a planner placeholder static literal from a grounded hint', () => {
+    const parsed = authPlan();
+    (parsed.perTool[1] as Record<string, unknown>).requiredInputs = [
+      {
+        location: 'header:X-App-Key',
+        source: 'static',
+        wiring: 'literal',
+        literal: '<recorded static anti-bot header value from seq 42>',
+        note: 'planner placeholder',
+      },
+    ];
+    const hints: RequiredInputHint[] = [
+      {
+        consumerTool: 'book',
+        input: {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 42,
+          note: 'page-minted app constant',
+        },
+      },
+    ];
+    const res = reconcileRequiredInputs(parsed, hints, new Set(['search', 'book']));
+    expect(res.injected).toBe(0);
+    expect(res.repaired).toBe(1);
+    const plan = validateBuildPlan(parsed, ['search', 'book']);
+    expect(resolveRequiredInputs(plan, 'book')[0]?.literal).toBe('real-grounded-app-key');
+    expect(resolveRequiredInputs(plan, 'book')[0]?.recordedSeq).toBe(42);
+  });
+
+  it('repairs a planner-declared static input missing its literal', () => {
+    const parsed = authPlan();
+    (parsed.perTool[1] as Record<string, unknown>).requiredInputs = [
+      {
+        location: 'header:X-App-Key',
+        source: 'static',
+        wiring: 'literal',
+        note: 'planner omitted literal',
+      },
+    ];
+    const hints: RequiredInputHint[] = [
+      {
+        consumerTool: 'book',
+        input: {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 42,
+          note: 'page-minted app constant',
+        },
+      },
+    ];
+    const res = reconcileRequiredInputs(parsed, hints, new Set(['search', 'book']));
+    expect(res.injected).toBe(0);
+    expect(res.repaired).toBe(1);
+    const plan = validateBuildPlan(parsed, ['search', 'book']);
+    expect(resolveRequiredInputs(plan, 'book')[0]?.literal).toBe('real-grounded-app-key');
+  });
+
   it('is a no-op with no hints', () => {
     const parsed = authPlan();
     expect(reconcileRequiredInputs(parsed, [], new Set(['book']))).toEqual({

@@ -1585,6 +1585,13 @@ interface LooseRequiredInputPerTool {
   requiredInputs?: Array<Record<string, unknown>>;
 }
 
+export function looksLikePlannerPlaceholderLiteral(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    /^<\s*recorded\b[\s\S]{0,160}\bvalue\b[\s\S]{0,80}>$/i.test(value.trim())
+  );
+}
+
 /**
  * Reconcile a parsed planner plan against the deterministically-derived
  * requiredInput hints, IN PLACE, before validation — the general analogue of
@@ -1644,6 +1651,22 @@ export function reconcileRequiredInputs(
     if (!Array.isArray(tool.requiredInputs)) tool.requiredInputs = [];
     const existing = tool.requiredInputs.find((ri) => ri && ri.location === h.input.location);
     if (existing) {
+      if (
+        h.input.source === 'static' &&
+        h.input.wiring === 'literal' &&
+        h.input.literal != null &&
+        existing.source === 'static' &&
+        existing.wiring === 'literal' &&
+        (existing.literal === undefined || looksLikePlannerPlaceholderLiteral(existing.literal))
+      ) {
+        existing.literal = h.input.literal;
+        existing.recordedSeq ??= h.input.recordedSeq;
+        existing.note =
+          typeof existing.note === 'string' && existing.note.length > 0
+            ? existing.note
+            : h.input.note;
+        result.repaired++;
+      }
       // Slot already declared — trust the planner; only seed a missing auth capture.
       if (h.input.source === 'auth' && h.authCapture) ensureAuthCapture(h.authCapture);
       continue;
