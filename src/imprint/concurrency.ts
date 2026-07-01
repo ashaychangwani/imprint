@@ -43,11 +43,13 @@ export async function mapLimitSettled<T, R>(
   items: T[],
   concurrency: number,
   fn: (item: T) => Promise<R>,
-): Promise<SettledResult<R>[]> {
+  opts: { stopOnError?: (err: unknown) => boolean } = {},
+): Promise<Array<SettledResult<R> | undefined>> {
   const results = new Array<SettledResult<R>>(items.length);
   let next = 0;
+  let stopped = false;
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
+    while (next < items.length && !stopped) {
       const index = next++;
       const item = items[index];
       if (item === undefined) continue;
@@ -55,6 +57,7 @@ export async function mapLimitSettled<T, R>(
         results[index] = { ok: true, value: await fn(item) };
       } catch (err) {
         results[index] = { ok: false, error: err };
+        if (opts.stopOnError?.(err)) stopped = true;
       }
     }
   });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { parseDuration } from '../src/cli.ts';
 import {
   type CandidateCompilePlan,
+  isProviderUsageLimitedError,
   mapLimitSettled,
   summarizeCompileOutcomes,
 } from '../src/imprint/teach.ts';
@@ -59,8 +60,9 @@ describe('mapLimitSettled', () => {
     });
     expect(results).toHaveLength(3);
     for (const r of results) {
+      expect(r).toBeDefined();
       expect(r?.ok).toBe(false);
-      if (!r?.ok) {
+      if (r && !r.ok) {
         expect(r.error).toBeInstanceOf(Error);
         expect((r.error as Error).message).toBe('boom');
       }
@@ -106,6 +108,25 @@ describe('mapLimitSettled', () => {
     expect(results[3]).toEqual({ ok: true, value: 4 });
   });
 
+  it('stops scheduling new work when stopOnError matches', async () => {
+    const processed: number[] = [];
+    const results = await mapLimitSettled(
+      [1, 2, 3, 4],
+      1,
+      async (n) => {
+        processed.push(n);
+        if (n === 1) throw new Error('provider usage limit');
+        return n;
+      },
+      { stopOnError: (err) => err instanceof Error && err.message.includes('usage limit') },
+    );
+    expect(processed).toEqual([1]);
+    expect(results[0]?.ok).toBe(false);
+    expect(results[1]).toBeUndefined();
+    expect(results[2]).toBeUndefined();
+    expect(results[3]).toBeUndefined();
+  });
+
   it('handles empty input', async () => {
     const results = await mapLimitSettled([], 3, async (n: number) => n);
     expect(results).toEqual([]);
@@ -122,6 +143,30 @@ describe('mapLimitSettled', () => {
     });
     expect(results).toHaveLength(1);
     expect(results[0]?.ok).toBe(false);
+  });
+});
+
+describe('isProviderUsageLimitedError', () => {
+  it('detects compile provider usage-limit failures', () => {
+    expect(
+      isProviderUsageLimitedError(
+        new Error('codex-cli failed: exit_code=1 error_code=rate_limited stderr_tail_chars=2000'),
+      ),
+    ).toBe(true);
+    expect(
+      isProviderUsageLimitedError(
+        new Error("You've hit your usage limit. Visit settings or try again at 3:24 AM."),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not treat ordinary tool failures as provider exhaustion', () => {
+    expect(
+      isProviderUsageLimitedError(new Error('compile agent did not produce a verified workflow')),
+    ).toBe(false);
+    expect(
+      isProviderUsageLimitedError(new Error('STATE_MISSING: capture api_key returned null')),
+    ).toBe(false);
   });
 });
 
