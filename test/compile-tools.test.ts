@@ -13,6 +13,7 @@ import {
   detectTokenSources,
   externalVerification,
   extractTestBlocks,
+  hasLiveBaselineWorkflowTest,
   injectContractedInputs,
   isBotDefenseFailure,
   parseJUnitResults,
@@ -612,6 +613,115 @@ describe('extract', () => {
       expect(failures.some((f) => f.includes('max_price'))).toBe(true);
       expect(failures.some((f) => f.includes('sort_order'))).toBe(true);
       expect(failures.some((f) => f.includes('query'))).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails a no-param integration suite that never calls the workflow', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-baseline-tautology-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+    const session: Session = {
+      site: 'baseline-tautology-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/trips',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/trips',
+          headers: {},
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ items: [{ id: 'trip-1' }] }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'list_trips',
+            intent: { description: 'List trips' },
+            parameters: [],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/api/trips',
+                headers: { Accept: 'application/json' },
+              },
+            ],
+            site: 'baseline-tautology-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+      writeFileSync(
+        pathJoin(exampleDir, 'parser.ts'),
+        `export function extract(data: { items?: Array<{ id: string }> }) {
+  return { items: data.items ?? [] };
+}
+`,
+        'utf8',
+      );
+      writeFileSync(
+        pathJoin(exampleDir, 'parser.test.ts'),
+        `import { expect, test } from 'bun:test';
+import { extract } from './parser.ts';
+
+test('extracts trips', () => {
+  const result = extract({ items: [{ id: 'trip-1' }] });
+  expect(result.items).toHaveLength(1);
+  expect(result.items[0]?.id).toBe('trip-1');
+  expect(Object.keys(result)).toContain('items');
+});
+
+test('synthetic:empty-result returns an empty collection', () => {
+  const result = extract({ items: [] });
+  expect(result.items).toEqual([]);
+  expect(result.items).toHaveLength(0);
+  expect(Object.keys(result)).toContain('items');
+});
+`,
+        'utf8',
+      );
+      writeFileSync(
+        pathJoin(exampleDir, 'integration.test.ts'),
+        `import { expect, test } from 'bun:test';
+import workflowJson from './workflow.json' with { type: 'json' };
+
+test('live API call returns trips', () => {
+  expect(workflowJson.toolName).toBe('list_trips');
+  expect(workflowJson.site).toBe('baseline-tautology-fixture');
+});
+`,
+        'utf8',
+      );
+
+      const { failures } = await externalVerification(exampleDir, session, sessionPath);
+      expect(
+        failures.some(
+          (f) => f.includes('baseline live workflow test') && f.includes('runWorkflowWithLadder'),
+        ),
+      ).toBe(true);
     } finally {
       rmSync(exampleDir, { recursive: true, force: true });
     }
@@ -1503,6 +1613,46 @@ test('param:discount_code is annotated', async () => {
     });
     expect(tautological).toEqual(['fake']);
     expect(paramVerification).toEqual([]);
+  });
+
+  it('detects when a no-param baseline test never calls the workflow', () => {
+    const tautologicalSrc = `import { expect, test } from 'bun:test';
+
+test('live API call returns upcoming trips for the authenticated account', () => {
+  expect(WORKFLOW.toolName).toBe('list_upcoming_trips');
+  expect(WORKFLOW.site).toBe('southwest');
+});
+`;
+    expect(hasLiveBaselineWorkflowTest(tautologicalSrc)).toBe(false);
+    expect(hasLiveBaselineWorkflowTest(integrationSrc)).toBe(true);
+  });
+
+  it('rejects a baseline test that exits green on a failed workflow result', () => {
+    const forgivingSrc = `import { expect, test } from 'bun:test';
+import { runWorkflowWithLadder } from 'imprint/backend-ladder';
+
+test('baseline accepts bot failure', async () => {
+  const { result } = await runWorkflowWithLadder({ workflowPath: WP, params: {} });
+  if (!result.ok) {
+    expect(/FORBIDDEN|403|bot/i.test(JSON.stringify(result))).toBe(true);
+    return;
+  }
+  expect(result.data).toBeTruthy();
+});
+`;
+    const throwingSrc = `import { expect, test } from 'bun:test';
+import { runWorkflowWithLadder } from 'imprint/backend-ladder';
+
+test('baseline throws on failure', async () => {
+  const { result } = await runWorkflowWithLadder({ workflowPath: WP, params: {} });
+  if (!result.ok) {
+    throw new Error(JSON.stringify(result));
+  }
+  expect(result.data).toBeTruthy();
+});
+`;
+    expect(hasLiveBaselineWorkflowTest(forgivingSrc)).toBe(false);
+    expect(hasLiveBaselineWorkflowTest(throwingSrc)).toBe(true);
   });
 
   it('marks params unverified (not blocking) when the suite was waived by anti-bot', () => {

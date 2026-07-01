@@ -2117,6 +2117,17 @@ export function classifyParamCoverage(opts: {
   return { paramVerification, uncovered, tautological, unchained };
 }
 
+export function hasLiveBaselineWorkflowTest(integrationSrc: string): boolean {
+  const requiresOk = /expect\s*\(\s*result\.ok\s*\)\s*\.\s*(?:toBe|toEqual)\s*\(\s*true\s*\)/;
+  const throwsOnFailure = /if\s*\(\s*!result\.ok\s*\)\s*\{[\s\S]{0,500}\bthrow\b/;
+  return extractTestBlocks(integrationSrc).some(
+    (block) =>
+      !block.title.includes('param:') &&
+      /\brunWorkflowWithLadder\s*\(/.test(block.body) &&
+      (requiresOk.test(block.body) || throwsOnFailure.test(block.body)),
+  );
+}
+
 /**
  * Fix D: on successful verification, persist each exposed parameter's
  * `verified` / `verifyNote` into workflow.json so the audit harness and
@@ -3380,102 +3391,110 @@ export async function externalVerification(
       'skipped the live integration test: a request references a ${state.X} capture (e.g. csrf/csp-nonce) whose pattern does not match the recorded page, so the live call is guaranteed to fail with STATE_MISSING. Fix the capture pattern/source (see the failure above) — the next verification cycle will run the live test once it can succeed. This avoids burning a doomed anti-bot .act call.',
     );
   } else {
-    // Scale the verifier's live-test timeout to the suite size: the baseline plus
-    // one live `runWorkflowWithLadder` per param, each gated by the ~25s compile
-    // pacing and a possible cdp cold start. A flat 60s truncated paced anti-bot
-    // suites mid-run, and the partial output then misclassified as a bot block.
-    // Cap it so a genuinely wedged suite can't run away.
-    const paramCount = opts.likelyParams?.length ?? 0;
-    const pacingMs = Number(process.env.IMPRINT_COMPILE_ACT_SPACING_MS ?? 25_000) || 0;
-    const verifierTimeoutMs = Math.min(120_000 + paramCount * (pacingMs + 20_000), 10 * 60_000);
-    let run: BunTestRun = {
-      stdout: '',
-      stderr: '',
-      exitCode: 1,
-      timedOut: false,
-      passed: new Set(),
-      failed: new Set(),
-    };
-    for (let attempt = 0; attempt < 3; attempt++) {
-      run = await runBunTestWithResults(integrationTestPath, toolDir, verifierTimeoutMs);
-      if (run.exitCode === 0) break;
-      // A timeout, bot-defense, or ladder-exhaustion failure will NOT clear on a
-      // retry — re-running only fires more state-changing calls and deepens the
-      // per-IP rate flag. One attempt is enough to classify it; stop early.
-      if (run.timedOut) break;
-      const out = `${run.stdout}\n${run.stderr}`;
-      const ladderExhausted =
-        /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(out) &&
-        /non-escalatable|giving up|ladder exhausted|all backends failed/.test(out);
-      if (isBotDefenseFailure(out) || ladderExhausted) break;
-    }
-    integrationPassedTests = run.passed;
-
-    const verdict = classifyIntegrationOutcome({
-      exitCode: run.exitCode,
-      timedOut: run.timedOut,
-      combined: `${run.stdout}\n${run.stderr}`,
-      passedTests: run.passed,
-      referencedStateBroken: false, // the broken-capture case is handled above
-      failedCaptureNames,
-      contractGap: unresolvedContractInputs > 0,
-    });
-    integrationOutcome = verdict.outcome;
-
-    if (verdict.outcome === 'passed') {
-      // exitCode 0 — nothing to surface.
-    } else if (verdict.captureFailName !== null) {
-      const capName = verdict.captureFailName;
-      // If the failing capture is a `response_header` on a REPLAYED workflow
-      // request, the cause is almost always the replay asymmetry: programmatic
-      // fetch reliably receives the response BODY and Set-Cookie, but anti-bot
-      // edges withhold browser-only response headers from non-browser requests.
-      let sourceHint = '';
-      try {
-        const wf = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
-          requests?: Array<{ captures?: Array<{ name: string; source: string }> }>;
-          bootstrap?: { captures?: Array<{ name: string; source: string }> };
-        };
-        const reqCap = (wf.requests ?? [])
-          .flatMap((r) => r.captures ?? [])
-          .find((c) => c.name === capName);
-        if (reqCap?.source === 'response_header') {
-          sourceHint = ` The capture uses source: 'response_header' on a replayed request. Programmatic replay does NOT receive browser-only response headers that anti-bot edges withhold — but it DOES receive the response body and Set-Cookie. If this token also appears in the HTML body, switch to source: 'text_regex' (read it from the body); if it is set as a cookie, switch to source: 'cookie'. Reserve 'response_header' for a workflow.bootstrap capture (a real Chrome navigation), not a replayed request.`;
-        }
-      } catch {
-        // best-effort hint only
-      }
+    const integrationSrc = readFileSync(integrationTestPath, 'utf8');
+    if (!hasLiveBaselineWorkflowTest(integrationSrc)) {
+      integrationOutcome = 'failed';
       failures.push(
-        `integration test failed because a declared capture did not produce a value at runtime: capture "${capName}" returned null${
-          verdict.captureFailFromKnown
-            ? ' (matches a capture flagged by the compile-time cross-reference check)'
-            : ''
-        }. This is a workflow-correctness error, not infra — fix the capture source/path in workflow.json so it actually reads from the recorded location.${sourceHint}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
-      );
-    } else if (verdict.outcome === 'waived-bot' || verdict.outcome === 'waived-infra') {
-      // `liveVerified` is driven by whether the BASELINE produced real data, NOT by
-      // whether every param test passed. Only stamp liveVerified=false when the
-      // baseline ALSO failed — if a backend returned real data this run the tool IS
-      // live-verified; only its per-parameter tests waive (non-blocking).
-      liveVerification = verdict.baselineLiveVerified
-        ? undefined
-        : {
-            kind: verdict.outcome,
-            firstError: verdict.firstError,
-            exhaustedBackends: verdict.exhaustedBackends,
-          };
-      const liveNote = verdict.baselineLiveVerified
-        ? 'The baseline returned real data this run, so liveVerified stays TRUE — only the per-parameter tests are waived.'
-        : 'Stamping liveVerified=false on workflow.json — the runtime falls through to the cdp-replay / playbook rung. Audit and teach surface this tool as unverified.';
-      warnings.push(
-        verdict.outcome === 'waived-bot'
-          ? `integration test hit a likely bot-detection / anti-automation challenge. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`
-          : `integration test hit an infrastructure error (${verdict.firstError}); rungs exhausted: ${verdict.exhaustedBackends.join(', ') || 'unknown'}. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        'integration.test.ts has no strict baseline live workflow test: add a non-`param:` test that calls `runWorkflowWithLadder(...)` on this tool workflow, fails when `result.ok` is false, and asserts the successful response contains real data. Static workflow-shape assertions or green returns on bot/infra errors are not enough to verify a generated tool.',
       );
     } else {
-      failures.push(
-        `bun test integration.test.ts exited ${run.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
-      );
+      // Scale the verifier's live-test timeout to the suite size: the baseline plus
+      // one live `runWorkflowWithLadder` per param, each gated by the ~25s compile
+      // pacing and a possible cdp cold start. A flat 60s truncated paced anti-bot
+      // suites mid-run, and the partial output then misclassified as a bot block.
+      // Cap it so a genuinely wedged suite can't run away.
+      const paramCount = opts.likelyParams?.length ?? 0;
+      const pacingMs = Number(process.env.IMPRINT_COMPILE_ACT_SPACING_MS ?? 25_000) || 0;
+      const verifierTimeoutMs = Math.min(120_000 + paramCount * (pacingMs + 20_000), 10 * 60_000);
+      let run: BunTestRun = {
+        stdout: '',
+        stderr: '',
+        exitCode: 1,
+        timedOut: false,
+        passed: new Set(),
+        failed: new Set(),
+      };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        run = await runBunTestWithResults(integrationTestPath, toolDir, verifierTimeoutMs);
+        if (run.exitCode === 0) break;
+        // A timeout, bot-defense, or ladder-exhaustion failure will NOT clear on a
+        // retry — re-running only fires more state-changing calls and deepens the
+        // per-IP rate flag. One attempt is enough to classify it; stop early.
+        if (run.timedOut) break;
+        const out = `${run.stdout}\n${run.stderr}`;
+        const ladderExhausted =
+          /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(out) &&
+          /non-escalatable|giving up|ladder exhausted|all backends failed/.test(out);
+        if (isBotDefenseFailure(out) || ladderExhausted) break;
+      }
+      integrationPassedTests = run.passed;
+
+      const verdict = classifyIntegrationOutcome({
+        exitCode: run.exitCode,
+        timedOut: run.timedOut,
+        combined: `${run.stdout}\n${run.stderr}`,
+        passedTests: run.passed,
+        referencedStateBroken: false, // the broken-capture case is handled above
+        failedCaptureNames,
+        contractGap: unresolvedContractInputs > 0,
+      });
+      integrationOutcome = verdict.outcome;
+
+      if (verdict.outcome === 'passed') {
+        // exitCode 0 — nothing to surface.
+      } else if (verdict.captureFailName !== null) {
+        const capName = verdict.captureFailName;
+        // If the failing capture is a `response_header` on a REPLAYED workflow
+        // request, the cause is almost always the replay asymmetry: programmatic
+        // fetch reliably receives the response BODY and Set-Cookie, but anti-bot
+        // edges withhold browser-only response headers from non-browser requests.
+        let sourceHint = '';
+        try {
+          const wf = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
+            requests?: Array<{ captures?: Array<{ name: string; source: string }> }>;
+            bootstrap?: { captures?: Array<{ name: string; source: string }> };
+          };
+          const reqCap = (wf.requests ?? [])
+            .flatMap((r) => r.captures ?? [])
+            .find((c) => c.name === capName);
+          if (reqCap?.source === 'response_header') {
+            sourceHint = ` The capture uses source: 'response_header' on a replayed request. Programmatic replay does NOT receive browser-only response headers that anti-bot edges withhold — but it DOES receive the response body and Set-Cookie. If this token also appears in the HTML body, switch to source: 'text_regex' (read it from the body); if it is set as a cookie, switch to source: 'cookie'. Reserve 'response_header' for a workflow.bootstrap capture (a real Chrome navigation), not a replayed request.`;
+          }
+        } catch {
+          // best-effort hint only
+        }
+        failures.push(
+          `integration test failed because a declared capture did not produce a value at runtime: capture "${capName}" returned null${
+            verdict.captureFailFromKnown
+              ? ' (matches a capture flagged by the compile-time cross-reference check)'
+              : ''
+          }. This is a workflow-correctness error, not infra — fix the capture source/path in workflow.json so it actually reads from the recorded location.${sourceHint}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        );
+      } else if (verdict.outcome === 'waived-bot' || verdict.outcome === 'waived-infra') {
+        // `liveVerified` is driven by whether the BASELINE produced real data, NOT by
+        // whether every param test passed. Only stamp liveVerified=false when the
+        // baseline ALSO failed — if a backend returned real data this run the tool IS
+        // live-verified; only its per-parameter tests waive (non-blocking).
+        liveVerification = verdict.baselineLiveVerified
+          ? undefined
+          : {
+              kind: verdict.outcome,
+              firstError: verdict.firstError,
+              exhaustedBackends: verdict.exhaustedBackends,
+            };
+        const liveNote = verdict.baselineLiveVerified
+          ? 'The baseline returned real data this run, so liveVerified stays TRUE — only the per-parameter tests are waived.'
+          : 'Stamping liveVerified=false on workflow.json — the runtime falls through to the cdp-replay / playbook rung. Audit and teach surface this tool as unverified.';
+        warnings.push(
+          verdict.outcome === 'waived-bot'
+            ? `integration test hit a likely bot-detection / anti-automation challenge. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`
+            : `integration test hit an infrastructure error (${verdict.firstError}); rungs exhausted: ${verdict.exhaustedBackends.join(', ') || 'unknown'}. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        );
+      } else {
+        failures.push(
+          `bun test integration.test.ts exited ${run.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        );
+      }
     }
   }
 

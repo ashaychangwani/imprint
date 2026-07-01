@@ -415,7 +415,7 @@ export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string):
   return extractJsonObject(stdout) ?? stdout;
 }
 
-export type CliFailureCode =
+type CliFailureCode =
   | 'not_found'
   | 'input_too_large'
   | 'subscription_access_disabled'
@@ -427,7 +427,7 @@ export type CliFailureCode =
 
 const CLI_STDERR_TAIL_LIMIT = 2000;
 
-export class CliProviderError extends Error {
+class CliProviderError extends Error {
   readonly provider: ProviderName;
   readonly exitCode: number;
   readonly errorCode: CliFailureCode;
