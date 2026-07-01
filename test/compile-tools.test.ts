@@ -2411,6 +2411,29 @@ describe('crossReferenceReferencedStateCaptures (Fix 2)', () => {
     expect(failures.join('\n')).toContain('invalid regex');
   });
 
+  it('rejects a referenced state placeholder with no declared capture', () => {
+    const wf = WorkflowSchema.parse({
+      toolName: 't',
+      intent: { description: 'd' },
+      parameters: [],
+      site: 'costco-car-rental',
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://www.costcotravel.com/api',
+          headers: { 'X-Api-Key': '${state.api_key}' },
+        },
+      ],
+    });
+    const { failures, failedCaptureNames } = crossReferenceReferencedStateCaptures(
+      wf,
+      sessionWithLandingPage(),
+    );
+    expect(failedCaptureNames.has('api_key')).toBe(true);
+    expect(failures.join('\n')).toContain('declares no capture named "api_key"');
+    expect(failures.join('\n')).toContain('STATE_MISSING');
+  });
+
   it('does not flag when no request references the capture (${state.X} unused)', () => {
     const wf = WorkflowSchema.parse({
       toolName: 't',

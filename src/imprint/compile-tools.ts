@@ -2329,9 +2329,12 @@ function crossReferenceCaptures(
  *  At runtime that reference STATE_MISSINGs the whole workflow. This check
  *  rejects done() so the agent must fix the pattern (or source).
  *
- *  Scope: html_regex / text_regex captures (robustly checkable by testing the
- *  pattern against every recorded same-origin HTML document body). Other
- *  sources referenced-but-not-required are left to Fix A / the integration test.
+ *  Missing captures are also rejected: a request that contains `${state.X}` has
+ *  made X required, and running the live ladder cannot synthesize an undeclared
+ *  workflow producer. Scope for pattern validation remains html_regex /
+ *  text_regex captures (robustly checkable by testing the pattern against every
+ *  recorded same-origin HTML document body). Other declared sources
+ *  referenced-but-not-required are left to Fix A / the integration test.
  *  General — not specific to any site or token. */
 export function crossReferenceReferencedStateCaptures(
   workflow: ReturnType<typeof WorkflowSchema.parse>,
@@ -2400,7 +2403,13 @@ export function crossReferenceReferencedStateCaptures(
   //    capture, assert the pattern matches at least one recorded HTML body.
   for (const name of referenced) {
     const cap = capByName.get(name);
-    if (!cap) continue; // may be seeded by the fetch-bootstrap jar — not statically known
+    if (!cap) {
+      failures.push(
+        `request references \${state.${name}}, but workflow.json declares no capture named "${name}". At runtime \${state.${name}} resolves to nothing → the request fails with STATE_MISSING. Add a bootstrap/request capture that produces "${name}", or remove the placeholder if the value is not actually needed.`,
+      );
+      failedCaptureNames.add(name);
+      continue;
+    }
     if (cap.source !== 'html_regex' && cap.source !== 'text_regex') continue;
     if (failedCaptureNames.has(name)) continue;
     let re: RegExp;
