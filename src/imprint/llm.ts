@@ -2,6 +2,7 @@
  *  user payload → raw model text. */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { withTimeoutCleanup } from './concurrency.ts';
 import {
   llmSpanAttributes,
   resolveTraceTokenCount,
@@ -34,14 +35,35 @@ interface AnalyzeResult {
 
 interface LLMProvider {
   readonly name: ProviderName;
-  analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult>;
+  analyze(
+    systemPrompt: string,
+    userPayload: unknown,
+    opts?: AnalyzeInvocationOptions,
+  ): Promise<AnalyzeResult>;
 }
 
 interface CliProcessWithOutput {
   stdout: ReadableStream<Uint8Array>;
   stderr: ReadableStream<Uint8Array>;
   exited: Promise<number>;
+  kill?: () => void;
+  pid?: number;
 }
+
+const CLI_STREAM_EXIT_GRACE_MS = 1000;
+const CLI_PID_POLL_INTERVAL_MS = 250;
+
+interface AnalyzeInvocationOptions {
+  timeoutMs?: number;
+  timeoutLabel?: string;
+  onEvent?: (event: AnalyzeInvocationEvent) => void;
+}
+
+export type AnalyzeInvocationEvent = {
+  type: string;
+  timestamp: string;
+  [key: string]: unknown;
+};
 
 interface TraceAnalyzeDetails {
   inputText: string;
@@ -210,7 +232,11 @@ class ClaudeCliProvider implements LLMProvider {
     this.model = model;
   }
 
-  async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
+  async analyze(
+    systemPrompt: string,
+    userPayload: unknown,
+    opts: AnalyzeInvocationOptions = {},
+  ): Promise<AnalyzeResult> {
     const userText = JSON.stringify(userPayload);
     return await traceAnalyze(
       this.name,
@@ -241,7 +267,21 @@ class ClaudeCliProvider implements LLMProvider {
             stdout: 'pipe',
             stderr: 'pipe',
           });
+          opts.onEvent?.({
+            type: 'process.started',
+            timestamp: new Date().toISOString(),
+            provider: this.name,
+            command: args[0],
+            args: args.slice(1),
+            pid: proc.pid,
+          });
         } catch (err) {
+          opts.onEvent?.({
+            type: 'process.spawn_failed',
+            timestamp: new Date().toISOString(),
+            provider: this.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
           throw enrichClaudeCliError(err, { model: this.model });
         }
 
@@ -254,11 +294,16 @@ class ClaudeCliProvider implements LLMProvider {
           throw new Error('Failed to capture claude-cli output streams');
         }
 
-        const { stdout, stderr, exitCode } = await collectCliProcessOutput({
-          stdout: proc.stdout,
-          stderr: proc.stderr,
-          exited: proc.exited,
-        });
+        const { stdout, stderr, exitCode } = await collectCliProcessOutput(
+          {
+            stdout: proc.stdout,
+            stderr: proc.stderr,
+            exited: proc.exited,
+            kill: proc.kill.bind(proc),
+            pid: proc.pid,
+          },
+          { timeoutMs: opts.timeoutMs, timeoutLabel: opts.timeoutLabel, onEvent: opts.onEvent },
+        );
 
         if (exitCode !== 0) throw cliExitError('claude-cli', exitCode, stderr);
 
@@ -327,7 +372,11 @@ class CodexCliProvider implements LLMProvider {
     this.model = model;
   }
 
-  async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
+  async analyze(
+    systemPrompt: string,
+    userPayload: unknown,
+    opts: AnalyzeInvocationOptions = {},
+  ): Promise<AnalyzeResult> {
     const combinedPrompt = `<system_instructions>
 ${systemPrompt}
 </system_instructions>
@@ -354,7 +403,21 @@ ${cliFinalArtifactInstruction()}`;
             stdout: 'pipe',
             stderr: 'pipe',
           });
+          opts.onEvent?.({
+            type: 'process.started',
+            timestamp: new Date().toISOString(),
+            provider: this.name,
+            command: args[0],
+            args: args.slice(1),
+            pid: proc.pid,
+          });
         } catch (err) {
+          opts.onEvent?.({
+            type: 'process.spawn_failed',
+            timestamp: new Date().toISOString(),
+            provider: this.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
           throw enrichCodexCliError(err, { model: this.model });
         }
 
@@ -367,11 +430,16 @@ ${cliFinalArtifactInstruction()}`;
           throw new Error('Failed to capture codex-cli output streams');
         }
 
-        const { stdout, stderr, exitCode } = await collectCliProcessOutput({
-          stdout: proc.stdout,
-          stderr: proc.stderr,
-          exited: proc.exited,
-        });
+        const { stdout, stderr, exitCode } = await collectCliProcessOutput(
+          {
+            stdout: proc.stdout,
+            stderr: proc.stderr,
+            exited: proc.exited,
+            kill: proc.kill.bind(proc),
+            pid: proc.pid,
+          },
+          { timeoutMs: opts.timeoutMs, timeoutLabel: opts.timeoutLabel, onEvent: opts.onEvent },
+        );
 
         if (exitCode !== 0) throw cliExitError('codex-cli', exitCode, stderr);
 
@@ -736,16 +804,150 @@ function promptTraceDetails(
   };
 }
 
-export async function collectCliProcessOutput(proc: CliProcessWithOutput): Promise<{
+export async function collectCliProcessOutput(
+  proc: CliProcessWithOutput,
+  opts: {
+    timeoutMs?: number;
+    timeoutLabel?: string;
+    onEvent?: (event: AnalyzeInvocationEvent) => void;
+  } = {},
+): Promise<{
   stdout: string;
   stderr: string;
   exitCode: number;
 }> {
-  const stdoutPromise = Bun.readableStreamToText(proc.stdout);
-  const stderrPromise = Bun.readableStreamToText(proc.stderr);
-  const exitPromise = proc.exited;
-  const [stdout, stderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, exitPromise]);
+  const exitPromise = observeCliExit(proc, opts.onEvent);
+  const stdoutPromise = readCliStreamToText(proc.stdout, exitPromise, 'stdout', opts.onEvent);
+  const stderrPromise = readCliStreamToText(proc.stderr, exitPromise, 'stderr', opts.onEvent);
+  const collect = Promise.all([stdoutPromise, stderrPromise, exitPromise]);
+  const [stdout, stderr, exitCode] = opts.timeoutMs
+    ? await withTimeoutCleanup(collect, opts.timeoutMs, opts.timeoutLabel ?? 'cli provider', () => {
+        opts.onEvent?.({
+          type: 'process.timeout',
+          timestamp: new Date().toISOString(),
+          timeoutMs: opts.timeoutMs,
+          timeoutLabel: opts.timeoutLabel ?? 'cli provider',
+        });
+        proc.kill?.();
+      })
+    : await collect;
+  opts.onEvent?.({
+    type: 'process.output_collected',
+    timestamp: new Date().toISOString(),
+    stdoutChars: stdout.length,
+    stderrChars: stderr.length,
+    exitCode,
+  });
   return { stdout, stderr, exitCode };
+}
+
+function observeCliExit(
+  proc: CliProcessWithOutput,
+  onEvent?: (event: AnalyzeInvocationEvent) => void,
+): Promise<number> {
+  let settled = false;
+  const exited = proc.exited.then((exitCode) => {
+    settled = true;
+    return exitCode;
+  });
+  if (!proc.pid) return exited;
+
+  const pidGone = new Promise<number>((resolve) => {
+    const timer = setInterval(() => {
+      if (settled) {
+        clearInterval(timer);
+        return;
+      }
+      if (processExists(proc.pid)) return;
+      settled = true;
+      clearInterval(timer);
+      onEvent?.({
+        type: 'process.exit_unobserved',
+        timestamp: new Date().toISOString(),
+        pid: proc.pid,
+      });
+      resolve(0);
+    }, CLI_PID_POLL_INTERVAL_MS);
+  });
+
+  return Promise.race([exited, pidGone]);
+}
+
+function processExists(pid: number | undefined): boolean {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = typeof err === 'object' && err && 'code' in err ? err.code : undefined;
+    return code === 'EPERM';
+  }
+}
+
+async function readCliStreamToText(
+  stream: ReadableStream<Uint8Array>,
+  exited: Promise<unknown>,
+  streamName: 'stdout' | 'stderr',
+  onEvent?: (event: AnalyzeInvocationEvent) => void,
+): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let processExited = false;
+  const exitSignal = exited.then(() => {
+    processExited = true;
+    return 'process-exited' as const;
+  });
+
+  try {
+    while (true) {
+      const read = reader.read();
+      const result = await Promise.race([
+        read,
+        processExited
+          ? new Promise<'stream-timeout'>((resolve) =>
+              setTimeout(() => resolve('stream-timeout'), CLI_STREAM_EXIT_GRACE_MS),
+            )
+          : exitSignal,
+      ]);
+
+      if (result === 'stream-timeout') {
+        read.catch(() => undefined);
+        onEvent?.({
+          type: 'process.stream_abandoned',
+          timestamp: new Date().toISOString(),
+          stream: streamName,
+          graceMs: CLI_STREAM_EXIT_GRACE_MS,
+        });
+        try {
+          await Promise.race([
+            reader.cancel(),
+            new Promise((resolve) => setTimeout(resolve, CLI_STREAM_EXIT_GRACE_MS)),
+          ]);
+        } catch {
+          // The process already exited; returning captured output is more useful.
+        }
+        break;
+      }
+
+      if (result === 'process-exited') {
+        read.catch(() => undefined);
+        continue;
+      }
+
+      if (result.done) break;
+      text += decoder.decode(result.value, { stream: true });
+    }
+  } finally {
+    text += decoder.decode();
+    try {
+      reader.releaseLock();
+    } catch {
+      // Ignore lock-release errors from streams already closed/cancelled by Bun.
+    }
+  }
+
+  return text;
 }
 
 function promptRequestsJsonObject(systemPrompt: string): boolean {
@@ -777,7 +979,11 @@ class CursorCliProvider implements LLMProvider {
     this.model = model;
   }
 
-  async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
+  async analyze(
+    systemPrompt: string,
+    userPayload: unknown,
+    opts: AnalyzeInvocationOptions = {},
+  ): Promise<AnalyzeResult> {
     const combinedPrompt = `<system_instructions>
 ${systemPrompt}
 </system_instructions>
@@ -807,7 +1013,21 @@ ${cliFinalArtifactInstruction()}`;
             stdout: 'pipe',
             stderr: 'pipe',
           });
+          opts.onEvent?.({
+            type: 'process.started',
+            timestamp: new Date().toISOString(),
+            provider: this.name,
+            command: args[0],
+            args: args.slice(1),
+            pid: proc.pid,
+          });
         } catch (err) {
+          opts.onEvent?.({
+            type: 'process.spawn_failed',
+            timestamp: new Date().toISOString(),
+            provider: this.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
           throw enrichCursorCliError(err);
         }
 
@@ -820,11 +1040,16 @@ ${cliFinalArtifactInstruction()}`;
           throw new Error('Failed to capture cursor-cli output streams');
         }
 
-        const { stdout, stderr, exitCode } = await collectCliProcessOutput({
-          stdout: proc.stdout,
-          stderr: proc.stderr,
-          exited: proc.exited,
-        });
+        const { stdout, stderr, exitCode } = await collectCliProcessOutput(
+          {
+            stdout: proc.stdout,
+            stderr: proc.stderr,
+            exited: proc.exited,
+            kill: proc.kill.bind(proc),
+            pid: proc.pid,
+          },
+          { timeoutMs: opts.timeoutMs, timeoutLabel: opts.timeoutLabel, onEvent: opts.onEvent },
+        );
 
         if (exitCode !== 0) throw cliExitError('cursor-cli', exitCode, stderr);
 

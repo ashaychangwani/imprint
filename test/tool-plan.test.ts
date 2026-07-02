@@ -160,6 +160,7 @@ describe('buildToolPlanPayload', () => {
           dependsOn: [],
         },
       ],
+      dynamicValueFindings: [],
       perTool: [
         {
           toolName: 'search_flights',

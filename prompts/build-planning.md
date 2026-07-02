@@ -29,6 +29,17 @@ You receive:
       "dependsOn": ["_shared/<other>.ts"]           // other shared modules this one imports (build order)
     }
   ],
+  "dynamicValueFindings": [
+    {
+      "toolName": "snake_case_tool_name",
+      "location": "header:X-Token or url_param:key or body:$.path",
+      "classification": "static" | "auth" | "producer_tool" | "browser_state" | "generated" | "runtime_supplied" | "unknown",
+      "evidence": "what the diff/requests prove: replay-varying, response producer seq/path, repeated literal, page/app metadata, generated shape, etc.",
+      "recommendation": "what compile agents should do: keep literal, capture as state, generate per call, rely on cdp/browser, chain producer, or write a targeted test",
+      "verificationPlan": "the focused parser/integration/static check the compile agent should run instead of rediscovering this from scratch",
+      "sourceSeqs": [number]
+    }
+  ],
   "authTool": {                                     // OPTIONAL — whenever the recording has a login (sharedContext.loginRequestSeqs non-empty), with or without 2FA
     "toolName": "authenticate_<site>",
     "loginRequestSeqs": [number],
@@ -100,3 +111,11 @@ You receive:
     - `generated` → `wiring: "generated"`, `generated` kind (a fresh per-call value: `uuid`/`epoch_ms`/`epoch_s`/`iso8601`/`nonce`).
     - `static` → `wiring: "literal"`, `literal` (a page-minted app constant — emit verbatim; NEVER a per-user secret).
     Leave `requiredInputs` empty when a tool needs no inputs beyond its user params. A dropped grounded input is reconciled in deterministically and re-checked by the compile-time gate, but declaring it lets you refine names/notes.
+
+14. **Dynamic value findings (`dynamicValueFindings`).** Use `ephemeralValues[]`, `requests[]`, `tokenContractHints[]`, and `requiredInputHints[]` to make shared compile-time decisions once. For any opaque or high-entropy request value that several tools would otherwise re-investigate, add a finding for each affected tool/location. This is guidance, not a hard rewrite: include the evidence and a verification plan so the compile agent can prove the choice with a targeted test.
+    - `browser_state`: a value minted by a prior response/page that should be captured as `${state.X}` or bootstrap state.
+    - `generated`: a value whose shape proves it should be made fresh per call (uuid, timestamp, nonce).
+    - `runtime_supplied`: a value the browser/CDP backend should supply because the diff shows browser-minted state but no stable response/body/cookie producer; tell the compile agent to keep the browser-capable backend path and verify with one live baseline, not to invent an impossible regex.
+    - `static`: public app/build metadata the recording proves is durable enough to keep literal.
+    - `producer_tool` / `auth`: values already covered by token/auth contracts; reference that contract so compile agents do not duplicate the investigation.
+    Do not use this field to hide uncertainty. If the diff is inconclusive, set `classification: "unknown"` and give the exact test or request comparison the compile agent should run.

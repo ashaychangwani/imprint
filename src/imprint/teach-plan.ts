@@ -127,6 +127,7 @@ export async function planAndBuildPrereqs(opts: {
   }
   const plan: BuildPlan = {
     sharedModules: generated.sharedModules,
+    dynamicValueFindings: generated.dynamicValueFindings,
     perTool: generated.perTool,
     authTool: generated.authTool,
   };
@@ -191,6 +192,7 @@ export async function planAndBuildPrereqs(opts: {
   const verifiedPaths = new Set(manifest.filter((m) => m.verified).map((m) => m.path));
   const prunedPlan: BuildPlan = {
     sharedModules: plan.sharedModules.filter((m) => verifiedPaths.has(m.path)),
+    dynamicValueFindings: plan.dynamicValueFindings,
     perTool: plan.perTool.map((t) => ({
       ...t,
       usesSharedModules: t.usesSharedModules.filter((p) => verifiedPaths.has(p)),

@@ -559,6 +559,81 @@ result:
     // locally; the assertion is just that playbook was ATTEMPTED).
   }, 30000);
 
+  it('skips playbook for credential-backed data workflows', async () => {
+    const siteDir = pathResolve(root, 'credentialed');
+    mkdirSync(siteDir, { recursive: true });
+    writeFileSync(
+      pathResolve(siteDir, 'playbook.yaml'),
+      `toolName: tool_credentialed
+summary: x
+parameters: []
+steps:
+  - action: navigate
+    url: about:blank
+result:
+  source: xhr
+  url_pattern: never
+  extract: x
+  return_as: r
+`,
+    );
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
+      stealthResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('credentialed', behavior, siteDir);
+    const [request] = tool.workflow.requests;
+    if (!request) throw new Error('expected fake tool to include one request');
+    request.body = 'username=${credential.username}&password=${credential.password}';
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch', 'playbook'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+    expect(r.attempts).toHaveLength(3);
+    expect(r.attempts[2]).toMatchObject({
+      backend: 'playbook',
+      outcome: 'unavailable',
+    });
+    expect(r.result.ok).toBe(false);
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(1);
+  });
+
+  it('skips browser-backed anti-bot rungs for credential-backed data workflows', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
+      stealthResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('credentialed', behavior);
+    const [request] = tool.workflow.requests;
+    if (!request) throw new Error('expected fake tool to include one request');
+    request.body = 'username=${credential.username}&password=${credential.password}';
+    const r = await runWithLadder(
+      ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+    expect(r.attempts.map((a) => [a.backend, a.outcome])).toEqual([
+      ['fetch', 'escalate'],
+      ['fetch-bootstrap', 'unavailable'],
+      ['cdp-replay', 'unavailable'],
+      ['stealth-fetch', 'escalate'],
+      ['playbook', 'unavailable'],
+    ]);
+    expect(r.usedBackend).toBe('stealth-fetch');
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(1);
+  });
+
   it('reaches stealth-fetch before playbook for state missing that stealth-bootstrap can mint', async () => {
     const siteDir = pathResolve(root, 'stateful', 'search_stateful');
     mkdirSync(siteDir, { recursive: true });
@@ -1340,6 +1415,79 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
       adult_passengers_count: 1,
     });
     expect(closes).toBe(1);
+  });
+
+  it('resolves response_header bootstrap captures from the cdp-replay minted jar', async () => {
+    const jarWithHeaders: MintedJar = {
+      ...defaultedJar,
+      bootstrapResponseHeaders: { 'x-session-token': 'fresh-from-navigation' },
+    };
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => jarWithHeaders,
+      close: async () => {},
+    }));
+    const tool = defaultedBootstrapTool('flights', (_params, opts) => {
+      expect((opts.initialState as Record<string, unknown>)?.session_token).toBe(
+        'fresh-from-navigation',
+      );
+      return { ok: true, data: { via: 'cdp-replay' } };
+    });
+    tool.workflow.bootstrap = {
+      ...tool.workflow.bootstrap,
+      url: tool.workflow.bootstrap?.url ?? 'https://flights.example.com/search',
+      captures: [
+        {
+          name: 'session_token',
+          source: 'response_header',
+          header: 'X-Session-Token',
+          mode: 'first',
+          required: true,
+          capability: 'browser_bootstrap',
+        },
+      ],
+    };
+
+    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map());
+
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(r.result.ok).toBe(true);
+  });
+
+  it('fails cdp-replay response_header bootstrap captures when the document header is absent', async () => {
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {},
+    }));
+    const tool = defaultedBootstrapTool('flights', () => {
+      throw new Error('workflow should not run without required bootstrap state');
+    });
+    tool.workflow.bootstrap = {
+      ...tool.workflow.bootstrap,
+      url: tool.workflow.bootstrap?.url ?? 'https://flights.example.com/search',
+      captures: [
+        {
+          name: 'session_token',
+          source: 'response_header',
+          header: 'X-Session-Token',
+          mode: 'first',
+          required: true,
+          capability: 'browser_bootstrap',
+        },
+      ],
+    };
+
+    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map());
+
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) {
+      expect(r.result.error).toBe('STATE_MISSING');
+      expect(r.result.message).toContain('response_header:X-Session-Token');
+    }
   });
 });
 

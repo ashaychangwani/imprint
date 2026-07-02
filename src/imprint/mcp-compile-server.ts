@@ -351,6 +351,7 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
           emittedTokens,
           requiredInputs,
           credentialValues,
+          credentialNames: opts.sharedContext?.credentialNames,
         });
       if (warnings.length > 0) {
         log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);

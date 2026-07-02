@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { TimeoutError } from '../src/imprint/concurrency.ts';
 import {
   classifyCliFailure,
   cliStderrTail,
@@ -111,6 +112,102 @@ describe('collectCliProcessOutput', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('ok');
     expect(result.stderr.length).toBe(2048 * 1024);
+  });
+
+  it('kills a CLI process when collection times out', async () => {
+    const proc = Bun.spawn(['bun', '-e', 'setTimeout(() => process.stdout.write("late"), 2000);'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    if (
+      typeof proc.stdout === 'number' ||
+      typeof proc.stderr === 'number' ||
+      !proc.stdout ||
+      !proc.stderr
+    ) {
+      throw new Error('test process did not expose streams');
+    }
+
+    const events: string[] = [];
+    await expect(
+      collectCliProcessOutput(
+        {
+          stdout: proc.stdout,
+          stderr: proc.stderr,
+          exited: proc.exited,
+          kill: proc.kill.bind(proc),
+        },
+        {
+          timeoutMs: 10,
+          timeoutLabel: 'unit cli',
+          onEvent: (event) => events.push(event.type),
+        },
+      ),
+    ).rejects.toBeInstanceOf(TimeoutError);
+
+    expect(events).toContain('process.timeout');
+    expect(await proc.exited).not.toBe(0);
+  });
+
+  it('does not hang when a CLI stream stays open after the process exits', async () => {
+    let stdoutController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const stdout = new ReadableStream<Uint8Array>({
+      start(controller) {
+        stdoutController = controller;
+        controller.enqueue(new TextEncoder().encode('ok'));
+      },
+      cancel() {
+        stdoutController = undefined;
+      },
+    });
+    const stderr = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      },
+    });
+    const events: string[] = [];
+
+    const result = await collectCliProcessOutput(
+      {
+        stdout,
+        stderr,
+        exited: Promise.resolve(0),
+      },
+      { timeoutMs: 5000, onEvent: (event) => events.push(event.type) },
+    );
+
+    expect(result).toEqual({ stdout: 'ok', stderr: '', exitCode: 0 });
+    expect(events).toContain('process.stream_abandoned');
+    expect(stdoutController).toBeUndefined();
+  });
+
+  it('falls back to PID liveness when Bun does not observe CLI exit', async () => {
+    const proc = Bun.spawn(['bun', '-e', 'process.stdout.write("ok")'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    if (
+      typeof proc.stdout === 'number' ||
+      typeof proc.stderr === 'number' ||
+      !proc.stdout ||
+      !proc.stderr
+    ) {
+      throw new Error('test process did not expose streams');
+    }
+    const events: string[] = [];
+
+    const result = await collectCliProcessOutput(
+      {
+        stdout: proc.stdout,
+        stderr: proc.stderr,
+        exited: new Promise<number>(() => undefined),
+        pid: proc.pid,
+      },
+      { timeoutMs: 5000, onEvent: (event) => events.push(event.type) },
+    );
+
+    expect(result).toEqual({ stdout: 'ok', stderr: '', exitCode: 0 });
+    expect(events).toContain('process.exit_unobserved');
   });
 });
 

@@ -320,7 +320,10 @@ export async function runWithLadder(
   }
   const attempts: LadderResult['attempts'] = [];
   let lastResult: ToolResult | null = null;
+  let lastResultBackend: ConcreteBackend | null = null;
   let skipUntilBackend: ConcreteBackend | null = null;
+  const credentialBackedDataWorkflow =
+    tool.workflow.toolKind !== 'authenticate' && workflowReferencesCredentials(tool.workflow);
 
   for (const backend of effectiveLadder) {
     if (skipUntilBackend && backend !== skipUntilBackend) continue;
@@ -337,6 +340,20 @@ export async function runWithLadder(
         durationMs: 0,
       });
       log(`${backend}: skipped (no playbook.yaml)`);
+      continue;
+    }
+    if (
+      credentialBackedDataWorkflow &&
+      (backend === 'fetch-bootstrap' || backend === 'cdp-replay' || backend === 'playbook')
+    ) {
+      attempts.push({
+        backend,
+        outcome: 'unavailable',
+        detail:
+          'workflow requires credential placeholders; browser-backed rung cannot receive credential store values',
+        durationMs: 0,
+      });
+      log(`${backend}: skipped (workflow requires credential placeholders)`);
       continue;
     }
 
@@ -407,6 +424,7 @@ export async function runWithLadder(
     }
     const durationMs = Date.now() - t0;
     lastResult = result;
+    lastResultBackend = backend;
 
     if (result.ok) {
       attempts.push({ backend, outcome: 'ok', detail: `succeeded in ${durationMs}ms`, durationMs });
@@ -524,7 +542,7 @@ export async function runWithLadder(
       attempts,
     };
   }
-  const lastBackend = effectiveLadder[effectiveLadder.length - 1] ?? 'fetch';
+  const lastBackend = lastResultBackend ?? effectiveLadder[effectiveLadder.length - 1] ?? 'fetch';
   // Be accurate about ladder size: the parallel probe calls this with SINGLE-rung
   // ladders, so "every backend escalated" was misleading (it described one rung,
   // e.g. fetch-only, as if the whole ladder gave up — and fooled the integration
@@ -591,6 +609,13 @@ export function effectiveAutoLadder(
     }
   }
   return next;
+}
+
+function workflowReferencesCredentials(workflow: Workflow): boolean {
+  return workflow.requests.some((req) => {
+    const haystack = `${req.url} ${req.body ?? ''} ${Object.values(req.headers).join(' ')}`;
+    return haystack.includes('${credential.');
+  });
 }
 
 /** A multi-step, state-changing, anti-bot workflow: ≥2 mutating requests AND an
@@ -876,9 +901,9 @@ async function runFetchBootstrap(
       ],
     };
 
-    // Satisfy any declared bootstrap captures from the minted jar (cookie) +
-    // page HTML (html_regex). response_header/dom captures aren't available from
-    // a closed browser — required ones of those fail loud below.
+    // Satisfy any declared bootstrap captures from the minted browser session:
+    // cookies, page HTML, and document response headers are all captured from
+    // the same navigation.
     const captureResult = jarBootstrapCaptureState(
       tool.workflow.bootstrap,
       jar,
@@ -1088,8 +1113,9 @@ async function runCdpReplay(
 }
 
 /** Resolve workflow.bootstrap captures from a minted jar (cookie source) + the
- *  bootstrap page HTML (html_regex source). Returns the initial ${state.X} map,
- *  or a STATE_MISSING result if a required capture can't be satisfied. */
+ *  bootstrap page HTML (html_regex source), and bootstrap document headers
+ *  (response_header source). Returns the initial ${state.X} map, or a
+ *  STATE_MISSING result if a required capture can't be satisfied. */
 function jarBootstrapCaptureState(
   bootstrap: ResolvedTool['workflow']['bootstrap'],
   jar: MintedJar,
@@ -1141,13 +1167,26 @@ function jarBootstrapCaptureState(
           ),
         };
       }
+    } else if (capture.source === 'response_header') {
+      const value = jar.bootstrapResponseHeaders?.[capture.header.toLowerCase()];
+      if (value) state[capture.name] = value;
+      else if (capture.required !== false) {
+        return {
+          ok: false,
+          result: bootstrapCaptureMissingResult(
+            capture,
+            `Required bootstrap capture "${capture.name}" (response_header:${capture.header}) did not appear on the bootstrap document response.`,
+            'producer_ran_value_absent',
+          ),
+        };
+      }
     } else if (capture.required !== false) {
-      // response_header / dom_* can't be resolved from a closed browser jar.
+      // dom_* can't be resolved from a closed browser jar.
       return {
         ok: false,
         result: bootstrapCaptureMissingResult(
           capture,
-          `Bootstrap capture "${capture.name}" (${capture.source}) is not supported by the fetch-bootstrap jar path; use cookie or html_regex.`,
+          `Bootstrap capture "${capture.name}" (${capture.source}) is not supported by the fetch-bootstrap jar path; use cookie, html_regex, or response_header.`,
           'producer_ran_value_absent',
         ),
       };

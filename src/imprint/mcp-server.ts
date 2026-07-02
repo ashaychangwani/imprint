@@ -18,6 +18,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { resolveLadder, runWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
+import { TimeoutError, withTimeoutCleanup } from './concurrency.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
 import { loadBackendsCacheStatus, persistRuntimeBackendsCache } from './probe-backends.ts';
@@ -119,6 +120,13 @@ export async function runSerializedBySite<T>(
     if (queues.get(site) === tail) queues.delete(site);
   });
   return await run;
+}
+
+function auditToolDeadlineMs(): number | undefined {
+  const raw = Number(process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  if (process.env.IMPRINT_AUDIT_PACING_MS !== undefined) return 120_000;
+  return undefined;
 }
 
 /** Build the MCP Server with all discovered tools registered. */
@@ -223,19 +231,47 @@ function buildServer(
         }
 
         const ladder = resolveLadder('auto', tool.preferredOrder);
-        const { result, usedBackend, attempts } = await runWithLadder(
-          ladder,
-          tool,
-          args,
-          assetRoot,
-          stealthCache,
-          {
-            cdpPool,
-            winnerCache,
-            skipBootstrapSplice: Boolean(tool.preferredOrder?.length),
-            initialState,
-          },
-        );
+        const run = runWithLadder(ladder, tool, args, assetRoot, stealthCache, {
+          cdpPool,
+          winnerCache,
+          skipBootstrapSplice: Boolean(tool.preferredOrder?.length),
+          initialState,
+        });
+        const auditDeadlineMs = auditToolDeadlineMs();
+        let result: ToolResult;
+        let usedBackend: ConcreteBackend;
+        let attempts: Awaited<ReturnType<typeof runWithLadder>>['attempts'];
+        try {
+          const out = auditDeadlineMs
+            ? await withTimeoutCleanup(
+                run,
+                auditDeadlineMs,
+                `${tool.workflow.toolName} audit MCP call`,
+                () => {
+                  const cf = cdpPool.get(tool.site);
+                  if (cf) {
+                    cdpPool.delete(tool.site);
+                    cf.close().catch(() => {});
+                  }
+                  for (const key of winnerCache.keys()) {
+                    if (key.startsWith(`${tool.site}:`)) winnerCache.delete(key);
+                  }
+                },
+              )
+            : await run;
+          result = out.result;
+          usedBackend = out.usedBackend;
+          attempts = out.attempts;
+        } catch (err) {
+          if (!(err instanceof TimeoutError)) throw err;
+          usedBackend = ladder[0] ?? 'fetch';
+          attempts = [];
+          result = {
+            ok: false,
+            error: 'NETWORK',
+            message: `${tool.workflow.toolName} exceeded the audit MCP internal deadline after ${Math.round((auditDeadlineMs ?? 0) / 1000)}s`,
+          };
+        }
         // Reset the idle timer for this site's pooled Chrome.
         if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
           const prev = cdpIdleTimers.get(tool.site);

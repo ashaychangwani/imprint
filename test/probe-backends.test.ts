@@ -292,6 +292,15 @@ describe('backend preference ranking', () => {
       ]),
     ).toEqual(['fetch', 'stealth-fetch', 'cdp-replay']);
   });
+
+  it('keeps playbook behind successful API transports even when it probes faster', () => {
+    expect(
+      rankSuccessfulBackends([
+        { backend: 'playbook', durationMs: 6_000, tooSlow: false },
+        { backend: 'stealth-fetch', durationMs: 20_000, tooSlow: false },
+      ]),
+    ).toEqual(['stealth-fetch', 'playbook']);
+  });
 });
 
 describe('runtime backend learning', () => {

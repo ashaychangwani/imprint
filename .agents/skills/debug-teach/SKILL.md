@@ -120,6 +120,7 @@ bun run src/cli.ts doctor
 
 | Path | Contents |
 |---|---|
+| `~/.imprint/<site>/.build-plan-log.json` | Incremental planner diagnostics; exists even if planning times out or returns invalid JSON |
 | `~/.imprint/<site>/<tool>/.compile-log.json` | Full compile-agent conversation |
 | `~/.imprint/<site>/<tool>/.tool-plan.md` | LLM-generated implementation plan |
 | `~/.imprint/<site>/.audit-report.json` | Audit results (after `imprint audit`) |

@@ -259,6 +259,9 @@ export function rankSuccessfulBackends(candidates: BackendProbeCandidate[]): Con
   return [...candidates]
     .sort((a, b) => {
       if (a.tooSlow !== b.tooSlow) return a.tooSlow ? 1 : -1;
+      if ((a.backend === 'playbook') !== (b.backend === 'playbook')) {
+        return a.backend === 'playbook' ? 1 : -1;
+      }
       return effectiveRankingDuration(a) - effectiveRankingDuration(b);
     })
     .map((c) => c.backend);

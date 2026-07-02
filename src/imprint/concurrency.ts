@@ -78,9 +78,29 @@ export class TimeoutError extends Error {
  *  NOT cancelled — the caller just stops awaiting it and decides how to degrade.
  *  Throws TimeoutError on timeout. */
 export async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  return withTimeoutCleanup(work, ms, label);
+}
+
+/** Like withTimeout, but runs cleanup exactly when the deadline fires. Use this
+ *  for work with external resources, such as spawned CLI providers, so timeout
+ *  fallback does not leave a child process alive. Cleanup is best-effort and its
+ *  errors are deliberately ignored in favor of the TimeoutError. */
+export async function withTimeoutCleanup<T>(
+  work: Promise<T>,
+  ms: number,
+  label: string,
+  onTimeout?: () => void,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new TimeoutError(label, ms)), ms);
+    timer = setTimeout(() => {
+      try {
+        onTimeout?.();
+      } catch {
+        // Preserve the timeout as the actionable failure.
+      }
+      reject(new TimeoutError(label, ms));
+    }, ms);
   });
   try {
     return await Promise.race([work, timeout]);

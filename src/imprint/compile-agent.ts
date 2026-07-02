@@ -354,6 +354,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         emittedTokens,
         requiredInputs,
         credentialValues: opts.teachCredentials?.values,
+        credentialNames: opts.sharedContext?.credentialNames,
       },
     );
 

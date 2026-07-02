@@ -556,7 +556,7 @@ async function driveAuditWithClaude(opts: DriveAuditOptions): Promise<DriveAudit
         // after one call, so a deliberate inter-call delay keeps the probing
         // steady enough that the per-IP anti-bot defense isn't tripped. Only
         // the audit sets this; production mcp-server runs unpaced.
-        env: { IMPRINT_AUDIT_PACING_MS: '5000' },
+        env: { IMPRINT_AUDIT_PACING_MS: '5000', IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000' },
       },
     },
   };
@@ -685,6 +685,10 @@ ${buildAuditInitialPrompt(opts, unverifiedNote)}`;
     '-c',
     `mcp_servers.${serverName}.tool_timeout_sec=300`,
     '-c',
+    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_PACING_MS=${JSON.stringify('5000')}`,
+    '-c',
+    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS=${JSON.stringify('120000')}`,
+    '-c',
     'shell_environment_policy.inherit=all',
     '-',
   ];
@@ -695,7 +699,11 @@ ${buildAuditInitialPrompt(opts, unverifiedNote)}`;
   try {
     child = spawn('codex', args, {
       cwd: REPO_ROOT,
-      env: { ...process.env, IMPRINT_AUDIT_PACING_MS: '5000' },
+      env: {
+        ...process.env,
+        IMPRINT_AUDIT_PACING_MS: '5000',
+        IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (err) {
@@ -755,6 +763,8 @@ export function buildAuditInitialPrompt(opts: DriveAuditOptions, unverifiedNote:
 There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set, judge the result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt.
 
 Parameter coverage is mandatory for idempotent read tools. A cold cdp-replay/browser-backed first call may be slow because it launches or warms a trusted browser session, but later calls usually reuse that warm session and are much cheaper. Do NOT use the first call's cold-start latency as a reason to skip parameter probes. For search/list/calendar/lookup/quote/read tools, keep making paced sequential differential calls until each advertised parameter has a verdict, unless the same parameter remains blocked by infrastructure after repeated paced retries. For genuinely state-changing or irreversible tools (book/pay/send/cancel/delete/order), make only the safe baseline call and mark parameters untestable with that state-changing reason.
+
+Promo/coupon/voucher/discount-code parameters require a known valid code to prove a visible effect. If neither the schema nor another tool output gives you a valid code, classify that parameter as untestable; do not invent a random code and call an unchanged response no_op.
 
 IMPORTANT: Call tools strictly sequentially — issue exactly one tool call, wait for its result, then issue the next. Never issue tool calls in parallel or batch them in one turn. Many target sites share an anti-bot defense across endpoints, so a parallel burst trips a site-wide rate-limit (HTTP 429) that then poisons every later call. If a call returns a 429 / rate-limit / anti-bot result, classify it \`infra\` and pause before the next call.${unverifiedNote}${buildTokenDepNote(opts.tokenDeps)}
 
