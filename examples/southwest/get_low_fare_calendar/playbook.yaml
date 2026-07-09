@@ -20,7 +20,7 @@ parameters:
     default: 1
   - name: currency_code
     type: string
-    description: Currency code, such as USD.
+    description: Currency code, such as USD or POINTS.
     default: USD
   - name: promo_code
     type: string

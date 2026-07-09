@@ -109,16 +109,7 @@ const WORKFLOW: Workflow = {
   ],
   "site": "southwest",
   "parserModule": "./parser.ts",
-  "liveVerified": false,
-  "liveVerifiedWaiver": {
-    "kind": "waived-bot",
-    "firstError": "FORBIDDEN in 170ms — escalating",
-    "exhaustedBackends": [
-      "fetch",
-      "cdp-replay",
-      "stealth-fetch"
-    ]
-  }
+  "liveVerified": true
 };
 
 export interface GetAccountDetailsInput {

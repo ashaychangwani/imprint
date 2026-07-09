@@ -36,9 +36,9 @@ function fromFlat(data: Dict, prefix: string, key: string): unknown {
 
 export function extract(rawResponse: unknown, context?: Context): unknown {
   const responses = context?.responses ?? [];
-  const login = objectValue(responses[0]);
-  const details = objectValue(responses[1]);
-  const userinfo = objectValue(rawResponse);
+  const login = objectValue(responses[1]);
+  const details = objectValue(responses[2]);
+  const userinfo = objectValue(responses[3] ?? rawResponse);
   const data = objectValue(details.data);
   const account = objectValue(data.account);
   const personal = objectValue(data.personal_details);
