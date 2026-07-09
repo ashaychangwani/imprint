@@ -114,26 +114,32 @@ echo "[teach-from-scratch] preserved: sessions/"
 
 # Compile from the EXISTING recordings, not a fresh capture. Plain
 # `teach <site> --no-interactive` would launch chromium and block on a new
-# recording; pointing teach at any one raw session makes it skip record, start
-# at redact, and combine ALL raw siblings (combineAvailableSessions →
-# mergeSessions). Pick the newest raw session by mtime, matching the raw-session
-# filter in listSessionsInDir (session-merge.ts): a *.json that does not contain
-# ".redacted"/".triaged" and does not start with "combined-".
+# recording. Prefer the richest narrated recording artifact so a site with
+# historical combined sessions does not silently regress to a small single
+# recording. Raw sessions are ideal, but older/manual runs may only have the
+# combined triaged artifact left; teach can still consume that as --from-session.
 SESSION=""
-for f in $(ls -t "$RESOLVED_SITE_DIR"/sessions/*.json 2>/dev/null); do
+SESSION_SCORE=-1
+for f in "$RESOLVED_SITE_DIR"/sessions/*.json; do
+  [[ -f "$f" ]] || continue
   base="$(basename "$f")"
   case "$base" in
-    *.redacted.*|*.triaged.*|combined-*) continue ;;
+    *.redacted.*) continue ;;
   esac
-  SESSION="$f"
-  break
+  score="$(
+    jq -r '((.narration // []) | length) * 100000 + ((.requests // []) | length)' "$f" 2>/dev/null || echo -1
+  )"
+  if [[ "$score" =~ ^[0-9]+$ && "$score" -gt "$SESSION_SCORE" ]]; then
+    SESSION_SCORE="$score"
+    SESSION="$f"
+  fi
 done
 
 if [[ -z "$SESSION" ]]; then
-  echo "error: no raw recording found in $RESOLVED_SITE_DIR/sessions/ — record one first (imprint record \"$SITE\")" >&2
+  echo "error: no recording artifact found in $RESOLVED_SITE_DIR/sessions/ — record one first (imprint record \"$SITE\")" >&2
   exit 1
 fi
-echo "[teach-from-scratch] session:   $(basename "$SESSION") (merges all raw siblings)"
+echo "[teach-from-scratch] session:   $(basename "$SESSION") (richest existing recording artifact)"
 
 # Per-tool compile timeout passthrough (heavy multi-filter search tools need
 # more than the 20-min default once parameter-fidelity verification runs).
@@ -144,8 +150,9 @@ if [[ -n "${IMPRINT_TEACH_TIMEOUT:-}" ]]; then
 fi
 
 echo "[teach-from-scratch] running teach with tracing on…"
+TEACH_PROVIDER="${IMPRINT_TEACH_PROVIDER:-codex-cli}"
 IMPRINT_TRACE=1 \
 PHOENIX_COLLECTOR_ENDPOINT="${PHOENIX_COLLECTOR_ENDPOINT:-http://localhost:6006}" \
   bun run "$REPO/src/cli.ts" teach "$SITE" \
     --from-session "$SESSION" \
-    --no-interactive --all-tools --provider claude-cli "${TIMEOUT_ARGS[@]}"
+    --no-interactive --all-tools --provider "$TEACH_PROVIDER" "${TIMEOUT_ARGS[@]}"

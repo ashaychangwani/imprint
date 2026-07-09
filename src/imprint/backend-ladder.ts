@@ -322,9 +322,6 @@ export async function runWithLadder(
   let lastResult: ToolResult | null = null;
   let lastResultBackend: ConcreteBackend | null = null;
   let skipUntilBackend: ConcreteBackend | null = null;
-  const credentialBackedDataWorkflow =
-    tool.workflow.toolKind !== 'authenticate' && workflowReferencesCredentials(tool.workflow);
-
   for (const backend of effectiveLadder) {
     if (skipUntilBackend && backend !== skipUntilBackend) continue;
     if (skipUntilBackend === backend) skipUntilBackend = null;
@@ -340,20 +337,6 @@ export async function runWithLadder(
         durationMs: 0,
       });
       log(`${backend}: skipped (no playbook.yaml)`);
-      continue;
-    }
-    if (
-      credentialBackedDataWorkflow &&
-      (backend === 'fetch-bootstrap' || backend === 'cdp-replay' || backend === 'playbook')
-    ) {
-      attempts.push({
-        backend,
-        outcome: 'unavailable',
-        detail:
-          'workflow requires credential placeholders; browser-backed rung cannot receive credential store values',
-        durationMs: 0,
-      });
-      log(`${backend}: skipped (workflow requires credential placeholders)`);
       continue;
     }
 
@@ -609,13 +592,6 @@ export function effectiveAutoLadder(
     }
   }
   return next;
-}
-
-function workflowReferencesCredentials(workflow: Workflow): boolean {
-  return workflow.requests.some((req) => {
-    const haystack = `${req.url} ${req.body ?? ''} ${Object.values(req.headers).join(' ')}`;
-    return haystack.includes('${credential.');
-  });
 }
 
 /** A multi-step, state-changing, anti-bot workflow: ≥2 mutating requests AND an

@@ -2889,6 +2889,7 @@ function collectSensitiveHeaderValues(session: Session): Set<string> {
     for (const [name, value] of Object.entries(headers ?? {})) {
       if (!isSensitiveHeader(name)) continue;
       const lower = name.toLowerCase();
+      if (APP_METADATA_HEADER_RE.test(name)) continue; // public app metadata, not a per-user secret
       if (pageMinted.has(lower)) continue; // public app constant — not a secret
       if (lower === 'cookie') {
         for (const part of value.split(';')) {

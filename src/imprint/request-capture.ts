@@ -22,6 +22,7 @@
  *  contains dots, e.g. `[customers.userInformation.accountNumber]`, is matched
  *  verbatim rather than traversed). */
 export function jsonpath(root: unknown, path: string): unknown {
+  const normalizedPath = path === '$' ? '' : path.startsWith('$.') ? path.slice(2) : path;
   const tokens: Array<
     | { kind: 'key'; v: string }
     | { kind: 'index'; v: number }
@@ -30,7 +31,7 @@ export function jsonpath(root: unknown, path: string): unknown {
   const re = /([^.[\]]+)|\[([^\]]*)\]/g;
   let m: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: standard regex-exec loop
-  while ((m = re.exec(path)) !== null) {
+  while ((m = re.exec(normalizedPath)) !== null) {
     if (m[1] !== undefined) {
       tokens.push({ kind: 'key', v: m[1] });
     } else {

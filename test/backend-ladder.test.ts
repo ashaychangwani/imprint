@@ -559,7 +559,7 @@ result:
     // locally; the assertion is just that playbook was ATTEMPTED).
   }, 30000);
 
-  it('skips playbook for credential-backed data workflows', async () => {
+  it('attempts playbook for credential-backed data workflows', async () => {
     const siteDir = pathResolve(root, 'credentialed');
     mkdirSync(siteDir, { recursive: true });
     writeFileSync(
@@ -595,16 +595,16 @@ result:
       { skipBootstrapSplice: true },
     );
     expect(r.attempts).toHaveLength(3);
-    expect(r.attempts[2]).toMatchObject({
-      backend: 'playbook',
-      outcome: 'unavailable',
-    });
+    const playbookAttempt = r.attempts[2];
+    if (!playbookAttempt) throw new Error('expected 3rd attempt');
+    expect(playbookAttempt.backend).toBe('playbook');
+    expect(['ok', 'failed', 'escalate']).toContain(playbookAttempt.outcome);
     expect(r.result.ok).toBe(false);
     expect(behavior.calls.fetch).toBe(1);
     expect(behavior.calls.stealth).toBe(1);
-  });
+  }, 30000);
 
-  it('skips browser-backed anti-bot rungs for credential-backed data workflows', async () => {
+  it('allows browser-backed anti-bot rungs for credential-backed data workflows', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
       stealthResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
@@ -624,8 +624,8 @@ result:
     );
     expect(r.attempts.map((a) => [a.backend, a.outcome])).toEqual([
       ['fetch', 'escalate'],
-      ['fetch-bootstrap', 'unavailable'],
-      ['cdp-replay', 'unavailable'],
+      ['fetch-bootstrap', 'escalate'],
+      ['cdp-replay', 'escalate'],
       ['stealth-fetch', 'escalate'],
       ['playbook', 'unavailable'],
     ]);
@@ -970,7 +970,7 @@ describe('runWorkflowWithLadder', () => {
 
   it('memoizes the winning backend across calls without breaking the fetch path', async () => {
     __resetCompileWinningBackendForTest();
-    __setProbeTimeoutMsForTest(5_000);
+    __setProbeTimeoutMsForTest(250);
     let hits = 0;
     const server = Bun.serve({
       port: 0,
@@ -999,6 +999,9 @@ describe('runWorkflowWithLadder', () => {
       // First call: parallel probe — fetch wins (fastest). Second call:
       // memo=fetch, sequential from the memoized winner.
       const a = await runWorkflowWithLadder({ workflowPath, params: {} });
+      // Let the losing parallel probe branches observe the short deadline before
+      // the temp workflow directory is removed in afterEach.
+      await new Promise((resolve) => setTimeout(resolve, 300));
       const b = await runWorkflowWithLadder({ workflowPath, params: {} });
       expect(a.usedBackend).toBe('fetch');
       expect(b.usedBackend).toBe('fetch');
