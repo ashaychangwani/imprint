@@ -180,7 +180,7 @@ const DynamicValueFindingSchema = z.object({
   verificationPlan: z.string().default(''),
   sourceSeqs: z.array(z.number().int().nonnegative()).default([]),
 });
-export type DynamicValueFinding = z.infer<typeof DynamicValueFindingSchema>;
+type DynamicValueFinding = z.infer<typeof DynamicValueFindingSchema>;
 
 const PerToolPlanSchema = z.object({
   toolName: z.string().regex(/^[a-z][a-z0-9_]*$/),

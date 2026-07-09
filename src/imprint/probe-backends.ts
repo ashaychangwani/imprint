@@ -7,7 +7,12 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, resolve as pathResolve } from 'node:path';
+import { resolve as pathResolve } from 'node:path';
+import {
+  type BackendsCacheStatus,
+  loadBackendsCache,
+  loadBackendsCacheStatus,
+} from './backend-cache.ts';
 import { runWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { createLog } from './log.ts';
@@ -45,6 +50,8 @@ interface ProbeBackendsResult {
 const log = createLog('probe');
 const DEFAULT_PREFERRED_MAX_MS = 90_000;
 
+export { loadBackendsCache, loadBackendsCacheStatus, type BackendsCacheStatus };
+
 type BackendProbeCandidate = {
   backend: ConcreteBackend;
   durationMs: number;
@@ -60,24 +67,6 @@ type BackendRuntimeAttempt = {
   detail: string;
   durationMs: number;
 };
-
-export type BackendsCacheStatus =
-  | {
-      status: 'missing';
-      path: string | null;
-      remediation: string;
-    }
-  | {
-      status: 'ok';
-      path: string;
-      cache: BackendsCache;
-    }
-  | {
-      status: 'stale' | 'invalid';
-      path: string;
-      reason: string;
-      remediation: string;
-    };
 
 export async function probeBackends(opts: ProbeBackendsOptions): Promise<ProbeBackendsResult> {
   const assetRoot = opts.assetRoot ?? imprintHomeDir();
@@ -275,19 +264,6 @@ function backendResultTooSlow(result: BackendsCache['results'][string] | undefin
   return result?.outcome === 'ok' && result.tooSlow === true;
 }
 
-function invalidPreferredOrderReason(cache: BackendsCache): string | null {
-  for (const backend of cache.preferredOrder) {
-    const result = cache.results[backend];
-    if (backend === 'playbook' && result?.outcome !== 'ok') {
-      return 'preferredOrder includes playbook without a successful playbook result';
-    }
-    if (result && result.outcome !== 'ok') {
-      return `preferredOrder includes ${backend} with ${result.outcome} result`;
-    }
-  }
-  return null;
-}
-
 function existingBackendUsable(
   backend: ConcreteBackend,
   result: BackendsCache['results'][string] | undefined,
@@ -349,69 +325,6 @@ function capabilityHash(workflow: ResolvedTool['workflow']): string {
     ),
   };
   return createHash('sha256').update(JSON.stringify(caps)).digest('hex');
-}
-
-/** Read backends.json with status information. Runtime can still fall back to
- *  the default ladder, while status commands can explain why a cache was not
- *  usable. */
-export function loadBackendsCacheStatus(
-  site: string,
-  _assetRoot: string,
-  toolDir?: string,
-  opts: { warn?: boolean; toolName?: string } = {},
-): BackendsCacheStatus {
-  const remediation = backendsCacheRemediation(site, opts.toolName ?? toolDirName(toolDir));
-  if (!toolDir) return { status: 'missing', path: null, remediation };
-  const path = pathResolve(toolDir, 'backends.json');
-  if (!existsSync(path)) return { status: 'missing', path, remediation };
-  try {
-    const raw = JSON.parse(readFileSync(path, 'utf8'));
-    const parsed = BackendsCacheSchema.parse(raw);
-    if (parsed.schemaVersion && parsed.schemaVersion >= 2 && parsed.workflowHash) {
-      const workflowPath = pathResolve(toolDir, 'workflow.json');
-      if (existsSync(workflowPath)) {
-        const currentHash = workflowHashSync(readFileSync(workflowPath, 'utf8'));
-        if (currentHash !== parsed.workflowHash) {
-          const reason = 'workflow hash changed';
-          if (opts.warn !== false) {
-            process.stderr.write(
-              `[imprint] backends.json at ${path} is stale for current workflow — ignoring (run \`${remediation}\` to regenerate)\n`,
-            );
-          }
-          return { status: 'stale', path, reason, remediation };
-        }
-      }
-    }
-    const invalidPreferredReason = invalidPreferredOrderReason(parsed);
-    if (invalidPreferredReason) {
-      if (opts.warn !== false) {
-        process.stderr.write(
-          `[imprint] backends.json at ${path} has unsafe preferred backends — ignoring (run \`${remediation}\` to regenerate): ${invalidPreferredReason}\n`,
-        );
-      }
-      return { status: 'invalid', path, reason: invalidPreferredReason, remediation };
-    }
-    return { status: 'ok', path, cache: parsed };
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    if (opts.warn !== false) {
-      process.stderr.write(
-        `[imprint] backends.json at ${path} failed to parse — ignoring (run \`${remediation}\` to regenerate): ${reason}\n`,
-      );
-    }
-    return { status: 'invalid', path, reason, remediation };
-  }
-}
-
-/** Read backends.json. Returns null on missing/malformed — runtime
- *  falls back to the default ladder; a stale cache must never break cron. */
-export function loadBackendsCache(
-  site: string,
-  _assetRoot: string,
-  toolDir?: string,
-): BackendsCache | null {
-  const status = loadBackendsCacheStatus(site, _assetRoot, toolDir);
-  return status.status === 'ok' ? status.cache : null;
 }
 
 export function persistRuntimeBackendsCache(opts: {
@@ -497,22 +410,6 @@ export function persistRuntimeBackendsCache(opts: {
   BackendsCacheSchema.parse(cache);
   writeFileSync(pathResolve(opts.tool.dir, 'backends.json'), `${JSON.stringify(cache, null, 2)}\n`);
   return cache;
-}
-
-function workflowHashSync(workflowJson: string): string {
-  return createHash('sha256')
-    .update(JSON.stringify(WorkflowSchema.parse(JSON.parse(workflowJson))))
-    .digest('hex');
-}
-
-function backendsCacheRemediation(site: string, toolName?: string): string {
-  return toolName
-    ? `imprint probe-backends ${site} --tool ${toolName}`
-    : `imprint probe-backends ${site}`;
-}
-
-function toolDirName(toolDir?: string): string | undefined {
-  return toolDir ? basename(toolDir) : undefined;
 }
 
 function uniqueBackends(backends: ConcreteBackend[]): ConcreteBackend[] {

@@ -17,6 +17,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
 import type { Page } from 'playwright';
+import { loadBackendsCacheStatus } from './backend-cache.ts';
 import {
   type CdpBrowserFetch,
   type CdpBrowserFetchOptions,
@@ -34,7 +35,6 @@ import { proxyUrl } from './chromium.ts';
 import { RuntimeCookieJar } from './cookie-jar.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
-import { loadBackendsCacheStatus } from './probe-backends.ts';
 import {
   type CredentialStore,
   executeWorkflow,
