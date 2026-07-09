@@ -259,6 +259,13 @@ function buildInPageFetchExpr(
   reqTimeoutMs: number,
   sameOriginIframeSrc?: string,
 ): string {
+  const iframeNativeFetchSetup = `
+          ifr = document.createElement('iframe');
+          ifr.style.display = 'none';
+          document.body.appendChild(ifr);
+          if (ifr.contentWindow && typeof ifr.contentWindow.fetch === 'function') {
+            _f = ifr.contentWindow.fetch.bind(ifr.contentWindow);
+          }`;
   const iframeSetup = sameOriginIframeSrc
     ? `
           ifr = document.createElement('iframe');
@@ -273,38 +280,41 @@ function buildInPageFetchExpr(
           if (ifr.contentWindow && typeof ifr.contentWindow.fetch === 'function') {
             _f = ifr.contentWindow.fetch.bind(ifr.contentWindow);
           }`
-    : `
-          ifr = document.createElement('iframe');
-          ifr.style.display = 'none';
-          document.body.appendChild(ifr);
-          if (ifr.contentWindow && typeof ifr.contentWindow.fetch === 'function') {
-            _f = ifr.contentWindow.fetch.bind(ifr.contentWindow);
-          }`;
+    : '';
+  const fetchOnce = (fetchSetup: string) => `
+        let ifr;
+        try {
+          let _f = fetch;
+          try {${fetchSetup}
+          } catch (_) {}
+          const ctrl = new AbortController();
+          const to = setTimeout(() => ctrl.abort(), ${reqTimeoutMs});
+          const r = await _f(${JSON.stringify(fullUrl)}, {
+            method: ${JSON.stringify(method)},
+            headers: ${JSON.stringify(headers)},
+            ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
+            credentials: 'include',
+            signal: ctrl.signal,
+          });
+          clearTimeout(to);
+          const text = await r.text();
+          const h = {};
+          r.headers.forEach((v, k) => { h[k] = v; });
+          if (ifr) ifr.remove();
+          return { ok: true, status: r.status, body: text, headers: h };
+        } catch (e) {
+          if (ifr) try { ifr.remove(); } catch (_) {}
+          return { ok: false, error: String(e) };
+        }`;
   return `(async () => {
-      let ifr;
-      try {
-        let _f = fetch;
-        try {${iframeSetup}
-        } catch (_) {}
-        const ctrl = new AbortController();
-        const to = setTimeout(() => ctrl.abort(), ${reqTimeoutMs});
-        const r = await _f(${JSON.stringify(fullUrl)}, {
-          method: ${JSON.stringify(method)},
-          headers: ${JSON.stringify(headers)},
-          ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
-          credentials: 'include',
-          signal: ctrl.signal,
-        });
-        clearTimeout(to);
-        const text = await r.text();
-        const h = {};
-        r.headers.forEach((v, k) => { h[k] = v; });
-        if (ifr) ifr.remove();
-        return JSON.stringify({ ok: true, status: r.status, body: text, headers: h });
-      } catch (e) {
-        if (ifr) try { ifr.remove(); } catch (_) {}
-        return JSON.stringify({ ok: false, error: String(e) });
+      const primary = await (async () => {${fetchOnce(iframeSetup)}
+      })();
+      if (${sameOriginIframeSrc ? 'false' : 'true'} && !primary.ok) {
+        const fallback = await (async () => {${fetchOnce(iframeNativeFetchSetup)}
+        })();
+        return JSON.stringify(fallback);
       }
+      return JSON.stringify(primary);
     })()`;
 }
 
