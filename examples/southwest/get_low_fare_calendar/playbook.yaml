@@ -1,0 +1,41 @@
+toolName: get_low_fare_calendar
+summary: Get Southwest low-fare calendar prices for a route and month.
+parameters:
+  - name: origination_airport_code
+    type: string
+    description: Origin airport code, such as SJC.
+  - name: destination_airport_code
+    type: string
+    description: Destination airport code, such as SAN.
+  - name: departure_date
+    type: string
+    description: Calendar month anchor date in YYYY-MM-DD format.
+  - name: trip_type
+    type: string
+    description: Trip type, such as oneway or roundtrip.
+    default: oneway
+  - name: adults_count
+    type: number
+    description: Number of adult passengers.
+    default: 1
+  - name: currency_code
+    type: string
+    description: Currency code, such as USD or POINTS.
+    default: USD
+  - name: promo_code
+    type: string
+    description: Optional Southwest promo code.
+    default: ""
+steps:
+  - action: navigate
+    url: "https://www.southwest.com/air/low-fare-calendar/select-dates?adultPassengersCount=${adults_count}&adultsCount=${adults_count}&currencyCode=${currency_code}&departureDate=${departure_date}&destinationAirportCode=${destination_airport_code}&hasNearByAirport=false&lapInfantPassengersCount=0&originationAirportCode=${origination_airport_code}&passengerType=ADULT&promoCode=${promo_code}&returnAirportCode=&returnDate=&selectedFlight1=${departure_date}&selectedFlight2=&tripType=${trip_type}"
+    wait_for: networkidle
+  - action: wait
+    wait_for:
+      xhr: "/api/air-booking/v1/air-booking/page/air/low-fare-calendar/select-dates"
+result:
+  source: xhr
+  url_pattern: "/api/air-booking/v1/air-booking/page/air/low-fare-calendar/select-dates"
+  extract: data.searchResults[].lowFareCalendarDays[]
+  return_as: calendar_days
+notes: Login is handled separately; this playbook starts from a browser context with any needed Southwest session cookies already loaded.

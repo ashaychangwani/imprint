@@ -1,0 +1,16 @@
+{
+  "probedAt": "2026-07-09T03:01:28.644Z",
+  "imprintVersion": "0.5.1",
+  "schemaVersion": 2,
+  "workflowHash": "939ac470494391f1932be147db462b426f90898a7d6eda8c71c03507af882df1",
+  "capabilityHash": "d0891f676244406c38af43944a1d24d32c068a9d1a75986d260a63bffd29e1b2",
+  "preferredOrder": [
+    "fetch"
+  ],
+  "results": {
+    "fetch": {
+      "outcome": "ok",
+      "durationMs": 630
+    }
+  }
+}

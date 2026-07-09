@@ -357,15 +357,25 @@ export async function searchBrowserSite() {
       {
         site: 'google-hotels',
         toolNames: [
-          'autocomplete_hotel_location',
-          'get_hotel_booking_options',
+          'get_hotel_details',
+          'get_hotel_photos',
           'get_hotel_reviews',
+          'get_travel_area_boundaries',
+          'list_hotel_booking_options',
+          'search_hotel_web_links',
           'search_hotels',
+          'suggest_hotel_destinations',
         ],
       },
       {
         site: 'southwest',
-        toolNames: ['search_southwest_flights'],
+        toolNames: [
+          'get_account_details',
+          'get_flight_status',
+          'get_low_fare_calendar',
+          'list_upcoming_trips',
+          'search_flights',
+        ],
       },
     ]);
 

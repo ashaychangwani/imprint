@@ -1,0 +1,24 @@
+toolName: list_upcoming_trips
+summary: List upcoming Southwest trips for the logged-in account.
+parameters: []
+steps:
+  - action: navigate
+    url: https://www.southwest.com/
+    wait_for:
+      xhr: /api/loyalty-management/v2/loyalty-management/accounts/self/future-air-reservations-secure
+  - action: click
+    locators:
+      - by: role
+        value: link
+        name: View & manage trips
+      - by: text
+        value: View & manage trips
+      - by: css
+        value: "a[href*='/loyalty/myaccount']"
+    wait_for: networkidle
+result:
+  source: xhr
+  url_pattern: /api/loyalty-management/v2/loyalty-management/accounts/self/future-air-reservations-secure
+  extract: data[]
+  return_as: upcoming_trips
+notes: Login is handled separately by imprint login; ignore telemetry and personalization requests.

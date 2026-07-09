@@ -1,0 +1,23 @@
+toolName: get_hotel_photos
+summary: Fetch photo thumbnail URLs for a selected Google Hotels property.
+parameters:
+  - name: hotel_token
+    type: string
+    description: Google Hotels selected hotel token.
+  - name: image_size
+    type: number
+    description: Requested thumbnail/image size in pixels when configurable.
+    default: 152
+steps:
+  - action: navigate
+    url: "https://www.google.com/travel/search?qs=${hotel_token}"
+    wait_for: networkidle
+  - action: wait
+    wait_for:
+      xhr: "rpcids=zM1L7d"
+result:
+  source: xhr
+  url_pattern: "rpcids=zM1L7d"
+  extract: "0[].2"
+  return_as: photo_payloads
+notes: "The zM1L7d batchexecute response wraps the actual photo entries as a stringified JSON payload; each entry contains category/order fields, an internal photo id/count, and thumbnail URLs sized by Google's session-bound request state."

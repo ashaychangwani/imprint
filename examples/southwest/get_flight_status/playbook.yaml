@@ -1,0 +1,58 @@
+toolName: get_flight_status
+summary: Get Southwest flight status for a flight segment.
+parameters:
+  - name: departure_date
+    type: string
+    description: Flight departure date in YYYY-MM-DD format.
+  - name: origination_airport_code
+    type: string
+    description: Origin airport code.
+  - name: destination_airport_code
+    type: string
+    description: Destination airport code.
+  - name: flight_number
+    type: string
+    description: Southwest flight number.
+steps:
+  - action: navigate
+    url: "https://www.southwest.com/loyalty/myaccount/"
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: role
+        value: button
+        name: "Round trip"
+      - by: text
+        value_pattern: "${origination_airport_code}.*${destination_airport_code}"
+      - by: css
+        value: "div.ariaLive__1kEl6 button"
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: role
+        value: tab
+        name: Return
+      - by: text
+        value: Return
+      - by: css
+        value: "div.tabsContainer__1ijZP button.tab__c1Zol"
+    wait_for:
+      sleep_ms: 300
+  - action: click
+    locators:
+      - by: role
+        value: link
+        name: Details
+      - by: text
+        value: Details
+      - by: css
+        value: "div.tripActions__1uWCm a.button__uPCsA"
+    wait_for:
+      xhr: "/api/air-operations/v1/air-operations/api/air/flights/statuses"
+result:
+  source: xhr
+  url_pattern: "/api/air-operations/v1/air-operations/api/air/flights/statuses"
+  extract: data.searchResults[]
+  return_as: flight_statuses
+notes: "This playbook starts from a logged-in Southwest account and uses the upcoming trips page; the trip list must contain the requested flight segment."

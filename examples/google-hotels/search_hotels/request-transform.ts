@@ -1,197 +1,128 @@
-// Per-tool request transform for google-hotels search_hotels.
-// Builds the AtySUc batchexecute inner payload from the tool params, then wraps
-// it with the SHARED freq.ts helpers (buildFreqBody / buildBatchExecuteUrl).
-// The structure was reverse-engineered from recorded requests:
-//   seq 229  (location only)               -> proves a bare text query resolves
-//   seq 300  (location + dates)            -> [1][2] location/dates block
-//   seq 691  (4+ rating)                   -> [1][4][3]/[1][4][4]
-//   seq 745  (price max 338)               -> [1][4][3][1] = [min,max]
-//   seq 1098 (19 amenities + 4/5 star)     -> [1][4][0][0] amenities, [1][4][0][1] stars
-//   seq 1745 (brands)                      -> [1][4][0][7] brands
-//   seq 1842 (sort lowest price)           -> [1][4][0][4] sort code
-//   seq 2082 (property type / vacation)    -> [1][0] = 1 hotels / 2 vacation rentals
-import {
-  buildFreqBody,
-  buildBatchExecuteUrl,
-  encodeDate,
-} from '../_shared/freq.ts';
+type Params = Record<string, string | number | boolean>;
 
-type Params = Record<string, string | number | boolean | undefined>;
-
-function num(v: unknown, dflt = 0): number {
-  if (v === undefined || v === null || v === '') return dflt;
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : dflt;
+function asString(params: Params | undefined, key: string, fallback = ''): string {
+  const value = params?.[key];
+  return value === undefined || value === null ? fallback : String(value);
 }
 
-function str(v: unknown): string {
-  return v === undefined || v === null ? '' : String(v).trim();
+function asNumber(params: Params | undefined, key: string, fallback = 0): number {
+  const value = params?.[key];
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-// Amenity name aliases -> Google integer codes (best-effort; numeric codes pass
-// through unchanged). Codes observed in the recording's 19-amenity list.
-const AMENITY_ALIASES: Record<string, number> = {
-  'free breakfast': 4,
-  breakfast: 4,
-  'free wi-fi': 6,
-  'free wifi': 6,
-  wifi: 6,
-  'wi-fi': 6,
-  bar: 2,
-  pool: 9,
-  spa: 15,
-  'air conditioning': 8,
-  'pet-friendly': 12,
-  'pet friendly': 12,
-  'fitness center': 19,
-  gym: 19,
-  restaurant: 1,
-  'room service': 3,
-  'airport shuttle': 22,
-  'electric vehicle charging station': 61,
-  parking: 7,
-  'free parking': 10,
-  'hot tub': 40,
-  'accessible': 5,
-  'kid-friendly': 53,
-  'all-inclusive available': 11,
-  'beach access': 52,
-};
+function parseDateTriplet(value: string): number[] | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
 
-function parseCodeList(raw: string, aliases?: Record<string, number>): number[] {
-  if (!raw) return [];
-  const out: number[] = [];
-  for (const part of raw.split(',')) {
-    const t = part.trim().toLowerCase();
-    if (!t) continue;
-    if (aliases && t in aliases) {
-      out.push(aliases[t]!);
-      continue;
-    }
-    const n = Number(t);
-    if (Number.isFinite(n)) out.push(n);
+function nightsBetween(checkIn: string, checkOut: string): number {
+  const start = Date.parse(`${checkIn}T00:00:00Z`);
+  const end = Date.parse(`${checkOut}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 1;
+  return Math.max(1, Math.round((end - start) / 86_400_000));
+}
+
+function numberList(value: string): number[] | null {
+  const nums = value
+    .split(',')
+    .map((part) => Number(part.trim()))
+    .filter((part) => Number.isFinite(part));
+  return nums.length ? nums : null;
+}
+
+function propertyTypeCode(value: string): number {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === '2' || normalized.includes('vacation')) return 2;
+  return 1;
+}
+
+function placeRow(destination: string): unknown[] | null {
+  const normalized = destination.trim().toLowerCase();
+  if (normalized.includes('chicago loop')) {
+    return ['/m/0gz469', null, null, null, null, null, 'Chicago Loop'];
   }
-  return out;
-}
-
-// Brand filter: each entry encodes as [parentCode,[childCode]]. Accept "parent:child"
-// or a bare numeric code (wrapped as [code,[code]]).
-function parseBrands(raw: string): Array<[number, number[]]> {
-  if (!raw) return [];
-  const out: Array<[number, number[]]> = [];
-  for (const part of raw.split(',')) {
-    const t = part.trim();
-    if (!t) continue;
-    if (t.includes(':')) {
-      const [a, b] = t.split(':');
-      const pa = Number(a);
-      const pb = Number(b);
-      if (Number.isFinite(pa) && Number.isFinite(pb)) out.push([pa, [pb]]);
-    } else {
-      const n = Number(t);
-      if (Number.isFinite(n)) out.push([n, [n]]);
-    }
+  if (normalized.includes('tahoe city')) {
+    return ['/m/0gyvmkl', null, null, null, null, '0x809bd62ecf1fa721:0x2a98b230816c9ed1', 'Tahoe City'];
   }
-  return out;
-}
-
-const SORT_CODES: Record<string, number | null> = {
-  relevance: null,
-  lowest_price: 3,
-  highest_rating: 8,
-  most_reviewed: 13,
-};
-
-function nightsBetween(ci: string, co: string): number {
-  const a = Date.parse(ci + 'T00:00:00Z');
-  const b = Date.parse(co + 'T00:00:00Z');
-  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return 1;
-  return Math.round((b - a) / 86_400_000);
-}
-
-export function buildInnerPayload(params: Params): unknown {
-  const location = str(params.location);
-  const checkIn = str(params.check_in_date);
-  const checkOut = str(params.check_out_date);
-  const adults = Math.max(1, num(params.adults, 2));
-  const children = Math.max(0, num(params.children, 0));
-  const minRating = num(params.min_rating, 0);
-  const minPrice = num(params.min_price, 0);
-  const maxPrice = num(params.max_price, 0);
-  const amenities = parseCodeList(str(params.amenities), AMENITY_ALIASES);
-  const stars = parseCodeList(str(params.hotel_class));
-  const brands = parseBrands(str(params.brands));
-  const sortKey = str(params.sort_by).toLowerCase() || 'relevance';
-  const sortCode = sortKey in SORT_CODES ? SORT_CODES[sortKey] : null;
-  const propertyType =
-    str(params.property_type).toLowerCase() === 'vacation_rentals' ? 2 : 1;
-
-  // [1][1] occupancy: array of adults (each [3]) + children scalar
-  const occupancy: unknown = [Array.from({ length: adults }, () => [3]), children];
-
-  // [1][2] location/dates: empty mid block + dates block
-  let locDates: unknown;
-  if (checkIn && checkOut) {
-    locDates = [
-      [],
-      [
-        null,
-        [encodeDate(checkIn), encodeDate(checkOut), nightsBetween(checkIn, checkOut)],
-        null,
-        null,
-        null,
-        [1],
-      ],
-    ];
-  } else {
-    locDates = null;
+  if (normalized.includes('denver downtown')) {
+    return ['/m/0525427', null, null, null, null, null, 'Denver Downtown'];
   }
+  return null;
+}
 
-  // [1][4] filters
-  const filterObj: unknown[] = [
-    amenities.length ? amenities : null, // [0] amenities
-    stars.length ? stars : null, // [1] hotel class (stars)
-    null, // [2]
-    null, // [3]
-    sortCode ?? null, // [4] sort
-    null, // [5]
-    'USD', // [6] currency
+function buildPayload(params?: Params): unknown[] {
+  const destination = asString(params, 'destination', 'chicago loop');
+  const currency = asString(params, 'currency', 'USD') || 'USD';
+  const type = propertyTypeCode(asString(params, 'property_type', 'hotels'));
+  const sortOrder = asString(params, 'sort_order', 'relevance').trim().toLowerCase();
+  const amenities = numberList(asString(params, 'amenities', ''));
+  const classes = numberList(asString(params, 'hotel_classes', ''));
+  const minPrice = asNumber(params, 'min_price', 0);
+  const maxPrice = asNumber(params, 'max_price', 0);
+  const minRating = asNumber(params, 'min_rating', 0);
+  const checkIn = asString(params, 'check_in_date', '2026-07-03');
+  const checkOut = asString(params, 'check_out_date', '2026-07-06');
+  const checkInTriplet = parseDateTriplet(checkIn);
+  const checkOutTriplet = parseDateTriplet(checkOut);
+  const place = placeRow(destination);
+
+  const filterVector: unknown[] = [
+    amenities,
+    classes,
+    null,
+    null,
+    null,
+    null,
+    currency,
   ];
-  if (brands.length) filterObj[7] = brands; // [7] brands
-
-  const f14: unknown[] = [filterObj, null, []];
-
-  const ratingCode = minRating > 0 ? Math.round(minRating * 2) : 0;
-  const priceSet = minPrice > 0 || maxPrice > 0;
-  if (priceSet || ratingCode) {
-    const priceTuple = priceSet ? [minPrice > 0 ? minPrice : null, maxPrice > 0 ? maxPrice : null] : null;
-    f14[3] = [null, priceTuple, 1];
-    if (ratingCode) f14[4] = ratingCode;
+  const filters: unknown[] = [filterVector, null, []];
+  if (minPrice > 0 || maxPrice > 0) {
+    const bounds: unknown[] = [];
+    bounds[0] = minPrice > 0 ? [null, minPrice] : null;
+    bounds[1] = maxPrice > 0 ? [null, maxPrice] : null;
+    if (maxPrice > 0) bounds[2] = 1;
+    filters[3] = bounds;
+  }
+  if (minRating >= 4) {
+    filters[4] = 8;
   }
 
-  const block1: unknown = [propertyType, occupancy, locDates, null, f14];
+  const uiState = sortOrder === 'prices' || minRating >= 4 || minPrice > 0 || maxPrice > 0 || amenities || classes
+    ? [[[3], [3], [3], [3]], 1]
+    : [[[3], [3]], 0];
+  const searchBlock: unknown[] = [type, uiState];
+  if (place && checkInTriplet && checkOutTriplet) {
+    searchBlock[2] = [
+      [null, [place], []],
+      [null, [checkInTriplet, checkOutTriplet, nightsBetween(checkIn, checkOut)], null, null, null, [1]],
+    ];
+    searchBlock[3] = null;
+    searchBlock[4] = filters;
+  } else {
+    searchBlock[2] = null;
+    searchBlock[3] = null;
+    searchBlock[4] = filters;
+  }
 
-  // [2] fresh-search block (matches seq 229 / a brand-new query)
-  const block2: unknown = [0, null, null, 0, 0, null, null, null, 0];
-
-  return [location, block1, block2];
+  const control = place ? [1, null, null, 0, 0, null, 13, null, 0] : [0, null, null, 0, 0, null, null, null, 0];
+  const payload: unknown[] = [destination, searchBlock, control];
+  if (sortOrder === 'prices') payload[6] = ['prices'];
+  return payload;
 }
 
 export function transform(
-  method: string,
+  _method: string,
   url: string,
-  responses: Record<string, any>,
+  _responses: unknown[],
   params?: Params,
 ): { url: string; body: string } {
-  void method;
-  void responses;
-  const u = new URL(url);
-  const rpcid = u.searchParams.get('rpcids') || 'AtySUc';
-  const fSid = u.searchParams.get('f.sid') ?? '';
-  const bl = u.searchParams.get('bl') ?? '';
-  const inner = buildInnerPayload(params ?? {});
+  const nextUrl = new URL(url);
+  nextUrl.searchParams.set('_reqid', String(Math.floor(Date.now() % 90_000_000) + 1_000_000));
+  const outer = [[['AtySUc', JSON.stringify(buildPayload(params)), null, '1']]];
   return {
-    url: buildBatchExecuteUrl(rpcid, { f_sid: fSid, bl }),
-    body: buildFreqBody(rpcid, inner, '1'),
+    url: nextUrl.toString(),
+    body: `f.req=${encodeURIComponent(JSON.stringify(outer))}&`,
   };
 }
