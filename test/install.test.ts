@@ -369,7 +369,13 @@ export async function searchBrowserSite() {
       },
       {
         site: 'southwest',
-        toolNames: ['search_southwest_flights'],
+        toolNames: [
+          'get_account_details',
+          'get_flight_status',
+          'get_low_fare_calendar',
+          'list_upcoming_trips',
+          'search_flights',
+        ],
       },
     ]);
 

@@ -1,0 +1,88 @@
+{
+  "toolName": "search_flights",
+  "intent": {
+    "description": "Search Southwest one-way or round-trip flight times and fares for a route and date.",
+    "userSaid": "i just specified the departure and arrival airports (SJC and SAN) i set teh depart date now i changed to one way trip only now i clicked search"
+  },
+  "site": "southwest",
+  "parameters": [
+    {
+      "name": "origination_airport_code",
+      "type": "string",
+      "description": "Origin airport code, such as SJC.",
+      "default": "SJC"
+    },
+    {
+      "name": "destination_airport_code",
+      "type": "string",
+      "description": "Destination airport code, such as SAN.",
+      "default": "SAN"
+    },
+    {
+      "name": "departure_date",
+      "type": "string",
+      "description": "Outbound departure date in YYYY-MM-DD format.",
+      "default": "2026-08-20"
+    },
+    {
+      "name": "return_date",
+      "type": "string",
+      "description": "Return date in YYYY-MM-DD format for round trips; empty for one-way searches.",
+      "default": ""
+    },
+    {
+      "name": "trip_type",
+      "type": "string",
+      "description": "Trip type, oneway or roundtrip.",
+      "default": "oneway"
+    },
+    {
+      "name": "adults_count",
+      "type": "number",
+      "description": "Number of adult passengers.",
+      "default": 1
+    },
+    {
+      "name": "fare_type",
+      "type": "string",
+      "description": "Fare currency type: USD for dollars, POINTS for Rapid Rewards points.",
+      "default": "USD"
+    }
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://www.southwest.com/swa-ui/bootstrap/landing-home-page-v2/1/data.js",
+      "headers": {
+        "Accept": "application/javascript, text/javascript, */*; q=0.01"
+      },
+      "captures": [
+        {
+          "name": "southwest_api_key",
+          "source": "text_regex",
+          "pattern": "\"swa-bootstrap-landing-home-page-v2/api-keys\":\\[function\\(require,module,exports\\)\\{\\s*module\\.exports = \\{[^}]*\"prod\":\"([^\"]+)\"",
+          "group": 1,
+          "required": true,
+          "capability": "ordinary_http"
+        }
+      ],
+      "effect": "safe"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.southwest.com/api/air-booking/v1/air-booking/page/air/booking/shopping",
+      "headers": {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Content-Type": "application/json",
+        "X-API-Key": "${state.southwest_api_key}",
+        "X-App-ID": "air-booking",
+        "X-Channel-ID": "southwest",
+        "X-User-Experience-ID": "${generated.uuid}",
+        "Referer": "https://www.southwest.com/air/booking/select-depart.html?adultsCount=${param.adults_count}&adultPassengersCount=${param.adults_count}&destinationAirportCode=${param.destination_airport_code}&departureDate=${param.departure_date}&departureTimeOfDay=ALL_DAY&fareType=${param.fare_type}&int=HOMEQBOMAIR&originationAirportCode=${param.origination_airport_code}&passengerType=ADULT&promoCode=&returnDate=${param.return_date}&returnTimeOfDay=ALL_DAY&tripType=${param.trip_type}"
+      },
+      "body": "{\"adultPassengersCount\":\"${param.adults_count}\",\"adultsCount\":\"${param.adults_count}\",\"departureDate\":\"${param.departure_date}\",\"departureTimeOfDay\":\"ALL_DAY\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"fareType\":\"${param.fare_type}\",\"int\":\"HOMEQBOMAIR\",\"originationAirportCode\":\"${param.origination_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"\",\"returnDate\":\"${param.return_date}\",\"returnTimeOfDay\":\"ALL_DAY\",\"tripType\":\"${param.trip_type}\",\"application\":\"air-booking\",\"site\":\"southwest\"}",
+      "effect": "safe"
+    }
+  ],
+  "parserModule": "./parser.ts"
+}

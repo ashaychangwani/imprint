@@ -1,0 +1,82 @@
+{
+  "toolName": "get_low_fare_calendar",
+  "intent": {
+    "description": "Get Southwest low-fare calendar prices for a route and month.",
+    "userSaid": "i just specified the departure and arrival airports (SJC and SAN) i set teh depart date now i changed to one way trip only now i clicked search now i clicked hte low fare calendar"
+  },
+  "site": "southwest",
+  "parameters": [
+    {
+      "name": "origination_airport_code",
+      "type": "string",
+      "description": "Origin airport code, such as SJC.",
+      "default": "SJC",
+      "verified": false,
+      "verifyNote": "waived-bot"
+    },
+    {
+      "name": "destination_airport_code",
+      "type": "string",
+      "description": "Destination airport code, such as SAN.",
+      "default": "SAN",
+      "verified": false,
+      "verifyNote": "waived-bot"
+    },
+    {
+      "name": "departure_date",
+      "type": "string",
+      "description": "Calendar month anchor date in YYYY-MM-DD format.",
+      "default": "2026-09-01",
+      "verified": false,
+      "verifyNote": "waived-bot"
+    }
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://www.southwest.com/swa-ui/bootstrap/landing-home-page-v2/1/data.js",
+      "headers": {
+        "Accept": "application/javascript, text/javascript, */*; q=0.01"
+      },
+      "captures": [
+        {
+          "name": "southwest_api_key",
+          "source": "text_regex",
+          "pattern": "\"swa-bootstrap-landing-home-page-v2/api-keys\":\\[function\\(require,module,exports\\)\\{\\s*module\\.exports = \\{[^}]*\"prod\":\"([^\\\"]+)\"",
+          "group": 1,
+          "required": true,
+          "capability": "ordinary_http"
+        }
+      ],
+      "effect": "safe"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.southwest.com/api/air-booking/v1/air-booking/page/air/low-fare-calendar/select-dates",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "x-api-key": "${state.southwest_api_key}",
+        "x-app-id": "air-low-fare-calendar-v2",
+        "x-app-version": "9.0.1",
+        "x-channel-id": "southwest",
+        "x-user-experience-id": "${generated.uuid}",
+        "x-diagnostic": "{\"spa\":\"9.0.1\"}",
+        "Referer": "https://www.southwest.com/air/low-fare-calendar/select-dates?adultPassengersCount=1&adultsCount=1&currencyCode=USD&departureDate=${param.departure_date}&destinationAirportCode=${param.destination_airport_code}&hasNearByAirport=false&lapInfantPassengersCount=0&originationAirportCode=${param.origination_airport_code}&passengerType=ADULT&promoCode=&returnAirportCode=&returnDate=&selectedFlight1=${param.departure_date}&selectedFlight2=&tripType=oneway&clk=6403032&cbid=6403032"
+      },
+      "body": "{\"adultPassengersCount\":\"1\",\"adultsCount\":\"1\",\"currencyCode\":\"USD\",\"departureDate\":\"${param.departure_date}\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"hasNearByAirport\":\"false\",\"lapInfantPassengersCount\":\"0\",\"originationAirportCode\":\"${param.origination_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"\",\"returnAirportCode\":\"\",\"returnDate\":\"\",\"selectedFlight1\":\"${param.departure_date}\",\"selectedFlight2\":\"\",\"tripType\":\"oneway\",\"clk\":\"6403032\",\"cbid\":\"6403032\"}",
+      "effect": "safe"
+    }
+  ],
+  "parserModule": "./parser.ts",
+  "liveVerified": false,
+  "liveVerifiedWaiver": {
+    "kind": "waived-bot",
+    "firstError": "FORBIDDEN in 152ms — escalating",
+    "exhaustedBackends": [
+      "fetch",
+      "cdp-replay",
+      "stealth-fetch"
+    ]
+  }
+}

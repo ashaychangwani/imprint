@@ -1,0 +1,22 @@
+{
+  "probedAt": "2026-07-09T19:22:00.000Z",
+  "imprintVersion": "0.5.1",
+  "schemaVersion": 2,
+  "workflowHash": "77f0c2ed6bfca6e4e8ce40c357c27f498ece190e28120f1a36ce84c935b1f9b4",
+  "capabilityHash": "3c8923581502dd6d363cb286839032709cd2de34a1c98c70f42cf63d5f092676",
+  "preferredOrder": [
+    "cdp-replay"
+  ],
+  "results": {
+    "stealth-fetch": {
+      "outcome": "failed",
+      "durationMs": 22228,
+      "error": "STATE_MISSING",
+      "detail": "Token request did not produce captured auth state through stealth-fetch."
+    },
+    "cdp-replay": {
+      "outcome": "ok",
+      "durationMs": 2547
+    }
+  }
+}
