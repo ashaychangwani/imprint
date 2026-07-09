@@ -29,6 +29,14 @@
       "default": "2026-09-01",
       "verified": false,
       "verifyNote": "waived-bot"
+    },
+    {
+      "name": "currency_code",
+      "type": "string",
+      "description": "Currency code, such as USD or POINTS.",
+      "default": "USD",
+      "verified": false,
+      "verifyNote": "manual-exposed"
     }
   ],
   "requests": [
@@ -62,9 +70,9 @@
         "x-channel-id": "southwest",
         "x-user-experience-id": "${generated.uuid}",
         "x-diagnostic": "{\"spa\":\"9.0.1\"}",
-        "Referer": "https://www.southwest.com/air/low-fare-calendar/select-dates?adultPassengersCount=1&adultsCount=1&currencyCode=USD&departureDate=${param.departure_date}&destinationAirportCode=${param.destination_airport_code}&hasNearByAirport=false&lapInfantPassengersCount=0&originationAirportCode=${param.origination_airport_code}&passengerType=ADULT&promoCode=&returnAirportCode=&returnDate=&selectedFlight1=${param.departure_date}&selectedFlight2=&tripType=oneway&clk=6403032&cbid=6403032"
+        "Referer": "https://www.southwest.com/air/low-fare-calendar/select-dates?adultPassengersCount=1&adultsCount=1&currencyCode=${param.currency_code}&departureDate=${param.departure_date}&destinationAirportCode=${param.destination_airport_code}&hasNearByAirport=false&lapInfantPassengersCount=0&originationAirportCode=${param.origination_airport_code}&passengerType=ADULT&promoCode=&returnAirportCode=&returnDate=&selectedFlight1=${param.departure_date}&selectedFlight2=&tripType=oneway&clk=6403032&cbid=6403032"
       },
-      "body": "{\"adultPassengersCount\":\"1\",\"adultsCount\":\"1\",\"currencyCode\":\"USD\",\"departureDate\":\"${param.departure_date}\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"hasNearByAirport\":\"false\",\"lapInfantPassengersCount\":\"0\",\"originationAirportCode\":\"${param.origination_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"\",\"returnAirportCode\":\"\",\"returnDate\":\"\",\"selectedFlight1\":\"${param.departure_date}\",\"selectedFlight2\":\"\",\"tripType\":\"oneway\",\"clk\":\"6403032\",\"cbid\":\"6403032\"}",
+      "body": "{\"adultPassengersCount\":\"1\",\"adultsCount\":\"1\",\"currencyCode\":\"${param.currency_code}\",\"departureDate\":\"${param.departure_date}\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"hasNearByAirport\":\"false\",\"lapInfantPassengersCount\":\"0\",\"originationAirportCode\":\"${param.origination_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"\",\"returnAirportCode\":\"\",\"returnDate\":\"\",\"selectedFlight1\":\"${param.departure_date}\",\"selectedFlight2\":\"\",\"tripType\":\"oneway\",\"clk\":\"6403032\",\"cbid\":\"6403032\"}",
       "effect": "safe"
     }
   ],

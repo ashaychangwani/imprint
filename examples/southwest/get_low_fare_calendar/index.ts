@@ -46,6 +46,14 @@ const WORKFLOW: Workflow = {
       "default": "2026-09-01",
       "verified": false,
       "verifyNote": "waived-bot"
+    },
+    {
+      "name": "currency_code",
+      "type": "string",
+      "description": "Currency code, such as USD or POINTS.",
+      "default": "USD",
+      "verified": false,
+      "verifyNote": "manual-exposed"
     }
   ],
   "requests": [
@@ -79,9 +87,9 @@ const WORKFLOW: Workflow = {
         "x-channel-id": "southwest",
         "x-user-experience-id": "${generated.uuid}",
         "x-diagnostic": "{\"spa\":\"9.0.1\"}",
-        "Referer": "https://www.southwest.com/air/low-fare-calendar/select-dates?adultPassengersCount=1&adultsCount=1&currencyCode=USD&departureDate=${param.departure_date}&destinationAirportCode=${param.destination_airport_code}&hasNearByAirport=false&lapInfantPassengersCount=0&originationAirportCode=${param.origination_airport_code}&passengerType=ADULT&promoCode=&returnAirportCode=&returnDate=&selectedFlight1=${param.departure_date}&selectedFlight2=&tripType=oneway&clk=6403032&cbid=6403032"
+        "Referer": "https://www.southwest.com/air/low-fare-calendar/select-dates?adultPassengersCount=1&adultsCount=1&currencyCode=${param.currency_code}&departureDate=${param.departure_date}&destinationAirportCode=${param.destination_airport_code}&hasNearByAirport=false&lapInfantPassengersCount=0&originationAirportCode=${param.origination_airport_code}&passengerType=ADULT&promoCode=&returnAirportCode=&returnDate=&selectedFlight1=${param.departure_date}&selectedFlight2=&tripType=oneway&clk=6403032&cbid=6403032"
       },
-      "body": "{\"adultPassengersCount\":\"1\",\"adultsCount\":\"1\",\"currencyCode\":\"USD\",\"departureDate\":\"${param.departure_date}\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"hasNearByAirport\":\"false\",\"lapInfantPassengersCount\":\"0\",\"originationAirportCode\":\"${param.origination_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"\",\"returnAirportCode\":\"\",\"returnDate\":\"\",\"selectedFlight1\":\"${param.departure_date}\",\"selectedFlight2\":\"\",\"tripType\":\"oneway\",\"clk\":\"6403032\",\"cbid\":\"6403032\"}",
+      "body": "{\"adultPassengersCount\":\"1\",\"adultsCount\":\"1\",\"currencyCode\":\"${param.currency_code}\",\"departureDate\":\"${param.departure_date}\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"hasNearByAirport\":\"false\",\"lapInfantPassengersCount\":\"0\",\"originationAirportCode\":\"${param.origination_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"\",\"returnAirportCode\":\"\",\"returnDate\":\"\",\"selectedFlight1\":\"${param.departure_date}\",\"selectedFlight2\":\"\",\"tripType\":\"oneway\",\"clk\":\"6403032\",\"cbid\":\"6403032\"}",
       "effect": "safe"
     }
   ],
@@ -106,6 +114,8 @@ export interface GetLowFareCalendarInput {
   destination_airport_code?: string;
   /** Calendar month anchor date in YYYY-MM-DD format. */
   departure_date?: string;
+  /** Currency code, such as USD or POINTS. */
+  currency_code?: string;
 }
 
 export async function getLowFareCalendar(
@@ -117,6 +127,7 @@ export async function getLowFareCalendar(
     origination_airport_code: input.origination_airport_code ?? "SJC",
     destination_airport_code: input.destination_airport_code ?? "SAN",
     departure_date: input.departure_date ?? "2026-09-01",
+    currency_code: input.currency_code ?? "USD",
 
   };
   return executeWorkflow({
