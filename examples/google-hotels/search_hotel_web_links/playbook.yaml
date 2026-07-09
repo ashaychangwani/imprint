@@ -1,0 +1,53 @@
+toolName: search_hotel_web_links
+summary: Search Google Hotels for a hotel and return external web link results for the selected hotel.
+parameters:
+  - name: hotel_name
+    type: string
+    description: Hotel name to search for.
+  - name: limit
+    type: number
+    description: Maximum number of web link results to return.
+    default: 10
+steps:
+  - action: navigate
+    url: "https://hotels.google.com/"
+    wait_for: networkidle
+  - action: click
+    locators:
+      - by: role
+        value: textbox
+        name: "Search for places, hotels and more"
+      - by: aria_label
+        value: "Search for places, hotels and more"
+      - by: css
+        value: "input[aria-label='Search for places, hotels and more']"
+    wait_for:
+      sleep_ms: 300
+  - action: type
+    locators:
+      - by: role
+        value: textbox
+        name: "Search for places, hotels and more"
+      - by: aria_label
+        value: "Search for places, hotels and more"
+      - by: css
+        value: "input[aria-label='Search for places, hotels and more']"
+    value: ${hotel_name}
+    wait_for:
+      sleep_ms: 500
+  - action: click
+    locators:
+      - by: aria_label
+        value_pattern: ${hotel_name}
+      - by: text
+        value_pattern: ${hotel_name}
+      - by: css
+        value: "a[href*='/travel/search']"
+    wait_for:
+      xhr: "rpcids=bdmBfe"
+result:
+  source: xhr
+  url_pattern: "rpcids=bdmBfe"
+  extract: "[]"
+  return_as: web_links
+notes: "The bdmBfe batchexecute payload returns web link rows as arrays containing title, URL, snippet, result type, breadcrumb, and favicon data; apply the limit parameter after extracting rows."

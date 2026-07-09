@@ -1,0 +1,44 @@
+{
+  "toolName": "suggest_hotel_destinations",
+  "intent": {
+    "description": "Get Google Hotels destination and hotel autocomplete suggestions for a typed query.",
+    "userSaid": "searched for hotels at chicago loop from july 3-6; changed location to tahoe city; searched for hotels in tahoe; searched for hotels in denver downtown"
+  },
+  "site": "google-hotels",
+  "parameters": [
+    {
+      "name": "query",
+      "type": "string",
+      "description": "Partial or full destination or hotel search text.",
+      "default": "denver downtown",
+      "verified": true
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "description": "Maximum number of suggestions requested.",
+      "default": 15,
+      "verified": false,
+      "verifyNote": "annotated"
+    }
+  ],
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=mejVKc&source-path=%2Ftravel%2Fsearch&f.sid=-7129101702754032847&bl=boq_travel-frontend-ui_20260603.00_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=3443921&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/travel/search?qs=OAA&ved=0CAAQ5JsGahcKEwiI69GMpe6UAxUAAAAAHQAAAAAQCA",
+        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"DTQmiQ==\"]",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=%5B%5B%5B%22mejVKc%22%2C%22%5B%5C%22${param.query}%5C%22%2C%5C%22%5C%22%2C1%2C0%2Cnull%2C30%2C${param.limit}%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&",
+      "effect": "safe"
+    }
+  ],
+  "parserModule": "./parser.ts",
+  "requestTransformModule": "./request-transform.ts",
+  "liveVerified": true
+}

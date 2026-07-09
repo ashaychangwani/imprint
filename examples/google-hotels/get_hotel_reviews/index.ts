@@ -3,7 +3,7 @@
  *
  * Tool: get_hotel_reviews
  * Site: google-hotels
- * Intent: Fetch aggregated reviews and reviewer snippets for a selected Google Hotels hotel.
+ * Intent: Fetch review data for a selected Google Hotels hotel token.
  *
  * To regenerate: imprint emit ~/.imprint/google-hotels/get_hotel_reviews/workflow.json --force
  */
@@ -19,44 +19,41 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "get_hotel_reviews",
   "intent": {
-    "description": "Fetch aggregated reviews and reviewer snippets for a selected Google Hotels hotel.",
-    "userSaid": "clicked one of the offerings, saw booking options"
+    "description": "Fetch review data for a selected Google Hotels hotel token.",
+    "userSaid": "clicked one of hte offerings, saw booking options"
   },
   "parameters": [
     {
-      "name": "hotel_id",
+      "name": "hotel_token",
       "type": "string",
-      "description": "Opaque hotel token (e.g. \"ChcI78-luoXdhoaIARoKL20vMDJ2cGdnMRAB\") obtained from the search_hotels tool's hotel_id output.",
-      "verified": true,
-      "sourcedFrom": {
-        "tool": "search_hotels",
-        "field": "hotel_id"
-      }
+      "description": "Google Hotels selected hotel token returned by a hotel search result.",
+      "verified": true
     }
   ],
   "requests": [
     {
       "method": "POST",
-      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=ocp93e&source-path=%2Ftravel%2Fsearch&f.sid=7513562915459271421&bl=boq_travel-frontend-ui_20260527.01_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=3252256&rt=c",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=ocp93e&source-path=%2Ftravel%2Fsearch&f.sid=7513562915459271421&bl=boq_travel-frontend-ui_20260527.01_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
       "headers": {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "Accept-Language": "en-US,en;q=0.9",
         "X-Same-Domain": "1",
-        "Origin": "https://www.google.com",
+        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"x6c25Q==\"]",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]",
         "Referer": "https://www.google.com/travel/search"
       },
-      "body": "f.req=%5B%5B%5B%22ocp93e%22%2C%22%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5C%22${param.hotel_id}%5C%22%2Cnull%2Cnull%2C%5B%5B%5D%5D%5D%22%2Cnull%2C%221%22%5D%5D%5D&",
+      "body": "f.req=%5B%5B%5B%22ocp93e%22%2C%22%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5C%22${param.hotel_token}%5C%22%2Cnull%2Cnull%2C%5B%5B%5D%5D%5D%22%2Cnull%2C%221%22%5D%5D%5D&",
       "effect": "safe"
     }
   ],
   "site": "google-hotels",
   "parserModule": "./parser.ts",
-  "requestTransformModule": "./request-transform.ts",
   "liveVerified": true
 };
 
 export interface GetHotelReviewsInput {
-  /** Opaque hotel token (e.g. "ChcI78-luoXdhoaIARoKL20vMDJ2cGdnMRAB") obtained from the search_hotels tool's hotel_id output. */
-  hotel_id: string;
+  /** Google Hotels selected hotel token returned by a hotel search result. */
+  hotel_token: string;
 }
 
 export async function getHotelReviews(
@@ -65,7 +62,7 @@ export async function getHotelReviews(
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
-    hotel_id: input.hotel_id,
+    hotel_token: input.hotel_token,
 
   };
   return executeWorkflow({

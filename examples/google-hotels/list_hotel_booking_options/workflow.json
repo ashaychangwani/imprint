@@ -1,0 +1,67 @@
+{
+  "toolName": "list_hotel_booking_options",
+  "site": "google-hotels",
+  "intent": {
+    "description": "List booking providers and prices for a selected Google Hotels stay.",
+    "userSaid": "clicked one of hte offerings, saw booking options; changed to stay total pricing; looked at more booking options"
+  },
+  "parameters": [
+    {
+      "name": "hotel_token",
+      "type": "string",
+      "description": "Google Hotels selected hotel token.",
+      "verified": true
+    },
+    {
+      "name": "check_in_date",
+      "type": "string",
+      "description": "Check-in date in YYYY-MM-DD format.",
+      "default": "2026-08-03",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "check_out_date",
+      "type": "string",
+      "description": "Check-out date in YYYY-MM-DD format.",
+      "default": "2026-08-06",
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "adults",
+      "type": "number",
+      "description": "Number of adult travelers.",
+      "default": 3,
+      "verified": false,
+      "verifyNote": "annotated"
+    },
+    {
+      "name": "children",
+      "type": "number",
+      "description": "Number of child travelers if included.",
+      "default": 1,
+      "verified": false,
+      "verifyNote": "annotated"
+    }
+  ],
+  "parserModule": "./parser.ts",
+  "requestTransformModule": "./request-transform.ts",
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=M0CRd&source-path=%2Ftravel%2Fsearch&f.sid=7513562915459271421&bl=boq_travel-frontend-ui_20260527.01_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=3552256&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/travel/search?q=chicago%20loop",
+        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"x6c25Q==\"]",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=${param.hotel_token}|${param.check_in_date}|${param.check_out_date}|${param.adults}|${param.children}|USD|nightly|&",
+      "effect": "safe"
+    }
+  ],
+  "liveVerified": true
+}
