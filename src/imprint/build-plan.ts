@@ -13,13 +13,19 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
-import { TimeoutError, withTimeout } from './concurrency.ts';
-import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
+import { TimeoutError } from './concurrency.ts';
+import { compactUrlForLlm } from './llm-url.ts';
+import {
+  type AnalyzeInvocationEvent,
+  type LLMOptions,
+  extractJsonObject,
+  resolveProvider,
+} from './llm.ts';
 import { createLog } from './log.ts';
 import { localSiteDir } from './paths.ts';
 import { detectPageMintedHeaders } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
-import { type ClassifiedValue, looksLikeToken } from './session-diff.ts';
+import { type ClassifiedValue, looksLikeOpaqueToken, looksLikeToken } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
 import { TwoFactorTypeSchema } from './types.ts';
@@ -29,6 +35,7 @@ const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
 const BODY_LIMIT = 800;
 const RESPONSE_PREVIEW_LIMIT = 500;
 const HEADER_LIMIT = 600;
+const MAX_PLANNER_EPHEMERAL_VALUES = 600;
 const log = createLog('build-plan');
 
 // ─── Schema ─────────────────────────────────────────────────────────────────
@@ -154,6 +161,27 @@ const RequiredInputSchema = z.object({
 });
 export type RequiredInput = z.infer<typeof RequiredInputSchema>;
 
+const DynamicValueFindingSchema = z.object({
+  toolName: z.string().regex(/^[a-z][a-z0-9_]*$/),
+  location: z.string().min(1),
+  classification: z
+    .enum([
+      'static',
+      'auth',
+      'producer_tool',
+      'browser_state',
+      'generated',
+      'runtime_supplied',
+      'unknown',
+    ])
+    .default('unknown'),
+  evidence: z.string().default(''),
+  recommendation: z.string().default(''),
+  verificationPlan: z.string().default(''),
+  sourceSeqs: z.array(z.number().int().nonnegative()).default([]),
+});
+type DynamicValueFinding = z.infer<typeof DynamicValueFindingSchema>;
+
 const PerToolPlanSchema = z.object({
   toolName: z.string().regex(/^[a-z][a-z0-9_]*$/),
   usesSharedModules: z.array(z.string()).default([]),
@@ -194,6 +222,7 @@ export type AuthToolPlan = z.infer<typeof AuthToolPlanSchema>;
 export const BuildPlanSchema = z
   .object({
     sharedModules: z.array(SharedModuleSpecSchema).default([]),
+    dynamicValueFindings: z.array(DynamicValueFindingSchema).default([]),
     perTool: z.array(PerToolPlanSchema).min(1),
     authTool: AuthToolPlanSchema,
   })
@@ -487,6 +516,8 @@ interface BuildPlanSlice {
   tool: PerToolPlan;
   /** The shared modules this tool is assigned, resolved from usesSharedModules. */
   sharedModules: SharedModuleSpec[];
+  /** Planner-level dynamic value decisions relevant to this tool. */
+  dynamicValueFindings: DynamicValueFinding[];
 }
 
 /** Project the plan down to a single tool's slice — what the per-tool compile
@@ -498,7 +529,8 @@ export function planSliceForTool(plan: BuildPlan, toolName: string): BuildPlanSl
   const sharedModules = tool.usesSharedModules
     .map((p) => byPath.get(p))
     .filter((m): m is SharedModuleSpec => m != null);
-  return { tool, sharedModules };
+  const dynamicValueFindings = plan.dynamicValueFindings.filter((f) => f.toolName === toolName);
+  return { tool, sharedModules, dynamicValueFindings };
 }
 
 /** A shared module a tool must import, with the relative import path the tool
@@ -961,7 +993,7 @@ export function deriveTokenContractHints(payload: {
     // across runs) OR a stable `constant` whose opaque value was found in a
     // sibling response — is a cross-tool token candidate.
     if (ev.producerSeq == null || !ev.producerPath) continue;
-    if (!ev.value || !looksLikeToken(ev.value)) continue; // skip echoed query text, etc.
+    if (!ev.value || !looksLikeOpaqueToken(ev.value)) continue; // skip echoed query text, etc.
     const consumerTool = soleOwner(ev.originalSeq);
     const producerTool = soleOwner(ev.producerSeq);
     if (!consumerTool || !producerTool || consumerTool === producerTool) continue;
@@ -977,7 +1009,7 @@ export function deriveTokenContractHints(payload: {
     // key — NOT an opaque JSPB index path (e.g. "body[0][10]" -> "0").
     const nameable = known.includes(param) || /^[A-Za-z][A-Za-z0-9_]*$/.test(param);
     const producerField = fieldNameFromPath(ev.producerPath);
-    const key = `${consumerTool} ${param} ${producerTool} ${producerField}`;
+    const key = `${consumerTool}\u0000${param}\u0000${producerTool}\u0000${producerField}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({
@@ -1323,18 +1355,21 @@ export function deriveRequiredInputHints(payload: {
     if (tool) browserMintedSlots.add(`${tool}\t${ev.location}`);
   }
 
-  // Opaque token VALUES some response minted (a non-login producer). A value proven
-  // server-derived anywhere is session/server state everywhere — never a bakeable
-  // deploy constant — even at a sibling instance the diff happened to label
-  // `constant` with no local producer. Gated on looksLikeToken so an incidental
-  // low-entropy echo (a client-id string, a UI label) isn't swept in.
+  // Opaque token VALUES some response minted (a non-login producer). A value
+  // proven dynamic/server-derived anywhere is session/server state everywhere —
+  // never a bakeable deploy constant — even at a sibling instance the diff
+  // happened to label `constant` with no local producer. Constant classifications
+  // with producerSeq are deliberately excluded: public app keys embedded in JS
+  // bundles are stable constants that merely have a source location, not expiring
+  // server/session tokens.
   const serverMintedTokenValues = new Set<string>();
   for (const ev of payload.ephemeralValues) {
     if (
+      ev.classification !== 'constant' &&
       ev.producerSeq != null &&
       !loginSeqs.has(ev.producerSeq) &&
       ev.value &&
-      looksLikeToken(ev.value)
+      looksLikeOpaqueToken(ev.value)
     ) {
       serverMintedTokenValues.add(ev.value);
     }
@@ -1346,10 +1381,9 @@ export function deriveRequiredInputHints(payload: {
     if (!consumerTool) continue;
 
     // Location class, computed once. browser_state / generated / static apply to
-    // commonly-dropped HEADER *and* URL-QUERY slots — URL-query session tokens
-    // (Google's f.sid / bl) must be contracted too, else nothing forces `${state.X}`
-    // + a bootstrap capture and the agent bakes the literal (which rots: bl is a
-    // deploy version). Cookies stay header-only.
+    // commonly-dropped HEADER *and* URL-QUERY slots. Dynamic URL-query values
+    // must be contracted too, else nothing forces `${state.X}` + a bootstrap
+    // capture and the agent bakes a literal that may rot. Cookies stay header-only.
     const locLower = ev.location.toLowerCase();
     const isHeaderLoc = locLower.startsWith('header:');
     const isQueryLoc = locLower.startsWith('url_param:');
@@ -1375,22 +1409,22 @@ export function deriveRequiredInputHints(payload: {
       continue;
     }
 
-    // Page/bootstrap session state — a header/url-query value pulled from a NON-login
-    // response whose producer is NOT a selected tool (e.g. f.sid / bl scraped from the
-    // flights bootstrap page, producerPath "body(substring)"). Cross-tool tokens have a
-    // tool producer (handled as producer_tool above); login tokens are auth above. These
-    // fall through every other branch (not browser_minted; producerSeq != null skips the
-    // constant branch), so without this they get NO contract and the agent bakes the
-    // rotting literal. Contract as browser_state so every tool templates `${state.X}` +
+    // Page/bootstrap session state: a dynamic header/url-query value pulled from a
+    // NON-login response whose producer is NOT a selected tool. Cross-tool tokens
+    // have a tool producer (handled as producer_tool above); login tokens are auth above.
+    // Constant producer provenance alone is not enough: public app keys embedded in JS
+    // bundles are static literals with a source location, not expiring session state.
+    // Contract dynamic values as browser_state so every tool templates `${state.X}` +
     // a bootstrap capture. (A missing capture degrades to a gate warning, never a block.)
     if (
       (isHeaderLoc || isQueryLoc) &&
       !(isHeaderLoc && isCookieHeaderName(evHeader)) &&
+      ev.classification !== 'constant' &&
       ev.producerSeq != null &&
       !loginSeqs.has(ev.producerSeq) &&
       soleOwner(ev.producerSeq) == null &&
       ev.value != null &&
-      looksLikeToken(ev.value)
+      looksLikeOpaqueToken(ev.value)
     ) {
       const name = nameFromLocationOrSuggestion(ev.location, ev.suggestedStateName);
       push({
@@ -1449,21 +1483,17 @@ export function deriveRequiredInputHints(payload: {
       }
       // else: ephemeral with NO upstream. browser_minted means the value varied across replay runs
       // and was found in no response (session-diff.ts), and it is not a recognized generated shape
-      // we could mint — so a `${state.X}` for it would be unsatisfiable, and baking a per-call value
-      // is dead. Only the live browser can supply it (cdp-replay runs the request in real Chrome),
-      // so do NOT contract it; leave it runtime-supplied. Covers internal per-call tokens
-      // (X-Goog-BatchExecute-Bgr) and browser-emitted client hints (sec-ch-ua-*) under one rule.
+      // we could mint. A `${state.X}` for it would be unsatisfiable, and baking a per-call value
+      // is dead. Leave the slot uncontracted so the planner/compile agent can decide whether
+      // the browser-capable backend should supply it and prove that with a targeted probe.
       continue;
     }
 
-    if (
-      ev.classification === 'constant' &&
-      ev.producerSeq == null &&
-      looksLikeToken(ev.value ?? '')
-    ) {
-      // A "constant"-classified header value reaches here only with no local
-      // producer. Two structural vetoes keep a per-call or session value from being
-      // baked as a verbatim literal — the bug class this contract exists to prevent.
+    if (ev.classification === 'constant' && looksLikeToken(ev.value ?? '')) {
+      // A "constant"-classified header value reaches here after auth, dynamic
+      // page/bootstrap state, and browser-minted cases have had first refusal.
+      // Two structural vetoes keep a per-call or session value from being baked as
+      // a verbatim literal — the bug class this contract exists to prevent.
       const kind = generatedKindOf(ev.value);
       const strongKind = kind != null && kind !== 'nonce'; // uuid / epoch_ms|s / iso8601
       if (strongKind) {
@@ -1583,12 +1613,21 @@ interface LooseRequiredInputPerTool {
   requiredInputs?: Array<Record<string, unknown>>;
 }
 
+export function looksLikePlannerPlaceholderLiteral(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!/^<[\s\S]{0,240}>$/.test(trimmed)) return false;
+  return (
+    /\b(recorded|captured)\b/i.test(trimmed) && /\b(seq|request|header|value)\b/i.test(trimmed)
+  );
+}
+
 /**
  * Reconcile a parsed planner plan against the deterministically-derived
  * requiredInput hints, IN PLACE, before validation — the general analogue of
  * `reconcileTokenContracts`. One decision per (consumerTool, location) slot:
- *  - if the planner already declared an input for that slot, trust it (only seed a
- *    missing auth capture so the superRefine invariant holds);
+ *  - if the planner already declared an input for that slot, trust it (only repair
+ *    an obvious placeholder literal for the same static source);
  *  - else inject the grounded hint so a planner shortcut can't drop an input the
  *    recording proves the request needs.
  * Auth hints also ensure `authTool.captures` carries the minting capture. No-op
@@ -1600,7 +1639,8 @@ export function reconcileRequiredInputs(
   selectedToolNames: Set<string>,
 ): { injected: number; repaired: number; warnings: string[] } {
   const result = { injected: 0, repaired: 0, warnings: [] as string[] };
-  if (hints.length === 0 || typeof parsed !== 'object' || parsed === null) return result;
+  if (hints.length === 0 && (typeof parsed !== 'object' || parsed === null)) return result;
+  if (typeof parsed !== 'object' || parsed === null) return result;
   const obj = parsed as {
     perTool?: LooseRequiredInputPerTool[];
     authTool?: { captures?: Array<Record<string, unknown>> } | null;
@@ -1642,6 +1682,26 @@ export function reconcileRequiredInputs(
     if (!Array.isArray(tool.requiredInputs)) tool.requiredInputs = [];
     const existing = tool.requiredInputs.find((ri) => ri && ri.location === h.input.location);
     if (existing) {
+      if (
+        h.input.source === 'static' &&
+        h.input.wiring === 'literal' &&
+        h.input.literal != null &&
+        existing.source === 'static' &&
+        existing.wiring === 'literal'
+      ) {
+        if (
+          existing.literal === undefined ||
+          looksLikePlannerPlaceholderLiteral(existing.literal)
+        ) {
+          existing.literal = h.input.literal;
+          existing.recordedSeq ??= h.input.recordedSeq;
+          existing.note =
+            typeof existing.note === 'string' && existing.note.length > 0
+              ? existing.note
+              : h.input.note;
+          result.repaired++;
+        }
+      }
       // Slot already declared — trust the planner; only seed a missing auth capture.
       if (h.input.source === 'auth' && h.authCapture) ensureAuthCapture(h.authCapture);
       continue;
@@ -1732,7 +1792,7 @@ export function buildBuildPlanPayload(opts: {
         seq: r.seq,
         timestamp: r.timestamp,
         method: r.method,
-        url: r.url,
+        url: compactUrlForLlm(r.url),
         resourceType: r.resourceType,
         status: r.response?.status,
         mimeType: r.response?.mimeType,
@@ -1747,7 +1807,12 @@ export function buildBuildPlanPayload(opts: {
     buildPlanRequestGroupKey,
   );
 
-  const ephemeralValues = (classifications ?? [])
+  const plannerEphemeralClassifications = selectPlannerEphemeralClassifications(
+    classifications ?? [],
+    scope,
+  );
+
+  const ephemeralValues = plannerEphemeralClassifications
     // Non-constant values, plus stable constants that carry recovered producer
     // provenance (server-provided per-entity tokens) — both are signals for the planner.
     .filter((c) => c.classification !== 'constant' || c.producerSeq != null)
@@ -1797,9 +1862,17 @@ export function buildBuildPlanPayload(opts: {
     suggestedStateName: c.suggestedStateName,
   }));
 
+  const requiredInputPayload = {
+    selectedTools,
+    loginRequestSeqs: sharedContext?.loginRequestSeqs ?? [],
+    ephemeralValues: fullEphemeral,
+    recordedHeaders,
+    pageMintedHeaders: detectPageMintedHeaders(session),
+  };
+
   return {
     site: session.site,
-    url: session.url,
+    url: compactUrlForLlm(session.url),
     narration: session.narration.map((n) => ({ timestamp: n.timestamp, text: n.text })),
     sharedContext,
     selectedTools,
@@ -1812,19 +1885,43 @@ export function buildBuildPlanPayload(opts: {
       // stable constant whose opaque value was found in a sibling response.
       ephemeralValues: fullEphemeral.filter((c) => c.producerSeq != null),
     }),
-    requiredInputHints: deriveRequiredInputHints({
-      selectedTools,
-      loginRequestSeqs: sharedContext?.loginRequestSeqs ?? [],
-      ephemeralValues: fullEphemeral,
-      recordedHeaders,
-      // Page-minted = a sensitive header the site bakes into its JS (present before
-      // the first interaction, not from a Set-Cookie/storage token — the
-      // scheme-stripped detector excludes a persisted bearer). Safe to emit as a
-      // verbatim static literal; a per-user token is never page-minted.
-      pageMintedHeaders: detectPageMintedHeaders(session),
-    }),
+    requiredInputHints: deriveRequiredInputHints(requiredInputPayload),
     requests,
   };
+}
+
+function selectPlannerEphemeralClassifications(
+  classifications: ClassifiedValue[],
+  scope: Set<number>,
+): ClassifiedValue[] {
+  const relevant = classifications.filter(
+    (c) => scope.has(c.originalSeq) || (c.producerSeq != null && scope.has(c.producerSeq)),
+  );
+
+  const selected = relevant.filter((c) => c.classification !== 'constant' || c.producerSeq != null);
+  if (selected.length <= MAX_PLANNER_EPHEMERAL_VALUES) return selected;
+
+  const score = (c: ClassifiedValue): number => {
+    let out = 0;
+    if (c.producerSeq != null) out += 100;
+    if (c.producerPath) out += 25;
+    if (c.suggestedStateName) out += 10;
+    if (c.location.startsWith('header:')) out += 8;
+    if (c.location.startsWith('url_param:')) out += 6;
+    if (c.location.startsWith('body')) out += 4;
+    if (c.classification === 'server_derived') out += 3;
+    if (c.classification === 'browser_minted') out += 2;
+    return out;
+  };
+
+  return [...selected]
+    .sort(
+      (a, b) =>
+        score(b) - score(a) ||
+        a.originalSeq - b.originalSeq ||
+        a.location.localeCompare(b.location),
+    )
+    .slice(0, MAX_PLANNER_EPHEMERAL_VALUES);
 }
 
 function buildPlanRequestGroupKey(request: BuildPlanRequestPayload): unknown[] {
@@ -1846,6 +1943,41 @@ interface GenerateBuildPlanResult extends BuildPlan {
   inputTokens: number | null;
   outputTokens: number | null;
   durationMs: number;
+}
+
+type BuildPlanLogEvent = {
+  type: string;
+  timestamp: string;
+  elapsedMs: number;
+  [key: string]: unknown;
+};
+
+function createBuildPlanLog(site: string): {
+  path: string;
+  event: (event: { type: string; [key: string]: unknown }) => void;
+} {
+  const path = buildPlanLogPath(site);
+  mkdirSync(localSiteDir(site), { recursive: true });
+  const startedAt = Date.now();
+  const events: BuildPlanLogEvent[] = [];
+  const flush = (): void => {
+    try {
+      writeFileSync(path, `${JSON.stringify(events, null, 2)}\n`, 'utf8');
+    } catch {
+      // Diagnostic logging must never change planner behavior.
+    }
+  };
+  return {
+    path,
+    event(event) {
+      events.push({
+        timestamp: new Date().toISOString(),
+        elapsedMs: Date.now() - startedAt,
+        ...event,
+      });
+      flush();
+    },
+  };
 }
 
 export async function generateBuildPlan(opts: {
@@ -1875,8 +2007,18 @@ export async function generateBuildPlan(opts: {
       'imprint.tool_count': opts.candidates.length,
     },
     async (span) => {
+      const planLog = createBuildPlanLog(opts.session.site);
+      planLog.event({
+        type: 'plan.started',
+        site: opts.session.site,
+        provider: opts.llmConfig?.provider ?? 'auto',
+        model: opts.llmConfig?.model ?? 'default',
+        toolCount: opts.candidates.length,
+        timeoutMs: opts.timeoutMs ?? null,
+      });
       const promptPath = pathJoin(PROMPTS_DIR, 'build-planning.md');
       if (!existsSync(promptPath)) {
+        planLog.event({ type: 'plan.failed', stage: 'load_prompt', error: 'prompt not found' });
         throw new Error(
           `Build-planning prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
         );
@@ -1884,6 +2026,19 @@ export async function generateBuildPlan(opts: {
       const systemPrompt = readFileSync(promptPath, 'utf8');
       const payload = buildBuildPlanPayload(opts);
       const payloadJson = JSON.stringify(payload);
+      planLog.event({
+        type: 'payload.ready',
+        promptChars: systemPrompt.length,
+        payloadChars: payloadJson.length,
+        requestCount: payload.requests.length,
+        ephemeralCount: payload.ephemeralValues.length,
+        ephemeralTotalCount: (opts.classifications ?? []).filter(
+          (c) => c.classification !== 'constant' || c.producerSeq != null,
+        ).length,
+        tokenEdgeCount: payload.tokenContractHints.length,
+        requiredInputHintCount: payload.requiredInputHints.length,
+        narrationCount: payload.narration.length,
+      });
 
       // Record input size on the span BEFORE the call, so a timed-out or slow
       // planning session is still debuggable on Phoenix (the success block below
@@ -1891,13 +2046,16 @@ export async function generateBuildPlan(opts: {
       setSpanAttributes(span, {
         'imprint.plan.request_count': payload.requests.length,
         'imprint.plan.ephemeral_count': payload.ephemeralValues.length,
+        'imprint.plan.ephemeral_total_count': (opts.classifications ?? []).filter(
+          (c) => c.classification !== 'constant' || c.producerSeq != null,
+        ).length,
         'imprint.plan.narration_count': payload.narration.length,
         'imprint.plan.payload_chars': payloadJson.length,
         'imprint.plan.prompt_chars': systemPrompt.length,
         'imprint.plan.timeout_ms': opts.timeoutMs ?? 0,
       });
       narrate(
-        `planning ${opts.candidates.length} tool(s): ${payload.requests.length} request(s), ${payload.ephemeralValues.length} ephemeral value(s), ${payload.tokenContractHints.length} token edge(s), ${payload.requiredInputHints.length} required-input hint(s), ${payload.narration.length} narration line(s); ${Math.round(payloadJson.length / 1024)} KB payload + ${Math.round(systemPrompt.length / 1024)} KB prompt → ${opts.llmConfig?.provider ?? 'auto'}/${opts.llmConfig?.model ?? 'default'}${opts.timeoutMs ? ` (timeout ${Math.round(opts.timeoutMs / 1000)}s)` : ''}`,
+        `planning ${opts.candidates.length} tool(s): ${payload.requests.length} request(s), ${payload.ephemeralValues.length}/${(opts.classifications ?? []).filter((c) => c.classification !== 'constant' || c.producerSeq != null).length} ephemeral value(s), ${payload.tokenContractHints.length} token edge(s), ${payload.requiredInputHints.length} required-input hint(s), ${payload.narration.length} narration line(s); ${Math.round(payloadJson.length / 1024)} KB payload + ${Math.round(systemPrompt.length / 1024)} KB prompt → ${opts.llmConfig?.provider ?? 'auto'}/${opts.llmConfig?.model ?? 'default'}${opts.timeoutMs ? ` (timeout ${Math.round(opts.timeoutMs / 1000)}s)` : ''}`,
       );
 
       const llm = resolveProvider(opts.llmConfig ?? {});
@@ -1905,16 +2063,37 @@ export async function generateBuildPlan(opts: {
       narrate('calling planner LLM');
       let result: Awaited<ReturnType<typeof llm.analyze>>;
       try {
-        const call = llm.analyze(systemPrompt, payload);
-        result = opts.timeoutMs
-          ? await withTimeout(call, opts.timeoutMs, 'build planner')
-          : await call;
+        planLog.event({ type: 'llm.started', provider: llm.name });
+        result = await llm.analyze(systemPrompt, payload, {
+          timeoutMs: opts.timeoutMs,
+          timeoutLabel: 'build planner',
+          onEvent: (event: AnalyzeInvocationEvent) => {
+            planLog.event({ type: 'llm.provider_event', event });
+          },
+        });
+        planLog.event({
+          type: 'llm.completed',
+          provider: llm.name,
+          durationMs: Date.now() - llmStart,
+          inputTokens: result.inputTokens ?? null,
+          outputTokens: result.outputTokens ?? null,
+          responseChars: result.text.length,
+          stopReason: result.stopReason,
+        });
       } catch (err) {
         const elapsedMs = Date.now() - llmStart;
         const timedOut = err instanceof TimeoutError;
         setSpanAttributes(span, {
           'imprint.plan.timed_out': timedOut,
           'imprint.plan.llm_elapsed_ms': elapsedMs,
+        });
+        planLog.event({
+          type: 'llm.failed',
+          provider: llm.name,
+          durationMs: elapsedMs,
+          timedOut,
+          errorName: err instanceof Error ? err.name : undefined,
+          error: err instanceof Error ? err.message : String(err),
         });
         narrate(
           `planner LLM ${timedOut ? 'timed out' : 'failed'} after ${Math.round(elapsedMs / 1000)}s: ${err instanceof Error ? err.message : String(err)}`,
@@ -1926,6 +2105,12 @@ export async function generateBuildPlan(opts: {
       );
       const objectText = extractJsonObject(result.text);
       if (!objectText) {
+        planLog.event({
+          type: 'plan.failed',
+          stage: 'extract_json',
+          responseChars: result.text.length,
+          responsePreview: truncate(result.text, 1000),
+        });
         throw new Error(
           `Build planner did not return a JSON object.\nRaw response:\n${result.text.slice(0, 1000)}`,
         );
@@ -1935,6 +2120,13 @@ export async function generateBuildPlan(opts: {
       try {
         parsed = JSON.parse(objectText);
       } catch (err) {
+        planLog.event({
+          type: 'plan.failed',
+          stage: 'parse_json',
+          extractedChars: objectText.length,
+          extractedPreview: truncate(objectText, 1000),
+          error: err instanceof Error ? err.message : String(err),
+        });
         throw new Error(
           `Build planner response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${objectText.slice(0, 1000)}`,
         );
@@ -1966,8 +2158,24 @@ export async function generateBuildPlan(opts: {
         );
       }
       for (const w of reconciledInputs.warnings) narrate(`required input: ${w}`);
+      planLog.event({
+        type: 'plan.reconciled',
+        tokenInjected: reconciled.injected,
+        tokenRepaired: reconciled.repaired,
+        tokenWarnings: reconciled.warnings.length,
+        requiredInputInjected: reconciledInputs.injected,
+        requiredInputRepaired: reconciledInputs.repaired,
+        requiredInputWarnings: reconciledInputs.warnings.length,
+      });
 
       const plan = validateBuildPlan(parsed, opts.candidates);
+      planLog.event({
+        type: 'plan.validated',
+        sharedModuleCount: plan.sharedModules.length,
+        toolCount: plan.perTool.length,
+        dynamicValueFindingCount: plan.dynamicValueFindings.length,
+        authTool: plan.authTool?.toolName ?? null,
+      });
       setSpanAttributes(span, {
         'imprint.plan.token_edge_count': payload.tokenContractHints.length,
         'imprint.plan.token_injected': reconciled.injected,
@@ -1998,6 +2206,13 @@ export async function generateBuildPlan(opts: {
  *  plan through CLI spawn args. Modeled on the `.classifications.json` sidecar. */
 export function buildPlanSidecarPath(site: string): string {
   return pathJoin(localSiteDir(site), '.build-plan.json');
+}
+
+/** Incremental diagnostic log for the build-planner LLM call. Unlike
+ * `.build-plan.json`, this exists even when planning times out or returns
+ * invalid JSON. */
+export function buildPlanLogPath(site: string): string {
+  return pathJoin(localSiteDir(site), '.build-plan-log.json');
 }
 
 export function writeBuildPlanSidecar(site: string, plan: BuildPlan): string {

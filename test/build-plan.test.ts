@@ -4,6 +4,7 @@ import {
   type RequiredInputHint,
   type TokenContractHint,
   buildBuildPlanPayload,
+  buildPlanLogPath,
   deriveRequiredInputHints,
   deriveTokenContractHints,
   describeAssignedModules,
@@ -83,6 +84,12 @@ function tool0(plan: BuildPlan): BuildPlan['perTool'][number] {
   return t;
 }
 
+describe('build plan diagnostics', () => {
+  it('publishes a site-level planner log path', () => {
+    expect(buildPlanLogPath('southwest')).toEndWith('/southwest/.build-plan-log.json');
+  });
+});
+
 describe('validateBuildPlan', () => {
   it('accepts a well-formed plan', () => {
     const plan = validateBuildPlan(basePlan());
@@ -97,6 +104,28 @@ describe('validateBuildPlan', () => {
     expect(plan.sharedModules).toEqual([]);
     expect(plan.perTool[0]?.usesSharedModules).toEqual([]);
     expect(plan.perTool[0]?.authRecipe.required).toBe(false);
+    expect(plan.dynamicValueFindings).toEqual([]);
+  });
+
+  it('accepts dynamic value findings and fills defaults', () => {
+    const plan = validateBuildPlan({
+      perTool: [{ toolName: 'search_flights' }],
+      dynamicValueFindings: [
+        {
+          toolName: 'search_flights',
+          location: 'header:X-Client-Entropy',
+        },
+      ],
+    });
+    expect(plan.dynamicValueFindings[0]).toEqual({
+      toolName: 'search_flights',
+      location: 'header:X-Client-Entropy',
+      classification: 'unknown',
+      evidence: '',
+      recommendation: '',
+      verificationPlan: '',
+      sourceSeqs: [],
+    });
   });
 
   it('accepts authTool: null (planner signals "no auth") instead of discarding the plan', () => {
@@ -161,6 +190,32 @@ describe('planSliceForTool', () => {
     const slice = planSliceForTool(basePlan(), 'search_flights');
     expect(slice?.tool.toolName).toBe('search_flights');
     expect(slice?.sharedModules.map((m) => m.path)).toEqual(['_shared/sign.ts']);
+  });
+
+  it('includes only dynamic value findings for that tool', () => {
+    const plan = basePlan();
+    plan.dynamicValueFindings = [
+      {
+        toolName: 'search_flights',
+        location: 'header:X-A',
+        classification: 'browser_state',
+        evidence: 'response body contains the value',
+        recommendation: 'capture from bootstrap',
+        verificationPlan: 'run parser test',
+        sourceSeqs: [1],
+      },
+      {
+        toolName: 'search_hotels',
+        location: 'header:X-B',
+        classification: 'static',
+        evidence: 'literal appears in JS bundle',
+        recommendation: 'keep literal',
+        verificationPlan: 'strict compile check',
+        sourceSeqs: [2],
+      },
+    ];
+    const slice = planSliceForTool(plan, 'search_flights');
+    expect(slice?.dynamicValueFindings.map((f) => f.location)).toEqual(['header:X-A']);
   });
 
   it('returns undefined for an unknown tool', () => {
@@ -408,6 +463,43 @@ describe('buildBuildPlanPayload', () => {
     });
     expect(payload.ephemeralValues).toHaveLength(1);
     expect(payload.ephemeralValues[0]?.classification).toBe('browser_minted');
+  });
+
+  it('caps noisy planner ephemeral classifications while preserving producer-linked entries', () => {
+    const noisy: ClassifiedValue[] = Array.from({ length: 700 }, (_, i) => ({
+      originalSeq: i % 2 === 0 ? 10 : 11,
+      location: `body:$.noise${i}`,
+      classification: 'browser_minted',
+      value1: `value-${i}`,
+      value2: `other-${i}`,
+    }));
+    const producerLinked: ClassifiedValue[] = Array.from({ length: 5 }, (_, i) => ({
+      originalSeq: 10,
+      location: `header:x-token-${i}`,
+      classification: 'server_derived',
+      value1: `token-${i}`,
+      value2: `token-other-${i}`,
+      producerSeq: 11,
+      producerPath: `$.tokens[${i}]`,
+      suggestedStateName: `token_${i}`,
+    }));
+
+    const payload = buildBuildPlanPayload({
+      session: session(),
+      candidates: [candidate('search_flights', [10]), candidate('search_hotels', [11])],
+      classifications: [...noisy, ...producerLinked],
+    });
+
+    expect(payload.ephemeralValues).toHaveLength(600);
+    for (const linked of producerLinked) {
+      expect(payload.ephemeralValues).toContainEqual(
+        expect.objectContaining({
+          location: linked.location,
+          producerSeq: linked.producerSeq,
+          producerPath: linked.producerPath,
+        }),
+      );
+    }
   });
 });
 
@@ -924,11 +1016,10 @@ describe('deriveRequiredInputHints', () => {
     expect(hints.find((h) => h.input.location === 'header:X-Ts')?.input.generated).toBe('epoch_ms');
   });
 
-  it('drops a reused browser_minted header with NO upstream (un-capturable → runtime-supplied)', () => {
+  it('drops a reused browser_minted header with NO upstream instead of inventing state', () => {
     // browser_minted = varied across replay runs AND found in no response, so there is no producer
     // to capture from. A ${state.X} for it would be unsatisfiable; the live browser (cdp-replay)
-    // supplies it at runtime — so it must NOT be contracted as browser_state. (This is the fix for
-    // the X-Goog-BatchExecute-Bgr / sec-ch-ua over-contracting that hard-blocked compile.)
+    // may supply it at runtime, so it must NOT be contracted as browser_state.
     const hints = deriveRequiredInputHints({
       selectedTools,
       loginRequestSeqs: [],
@@ -1102,6 +1193,81 @@ describe('deriveRequiredInputHints', () => {
     expect(sess?.input.wiring).toBe('state');
   });
 
+  it('keeps low-entropy route/app slugs static even when they have response provenance', () => {
+    const hints = deriveRequiredInputHints({
+      selectedTools,
+      loginRequestSeqs: [],
+      ephemeralValues: [
+        {
+          classification: 'server_derived',
+          originalSeq: 20,
+          location: 'header:X-App-Id',
+          producerSeq: 99,
+          producerPath: 'body(substring)',
+          value: 'landing-home-page-v2',
+          suggestedStateName: 'app_id',
+        },
+        {
+          classification: 'constant',
+          originalSeq: 10,
+          location: 'header:X-App-Id',
+          producerSeq: 99,
+          producerPath: 'body(substring)',
+          value: 'landing-home-page-v2',
+          suggestedStateName: 'app_id',
+        },
+      ],
+      recordedHeaders: [{ seq: 10, headers: { 'X-App-Id': 'landing-home-page-v2' } }],
+      pageMintedHeaders: [],
+    });
+    const appId = hints.find(
+      (h) => h.consumerTool === 'search' && h.input.location === 'header:X-App-Id',
+    );
+    expect(appId?.input.source).toBe('static');
+    expect(appId?.input.wiring).toBe('literal');
+    expect(appId?.input.literal).toBe('landing-home-page-v2');
+  });
+
+  it('keeps a JS-embedded app key static even when constant classifications have producer provenance', () => {
+    const hints = deriveRequiredInputHints({
+      selectedTools,
+      loginRequestSeqs: [],
+      ephemeralValues: [
+        {
+          classification: 'constant',
+          originalSeq: 10,
+          location: 'header:X-Api-Key',
+          value: 'appkey-aaaaaaaaaaaaaaaa',
+        },
+        {
+          classification: 'constant',
+          originalSeq: 20,
+          location: 'header:X-Api-Key',
+          value: 'appkey-aaaaaaaaaaaaaaaa',
+          producerSeq: 1,
+          producerPath: 'body(substring)',
+        },
+      ],
+      recordedHeaders: [
+        { seq: 10, headers: { 'X-Api-Key': 'appkey-aaaaaaaaaaaaaaaa' } },
+        { seq: 20, headers: { 'X-Api-Key': 'appkey-aaaaaaaaaaaaaaaa' } },
+      ],
+      pageMintedHeaders: [],
+    });
+    const searchKey = hints.find(
+      (h) => h.consumerTool === 'search' && h.input.location === 'header:X-Api-Key',
+    );
+    expect(searchKey?.input.source).toBe('static');
+    expect(searchKey?.input.wiring).toBe('literal');
+    expect(searchKey?.input.literal).toBe('appkey-aaaaaaaaaaaaaaaa');
+    const bookKey = hints.find(
+      (h) => h.consumerTool === 'book' && h.input.location === 'header:X-Api-Key',
+    );
+    expect(bookKey?.input.source).toBe('static');
+    expect(bookKey?.input.wiring).toBe('literal');
+    expect(bookKey?.input.literal).toBe('appkey-aaaaaaaaaaaaaaaa');
+  });
+
   it('lets a browser_minted sibling override an alignment-artifact constant — most-ephemeral-wins', () => {
     // One tool owns two requests sending the same header; the diff mislabeled the
     // first instance `constant` (aligned to a same-value replay) but the sibling is
@@ -1131,8 +1297,8 @@ describe('deriveRequiredInputHints', () => {
     });
     const cid = hints.find((h) => h.input.location === 'header:X-Cid');
     // Guarantee under test: most-ephemeral-wins never bakes the slot as a dead static literal.
-    // With no upstream and no per-call shape, the ephemeral value is now dropped (runtime-supplied)
-    // rather than contracted — so "not static" is the assertion that survives the new rule (a broken
+    // With no upstream and no per-call shape, the ephemeral value is now dropped rather than
+    // contracted, so "not static" is the assertion that survives the new rule (a broken
     // most-ephemeral-wins would route the constant sibling to a static literal and fail here).
     expect(cid?.input.source).not.toBe('static');
   });
@@ -1313,6 +1479,197 @@ describe('reconcileRequiredInputs', () => {
     ];
     const res = reconcileRequiredInputs(parsed, hints, new Set(['search', 'book']));
     expect(res.injected).toBe(0);
+  });
+
+  it('trusts a planner dynamic input even when a static hint exists', () => {
+    const parsed = authPlan();
+    (parsed.perTool[1] as Record<string, unknown>).requiredInputs = [
+      {
+        location: 'header:X-App-Key',
+        source: 'browser_state',
+        wiring: 'state',
+        stateName: 'app_key',
+        note: 'planner guessed capture',
+      },
+    ];
+    const hints: RequiredInputHint[] = [
+      {
+        consumerTool: 'book',
+        input: {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 42,
+          note: 'page-minted app constant',
+        },
+      },
+    ];
+    const res = reconcileRequiredInputs(parsed, hints, new Set(['search', 'book']));
+    expect(res.injected).toBe(0);
+    expect(res.repaired).toBe(0);
+    const plan = validateBuildPlan(parsed, ['search', 'book']);
+    const input = resolveRequiredInputs(plan, 'book')[0];
+    expect(input?.source).toBe('browser_state');
+    expect(input?.wiring).toBe('state');
+    expect(input?.stateName).toBe('app_key');
+  });
+
+  it('repairs a planner placeholder static literal from a grounded hint', () => {
+    const parsed = authPlan();
+    (parsed.perTool[1] as Record<string, unknown>).requiredInputs = [
+      {
+        location: 'header:X-App-Key',
+        source: 'static',
+        wiring: 'literal',
+        literal: '<recorded static anti-bot header value from seq 42>',
+        note: 'planner placeholder',
+      },
+    ];
+    const hints: RequiredInputHint[] = [
+      {
+        consumerTool: 'book',
+        input: {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 42,
+          note: 'page-minted app constant',
+        },
+      },
+    ];
+    const res = reconcileRequiredInputs(parsed, hints, new Set(['search', 'book']));
+    expect(res.injected).toBe(0);
+    expect(res.repaired).toBe(1);
+    const plan = validateBuildPlan(parsed, ['search', 'book']);
+    expect(resolveRequiredInputs(plan, 'book')[0]?.literal).toBe('real-grounded-app-key');
+    expect(resolveRequiredInputs(plan, 'book')[0]?.recordedSeq).toBe(42);
+  });
+
+  it('repairs a planner recorded-seq header placeholder from a grounded hint', () => {
+    const parsed = authPlan();
+    (parsed.perTool[1] as Record<string, unknown>).requiredInputs = [
+      {
+        location: 'header:X-App-Key',
+        source: 'static',
+        wiring: 'literal',
+        literal: '<recorded seq 42 header X-App-Key>',
+        note: 'planner placeholder',
+      },
+    ];
+    const hints: RequiredInputHint[] = [
+      {
+        consumerTool: 'book',
+        input: {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 42,
+          note: 'page-minted app constant',
+        },
+      },
+    ];
+    const res = reconcileRequiredInputs(parsed, hints, new Set(['search', 'book']));
+    expect(res.injected).toBe(0);
+    expect(res.repaired).toBe(1);
+    const plan = validateBuildPlan(parsed, ['search', 'book']);
+    expect(resolveRequiredInputs(plan, 'book')[0]?.literal).toBe('real-grounded-app-key');
+    expect(resolveRequiredInputs(plan, 'book')[0]?.recordedSeq).toBe(42);
+  });
+
+  it('repairs a planner recorded static header placeholder from a grounded hint', () => {
+    const parsed = authPlan();
+    (parsed.perTool[1] as Record<string, unknown>).requiredInputs = [
+      {
+        location: 'header:X-App-Key',
+        source: 'static',
+        wiring: 'literal',
+        literal: '<recorded static header from seq 42>',
+        note: 'planner placeholder',
+      },
+    ];
+    const hints: RequiredInputHint[] = [
+      {
+        consumerTool: 'book',
+        input: {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 42,
+          note: 'page-minted app constant',
+        },
+      },
+    ];
+    const res = reconcileRequiredInputs(parsed, hints, new Set(['search', 'book']));
+    expect(res.injected).toBe(0);
+    expect(res.repaired).toBe(1);
+    const plan = validateBuildPlan(parsed, ['search', 'book']);
+    expect(resolveRequiredInputs(plan, 'book')[0]?.literal).toBe('real-grounded-app-key');
+    expect(resolveRequiredInputs(plan, 'book')[0]?.recordedSeq).toBe(42);
+  });
+
+  it('repairs planner prose placeholders that mention a recorded header value', () => {
+    const parsed = authPlan();
+    (parsed.perTool[1] as Record<string, unknown>).requiredInputs = [
+      {
+        location: 'header:X-App-Key',
+        source: 'static',
+        wiring: 'literal',
+        literal: '<static header value recorded at seq 42>',
+        note: 'planner placeholder',
+      },
+    ];
+    const hints: RequiredInputHint[] = [
+      {
+        consumerTool: 'book',
+        input: {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 42,
+          note: 'page-minted app constant',
+        },
+      },
+    ];
+    const res = reconcileRequiredInputs(parsed, hints, new Set(['search', 'book']));
+    expect(res.injected).toBe(0);
+    expect(res.repaired).toBe(1);
+    const plan = validateBuildPlan(parsed, ['search', 'book']);
+    expect(resolveRequiredInputs(plan, 'book')[0]?.literal).toBe('real-grounded-app-key');
+  });
+
+  it('repairs a planner-declared static input missing its literal', () => {
+    const parsed = authPlan();
+    (parsed.perTool[1] as Record<string, unknown>).requiredInputs = [
+      {
+        location: 'header:X-App-Key',
+        source: 'static',
+        wiring: 'literal',
+        note: 'planner omitted literal',
+      },
+    ];
+    const hints: RequiredInputHint[] = [
+      {
+        consumerTool: 'book',
+        input: {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 42,
+          note: 'page-minted app constant',
+        },
+      },
+    ];
+    const res = reconcileRequiredInputs(parsed, hints, new Set(['search', 'book']));
+    expect(res.injected).toBe(0);
+    expect(res.repaired).toBe(1);
+    const plan = validateBuildPlan(parsed, ['search', 'book']);
+    expect(resolveRequiredInputs(plan, 'book')[0]?.literal).toBe('real-grounded-app-key');
   });
 
   it('is a no-op with no hints', () => {
@@ -1512,10 +1869,10 @@ describe('buildBuildPlanPayload requiredInputHints (end-to-end)', () => {
   }
 
   it('does NOT emit a per-call generated hint for a REUSED browser_minted header (reuse-map regression)', () => {
-    // Regression: the reuse map must see ALL request headers, not just the sensitive subset — else a
+    // Regression: the reuse map must see ALL request headers, not just the sensitive subset. Else a
     // reused x-trace-id (UUID shape) is wrongly emitted as per-call `generated`. With reuse detected
-    // it is NOT regenerated; and since it is browser_minted with no upstream it is dropped as
-    // runtime-supplied rather than contracted as an unsatisfiable browser_state.
+    // it is NOT regenerated; and since it is browser_minted with no upstream it is dropped rather
+    // than contracted as an unsatisfiable browser_state.
     const uuid = '550e8400-e29b-41d4-a716-446655440000';
     const session: Session = {
       site: 'demo',

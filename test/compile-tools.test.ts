@@ -9,13 +9,16 @@ import {
   classifyIntegrationOutcome,
   classifyParamCoverage,
   contractedInputGate,
+  crossReferenceBrowserStateContracts,
   crossReferenceReferencedStateCaptures,
   detectTokenSources,
   externalVerification,
   extractTestBlocks,
+  hasLiveBaselineWorkflowTest,
   injectContractedInputs,
   isBotDefenseFailure,
   parseJUnitResults,
+  repairRequiredInputStaticLiterals,
   typecheckArtifacts,
 } from '../src/imprint/compile-tools.ts';
 import { type Session, WorkflowSchema } from '../src/imprint/types.ts';
@@ -617,6 +620,463 @@ describe('extract', () => {
     }
   });
 
+  it('fails long opaque defaults on agent-facing parameters without a token contract', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-opaque-param-default-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'opaque-param-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/reservations',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/reservation?search_token=recorded-token',
+          headers: {},
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ reservation: { id: 'res-1' } }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'get_reservation',
+            intent: { description: 'Get reservation details' },
+            parameters: [
+              {
+                name: 'search_token',
+                type: 'string',
+                description: 'Opaque reservation selector',
+                default:
+                  'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+              },
+            ],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/api/reservation?search_token=${param.search_token}',
+                headers: { Accept: 'application/json' },
+              },
+            ],
+            site: 'opaque-param-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const { failures } = await externalVerification(exampleDir, session, sessionPath);
+      expect(failures.some((f) => f.includes('long opaque recorded default'))).toBe(true);
+      expect(failures.some((f) => f.includes('search_token'))).toBe(true);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails long opaque token-like query literals in workflow URLs', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-opaque-url-token-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'opaque-url-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/details',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/details',
+          headers: {},
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ ok: true }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'get_details',
+            intent: { description: 'Get details' },
+            parameters: [],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/api/details?search_token=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.cccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddd',
+                headers: { Accept: 'application/json' },
+              },
+            ],
+            site: 'opaque-url-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const { failures } = await externalVerification(exampleDir, session, sessionPath);
+      expect(failures.some((f) => f.includes('long opaque literal query value'))).toBe(true);
+      expect(failures.some((f) => f.includes('search_token'))).toBe(true);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails credential placeholders that are not in the credential contract', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-uncontracted-credential-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'credential-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/search',
+          headers: { 'x-api-key': 'public-app-key' },
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ items: [] }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'search_items',
+            intent: { description: 'Search items' },
+            parameters: [],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/api/search',
+                headers: { 'X-API-Key': '${credential.api_key}' },
+              },
+            ],
+            site: 'credential-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const { failures } = await externalVerification(exampleDir, session, sessionPath, {
+        credentialNames: ['username', 'password'],
+      });
+      expect(failures.some((f) => f.includes('uncontracted credential'))).toBe(true);
+      expect(failures.some((f) => f.includes('${credential.api_key}'))).toBe(true);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows credential placeholders named by the credential contract', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-contracted-credential-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'credential-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/login',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/login',
+          headers: { 'content-type': 'application/json' },
+          body: '{"username":"user"}',
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ ok: true }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'login',
+            intent: { description: 'Log in' },
+            parameters: [],
+            requests: [
+              {
+                method: 'POST',
+                url: 'https://example.com/api/login',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{"username":"${credential.username}","password":"${credential.password}"}',
+              },
+            ],
+            site: 'credential-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const { failures } = await externalVerification(exampleDir, session, sessionPath, {
+        credentialNames: ['username', 'password'],
+      });
+      expect(failures.some((f) => f.includes('uncontracted credential'))).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails app metadata header values exposed as extra caller parameters', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-app-metadata-param-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'metadata-param-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/search?q=alpha',
+          headers: { 'x-api-key': 'public-app-key' },
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ items: ['alpha'] }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'search_items',
+            intent: { description: 'Search items' },
+            parameters: [
+              { name: 'query', type: 'string', description: 'Search query' },
+              { name: 'x_api_key', type: 'string', description: 'Public app key' },
+            ],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/api/search?q=${param.query}',
+                headers: { 'X-API-Key': '${param.x_api_key}' },
+              },
+            ],
+            site: 'metadata-param-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const { failures } = await externalVerification(exampleDir, session, sessionPath, {
+        likelyParams: [{ name: 'query', type: 'string', description: 'Search query' }],
+      });
+      expect(failures.some((f) => f.includes('app metadata header'))).toBe(true);
+      expect(failures.some((f) => f.includes('x_api_key'))).toBe(true);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails a no-param integration suite that never calls the workflow', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-baseline-tautology-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+    const session: Session = {
+      site: 'baseline-tautology-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/trips',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/trips',
+          headers: {},
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ items: [{ id: 'trip-1' }] }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'list_trips',
+            intent: { description: 'List trips' },
+            parameters: [],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/api/trips',
+                headers: { Accept: 'application/json' },
+              },
+            ],
+            site: 'baseline-tautology-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+      writeFileSync(
+        pathJoin(exampleDir, 'parser.ts'),
+        `export function extract(data: { items?: Array<{ id: string }> }) {
+  return { items: data.items ?? [] };
+}
+`,
+        'utf8',
+      );
+      writeFileSync(
+        pathJoin(exampleDir, 'parser.test.ts'),
+        `import { expect, test } from 'bun:test';
+import { extract } from './parser.ts';
+
+test('extracts trips', () => {
+  const result = extract({ items: [{ id: 'trip-1' }] });
+  expect(result.items).toHaveLength(1);
+  expect(result.items[0]?.id).toBe('trip-1');
+  expect(Object.keys(result)).toContain('items');
+});
+
+test('synthetic:empty-result returns an empty collection', () => {
+  const result = extract({ items: [] });
+  expect(result.items).toEqual([]);
+  expect(result.items).toHaveLength(0);
+  expect(Object.keys(result)).toContain('items');
+});
+`,
+        'utf8',
+      );
+      writeFileSync(
+        pathJoin(exampleDir, 'integration.test.ts'),
+        `import { expect, test } from 'bun:test';
+import workflowJson from './workflow.json' with { type: 'json' };
+
+test('live API call returns trips', () => {
+  expect(workflowJson.toolName).toBe('list_trips');
+  expect(workflowJson.site).toBe('baseline-tautology-fixture');
+});
+`,
+        'utf8',
+      );
+
+      const { failures } = await externalVerification(exampleDir, session, sessionPath);
+      expect(
+        failures.some(
+          (f) => f.includes('baseline live workflow test') && f.includes('runWorkflowWithLadder'),
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails a producer whose parser does not emit a declared emitsTokens field', async () => {
     const repoRoot = pathJoin(import.meta.dir, '..');
     const scratchRoot = pathJoin(repoRoot, '.context');
@@ -828,6 +1288,66 @@ describe('extract', () => {
         ],
       });
       expect(hits.failures.some((f) => f.includes('request-transform.ts'))).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks recorded opaque defaults on producer-sourced token params', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-token-default-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'token-default-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/item',
+      imprintVersion: '0.1.0',
+      requests: [],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'get_item',
+            intent: { description: 'x' },
+            site: 'x',
+            parameters: [
+              {
+                name: 'selected_item',
+                type: 'string',
+                description: 'Producer-minted selected item token.',
+                default: 'eyJhbGciOiJSUzI1NiIsImtpZCI6InJlY29yZGVkIn0.recorded-token-123',
+              },
+            ],
+            requests: [],
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const result = await externalVerification(exampleDir, session, sessionPath, {
+        tokenParams: [
+          {
+            param: 'selected_item',
+            sourceTool: 'search_items',
+            sourceField: 'selected_item',
+          },
+        ],
+      });
+
+      expect(result.failures.join('\n')).toContain('recorded opaque default');
+      expect(result.failures.join('\n')).toContain('selected_item');
     } finally {
       rmSync(exampleDir, { recursive: true, force: true });
     }
@@ -1505,6 +2025,58 @@ test('param:discount_code is annotated', async () => {
     expect(paramVerification).toEqual([]);
   });
 
+  it('detects when a no-param baseline test never calls the workflow', () => {
+    const tautologicalSrc = `import { expect, test } from 'bun:test';
+
+test('live API call returns upcoming trips for the authenticated account', () => {
+  expect(WORKFLOW.toolName).toBe('list_upcoming_trips');
+  expect(WORKFLOW.site).toBe('southwest');
+});
+`;
+    expect(hasLiveBaselineWorkflowTest(tautologicalSrc)).toBe(false);
+    expect(hasLiveBaselineWorkflowTest(integrationSrc)).toBe(true);
+  });
+
+  it('rejects a baseline test that exits green on a failed workflow result', () => {
+    const forgivingSrc = `import { expect, test } from 'bun:test';
+import { runWorkflowWithLadder } from 'imprint/backend-ladder';
+
+test('baseline accepts bot failure', async () => {
+  const { result } = await runWorkflowWithLadder({ workflowPath: WP, params: {} });
+  if (!result.ok) {
+    expect(/FORBIDDEN|403|bot/i.test(JSON.stringify(result))).toBe(true);
+    return;
+  }
+  expect(result.data).toBeTruthy();
+});
+`;
+    const producerForgivingSrc = `import { expect, test } from 'bun:test';
+import { runWorkflowWithLadder } from 'imprint/backend-ladder';
+
+test('baseline skips when producer state is missing', async () => {
+  const producer = await runWorkflowWithLadder({ workflowPath: PRODUCER, params: {} });
+  if (!producer.result.ok && String(producer.result.message ?? '').includes('STATE_MISSING')) return;
+  if (!producer.result.ok) throw new Error(JSON.stringify(producer.result));
+  const { result } = await runWorkflowWithLadder({ workflowPath: WP, params: { token: 'fresh' } });
+  expect(result.ok).toBe(true);
+});
+`;
+    const throwingSrc = `import { expect, test } from 'bun:test';
+import { runWorkflowWithLadder } from 'imprint/backend-ladder';
+
+test('baseline throws on failure', async () => {
+  const { result } = await runWorkflowWithLadder({ workflowPath: WP, params: {} });
+  if (!result.ok) {
+    throw new Error(JSON.stringify(result));
+  }
+  expect(result.data).toBeTruthy();
+});
+`;
+    expect(hasLiveBaselineWorkflowTest(forgivingSrc)).toBe(false);
+    expect(hasLiveBaselineWorkflowTest(producerForgivingSrc)).toBe(false);
+    expect(hasLiveBaselineWorkflowTest(throwingSrc)).toBe(true);
+  });
+
   it('marks params unverified (not blocking) when the suite was waived by anti-bot', () => {
     const { paramVerification, uncovered } = classifyParamCoverage({
       likelyParams: [{ name: 'query' }, { name: 'sort' }],
@@ -2141,6 +2713,40 @@ describe('classifyIntegrationOutcome (Fix A — liveVerified decoupled from the 
     expect(v.outcome).toBe('waived-bot'); // 403 + access denied ⇒ bot defense
   });
 
+  it('waives a baseline assertion failure when every backend was bot-blocked', () => {
+    const combined = [
+      '[imprint backend] trying fetch…',
+      '[imprint backend] trying cdp-replay…',
+      '[imprint backend] trying stealth-fetch…',
+      '[imprint cdp-jar] cached jar not validated (_abck~?~, no bm_sv) — re-mint',
+      '[imprint cdp-browser] _abck status after interaction: ~?~',
+      '[imprint backend] fetch: FORBIDDEN in 459ms — escalating',
+      '[imprint backend] stealth-fetch: BAD_RESPONSE in 15057ms — escalating (a higher-trust rung may pass)',
+      '[imprint backend] cdp-replay: FORBIDDEN in 31341ms — escalating',
+      '[imprint backend] parallel probe: all backends failed — falling through to sequential ladder',
+      '  fetch: FORBIDDEN — Request 0 returned 403: { "code": 403050700 } (460ms)',
+      '  cdp-replay: FORBIDDEN — Request 0 returned 403: { "code": 403050700 } (31341ms)',
+      '  stealth-fetch: BAD_RESPONSE — Request 0 returned 400: {"error":"server_error"} (15057ms)',
+      '[imprint backend] ladder exhausted: all 4 rungs escalated (fetch → fetch-bootstrap → cdp-replay → stealth-fetch); returning last error from stealth-fetch',
+      '21 |   expect(result.ok).toBe(true);',
+      '                          ^',
+      'error: expect(received).toBe(expected)',
+      'Expected: true',
+      'Received: false',
+      '(fail) live API call returns upcoming Southwest trips [102444.51ms]',
+    ].join('\n');
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: false,
+      combined,
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.baselineLiveVerified).toBe(false);
+    expect(v.outcome).toBe('waived-bot');
+  });
+
   it('a timeout is infra even if the partial output has a fetch 403 (never a bot block)', () => {
     const v = classifyIntegrationOutcome({
       exitCode: 1,
@@ -2198,6 +2804,29 @@ describe('classifyIntegrationOutcome (Fix A — liveVerified decoupled from the 
     });
     expect(v.outcome).toBe('failed');
     expect(v.baselineLiveVerified).toBe(false);
+  });
+
+  it('does not waive a generated test that omits a required workflow parameter', () => {
+    const combined = [
+      '[imprint backend] trying fetch…',
+      '[imprint backend] fetch: UNKNOWN in 67ms — non-escalatable, returning',
+      '[imprint backend] cdp-replay: UNKNOWN in 32128ms — non-escalatable, returning',
+      '[imprint backend] parallel probe: all backends failed',
+      '  fetch: UNKNOWN — Missing required parameter: reservation_context (Opaque reservation context emitted by list_upcoming_trips.) (74ms)',
+      '  cdp-replay: UNKNOWN — Missing required parameter: reservation_context (Opaque reservation context emitted by list_upcoming_trips.) (32128ms)',
+      'error: producer get_seat_map failed: {"ok":false,"error":"NETWORK","message":"All backends failed during parallel probe"}',
+      '(fail) param:seat_change_context uses a fresh token minted by get_seat_map [32240.63ms]',
+    ].join('\n');
+    const v = classifyIntegrationOutcome({
+      exitCode: 1,
+      timedOut: false,
+      combined,
+      passedTests: new Set(),
+      referencedStateBroken: false,
+      failedCaptureNames: new Set(),
+    });
+    expect(v.outcome).toBe('failed');
+    expect(v.firstError).toBe('missing required workflow parameter');
   });
 
   it('does not waive deterministic BAD_RESPONSE 400 without bot or rate evidence', () => {
@@ -2411,6 +3040,29 @@ describe('crossReferenceReferencedStateCaptures (Fix 2)', () => {
     expect(failures.join('\n')).toContain('invalid regex');
   });
 
+  it('rejects a referenced state placeholder with no declared capture', () => {
+    const wf = WorkflowSchema.parse({
+      toolName: 't',
+      intent: { description: 'd' },
+      parameters: [],
+      site: 'costco-car-rental',
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://www.costcotravel.com/api',
+          headers: { 'X-Api-Key': '${state.api_key}' },
+        },
+      ],
+    });
+    const { failures, failedCaptureNames } = crossReferenceReferencedStateCaptures(
+      wf,
+      sessionWithLandingPage(),
+    );
+    expect(failedCaptureNames.has('api_key')).toBe(true);
+    expect(failures.join('\n')).toContain('declares no capture named "api_key"');
+    expect(failures.join('\n')).toContain('STATE_MISSING');
+  });
+
   it('does not flag when no request references the capture (${state.X} unused)', () => {
     const wf = WorkflowSchema.parse({
       toolName: 't',
@@ -2429,6 +3081,104 @@ describe('crossReferenceReferencedStateCaptures (Fix 2)', () => {
     });
     const { failures } = crossReferenceReferencedStateCaptures(wf, sessionWithLandingPage());
     expect(failures).toHaveLength(0);
+  });
+});
+
+describe('crossReferenceBrowserStateContracts', () => {
+  function browserStateSession(): Session {
+    return {
+      site: 'example',
+      startedAt: '2026-06-02T00:00:00.000Z',
+      url: 'https://www.example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 10,
+          method: 'GET',
+          url: 'https://www.example.com/search',
+          headers: {},
+          resourceType: 'Document',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+            mimeType: 'text/html',
+            body:
+              '<html><script src="/app/bootstrap/data.js"></script>' +
+              '<script>window.__APP_CONFIG__={apiKey:"public-key-123"}</script></html>',
+          },
+        },
+        {
+          seq: 2,
+          timestamp: 20,
+          method: 'POST',
+          url: 'https://www.example.com/api/search',
+          headers: { 'X-API-Key': 'public-key-123' },
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: '{"ok":true}',
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+  }
+
+  function workflowWithApiKey(pattern: string) {
+    return WorkflowSchema.parse({
+      toolName: 'search',
+      intent: { description: 'search' },
+      parameters: [],
+      site: 'example',
+      bootstrap: {
+        url: 'https://www.example.com/search',
+        captures: [{ source: 'html_regex', name: 'api_key', pattern, required: true }],
+      },
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://www.example.com/api/search',
+          headers: { 'X-API-Key': '${state.api_key}' },
+        },
+      ],
+    });
+  }
+
+  const apiKeyInput: RequiredInput = {
+    location: 'header:X-API-Key',
+    source: 'browser_state',
+    wiring: 'state',
+    stateName: 'api_key',
+    recordedSeq: 2,
+    note: '',
+  };
+
+  it('rejects a browser_state regex that matches the page but captures the wrong value', () => {
+    const result = crossReferenceBrowserStateContracts(
+      workflowWithApiKey('src="([^"]*/bootstrap/data\\.js)"'),
+      browserStateSession(),
+      [apiKeyInput],
+    );
+
+    expect(result.failedCaptureNames.has('api_key')).toBe(true);
+    expect(result.failures.join('\n')).toContain('do not match the value sent by request seq=2');
+  });
+
+  it('passes when the browser_state regex captures the recorded request value', () => {
+    const result = crossReferenceBrowserStateContracts(
+      workflowWithApiKey('apiKey:"([^"]+)"'),
+      browserStateSession(),
+      [apiKeyInput],
+    );
+
+    expect(result.failures).toHaveLength(0);
+    expect(result.failedCaptureNames.size).toBe(0);
   });
 });
 
@@ -2456,7 +3206,7 @@ function secretSession(): Session {
         seq: 10,
         timestamp: 100,
         method: 'GET',
-        url: 'https://api.example.com/data',
+        url: 'https://api.example.com/data?search_token=recorded-search-token-001',
         headers: {
           Authorization: 'Bearer secrettoken1234567890abcdef',
           'X-App-Key': 'synthetic-appkey-001',
@@ -2616,6 +3366,97 @@ describe('assertNoRawSecrets', () => {
 });
 
 describe('injectContractedInputs', () => {
+  it('repairs placeholder static requiredInput literals from the recorded request', () => {
+    const session = secretSession();
+    const repaired = repairRequiredInputStaticLiterals(
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: '<recorded static anti-bot header value from seq 10>',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(repaired[0]?.literal).toBe('synthetic-appkey-001');
+  });
+
+  it('repairs recorded-seq header placeholder literals from the recorded request', () => {
+    const session = secretSession();
+    const repaired = repairRequiredInputStaticLiterals(
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: '<recorded seq 10 header X-App-Key>',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(repaired[0]?.literal).toBe('synthetic-appkey-001');
+  });
+
+  it('repairs recorded static header placeholder literals from the recorded request', () => {
+    const session = secretSession();
+    const repaired = repairRequiredInputStaticLiterals(
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: '<recorded static header from seq 10>',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(repaired[0]?.literal).toBe('synthetic-appkey-001');
+  });
+
+  it('repairs planner prose static header placeholders from the recorded request', () => {
+    const session = secretSession();
+    const repaired = repairRequiredInputStaticLiterals(
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: '<static header value recorded at seq 10>',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(repaired[0]?.literal).toBe('synthetic-appkey-001');
+  });
+
+  it('repairs static url_param placeholders from the recorded request URL', () => {
+    const session = secretSession();
+    const repaired = repairRequiredInputStaticLiterals(
+      [
+        {
+          location: 'url_param:search_token',
+          source: 'static',
+          wiring: 'literal',
+          literal:
+            '<search_token captured at seq 10; prefer reservation_context.manage_reservation_search_token when chained>',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(repaired[0]?.literal).toBe('recorded-search-token-001');
+  });
+
   it('injects a dropped credential header into the matching request', () => {
     const session = secretSession();
     const workflow = {
@@ -2636,6 +3477,180 @@ describe('injectContractedInputs', () => {
     expect(workflow.requests[0]?.headers).toEqual({
       Authorization: '${credential.access_token}',
     });
+  });
+
+  it('replaces an existing placeholder static header with the grounded literal', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/data',
+          headers: { 'X-App-Key': '<recorded static anti-bot header value from seq 10>' },
+        },
+      ],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(1);
+    expect(workflow.requests[0]?.headers['X-App-Key']).toBe('real-grounded-app-key');
+  });
+
+  it('replaces an existing recorded-seq static header placeholder with the grounded literal', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/data',
+          headers: { 'X-App-Key': '<recorded seq 10 header X-App-Key>' },
+        },
+      ],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(1);
+    expect(workflow.requests[0]?.headers['X-App-Key']).toBe('real-grounded-app-key');
+  });
+
+  it('replaces an existing recorded static header placeholder with the grounded literal', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/data',
+          headers: { 'X-App-Key': '<recorded static header from seq 10>' },
+        },
+      ],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'header:X-App-Key',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'real-grounded-app-key',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(1);
+    expect(workflow.requests[0]?.headers['X-App-Key']).toBe('real-grounded-app-key');
+  });
+
+  it('injects a dropped static url_param into the matching request', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [{ method: 'GET', url: 'https://api.example.com/data', headers: {} }],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'url_param:search_token',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'recorded-search-token-001',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(1);
+    expect(workflow.requests[0]?.url).toBe(
+      'https://api.example.com/data?search_token=recorded-search-token-001',
+    );
+  });
+
+  it('replaces an existing static url_param placeholder with the grounded literal', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/data?search_token=%3Csearch_token+captured+at+seq+10%3E',
+          headers: {},
+        },
+      ],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'url_param:search_token',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'recorded-search-token-001',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(1);
+    expect(workflow.requests[0]?.url).toBe(
+      'https://api.example.com/data?search_token=recorded-search-token-001',
+    );
+  });
+
+  it('does not overwrite an existing concrete url_param', () => {
+    const session = secretSession();
+    const workflow = {
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/data?search_token=keep-existing',
+          headers: {},
+        },
+      ],
+    };
+    const res = injectContractedInputs(
+      workflow,
+      [
+        {
+          location: 'url_param:search_token',
+          source: 'static',
+          wiring: 'literal',
+          literal: 'recorded-search-token-001',
+          recordedSeq: 10,
+          note: '',
+        },
+      ],
+      session,
+    );
+    expect(res.injected).toBe(0);
+    expect(workflow.requests[0]?.url).toBe(
+      'https://api.example.com/data?search_token=keep-existing',
+    );
   });
 
   it('sets workflow.bootstrap.url from a referer input', () => {
@@ -2809,10 +3824,10 @@ describe('contractedInputGate', () => {
   it('warns (does not block) a browser_state input with no capture declared anywhere', () => {
     const gate = contractedInputGate('{"requests":[{"headers":{}}]}', [
       {
-        location: 'header:X-Goog-BatchExecute-Bgr',
+        location: 'header:X-Browser-Entropy',
         source: 'browser_state',
         wiring: 'state',
-        stateName: 'x_goog_batch_execute_bgr',
+        stateName: 'browser_entropy',
         note: '',
       },
     ]);

@@ -17,6 +17,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
 import type { Page } from 'playwright';
+import { loadBackendsCacheStatus } from './backend-cache.ts';
 import {
   type CdpBrowserFetch,
   type CdpBrowserFetchOptions,
@@ -49,15 +50,15 @@ import {
 } from './stealth-fetch.ts';
 import { clearCachedToken, loadCachedToken, saveCachedToken } from './stealth-token-cache.ts';
 import type { ResolvedTool } from './tool-loader.ts';
-import {
-  type BootstrapCapture,
-  type ConcreteBackend,
-  type ReplayBackend,
-  type StateCapability,
-  type StateMissingItem,
-  type ToolResult,
-  type Workflow,
-  WorkflowSchema,
+import { WorkflowSchema } from './types.ts';
+import type {
+  BootstrapCapture,
+  ConcreteBackend,
+  ReplayBackend,
+  StateCapability,
+  StateMissingItem,
+  ToolResult,
+  Workflow,
 } from './types.ts';
 
 type UsedBackend = ConcreteBackend;
@@ -75,6 +76,13 @@ interface LadderResult {
 }
 
 const log = createLog('backend');
+
+type PlaybookRunner = (opts: Parameters<typeof runPlaybook>[0]) => ReturnType<typeof runPlaybook>;
+let playbookRunner: PlaybookRunner = runPlaybook;
+
+export function __setPlaybookRunnerForTest(fn: PlaybookRunner | null): void {
+  playbookRunner = fn ?? runPlaybook;
+}
 
 const DEFAULT_LADDER: ConcreteBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
 
@@ -252,15 +260,24 @@ export function __resetCompilePacingForTest(): void {
 }
 
 /** Expand a replayBackend choice into a concrete ladder. 'auto' prefers
- *  the probed order (if any), else the default. Explicit choice → single rung. */
+ *  the probed order (if any), then appends the default fallback ladder.
+ *  Explicit choice → single rung. */
 export function resolveLadder(
   backend: ReplayBackend,
   cachedPreferredOrder?: ConcreteBackend[],
 ): ConcreteBackend[] {
   if (backend === 'auto') {
-    return cachedPreferredOrder && cachedPreferredOrder.length > 0
-      ? cachedPreferredOrder
-      : DEFAULT_LADDER;
+    if (cachedPreferredOrder && cachedPreferredOrder.length > 0) {
+      const seen = new Set<ConcreteBackend>();
+      const ordered: ConcreteBackend[] = [];
+      for (const rung of [...cachedPreferredOrder, ...DEFAULT_LADDER]) {
+        if (seen.has(rung)) continue;
+        seen.add(rung);
+        ordered.push(rung);
+      }
+      return ordered;
+    }
+    return DEFAULT_LADDER;
   }
   return [backend];
 }
@@ -320,8 +337,8 @@ export async function runWithLadder(
   }
   const attempts: LadderResult['attempts'] = [];
   let lastResult: ToolResult | null = null;
+  let lastResultBackend: ConcreteBackend | null = null;
   let skipUntilBackend: ConcreteBackend | null = null;
-
   for (const backend of effectiveLadder) {
     if (skipUntilBackend && backend !== skipUntilBackend) continue;
     if (skipUntilBackend === backend) skipUntilBackend = null;
@@ -387,7 +404,7 @@ export async function runWithLadder(
           // Apply workflow.json's declared parameter defaults — runPlaybook
           // validates and throws on absent values regardless of declared defaults.
           const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
-          result = await runPlaybook({
+          result = await playbookRunner({
             playbook: playbookPath(assetRoot, tool.site, tool.dir),
             params: paramsWithDefaults,
             site: tool.site,
@@ -407,6 +424,7 @@ export async function runWithLadder(
     }
     const durationMs = Date.now() - t0;
     lastResult = result;
+    lastResultBackend = backend;
 
     if (result.ok) {
       attempts.push({ backend, outcome: 'ok', detail: `succeeded in ${durationMs}ms`, durationMs });
@@ -524,7 +542,7 @@ export async function runWithLadder(
       attempts,
     };
   }
-  const lastBackend = effectiveLadder[effectiveLadder.length - 1] ?? 'fetch';
+  const lastBackend = lastResultBackend ?? effectiveLadder[effectiveLadder.length - 1] ?? 'fetch';
   // Be accurate about ladder size: the parallel probe calls this with SINGLE-rung
   // ladders, so "every backend escalated" was misleading (it described one rung,
   // e.g. fetch-only, as if the whole ladder gave up — and fooled the integration
@@ -876,9 +894,9 @@ async function runFetchBootstrap(
       ],
     };
 
-    // Satisfy any declared bootstrap captures from the minted jar (cookie) +
-    // page HTML (html_regex). response_header/dom captures aren't available from
-    // a closed browser — required ones of those fail loud below.
+    // Satisfy any declared bootstrap captures from the minted browser session:
+    // cookies, page HTML, and document response headers are all captured from
+    // the same navigation.
     const captureResult = jarBootstrapCaptureState(
       tool.workflow.bootstrap,
       jar,
@@ -1088,8 +1106,9 @@ async function runCdpReplay(
 }
 
 /** Resolve workflow.bootstrap captures from a minted jar (cookie source) + the
- *  bootstrap page HTML (html_regex source). Returns the initial ${state.X} map,
- *  or a STATE_MISSING result if a required capture can't be satisfied. */
+ *  bootstrap page HTML (html_regex source), and bootstrap document headers
+ *  (response_header source). Returns the initial ${state.X} map, or a
+ *  STATE_MISSING result if a required capture can't be satisfied. */
 function jarBootstrapCaptureState(
   bootstrap: ResolvedTool['workflow']['bootstrap'],
   jar: MintedJar,
@@ -1141,13 +1160,26 @@ function jarBootstrapCaptureState(
           ),
         };
       }
+    } else if (capture.source === 'response_header') {
+      const value = jar.bootstrapResponseHeaders?.[capture.header.toLowerCase()];
+      if (value) state[capture.name] = value;
+      else if (capture.required !== false) {
+        return {
+          ok: false,
+          result: bootstrapCaptureMissingResult(
+            capture,
+            `Required bootstrap capture "${capture.name}" (response_header:${capture.header}) did not appear on the bootstrap document response.`,
+            'producer_ran_value_absent',
+          ),
+        };
+      }
     } else if (capture.required !== false) {
-      // response_header / dom_* can't be resolved from a closed browser jar.
+      // dom_* can't be resolved from a closed browser jar.
       return {
         ok: false,
         result: bootstrapCaptureMissingResult(
           capture,
-          `Bootstrap capture "${capture.name}" (${capture.source}) is not supported by the fetch-bootstrap jar path; use cookie or html_regex.`,
+          `Bootstrap capture "${capture.name}" (${capture.source}) is not supported by the fetch-bootstrap jar path; use cookie, html_regex, or response_header.`,
           'producer_ran_value_absent',
         ),
       };
@@ -1558,7 +1590,7 @@ export async function runWorkflowWithLadder(opts: {
       : ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
 
   const memoKey = `${tool.site}::${workflow.toolName}`;
-  const memoWinner = compileWinningBackend.get(memoKey);
+  let memoWinner = compileWinningBackend.get(memoKey);
 
   // Share one stealth token across this site's compile-time test processes.
   const stealthCache = new Map<string, StealthFetch>();
@@ -1621,6 +1653,24 @@ export async function runWorkflowWithLadder(opts: {
         cdpPool,
         initialState: opts.initialState,
       });
+    }
+
+    if (!memoWinner) {
+      const cacheStatus = loadBackendsCacheStatus(tool.site, dirname(toolDir), toolDir, {
+        warn: false,
+        toolName: workflow.toolName,
+      });
+      const cachedWinner =
+        cacheStatus.status === 'ok'
+          ? cacheStatus.cache.preferredOrder.find((backend) => ladder.includes(backend))
+          : undefined;
+      if (cacheStatus.status === 'ok' && cachedWinner) {
+        memoWinner = cachedWinner;
+        compileWinningBackend.set(memoKey, cachedWinner);
+        log(
+          `compile cache: ${memoKey} using ${cachedWinner} from backends.json; preferred order: ${cacheStatus.cache.preferredOrder.join(' → ')}`,
+        );
+      }
     }
 
     // ── First call: parallel probe (45s deadline) ───────────────────────────

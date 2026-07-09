@@ -22,6 +22,7 @@ import {
   type AssignedSharedModule,
   type RequiredInput,
   type SharedModuleManifestEntry,
+  looksLikePlannerPlaceholderLiteral,
   planSliceForTool,
   readBuildPlanFile,
   resolveAssignedModules,
@@ -136,7 +137,15 @@ function buildReadBuildPlanTool(
       const emitsTokens = slice.tool.emitsTokens ?? [];
       const tokenParams = slice.tool.tokenParams ?? [];
       const requiredInputs = slice.tool.requiredInputs ?? [];
+      const dynamicValueFindings = slice.dynamicValueFindings ?? [];
       const tokenNotes: string[] = [];
+      const opaqueValueDecisionProtocol = [
+        'Before copying any opaque-looking recorded value from a URL, header, cookie, or body into workflow.json, decide its provenance from the surrounding request/response evidence.',
+        'Classify it as exactly one of: static public app config, credential/auth/session state, producer-tool token, browser/CDP-minted state, generated per-call value, or user parameter.',
+        'Use reveal_request on the request and likely producer requests before deciding; if the value is minted by an earlier response or browser page, wire a capture/state/bootstrap instead of pasting the literal.',
+        'If the planner provided dynamicValueFindings, treat them as shared hypotheses to verify with targeted parser/integration tests. Do not re-investigate the same site-wide token class from scratch unless the finding contradicts the request you are compiling.',
+        'If the value is durable public app config required by the API, keep the literal. If it is ambiguous, prefer a workflow shape that lets the backend ladder/browser remint it, or document the uncertainty in an integration test rather than inventing a deterministic rule.',
+      ];
       if (emitsTokens.length > 0) {
         tokenNotes.push(
           `PRODUCER CONTRACT: your parser MUST emit ${emitsTokens
@@ -205,6 +214,9 @@ function buildReadBuildPlanTool(
                 : 'No shared modules assigned — build this tool self-contained.',
             tokenContract: tokenNotes.length > 0 ? tokenNotes : undefined,
             contractedInputs: inputNotes.length > 0 ? inputNotes : undefined,
+            dynamicValueFindings:
+              dynamicValueFindings.length > 0 ? dynamicValueFindings : undefined,
+            opaqueValueDecisionProtocol,
           },
           null,
           2,
@@ -1420,7 +1432,8 @@ function buildRunTestsTool(
 ): AgentTool {
   return {
     name: 'run_tests',
-    description: 'Run bun test parser.test.ts and parse the output for pass/fail counts.',
+    description:
+      'Run bun test parser.test.ts plus strict TypeScript checks for generated parser/request-transform artifacts, then parse pass/fail counts.',
     input_schema: {
       type: 'object',
       properties: {},
@@ -1453,6 +1466,8 @@ function buildRunTestsTool(
       const passed = passMatch?.[1] ? Number.parseInt(passMatch[1], 10) : 0;
       const failed = failMatch?.[1] ? Number.parseInt(failMatch[1], 10) : 0;
       const total = passed + failed;
+      const typecheck = await typecheckArtifacts(toolDir, ['parser.ts', 'request-transform.ts']);
+      const typecheckFailed = typecheck.exitCode !== 0 || typecheck.timedOut;
 
       return {
         result: JSON.stringify({
@@ -1463,8 +1478,14 @@ function buildRunTestsTool(
           failed,
           total,
           timedOut: output.timedOut,
+          typecheck: {
+            stdout: typecheck.stdout,
+            stderr: typecheck.stderr,
+            exitCode: typecheck.exitCode,
+            timedOut: typecheck.timedOut,
+          },
         }),
-        isError: output.exitCode !== 0 || output.timedOut,
+        isError: output.exitCode !== 0 || output.timedOut || typecheckFailed,
       };
     },
   };
@@ -1751,6 +1772,101 @@ function looksOpaque(v: string): boolean {
   return /[:|_-]/.test(v) || /\d/.test(v) || v.length >= 16;
 }
 
+/** A default long enough to be a recorded session/JWT/search token should not
+ * be exposed on the agent-facing surface. Even when the build planner timed out
+ * and no producer contract exists, the compiler must derive or mint this value
+ * inside the workflow instead of teaching callers to replay the capture. */
+function looksLikeOpaqueSessionDefault(v: string): boolean {
+  if (v.length < 64) return false;
+  if (/\s/.test(v)) return false;
+  if (v.includes('${')) return false;
+  return looksOpaque(v);
+}
+
+function isSessionLikeQueryKey(key: string): boolean {
+  return /(?:^|[_-])(token|session|auth|jwt|nonce|signature|sig|state)(?:$|[_-])/i.test(key);
+}
+
+function detectOpaqueUrlQueryLiterals(workflow: ReturnType<typeof WorkflowSchema.parse>): string[] {
+  const failures: string[] = [];
+  for (const [index, req] of workflow.requests.entries()) {
+    let url: URL;
+    try {
+      url = new URL(req.url, 'https://imprint.invalid');
+    } catch {
+      continue;
+    }
+    const offenders: string[] = [];
+    for (const [key, value] of url.searchParams.entries()) {
+      if (!isSessionLikeQueryKey(key)) continue;
+      if (!looksLikeOpaqueSessionDefault(value)) continue;
+      offenders.push(`${key} (length ${value.length})`);
+    }
+    if (offenders.length === 0) continue;
+    failures.push(
+      `request[${index}] ${req.method} ${req.url.split('?')[0]} contains long opaque literal query value(s): ${offenders.join(', ')}. Token/session-like query values must be derived from an earlier workflow response, wired via a producer-token contract/state capture, generated fresh, or exposed without a recorded default and marked unverified; never paste the recorded session token into workflow.json.`,
+    );
+  }
+  return failures;
+}
+
+const APP_METADATA_HEADER_RE =
+  /^(?:x-)?(?:api-key|app-id|app-version|api-version|channel-id|client-id|client-version|user-experience-id)$/i;
+
+function detectUncontractedCredentialPlaceholders(
+  workflowJson: string,
+  allowedCredentialNames: Set<string>,
+): string[] {
+  const placeholders = new Set(
+    [...workflowJson.matchAll(/\$\{credential\.([A-Za-z0-9_]+)\}/g)]
+      .map((match) => match[1])
+      .filter((name): name is string => Boolean(name)),
+  );
+  const uncontracted = [...placeholders].filter((name) => !allowedCredentialNames.has(name));
+  if (uncontracted.length === 0) return [];
+  return [
+    `workflow.json references uncontracted credential placeholder(s): ${uncontracted
+      .map((name) => `\${credential.${name}}`)
+      .join(
+        ', ',
+      )}. Only credentials named by the site's auth contract may use \${credential.NAME}. Public app metadata such as x-api-key/x-app-id should stay as recorded literals; response/session tokens should be captured as state or producer outputs.`,
+  ];
+}
+
+function detectAppMetadataParameters(
+  workflow: ReturnType<typeof WorkflowSchema.parse>,
+  likelyParamNames: Set<string>,
+): string[] {
+  if (likelyParamNames.size === 0) return [];
+  const offenders: string[] = [];
+  for (const param of workflow.parameters ?? []) {
+    if (likelyParamNames.has(param.name)) continue;
+    const placeholder = `\${param.${param.name}}`;
+    let useCount = 0;
+    let nonMetadataUse = false;
+    for (const req of workflow.requests) {
+      if (req.url.includes(placeholder) || req.body?.includes(placeholder)) {
+        useCount++;
+        nonMetadataUse = true;
+      }
+      for (const [header, value] of Object.entries(req.headers)) {
+        if (!value.includes(placeholder)) continue;
+        useCount++;
+        if (!APP_METADATA_HEADER_RE.test(header)) nonMetadataUse = true;
+      }
+    }
+    if (useCount > 0 && !nonMetadataUse) offenders.push(param.name);
+  }
+  if (offenders.length === 0) return [];
+  return [
+    `workflow.json exposes app metadata header value(s) as caller parameter(s): ${offenders
+      .map((name) => `\`${name}\``)
+      .join(
+        ', ',
+      )}. Parameters must be real user inputs from the candidate contract. Public app metadata headers such as x-api-key/x-app-id should be hardcoded as recorded literals unless the recording proves they vary per user.`,
+  ];
+}
+
 /**
  * Mechanical producer-source detector (secondary signal to the build plan's
  * declared `tokenParams`). A parameter is producer-sourced when its recorded
@@ -1946,8 +2062,24 @@ export function classifyIntegrationOutcome(input: {
   // failed. Keep this before the generic timeout waiver so broken contracts do
   // not ship as `waived-chain` merely because a later/parallel live call timed
   // out.
-  if (/\berror:\s*expect\s*\(/.test(combined) || /\bAssertionError\b/.test(combined)) {
+  if (
+    (/\berror:\s*expect\s*\(/.test(combined) || /\bAssertionError\b/.test(combined)) &&
+    (baselineLiveVerified || !botOrRateEvidence)
+  ) {
     return { ...base, outcome: 'failed', captureFailName: null, captureFailFromKnown: false };
+  }
+  // Missing required parameters are generated-test/workflow contract bugs, not
+  // infrastructure. This often appears when a chained producer test calls the
+  // producer without first minting its own required upstream token; waiving it
+  // would stamp the consumer as compiled while the chain was never exercised.
+  if (/\bMissing required parameter:\s*[A-Za-z0-9_.-]+/i.test(combined)) {
+    return {
+      ...base,
+      outcome: 'failed',
+      firstError: 'missing required workflow parameter',
+      captureFailName: null,
+      captureFailFromKnown: false,
+    };
   }
   // HTTP 400/422 BAD_RESPONSE with no challenge/rate-limit evidence is a
   // deterministic request-contract failure, not infrastructure uncertainty. This
@@ -2102,6 +2234,20 @@ export function classifyParamCoverage(opts: {
     uncovered.push(lp.name);
   }
   return { paramVerification, uncovered, tautological, unchained };
+}
+
+export function hasLiveBaselineWorkflowTest(integrationSrc: string): boolean {
+  const requiresOk = /expect\s*\(\s*result\.ok\s*\)\s*\.\s*(?:toBe|toEqual)\s*\(\s*true\s*\)/;
+  const throwsOnFailure = /if\s*\(\s*!result\.ok\s*\)\s*\{[\s\S]{0,500}\bthrow\b/;
+  const returnsOnFailedResult =
+    /if\s*\([^)]*![^)]*\.result\.ok[\s\S]{0,200}\)\s*(?:\{[\s\S]{0,300}\breturn\b|return\b)/;
+  return extractTestBlocks(integrationSrc).some(
+    (block) =>
+      !block.title.includes('param:') &&
+      /\brunWorkflowWithLadder\s*\(/.test(block.body) &&
+      !returnsOnFailedResult.test(block.body) &&
+      (requiresOk.test(block.body) || throwsOnFailure.test(block.body)),
+  );
 }
 
 /**
@@ -2329,9 +2475,12 @@ function crossReferenceCaptures(
  *  At runtime that reference STATE_MISSINGs the whole workflow. This check
  *  rejects done() so the agent must fix the pattern (or source).
  *
- *  Scope: html_regex / text_regex captures (robustly checkable by testing the
- *  pattern against every recorded same-origin HTML document body). Other
- *  sources referenced-but-not-required are left to Fix A / the integration test.
+ *  Missing captures are also rejected: a request that contains `${state.X}` has
+ *  made X required, and running the live ladder cannot synthesize an undeclared
+ *  workflow producer. Scope for pattern validation remains html_regex /
+ *  text_regex captures (robustly checkable by testing the pattern against every
+ *  recorded same-origin HTML document body). Other declared sources
+ *  referenced-but-not-required are left to Fix A / the integration test.
  *  General — not specific to any site or token. */
 export function crossReferenceReferencedStateCaptures(
   workflow: ReturnType<typeof WorkflowSchema.parse>,
@@ -2364,9 +2513,48 @@ export function crossReferenceReferencedStateCaptures(
     for (const cap of req.captures ?? []) capByName.set(cap.name, cap);
   }
 
-  // 3) Gather recorded HTML document bodies, preferring the bootstrap origin but
-  //    falling back to all HTML bodies (the bootstrap page itself may be absent
-  //    from the recording — e.g. costco's /Rental-Cars).
+  const htmlBodies = recordedHtmlBodiesForWorkflow(workflow, session);
+
+  // 4) For each referenced state name produced by an html_regex/text_regex
+  //    capture, assert the pattern matches at least one recorded HTML body.
+  for (const name of referenced) {
+    const cap = capByName.get(name);
+    if (!cap) {
+      failures.push(
+        `request references \${state.${name}}, but workflow.json declares no capture named "${name}". At runtime \${state.${name}} resolves to nothing → the request fails with STATE_MISSING. Add a bootstrap/request capture that produces "${name}", or remove the placeholder if the value is not actually needed.`,
+      );
+      failedCaptureNames.add(name);
+      continue;
+    }
+    if (cap.source !== 'html_regex' && cap.source !== 'text_regex') continue;
+    if (failedCaptureNames.has(name)) continue;
+    let re: RegExp;
+    try {
+      re = new RegExp(cap.pattern);
+    } catch (err) {
+      failures.push(
+        `capture "${name}" (referenced via \${state.${name}} in a request) has an invalid regex /${cap.pattern}/: ${err instanceof Error ? err.message : String(err)}.`,
+      );
+      failedCaptureNames.add(name);
+      continue;
+    }
+    if (htmlBodies.length === 0) continue; // no recorded HTML to check against
+    const matches = htmlBodies.some((body) => re.test(body));
+    if (!matches) {
+      failures.push(
+        `capture "${name}" (source "${cap.source}") is referenced via \${state.${name}} in a request, but its pattern /${cap.pattern}/ does not match ANY recorded HTML page body for this site. At runtime \${state.${name}} resolves to nothing → the request fails with STATE_MISSING. Fix the pattern to match the token as it actually appears in the recorded page (inspect the recorded HTML), or change the capture source. (required:${cap.required === false ? 'false' : 'true'} does not exempt this — the request hard-references the value.)`,
+      );
+      failedCaptureNames.add(name);
+    }
+  }
+
+  return { failures, failedCaptureNames };
+}
+
+function recordedHtmlBodiesForWorkflow(
+  workflow: ReturnType<typeof WorkflowSchema.parse>,
+  session: Session,
+): string[] {
   let targetOrigin: string | undefined;
   try {
     if (workflow.bootstrap?.url) targetOrigin = new URL(workflow.bootstrap.url).origin;
@@ -2389,38 +2577,92 @@ export function crossReferenceReferencedStateCaptures(
       return false;
     }
   };
-  let htmlBodies = session.requests
+  const sameOriginBodies = session.requests
     .filter((r) => isHtmlDoc(r) && sameOrigin(r))
     .map((r) => r.response?.body ?? '');
-  if (htmlBodies.length === 0) {
-    htmlBodies = session.requests.filter(isHtmlDoc).map((r) => r.response?.body ?? '');
-  }
+  if (sameOriginBodies.length > 0) return sameOriginBodies;
+  return session.requests.filter(isHtmlDoc).map((r) => r.response?.body ?? '');
+}
 
-  // 4) For each referenced state name produced by an html_regex/text_regex
-  //    capture, assert the pattern matches at least one recorded HTML body.
-  for (const name of referenced) {
-    const cap = capByName.get(name);
-    if (!cap) continue; // may be seeded by the fetch-bootstrap jar — not statically known
-    if (cap.source !== 'html_regex' && cap.source !== 'text_regex') continue;
-    if (failedCaptureNames.has(name)) continue;
-    let re: RegExp;
-    try {
-      re = new RegExp(cap.pattern);
-    } catch (err) {
+function workflowReferencesState(
+  workflow: ReturnType<typeof WorkflowSchema.parse>,
+  name: string,
+): boolean {
+  const token = `\${state.${name}}`;
+  for (const req of workflow.requests) {
+    if (req.url.includes(token) || req.body?.includes(token)) return true;
+    for (const value of Object.values(req.headers ?? {})) if (value.includes(token)) return true;
+  }
+  return false;
+}
+
+function captureRegexValues(
+  cap: BootstrapCapture | RequestCapture,
+  bodies: string[],
+): { values: string[]; error?: string } | null {
+  if (cap.source !== 'html_regex' && cap.source !== 'text_regex') return null;
+  let re: RegExp;
+  try {
+    re = new RegExp(cap.pattern);
+  } catch (err) {
+    return { values: [], error: err instanceof Error ? err.message : String(err) };
+  }
+  const values: string[] = [];
+  const group = cap.group ?? 1;
+  for (const body of bodies) {
+    const match = re.exec(body);
+    const value = match?.[group];
+    if (value) values.push(value);
+  }
+  return { values };
+}
+
+/** Verify browser_state captures that are directly substituted into requests
+ *  produce the same value observed at the contracted recorded location. A regex
+ *  matching "something" in the bootstrap page is not enough: if the request
+ *  later sends `${state.X}` in a header/query slot, the captured value must be
+ *  that header/query value. */
+export function crossReferenceBrowserStateContracts(
+  workflow: ReturnType<typeof WorkflowSchema.parse>,
+  session: Session,
+  requiredInputs: RequiredInput[],
+): { failures: string[]; failedCaptureNames: Set<string> } {
+  const failures: string[] = [];
+  const failedCaptureNames = new Set<string>();
+  const capByName = new Map<string, BootstrapCapture | RequestCapture>();
+  for (const cap of workflow.bootstrap?.captures ?? []) capByName.set(cap.name, cap);
+  for (const req of workflow.requests) {
+    for (const cap of req.captures ?? []) capByName.set(cap.name, cap);
+  }
+  const htmlBodies = recordedHtmlBodiesForWorkflow(workflow, session);
+
+  for (const ri of requiredInputs) {
+    if (ri.source !== 'browser_state' || ri.wiring !== 'state' || !ri.stateName) continue;
+    if (ri.location === 'referer') continue;
+    if (!workflowReferencesState(workflow, ri.stateName)) continue;
+
+    const expected = recordedHeaderValue(session, ri) ?? recordedUrlParamValue(session, ri);
+    if (!expected) continue;
+    const cap = capByName.get(ri.stateName);
+    if (!cap) continue;
+
+    const captured = captureRegexValues(cap, htmlBodies);
+    if (!captured) continue;
+    if (captured.error) {
       failures.push(
-        `capture "${name}" (referenced via \${state.${name}} in a request) has an invalid regex /${cap.pattern}/: ${err instanceof Error ? err.message : String(err)}.`,
+        `capture "${ri.stateName}" used for browser_state at ${ri.location} has an invalid regex: ${captured.error}.`,
       );
-      failedCaptureNames.add(name);
+      failedCaptureNames.add(ri.stateName);
       continue;
     }
-    if (htmlBodies.length === 0) continue; // no recorded HTML to check against
-    const matches = htmlBodies.some((body) => re.test(body));
-    if (!matches) {
-      failures.push(
-        `capture "${name}" (source "${cap.source}") is referenced via \${state.${name}} in a request, but its pattern /${cap.pattern}/ does not match ANY recorded HTML page body for this site. At runtime \${state.${name}} resolves to nothing → the request fails with STATE_MISSING. Fix the pattern to match the token as it actually appears in the recorded page (inspect the recorded HTML), or change the capture source. (required:${cap.required === false ? 'false' : 'true'} does not exempt this — the request hard-references the value.)`,
-      );
-      failedCaptureNames.add(name);
-    }
+    if (captured.values.length === 0) continue;
+    if (captured.values.includes(expected)) continue;
+
+    const lengths = [...new Set(captured.values.map((v) => v.length))].sort((a, b) => a - b);
+    failures.push(
+      `capture "${ri.stateName}" is wired into ${ri.location}, but the recorded capture values do not match the value sent by request seq=${ri.recordedSeq ?? 'unknown'} (recorded length ${expected.length}; captured length${lengths.length === 1 ? '' : 's'} ${lengths.join(', ')}). A request that substitutes \${state.${ri.stateName}} needs a capture that resolves to the actual recorded request value, not merely another bootstrap value.`,
+    );
+    failedCaptureNames.add(ri.stateName);
   }
 
   return { failures, failedCaptureNames };
@@ -2647,6 +2889,7 @@ function collectSensitiveHeaderValues(session: Session): Set<string> {
     for (const [name, value] of Object.entries(headers ?? {})) {
       if (!isSensitiveHeader(name)) continue;
       const lower = name.toLowerCase();
+      if (APP_METADATA_HEADER_RE.test(name)) continue; // public app metadata, not a per-user secret
       if (pageMinted.has(lower)) continue; // public app constant — not a secret
       if (lower === 'cookie') {
         for (const part of value.split(';')) {
@@ -2781,11 +3024,68 @@ function headerNameOf(location: string): string | null {
   return location.toLowerCase().startsWith('header:') ? location.slice('header:'.length) : null;
 }
 
+function urlParamNameOf(location: string): string | null {
+  return location.toLowerCase().startsWith('url_param:')
+    ? location.slice('url_param:'.length)
+    : null;
+}
+
+function recordedHeaderValue(session: Session, ri: RequiredInput): string | null {
+  const header = headerNameOf(ri.location);
+  if (!header || ri.recordedSeq == null) return null;
+  const rec = session.requests.find((r) => r.seq === ri.recordedSeq);
+  return (
+    Object.entries(rec?.headers ?? {}).find(
+      ([h]) => h.toLowerCase() === header.toLowerCase(),
+    )?.[1] ?? null
+  );
+}
+
+function parseLooseUrl(url: string): URL | null {
+  try {
+    return new URL(url, 'https://imprint.local');
+  } catch {
+    return null;
+  }
+}
+
+function recordedUrlParamValue(session: Session, ri: RequiredInput): string | null {
+  const param = urlParamNameOf(ri.location);
+  if (!param || ri.recordedSeq == null) return null;
+  const rec = session.requests.find((r) => r.seq === ri.recordedSeq);
+  if (!rec?.url) return null;
+  return parseLooseUrl(rec.url)?.searchParams.get(param) ?? null;
+}
+
+export function repairRequiredInputStaticLiterals(
+  requiredInputs: RequiredInput[],
+  session: Session,
+): RequiredInput[] {
+  return requiredInputs.map((ri) => {
+    if (
+      ri.source !== 'static' ||
+      (ri.literal !== undefined && !looksLikePlannerPlaceholderLiteral(ri.literal))
+    ) {
+      return ri;
+    }
+    const recorded = recordedHeaderValue(session, ri) ?? recordedUrlParamValue(session, ri);
+    return recorded ? { ...ri, literal: recorded } : ri;
+  });
+}
+
 function looseUrlPath(url: string): string {
   const q = url.indexOf('?');
   const noQuery = q >= 0 ? url.slice(0, q) : url;
   const m = noQuery.match(/^https?:\/\/[^/]+(\/.*)?$/i);
   return m ? (m[1] ?? '/') : noQuery;
+}
+
+function setLooseUrlParam(url: string, name: string, value: string): string | null {
+  const parsed = parseLooseUrl(url);
+  if (!parsed) return null;
+  const absolute = /^[a-z][a-z0-9+.-]*:/i.test(url);
+  parsed.searchParams.set(name, value);
+  return absolute ? parsed.toString() : `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
 /** All ${state.X} capture names already declared in the workflow (request + bootstrap
@@ -2831,19 +3131,14 @@ export function injectContractedInputs(
       continue;
     }
     const header = headerNameOf(ri.location);
-    if (!header || requests.length === 0) continue; // only header inputs are injected here
+    const urlParam = urlParamNameOf(ri.location);
+    if ((!header && !urlParam) || requests.length === 0) continue;
     if (ri.source === 'producer_tool' || ri.source === 'user_param') continue; // params: handled elsewhere
     // browser_state needs a producer — only inject the header when its capture exists.
     if (ri.source === 'browser_state' && !(ri.stateName && captureNames.has(ri.stateName)))
       continue;
     const token = wiringToken(ri);
     if (token == null) continue;
-    // Skip if any request already carries this header (the agent wired it; a wrong
-    // raw value is handled by the emit-time guard's rewrite, not here).
-    const already = requests.some((r) =>
-      Object.keys(r.headers ?? {}).some((h) => h.toLowerCase() === header.toLowerCase()),
-    );
-    if (already) continue;
     // Target the request(s) matching the input's recorded method + path; fall back
     // to every request when there's no usable anchor.
     const rec =
@@ -2856,6 +3151,47 @@ export function injectContractedInputs(
         )
       : [];
     const dest = targets.length > 0 ? targets : requests;
+    if (urlParam) {
+      let changed = false;
+      for (const r of dest) {
+        if (!r.url) continue;
+        const parsed = parseLooseUrl(r.url);
+        const existing = parsed?.searchParams.get(urlParam);
+        if (existing != null && !looksLikePlannerPlaceholderLiteral(existing)) continue;
+        const nextUrl = setLooseUrlParam(r.url, urlParam, token);
+        if (!nextUrl || nextUrl === r.url) continue;
+        r.url = nextUrl;
+        changed = true;
+      }
+      if (changed) injected++;
+      continue;
+    }
+    if (!header) continue;
+    let repairedPlaceholder = false;
+    if (ri.source === 'static' && !looksLikePlannerPlaceholderLiteral(token)) {
+      for (const r of dest) {
+        for (const [h, value] of Object.entries(r.headers ?? {})) {
+          if (
+            h.toLowerCase() === header.toLowerCase() &&
+            looksLikePlannerPlaceholderLiteral(value)
+          ) {
+            if (!r.headers || typeof r.headers !== 'object') r.headers = {};
+            r.headers[h] = token;
+            repairedPlaceholder = true;
+          }
+        }
+      }
+    }
+    if (repairedPlaceholder) {
+      injected++;
+      continue;
+    }
+    // Skip if any request already carries this header (the agent wired it; a wrong
+    // raw value is handled by the emit-time guard's rewrite, not here).
+    const already = requests.some((r) =>
+      Object.keys(r.headers ?? {}).some((h) => h.toLowerCase() === header.toLowerCase()),
+    );
+    if (already) continue;
     for (const r of dest) {
       if (!r.headers || typeof r.headers !== 'object') r.headers = {};
       r.headers[header] = token;
@@ -3029,6 +3365,10 @@ export async function externalVerification(
      *  hardcoded credential is auto-rewritten to its ${credential.X} placeholder or
      *  blocked. Best-effort: provided on the teach path, empty otherwise. */
     credentialValues?: Record<string, string>;
+    /** Credential names provisioned or declared by the site's auth contract. The
+     *  verifier blocks invented ${credential.X} placeholders that are not in this
+     *  set or in requiredInputs. */
+    credentialNames?: string[];
   } = {},
 ): Promise<{
   failures: string[];
@@ -3075,7 +3415,7 @@ export async function externalVerification(
   if (existsSync(workflowPath)) {
     try {
       const rawWorkflow = JSON.parse(readFileSync(workflowPath, 'utf8')) as RawWorkflow;
-      const requiredInputs = opts.requiredInputs ?? [];
+      const requiredInputs = repairRequiredInputStaticLiterals(opts.requiredInputs ?? [], session);
       const inj = injectContractedInputs(rawWorkflow, requiredInputs, session);
       let workflowJson = JSON.stringify(rawWorkflow, null, 2);
 
@@ -3132,13 +3472,60 @@ export async function externalVerification(
         );
       }
       const wfStr = JSON.stringify(raw);
+      const allowedCredentialNames = new Set([
+        ...Object.keys(opts.credentialValues ?? {}),
+        ...(opts.credentialNames ?? []),
+        ...(opts.requiredInputs ?? [])
+          .map((ri) => (ri.source === 'auth' ? ri.credentialName : undefined))
+          .filter((name): name is string => Boolean(name)),
+      ]);
+      failures.push(...detectUncontractedCredentialPlaceholders(wfStr, allowedCredentialNames));
       const envMatches = wfStr.match(/\$\{env\.[A-Za-z0-9_.]+\}/g);
       if (envMatches && envMatches.length > 0) {
         failures.push(
           `workflow.json contains \${env.X} placeholders (${envMatches.join(', ')}). These require manual environment setup and break portability. If the value appeared in the recorded session, hardcode it as a literal string instead.`,
         );
       }
-
+      const tokenParamNames = new Set((opts.tokenParams ?? []).map((token) => token.param));
+      const recordedTokenDefaults = (workflow.parameters ?? [])
+        .filter(
+          (param) =>
+            tokenParamNames.has(param.name) &&
+            typeof param.default === 'string' &&
+            looksOpaque(param.default),
+        )
+        .map((param) => param.name);
+      if (recordedTokenDefaults.length > 0) {
+        failures.push(
+          `workflow.json gives recorded opaque default value(s) to producer-sourced token param(s): ${recordedTokenDefaults
+            .map((name) => `\`${name}\``)
+            .join(
+              ', ',
+            )}. Token params must be minted fresh from their producer tool in a chained \`param:<name>\` integration test; remove the recorded default so callers do not silently replay stale session tokens.`,
+        );
+      }
+      const suspiciousOpaqueDefaults = (workflow.parameters ?? [])
+        .filter(
+          (param) =>
+            typeof param.default === 'string' && looksLikeOpaqueSessionDefault(param.default),
+        )
+        .map((param) => param.name);
+      if (suspiciousOpaqueDefaults.length > 0) {
+        failures.push(
+          `workflow.json gives long opaque recorded default value(s) to agent-facing parameter(s): ${suspiciousOpaqueDefaults
+            .map((name) => `\`${name}\``)
+            .join(
+              ', ',
+            )}. Long opaque tokens are session/browser/API-minted state, not user input. Derive them from an earlier request/response in the workflow, declare a producer-token contract, capture state, or remove the default and mark the parameter unverified; do not replay the recorded token as a caller-supplied value.`,
+        );
+      }
+      failures.push(...detectOpaqueUrlQueryLiterals(workflow));
+      failures.push(
+        ...detectAppMetadataParameters(
+          workflow,
+          new Set((opts.likelyParams ?? []).map((param) => param.name)),
+        ),
+      );
       // Fix A — cross-reference every required capture against the recording.
       // A capture that declares `response_header` but reads from a recorded
       // response with no such header (or `html_regex` whose pattern doesn't
@@ -3157,6 +3544,15 @@ export async function externalVerification(
       failures.push(...stateRef.failures);
       for (const n of stateRef.failedCaptureNames) failedCaptureNames.add(n);
       if (stateRef.failedCaptureNames.size > 0) referencedStateBroken = true;
+
+      const browserStateRef = crossReferenceBrowserStateContracts(
+        workflow,
+        session,
+        opts.requiredInputs ?? [],
+      );
+      failures.push(...browserStateRef.failures);
+      for (const n of browserStateRef.failedCaptureNames) failedCaptureNames.add(n);
+      if (browserStateRef.failedCaptureNames.size > 0) referencedStateBroken = true;
 
       // Fix B — flag request body fields hardcoded to one recorded user's
       // session when the recording proves those fields are user input
@@ -3358,102 +3754,110 @@ export async function externalVerification(
       'skipped the live integration test: a request references a ${state.X} capture (e.g. csrf/csp-nonce) whose pattern does not match the recorded page, so the live call is guaranteed to fail with STATE_MISSING. Fix the capture pattern/source (see the failure above) — the next verification cycle will run the live test once it can succeed. This avoids burning a doomed anti-bot .act call.',
     );
   } else {
-    // Scale the verifier's live-test timeout to the suite size: the baseline plus
-    // one live `runWorkflowWithLadder` per param, each gated by the ~25s compile
-    // pacing and a possible cdp cold start. A flat 60s truncated paced anti-bot
-    // suites mid-run, and the partial output then misclassified as a bot block.
-    // Cap it so a genuinely wedged suite can't run away.
-    const paramCount = opts.likelyParams?.length ?? 0;
-    const pacingMs = Number(process.env.IMPRINT_COMPILE_ACT_SPACING_MS ?? 25_000) || 0;
-    const verifierTimeoutMs = Math.min(120_000 + paramCount * (pacingMs + 20_000), 10 * 60_000);
-    let run: BunTestRun = {
-      stdout: '',
-      stderr: '',
-      exitCode: 1,
-      timedOut: false,
-      passed: new Set(),
-      failed: new Set(),
-    };
-    for (let attempt = 0; attempt < 3; attempt++) {
-      run = await runBunTestWithResults(integrationTestPath, toolDir, verifierTimeoutMs);
-      if (run.exitCode === 0) break;
-      // A timeout, bot-defense, or ladder-exhaustion failure will NOT clear on a
-      // retry — re-running only fires more state-changing calls and deepens the
-      // per-IP rate flag. One attempt is enough to classify it; stop early.
-      if (run.timedOut) break;
-      const out = `${run.stdout}\n${run.stderr}`;
-      const ladderExhausted =
-        /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(out) &&
-        /non-escalatable|giving up|ladder exhausted|all backends failed/.test(out);
-      if (isBotDefenseFailure(out) || ladderExhausted) break;
-    }
-    integrationPassedTests = run.passed;
-
-    const verdict = classifyIntegrationOutcome({
-      exitCode: run.exitCode,
-      timedOut: run.timedOut,
-      combined: `${run.stdout}\n${run.stderr}`,
-      passedTests: run.passed,
-      referencedStateBroken: false, // the broken-capture case is handled above
-      failedCaptureNames,
-      contractGap: unresolvedContractInputs > 0,
-    });
-    integrationOutcome = verdict.outcome;
-
-    if (verdict.outcome === 'passed') {
-      // exitCode 0 — nothing to surface.
-    } else if (verdict.captureFailName !== null) {
-      const capName = verdict.captureFailName;
-      // If the failing capture is a `response_header` on a REPLAYED workflow
-      // request, the cause is almost always the replay asymmetry: programmatic
-      // fetch reliably receives the response BODY and Set-Cookie, but anti-bot
-      // edges withhold browser-only response headers from non-browser requests.
-      let sourceHint = '';
-      try {
-        const wf = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
-          requests?: Array<{ captures?: Array<{ name: string; source: string }> }>;
-          bootstrap?: { captures?: Array<{ name: string; source: string }> };
-        };
-        const reqCap = (wf.requests ?? [])
-          .flatMap((r) => r.captures ?? [])
-          .find((c) => c.name === capName);
-        if (reqCap?.source === 'response_header') {
-          sourceHint = ` The capture uses source: 'response_header' on a replayed request. Programmatic replay does NOT receive browser-only response headers that anti-bot edges withhold — but it DOES receive the response body and Set-Cookie. If this token also appears in the HTML body, switch to source: 'text_regex' (read it from the body); if it is set as a cookie, switch to source: 'cookie'. Reserve 'response_header' for a workflow.bootstrap capture (a real Chrome navigation), not a replayed request.`;
-        }
-      } catch {
-        // best-effort hint only
-      }
+    const integrationSrc = readFileSync(integrationTestPath, 'utf8');
+    if (!hasLiveBaselineWorkflowTest(integrationSrc)) {
+      integrationOutcome = 'failed';
       failures.push(
-        `integration test failed because a declared capture did not produce a value at runtime: capture "${capName}" returned null${
-          verdict.captureFailFromKnown
-            ? ' (matches a capture flagged by the compile-time cross-reference check)'
-            : ''
-        }. This is a workflow-correctness error, not infra — fix the capture source/path in workflow.json so it actually reads from the recorded location.${sourceHint}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
-      );
-    } else if (verdict.outcome === 'waived-bot' || verdict.outcome === 'waived-infra') {
-      // `liveVerified` is driven by whether the BASELINE produced real data, NOT by
-      // whether every param test passed. Only stamp liveVerified=false when the
-      // baseline ALSO failed — if a backend returned real data this run the tool IS
-      // live-verified; only its per-parameter tests waive (non-blocking).
-      liveVerification = verdict.baselineLiveVerified
-        ? undefined
-        : {
-            kind: verdict.outcome,
-            firstError: verdict.firstError,
-            exhaustedBackends: verdict.exhaustedBackends,
-          };
-      const liveNote = verdict.baselineLiveVerified
-        ? 'The baseline returned real data this run, so liveVerified stays TRUE — only the per-parameter tests are waived.'
-        : 'Stamping liveVerified=false on workflow.json — the runtime falls through to the cdp-replay / playbook rung. Audit and teach surface this tool as unverified.';
-      warnings.push(
-        verdict.outcome === 'waived-bot'
-          ? `integration test hit a likely bot-detection / anti-automation challenge. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`
-          : `integration test hit an infrastructure error (${verdict.firstError}); rungs exhausted: ${verdict.exhaustedBackends.join(', ') || 'unknown'}. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        'integration.test.ts has no strict baseline live workflow test: add a non-`param:` test that calls `runWorkflowWithLadder(...)` on this tool workflow, fails when `result.ok` is false, and asserts the successful response contains real data. Static workflow-shape assertions or green returns on bot/infra errors are not enough to verify a generated tool.',
       );
     } else {
-      failures.push(
-        `bun test integration.test.ts exited ${run.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
-      );
+      // Scale the verifier's live-test timeout to the suite size: the baseline plus
+      // one live `runWorkflowWithLadder` per param, each gated by the ~25s compile
+      // pacing and a possible cdp cold start. A flat 60s truncated paced anti-bot
+      // suites mid-run, and the partial output then misclassified as a bot block.
+      // Cap it so a genuinely wedged suite can't run away.
+      const paramCount = opts.likelyParams?.length ?? 0;
+      const pacingMs = Number(process.env.IMPRINT_COMPILE_ACT_SPACING_MS ?? 25_000) || 0;
+      const verifierTimeoutMs = Math.min(120_000 + paramCount * (pacingMs + 20_000), 10 * 60_000);
+      let run: BunTestRun = {
+        stdout: '',
+        stderr: '',
+        exitCode: 1,
+        timedOut: false,
+        passed: new Set(),
+        failed: new Set(),
+      };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        run = await runBunTestWithResults(integrationTestPath, toolDir, verifierTimeoutMs);
+        if (run.exitCode === 0) break;
+        // A timeout, bot-defense, or ladder-exhaustion failure will NOT clear on a
+        // retry — re-running only fires more state-changing calls and deepens the
+        // per-IP rate flag. One attempt is enough to classify it; stop early.
+        if (run.timedOut) break;
+        const out = `${run.stdout}\n${run.stderr}`;
+        const ladderExhausted =
+          /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(out) &&
+          /non-escalatable|giving up|ladder exhausted|all backends failed/.test(out);
+        if (isBotDefenseFailure(out) || ladderExhausted) break;
+      }
+      integrationPassedTests = run.passed;
+
+      const verdict = classifyIntegrationOutcome({
+        exitCode: run.exitCode,
+        timedOut: run.timedOut,
+        combined: `${run.stdout}\n${run.stderr}`,
+        passedTests: run.passed,
+        referencedStateBroken: false, // the broken-capture case is handled above
+        failedCaptureNames,
+        contractGap: unresolvedContractInputs > 0,
+      });
+      integrationOutcome = verdict.outcome;
+
+      if (verdict.outcome === 'passed') {
+        // exitCode 0 — nothing to surface.
+      } else if (verdict.captureFailName !== null) {
+        const capName = verdict.captureFailName;
+        // If the failing capture is a `response_header` on a REPLAYED workflow
+        // request, the cause is almost always the replay asymmetry: programmatic
+        // fetch reliably receives the response BODY and Set-Cookie, but anti-bot
+        // edges withhold browser-only response headers from non-browser requests.
+        let sourceHint = '';
+        try {
+          const wf = JSON.parse(readFileSync(workflowPath, 'utf8')) as {
+            requests?: Array<{ captures?: Array<{ name: string; source: string }> }>;
+            bootstrap?: { captures?: Array<{ name: string; source: string }> };
+          };
+          const reqCap = (wf.requests ?? [])
+            .flatMap((r) => r.captures ?? [])
+            .find((c) => c.name === capName);
+          if (reqCap?.source === 'response_header') {
+            sourceHint = ` The capture uses source: 'response_header' on a replayed request. Programmatic replay does NOT receive browser-only response headers that anti-bot edges withhold — but it DOES receive the response body and Set-Cookie. If this token also appears in the HTML body, switch to source: 'text_regex' (read it from the body); if it is set as a cookie, switch to source: 'cookie'. Reserve 'response_header' for a workflow.bootstrap capture (a real Chrome navigation), not a replayed request.`;
+          }
+        } catch {
+          // best-effort hint only
+        }
+        failures.push(
+          `integration test failed because a declared capture did not produce a value at runtime: capture "${capName}" returned null${
+            verdict.captureFailFromKnown
+              ? ' (matches a capture flagged by the compile-time cross-reference check)'
+              : ''
+          }. This is a workflow-correctness error, not infra — fix the capture source/path in workflow.json so it actually reads from the recorded location.${sourceHint}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        );
+      } else if (verdict.outcome === 'waived-bot' || verdict.outcome === 'waived-infra') {
+        // `liveVerified` is driven by whether the BASELINE produced real data, NOT by
+        // whether every param test passed. Only stamp liveVerified=false when the
+        // baseline ALSO failed — if a backend returned real data this run the tool IS
+        // live-verified; only its per-parameter tests waive (non-blocking).
+        liveVerification = verdict.baselineLiveVerified
+          ? undefined
+          : {
+              kind: verdict.outcome,
+              firstError: verdict.firstError,
+              exhaustedBackends: verdict.exhaustedBackends,
+            };
+        const liveNote = verdict.baselineLiveVerified
+          ? 'The baseline returned real data this run, so liveVerified stays TRUE — only the per-parameter tests are waived.'
+          : 'Stamping liveVerified=false on workflow.json — the runtime falls through to the cdp-replay / playbook rung. Audit and teach surface this tool as unverified.';
+        warnings.push(
+          verdict.outcome === 'waived-bot'
+            ? `integration test hit a likely bot-detection / anti-automation challenge. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`
+            : `integration test hit an infrastructure error (${verdict.firstError}); rungs exhausted: ${verdict.exhaustedBackends.join(', ') || 'unknown'}. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        );
+      } else {
+        failures.push(
+          `bun test integration.test.ts exited ${run.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        );
+      }
     }
   }
 

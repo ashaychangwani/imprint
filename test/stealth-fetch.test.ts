@@ -23,6 +23,7 @@ import {
   type StealthFetchOptions,
   type TokenCache,
   createStealthFetch,
+  sanitizeSensorHeaders,
 } from '../src/imprint/stealth-fetch.ts';
 
 interface FakeOpts extends Partial<StealthFetchOptions> {
@@ -311,6 +312,36 @@ describe('Header defaults vs caller overrides', () => {
     });
     expect(seen[0]?.accept).toBe('text/html,application/xhtml+xml');
     expect(seen[0]).not.toHaveProperty('Accept');
+  });
+
+  it('does not replay auth-like headers captured during stealth bootstrap', async () => {
+    const seen: Array<Record<string, string>> = [];
+    const sf = createStealthFetch(
+      { baseUrl: 'https://example.com' },
+      {
+        bootstrap: async (): Promise<TokenCache> => ({
+          cookies: [],
+          sensorHeaders: sanitizeSensorHeaders({
+            authorization: 'Bearer stale',
+            'x-api-idtoken': 'stale-id',
+            'x-api-key': 'app-key',
+            'EE-a': 'sensor-token',
+          }),
+          bootstrappedAt: Date.now(),
+        }),
+        underlyingFetch: async (_url, init) => {
+          seen.push((init.headers ?? {}) as Record<string, string>);
+          return { status: 200, ok: true, body: '{}', headers: {} };
+        },
+      },
+    );
+
+    await sf.fetchImpl('https://example.com/api/x');
+
+    expect(seen[0]).toHaveProperty('EE-a', 'sensor-token');
+    expect(seen[0]).not.toHaveProperty('authorization');
+    expect(seen[0]).not.toHaveProperty('x-api-idtoken');
+    expect(seen[0]).not.toHaveProperty('x-api-key');
   });
 });
 

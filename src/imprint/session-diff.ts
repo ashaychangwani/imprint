@@ -329,6 +329,19 @@ export function looksLikeToken(v: string): boolean {
   return /[:|_-]/.test(v) || /\d/.test(v);
 }
 
+/** Stricter than looksLikeToken: true only for values that look opaque enough to
+ * be session/server tokens. Human-readable route/app slugs such as
+ * `landing-home-page-v2` have provenance, but are still deploy constants. */
+export function looksLikeOpaqueToken(v: string): boolean {
+  if (!looksLikeToken(v)) return false;
+  if (/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/.test(v) && !/[._:|]/.test(v)) {
+    const digitCount = (v.match(/\d/g) ?? []).length;
+    const hexish = /^[a-f0-9-]{16,}$/i.test(v) && digitCount >= 4;
+    if (!hexish && digitCount <= 2) return false;
+  }
+  return true;
+}
+
 // ─── Main diff ──────────────────────────────────────────────────────────────
 
 export function diffTriagedSessions(
@@ -370,7 +383,7 @@ export function diffTriagedSessions(
         // can't expose it by variance (same entity → same token), so recover its
         // provenance from the original responses (already original-seq space).
         // A cross-tool consumer then sources it as a param instead of hardcoding.
-        const provider = looksLikeToken(v1.value)
+        const provider = looksLikeOpaqueToken(v1.value)
           ? searchPriorResponses(v1.value, original.requests, pair.originalSeq)
           : null;
         classifications.push({

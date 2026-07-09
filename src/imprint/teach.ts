@@ -133,6 +133,22 @@ const COMPILE_CONCURRENCY = 3;
 /** Module logger — suppressed during teach's spinner phases via muteLog(). */
 const log = createLog('teach');
 
+export function isProviderUsageLimitedError(err: unknown): boolean {
+  const text = err instanceof Error ? `${err.name}\n${err.message}` : String(err);
+  return (
+    /\berror_code=rate_limited\b/i.test(text) ||
+    /\byou['’]?ve hit your usage limit\b/i.test(text) ||
+    /\btry again at \d{1,2}:\d{2}\s*(?:am|pm)\b/i.test(text)
+  );
+}
+
+function skippedAfterProviderLimitError(err: unknown): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  return new Error(
+    `skipped because the compile provider hit a usage limit before this tool started. Retry the teach run after the provider reset; root cause: ${message.split('\n')[0] ?? message}`,
+  );
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface TeachOptions {
@@ -1929,13 +1945,34 @@ async function compileCandidatePlans(opts: {
     buildPlan,
   );
   const outcomeByKey = new Map<string, CompileOutcome>();
-  for (const level of levels) {
+  for (let levelIndex = 0; levelIndex < levels.length; levelIndex++) {
+    const level = levels[levelIndex];
+    if (!level) continue;
     const levelPlans = level.map((k) => k.plan);
-    const levelOutcomes = await mapLimitSettled(levelPlans, concurrency, compileOne);
+    const levelOutcomes = await mapLimitSettled(levelPlans, concurrency, compileOne, {
+      stopOnError: isProviderUsageLimitedError,
+    });
     levelPlans.forEach((plan, i) => {
       const outcome = levelOutcomes[i];
       if (outcome) outcomeByKey.set(plan.workflowKey, outcome);
     });
+    const usageLimitOutcome = levelOutcomes.find(
+      (outcome) => outcome && !outcome.ok && isProviderUsageLimitedError(outcome.error),
+    );
+    if (usageLimitOutcome && !usageLimitOutcome.ok) {
+      const skippedError = skippedAfterProviderLimitError(usageLimitOutcome.error);
+      for (const plan of levelPlans) {
+        if (!outcomeByKey.has(plan.workflowKey)) {
+          outcomeByKey.set(plan.workflowKey, { ok: false, error: skippedError });
+        }
+      }
+      for (const remainingLevel of levels.slice(levelIndex + 1)) {
+        for (const { plan } of remainingLevel) {
+          outcomeByKey.set(plan.workflowKey, { ok: false, error: skippedError });
+        }
+      }
+      break;
+    }
   }
   const outcomes: CompileOutcome[] = opts.plans.map(
     (plan) =>

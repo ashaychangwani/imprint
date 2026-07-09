@@ -467,6 +467,27 @@ describe('audit prompt construction', () => {
     expect(prompt).not.toContain('Do EXACTLY ONE realistic invocation');
   });
 
+  it('does not let invented promo codes masquerade as no-op evidence', () => {
+    const prompt = buildAuditInitialPrompt(
+      {
+        site: 'example',
+        provider: 'codex-cli',
+        model: 'test-model',
+        timeoutMs: 60_000,
+        systemPromptPath: '/tmp/prompt.md',
+        toolNames: ['search_items'],
+        unverifiedParams: [],
+        tokenDeps: [],
+      },
+      '',
+    );
+
+    expect(prompt).toContain(
+      'Promo/coupon/voucher/discount-code parameters require a known valid code',
+    );
+    expect(prompt).toContain('do not invent a random code and call an unchanged response no_op');
+  });
+
   it('prioritizes unverified params without exempting bot-defended idempotent reads', () => {
     const note = buildUnverifiedParamNote([{ tool: 'search_items', params: ['query', 'sort'] }]);
 

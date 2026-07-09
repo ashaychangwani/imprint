@@ -39,6 +39,8 @@ const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
 const MCP_SERVER_NAME = 'imprint-compile';
 const MAX_VERIFICATION_CYCLES = 5;
+const MIN_MCP_TOOL_TIMEOUT_SEC = 300;
+const MAX_MCP_TOOL_TIMEOUT_SEC = 1800;
 
 interface CompileViaCodexCliOptions {
   session: Session;
@@ -213,6 +215,7 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
   const model = preferredAgentModel('codex-cli');
   const initialTokenCount = resolveTraceTokenCount(null, initialPrompt);
   const captureLlmIo = traceLlmIoEnabled();
+  const mcpToolTimeoutSec = resolveMcpToolTimeoutSec(opts.deadlineMs);
   setSpanAttributes(traceSpan, {
     ...llmSpanAttributes({
       provider: 'codex-cli',
@@ -228,7 +231,7 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
         command: 'codex exec',
         json: true,
         sandbox: 'workspace-write',
-        tool_timeout_sec: 300,
+        tool_timeout_sec: mcpToolTimeoutSec,
       },
     }),
     'imprint.compile.initial_prompt_chars': initialPrompt.length,
@@ -256,7 +259,7 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     '-c',
     `mcp_servers.${MCP_SERVER_NAME}.default_tools_approval_mode=${JSON.stringify('approve')}`,
     '-c',
-    `mcp_servers.${MCP_SERVER_NAME}.tool_timeout_sec=300`,
+    `mcp_servers.${MCP_SERVER_NAME}.tool_timeout_sec=${mcpToolTimeoutSec}`,
     '-c',
     'shell_environment_policy.inherit=all',
     '-',
@@ -310,6 +313,14 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     'imprint.compile.message': result.message,
   });
   return result;
+}
+
+function resolveMcpToolTimeoutSec(deadlineMs: number, now = Date.now()): number {
+  const remainingSec = Math.ceil(Math.max(0, deadlineMs - now) / 1000);
+  return Math.max(
+    MIN_MCP_TOOL_TIMEOUT_SEC,
+    Math.min(MAX_MCP_TOOL_TIMEOUT_SEC, remainingSec || MIN_MCP_TOOL_TIMEOUT_SEC),
+  );
 }
 
 async function driveJsonl(

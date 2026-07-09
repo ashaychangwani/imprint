@@ -16,6 +16,7 @@ import {
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
   __setCdpJarMinterForTest,
+  __setPlaybookRunnerForTest,
   __setProbeTimeoutMsForTest,
   effectiveAutoLadder,
   evaluateBootstrapCapture,
@@ -55,6 +56,13 @@ beforeEach(() => {
     },
     close: async () => {},
   }));
+  // Keep ladder unit tests deterministic. Playbook execution itself has
+  // separate coverage; here we only need to prove the rung is reached.
+  __setPlaybookRunnerForTest(async () => ({
+    ok: false,
+    error: 'BAD_RESPONSE',
+    message: 'playbook disabled in backend-ladder tests',
+  }));
   // Disable the compile-path .act rate gate so tests don't sleep between calls.
   process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '0';
   // Shorten the parallel probe deadline so its setTimeout doesn't keep bun's
@@ -66,6 +74,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   __setCdpJarMinterForTest(null);
   __setCdpBrowserFetchFactoryForTest(null);
+  __setPlaybookRunnerForTest(null);
   __setProbeTimeoutMsForTest(null);
   // The compile CDP pool is now process-global — reset it so a pooled browser /
   // armed idle timer can't leak across tests.
@@ -136,8 +145,18 @@ describe('resolveLadder', () => {
     expect(resolveLadder('auto', [])).toEqual(['fetch', 'stealth-fetch', 'playbook']);
   });
 
-  it('uses the cached preferred order for "auto" when provided', () => {
+  it('uses the cached preferred order as a prefix for "auto" when provided', () => {
     expect(resolveLadder('auto', ['stealth-fetch', 'playbook'])).toEqual([
+      'stealth-fetch',
+      'playbook',
+      'fetch',
+    ]);
+  });
+
+  it('keeps a cached cdp-replay winner while preserving generic fallbacks', () => {
+    expect(resolveLadder('auto', ['cdp-replay'])).toEqual([
+      'cdp-replay',
+      'fetch',
       'stealth-fetch',
       'playbook',
     ]);
@@ -546,18 +565,89 @@ result:
       makeStealthCache(tool),
       { skipBootstrapSplice: true },
     );
-    // Playbook will fail too (no real browser, navigates about:blank, no
-    // matching XHR) — but it WAS attempted.
+    // The playbook runner is stubbed in this unit test; the assertion is that
+    // the ladder attempted the playbook rung after API transports escalated.
     expect(r.attempts).toHaveLength(3);
     const playbookAttempt = r.attempts[2];
     if (!playbookAttempt) throw new Error('expected 3rd attempt');
     expect(playbookAttempt.backend).toBe('playbook');
     expect(['ok', 'failed', 'escalate']).toContain(playbookAttempt.outcome);
-    // This rung launches a REAL Playwright Chromium (navigate about:blank, wait
-    // for a never-matching XHR), so on a cold CI runner it legitimately exceeds
-    // the 5s default — give it a generous timeout to de-flake (passes in <1s
-    // locally; the assertion is just that playbook was ATTEMPTED).
-  }, 30000);
+  });
+
+  it('attempts playbook for credential-backed data workflows', async () => {
+    const siteDir = pathResolve(root, 'credentialed');
+    mkdirSync(siteDir, { recursive: true });
+    writeFileSync(
+      pathResolve(siteDir, 'playbook.yaml'),
+      `toolName: tool_credentialed
+summary: x
+parameters: []
+steps:
+  - action: navigate
+    url: about:blank
+result:
+  source: xhr
+  url_pattern: never
+  extract: x
+  return_as: r
+`,
+    );
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
+      stealthResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('credentialed', behavior, siteDir);
+    const [request] = tool.workflow.requests;
+    if (!request) throw new Error('expected fake tool to include one request');
+    request.body = 'username=${credential.username}&password=${credential.password}';
+    const r = await runWithLadder(
+      ['fetch', 'stealth-fetch', 'playbook'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+    expect(r.attempts).toHaveLength(3);
+    const playbookAttempt = r.attempts[2];
+    if (!playbookAttempt) throw new Error('expected 3rd attempt');
+    expect(playbookAttempt.backend).toBe('playbook');
+    expect(['ok', 'failed', 'escalate']).toContain(playbookAttempt.outcome);
+    expect(r.result.ok).toBe(false);
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(1);
+  });
+
+  it('allows browser-backed anti-bot rungs for credential-backed data workflows', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
+      stealthResult: { ok: false, error: 'FORBIDDEN', message: 'blocked' },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('credentialed', behavior);
+    const [request] = tool.workflow.requests;
+    if (!request) throw new Error('expected fake tool to include one request');
+    request.body = 'username=${credential.username}&password=${credential.password}';
+    const r = await runWithLadder(
+      ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+    expect(r.attempts.map((a) => [a.backend, a.outcome])).toEqual([
+      ['fetch', 'escalate'],
+      ['fetch-bootstrap', 'escalate'],
+      ['cdp-replay', 'escalate'],
+      ['stealth-fetch', 'escalate'],
+      ['playbook', 'unavailable'],
+    ]);
+    expect(r.usedBackend).toBe('stealth-fetch');
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(1);
+  });
 
   it('reaches stealth-fetch before playbook for state missing that stealth-bootstrap can mint', async () => {
     const siteDir = pathResolve(root, 'stateful', 'search_stateful');
@@ -830,19 +920,10 @@ describe('runWorkflowWithLadder', () => {
     }
   });
 
-  it('ladder is fixed to [fetch, stealth-fetch] regardless of a sibling backends.json', async () => {
-    // Compile-time integration tests run BEFORE `imprint compile-playbook`
-    // generates a playbook.yaml, so the playbook rung is intentionally
-    // excluded. The helper must also ignore any sibling backends.json
-    // (which is a runtime probe cache, not a compile-time concern) and
-    // always use the same two-rung ladder. This is a regression guard
-    // against drift toward runtime-coupled behavior.
-    //
-    // We prove it by: workflow whose fetch returns 200 (so the fetch
-    // rung wins) AND a backends.json that says "only try playbook"
-    // (which the helper should ignore). If the helper read backends.json,
-    // it would try playbook (which doesn't exist on disk), get a skip,
-    // and return a no-rungs-available error.
+  it('ignores an unsafe sibling backends.json', async () => {
+    // A valid backends.json can seed the compile-time helper, but unsafe caches
+    // must not. This adversarial cache says "only try playbook" without a
+    // successful playbook probe; the helper should ignore it and let fetch win.
     const server = Bun.serve({
       port: 0,
       fetch: () =>
@@ -893,9 +974,59 @@ describe('runWorkflowWithLadder', () => {
     }
   });
 
+  it('uses a valid sibling backends.json before probing', async () => {
+    __resetCompileWinningBackendForTest();
+    __setProbeTimeoutMsForTest(2_000);
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(JSON.stringify({ ok: true }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    });
+    const port = server.port;
+    try {
+      const toolDir = pathJoin(root, 'cached-site', 'cached_tool');
+      mkdirSync(toolDir, { recursive: true });
+      const workflowPath = pathJoin(toolDir, 'workflow.json');
+      writeFileSync(
+        workflowPath,
+        JSON.stringify({
+          toolName: 'cached_tool',
+          intent: { description: 'Should use cached fetch' },
+          parameters: [],
+          requests: [{ method: 'GET', url: `http://127.0.0.1:${port}/api/ok`, headers: {} }],
+          site: 'cached-site',
+        }),
+      );
+      writeFileSync(
+        pathJoin(toolDir, 'backends.json'),
+        JSON.stringify({
+          probedAt: new Date().toISOString(),
+          imprintVersion: '0.1.0',
+          schemaVersion: 2,
+          preferredOrder: ['fetch'],
+          results: { fetch: { outcome: 'ok', durationMs: 10 } },
+        }),
+      );
+
+      const t0 = Date.now();
+      const { result, usedBackend, attempts } = await runWorkflowWithLadder({
+        workflowPath,
+        params: {},
+      });
+      expect(result.ok).toBe(true);
+      expect(usedBackend).toBe('fetch');
+      expect(attempts.map((a) => a.backend)).toEqual(['fetch']);
+      expect(Date.now() - t0).toBeLessThan(1_500);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   it('memoizes the winning backend across calls without breaking the fetch path', async () => {
     __resetCompileWinningBackendForTest();
-    __setProbeTimeoutMsForTest(5_000);
+    __setProbeTimeoutMsForTest(250);
     let hits = 0;
     const server = Bun.serve({
       port: 0,
@@ -924,6 +1055,9 @@ describe('runWorkflowWithLadder', () => {
       // First call: parallel probe — fetch wins (fastest). Second call:
       // memo=fetch, sequential from the memoized winner.
       const a = await runWorkflowWithLadder({ workflowPath, params: {} });
+      // Let the losing parallel probe branches observe the short deadline before
+      // the temp workflow directory is removed in afterEach.
+      await new Promise((resolve) => setTimeout(resolve, 300));
       const b = await runWorkflowWithLadder({ workflowPath, params: {} });
       expect(a.usedBackend).toBe('fetch');
       expect(b.usedBackend).toBe('fetch');
@@ -1340,6 +1474,79 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
       adult_passengers_count: 1,
     });
     expect(closes).toBe(1);
+  });
+
+  it('resolves response_header bootstrap captures from the cdp-replay minted jar', async () => {
+    const jarWithHeaders: MintedJar = {
+      ...defaultedJar,
+      bootstrapResponseHeaders: { 'x-session-token': 'fresh-from-navigation' },
+    };
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => jarWithHeaders,
+      close: async () => {},
+    }));
+    const tool = defaultedBootstrapTool('flights', (_params, opts) => {
+      expect((opts.initialState as Record<string, unknown>)?.session_token).toBe(
+        'fresh-from-navigation',
+      );
+      return { ok: true, data: { via: 'cdp-replay' } };
+    });
+    tool.workflow.bootstrap = {
+      ...tool.workflow.bootstrap,
+      url: tool.workflow.bootstrap?.url ?? 'https://flights.example.com/search',
+      captures: [
+        {
+          name: 'session_token',
+          source: 'response_header',
+          header: 'X-Session-Token',
+          mode: 'first',
+          required: true,
+          capability: 'browser_bootstrap',
+        },
+      ],
+    };
+
+    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map());
+
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(r.result.ok).toBe(true);
+  });
+
+  it('fails cdp-replay response_header bootstrap captures when the document header is absent', async () => {
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {},
+    }));
+    const tool = defaultedBootstrapTool('flights', () => {
+      throw new Error('workflow should not run without required bootstrap state');
+    });
+    tool.workflow.bootstrap = {
+      ...tool.workflow.bootstrap,
+      url: tool.workflow.bootstrap?.url ?? 'https://flights.example.com/search',
+      captures: [
+        {
+          name: 'session_token',
+          source: 'response_header',
+          header: 'X-Session-Token',
+          mode: 'first',
+          required: true,
+          capability: 'browser_bootstrap',
+        },
+      ],
+    };
+
+    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map());
+
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) {
+      expect(r.result.error).toBe('STATE_MISSING');
+      expect(r.result.message).toContain('response_header:X-Session-Token');
+    }
   });
 });
 

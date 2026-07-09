@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { TimeoutError, withTimeout } from '../src/imprint/concurrency.ts';
+import { TimeoutError, withTimeout, withTimeoutCleanup } from '../src/imprint/concurrency.ts';
 
 describe('withTimeout', () => {
   it('resolves with the work value when it finishes before the deadline', async () => {
@@ -15,6 +15,19 @@ describe('withTimeout', () => {
   it('propagates a real rejection unchanged (not as a timeout)', async () => {
     const boom = Promise.reject(new Error('boom'));
     await expect(withTimeout(boom, 1000, 'unit')).rejects.toThrow('boom');
+  });
+
+  it('runs cleanup when the deadline fires', async () => {
+    let cleaned = false;
+    const slow = new Promise<string>((resolve) => setTimeout(() => resolve('late'), 200));
+
+    await expect(
+      withTimeoutCleanup(slow, 10, 'unit', () => {
+        cleaned = true;
+      }),
+    ).rejects.toBeInstanceOf(TimeoutError);
+
+    expect(cleaned).toBe(true);
   });
 });
 

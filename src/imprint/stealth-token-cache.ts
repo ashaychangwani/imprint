@@ -21,7 +21,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { createLog } from './log.ts';
-import type { TokenCache } from './stealth-fetch.ts';
+import { type TokenCache, sanitizeSensorHeaders } from './stealth-fetch.ts';
 
 const log = createLog('stealth-cache');
 
@@ -55,7 +55,7 @@ export function loadCachedToken(siteDir: string, maxAgeSeconds: number): TokenCa
     }
     return {
       cookies: raw.cookies,
-      sensorHeaders: raw.sensorHeaders,
+      sensorHeaders: sanitizeSensorHeaders(raw.sensorHeaders as Record<string, string>),
       bootstrappedAt: raw.bootstrappedAt,
     };
   } catch {

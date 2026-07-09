@@ -49,6 +49,14 @@ Whenever you change user-facing implementation behavior, update every matching u
 
 After website changes, run `bun install` only from `web/` if dependencies are missing, then run `bun run build` from `web/` and visually inspect the page at mobile and desktop widths. Keep root package installs separate from `web/`.
 
+## Teach and compile-agent guidance
+
+When improving `imprint teach`, prefer giving the planner and compile agents better evidence over adding broad deterministic classifiers. For new ambiguity, first ask what a thinking compile agent could decide at compile time with the right context, then expose that context through the build plan, prompts, diffs, browser-minted state, and targeted tests. Ambiguous dynamic values should be handled by LLM reasoning backed by concrete artifacts: session diffs, producer/consumer traces, recorded requests and responses, browser-minted state, and targeted tests the compile agent can run.
+
+Use deterministic code for narrow, contract-level invariants only, such as "a producer-sourced token parameter must not default to one recorded opaque value" or "a declared browser_state capture must reproduce the value sent by the recorded request." Do not encode site-specific conclusions as universal rules. If the right choice depends on whether a token is static app metadata, browser/CDP-supplied state, generated per call, auth, or a producer-tool output, expose the evidence in the build plan and let the planner/compile agent decide and verify it.
+
+For browser-minted tokens, make the compile path cheaper to reason about: surface where the value appeared, what changed across the diff, whether a response/header/body/cookie producer exists, and what small probe would prove the classification. Avoid trying to pre-classify every possible web edge case in runtime code. If repeated re-teaches reveal tiny edge cases, update the evidence contract or compile-agent test harness instead of stacking site-shaped runtime rules.
+
 ## CI/CD & releases
 
 Three GitHub Actions workflows:

@@ -22,6 +22,7 @@ import {
   resolveDefaultCompilePlaybookPath,
   selectTriageCandidateRequests,
   shrinkSession,
+  triageBodySnippet,
 } from '../src/imprint/compile.ts';
 import type { Session } from '../src/imprint/types.ts';
 
@@ -217,6 +218,19 @@ describe('buildTriageEventContexts', () => {
   });
 });
 
+describe('triageBodySnippet', () => {
+  it('keeps textual request bodies for triage', () => {
+    expect(triageBodySnippet('{"query":"sfo"}')).toBe('{"query":"sfo"}');
+  });
+
+  it('omits non-text request bodies before sending triage prompts to an LLM', () => {
+    const binaryish = `x\u009c\u0003\u0000\u0000\u0000\u0001\u001f\u008b${'a'.repeat(100)}`;
+    expect(triageBodySnippet(binaryish)).toBe(
+      `[non-text request body omitted; original length ${binaryish.length}]`,
+    );
+  });
+});
+
 describe('selectTriageCandidateRequests', () => {
   it('drops obvious telemetry before LLM triage while preserving required seqs', () => {
     const session = makeSession({
@@ -258,6 +272,35 @@ describe('selectTriageCandidateRequests', () => {
     expect(selectTriageCandidateRequests(session, [3]).map((request) => request.seq)).toEqual([
       2, 3,
     ]);
+  });
+
+  it('drops known telemetry vendor hosts before LLM triage', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://ingest.quantummetric.com/horizon/app?u=https%3A%2F%2Fexample.com%2Fpage',
+          headers: {},
+          body: '{"event":"click"}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{}' },
+        },
+        {
+          seq: 2,
+          timestamp: 200,
+          method: 'POST',
+          url: 'https://api.example.com/search',
+          headers: {},
+          body: '{"query":"sfo"}',
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: '{"results":[]}' },
+        },
+      ],
+    });
+
+    expect(selectTriageCandidateRequests(session).map((request) => request.seq)).toEqual([2]);
   });
 });
 

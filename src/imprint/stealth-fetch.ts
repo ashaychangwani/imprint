@@ -155,6 +155,7 @@ const STANDARD_HEADERS = new Set([
   'accept',
   'accept-encoding',
   'accept-language',
+  'authorization',
   'connection',
   'content-length',
   'content-type',
@@ -170,6 +171,28 @@ const STANDARD_HEADERS = new Set([
   'user-agent',
   'cookie',
 ]);
+
+/** Headers that may be present during the probe but are not reusable
+ * bot-defense sensors. Capturing these into the per-site stealth cache leaks
+ * auth/application state across unrelated tools, e.g. a stale Authorization
+ * header from an account page getting injected into a fresh login request. */
+const NON_REUSABLE_SENSOR_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'x-api-idtoken',
+  'x-api-key',
+  'x-auth-token',
+  'x-csrf-token',
+]);
+
+export function sanitizeSensorHeaders(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (NON_REUSABLE_SENSOR_HEADERS.has(key.toLowerCase())) continue;
+    out[key] = value;
+  }
+  return out;
+}
 
 /** Regenerate as fresh UUIDs per call. Sites validate these as
  *  unique-per-request and reject replay (verified vs. Southwest's
@@ -622,7 +645,10 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
     const sensorHeaders: Record<string, string> = {};
     await page.route('**/*', async (route) => {
       for (const [k, v] of Object.entries(route.request().headers())) {
-        if (!probeSentKeys.has(k.toLowerCase())) {
+        if (
+          !probeSentKeys.has(k.toLowerCase()) &&
+          !NON_REUSABLE_SENSOR_HEADERS.has(k.toLowerCase())
+        ) {
           sensorHeaders[k] = v;
         }
       }

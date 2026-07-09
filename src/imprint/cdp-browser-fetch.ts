@@ -58,6 +58,10 @@ export interface MintedJar {
   /** The bootstrap page HTML, so callers can satisfy html_regex captures
    *  (e.g. csrf / csp-nonce scraped from the page) without the browser. */
   html: string;
+  /** Response headers from the bootstrap document navigation, lower-cased, so
+   *  callers can satisfy response_header bootstrap captures from the same
+   *  browser session that minted cookies and HTML. */
+  bootstrapResponseHeaders?: Record<string, string>;
   /** Date.now() at mint — the jar's validity is bounded (~2h fixed for Akamai). */
   bootstrapEpoch: number;
   /** The final `_abck` status field at capture (`0` = validated, `-1` = pending).
@@ -255,6 +259,13 @@ function buildInPageFetchExpr(
   reqTimeoutMs: number,
   sameOriginIframeSrc?: string,
 ): string {
+  const iframeNativeFetchSetup = `
+          ifr = document.createElement('iframe');
+          ifr.style.display = 'none';
+          document.body.appendChild(ifr);
+          if (ifr.contentWindow && typeof ifr.contentWindow.fetch === 'function') {
+            _f = ifr.contentWindow.fetch.bind(ifr.contentWindow);
+          }`;
   const iframeSetup = sameOriginIframeSrc
     ? `
           ifr = document.createElement('iframe');
@@ -269,38 +280,41 @@ function buildInPageFetchExpr(
           if (ifr.contentWindow && typeof ifr.contentWindow.fetch === 'function') {
             _f = ifr.contentWindow.fetch.bind(ifr.contentWindow);
           }`
-    : `
-          ifr = document.createElement('iframe');
-          ifr.style.display = 'none';
-          document.body.appendChild(ifr);
-          if (ifr.contentWindow && typeof ifr.contentWindow.fetch === 'function') {
-            _f = ifr.contentWindow.fetch.bind(ifr.contentWindow);
-          }`;
+    : '';
+  const fetchOnce = (fetchSetup: string) => `
+        let ifr;
+        try {
+          let _f = fetch;
+          try {${fetchSetup}
+          } catch (_) {}
+          const ctrl = new AbortController();
+          const to = setTimeout(() => ctrl.abort(), ${reqTimeoutMs});
+          const r = await _f(${JSON.stringify(fullUrl)}, {
+            method: ${JSON.stringify(method)},
+            headers: ${JSON.stringify(headers)},
+            ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
+            credentials: 'include',
+            signal: ctrl.signal,
+          });
+          clearTimeout(to);
+          const text = await r.text();
+          const h = {};
+          r.headers.forEach((v, k) => { h[k] = v; });
+          if (ifr) ifr.remove();
+          return { ok: true, status: r.status, body: text, headers: h };
+        } catch (e) {
+          if (ifr) try { ifr.remove(); } catch (_) {}
+          return { ok: false, error: String(e) };
+        }`;
   return `(async () => {
-      let ifr;
-      try {
-        let _f = fetch;
-        try {${iframeSetup}
-        } catch (_) {}
-        const ctrl = new AbortController();
-        const to = setTimeout(() => ctrl.abort(), ${reqTimeoutMs});
-        const r = await _f(${JSON.stringify(fullUrl)}, {
-          method: ${JSON.stringify(method)},
-          headers: ${JSON.stringify(headers)},
-          ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
-          credentials: 'include',
-          signal: ctrl.signal,
-        });
-        clearTimeout(to);
-        const text = await r.text();
-        const h = {};
-        r.headers.forEach((v, k) => { h[k] = v; });
-        if (ifr) ifr.remove();
-        return JSON.stringify({ ok: true, status: r.status, body: text, headers: h });
-      } catch (e) {
-        if (ifr) try { ifr.remove(); } catch (_) {}
-        return JSON.stringify({ ok: false, error: String(e) });
+      const primary = await (async () => {${fetchOnce(iframeSetup)}
+      })();
+      if (${sameOriginIframeSrc ? 'false' : 'true'} && !primary.ok) {
+        const fallback = await (async () => {${fetchOnce(iframeNativeFetchSetup)}
+        })();
+        return JSON.stringify(fallback);
       }
+      return JSON.stringify(primary);
     })()`;
 }
 
@@ -372,6 +386,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   let client: CdpClient | null = null;
   let bootstrapped = false;
   let appliedUa: string | undefined;
+  let bootstrapResponseHeaders: Record<string, string> = {};
 
   async function close(): Promise<void> {
     const c = client;
@@ -381,6 +396,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     chrome = null;
     bootstrapped = false;
     appliedUa = undefined;
+    bootstrapResponseHeaders = {};
     try {
       await withTimeout(Promise.resolve(c?.close()), 'CDP client close', 2_000);
     } catch {
@@ -428,6 +444,31 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       await withTimeout(Runtime.enable(), 'CDP Runtime.enable', cdpCommandTimeoutMs);
       await withTimeout(Network.enable(), 'CDP Network.enable', cdpCommandTimeoutMs);
       await withTimeout(Page.enable(), 'CDP Page.enable', cdpCommandTimeoutMs);
+      bootstrapResponseHeaders = {};
+      let navDocumentResponseUrl = '';
+      const onResponseReceived = (event: {
+        type?: string;
+        response?: { url?: string; headers?: Record<string, unknown> };
+      }) => {
+        if (event.type !== 'Document') return;
+        const url = event.response?.url;
+        if (!url) return;
+        try {
+          const responseUrl = new URL(url);
+          const targetUrl = new URL(navUrl);
+          if (responseUrl.origin !== targetUrl.origin) return;
+        } catch {
+          return;
+        }
+        navDocumentResponseUrl = url;
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(event.response?.headers ?? {})) {
+          if (v == null) continue;
+          headers[k.toLowerCase()] = String(v);
+        }
+        bootstrapResponseHeaders = headers;
+      };
+      Network.responseReceived(onResponseReceived);
       // Plant the high-trust seed cookies (the recording's validated Akamai jar)
       // BEFORE navigating, so the first request to the protected origin carries the
       // trusted session. A synthetic mint can reach `_abck~0~` yet still get its
@@ -499,6 +540,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           'CDP Page.loadEventFired',
           Math.max(1, Math.min(abckWaitMs, 5_000)),
         ).catch(() => {});
+        if (navDocumentResponseUrl) {
+          log(`captured bootstrap response headers from ${navDocumentResponseUrl}`);
+        }
       } catch (err) {
         log(`navigation issue (continuing): ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -857,6 +901,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         cookies,
         ua: appliedUa ?? '',
         html,
+        bootstrapResponseHeaders,
         bootstrapEpoch: Date.now(),
         abckFlag: abckFlag(abck),
         validated: jarCookiesValidated(cookies),

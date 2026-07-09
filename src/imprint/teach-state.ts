@@ -342,10 +342,9 @@ export function assertResumableAt(
   );
 }
 
-/** Pick which persisted workflow a `--from-step` run should resume (the
- *  most-recently-updated one), and validate the guard via assertResumableAt.
- *  Throws a clear, actionable error when there's no prior run or it didn't reach
- *  far enough. */
+/** Pick which persisted workflow a `--from-step` run should resume (the newest
+ *  workflow that actually reached the requested step's prerequisites). Throws a
+ *  clear, actionable error when there's no prior run or none reached far enough. */
 export function resolveStepStartTarget(
   site: string,
   state: TeachState,
@@ -365,11 +364,17 @@ export function resolveStepStartTarget(
       ].join('\n'),
     );
   }
-  // Most-recently-updated workflow — the run a developer just executed and wants
-  // to resume a single phase of.
-  const [workflowKey, ws] = entries.sort((a, b) =>
-    (b[1].updatedAt ?? '').localeCompare(a[1].updatedAt ?? ''),
-  )[0] as [string, WorkflowState];
+  // Most-recently-updated resumable workflow — the run a developer just executed
+  // and wants to resume a single phase of. Newly discovered orphan sessions can
+  // have newer timestamps but only `record`/`redact`; they must not shadow the
+  // candidate workflows that are ready for later phases.
+  const sorted = entries.sort((a, b) => (b[1].updatedAt ?? '').localeCompare(a[1].updatedAt ?? ''));
+  const target = sorted.find(([, ws]) => isResumableAt(ws, fromStep));
+  if (target) {
+    const [workflowKey, ws] = target;
+    return { workflowKey, ws };
+  }
+  const [workflowKey, ws] = sorted[0] as [string, WorkflowState];
   assertResumableAt(site, workflowKey, ws, fromStep);
   return { workflowKey, ws };
 }

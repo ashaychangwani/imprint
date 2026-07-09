@@ -23,6 +23,8 @@ For EACH parameter that should influence the request, also emit a short **verifi
 ### Requests
 The request(s) the tool issues, in order: method, URL (with which parts are templated from parameters vs constant), body shape, and required headers. If a value is signed or dynamically constructed and an `assignedModules` `request-transform` covers it, say to call that module by its `importPath` rather than re-deriving the algorithm. If there is no assigned module, describe the construction/signing from the recording. Note dependency requests (`dependencySeqs`) that must run first to mint a token or id, and what they produce.
 
+For auth/app metadata, distinguish user credentials from public app configuration. Values such as `x-api-key`, `x-app-id`, `x-channel-id`, `x-app-version`, OAuth `client_id`, build IDs, and similar constants are usually app-level values shipped in the site's JavaScript; when the recording shows a literal value, tell the compiler to keep that literal. Use `${credential.NAME}` only for values the user provisions or an auth tool deliberately persists, such as username, password, account API token, or a login-minted durable session token. Do not turn public app constants into new credentials.
+
 ### Response parsing
 The exact location of the result data: the `seq` whose response carries it, the precise JSON path(s) to the array/object, and the per-item fields to extract for `expectedOutput`. If the body is an RPC envelope (anti-XSSI prefix, length-prefixed frames, doubly-encoded JSON strings), give the exact unwrapping steps. If an `assignedModules` `parser-helper` covers this, say to call it by its `importPath` and what it returns.
 

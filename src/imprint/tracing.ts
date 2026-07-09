@@ -48,6 +48,7 @@ export function suppressTracingInit(): void {
   suppressInit = true;
 }
 const DEFAULT_TRACE_IO_MAX_CHARS = 50_000;
+const DEFAULT_TRACE_ERROR_MAX_CHARS = 2000;
 const CACHE_READ_MULTIPLIER = 0.1;
 const CACHE_WRITE_MULTIPLIER = 1.25;
 
@@ -473,8 +474,23 @@ function cleanAttributeValue(value: unknown): AttributeValue | undefined {
 
 function recordSpanError(span: Span, err: unknown): void {
   const error = err instanceof Error ? err : new Error(String(err));
-  span.recordException(error);
-  span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+  const message = sanitizeTraceErrorMessage(error.message);
+  const stack = error.stack ? sanitizeTraceErrorMessage(error.stack) : undefined;
+  span.recordException({
+    name: error.name,
+    message,
+    stack,
+  });
+  span.setStatus({ code: SpanStatusCode.ERROR, message });
+}
+
+export function sanitizeTraceErrorMessage(
+  message: string,
+  maxChars = DEFAULT_TRACE_ERROR_MAX_CHARS,
+): string {
+  if (message.length <= maxChars) return message;
+  if (maxChars <= 0) return `...[truncated ${message.length} chars]`;
+  return `${message.slice(0, maxChars)}\n...[truncated ${message.length - maxChars} chars]`;
 }
 
 function openInferenceProvider(provider: string): string {

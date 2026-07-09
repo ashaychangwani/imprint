@@ -22,6 +22,7 @@ import { inferAppApiHosts } from './app-api-hosts.ts';
 import type { SharedModuleManifestEntry } from './build-plan.ts';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
+import { compactUrlForLlm } from './llm-url.ts';
 import { type LLMOptions, extractJsonArray, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
@@ -408,12 +409,12 @@ export async function triageRequests(
           seq: r.seq,
           timestamp: r.timestamp,
           method: r.method,
-          url: r.url,
+          url: compactUrlForLlm(r.url),
           resourceType: r.resourceType,
           status: r.response?.status,
           mimeType: r.response?.mimeType,
           headers: truncateHeaders(r.headers),
-          body: truncate(r.body, TRIAGE_BODY_LIMIT),
+          body: triageBodySnippet(r.body),
           bodyDigest: requestContextDigest(r.body),
           bodyLength: r.body?.length,
           responseBodyDigest: requestContextDigest(r.response?.body),
@@ -429,11 +430,12 @@ export async function triageRequests(
 
       const triagePayload = {
         site: session.site,
-        url: session.url,
+        url: compactUrlForLlm(session.url),
         narration: session.narration,
         events: buildTriageEventContexts(session),
         requests: metadata,
       };
+      const triagePayloadChars = JSON.stringify(triagePayload).length;
 
       const promptPath = pathJoin(PROMPTS_DIR, 'request-triage.md');
       if (!existsSync(promptPath)) {
@@ -444,7 +446,7 @@ export async function triageRequests(
       const systemPrompt = readFileSync(promptPath, 'utf8');
 
       log(
-        `triaging ${metadata.length} compacted requests (from ${candidates.length} candidates / ${session.requests.length} total)…`,
+        `triaging ${metadata.length} compacted requests (from ${candidates.length} candidates / ${session.requests.length} total); ${Math.round(triagePayloadChars / 1024)} KB payload…`,
       );
       const llm = resolveProvider(llmConfig ?? {});
       const result = await llm.analyze(systemPrompt, triagePayload);
@@ -483,6 +485,7 @@ export async function triageRequests(
       setSpanAttributes(span, {
         'imprint.requests_compacted': metadata.length,
         'imprint.requests_selected': selectedSet.size,
+        'imprint.triage.payload_chars': triagePayloadChars,
         'imprint.triage.duration_ms': result.durationMs,
         'imprint.triage.input_tokens': result.inputTokens,
         'imprint.triage.output_tokens': result.outputTokens,
@@ -603,6 +606,25 @@ function truncateHeaders(headers: Record<string, string>): string {
   const serialized = JSON.stringify(headers);
   if (serialized.length <= HEADER_TRUNCATE_LIMIT) return serialized;
   return `${serialized.slice(0, HEADER_TRUNCATE_LIMIT)}…`;
+}
+
+export function triageBodySnippet(body: string | undefined): string | undefined {
+  if (body === undefined) return undefined;
+  if (isLikelyText(body)) return truncate(body, TRIAGE_BODY_LIMIT);
+  return `[non-text request body omitted; original length ${body.length}]`;
+}
+
+function isLikelyText(value: string): boolean {
+  if (value.length === 0) return true;
+  const sample = value.slice(0, Math.min(value.length, TRIAGE_BODY_LIMIT));
+  let suspicious = 0;
+  for (const ch of sample) {
+    const code = ch.charCodeAt(0);
+    if (ch === '\uFFFD' || (code < 32 && ch !== '\n' && ch !== '\r' && ch !== '\t')) {
+      suspicious++;
+    }
+  }
+  return suspicious <= 4 && suspicious / sample.length <= 0.02;
 }
 
 // ─── compilePlaybook (playbook.yaml) ─────────────────────────────────────────
@@ -759,7 +781,7 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
       seq: r.seq,
       timestamp: r.timestamp,
       method: r.method,
-      url: r.url,
+      url: compactUrlForLlm(r.url),
       resourceType: r.resourceType,
       status: r.response?.status,
       response_body: truncate(r.response?.body, RESPONSE_BODY_LIMIT),
@@ -771,7 +793,7 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
 
   const slimmed = {
     site: session.site,
-    url: session.url,
+    url: compactUrlForLlm(session.url),
     candidate: opts.candidate,
     sharedContext: opts.sharedContext,
     narration: session.narration,

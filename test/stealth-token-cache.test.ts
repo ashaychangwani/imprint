@@ -38,6 +38,26 @@ describe('stealth-token-cache', () => {
     }
   });
 
+  it('strips non-reusable auth headers from cached sensor headers on read', () => {
+    const dir = scratchDir();
+    try {
+      const token: TokenCache = {
+        ...tokenAt(5),
+        sensorHeaders: {
+          authorization: 'Bearer stale',
+          'x-api-idtoken': 'stale-id',
+          'x-api-key': 'app-key',
+          'x-acf-sensor-data': 'fixture-sensor',
+        },
+      };
+      saveCachedToken(dir, token);
+      const loaded = loadCachedToken(dir, 600);
+      expect(loaded?.sensorHeaders).toEqual({ 'x-acf-sensor-data': 'fixture-sensor' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('ignores a token older than the max age', () => {
     const dir = scratchDir();
     try {

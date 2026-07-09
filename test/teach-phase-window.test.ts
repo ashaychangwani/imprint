@@ -97,7 +97,7 @@ describe('resolveStepStartTarget (workflow selection + guard)', () => {
     );
   });
 
-  it('picks the most-recently-updated workflow', () => {
+  it('picks the most-recently-updated resumable workflow', () => {
     const state: TeachState = {
       workflows: {
         old: ws(['record', 'redact', 'replay-and-diff', 'triage'], '2026-01-01T00:00:00Z'),
@@ -111,7 +111,21 @@ describe('resolveStepStartTarget (workflow selection + guard)', () => {
     expect(target.workflowKey).toBe('recent');
   });
 
-  it('propagates the guard failure of the selected (most-recent) workflow', () => {
+  it('skips newer incomplete non-pending entries when an older workflow is resumable', () => {
+    const state: TeachState = {
+      workflows: {
+        valid: ws(
+          ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+          '2026-01-01T00:00:00Z',
+        ),
+        orphan: ws(['record', 'redact'], '2026-06-01T00:00:00Z'),
+      },
+    };
+    const target = resolveStepStartTarget('s', state, 'plan-prereqs');
+    expect(target.workflowKey).toBe('valid');
+  });
+
+  it('propagates a guard failure when no workflow is resumable', () => {
     const state: TeachState = {
       workflows: {
         recent: ws(['record', 'redact'], '2026-06-01T00:00:00Z'),
