@@ -16,6 +16,7 @@ import {
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
   __setCdpJarMinterForTest,
+  __setPlaybookRunnerForTest,
   __setProbeTimeoutMsForTest,
   effectiveAutoLadder,
   evaluateBootstrapCapture,
@@ -55,6 +56,13 @@ beforeEach(() => {
     },
     close: async () => {},
   }));
+  // Keep ladder unit tests deterministic. Playbook execution itself has
+  // separate coverage; here we only need to prove the rung is reached.
+  __setPlaybookRunnerForTest(async () => ({
+    ok: false,
+    error: 'BAD_RESPONSE',
+    message: 'playbook disabled in backend-ladder tests',
+  }));
   // Disable the compile-path .act rate gate so tests don't sleep between calls.
   process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '0';
   // Shorten the parallel probe deadline so its setTimeout doesn't keep bun's
@@ -66,6 +74,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   __setCdpJarMinterForTest(null);
   __setCdpBrowserFetchFactoryForTest(null);
+  __setPlaybookRunnerForTest(null);
   __setProbeTimeoutMsForTest(null);
   // The compile CDP pool is now process-global — reset it so a pooled browser /
   // armed idle timer can't leak across tests.
@@ -546,18 +555,14 @@ result:
       makeStealthCache(tool),
       { skipBootstrapSplice: true },
     );
-    // Playbook will fail too (no real browser, navigates about:blank, no
-    // matching XHR) — but it WAS attempted.
+    // The playbook runner is stubbed in this unit test; the assertion is that
+    // the ladder attempted the playbook rung after API transports escalated.
     expect(r.attempts).toHaveLength(3);
     const playbookAttempt = r.attempts[2];
     if (!playbookAttempt) throw new Error('expected 3rd attempt');
     expect(playbookAttempt.backend).toBe('playbook');
     expect(['ok', 'failed', 'escalate']).toContain(playbookAttempt.outcome);
-    // This rung launches a REAL Playwright Chromium (navigate about:blank, wait
-    // for a never-matching XHR), so on a cold CI runner it legitimately exceeds
-    // the 5s default — give it a generous timeout to de-flake (passes in <1s
-    // locally; the assertion is just that playbook was ATTEMPTED).
-  }, 30000);
+  });
 
   it('attempts playbook for credential-backed data workflows', async () => {
     const siteDir = pathResolve(root, 'credentialed');
@@ -602,7 +607,7 @@ result:
     expect(r.result.ok).toBe(false);
     expect(behavior.calls.fetch).toBe(1);
     expect(behavior.calls.stealth).toBe(1);
-  }, 30000);
+  });
 
   it('allows browser-backed anti-bot rungs for credential-backed data workflows', async () => {
     const behavior: FakeToolBehavior = {

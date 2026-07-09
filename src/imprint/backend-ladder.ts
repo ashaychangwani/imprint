@@ -77,6 +77,13 @@ interface LadderResult {
 
 const log = createLog('backend');
 
+type PlaybookRunner = (opts: Parameters<typeof runPlaybook>[0]) => ReturnType<typeof runPlaybook>;
+let playbookRunner: PlaybookRunner = runPlaybook;
+
+export function __setPlaybookRunnerForTest(fn: PlaybookRunner | null): void {
+  playbookRunner = fn ?? runPlaybook;
+}
+
 const DEFAULT_LADDER: ConcreteBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
 
 const NON_TRANSPORT_ERRORS = new Set(['AWAITING_2FA', 'AUTH_EXPIRED', 'RATE_LIMITED']);
@@ -388,7 +395,7 @@ export async function runWithLadder(
           // Apply workflow.json's declared parameter defaults — runPlaybook
           // validates and throws on absent values regardless of declared defaults.
           const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
-          result = await runPlaybook({
+          result = await playbookRunner({
             playbook: playbookPath(assetRoot, tool.site, tool.dir),
             params: paramsWithDefaults,
             site: tool.site,
