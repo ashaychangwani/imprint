@@ -234,7 +234,6 @@ function buildServer(
         const run = runWithLadder(ladder, tool, args, assetRoot, stealthCache, {
           cdpPool,
           winnerCache,
-          skipBootstrapSplice: Boolean(tool.preferredOrder?.length),
           initialState,
         });
         const auditDeadlineMs = auditToolDeadlineMs();

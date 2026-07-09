@@ -13,7 +13,7 @@ import {
   loadBackendsCache,
   loadBackendsCacheStatus,
 } from './backend-cache.ts';
-import { runWithLadder } from './backend-ladder.ts';
+import { prefersCdpReplayFirst, runWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
@@ -127,9 +127,7 @@ async function probeResolvedTool(
   // cdp-replay rung, wasting time on every call.
   const stealthCache = new Map<string, StealthFetch>();
   const cdpPool = new Map<string, CdpBrowserFetch>();
-  const allBackends: ConcreteBackend[] = workflowNeedsBootstrap(tool.workflow)
-    ? ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']
-    : ['fetch', 'stealth-fetch', 'playbook'];
+  const allBackends = probeCandidateBackendsForWorkflow(tool.workflow);
   const results: BackendsCache['results'] = {};
   const working: BackendProbeCandidate[] = [];
   const preferredMaxMs = preferredBackendMaxMs();
@@ -309,6 +307,14 @@ function workflowNeedsBootstrap(workflow: ResolvedTool['workflow']): boolean {
       (c) => c.capability === 'browser_bootstrap' || c.capability === 'stealth_bootstrap',
     ),
   );
+}
+
+export function probeCandidateBackendsForWorkflow(
+  workflow: ResolvedTool['workflow'],
+): ConcreteBackend[] {
+  return workflowNeedsBootstrap(workflow) || prefersCdpReplayFirst(workflow)
+    ? ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']
+    : ['fetch', 'stealth-fetch', 'playbook'];
 }
 
 function workflowHash(workflow: ResolvedTool['workflow']): string {

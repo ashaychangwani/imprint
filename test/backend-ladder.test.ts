@@ -145,8 +145,18 @@ describe('resolveLadder', () => {
     expect(resolveLadder('auto', [])).toEqual(['fetch', 'stealth-fetch', 'playbook']);
   });
 
-  it('uses the cached preferred order for "auto" when provided', () => {
+  it('uses the cached preferred order as a prefix for "auto" when provided', () => {
     expect(resolveLadder('auto', ['stealth-fetch', 'playbook'])).toEqual([
+      'stealth-fetch',
+      'playbook',
+      'fetch',
+    ]);
+  });
+
+  it('keeps a cached cdp-replay winner while preserving generic fallbacks', () => {
+    expect(resolveLadder('auto', ['cdp-replay'])).toEqual([
+      'cdp-replay',
+      'fetch',
       'stealth-fetch',
       'playbook',
     ]);

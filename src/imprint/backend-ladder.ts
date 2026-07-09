@@ -260,15 +260,24 @@ export function __resetCompilePacingForTest(): void {
 }
 
 /** Expand a replayBackend choice into a concrete ladder. 'auto' prefers
- *  the probed order (if any), else the default. Explicit choice → single rung. */
+ *  the probed order (if any), then appends the default fallback ladder.
+ *  Explicit choice → single rung. */
 export function resolveLadder(
   backend: ReplayBackend,
   cachedPreferredOrder?: ConcreteBackend[],
 ): ConcreteBackend[] {
   if (backend === 'auto') {
-    return cachedPreferredOrder && cachedPreferredOrder.length > 0
-      ? cachedPreferredOrder
-      : DEFAULT_LADDER;
+    if (cachedPreferredOrder && cachedPreferredOrder.length > 0) {
+      const seen = new Set<ConcreteBackend>();
+      const ordered: ConcreteBackend[] = [];
+      for (const rung of [...cachedPreferredOrder, ...DEFAULT_LADDER]) {
+        if (seen.has(rung)) continue;
+        seen.add(rung);
+        ordered.push(rung);
+      }
+      return ordered;
+    }
+    return DEFAULT_LADDER;
   }
   return [backend];
 }

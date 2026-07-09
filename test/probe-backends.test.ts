@@ -17,6 +17,7 @@ import {
   loadBackendsCacheStatus,
   persistRuntimeBackendsCache,
   probeAllBackends,
+  probeCandidateBackendsForWorkflow,
   rankSuccessfulBackends,
 } from '../src/imprint/probe-backends.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
@@ -488,6 +489,47 @@ describe('runtime backend learning', () => {
       durationMs: 140_000,
       tooSlow: true,
     });
+  });
+});
+
+describe('probeCandidateBackendsForWorkflow', () => {
+  it('includes cdp-replay for multi-step state-changing workflows with captured state refs', () => {
+    const workflow = WorkflowSchema.parse({
+      toolName: 'stateful_checkout',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://example.com/start',
+          headers: { 'X-Csrf': '${state.csrf}' },
+        },
+        {
+          method: 'POST',
+          url: 'https://example.com/confirm',
+          headers: {},
+        },
+      ],
+      site: 'stateful',
+    });
+
+    expect(probeCandidateBackendsForWorkflow(workflow)).toContain('cdp-replay');
+  });
+
+  it('keeps cdp-replay out of plain workflows with no browser-state need', () => {
+    const workflow = WorkflowSchema.parse({
+      toolName: 'plain_search',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/search', headers: {} }],
+      site: 'plain',
+    });
+
+    expect(probeCandidateBackendsForWorkflow(workflow)).toEqual([
+      'fetch',
+      'stealth-fetch',
+      'playbook',
+    ]);
   });
 });
 
