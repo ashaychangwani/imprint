@@ -905,19 +905,10 @@ describe('runWorkflowWithLadder', () => {
     }
   });
 
-  it('ladder is fixed to [fetch, stealth-fetch] regardless of a sibling backends.json', async () => {
-    // Compile-time integration tests run BEFORE `imprint compile-playbook`
-    // generates a playbook.yaml, so the playbook rung is intentionally
-    // excluded. The helper must also ignore any sibling backends.json
-    // (which is a runtime probe cache, not a compile-time concern) and
-    // always use the same two-rung ladder. This is a regression guard
-    // against drift toward runtime-coupled behavior.
-    //
-    // We prove it by: workflow whose fetch returns 200 (so the fetch
-    // rung wins) AND a backends.json that says "only try playbook"
-    // (which the helper should ignore). If the helper read backends.json,
-    // it would try playbook (which doesn't exist on disk), get a skip,
-    // and return a no-rungs-available error.
+  it('ignores an unsafe sibling backends.json', async () => {
+    // A valid backends.json can seed the compile-time helper, but unsafe caches
+    // must not. This adversarial cache says "only try playbook" without a
+    // successful playbook probe; the helper should ignore it and let fetch win.
     const server = Bun.serve({
       port: 0,
       fetch: () =>
@@ -963,6 +954,56 @@ describe('runWorkflowWithLadder', () => {
       expect(usedBackend).toBe('fetch');
       // Two-rung ladder advertised; only the first rung needed to run.
       expect(attempts.map((a) => a.backend)).toEqual(['fetch']);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it('uses a valid sibling backends.json before probing', async () => {
+    __resetCompileWinningBackendForTest();
+    __setProbeTimeoutMsForTest(2_000);
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(JSON.stringify({ ok: true }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    });
+    const port = server.port;
+    try {
+      const toolDir = pathJoin(root, 'cached-site', 'cached_tool');
+      mkdirSync(toolDir, { recursive: true });
+      const workflowPath = pathJoin(toolDir, 'workflow.json');
+      writeFileSync(
+        workflowPath,
+        JSON.stringify({
+          toolName: 'cached_tool',
+          intent: { description: 'Should use cached fetch' },
+          parameters: [],
+          requests: [{ method: 'GET', url: `http://127.0.0.1:${port}/api/ok`, headers: {} }],
+          site: 'cached-site',
+        }),
+      );
+      writeFileSync(
+        pathJoin(toolDir, 'backends.json'),
+        JSON.stringify({
+          probedAt: new Date().toISOString(),
+          imprintVersion: '0.1.0',
+          schemaVersion: 2,
+          preferredOrder: ['fetch'],
+          results: { fetch: { outcome: 'ok', durationMs: 10 } },
+        }),
+      );
+
+      const t0 = Date.now();
+      const { result, usedBackend, attempts } = await runWorkflowWithLadder({
+        workflowPath,
+        params: {},
+      });
+      expect(result.ok).toBe(true);
+      expect(usedBackend).toBe('fetch');
+      expect(attempts.map((a) => a.backend)).toEqual(['fetch']);
+      expect(Date.now() - t0).toBeLessThan(1_500);
     } finally {
       server.stop(true);
     }

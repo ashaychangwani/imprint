@@ -34,6 +34,7 @@ import { proxyUrl } from './chromium.ts';
 import { RuntimeCookieJar } from './cookie-jar.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
+import { loadBackendsCacheStatus } from './probe-backends.ts';
 import {
   type CredentialStore,
   executeWorkflow,
@@ -49,15 +50,15 @@ import {
 } from './stealth-fetch.ts';
 import { clearCachedToken, loadCachedToken, saveCachedToken } from './stealth-token-cache.ts';
 import type { ResolvedTool } from './tool-loader.ts';
-import {
-  type BootstrapCapture,
-  type ConcreteBackend,
-  type ReplayBackend,
-  type StateCapability,
-  type StateMissingItem,
-  type ToolResult,
-  type Workflow,
-  WorkflowSchema,
+import { WorkflowSchema } from './types.ts';
+import type {
+  BootstrapCapture,
+  ConcreteBackend,
+  ReplayBackend,
+  StateCapability,
+  StateMissingItem,
+  ToolResult,
+  Workflow,
 } from './types.ts';
 
 type UsedBackend = ConcreteBackend;
@@ -1573,7 +1574,7 @@ export async function runWorkflowWithLadder(opts: {
       : ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
 
   const memoKey = `${tool.site}::${workflow.toolName}`;
-  const memoWinner = compileWinningBackend.get(memoKey);
+  let memoWinner = compileWinningBackend.get(memoKey);
 
   // Share one stealth token across this site's compile-time test processes.
   const stealthCache = new Map<string, StealthFetch>();
@@ -1636,6 +1637,24 @@ export async function runWorkflowWithLadder(opts: {
         cdpPool,
         initialState: opts.initialState,
       });
+    }
+
+    if (!memoWinner) {
+      const cacheStatus = loadBackendsCacheStatus(tool.site, dirname(toolDir), toolDir, {
+        warn: false,
+        toolName: workflow.toolName,
+      });
+      const cachedWinner =
+        cacheStatus.status === 'ok'
+          ? cacheStatus.cache.preferredOrder.find((backend) => ladder.includes(backend))
+          : undefined;
+      if (cacheStatus.status === 'ok' && cachedWinner) {
+        memoWinner = cachedWinner;
+        compileWinningBackend.set(memoKey, cachedWinner);
+        log(
+          `compile cache: ${memoKey} using ${cachedWinner} from backends.json; preferred order: ${cacheStatus.cache.preferredOrder.join(' → ')}`,
+        );
+      }
     }
 
     // ── First call: parallel probe (45s deadline) ───────────────────────────
