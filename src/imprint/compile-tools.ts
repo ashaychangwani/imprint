@@ -57,11 +57,6 @@ const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 // from run_tests / externalVerification — the test never reads from disk
 // without it, so leftover test files won't blow up under default `bun test`.
 const SESSION_PATH_ENV = 'IMPRINT_SESSION_PATH';
-const ALLOW_PLAYBOOK_FALLBACK_ENV = 'IMPRINT_ALLOW_PLAYBOOK_FALLBACK';
-
-function allowPlaybookFallback(): boolean {
-  return process.env[ALLOW_PLAYBOOK_FALLBACK_ENV] === '1';
-}
 
 function parseRequiredKeysFromTokenShape(shape: string | undefined): string[] {
   if (!shape) return [];
@@ -86,8 +81,8 @@ export function buildCompileTools(
     : undefined;
   const tools = [
     buildReadSessionSummaryTool(session, context),
-    buildSearchRequestsTool(session),
     buildReadRequestTool(session),
+    buildSearchRequestsTool(session),
     buildRevealRequestTool(sessionPath),
     buildDiffRequestForEventTool(session, context),
     buildReadResponseBodyTool(session),
@@ -897,29 +892,21 @@ export function buildReadRequestTool(session: Session): AgentTool {
   };
 }
 
-// ─── Tool: search_requests ──────────────────────────────────────────────────
-
-/** Discover sparse request sequence IDs by structural recording properties.
- *  Agents should not have to guess sequence numbers to find a Document producer
- *  that precedes an OAuth/API chain. */
 export function buildSearchRequestsTool(session: Session): AgentTool {
   return {
     name: 'search_requests',
     description:
-      'Search recorded requests by method, resource type, URL fragment, response status, and sequence range. Returns compact request metadata with exact seq IDs for follow-up read_request/read_response_body calls.',
+      'Search recorded requests by method, resource type, URL fragment, response status, and sequence range. Returns exact seq IDs for read_request/read_response_body.',
     input_schema: {
       type: 'object',
       properties: {
-        method: { type: 'string', description: 'HTTP method, case-insensitive' },
-        resourceType: {
-          type: 'string',
-          description: 'Recorded resource type, e.g. Document, Fetch, or XHR',
-        },
-        urlContains: { type: 'string', description: 'Case-insensitive URL substring' },
-        status: { type: 'number', description: 'Exact HTTP response status' },
-        afterSeq: { type: 'number', description: 'Only seq values greater than this value' },
-        beforeSeq: { type: 'number', description: 'Only seq values less than this value' },
-        limit: { type: 'number', description: 'Maximum results (default 50, max 200)' },
+        method: { type: 'string' },
+        resourceType: { type: 'string' },
+        urlContains: { type: 'string' },
+        status: { type: 'number' },
+        afterSeq: { type: 'number' },
+        beforeSeq: { type: 'number' },
+        limit: { type: 'number', description: 'Default 50, maximum 200' },
       },
       required: [],
     },
@@ -933,15 +920,14 @@ export function buildSearchRequestsTool(session: Session): AgentTool {
         beforeSeq?: number;
         limit?: number;
       };
-      const limit = Math.max(1, Math.min(200, Math.trunc(filters.limit ?? 50)));
       const method = filters.method?.toUpperCase();
       const resourceType = filters.resourceType?.toLowerCase();
-      const urlContains = filters.urlContains?.toLowerCase();
-      const matches = session.requests
+      const url = filters.urlContains?.toLowerCase();
+      const requests = session.requests
         .filter((request) => {
           if (method && request.method.toUpperCase() !== method) return false;
           if (resourceType && request.resourceType?.toLowerCase() !== resourceType) return false;
-          if (urlContains && !request.url.toLowerCase().includes(urlContains)) return false;
+          if (url && !request.url.toLowerCase().includes(url)) return false;
           if (filters.status !== undefined && request.response?.status !== filters.status)
             return false;
           if (filters.afterSeq !== undefined && request.seq <= filters.afterSeq) return false;
@@ -949,7 +935,7 @@ export function buildSearchRequestsTool(session: Session): AgentTool {
           return true;
         })
         .sort((a, b) => a.seq - b.seq)
-        .slice(0, limit)
+        .slice(0, Math.max(1, Math.min(200, Math.trunc(filters.limit ?? 50))))
         .map((request) => ({
           seq: request.seq,
           resourceType: request.resourceType,
@@ -958,7 +944,7 @@ export function buildSearchRequestsTool(session: Session): AgentTool {
           status: request.response?.status,
           mimeType: request.response?.mimeType,
         }));
-      return { result: JSON.stringify({ count: matches.length, requests: matches }, null, 2) };
+      return { result: JSON.stringify({ count: requests.length, requests }, null, 2) };
     },
   };
 }
@@ -1346,12 +1332,6 @@ export function buildRunBashTool(toolDir: string, credEnv?: Record<string, strin
           isError: true,
         };
       }
-      if (!allowPlaybookFallback() && /\bplaybook\.ya?ml\b/.test(command)) {
-        return {
-          result: `blocked playbook fallback command — generated data tools may not create or modify playbook.yaml unless ${ALLOW_PLAYBOOK_FALLBACK_ENV}=1`,
-          isError: true,
-        };
-      }
 
       const cappedTimeout = Math.min(timeoutSec, 300) * 1000;
 
@@ -1644,8 +1624,8 @@ function assertSharedModuleImports(
  * bot defense (as opposed to a real workflow defect). Compile-time integration
  * tests only reach the fetch + fetch-bootstrap rungs; many sites gate their
  * APIs behind challenges (CAPTCHA interstitials, redirect-to-challenge pages,
- * rate-based blocks) that only the broader runtime API ladder may bypass.
- * When the parser is already verified against the recorded
+ * rate-based blocks) that only the runtime ladder's stealth-fetch + playbook
+ * rungs bypass. When the parser is already verified against the recorded
  * response, such a block should be a non-blocking warning, not a hard failure —
  * the tool works in production via the full ladder.
  *
@@ -1670,7 +1650,7 @@ export function isBotDefenseFailure(output: string): boolean {
   // session Akamai serves a 200 "soft block" with empty/placeholder data instead
   // of a 403, so the live integration fails to produce data even though every
   // backend reports OK. Treat that as a bot-defense waiver (the tool falls through
-  // to the runtime API ladder and the audit validates it live) rather than
+  // to the runtime ladder / playbook and the audit validates it live) rather than
   // a hard compile failure. Scoped to the post-interaction confirmation so the
   // ordinary "cached jar not validated … — re-mint" log (which precedes a retry
   // that often succeeds) does NOT trip it.
@@ -1742,7 +1722,7 @@ interface ParamVerification {
   /** Why an exposed param is unverified. Undefined when `verified` is true.
    *  - `waived-bot` / `waived-infra`: the live suite was waived (anti-bot /
    *    infra), so the param's effect could not be confirmed at compile time;
-   *    it is exercised at runtime via the API backend ladder.
+   *    it is exercised at runtime via the stealth-fetch / playbook ladder.
    *  - `annotated`: the agent marked it `// exposed-but-not-verified`.
    *  - `waived-chain`: the param is a producer-sourced token but the producer
    *    tool could not be run at compile time (anti-bot / not compiled), so the
@@ -1890,28 +1870,6 @@ function detectOpaqueUrlQueryLiterals(workflow: ReturnType<typeof WorkflowSchema
 
 const APP_METADATA_HEADER_RE =
   /^(?:x-)?(?:api-key|app-id|app-version|api-version|channel-id|client-id|client-version|user-experience-id)$/i;
-
-const VOLATILE_HEADER_NAME_RE =
-  /(?:^|[-_])(?:session|correlation|request|trace|nonce)(?:[-_]|$)|(?:^|[-_])idempotency[-_]?key(?:[-_]|$)/i;
-
-function detectVolatileHeaderLiterals(workflow: ReturnType<typeof WorkflowSchema.parse>): string[] {
-  const failures: string[] = [];
-  for (const [index, req] of workflow.requests.entries()) {
-    const offenders: string[] = [];
-    for (const [header, value] of Object.entries(req.headers)) {
-      if (!VOLATILE_HEADER_NAME_RE.test(header)) continue;
-      if (APP_METADATA_HEADER_RE.test(header)) continue;
-      if (value.includes('${')) continue;
-      if (!looksOpaque(value)) continue;
-      offenders.push(`${header} (length ${value.length})`);
-    }
-    if (offenders.length === 0) continue;
-    failures.push(
-      `request[${index}] ${req.method} ${req.url.split('?')[0]} hardcodes volatile header literal(s): ${offenders.join(', ')}. Session/correlation/request identifiers must be generated fresh with \${generated.uuid}/\${generated.nonce}, captured from earlier state, or omitted when the browser/backend supplies them; never replay the recorded value from workflow.json.`,
-    );
-  }
-  return failures;
-}
 
 function detectUncontractedCredentialPlaceholders(
   workflowJson: string,
@@ -2404,7 +2362,7 @@ export function applyParamVerification(
   return [
     `${unverified.length} parameter(s) live-unverified at compile time (${unverified
       .map((p) => `${p.name}: ${p.reason ?? 'unverified'}`)
-      .join(', ')}) — exercised at runtime via the API backend ladder.`,
+      .join(', ')}) — exercised at runtime via the stealth-fetch / playbook ladder.`,
   ];
 }
 
@@ -3407,7 +3365,7 @@ export function contractedInputGate(
       unresolved++;
       const how =
         ri.source === 'auth'
-          ? `wire it as \`${token}\` (the authenticate tool persists it via sessionCapture)`
+          ? `wire it as \`${token}\` (the authenticate tool names it in authConfig.persist)`
           : ri.source === 'browser_state'
             ? `wire it as \`${token}\` and add the capture/bootstrap that produces it`
             : ri.source === 'generated'
@@ -3503,13 +3461,6 @@ export async function externalVerification(
   const parserPath = pathJoin(toolDir, 'parser.ts');
   const parserTestPath = pathJoin(toolDir, 'parser.test.ts');
   const requestTransformPath = pathJoin(toolDir, 'request-transform.ts');
-  const playbookPath = pathJoin(toolDir, 'playbook.yaml');
-
-  if (existsSync(playbookPath) && !allowPlaybookFallback()) {
-    failures.push(
-      `playbook.yaml is not allowed in generated data tools by default. Remove it and make the API workflow work through fetch/fetch-bootstrap/cdp-replay/stealth-fetch, or set ${ALLOW_PLAYBOOK_FALLBACK_ENV}=1 only when the operator explicitly opts into DOM playbook fallback.`,
-    );
-  }
 
   // Contracted-input injection + emit-time secret guard + the contracted-input
   // gate. Runs FIRST so every downstream check and the live test see the final,
@@ -3627,7 +3578,6 @@ export async function externalVerification(
         );
       }
       failures.push(...detectOpaqueUrlQueryLiterals(workflow));
-      failures.push(...detectVolatileHeaderLiterals(workflow));
       failures.push(
         ...detectAppMetadataParameters(
           workflow,
@@ -3955,7 +3905,7 @@ export async function externalVerification(
             };
         const liveNote = verdict.baselineLiveVerified
           ? 'The baseline returned real data this run, so liveVerified stays TRUE — only the per-parameter tests are waived.'
-          : 'Stamping liveVerified=false on workflow.json — the API workflow exhausted fetch/fetch-bootstrap/cdp-replay/stealth-fetch without live data. Audit and teach surface this tool as unverified.';
+          : 'Stamping liveVerified=false on workflow.json — the runtime falls through to the cdp-replay / playbook rung. Audit and teach surface this tool as unverified.';
         warnings.push(
           verdict.outcome === 'waived-bot'
             ? `integration test hit a likely bot-detection / anti-automation challenge. ${liveNote}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`

@@ -11,7 +11,7 @@ import { extractAt } from './json-path.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
-import { type CredentialStore, substituteString } from './runtime.ts';
+import { substituteString } from './runtime.ts';
 import { getStealthChromium, getStealthExecutablePath } from './stealth-chromium.ts';
 import type {
   Locator,
@@ -46,17 +46,10 @@ interface RunPlaybookOptions {
    *  whether the skill lives under `~/.imprint/`, `~/.hermes/skills/`,
    *  `~/.openclaw/skills/`, or anywhere else. */
   site?: string;
-  /** Credential override supplied by auth verification. Compile-time auth
-   *  checks may hold live username/password values in memory without first
-   *  persisting them to the site credential store. */
-  credentials?: CredentialStore;
   /** Harvest the browser context's cookies after a successful run and save them
    *  to the credential store. Set by the ladder for authenticate tools so a
    *  login playbook's freshly minted session is persisted for data tools. */
   persistCookies?: boolean;
-  /** For data-tool playbooks, fail fast when navigation lands on a login page
-   *  instead of spending the whole timeout on waits that can never fire. */
-  failOnAuthRedirect?: boolean;
 }
 
 const log = createLog('playbook');
@@ -86,8 +79,6 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   // Credential VALUES (username/password/etc.) for ${credential.X} placeholders
   // in typed field steps. Loaded from the store below; never logged.
   let credValues: Record<string, string> = {};
-  const credentialView = opts.credentials;
-  if (credentialView) credValues = credentialView.values ?? {};
 
   let browser: Browser | undefined;
   let context: BrowserContext | undefined;
@@ -126,26 +117,7 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     // Inject credentials.cookies into the browser so the playbook can navigate
     // an authenticated flow (e.g., my-trips → reservation → seat map), and load
     // credential values for ${credential.X} placeholders in login playbooks.
-    if (credentialView) {
-      const playwrightCookies = (credentialView.cookies ?? [])
-        .map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path }))
-        .filter((c) => c.name && c.value);
-      if (playwrightCookies.length > 0) {
-        await context.addCookies(playwrightCookies);
-        log(
-          `injected ${playwrightCookies.length} override cookies for site ${site ?? credentialView.site}`,
-        );
-      }
-      const localStorageRecords = (credentialView.storage ?? []).filter(
-        (s) => s.kind === 'localStorage',
-      );
-      if (localStorageRecords.length > 0) {
-        await seedLocalStorage(context, localStorageRecords);
-        log(
-          `seeded ${localStorageRecords.length} override localStorage keys for site ${site ?? credentialView.site}`,
-        );
-      }
-    } else if (site) {
+    if (site) {
       try {
         const { loadSiteCredentials } = await import('./credential-store.ts');
         const view = await loadSiteCredentials(site);
@@ -165,7 +137,31 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
         // setItem only fires on its own origin.
         const localStorageRecords = view.storage.filter((s) => s.kind === 'localStorage');
         if (localStorageRecords.length > 0) {
-          await seedLocalStorage(context, localStorageRecords);
+          const byOrigin = new Map<string, Array<{ key: string; value: string }>>();
+          for (const rec of localStorageRecords) {
+            const list = byOrigin.get(rec.origin) ?? [];
+            list.push({ key: rec.key, value: rec.value });
+            byOrigin.set(rec.origin, list);
+          }
+          for (const [origin, entries] of byOrigin) {
+            await context.addInitScript(
+              ({ origin: o, entries: e }) => {
+                // Runs in the browser; type the needed globals locally since the
+                // Node typecheck has no DOM lib.
+                const w = globalThis as unknown as {
+                  location: { origin: string };
+                  localStorage: { setItem(k: string, v: string): void };
+                };
+                try {
+                  if (w.location.origin !== o) return;
+                  for (const { key, value } of e) w.localStorage.setItem(key, value);
+                } catch {
+                  /* storage may be unavailable (sandboxed frame) — skip */
+                }
+              },
+              { origin, entries },
+            );
+          }
           log(`seeded ${localStorageRecords.length} localStorage keys for site ${site}`);
         }
       } catch (err) {
@@ -203,7 +199,7 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
       );
       log(`step ${i + 1}/${playbook.steps.length}: ${step.action}`);
       await withTimeout(
-        executeStep(page, step, params, credValues, budgetMs, opts.failOnAuthRedirect === true),
+        executeStep(page, step, params, credValues, budgetMs),
         budgetMs,
         `Playbook step ${lastStep}/${playbook.steps.length} (${step.action})`,
       );
@@ -282,9 +278,6 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     }
     return { ok: true, data };
   } catch (err) {
-    if (err instanceof PlaybookAuthExpiredError) {
-      return { ok: false, error: 'AUTH_EXPIRED', message: err.message };
-    }
     const screenshotPath = await screenshot(page, playbook.toolName, lastStep, screenshotTimeoutMs);
     const suffix = screenshotPath ? `\nscreenshot: ${screenshotPath}` : '';
     const errStr = errMsg(err);
@@ -311,37 +304,6 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
       await context?.close().catch(() => {});
       await browser?.close().catch(() => {});
     }
-  }
-}
-
-async function seedLocalStorage(
-  context: BrowserContext,
-  localStorageRecords: Array<{ origin: string; key: string; value: string }>,
-): Promise<void> {
-  const byOrigin = new Map<string, Array<{ key: string; value: string }>>();
-  for (const rec of localStorageRecords) {
-    const list = byOrigin.get(rec.origin) ?? [];
-    list.push({ key: rec.key, value: rec.value });
-    byOrigin.set(rec.origin, list);
-  }
-  for (const [origin, entries] of byOrigin) {
-    await context.addInitScript(
-      ({ origin: o, entries: e }) => {
-        // Runs in the browser; type the needed globals locally since the Node
-        // typecheck has no DOM lib.
-        const w = globalThis as unknown as {
-          location: { origin: string };
-          localStorage: { setItem(k: string, v: string): void };
-        };
-        try {
-          if (w.location.origin !== o) return;
-          for (const { key, value } of e) w.localStorage.setItem(key, value);
-        } catch {
-          /* storage may be unavailable (sandboxed frame) — skip */
-        }
-      },
-      { origin, entries },
-    );
   }
 }
 
@@ -432,31 +394,16 @@ async function executeStep(
   params: Record<string, string | number | boolean>,
   credValues: Record<string, string>,
   timeoutMs: number,
-  failOnAuthRedirect: boolean,
 ): Promise<void> {
   switch (step.action) {
     case 'navigate': {
       // 'domcontentloaded' instead of 'load' — SPAs behind enterprise
       // WAFs keep persistent connections alive so 'load' hangs forever.
       // Explicit wait_for handles "page is ready" semantics.
-      try {
-        await page.goto(subst(step.url, params), {
-          timeout: timeoutMs,
-          waitUntil: 'domcontentloaded',
-        });
-      } catch (err) {
-        if (failOnAuthRedirect && (await isLikelyAuthPage(page))) {
-          throw new PlaybookAuthExpiredError(
-            'Playbook navigation reached a login page; refresh authentication before running this data tool.',
-          );
-        }
-        throw err;
-      }
-      if (failOnAuthRedirect && (await isLikelyAuthPage(page))) {
-        throw new PlaybookAuthExpiredError(
-          'Playbook navigation reached a login page; refresh authentication before running this data tool.',
-        );
-      }
+      await page.goto(subst(step.url, params), {
+        timeout: timeoutMs,
+        waitUntil: 'domcontentloaded',
+      });
       await applyWait(page, step.wait_for, undefined, timeoutMs);
       return;
     }
@@ -480,6 +427,25 @@ async function executeStep(
     case 'type': {
       const locator = await firstMatching(page, step.locators, params, timeoutMs);
       const value = subst(step.value, params, credValues);
+      // Detect element type so we dispatch the right action. `type` on a
+      // <select> means "choose the option whose value/label matches" —
+      // a recording can capture either action shape, and the audit-time
+      // tool may also call type with a value that happens to land on a
+      // select. Without this branch, fill()/pressSequentially() throw
+      // "Element is not an input/textarea" and the whole playbook
+      // aborts.
+      const tagName = await locator.evaluate((el) => el.tagName.toLowerCase());
+      if (tagName === 'select') {
+        // Try value first, fall back to label — match Playwright's own
+        // selectOption semantics.
+        try {
+          await locator.selectOption({ value }, { timeout: timeoutMs });
+        } catch {
+          await locator.selectOption({ label: value }, { timeout: timeoutMs });
+        }
+        await applyWait(page, step.wait_for, locator, timeoutMs);
+        return;
+      }
       // Inputs / textareas: pressSequentially fires real input / keydown
       // / keyup events. React-style frameworks bind to synthetic events
       // that locator.fill() doesn't trigger — typing into an autocomplete
@@ -487,28 +453,10 @@ async function executeStep(
       // but the framework's onChange handler never runs, so the dropdown
       // / XHR / next-step locator times out. The ~10ms-per-char internal
       // delay is negligible against page-load latency.
-      try {
-        if (step.clear !== false) {
-          await locator.fill('', { timeout: timeoutMs });
-        }
-        await locator.pressSequentially(value, { timeout: timeoutMs });
-      } catch (err) {
-        // `type` can also represent choosing a <select> option. Avoid
-        // locator.evaluate() for tag detection because some login pages
-        // intentionally monkeypatch/disable eval in the main world.
-        if (
-          !/Element is not an <input>|Element is not an input|not an input|not a textarea|select/i.test(
-            errMsg(err),
-          )
-        ) {
-          throw err;
-        }
-        try {
-          await locator.selectOption({ value }, { timeout: timeoutMs });
-        } catch {
-          await locator.selectOption({ label: value }, { timeout: timeoutMs });
-        }
+      if (step.clear !== false) {
+        await locator.fill('', { timeout: timeoutMs });
       }
+      await locator.pressSequentially(value, { timeout: timeoutMs });
       await applyWait(page, step.wait_for, locator, timeoutMs);
       return;
     }
@@ -534,29 +482,6 @@ async function executeStep(
     case 'wait':
       await applyWait(page, step.wait_for, undefined, timeoutMs);
       return;
-  }
-}
-
-class PlaybookAuthExpiredError extends Error {}
-
-async function isLikelyAuthPage(page: Page): Promise<boolean> {
-  let url = '';
-  try {
-    url = page.url();
-  } catch {
-    // Continue to DOM probe below.
-  }
-  const authUrl = /(?:^|[/?#&._-])(login|logon|sign-?in|authenticate|oauth)(?:$|[/?#&._=-])/i.test(
-    url,
-  );
-  try {
-    const passwordVisible = await page
-      .locator('input[type="password"], input[name*="password" i], input[id*="password" i]')
-      .first()
-      .isVisible({ timeout: 250 });
-    return authUrl || passwordVisible;
-  } catch {
-    return authUrl;
   }
 }
 
@@ -659,15 +584,7 @@ async function applyWait(
 ): Promise<void> {
   if (!wait) return;
   if (typeof wait === 'string') {
-    if (wait === 'networkidle') {
-      try {
-        await page.waitForLoadState(wait, { timeout: timeoutMs });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!/timeout|Timeout/.test(msg)) throw err;
-        log(`networkidle wait timed out after ${timeoutMs}ms; continuing`);
-      }
-    } else if (wait === 'load') {
+    if (wait === 'networkidle' || wait === 'load') {
       await page.waitForLoadState(wait, { timeout: timeoutMs });
     } else if ((wait === 'visible' || wait === 'hidden') && ctxLocator) {
       await ctxLocator.waitFor({ state: wait, timeout: timeoutMs });

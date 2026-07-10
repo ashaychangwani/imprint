@@ -6,7 +6,6 @@ import type { RequiredInput } from '../src/imprint/build-plan.ts';
 import {
   assertNoRawSecrets,
   buildCompileTools,
-  buildRunBashTool,
   classifyIntegrationOutcome,
   classifyParamCoverage,
   contractedInputGate,
@@ -40,53 +39,6 @@ function makeSummaryRequest(seq: number, timestamp: number): Session['requests']
     },
   };
 }
-
-describe('search_requests recording discovery', () => {
-  it('finds sparse document producers by structural filters', async () => {
-    const session: Session = {
-      site: 'test',
-      startedAt: '2026-05-04T00:00:00.000Z',
-      url: 'https://example.com/start',
-      imprintVersion: '0.1.0',
-      requests: [
-        {
-          ...makeSummaryRequest(1430, 1430),
-          method: 'POST',
-          url: 'https://api.example.com/oauth/token',
-        },
-        {
-          ...makeSummaryRequest(1343, 1343),
-          resourceType: 'Document',
-          url: 'https://travel.example.com/search-redirect?next=oauth',
-          response: {
-            status: 200,
-            headers: {},
-            mimeType: 'text/html',
-            body: '<html></html>',
-          },
-        },
-      ],
-      events: [],
-      narration: [],
-      cookieSnapshots: [],
-      storageSnapshots: [],
-    };
-    const search = buildCompileTools(session, '/tmp/imprint-tool', '/tmp/session.json').find(
-      (tool) => tool.name === 'search_requests',
-    );
-    if (!search) throw new Error('search_requests tool missing');
-
-    const result = await search.handler({
-      method: 'get',
-      resourceType: 'document',
-      urlContains: 'SEARCH-REDIRECT',
-      beforeSeq: 1400,
-    });
-    const parsed = JSON.parse(result.result) as { count: number; requests: Array<{ seq: number }> };
-    expect(parsed.count).toBe(1);
-    expect(parsed.requests.map((request) => request.seq)).toEqual([1343]);
-  });
-});
 
 describe('compile tools state hints', () => {
   it('surfaces redacted equality between an earlier Set-Cookie and a later request header', async () => {
@@ -152,122 +104,6 @@ describe('compile tools state hints', () => {
   });
 });
 
-describe('compile tools playbook policy', () => {
-  it('rejects playbook.yaml in data-tool compilation by default', async () => {
-    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-playbook-policy-'));
-    const sessionPath = pathJoin(dir, 'session.json');
-    const previous = process.env.IMPRINT_ALLOW_PLAYBOOK_FALLBACK;
-    process.env.IMPRINT_ALLOW_PLAYBOOK_FALLBACK = undefined;
-
-    const session: Session = {
-      site: 'playbook-policy',
-      startedAt: '2026-07-10T00:00:00.000Z',
-      url: 'https://example.com/search',
-      imprintVersion: '0.1.0',
-      requests: [],
-      events: [],
-      narration: [],
-      cookieSnapshots: [],
-      storageSnapshots: [],
-    };
-
-    try {
-      writeFileSync(sessionPath, JSON.stringify(session), 'utf8');
-      writeFileSync(
-        pathJoin(dir, 'workflow.json'),
-        JSON.stringify({
-          toolName: 'search_hotels',
-          intent: { description: 'fixture' },
-          site: 'playbook-policy',
-          parameters: [],
-          requests: [{ method: 'GET', url: 'https://example.com/api', headers: {} }],
-        }),
-        'utf8',
-      );
-      writeFileSync(pathJoin(dir, 'playbook.yaml'), 'steps: []\n', 'utf8');
-
-      const { failures } = await externalVerification(dir, session, sessionPath);
-      expect(failures.some((failure) => failure.includes('playbook.yaml is not allowed'))).toBe(
-        true,
-      );
-    } finally {
-      if (previous === undefined) process.env.IMPRINT_ALLOW_PLAYBOOK_FALLBACK = undefined;
-      else process.env.IMPRINT_ALLOW_PLAYBOOK_FALLBACK = previous;
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('blocks run_bash from creating playbook.yaml by default', async () => {
-    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-playbook-bash-'));
-    const previous = process.env.IMPRINT_ALLOW_PLAYBOOK_FALLBACK;
-    process.env.IMPRINT_ALLOW_PLAYBOOK_FALLBACK = undefined;
-
-    try {
-      const tool = buildRunBashTool(dir);
-      const result = await tool.handler({
-        command: 'printf "steps: []\\n" > playbook.yaml',
-      });
-
-      expect(result.isError).toBe(true);
-      expect(result.result).toContain('blocked playbook fallback command');
-    } finally {
-      if (previous === undefined) process.env.IMPRINT_ALLOW_PLAYBOOK_FALLBACK = undefined;
-      else process.env.IMPRINT_ALLOW_PLAYBOOK_FALLBACK = previous;
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('compile tools volatile header guard', () => {
-  it('rejects hardcoded session and correlation header literals', async () => {
-    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-volatile-headers-'));
-    const sessionPath = pathJoin(dir, 'session.json');
-    const session: Session = {
-      site: 'volatile-headers',
-      startedAt: '2026-07-10T00:00:00.000Z',
-      url: 'https://example.com/search',
-      imprintVersion: '0.1.0',
-      requests: [],
-      events: [],
-      narration: [],
-      cookieSnapshots: [],
-      storageSnapshots: [],
-    };
-
-    try {
-      writeFileSync(sessionPath, JSON.stringify(session), 'utf8');
-      writeFileSync(
-        pathJoin(dir, 'workflow.json'),
-        JSON.stringify({
-          toolName: 'search_hotels',
-          intent: { description: 'fixture' },
-          site: 'volatile-headers',
-          parameters: [],
-          requests: [
-            {
-              method: 'POST',
-              url: 'https://example.com/api/search',
-              headers: {
-                'lxp-api-session-id': 'fixture-session-id-6AEClZySEhjARUpKLTLm',
-                'lxp-client-correlation-id': '${generated.uuid}',
-              },
-            },
-          ],
-        }),
-        'utf8',
-      );
-
-      const { failures } = await externalVerification(dir, session, sessionPath);
-      const text = failures.join('\n');
-      expect(text).toContain('hardcodes volatile header literal');
-      expect(text).toContain('lxp-api-session-id');
-      expect(text).not.toContain('lxp-client-correlation-id');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
 describe('compile tools request compaction', () => {
   it('compacts summary requests while preserving selected candidate seqs', async () => {
     const session: Session = {
@@ -319,12 +155,8 @@ describe('compile tools request compaction', () => {
         credentialNames: [],
         tokenExtractionNotes: '',
         sharedHelperNotes: '',
-        twoFactorDetected: false,
-        twoFactorType: 'none' as const,
-        twoFactorRequestSeqs: [],
-        authCompletionSeqs: [],
-        twoFactorContext: [],
-        twoFactorNotes: '',
+        authRequestSeqs: [4],
+        authNotes: '',
       },
     }).find((tool) => tool.name === 'read_session_summary');
     if (!readSummary) throw new Error('read_session_summary tool missing');

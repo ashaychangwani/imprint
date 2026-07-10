@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import {
-  auditToolDeadlineMs,
+  AuthContinuationStore,
   buildJsonSchema,
   runSerializedBySite,
 } from '../src/imprint/mcp-server.ts';
@@ -61,49 +61,65 @@ describe('buildJsonSchema', () => {
       {
         name: 'action',
         type: 'string',
-        description: 'Authentication phase.',
-        default: 'initiate',
-        choices: ['initiate', 'complete', 'submit_otp'],
+        description: 'Compiled action.',
+        default: 'begin',
+        choices: ['begin', 'finish'],
       },
     ];
     const schema = buildJsonSchema(params);
     const props = schema.properties as
       | Record<string, { enum?: Array<string | number | boolean> } | undefined>
       | undefined;
-    expect(props?.action?.enum).toEqual(['initiate', 'complete', 'submit_otp']);
+    expect(props?.action?.enum).toEqual(['begin', 'finish']);
     expect(schema.required).toBeUndefined();
+  });
+
+  it('advertises auth continuation as an opaque token', () => {
+    const schema = buildJsonSchema([], {
+      authConfig: {
+        entry: 'begin',
+        actions: {
+          begin: {
+            parameters: [],
+            steps: [{ request: 0, onError: 'fail' }],
+            outcome: { type: 'success', evidence: [] },
+          },
+        },
+        persist: [],
+        crossOriginCookieReinjection: false,
+      },
+    });
+    const props = schema.properties as Record<string, { type?: string } | undefined>;
+    expect(props.continuation?.type).toBe('string');
   });
 });
 
-describe('auditToolDeadlineMs', () => {
-  it('defaults paced audit MCP calls to the 270s internal budget', () => {
-    const prevDeadline = process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS;
-    const prevPacing = process.env.IMPRINT_AUDIT_PACING_MS;
-    try {
-      process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = undefined;
-      process.env.IMPRINT_AUDIT_PACING_MS = '5000';
-      expect(auditToolDeadlineMs()).toBe(270_000);
-    } finally {
-      if (prevDeadline === undefined) process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = undefined;
-      else process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = prevDeadline;
-      if (prevPacing === undefined) process.env.IMPRINT_AUDIT_PACING_MS = undefined;
-      else process.env.IMPRINT_AUDIT_PACING_MS = prevPacing;
-    }
+describe('AuthContinuationStore', () => {
+  it('returns state only once to the declared tool and next action', () => {
+    const store = new AuthContinuationStore();
+    const token = store.issue({
+      toolName: 'authenticate_fixture',
+      nextAction: 'finish',
+      state: { ticket: 'private-ticket' },
+    });
+
+    expect(store.consume(token, 'authenticate_fixture', 'finish')).toEqual({
+      ticket: 'private-ticket',
+    });
+    expect(store.consume(token, 'authenticate_fixture', 'finish')).toBeUndefined();
   });
 
-  it('honors an explicit audit MCP deadline override', () => {
-    const prevDeadline = process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS;
-    const prevPacing = process.env.IMPRINT_AUDIT_PACING_MS;
-    try {
-      process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = '42000';
-      process.env.IMPRINT_AUDIT_PACING_MS = '5000';
-      expect(auditToolDeadlineMs()).toBe(42_000);
-    } finally {
-      if (prevDeadline === undefined) process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = undefined;
-      else process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = prevDeadline;
-      if (prevPacing === undefined) process.env.IMPRINT_AUDIT_PACING_MS = undefined;
-      else process.env.IMPRINT_AUDIT_PACING_MS = prevPacing;
-    }
+  it('rejects forged tokens and consumes tokens used for the wrong action', () => {
+    const store = new AuthContinuationStore();
+    const token = store.issue({
+      toolName: 'authenticate_fixture',
+      nextAction: 'finish',
+      state: { ticket: 'private-ticket' },
+    });
+
+    expect(store.consume('forged', 'authenticate_fixture', 'finish')).toBeUndefined();
+    expect(store.consume(token, 'authenticate_fixture', 'other')).toBeUndefined();
+    expect(store.consume(token, 'authenticate_fixture', 'finish')).toBeUndefined();
   });
 });
 

@@ -27,6 +27,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
+import { type Span, context as otelContext } from '@opentelemetry/api';
 import type { OnDeadlineReached } from './agent.ts';
 import type { AuthCliCompileMode } from './auth-compile-tools.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
@@ -41,7 +42,6 @@ import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
-  type Span,
   endTraceSpan,
   llmSpanAttributes,
   setSpanAttributes,
@@ -454,6 +454,12 @@ async function driveStreamJson(
   child: ChildProcess,
   opts: CompileViaClaudeCliOptions,
 ): Promise<CompileAgentResult> {
+  // Capture OTel context so child-process event handlers can parent spans
+  // under the current compile.claude_cli_agent span. Bun's event emitters
+  // don't propagate AsyncLocalStorage, so without this the agent.turn.*
+  // spans appear as orphaned root traces in Phoenix.
+  const parentCtx = otelContext.active();
+
   const conversationLog: unknown[] = [];
   const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
   const flushLog = (): void => {
@@ -485,7 +491,7 @@ async function driveStreamJson(
       inputTokens,
       outputTokens,
       verificationCycle: 1,
-      maxVerificationCycles: MAX_VERIFICATION_CYCLES,
+      maxVerificationCycles: opts.authMode ? undefined : MAX_VERIFICATION_CYCLES,
     });
   };
 
@@ -527,105 +533,107 @@ async function driveStreamJson(
   // Stdout: newline-delimited stream-json events.
   let stdoutBuf = '';
   child.stdout?.on('data', (chunk: Buffer) => {
-    stdoutBuf += chunk.toString('utf8');
-    while (true) {
-      const nl = stdoutBuf.indexOf('\n');
-      if (nl < 0) break;
-      const line = stdoutBuf.slice(0, nl).trim();
-      stdoutBuf = stdoutBuf.slice(nl + 1);
-      if (!line) continue;
+    otelContext.with(parentCtx, () => {
+      stdoutBuf += chunk.toString('utf8');
+      while (true) {
+        const nl = stdoutBuf.indexOf('\n');
+        if (nl < 0) break;
+        const line = stdoutBuf.slice(0, nl).trim();
+        stdoutBuf = stdoutBuf.slice(nl + 1);
+        if (!line) continue;
 
-      let evt: StreamJsonEvent;
-      try {
-        evt = JSON.parse(line);
-      } catch (err) {
-        log(`unparseable stream-json line: ${err instanceof Error ? err.message : String(err)}`);
-        continue;
-      }
-
-      conversationLog.push(evt);
-
-      // Token accounting from any event that carries usage.
-      const evtInputTokens =
-        (evt.usage?.input_tokens ?? 0) + (evt.message?.usage?.input_tokens ?? 0);
-      const evtOutputTokens =
-        (evt.usage?.output_tokens ?? 0) + (evt.message?.usage?.output_tokens ?? 0);
-      if (evtInputTokens || evtOutputTokens) {
-        inputTokens += evtInputTokens;
-        outputTokens += evtOutputTokens;
-        turnInputTokens += evtInputTokens;
-        turnOutputTokens += evtOutputTokens;
-      }
-
-      if (evt.type === 'system' && evt.subtype === 'init') {
-        if (evt.session_id) capturedSessionId = evt.session_id;
-        log(`session_id=${evt.session_id ?? '(none)'}`);
-        continue;
-      }
-
-      if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
-        if (currentTurnSpan) {
-          setSpanAttributes(currentTurnSpan, {
-            'imprint.agent.turn_input_tokens': turnInputTokens,
-            'imprint.agent.turn_output_tokens': turnOutputTokens,
-          });
-          endTraceSpan(currentTurnSpan);
+        let evt: StreamJsonEvent;
+        try {
+          evt = JSON.parse(line);
+        } catch (err) {
+          log(`unparseable stream-json line: ${err instanceof Error ? err.message : String(err)}`);
+          continue;
         }
-        flushLog();
-        turn++;
-        turnInputTokens = 0;
-        turnOutputTokens = 0;
-        currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
-          'imprint.agent.turn': turn,
-          'imprint.agent.cumulative_input_tokens': inputTokens,
-          'imprint.agent.cumulative_output_tokens': outputTokens,
-        });
-        if (currentTurnSpan && captureLlmIo) {
-          setSpanAttributes(
-            currentTurnSpan,
-            traceJsonInputOutputAttributes('output', evt.message.content),
-          );
+
+        conversationLog.push(evt);
+
+        // Token accounting from any event that carries usage.
+        const evtInputTokens =
+          (evt.usage?.input_tokens ?? 0) + (evt.message?.usage?.input_tokens ?? 0);
+        const evtOutputTokens =
+          (evt.usage?.output_tokens ?? 0) + (evt.message?.usage?.output_tokens ?? 0);
+        if (evtInputTokens || evtOutputTokens) {
+          inputTokens += evtInputTokens;
+          outputTokens += evtOutputTokens;
+          turnInputTokens += evtInputTokens;
+          turnOutputTokens += evtOutputTokens;
         }
-        fireProgress('thinking');
-        for (const block of evt.message.content) {
-          if (block && (block as { type?: string }).type === 'tool_use') {
-            const fullName = (block as { name?: string }).name ?? '(unknown)';
-            // Strip mcp__<server>__ prefix for human-readable progress.
-            const short = fullName.replace(`mcp__${MCP_SERVER_NAME}__`, '');
-            fireProgress('tool', short);
+
+        if (evt.type === 'system' && evt.subtype === 'init') {
+          if (evt.session_id) capturedSessionId = evt.session_id;
+          log(`session_id=${evt.session_id ?? '(none)'}`);
+          continue;
+        }
+
+        if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
+          if (currentTurnSpan) {
+            setSpanAttributes(currentTurnSpan, {
+              'imprint.agent.turn_input_tokens': turnInputTokens,
+              'imprint.agent.turn_output_tokens': turnOutputTokens,
+            });
+            endTraceSpan(currentTurnSpan);
           }
+          flushLog();
+          turn++;
+          turnInputTokens = 0;
+          turnOutputTokens = 0;
+          currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
+            'imprint.agent.turn': turn,
+            'imprint.agent.cumulative_input_tokens': inputTokens,
+            'imprint.agent.cumulative_output_tokens': outputTokens,
+          });
+          if (currentTurnSpan && captureLlmIo) {
+            setSpanAttributes(
+              currentTurnSpan,
+              traceJsonInputOutputAttributes('output', evt.message.content),
+            );
+          }
+          fireProgress('thinking');
+          for (const block of evt.message.content) {
+            if (block && (block as { type?: string }).type === 'tool_use') {
+              const fullName = (block as { name?: string }).name ?? '(unknown)';
+              // Strip mcp__<server>__ prefix for human-readable progress.
+              const short = fullName.replace(`mcp__${MCP_SERVER_NAME}__`, '');
+              fireProgress('tool', short);
+            }
+          }
+          continue;
         }
-        continue;
-      }
 
-      if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
-        if (currentTurnSpan && captureLlmIo) {
-          setSpanAttributes(
-            currentTurnSpan,
-            traceJsonInputOutputAttributes('input', evt.message.content),
-          );
+        if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
+          if (currentTurnSpan && captureLlmIo) {
+            setSpanAttributes(
+              currentTurnSpan,
+              traceJsonInputOutputAttributes('input', evt.message.content),
+            );
+          }
+          continue;
         }
-        continue;
-      }
 
-      if (evt.type === 'result') {
-        if (evt.usage) {
-          inputTokens = evt.usage.input_tokens ?? inputTokens;
-          outputTokens = evt.usage.output_tokens ?? outputTokens;
-          cacheReadInputTokens = evt.usage.cache_read_input_tokens ?? cacheReadInputTokens;
-          cacheCreationInputTokens =
-            evt.usage.cache_creation_input_tokens ?? cacheCreationInputTokens;
+        if (evt.type === 'result') {
+          if (evt.usage) {
+            inputTokens = evt.usage.input_tokens ?? inputTokens;
+            outputTokens = evt.usage.output_tokens ?? outputTokens;
+            cacheReadInputTokens = evt.usage.cache_read_input_tokens ?? cacheReadInputTokens;
+            cacheCreationInputTokens =
+              evt.usage.cache_creation_input_tokens ?? cacheCreationInputTokens;
+          }
+          if (evt.is_error) {
+            lastErrorEvent = evt;
+          }
+          continue;
         }
-        if (evt.is_error) {
-          lastErrorEvent = evt;
-        }
-        continue;
-      }
 
-      if (evt.type === 'system' && evt.subtype === 'api_retry') {
-        log(`api_retry: ${(evt as { error?: string }).error ?? '(unknown)'}`);
+        if (evt.type === 'system' && evt.subtype === 'api_retry') {
+          log(`api_retry: ${(evt as { error?: string }).error ?? '(unknown)'}`);
+        }
       }
-    }
+    });
   });
 
   child.stderr?.on('data', (chunk: Buffer) => {

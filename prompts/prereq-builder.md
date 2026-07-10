@@ -22,7 +22,7 @@ You receive `{ site, url, module, availableDependencies, sources, implementation
 ## Output requirements by `kind`
 
 ### `request-transform`
-- Export a `transform` function: `transform(method: string, url: string, responses: unknown[], params?: Record<string, string | number | boolean>): string | { url?: string; body?: string; headers?: Record<string, string>; skip?: boolean }`.
+- Export a `transform` function: `transform(method: string, url: string, responses: unknown[], params?: Record<string, string | number | boolean>): string | { url: string; body?: string }`.
 - It reproduces the site's per-request signing/body logic (e.g. HMAC/MD5/CRC32 + encoding) so the regenerated value matches what the recording sent. Derive the algorithm from `sources` (and any `.js` body included there). Return the URL with the signing param appended (or `{ url, body }` when you must build the body).
 - **The verifier re-signs a recorded URL and checks your output reproduces the recorded signing param.** A no-op that returns the URL unchanged will fail.
 

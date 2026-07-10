@@ -50,22 +50,16 @@ export interface CompileAgentProgress extends AgentProgress {
   /** 1-based verification cycle. Cycle 1 is the initial agent run. Subsequent cycles
    *  happen when the agent claims done() but external verification fails. */
   verificationCycle: number;
-  /** Hard cap on verification cycles (typically 5). */
-  maxVerificationCycles: number;
+  /** Verification cap for bounded data-tool compiles; auth is deadline-bounded. */
+  maxVerificationCycles?: number;
   // ── Auth segments only (all optional; data-compile + codex paths leave unset) ──
   /** 1-based current segment index in the resumable auth loop. */
   segment?: number;
-  /** Total segment budget (MAX_AUTH_SEGMENTS). */
-  maxSegments?: number;
-  /** Live `initiate` attempts spent so far (AuthVerifier.attemptsUsed). */
-  attempt?: number;
-  /** Attempt cap (AuthVerifier.maxInitiateAttempts). */
-  maxAttempts?: number;
   /** The most recent live verification result, so the orchestrator's progress
    *  line can surface a failure (e.g. a 403) the instant it happens instead of
    *  only feeding it to the agent. Grounded purely in AuthPhaseResult fields. */
   lastVerification?: {
-    phase: string;
+    action: string;
     ok: boolean;
     status?: number;
     error?: string;
@@ -82,7 +76,12 @@ export interface CompileAgentProgress extends AgentProgress {
  *  the cooldown — then resumes the agent (`claude --resume`) with the result as a
  *  follow-up user message. Site/channel-agnostic. */
 export type AuthCheckpoint =
-  | { kind: 'run_verification'; phase: 'initiate' | 'submit_otp' | 'complete'; otp_code?: string }
+  | {
+      kind: 'run_verification';
+      action: string;
+      parameters?: Record<string, string | number | boolean>;
+      freshSession?: boolean;
+    }
   | { kind: 'prompt_user'; message: string; options?: string[] }
   | { kind: 'wait_for_cooldown'; minutes: number; reason?: string };
 

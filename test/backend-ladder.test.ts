@@ -25,7 +25,6 @@ import {
   pickProbeWinner,
   prefersCdpReplayFirst,
   renderWorkflowRequests,
-  reshapePlaybookAuthResult,
   resolveLadder,
   runWithLadder,
   runWorkflowWithLadder,
@@ -34,7 +33,12 @@ import type { MintedJar } from '../src/imprint/cdp-browser-fetch.ts';
 import { type CredentialStore, executeWorkflow } from '../src/imprint/runtime.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
-import type { ConcreteBackend, ToolResult, Workflow } from '../src/imprint/types.ts';
+import {
+  type ConcreteBackend,
+  type ToolResult,
+  type Workflow,
+  WorkflowSchema,
+} from '../src/imprint/types.ts';
 
 let root: string;
 
@@ -203,152 +207,35 @@ describe('pickProbeWinner (cdp-replay preferred over stealth-fetch)', () => {
   });
 });
 
-describe('cdpReplayPoolKey', () => {
-  it('scopes pooled CDP sessions by site and origin', () => {
-    expect(cdpReplayPoolKey('fixture-site', 'https://login.example.com/path')).toBe(
-      'fixture-site::https://login.example.com',
-    );
-    expect(cdpReplayPoolKey('fixture-site', 'https://travel.example.com/api')).toBe(
-      'fixture-site::https://travel.example.com',
-    );
-  });
-});
-
-describe('runWorkflowWithLadder — auth credential overrides', () => {
-  it('passes explicit credentials to a forced auth playbook rung', async () => {
-    const toolDir = pathJoin(root, 'fixture-site', 'authenticate_fixture');
-    mkdirSync(toolDir, { recursive: true });
-    const workflow: Workflow = {
-      toolName: 'authenticate_fixture',
-      toolKind: 'authenticate',
-      site: 'fixture-site',
-      intent: { description: 'auth fixture' },
-      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
-      requests: [
-        {
-          method: 'POST',
-          url: 'https://login.example.com/session',
-          headers: {},
-          body: '{"username":"${credential.username}"}',
-        },
-      ],
-      authConfig: {
-        twoFactorType: 'none',
-        initiateRequestCount: 1,
-        pollIntervalMs: 3000,
-        maxPollAttempts: 80,
-        twoFactorContext: [],
-        crossOriginCookieReinjection: false,
-        sessionCapture: [],
-      },
-    };
-    writeFileSync(pathJoin(toolDir, 'workflow.json'), JSON.stringify(workflow), 'utf8');
-    writeFileSync(
-      pathJoin(toolDir, 'playbook.yaml'),
-      'toolName: authenticate_fixture\nparameters: []\nsteps: []\nresult: { source: dom, locators: [{ by: text, value: OK }], extract: text }\n',
-      'utf8',
-    );
-
-    let seenCredentials: CredentialStore | undefined;
-    __setPlaybookRunnerForTest(async (opts) => {
-      seenCredentials = opts.credentials;
-      return { ok: true, data: { reached: true } };
-    });
-
-    const credentials: CredentialStore = {
-      site: 'fixture-site',
-      cookies: [],
-      values: { username: 'compile-user', password: 'compile-pass' },
-      storage: [],
-    };
-    const result = await runWorkflowWithLadder({
-      workflowPath: pathJoin(toolDir, 'workflow.json'),
-      params: { action: 'initiate' },
-      credentials,
-      forceBackend: 'playbook',
-    });
-
-    expect(result.result.ok).toBe(true);
-    expect(result.usedBackend).toBe('playbook');
-    expect(seenCredentials?.values).toEqual({
-      username: 'compile-user',
-      password: 'compile-pass',
-    });
-  });
-
-  it('passes explicit credentials to a memoized auth playbook rung', async () => {
-    const toolDir = pathJoin(root, 'fixture-site', 'authenticate_fixture');
-    mkdirSync(toolDir, { recursive: true });
-    const workflow: Workflow = {
-      toolName: 'authenticate_fixture',
-      toolKind: 'authenticate',
-      site: 'fixture-site',
-      intent: { description: 'auth fixture' },
-      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
-      requests: [
-        {
-          method: 'POST',
-          url: 'https://login.example.com/session',
-          headers: {},
-          body: '{"username":"${credential.username}"}',
-        },
-      ],
-      authConfig: {
-        twoFactorType: 'none',
-        initiateRequestCount: 1,
-        pollIntervalMs: 3000,
-        maxPollAttempts: 80,
-        twoFactorContext: [],
-        crossOriginCookieReinjection: false,
-        sessionCapture: [],
-      },
-    };
-    writeFileSync(pathJoin(toolDir, 'workflow.json'), JSON.stringify(workflow), 'utf8');
-    writeFileSync(
-      pathJoin(toolDir, 'playbook.yaml'),
-      'toolName: authenticate_fixture\nparameters: []\nsteps: []\nresult: { source: dom, locators: [{ by: text, value: OK }], extract: text }\n',
-      'utf8',
-    );
-    writeFileSync(
-      pathJoin(toolDir, 'backends.json'),
-      JSON.stringify({
-        probedAt: new Date().toISOString(),
-        imprintVersion: '0.1.0',
-        schemaVersion: 2,
-        preferredOrder: ['playbook'],
-        results: { playbook: { outcome: 'ok', durationMs: 10 } },
-      }),
-      'utf8',
-    );
-
-    let seenCredentials: CredentialStore | undefined;
-    __setPlaybookRunnerForTest(async (opts) => {
-      seenCredentials = opts.credentials;
-      return { ok: true, data: { reached: true } };
-    });
-
-    const credentials: CredentialStore = {
-      site: 'fixture-site',
-      cookies: [],
-      values: { username: 'compile-user', password: 'compile-pass' },
-      storage: [],
-    };
-    const result = await runWorkflowWithLadder({
-      workflowPath: pathJoin(toolDir, 'workflow.json'),
-      params: { action: 'initiate' },
-      credentials,
-    });
-
-    expect(result.result.ok).toBe(true);
-    expect(result.usedBackend).toBe('playbook');
-    expect(seenCredentials?.values).toEqual({
-      username: 'compile-user',
-      password: 'compile-pass',
-    });
-  });
-});
-
 describe('runWithLadder — single-rung explicit', () => {
+  it('never executes the playbook rung for authenticate workflows', async () => {
+    const behavior: FakeToolBehavior = { calls: { fetch: 0, stealth: 0 } };
+    const tool = makeFakeTool('auth-fixture', behavior);
+    tool.workflow = WorkflowSchema.parse({
+      ...tool.workflow,
+      toolKind: 'authenticate',
+      parameters: [{ name: 'action', type: 'string', description: 'action', default: 'login' }],
+      authConfig: {
+        entry: 'login',
+        actions: {
+          login: {
+            steps: [{ request: 0 }],
+            outcome: { type: 'success' },
+          },
+        },
+      },
+    });
+    let playbookCalls = 0;
+    __setPlaybookRunnerForTest(async () => {
+      playbookCalls++;
+      return { ok: true, data: {} };
+    });
+
+    const result = await runWithLadder(['playbook'], tool, {}, root, new Map());
+    expect(result.result.ok).toBe(false);
+    expect(playbookCalls).toBe(0);
+  });
+
   it('returns the fetch result directly when explicit "fetch"', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: { ok: true, data: { x: 1 } },
@@ -1829,15 +1716,32 @@ describe('cdp-replay cookie seeding by toolKind', () => {
     // sensor so the cross-origin credential POST is edge-403'd. Auth = fresh session.
     seedJarOnDisk('auth');
     const cap = captureSeed();
-    const r = await runWithLadder(
-      ['cdp-replay'],
-      cdpTool('auth', 'authenticate'),
-      {},
-      root,
-      new Map(),
-    );
+    const tool = cdpTool('auth', 'authenticate');
+    let runtimeCookieNames: string[] | undefined;
+    tool.toolFn = async (_params, opts) => {
+      runtimeCookieNames = (opts?.credentials as CredentialStore | undefined)?.cookies.map(
+        (cookie) => cookie.name,
+      );
+      return { ok: true, data: { via: 'cdp-replay' } };
+    };
+    const r = await runWithLadder(['cdp-replay'], tool, {}, root, new Map(), {
+      credentials: {
+        site: 'auth',
+        values: {},
+        storage: [],
+        cookies: [
+          {
+            name: 'stale_session',
+            value: 'STALE',
+            domain: '.auth.example.com',
+            path: '/',
+          },
+        ],
+      },
+    });
     expect(r.usedBackend).toBe('cdp-replay');
     expect(cap.seen()).toBeUndefined();
+    expect(runtimeCookieNames).toEqual([]);
   });
 });
 
@@ -2308,75 +2212,5 @@ describe('pickBaseUrl', () => {
   it('throws for empty requests', () => {
     const tool = toolWith([]);
     expect(() => pickBaseUrl(tool)).toThrow('has no requests');
-  });
-});
-
-describe('reshapePlaybookAuthResult', () => {
-  const authWorkflow = (over: Partial<Workflow['authConfig']> = {}): Workflow =>
-    ({
-      toolName: 'authenticate_fix',
-      toolKind: 'authenticate',
-      intent: { description: 'auth' },
-      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
-      requests: [{ method: 'POST', url: 'https://fix.example/login', headers: {} }],
-      site: 'fix',
-      authConfig: {
-        twoFactorType: 'otp',
-        initiateRequestCount: 1,
-        twoFactorContext: ['SecurityCode'],
-        ...over,
-      },
-    }) as Workflow;
-
-  const okResult = (data: Record<string, unknown>): ToolResult => ({ ok: true, data });
-
-  it('reshapes a 2FA playbook ok:true into AWAITING_2FA carrying the captured token', () => {
-    const r = reshapePlaybookAuthResult(
-      okResult({ authenticated: true, SecurityCode: 'SYNTH-SEC-1' }),
-      authWorkflow(),
-      { action: 'initiate' },
-    );
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error('expected AWAITING_2FA');
-    expect(r.error).toBe('AWAITING_2FA');
-    expect(r.twoFactorType).toBe('otp');
-    expect(r.twoFactorContext).toEqual({ SecurityCode: 'SYNTH-SEC-1' });
-  });
-
-  it('reshapes with undefined twoFactorContext when no token was captured', () => {
-    const r = reshapePlaybookAuthResult(okResult({ authenticated: true }), authWorkflow(), {
-      action: 'initiate',
-    });
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error('expected AWAITING_2FA');
-    expect(r.error).toBe('AWAITING_2FA');
-    expect(r.twoFactorContext).toBeUndefined();
-  });
-
-  it('leaves a no-2FA authenticate ok:true untouched (full login)', () => {
-    const r = reshapePlaybookAuthResult(
-      okResult({ authenticated: true }),
-      authWorkflow({ twoFactorType: 'none' }),
-      { action: 'initiate' },
-    );
-    expect(r.ok).toBe(true);
-  });
-
-  it('does NOT reshape submit_otp/complete actions (those run via fetch)', () => {
-    for (const action of ['submit_otp', 'complete']) {
-      const r = reshapePlaybookAuthResult(okResult({ authenticated: true }), authWorkflow(), {
-        action,
-      });
-      expect(r.ok).toBe(true);
-    }
-  });
-
-  it('passes through a failed result and non-authenticate tools unchanged', () => {
-    const failed: ToolResult = { ok: false, error: 'NETWORK', message: 'boom' };
-    expect(reshapePlaybookAuthResult(failed, authWorkflow(), { action: 'initiate' })).toBe(failed);
-
-    const dataTool = { ...authWorkflow(), toolKind: 'read' } as unknown as Workflow;
-    const ok = okResult({ x: 1 });
-    expect(reshapePlaybookAuthResult(ok, dataTool, { action: 'initiate' })).toBe(ok);
   });
 });

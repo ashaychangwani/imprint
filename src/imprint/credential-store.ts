@@ -713,18 +713,13 @@ export async function saveSiteCookies(site: string, cookies: CookieRecord[]): Pr
   await backend.setCookies(site, cookies);
 }
 
-/** Convenience wrapper to persist browser storage (localStorage/sessionStorage)
- *  after a successful auth tool run, so a later stateless `submit_otp` call can
- *  rehydrate the same session state. Delegates to the backend's optional
- *  setStorage; no-ops on backends that don't support storage. */
+/** Persist browser storage through the active credential backend. */
 export async function saveSiteStorage(site: string, storage: StorageRecord[]): Promise<void> {
   const backend = await getCredentialBackend();
   await backend.setStorage?.(site, storage);
 }
 
-/** Persist a single durable secret value (e.g. a bearer/access token captured
- *  from a completed login via authConfig.sessionCapture) so data tools reuse it
- *  as `${credential.NAME}` without re-running auth. */
+/** Persist one action-program capture named by `authConfig.persist`. */
 export async function saveSiteSecret(site: string, name: string, value: string): Promise<void> {
   const backend = await getCredentialBackend();
   await backend.setSecret(site, name, value);

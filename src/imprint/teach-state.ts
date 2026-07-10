@@ -29,7 +29,11 @@ import {
   relativeToLocalSite,
   resolveLocalSitePath,
 } from './paths.ts';
-import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
+import {
+  type SharedCompileContext,
+  SharedCompileContextSchema,
+  type ToolCandidate,
+} from './tool-candidates.ts';
 
 export const TEACH_STEPS = [
   'record',
@@ -93,6 +97,11 @@ export function loadTeachState(site: string): TeachState {
   if (!existsSync(loadPath)) return { workflows: {} };
   try {
     const state = JSON.parse(readFileSync(loadPath, 'utf8')) as TeachState;
+    for (const workflow of Object.values(state.workflows)) {
+      if (!workflow.sharedContext) continue;
+      const parsed = SharedCompileContextSchema.safeParse(workflow.sharedContext);
+      workflow.sharedContext = parsed.success ? parsed.data : undefined;
+    }
     return isLegacy ? normalizeLegacyTeachState(site, state) : state;
   } catch {
     return { workflows: {} };

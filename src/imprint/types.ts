@@ -171,7 +171,7 @@ const CookieCaptureSchema = CaptureCommonSchema.extend({
   allowHttpOnlyProjection: z.boolean().optional().default(false),
 });
 
-const RequestCaptureSchema = z.discriminatedUnion('source', [
+export const RequestCaptureSchema = z.discriminatedUnion('source', [
   RequestCaptureCommonSchema.extend({
     source: z.literal('json'),
     path: z.string(),
@@ -275,44 +275,56 @@ const WorkflowRequestSchema = z.object({
 });
 export type WorkflowRequest = z.infer<typeof WorkflowRequestSchema>;
 
-/** The two *structural* 2FA cases the runtime actually branches on, plus `none`.
- *  A code that arrives out-of-band (sms / email / authenticator app) and is typed
- *  back into a second request is one case (`otp`); an approval the user taps
- *  elsewhere while we poll is the other (`push`). The delivery *channel* never
- *  changes how we replay it, so we don't model it. */
-export const TwoFactorTypeSchema = z.enum(['otp', 'push', 'none']).default('none');
-
 const AuthConfigSchema = z
   .object({
-    twoFactorType: TwoFactorTypeSchema,
-    /** How many requests to execute for the 'initiate' phase (login + 2FA trigger).
-     *  The remaining requests run during the 'complete'/'submit_otp' phase. */
-    initiateRequestCount: z.number().int().nonnegative().default(0),
-    pollEndpoint: z.string().optional(),
-    /** Push only: HTTP method for the poll request (default POST). */
-    pollMethod: z.string().optional(),
-    /** Push only: the request body to send on each poll attempt, templated like
-     *  any other request body (`${param.X}` / `${state.X}` / `${credential.X}`).
-     *  Some poll/status endpoints reject an empty body (e.g. require a JSON
-     *  `{mfaId,...}` payload), so the compile agent must declare the recorded
-     *  poll body here — otherwise the poll silently sends nothing and the
-     *  approved push is never recognized. Omitted → body-less poll (legacy). */
-    pollBody: z.string().optional(),
-    /** Push only: Content-Type for the poll body (default application/json when
-     *  pollBody is set). Grounded in the recorded poll request's header. */
-    pollContentType: z.string().optional(),
-    pollIntervalMs: z.number().int().positive().default(3000),
-    maxPollAttempts: z.number().int().positive().default(60),
-    /** Push only: a recording-grounded capture that resolves on the *approved*
-     *  poll response (and not on the pending ones). It may use `equals` when a
-     *  scalar field changes to a terminal value, including an empty string.
-     *  Omitted → fall back to "a session Set-Cookie appeared". */
-    pollTerminal: RequestCaptureSchema.optional(),
-    /** OTP only: the names of `${state.X}` values captured from the initiate
-     *  response that the completion (submit_otp) requests need (e.g. a reauth
-     *  `mfaId`). Because each MCP call is stateless, these are echoed back to
-     *  the caller in the AWAITING_2FA result and passed in again on submit_otp. */
-    twoFactorContext: z.array(z.string()).default([]),
+    /** Recording-grounded auth program. Action names, boundaries, evidence,
+     *  retry behavior, and completion are chosen by the compile agent. */
+    entry: z.string().min(1),
+    actions: z.record(
+      z.string().min(1),
+      z
+        .object({
+          parameters: z.array(z.string().min(1)).optional().default([]),
+          steps: z
+            .array(
+              z
+                .object({
+                  request: z.number().int().nonnegative(),
+                  onError: z.enum(['fail', 'continue', 'retry']).optional().default('fail'),
+                  repeat: z
+                    .object({
+                      until: RequestCaptureSchema,
+                      intervalMs: z.number().int().nonnegative(),
+                      maxAttempts: z.number().int().positive(),
+                    })
+                    .strict()
+                    .optional(),
+                })
+                .strict(),
+            )
+            .min(1),
+          outcome: z.discriminatedUnion('type', [
+            z
+              .object({
+                type: z.literal('pause'),
+                next: z.string().min(1),
+                evidence: z.array(z.string().min(1)).optional().default([]),
+                carry: z.array(z.string().min(1)).optional().default([]),
+                message: z.string().min(1),
+              })
+              .strict(),
+            z
+              .object({
+                type: z.literal('success'),
+                evidence: z.array(z.string().min(1)).optional().default([]),
+              })
+              .strict(),
+          ]),
+        })
+        .strict(),
+    ),
+    /** Captured state names to store as durable credentials after success. */
+    persist: z.array(z.string().min(1)).optional().default([]),
     /** Opt-in: when the recorded login carries its session through a CROSS-ORIGIN
      *  `Set-Cookie` (e.g. a `functions.*`/`global.*` host sets a cookie that a
      *  later leg depends on), set this so cdp-replay writes those cross-origin
@@ -320,14 +332,6 @@ const AuthConfigSchema = z
      *  when the recording actually shows cross-origin cookie chaining; otherwise
      *  the browser's normal same-origin jar is left untouched. */
     crossOriginCookieReinjection: z.boolean().default(false),
-    /** Durable session tokens to persist after a SUCCESSFUL login completion so
-     *  DATA tools can reuse them without re-running auth (they re-auth only on
-     *  expiry / AUTH_EXPIRED). Cookies persist automatically; declare here only
-     *  the NON-cookie material a data request needs — a bearer / access / CSRF
-     *  token the completion response returns in its body or a header. Each
-     *  capture's resolved value is stored as a durable credential secret
-     *  (`${credential.NAME}`). Grounded in the recording; channel/site-agnostic. */
-    sessionCapture: z.array(RequestCaptureSchema).default([]),
   })
   .strict()
   .optional();
@@ -416,12 +420,12 @@ export interface StateMissingItem {
 
 /** Discriminated union returned by every generated tool. */
 export type ToolResult<T = unknown> =
-  | { ok: true; data: T; loginResponsePreview?: string }
+  | { ok: true; data: T }
   | {
       ok: false;
       error:
         | 'AUTH_EXPIRED' // 401 — run `imprint login`
-        | 'AWAITING_2FA' // 2FA required — user must approve push / enter OTP
+        | 'ACTION_REQUIRED' // declared auth action completed; another action/user input is needed
         | 'FORBIDDEN' // 403 — bot detection, geo, ToS, capability mismatch
         | 'NETWORK' // fetch threw / timed out
         | 'RATE_LIMITED' // 429
@@ -435,23 +439,12 @@ export type ToolResult<T = unknown> =
        *  (absent for transport/STATE_MISSING failures). Surfaced so the auth
        *  compile agent sees the concrete code, not just a prose message. */
       status?: number;
-      /** Truncated response body of the failing request (first ~500 chars).
-       *  Lets the compile agent inspect the server's actual error payload
-       *  without re-running. Distinct from `loginResponsePreview`, which is the
-       *  *initiate* response preview on the AWAITING_2FA path. */
+      /** Truncated response body of the failing request (first ~500 chars). */
       responseBodyPreview?: string;
-      twoFactorType?: string;
-      /** OTP only: the `${state.X}` values captured from the initiate response
-       *  that the caller must echo back on the submit_otp call (stateless
-       *  state-chain bridge). Names are declared in authConfig.twoFactorContext. */
-      twoFactorContext?: Record<string, unknown>;
-      /** Internal verifier progress that must survive a retry of the same auth
-       *  phase. This is consumed by AuthVerifier and is not compiler input. */
-      _authContinuation?: {
-        pushApproved?: true;
-        nextRequestIndex?: number;
-      };
-      loginResponsePreview?: string;
+      /** Recording-derived state and generic action progress. Echo this object
+       *  unchanged on the next auth call. */
+      continuation?: Record<string, unknown>;
+      nextAction?: string;
     };
 
 // ─── Cron config (input to `imprint cron`) ───────────────────────────────────
@@ -649,11 +642,7 @@ const PlaybookResultSchema = z.discriminatedUnion('source', [
 ]);
 export type PlaybookResult = z.infer<typeof PlaybookResultSchema>;
 
-/** A named value extracted from a captured XHR response, in addition to the
- *  success marker. Used by a login playbook to carry a 2FA-chain token (e.g. a
- *  single-use `SecurityCode` minted in the browser during the OTP-send step)
- *  out of the playbook run so a later stateless `submit_otp` can include it.
- *  The `name` should match an `authConfig.twoFactorContext` entry. */
+/** A named value extracted from a playbook's captured XHR response. */
 const PlaybookCaptureSchema = z.object({
   name: z.string(),
   /** Regex matched against the captured response URL. */

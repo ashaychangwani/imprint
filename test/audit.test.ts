@@ -3,7 +3,6 @@ import {
   type AuditReport,
   AuditReportSchema,
   auditHasCorrectSignal,
-  auditMcpToolDeadlineMs,
   buildAuditInitialPrompt,
   buildTokenDepNote,
   buildUnverifiedParamNote,
@@ -262,19 +261,6 @@ describe('computeAuditScore', () => {
     expect(score.graded).toBe(2);
     expect(score.score).toBe(100);
     expect(score.verdict).toBe('pass');
-  });
-});
-
-describe('auditMcpToolDeadlineMs', () => {
-  it('defaults audit MCP calls to 270s, leaving margin under the 300s client timeout', () => {
-    const prev = process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS;
-    try {
-      process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = undefined;
-      expect(auditMcpToolDeadlineMs()).toBe(270_000);
-    } finally {
-      if (prev === undefined) process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = undefined;
-      else process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = prev;
-    }
   });
 });
 

@@ -1,9 +1,9 @@
 /**
- * Headless-agent MCP audit harness — the acceptance gate for a site's
+ * Headless-claude MCP audit harness — the acceptance gate for a site's
  * generated tools.
  *
  * `runAudit` discovers every tool a site exposes via `imprint mcp-server`,
- * spawns a headless Claude or Codex session pointed at that real MCP server, and asks
+ * spawns a headless `claude` session pointed at that real MCP server, and asks
  * it to exercise each tool and classify every invocation. The model returns a
  * structured report, but it never reports a score: imprint recomputes the score
  * deterministically from the model's per-invocation verdicts
@@ -28,8 +28,6 @@ const log = createLog('audit');
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
 const PROMPTS_DIR = pathJoin(REPO_ROOT, 'prompts');
-const AUDIT_MCP_TOOL_TIMEOUT_MS = 300_000;
-const DEFAULT_AUDIT_MCP_INTERNAL_DEADLINE_MS = 270_000;
 
 /** Default wall-clock cap for an audit session. This is a CAP, not a fixed
  *  duration: fast sites finish their full differential param sweep and exit
@@ -37,15 +35,6 @@ const DEFAULT_AUDIT_MCP_INTERNAL_DEADLINE_MS = 270_000;
  *  cdp-replay startup can be expensive, but warm calls usually reuse the live
  *  browser pool and should not be treated as equally expensive. */
 const DEFAULT_AUDIT_TIMEOUT_MS = 45 * 60_000;
-
-export function auditMcpToolDeadlineMs(): number {
-  const raw = Number(process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_AUDIT_MCP_INTERNAL_DEADLINE_MS;
-}
-
-function auditMcpToolDeadlineEnv(): string {
-  return String(auditMcpToolDeadlineMs());
-}
 
 /** One invocation the auditor performed against a tool. */
 const InvocationSchema = z.object({
@@ -567,10 +556,7 @@ async function driveAuditWithClaude(opts: DriveAuditOptions): Promise<DriveAudit
         // after one call, so a deliberate inter-call delay keeps the probing
         // steady enough that the per-IP anti-bot defense isn't tripped. Only
         // the audit sets this; production mcp-server runs unpaced.
-        env: {
-          IMPRINT_AUDIT_PACING_MS: '5000',
-          IMPRINT_AUDIT_TOOL_DEADLINE_MS: auditMcpToolDeadlineEnv(),
-        },
+        env: { IMPRINT_AUDIT_PACING_MS: '5000', IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000' },
       },
     },
   };
@@ -630,7 +616,7 @@ async function driveAuditWithClaude(opts: DriveAuditOptions): Promise<DriveAudit
       // inputs) before the auditor finishes grading. Honor user-set env.
       env: {
         ...process.env,
-        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? String(AUDIT_MCP_TOOL_TIMEOUT_MS),
+        MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '300000',
         MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? '60000',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -697,11 +683,11 @@ ${buildAuditInitialPrompt(opts, unverifiedNote)}`;
     '-c',
     `mcp_servers.${serverName}.default_tools_approval_mode=${JSON.stringify('approve')}`,
     '-c',
-    `mcp_servers.${serverName}.tool_timeout_sec=${Math.floor(AUDIT_MCP_TOOL_TIMEOUT_MS / 1000)}`,
+    `mcp_servers.${serverName}.tool_timeout_sec=300`,
     '-c',
     `mcp_servers.${serverName}.env.IMPRINT_AUDIT_PACING_MS=${JSON.stringify('5000')}`,
     '-c',
-    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS=${JSON.stringify(auditMcpToolDeadlineEnv())}`,
+    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS=${JSON.stringify('120000')}`,
     '-c',
     'shell_environment_policy.inherit=all',
     '-',
@@ -716,7 +702,7 @@ ${buildAuditInitialPrompt(opts, unverifiedNote)}`;
       env: {
         ...process.env,
         IMPRINT_AUDIT_PACING_MS: '5000',
-        IMPRINT_AUDIT_TOOL_DEADLINE_MS: auditMcpToolDeadlineEnv(),
+        IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

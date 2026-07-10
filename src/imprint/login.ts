@@ -48,7 +48,7 @@ export async function login(opts: LoginOptions): Promise<LoginResult> {
     upsertManifestEntry(opts.site, {
       name,
       kind: 'opaque',
-      description: 'Captured from the recorded login response (authConfig.sessionCapture)',
+      description: 'Captured from the recorded login response (authConfig.persist)',
     });
   }
 
@@ -89,11 +89,7 @@ function collectStorage(session: Session): StorageRecord[] {
   return Array.from(byKey.values());
 }
 
-/** Gather every durable `authConfig.sessionCapture` declared by the site's
- *  compiled workflows (`~/.imprint/<site>/<tool>/workflow.json`). Deduped by
- *  name (first workflow to declare a capture wins). Returns `[]` when the site
- *  has no compiled tools or none declare captures — there is no per-site code,
- *  so a new authed site works as soon as its workflow declares what it needs. */
+/** Gather the request captures named by each auth program's `persist` list. */
 function collectSessionCaptures(site: string): RequestCapture[] {
   const siteDir = localSiteDir(site);
   let entries: string[];
@@ -113,10 +109,13 @@ function collectSessionCaptures(site: string): RequestCapture[] {
     } catch {
       continue; // not a tool dir, unreadable, or not a valid workflow
     }
-    for (const capture of workflow.authConfig?.sessionCapture ?? []) {
-      if (seen.has(capture.name)) continue;
-      seen.add(capture.name);
-      captures.push(capture);
+    const persisted = new Set(workflow.authConfig?.persist ?? []);
+    for (const request of workflow.requests) {
+      for (const capture of request.captures ?? []) {
+        if (!persisted.has(capture.name) || seen.has(capture.name)) continue;
+        seen.add(capture.name);
+        captures.push(capture);
+      }
     }
   }
   return captures;
@@ -162,7 +161,7 @@ function resolveCapture(session: Session, capture: RequestCapture): string | und
   return undefined;
 }
 
-/** Resolve all of a site's declared `sessionCapture` credential slots from the
+/** Resolve all captures selected by a site's `authConfig.persist` list from the
  *  recording. Fully generic — no per-site logic. Exported for tests. */
 export function extractCredentials(site: string, session: Session): Record<string, string> {
   const values: Record<string, string> = {};

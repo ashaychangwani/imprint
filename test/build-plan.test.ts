@@ -1413,8 +1413,8 @@ describe('reconcileRequiredInputs', () => {
       ],
       authTool: {
         toolName: 'authenticate',
-        loginRequestSeqs: [5],
-        twoFactorType: 'none',
+        credentialRequestSeqs: [5],
+        authRequestSeqs: [5],
         captures: [],
       },
     };
@@ -1743,7 +1743,12 @@ describe('validateBuildPlan requiredInputs', () => {
             credentialName: 'orphan',
           },
         ],
-        { toolName: 'authenticate', loginRequestSeqs: [5], twoFactorType: 'none', captures: [] },
+        {
+          toolName: 'authenticate',
+          credentialRequestSeqs: [5],
+          authRequestSeqs: [5],
+          captures: [],
+        },
       ),
       ['search', 'book'],
     );
@@ -1763,8 +1768,8 @@ describe('validateBuildPlan requiredInputs', () => {
         ],
         {
           toolName: 'authenticate',
-          loginRequestSeqs: [5],
-          twoFactorType: 'none',
+          credentialRequestSeqs: [5],
+          authRequestSeqs: [5],
           captures: [
             {
               name: 'access_token',

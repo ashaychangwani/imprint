@@ -28,7 +28,6 @@ import { compactRequestContexts, requestContextDigest } from './request-context.
 import { type ClassifiedValue, looksLikeOpaqueToken, looksLikeToken } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
-import { TwoFactorTypeSchema } from './types.ts';
 import type { Session } from './types.ts';
 
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
@@ -206,12 +205,8 @@ type PerToolPlan = z.infer<typeof PerToolPlanSchema>;
 export const AuthToolPlanSchema = z
   .object({
     toolName: z.string(),
-    loginRequestSeqs: z.array(z.number().int().nonnegative()),
-    twoFactorRequestSeqs: z.array(z.number().int().nonnegative()).default([]),
-    twoFactorType: TwoFactorTypeSchema,
-    /** OTP only: initiate-response field names the completion request chains via
-     *  ${state.X} (structural, from the recording). */
-    twoFactorContext: z.array(z.string()).default([]),
+    credentialRequestSeqs: z.array(z.number().int().nonnegative()).default([]),
+    authRequestSeqs: z.array(z.number().int().nonnegative()).default([]),
     credentialNames: z.array(z.string()).default([]),
     captures: z.array(AuthCaptureSchema).default([]),
     notes: z.string().default(''),
@@ -1391,7 +1386,7 @@ export function deriveRequiredInputHints(payload: {
 
     // auth — minted by the login flow's response (any NON-cookie location). A
     // login-minted value sent back as a Cookie persists automatically via the
-    // credential jar, so it needs no ${credential.X} sessionCapture contract.
+    // credential jar, so it needs no ${credential.X} persist contract.
     if (ev.producerSeq != null && loginSeqs.has(ev.producerSeq) && !isCookieHeaderName(evHeader)) {
       const name = nameFromLocationOrSuggestion(ev.location, ev.suggestedStateName);
       push({

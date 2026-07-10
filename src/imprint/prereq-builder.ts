@@ -469,7 +469,7 @@ async function anchorRequestTransform(
 
   if (attempted && !anyCallSucceeded) {
     return {
-      failure: `${module.path} (request-transform) threw or returned no URL result when re-signing every recorded URL. It must reproduce the site's signing logic (sourceSeqs ${module.sourceSeqs.join(', ') || 'none'}).`,
+      failure: `${module.path} (request-transform) threw or returned no URL string when re-signing every recorded URL. It must reproduce the site's signing logic (sourceSeqs ${module.sourceSeqs.join(', ') || 'none'}).`,
     };
   }
   if (attempted) {

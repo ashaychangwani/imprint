@@ -13,6 +13,7 @@ import {
   type TeachState,
   type WorkflowState,
   discoverOrphanSession,
+  loadTeachState,
   pruneStalePendingTeachWorkflows,
 } from '../src/imprint/teach-state.ts';
 import {
@@ -27,9 +28,7 @@ import {
   resolveWorkflowTriagedPath,
   selectCompleteAuthCredentials,
   updateCandidateStageCheckpoints,
-  writeQuickBackendsCache,
 } from '../src/imprint/teach.ts';
-import { WorkflowSchema } from '../src/imprint/types.ts';
 
 describe('teach verb', () => {
   it('has a VERB_HELP entry', () => {
@@ -115,47 +114,6 @@ describe('teach auth credential precedence', () => {
   });
 });
 
-describe('teach quick backend cache', () => {
-  it('re-probes a cache from an older imprint version or workflow', async () => {
-    const dir = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-backends-'));
-    const workflow = WorkflowSchema.parse({
-      toolName: 'search_hotels',
-      intent: { description: 'Search hotels' },
-      parameters: [],
-      requests: [{ method: 'GET', url: 'https://example.com/hotels', headers: {} }],
-      site: 'fixture-site',
-    });
-    writeFileSync(
-      pathResolve(dir, 'backends.json'),
-      JSON.stringify({
-        probedAt: '2025-01-01T00:00:00.000Z',
-        imprintVersion: '0.1.0',
-        schemaVersion: 2,
-        workflowHash: 'stale-workflow-hash',
-        preferredOrder: ['stealth-fetch'],
-        results: {},
-      }),
-    );
-
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => new Response('', { status: 403 })) as unknown as typeof fetch;
-    try {
-      await writeQuickBackendsCache(dir, workflow);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-
-    const cache = JSON.parse(readFileSync(pathResolve(dir, 'backends.json'), 'utf8')) as {
-      imprintVersion: string;
-      workflowHash: string;
-      preferredOrder: string[];
-    };
-    expect(cache.imprintVersion).toBe('0.6.0');
-    expect(cache.workflowHash).not.toBe('stale-workflow-hash');
-    expect(cache.preferredOrder).toEqual(['stealth-fetch']);
-  });
-});
-
 describe('teach provider picker', () => {
   const statuses: ProviderStatus[] = [
     {
@@ -234,6 +192,33 @@ describe('teach session state helpers', () => {
     expect(resolveTeachStatePath('google-flights', '')).toBeNull();
     expect(resolveTeachStatePath('google-flights', '   ')).toBeNull();
     expect(resolveTeachStatePath('google-flights', undefined)).toBeNull();
+  });
+
+  it('normalizes shared context saved before neutral auth fields existed', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      const siteDir = localSiteDir('legacy-auth');
+      mkdirSync(siteDir, { recursive: true });
+      writeFileSync(
+        pathResolve(siteDir, '.teach-state.json'),
+        JSON.stringify({
+          workflows: {
+            search: workflowState({
+              sharedContext: {
+                loginRequestSeqs: [5],
+                credentialNames: ['username'],
+                twoFactorType: 'push',
+              } as unknown as WorkflowState['sharedContext'],
+            }),
+          },
+        }),
+      );
+
+      const context = loadTeachState('legacy-auth').workflows.search?.sharedContext;
+      expect(context?.authRequestSeqs).toEqual([]);
+      expect(context?.authNotes).toBe('');
+      expect(context).not.toHaveProperty('twoFactorType');
+    });
   });
 
   it('resolves relative state paths under ~/.imprint and preserves absolute paths', () => {
@@ -530,14 +515,12 @@ describe('formatAuthProgress', () => {
     expect(formatAuthProgress(base({ turn: 29 }))).toBe('Auth compile: turn 29');
   });
 
-  it('a failed verification surfaces phase, error, status, and attempt', () => {
+  it('a failed verification surfaces action, error, and status', () => {
     const s = formatAuthProgress(
       base({
         turn: 30,
-        attempt: 2,
-        maxAttempts: 5,
         lastVerification: {
-          phase: 'initiate',
+          action: 'begin',
           ok: false,
           error: 'FORBIDDEN',
           status: 403,
@@ -546,27 +529,25 @@ describe('formatAuthProgress', () => {
       }),
     );
     expect(s).toContain('turn 30');
-    expect(s).toContain('initiate FAILED');
+    expect(s).toContain('begin FAILED');
     expect(s).toContain('FORBIDDEN');
     expect(s).toContain('HTTP 403');
-    expect(s).toContain('attempt 2/5');
-    expect(s).toContain('retrying');
+    expect(s).toContain('revising');
   });
 
   it('a successful verification falls back to the plain turn line', () => {
     const s = formatAuthProgress(
-      base({ turn: 31, lastVerification: { phase: 'complete', ok: true } }),
+      base({ turn: 31, lastVerification: { action: 'finish', ok: true } }),
     );
     expect(s).toBe('Auth compile: turn 31');
   });
 
-  it('omits the attempt suffix when attempt counts are absent', () => {
+  it('shows a generic action failure', () => {
     const s = formatAuthProgress(
-      base({ turn: 5, lastVerification: { phase: 'initiate', ok: false, error: 'NETWORK' } }),
+      base({ turn: 5, lastVerification: { action: 'begin', ok: false, error: 'NETWORK' } }),
     );
-    expect(s).toContain('initiate FAILED');
+    expect(s).toContain('begin FAILED');
     expect(s).toContain('NETWORK');
-    expect(s).not.toContain('attempt');
   });
 
   it('the per-segment offset makes the turn monotonic (no reset across segments)', () => {

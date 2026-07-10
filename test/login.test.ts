@@ -7,7 +7,7 @@ import type { Session } from '../src/imprint/types.ts';
 
 /**
  * `imprint login` credential extraction is GENERIC: it resolves each site's
- * declared `authConfig.sessionCapture` (read from the site's compiled
+ * request captures named by `authConfig.persist` (read from the site's compiled
  * workflow.json) against the recorded login response — there is no per-site
  * code. These tests prove the two shapes the old hardcoded extractors handled
  * (Discover & Go nested keys, Southwest dotted top-level keys) reproduce the
@@ -28,7 +28,12 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-function writeWorkflow(site: string, tool: string, authConfig: unknown): void {
+function writeWorkflow(
+  site: string,
+  tool: string,
+  captures: unknown[],
+  persist = captures.map((capture) => (capture as { name: string }).name),
+): void {
   const dir = join(home, site, tool);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
@@ -37,8 +42,20 @@ function writeWorkflow(site: string, tool: string, authConfig: unknown): void {
       toolName: tool,
       intent: { description: 'test tool' },
       parameters: [],
-      requests: [],
-      authConfig,
+      requests: [{ method: 'POST', url: 'https://example.test/login', headers: {}, captures }],
+      toolKind: 'authenticate',
+      authConfig: {
+        entry: 'authenticate',
+        actions: {
+          authenticate: {
+            parameters: [],
+            steps: [{ request: 0, onError: 'fail' }],
+            outcome: { type: 'success', evidence: [] },
+          },
+        },
+        persist,
+        crossOriginCookieReinjection: false,
+      },
       site,
     }),
   );
@@ -64,15 +81,13 @@ function sessionWithLoginResponse(body: string): Session {
   } as unknown as Session;
 }
 
-describe('extractCredentials (generic sessionCapture resolver)', () => {
+describe('extractCredentials (generic persisted-capture resolver)', () => {
   it('resolves Discover & Go nested-key shape into the exact credential slots', () => {
-    writeWorkflow('discoverandgo', 'book_pass', {
-      sessionCapture: [
-        { name: 'patron_id', source: 'json', path: 'patronID' },
-        { name: 'session_id', source: 'json', path: 'session' },
-        { name: 'patron_email', source: 'json', path: 'patronEmail' },
-      ],
-    });
+    writeWorkflow('discoverandgo', 'book_pass', [
+      { name: 'patron_id', source: 'json', path: 'patronID' },
+      { name: 'session_id', source: 'json', path: 'session' },
+      { name: 'patron_email', source: 'json', path: 'patronEmail' },
+    ]);
     const session = sessionWithLoginResponse(
       JSON.stringify({ patronID: 'P123', session: 'S456', patronEmail: 'bob@example.com' }),
     );
@@ -85,16 +100,14 @@ describe('extractCredentials (generic sessionCapture resolver)', () => {
   });
 
   it('resolves Southwest dotted top-level keys via bracketed paths', () => {
-    writeWorkflow('southwest', 'account', {
-      sessionCapture: [
-        {
-          name: 'account_number',
-          source: 'json',
-          path: '[customers.userInformation.accountNumber]',
-        },
-        { name: 'primary_email', source: 'json', path: '[customers.userInformation.primaryEmail]' },
-      ],
-    });
+    writeWorkflow('southwest', 'account', [
+      {
+        name: 'account_number',
+        source: 'json',
+        path: '[customers.userInformation.accountNumber]',
+      },
+      { name: 'primary_email', source: 'json', path: '[customers.userInformation.primaryEmail]' },
+    ]);
     const session = sessionWithLoginResponse(
       JSON.stringify({
         'customers.userInformation.accountNumber': 'ACC999',
@@ -109,9 +122,9 @@ describe('extractCredentials (generic sessionCapture resolver)', () => {
   });
 
   it('resolves a response_header capture', () => {
-    writeWorkflow('acme', 'tool', {
-      sessionCapture: [{ name: 'csrf', source: 'response_header', header: 'x-csrf-token' }],
-    });
+    writeWorkflow('acme', 'tool', [
+      { name: 'csrf', source: 'response_header', header: 'x-csrf-token' },
+    ]);
     const session: Session = {
       requests: [
         {
@@ -133,7 +146,7 @@ describe('extractCredentials (generic sessionCapture resolver)', () => {
   });
 
   it('returns nothing when the site declares no captures (no per-site fallback)', () => {
-    writeWorkflow('plainsite', 'tool', { sessionCapture: [] });
+    writeWorkflow('plainsite', 'tool', []);
     const session = sessionWithLoginResponse(JSON.stringify({ patronID: 'P123' }));
     expect(extractCredentials('plainsite', session)).toEqual({});
   });
@@ -144,12 +157,15 @@ describe('extractCredentials (generic sessionCapture resolver)', () => {
   });
 
   it('skips a capture whose value is absent from every response', () => {
-    writeWorkflow('acme', 'tool', {
-      sessionCapture: [
+    writeWorkflow(
+      'acme',
+      'tool',
+      [
         { name: 'patron_id', source: 'json', path: 'patronID' },
         { name: 'missing', source: 'json', path: 'nope' },
       ],
-    });
+      ['patron_id', 'missing'],
+    );
     const session = sessionWithLoginResponse(JSON.stringify({ patronID: 'P123' }));
     expect(extractCredentials('acme', session)).toEqual({ patron_id: 'P123' });
   });

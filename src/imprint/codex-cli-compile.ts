@@ -8,8 +8,9 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
+import type { Span } from '@opentelemetry/api';
 import type { AuthCliCompileMode } from './auth-compile-tools.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import type {
@@ -23,7 +24,6 @@ import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
-  type Span,
   endTraceSpan,
   llmSpanAttributes,
   resolveTraceTokenCount,
@@ -45,7 +45,6 @@ const MCP_SERVER_NAME = 'imprint-compile';
 const MAX_VERIFICATION_CYCLES = 5;
 const MIN_MCP_TOOL_TIMEOUT_SEC = 300;
 const MAX_MCP_TOOL_TIMEOUT_SEC = 1800;
-const DEFAULT_AUTH_CODEX_IDLE_TIMEOUT_MS = 120_000;
 
 interface CompileViaCodexCliOptions {
   session: Session;
@@ -364,18 +363,13 @@ function buildAuthCodexInitialPrompt(initialPrompt: string): string {
 ${authPrompt}
 
 Auth compile rules:
-- Use the recording and auth plan as the source of truth. Inspect with read_session_summary, search_requests, read_request, and read_response_body before writing files. Use search_requests instead of guessing sparse sequence IDs, especially to find Document requests preceding an OAuth/API chain.
-- Write workflow.json for toolKind "authenticate". Include an action parameter with choices ["initiate","complete","submit_otp"], authConfig, bootstrap.url, and both initiate and completion phase requests.
-- Use only the canonical workflow schema: request entries use method, url, headers, optional body (a string), optional captures (an array of {source,name,...} with optional scalar equals), effect, optional, and the browser-native mode described below. There is no request phase, bodyJson, singular capture, transform, expect, poll, id, or seq field. Set authConfig.twoFactorType explicitly to "push", "otp", or "none"; authConfig.type is invalid. Put the split in authConfig.initiateRequestCount, push polling in authConfig.pollEndpoint/pollBody/pollTerminal, and the module path in top-level requestTransformModule.
-- When a recorded top-level Document page generates coupled browser state or drives redirects (OAuth PKCE is the standard example), represent that recorded GET as {"mode":"navigate","navigation":{"urlIncludes":"..."}} or use navigation.cookie {name,domain?,path?} grounded in the recording. A urlIncludes completion predicate must identify a destination and must not already match the starting URL. This runs the real page JavaScript in the persistent cdp-replay browser. Do not synthesize verifier cookies, guess framework cookie names, or replace the page with manual OAuth API calls.
-- Runtime templates use the exact \${credential.X}, \${state.X}, \${generated.uuid}, and \${response[N].path} syntax, never double-brace templates. Serialize JSON request bodies into body strings. For 2FA, list the carried values in authConfig.twoFactorContext and make the final initiate request capture at least one of them as concrete delivery evidence.
-- Do not write playbook.yaml. Under the default no-playbook policy, use workflow.json plus a legitimate request-transform.ts.
-- Do not freeze recorded-only freshness values such as request IDs, OAuth nonces/challenges/verifiers, browser clock fields, or concrete device/account labels. Generate, capture, transform, or give up after verification proves a required value cannot be represented.
-- A recorded encrypted/signed credential envelope is not a freshness value and is not proven stale by static inspection, browser-side generation, opacity, or variation across recordings. Preserve its encryptedData/signature/publicKey fields in the first workflow and call run_verification. Only a concrete pre-challenge verification failure may prove it stale and justify give_up.
-- Do not replace a recorded encrypted/signed credential submit with a raw password form unless a request transform derives the equivalent live fields, and do not attempt to reimplement unknown site crypto before testing the recorded envelope.
-- Verify with run_verification. It is a checkpoint: after run_verification, prompt_user, or wait_for_cooldown, stop and let the orchestrator resume you.
-- Once initiate reaches AWAITING_2FA, do not rerun initiate just to check it again. Prompt the user if needed, then complete/submit_otp once and call done only after verification passes.
-- Do not inspect Imprint source or runtime internals before the first workflow.json unless a concrete verification failure requires it.
+- Treat the recording as the source of truth. Inspect requests and responses before writing artifacts.
+- Write a canonical toolKind="authenticate" workflow. Keep network operations in requests; define authConfig.entry, arbitrary named actions, per-action parameters and steps, evidence, explicit carry/next state, retry bounds, and a declared success outcome from the recording.
+- Request steps reference indices in workflow.requests. A repeat block supplies until (a normal capture), intervalMs, and maxAttempts. onError is fail, continue, or retry; retry requires repeat bounds.
+- Use ordinary captures and exact runtime templates (\${credential.X}, \${param.X}, \${state.X}, \${response[N].path}, and supported \${generated.*} values). Use mode="navigate" or request-transform.ts when recording-grounded browser execution requires it.
+- Never write or depend on playbook.yaml. Do not inspect Imprint runtime source to infer site behavior.
+- run_verification accepts a declared action plus its scalar parameters. It is the only live login path. It reuses the verification session by default; set freshSession only when observed evidence requires discarding prior browser and continuation state. After any checkpoint call, stop and let the orchestrator resume you with observed facts.
+- Call done only after an action with a declared success outcome returns ok:true.
 
 Your first response MUST be a call to the imprint-compile read_session_summary tool. Do not answer in prose or spend the first turn planning before that tool call.`;
 }
@@ -406,15 +400,10 @@ async function driveJsonl(
   let inputTokens = 0;
   let outputTokens = 0;
   let turn = 0;
-  let activeToolCount = 0;
   let lastErrorMessage = '';
   let stderrBuf = '';
   let agentMessageCount = 0;
   let capturedSessionId: string | undefined;
-  let lastProgressAt = Date.now();
-  let authIdleTimedOut = false;
-  let authMcpProgressSeen = false;
-  let firstAuthMcpTimer: ReturnType<typeof setTimeout> | undefined;
   const toolSpans = new Map<string, Span>();
   let currentTurnSpan: Span | null = null;
 
@@ -429,7 +418,7 @@ async function driveJsonl(
       inputTokens,
       outputTokens,
       verificationCycle: 1,
-      maxVerificationCycles: MAX_VERIFICATION_CYCLES,
+      maxVerificationCycles: opts.authMode ? undefined : MAX_VERIFICATION_CYCLES,
     });
   };
 
@@ -439,22 +428,6 @@ async function driveJsonl(
   const workflowPath = pathJoin(opts.absoluteToolDir, 'workflow.json');
   const parserPath = pathJoin(opts.absoluteToolDir, 'parser.ts');
   const parserTestPath = pathJoin(opts.absoluteToolDir, 'parser.test.ts');
-  const requestTransformPath = pathJoin(opts.absoluteToolDir, 'request-transform.ts');
-  const segmentStartedAt = Date.now();
-  const artifactBaselineMtimes = new Map(
-    [workflowPath, requestTransformPath, doneSentinel, giveUpSentinel, checkpointSentinel].map(
-      (p) => [p, fileMtimeMs(p)] as const,
-    ),
-  );
-  const authIdleTimeoutMs = resolveAuthCodexIdleTimeoutMs();
-  const markProgress = (): void => {
-    lastProgressAt = Date.now();
-  };
-  const clearFirstAuthMcpTimer = (): void => {
-    if (!firstAuthMcpTimer) return;
-    clearTimeout(firstAuthMcpTimer);
-    firstAuthMcpTimer = undefined;
-  };
   const terminateChild = (graceMs: number): void => {
     try {
       signalCodexProcessTree(child, 'SIGTERM');
@@ -470,39 +443,6 @@ async function driveJsonl(
     }, graceMs);
     forceTimer.unref?.();
   };
-  const terminateForAuthIdle = (reason: string): void => {
-    if (authIdleTimedOut) return;
-    authIdleTimedOut = true;
-    log(reason);
-    // A stalled native Codex process can ignore SIGTERM while retaining the
-    // wrapper's stdout pipe. This path has no checkpoint state to flush, so kill
-    // the dedicated process group immediately.
-    signalCodexProcessTree(child, 'SIGKILL');
-  };
-  const checkAuthFirstMcpTimeout = (): void => {
-    if (!opts.authMode || authIdleTimedOut || authMcpProgressSeen || turn <= 0) return;
-    if (Date.now() - lastProgressAt < authIdleTimeoutMs) return;
-    clearFirstAuthMcpTimer();
-    terminateForAuthIdle(
-      `auth codex segment streamed without imprint-compile MCP/artifact progress for ${Math.round(authIdleTimeoutMs / 1000)}s; terminating`,
-    );
-  };
-  const armFirstAuthMcpTimer = (): void => {
-    if (!opts.authMode || authMcpProgressSeen || firstAuthMcpTimer) return;
-    log(`auth codex first-MCP watchdog armed for turn ${turn}: ${authIdleTimeoutMs}ms`);
-    firstAuthMcpTimer = setTimeout(() => {
-      firstAuthMcpTimer = undefined;
-      if (authMcpProgressSeen) return;
-      terminateForAuthIdle(
-        `auth codex segment made no imprint-compile MCP/artifact progress for ${Math.round(authIdleTimeoutMs / 1000)}s; terminating`,
-      );
-    }, authIdleTimeoutMs);
-  };
-  const hasFreshAuthArtifactProgress = (): boolean =>
-    [workflowPath, requestTransformPath, doneSentinel, giveUpSentinel, checkpointSentinel].some(
-      (p) => fileChangedSince(p, artifactBaselineMtimes.get(p), segmentStartedAt),
-    );
-
   const deadlineTimer = setTimeout(
     () => {
       log('wall-clock deadline exceeded, terminating codex');
@@ -513,7 +453,6 @@ async function driveJsonl(
 
   let stdoutBuf = '';
   child.stdout?.on('data', (chunk: Buffer) => {
-    checkAuthFirstMcpTimeout();
     const chunkText = chunk.toString('utf8');
     rawStdoutChunks.push(chunkText);
     stdoutBuf += chunkText;
@@ -545,8 +484,6 @@ async function driveJsonl(
         if (currentTurnSpan) endTraceSpan(currentTurnSpan);
         flushLog();
         turn++;
-        markProgress();
-        armFirstAuthMcpTimer();
         currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
           'imprint.agent.turn': turn,
           'imprint.agent.cumulative_input_tokens': inputTokens,
@@ -562,13 +499,6 @@ async function driveJsonl(
         const toolName = codexToolName(item);
         if (toolName) {
           traceCodexToolEvent(toolSpans, eventType, item, toolName);
-          if (eventType === 'item.started') activeToolCount++;
-          if (eventType === 'item.completed') activeToolCount = Math.max(0, activeToolCount - 1);
-          markProgress();
-          if (opts.authMode && isCodexMcpCompileTool(item)) {
-            authMcpProgressSeen = true;
-            clearFirstAuthMcpTimer();
-          }
           fireProgress(eventType === 'item.started' ? 'tool' : 'thinking', toolName);
         }
         continue;
@@ -615,11 +545,9 @@ async function driveJsonl(
         lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
       }
     }
-    checkAuthFirstMcpTimeout();
   });
 
   child.stderr?.on('data', (chunk: Buffer) => {
-    checkAuthFirstMcpTimeout();
     const s = chunk.toString('utf8');
     rawStderrChunks.push(s);
     stderrBuf += s;
@@ -634,7 +562,6 @@ async function driveJsonl(
       resolved = true;
       if (forcedKillTimer) clearTimeout(forcedKillTimer);
       clearInterval(sentinelTimer);
-      clearInterval(idleTimer);
       resolve(code);
     };
     const terminateForSentinel = (): void => {
@@ -661,25 +588,6 @@ async function driveJsonl(
       if (!existsSync(doneSentinel) && !existsSync(giveUpSentinel) && !checkpointReached) return;
       terminateForSentinel();
     }, 500);
-    const idleTimer = setInterval(() => {
-      if (!opts.authMode) return;
-      if (hasFreshAuthArtifactProgress()) {
-        markProgress();
-        return;
-      }
-      // A tool START is progress, but it must not exempt the subprocess forever.
-      // Auth shaping tools are checkpointed/read-only and individually bounded;
-      // if no completion, artifact, or later event arrives within this window,
-      // the MCP call itself is stalled and the whole Codex process tree must go.
-      if (turn <= 0 || Date.now() - lastProgressAt < authIdleTimeoutMs) {
-        return;
-      }
-      authIdleTimedOut = true;
-      log(
-        `auth codex segment made no completed tool/artifact progress for ${Math.round(authIdleTimeoutMs / 1000)}s${activeToolCount > 0 ? ` (${activeToolCount} tool call(s) still active)` : ''}; terminating`,
-      );
-      terminateForSentinel();
-    }, 1000);
     child.once('close', (code) => {
       finish(code ?? -1);
     });
@@ -688,7 +596,6 @@ async function driveJsonl(
     });
   });
   clearTimeout(deadlineTimer);
-  clearFirstAuthMcpTimer();
   if (currentTurnSpan) endTraceSpan(currentTurnSpan);
   for (const span of toolSpans.values()) endTraceSpan(span);
   toolSpans.clear();
@@ -823,15 +730,6 @@ async function driveJsonl(
       success: false,
       outcome: 'timeout',
       message: `codex-cli exceeded the ${Math.round((opts.deadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
-      ...baseResult,
-    };
-  }
-
-  if (authIdleTimedOut) {
-    return {
-      success: false,
-      outcome: 'error',
-      message: `codex-cli auth segment made no required auth compile progress within ${Math.round(authIdleTimeoutMs / 1000)}s after starting a turn.`,
       ...baseResult,
     };
   }
@@ -1004,12 +902,6 @@ function codexToolName(item: NonNullable<CodexJsonEvent['item']>): string | unde
   return name.replace(`mcp__${MCP_SERVER_NAME}__`, '');
 }
 
-function isCodexMcpCompileTool(item: NonNullable<CodexJsonEvent['item']>): boolean {
-  if (item.server === MCP_SERVER_NAME) return true;
-  const name = item.name ?? item.tool_name ?? item.tool;
-  return typeof name === 'string' && name.startsWith(`mcp__${MCP_SERVER_NAME}__`);
-}
-
 function codexToolInput(item: NonNullable<CodexJsonEvent['item']>): unknown {
   return (
     item.arguments ??
@@ -1049,25 +941,6 @@ function stringField(record: Record<string, unknown>, key: string): string | und
   return typeof value === 'string' ? value : undefined;
 }
 
-function fileMtimeMs(p: string): number | undefined {
-  try {
-    return statSync(p).mtimeMs;
-  } catch {
-    return undefined;
-  }
-}
-
-function fileChangedSince(
-  p: string,
-  baselineMtimeMs: number | undefined,
-  sinceMs: number,
-): boolean {
-  const currentMtimeMs = fileMtimeMs(p);
-  if (currentMtimeMs === undefined) return false;
-  if (baselineMtimeMs === undefined) return currentMtimeMs >= sinceMs - 1;
-  return currentMtimeMs > baselineMtimeMs;
-}
-
 function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): CompileAgentResult {
   mkdirSync(opts.absoluteToolDir, { recursive: true });
   const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
@@ -1088,14 +961,6 @@ function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): Com
     cacheReadInputTokens: 0,
     cacheCreationInputTokens: 0,
   };
-}
-
-function resolveAuthCodexIdleTimeoutMs(): number {
-  const raw = process.env.IMPRINT_AUTH_CODEX_IDLE_TIMEOUT_MS;
-  if (!raw) return DEFAULT_AUTH_CODEX_IDLE_TIMEOUT_MS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AUTH_CODEX_IDLE_TIMEOUT_MS;
-  return Math.max(1_000, Math.round(parsed));
 }
 
 function errMsg(err: unknown): string {

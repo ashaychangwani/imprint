@@ -20,18 +20,14 @@ describe('jsonpath', () => {
 
   test('supports compact and standard field predicates', () => {
     const root = {
-      challenges: [
-        { category: 'SMS', token: 'sms-token' },
-        { category: 'PUSH_NOTIFICATION', token: 'push-token' },
+      items: [
+        { category: 'SECONDARY', token: 'secondary-token' },
+        { category: 'PRIMARY', token: 'primary-token' },
       ],
     };
 
-    expect(jsonpath(root, 'challenges[category=PUSH_NOTIFICATION].token')).toBe('push-token');
-    expect(jsonpath(root, "$.challenges[?(@.category=='PUSH_NOTIFICATION')].token")).toBe(
-      'push-token',
-    );
-    expect(jsonpath(root, '$.challenges[?(@.category=="PUSH_NOTIFICATION")].token')).toBe(
-      'push-token',
-    );
+    expect(jsonpath(root, 'items[category=PRIMARY].token')).toBe('primary-token');
+    expect(jsonpath(root, "$.items[?(@.category=='PRIMARY')].token")).toBe('primary-token');
+    expect(jsonpath(root, '$.items[?(@.category=="PRIMARY")].token')).toBe('primary-token');
   });
 });

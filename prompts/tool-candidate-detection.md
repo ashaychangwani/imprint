@@ -10,12 +10,8 @@ Schema:
     "credentialNames": [string],
     "tokenExtractionNotes": "string",
     "sharedHelperNotes": "string",
-    "twoFactorDetected": boolean,
-    "twoFactorType": "otp" | "push" | "none",
-    "twoFactorRequestSeqs": [number],
-    "authCompletionSeqs": [number],
-    "twoFactorContext": [string],
-    "twoFactorNotes": "string"
+    "authRequestSeqs": [number],
+    "authNotes": "string"
   },
   "candidates": [
     {
@@ -44,29 +40,13 @@ Rules:
 2. Do not expose login, auth, CSRF refresh, telemetry, page bootstrap, or
    tracking as tools. Put login/auth request seqs in sharedContext.loginRequestSeqs
    or candidate.dependencySeqs instead.
-3. When login requests include a multi-step authentication flow, set
-   `twoFactorDetected: true` and classify `twoFactorType` by the recording's
-   **structure**, not the delivery channel:
-   - **`otp`** — a *later* request carries a short code the user obtained
-     out-of-band (the code appears in the request body/params but in no earlier
-     response). SMS, email, and authenticator-app (TOTP) codes are all `otp` —
-     the channel doesn't change the replay. If that completion request reads a
-     value the *initiate response returned in its body* (e.g. a reauth `mfaId`),
-     list the field name(s) in `twoFactorContext` so the compiler chains them.
-   - **`push`** — the same endpoint is polled repeatedly until its response flips
-     (pending→approved) or a session cookie appears; no code re-enters the flow.
-     In `twoFactorNotes`, name the poll endpoint and the field/value that marks
-     approval in the recorded terminal poll.
-   Put the 2FA-related request seqs in `twoFactorRequestSeqs`; post-2FA
-   finalization requests (trusted device registration, final OAuth exchange,
-   session confirmation) in `authCompletionSeqs`. These seqs must NOT appear
-   in any candidate's `requestSeqs` — they belong to the auth flow, not data
-   tools. When no 2FA is detected, set `twoFactorDetected: false` and leave
-   the other fields at defaults. `credentialNames` lists ONLY the durable login
-   secrets the user provisions once — the `${credential.*}` fields submitted in
-   the login request(s), typically `username` + `password`. NEVER put the live
-   one-time 2FA code in `credentialNames`: it is captured by
-   `twoFactorType`/`twoFactorContext` and entered fresh at runtime, not stored.
+3. Put every request that belongs to authentication in `authRequestSeqs`,
+   including credential submission, user-interaction checkpoints, repeated
+   status checks, redirects, exchanges, and finalization. Describe only the
+   observed request/response relationships in `authNotes`; do not classify the
+   flow into runtime phases. The auth compile agent will derive its action graph
+   from the recording. `credentialNames` lists only durable login values the
+   user provisions, never live one-time input.
 4. When multiple requests contain `${credential.*}` placeholders (multiple
    login attempts in the recording), check each request's `status` and
    `responsePreview` to determine which attempt(s) actually succeeded. A

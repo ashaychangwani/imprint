@@ -87,7 +87,7 @@ export function __setPlaybookRunnerForTest(fn: PlaybookRunner | null): void {
 
 const DEFAULT_LADDER: ConcreteBackend[] = ['fetch', 'stealth-fetch', 'playbook'];
 
-const NON_TRANSPORT_ERRORS = new Set(['AWAITING_2FA', 'AUTH_EXPIRED', 'RATE_LIMITED']);
+const NON_TRANSPORT_ERRORS = new Set(['ACTION_REQUIRED', 'AUTH_EXPIRED', 'RATE_LIMITED']);
 
 function isProbeReachable(result: ToolResult): boolean {
   if (result.ok) return true;
@@ -95,9 +95,7 @@ function isProbeReachable(result: ToolResult): boolean {
 }
 // Generous enough to clear an anti-bot interstitial (Cloudflare/Akamai
 // "checking your browser", which can hold the navigation 10-30s) before the
-// real page's `load` fires. Login pages are exactly where these challenges
-// gate, so a 20s per-step cap was too tight and stranded otherwise-correct
-// login playbooks at the navigate step. Overridable via env for tuning.
+// real page's `load` fires. Overridable via env for tuning.
 const DEFAULT_PLAYBOOK_BACKEND_TIMEOUT_MS = 150_000;
 const DEFAULT_PLAYBOOK_BACKEND_STEP_TIMEOUT_MS = 45_000;
 
@@ -260,12 +258,8 @@ export function __resetCompilePacingForTest(): void {
   compileLastRequestAt.clear();
 }
 
-export function cdpReplayPoolKey(site: string, baseUrl: string): string {
-  try {
-    return `${site}::${new URL(baseUrl).origin}`;
-  } catch {
-    return `${site}::${baseUrl}`;
-  }
+export function cdpReplayPoolKey(site: string, _baseUrl: string): string {
+  return site;
 }
 
 /** Expand a replayBackend choice into a concrete ladder. 'auto' prefers
@@ -309,15 +303,10 @@ export async function runWithLadder(
      *  The mcp-server owns one map and ties its lifetime to `cdpPool` (a memoized
      *  cdp-replay is only fast while its Chrome is pooled). */
     winnerCache?: Map<string, ConcreteBackend>;
-    /** Seed state for `${state.X}` substitution, merged UNDER any state a rung
-     *  mints itself (bootstrap captures win on key overlap). The auth 2FA bridge
-     *  uses it: the caller echoes the AWAITING_2FA `twoFactorContext` back on
-     *  submit_otp so a body-returned token (e.g. a reauth mfaId) resolves on the
-     *  stateless second call. Undefined for every non-auth call → no effect. */
+    /** Seed state for `${state.X}` substitution, merged under state minted by a
+     *  rung. Auth actions use this for their declared continuation projection. */
     initialState?: Record<string, unknown>;
-    /** Optional credential override used by auth verification. Workflow rungs
-     *  already receive this through the generated tool function; the playbook
-     *  rung needs it explicitly so DOM login steps can type live credentials. */
+    /** Optional credential override used by auth verification. */
     credentials?: CredentialStore;
   },
 ): Promise<LadderResult> {
@@ -325,9 +314,24 @@ export async function runWithLadder(
     throw new Error('runWithLadder: empty ladder');
   }
 
+  const permittedLadder =
+    tool.workflow.toolKind === 'authenticate'
+      ? ladder.filter((backend) => backend !== 'playbook')
+      : ladder;
+  if (permittedLadder.length === 0) {
+    return {
+      result: {
+        ok: false,
+        error: 'UNKNOWN',
+        message: 'Authenticate workflows do not execute playbooks.',
+      },
+      usedBackend: 'playbook',
+      attempts: [],
+    };
+  }
   const baseLadder = options?.skipBootstrapSplice
-    ? ladder
-    : effectiveAutoLadder(ladder, tool.workflow);
+    ? permittedLadder
+    : effectiveAutoLadder(permittedLadder, tool.workflow);
 
   // Runtime winner memo. Once a backend has served this tool in THIS session,
   // start there next time instead of re-walking the doomed early rungs (southwest
@@ -437,15 +441,9 @@ export async function runWithLadder(
             playbook: playbookPath(assetRoot, tool.site, tool.dir),
             params: paramsWithDefaults,
             site: tool.site,
-            credentials: options?.credentials,
             stepTimeoutMs: playbookBackendStepTimeoutMs(),
             maxDurationMs: playbookBackendTimeoutMs(),
-            // A login playbook mints a fresh session — persist it so downstream
-            // data tools reuse the cookies.
-            persistCookies: tool.workflow.toolKind === 'authenticate',
-            failOnAuthRedirect: tool.workflow.toolKind !== 'authenticate',
           });
-          result = reshapePlaybookAuthResult(result, tool.workflow, paramsWithDefaults);
           break;
         }
       }
@@ -1086,7 +1084,7 @@ async function runCdpReplay(
     const bootstrappedCredentials: CredentialStore = {
       ...credentials,
       cookies: [
-        ...credentials.cookies,
+        ...(tool.workflow.toolKind === 'authenticate' ? [] : credentials.cookies),
         ...jar.cookies.map((c) => ({
           name: c.name,
           value: c.value,
@@ -1134,15 +1132,9 @@ async function runCdpReplay(
       } finally {
         if (!cdpPool && ownsSession) await cf.close();
       }
-    } else if (cdpPool && result.error === 'AWAITING_2FA') {
-      // Cross-phase 2FA continuity: AWAITING_2FA is the EXPECTED, healthy outcome
-      // of the initiate phase — NOT a failure. Keep the live browser pooled so the
-      // completion phase reuses the EXACT page that minted the challenge: the
-      // server-side challenge state and any single-use in-page tokens are bound to
-      // THIS session, so a fresh browser would reset them and the poll/complete
-      // would 401. The caller (AuthVerifier) owns this pool and drains it in its
-      // `finally`. Without this carve-out the generic `else` below evicts+closes
-      // the session here and phase 2 silently starts cold → "tokens missing" 401.
+    } else if (cdpPool && result.error === 'ACTION_REQUIRED') {
+      // A paused auth action is healthy progress. Retain the browser so the next
+      // declared action sees the same cookies, page, and browser-owned state.
       if (ownsSession) cdpPool.set(poolKey, cf);
       try {
         const postJar = await cf.mintJar();
@@ -1520,50 +1512,6 @@ function playbookPath(assetRoot: string, site: string, toolDir?: string): string
 }
 
 /**
- * For a 2FA authenticate tool whose login runs on the playbook rung, the
- * playbook's success marker is the **2FA challenge state** (per the
- * auth-compile contract), not full authentication. Reshape that `ok: true`
- * into the same `AWAITING_2FA` signal the API rungs emit so every consumer
- * (teach, mcp-server) handles playbook- and API-reached 2FA uniformly — and
- * carry any best-effort `twoFactorContext` token the playbook captured (named
- * per `authConfig.twoFactorContext`) across the stateless initiate→submit_otp
- * gap. Only fires on the login/initiate action; submit_otp/complete run via
- * the workflow requests, not the playbook.
- */
-export function reshapePlaybookAuthResult(
-  result: ToolResult,
-  workflow: Workflow,
-  params: Record<string, string | number | boolean>,
-): ToolResult {
-  const authCfg = workflow.authConfig;
-  const action = String(params.action ?? 'initiate');
-  if (
-    !result.ok ||
-    workflow.toolKind !== 'authenticate' ||
-    !authCfg ||
-    authCfg.twoFactorType === 'none' ||
-    action === 'submit_otp' ||
-    action === 'complete'
-  ) {
-    return result;
-  }
-  const data = (result.data ?? {}) as Record<string, unknown>;
-  const ctx: Record<string, unknown> = {};
-  for (const name of authCfg.twoFactorContext ?? []) {
-    if (data && typeof data === 'object' && name in data && data[name] != null) {
-      ctx[name] = data[name];
-    }
-  }
-  return {
-    ok: false,
-    error: 'AWAITING_2FA',
-    twoFactorType: authCfg.twoFactorType,
-    twoFactorContext: Object.keys(ctx).length > 0 ? ctx : undefined,
-    message: `2FA required (${authCfg.twoFactorType}) — login reached the 2FA challenge via the playbook rung.`,
-  };
-}
-
-/**
  * Compile-time integration-test convenience: dispatch a request through
  * `runWithLadder` using only a `workflow.json` path. Avoids requiring an
  * emitted `index.ts` (which doesn't exist when integration.test.ts runs
@@ -1592,22 +1540,17 @@ export async function runWorkflowWithLadder(opts: {
   /** Optional credential override; otherwise loaded from the credential
    *  store by executeWorkflow. */
   credentials?: CredentialStore;
-  /** Seed state for `${state.X}` (auth 2FA bridge): the echoed twoFactorContext
-   *  from a prior AWAITING_2FA result, threaded into every rung so a submit_otp
-   *  completion request can resolve a token the initiate response returned. */
+  /** Seed state for `${state.X}`. AuthVerifier uses the action program's
+   *  declared continuation projection here. */
   initialState?: Record<string, unknown>;
   /** Caller-owned CDP pool. When provided, cdp-replay pools its live Chrome here
    *  (reused across calls that pass the SAME map) and the process-global idle
    *  close is NOT armed — the caller owns the browser's lifecycle and must drain
-   *  it. Used by the auth verifier to keep ONE live session across 2FA phase 1
-   *  (send) → user input → phase 2 (verify) so the challenge isn't reset. */
+   *  it. AuthVerifier uses this to preserve one browser across action
+   *  checkpoints. */
   cdpPool?: Map<string, CdpBrowserFetch>;
   /** Pin execution to a single rung, bypassing the parallel probe AND the winner
-   *  memo. The 2FA auth verifier sets this to `cdp-replay`: only cdp-replay keeps
-   *  one live browser in `cdpPool` (which the AWAITING_2FA carve-out retains), so
-   *  phase 2 can reuse the exact session that minted the challenge. Left to the
-   *  probe, the FASTEST rung returning AWAITING_2FA wins (often fetch /
-   *  fetch-bootstrap), which can't persist the session → completion 401s. */
+   *  memo. AuthVerifier pins `cdp-replay` so all actions share one browser. */
   forceBackend?: ConcreteBackend;
 }): Promise<LadderResult> {
   if (!existsSync(opts.workflowPath)) {
@@ -1651,14 +1594,7 @@ export async function runWorkflowWithLadder(opts: {
     },
   };
 
-  // Authenticate tools may need the playbook rung: a login whose POST body is
-  // browser-minted (encrypted credentials) can't be API-replayed, so the login
-  // DOM steps must run in a real browser. runWithLadder skips playbook when no
-  // playbook.yaml exists, so including it is safe for tools without one.
-  const ladder: ConcreteBackend[] =
-    workflow.toolKind === 'authenticate'
-      ? ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']
-      : ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
+  const ladder: ConcreteBackend[] = ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
 
   const memoKey = `${tool.site}::${workflow.toolName}`;
   let memoWinner = compileWinningBackend.get(memoKey);
@@ -1806,14 +1742,7 @@ export async function runWorkflowWithLadder(opts: {
         }),
       );
 
-      // For an authenticate tool, AUTH_EXPIRED is NOT a reachable winner — it
-      // means the login failed, and the playbook rung (only reached via the
-      // sequential fallback below) is the browser-minted login's actual path.
-      // Treating it as "reachable" would let a cdp-replay 401 win the probe and
-      // the playbook would never run. AWAITING_2FA stays reachable (it IS success).
-      const isAuthTool = tool.workflow.toolKind === 'authenticate';
-      const probeReachable = (r: ToolResult): boolean =>
-        isProbeReachable(r) && !(isAuthTool && !r.ok && r.error === 'AUTH_EXPIRED');
+      const probeReachable = isProbeReachable;
       const digest = settled.map((s, i) => {
         const b = probeBackends[i];
         if (s.status === 'rejected')
