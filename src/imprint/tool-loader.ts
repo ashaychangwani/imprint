@@ -1,12 +1,19 @@
 /** Discover + load generated tools from <assetRoot>/<site>/<toolName>/index.ts. Used
  *  by mcp-server, cron, and probe-backends. */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
-import type { ToolResult, Workflow, WorkflowParameter } from './types.ts';
+import { type ToolResult, type Workflow, type WorkflowParameter, WorkflowSchema } from './types.ts';
 
 type GeneratedToolFn = (
   input: Record<string, unknown>,
@@ -86,8 +93,7 @@ async function tryLoadTool(
       (await tryRepairGeneratedModule(modulePath, logPrefix))
     ) {
       try {
-        const repairedUrl = `${pathToFileURL(modulePath).href}?imprintRepair=${Date.now()}`;
-        mod = (await import(repairedUrl)) as GeneratedModule;
+        mod = await importRepairedGeneratedModule(modulePath);
       } catch (repairErr) {
         process.stderr.write(
           `${logPrefix} skipping ${modulePath}: failed to load after repair (${repairErr instanceof Error ? repairErr.message : String(repairErr)})\n`,
@@ -104,6 +110,25 @@ async function tryLoadTool(
   if (!mod.WORKFLOW) {
     process.stderr.write(`${logPrefix} skipping ${modulePath}: missing WORKFLOW export\n`);
     return null;
+  }
+  const workflowStatus = embeddedWorkflowStatus(modulePath, mod.WORKFLOW);
+  if (workflowStatus === 'stale') {
+    if (await tryRepairGeneratedModule(modulePath, logPrefix, 'stale embedded WORKFLOW')) {
+      try {
+        mod = await importRepairedGeneratedModule(modulePath);
+      } catch (repairErr) {
+        process.stderr.write(
+          `${logPrefix} skipping ${modulePath}: failed to load after workflow repair (${repairErr instanceof Error ? repairErr.message : String(repairErr)})\n`,
+        );
+        return null;
+      }
+      if (!mod.WORKFLOW) {
+        process.stderr.write(`${logPrefix} skipping ${modulePath}: missing WORKFLOW export\n`);
+        return null;
+      }
+    } else {
+      return null;
+    }
   }
   const fn = findToolFunction(mod);
   if (!fn) {
@@ -129,13 +154,17 @@ function canRepairStaleRuntimeImport(err: unknown): boolean {
   return message.includes('Cannot find module') && message.includes('/src/imprint/runtime.ts');
 }
 
-async function tryRepairGeneratedModule(modulePath: string, logPrefix: string): Promise<boolean> {
+async function tryRepairGeneratedModule(
+  modulePath: string,
+  logPrefix: string,
+  reason = 'stale generated wrapper',
+): Promise<boolean> {
   const toolDir = dirname(modulePath);
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   try {
     const { emit } = await import('./emit.ts');
     emit({ workflowPath, outDir: toolDir, force: true });
-    process.stderr.write(`${logPrefix} repaired stale generated wrapper at ${modulePath}\n`);
+    process.stderr.write(`${logPrefix} repaired ${reason} at ${modulePath}\n`);
     return true;
   } catch (err) {
     process.stderr.write(
@@ -143,6 +172,49 @@ async function tryRepairGeneratedModule(modulePath: string, logPrefix: string): 
     );
     return false;
   }
+}
+
+let repairedImportSeq = 0;
+
+async function importRepairedGeneratedModule(modulePath: string): Promise<GeneratedModule> {
+  const toolDir = dirname(modulePath);
+  const tempPath = pathJoin(
+    toolDir,
+    `.index.imprint-repaired-${process.pid}-${Date.now()}-${repairedImportSeq++}.ts`,
+  );
+  writeFileSync(tempPath, readFileSync(modulePath, 'utf8'), 'utf8');
+  try {
+    return (await import(pathToFileURL(tempPath).href)) as GeneratedModule;
+  } finally {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // Best-effort cleanup; stale temp wrappers are harmless and hidden.
+    }
+  }
+}
+
+function embeddedWorkflowStatus(modulePath: string, embedded: Workflow): 'current' | 'stale' {
+  const workflowPath = pathJoin(dirname(modulePath), 'workflow.json');
+  if (!existsSync(workflowPath)) return 'current';
+  try {
+    const disk = WorkflowSchema.parse(JSON.parse(readFileSync(workflowPath, 'utf8')));
+    const wrapped = WorkflowSchema.parse(embedded);
+    return stableStringify(disk) === stableStringify(wrapped) ? 'current' : 'stale';
+  } catch {
+    return 'current';
+  }
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /** Tool fn export is the camelCase of toolName: book_x_y → bookXY. */
@@ -177,6 +249,11 @@ export function buildZodValidator(parameters: WorkflowParameter[]): z.ZodObject<
       case 'boolean':
         field = z.boolean();
         break;
+    }
+    if (p.choices?.length) {
+      field = field.refine((value) => p.choices?.includes(value), {
+        message: `Expected one of: ${p.choices.join(', ')}`,
+      });
     }
     field = field.describe(p.description);
     if (p.default !== undefined) field = field.optional();

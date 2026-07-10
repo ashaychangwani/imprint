@@ -4,9 +4,10 @@
  *
  * Mirrors compile-agent.ts for data tools but with the auth-specific live-test
  * tool (run_verification) and lighter verification. Authentication runs on a
- * single rung — headed cdp-replay (a real visible browser that replays the
- * recorded requests in-page); see AUTH_RUNGS in auth-verifier.ts. There is no
- * bespoke login backend and no playbook rung in the auth path.
+ * primary rung — headed cdp-replay (a real visible browser that replays the
+ * recorded requests in-page); see AUTH_RUNGS in auth-verifier.ts. When a
+ * credential POST is browser-minted and stale on replay, the same tool
+ * directory may include a constrained login playbook fallback for initiate.
  *
  * Provider paths mirror compile-agent.ts exactly:
  *   - claude-cli / codex-cli: shell out with the auth toolset registered as a
@@ -15,7 +16,7 @@
  *   - anthropic-api (or any ToolUseProvider): drive in-process via runAgentLoop.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import {
   type AgentProgress,
@@ -28,12 +29,15 @@ import {
 import { ensureAuthBootstrap } from './auth-bootstrap.ts';
 import {
   AUTH_COMPILE_TOOL_NAMES,
+  AUTH_VERIFICATION_ATTEMPT_SENTINEL,
   authExternalVerification,
+  authWorkflowPreflightFailures,
   buildAuthCompileTools,
 } from './auth-compile-tools.ts';
 import { type AuthPhaseResult, AuthVerifier } from './auth-verifier.ts';
 import type { AuthToolPlan } from './build-plan.ts';
 import { compileAuthViaClaudeCli } from './claude-cli-compile.ts';
+import { compileViaCodexCli } from './codex-cli-compile.ts';
 import type {
   AuthCheckpoint,
   CompileAgentProgress,
@@ -117,7 +121,7 @@ Auth tool plan:
 - credentialNames: ${JSON.stringify(authToolPlan.credentialNames)}${sessionCaptureNote}
 - notes: ${authToolPlan.notes || '(none)'}
 
-Begin by calling read_session_summary to orient yourself, then examine the login requests and write workflow.json per the system prompt.`;
+MANDATORY FIRST ACTION: call read_session_summary now. Do not write prose, do not inspect repository files, and do not plan silently before that tool call. After read_session_summary returns, examine the login requests and write workflow.json per the system prompt.`;
 }
 
 export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<CompileAgentResult> {
@@ -144,6 +148,7 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
     const resolved = resolveProvider(opts.llmConfig);
     if (resolved.name === 'claude-cli') {
       return await runAuthSegmentLoop({
+        driver: 'claude-cli',
         site,
         session,
         sessionPath: opts.sessionPath,
@@ -160,20 +165,22 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
       });
     }
     if (resolved.name === 'codex-cli') {
-      // Auth verification is checkpoint-based: the agent calls run_verification and
-      // STOPS, and the orchestrator must resume the SAME session past that
-      // checkpoint with the live result. codex-cli runs ephemerally (no resume) and
-      // its driver only recognizes the done/give_up sentinels — not the checkpoint
-      // sentinel — so a run_verification checkpoint exits 0, is misread as "stopped
-      // early", and every codex auth compile fails with a misleading message.
-      // Reject it up front rather than fail late. (Data-tool compiles, which never
-      // checkpoint, still run on codex-cli.)
-      throw new Error(
-        [
-          'provider "codex-cli" cannot compile an authenticate tool: live 2FA verification is checkpoint-based and codex-cli runs ephemerally — it cannot resume past a run_verification checkpoint.',
-          '→ use one of: claude-cli, anthropic-api (set ANTHROPIC_API_KEY)',
-        ].join('\n'),
-      );
+      return await runAuthSegmentLoop({
+        driver: 'codex-cli',
+        site,
+        session,
+        sessionPath: opts.sessionPath,
+        systemPromptPath,
+        deadlineMs,
+        startTime,
+        toolDir,
+        authToolPlan,
+        teachCredentials: opts.teachCredentials,
+        initialPrompt: initialUserMessage,
+        onProgress: opts.onProgress,
+        onPrompt: opts.onPrompt,
+        onCooldown: opts.onCooldown,
+      });
     }
     if (!isToolUseProvider(resolved)) {
       throw new Error(
@@ -249,6 +256,7 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
     const failures = authExternalVerification(
       toolDir,
       (authToolPlan.captures ?? []).map((c) => ({ name: c.name, usedAs: c.usedAs })),
+      { requireLiveAttempt: true },
     );
 
     if (failures.length === 0) {
@@ -293,6 +301,7 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
 }
 
 interface AuthSegmentLoopOptions {
+  driver: 'claude-cli' | 'codex-cli';
   site: string;
   session: Session;
   sessionPath: string;
@@ -347,17 +356,25 @@ function formatVerifyResult(phase: string, r: AuthPhaseResult): string {
 }
 
 /**
- * Drive the claude-cli auth compile as a sequence of resumable SEGMENTS. The
+ * Drive a CLI auth compile as a sequence of checkpointed SEGMENTS. The
  * agent shapes from the recording, then pauses at checkpoint tools; this loop
  * (the durable orchestrator) executes each checkpoint — run_verification on the
  * persistent AuthVerifier session, prompt_user via the TUI bridge, or a
- * cool-off wait — and resumes the same claude session with the result. The ONE
+ * cool-off wait — then feeds the result into the next segment. The ONE
  * stateful thing (the live browser) lives in the AuthVerifier and is drained at
- * the end. Conversation state is carried by `--resume`, not retained here.
+ * the end. CLI conversation state is carried by provider-native resume
+ * (`claude --resume`, `codex exec resume`), not retained here.
  */
 async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<CompileAgentResult> {
   const workflowPath = pathJoin(opts.toolDir, 'workflow.json');
-  const credsForRun = { site: opts.site, cookies: [], values: opts.teachCredentials.values };
+  const verificationAttemptPath = pathJoin(opts.toolDir, AUTH_VERIFICATION_ATTEMPT_SENTINEL);
+  if (existsSync(verificationAttemptPath)) unlinkSync(verificationAttemptPath);
+  const credsForRun = {
+    site: opts.site,
+    cookies: [],
+    values: opts.teachCredentials.values,
+    storage: [],
+  };
   const verifier = new AuthVerifier(workflowPath, credsForRun);
   const authMode = {
     site: opts.site,
@@ -379,7 +396,7 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
 
   try {
     for (let seg = 0; seg < MAX_AUTH_SEGMENTS; seg++) {
-      // Each resumed segment restarts claude-cli's per-segment `turn` at 0; add
+      // Each resumed/restarted segment has its own per-segment `turn` at 0; add
       // the prior segments' turns so the displayed count is monotonic (no reset).
       const offset = totalTurns; // turns from prior segments only (read BEFORE the += below)
       const wrappedOnProgress = opts.onProgress
@@ -395,17 +412,30 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
             })
         : undefined;
 
-      const result = await compileAuthViaClaudeCli({
-        session: opts.session,
-        absoluteToolDir: opts.toolDir,
-        sessionPath: opts.sessionPath,
-        systemPromptPath: opts.systemPromptPath,
-        deadlineMs: opts.deadlineMs,
-        startTime: opts.startTime,
-        onProgress: wrappedOnProgress,
-        authMode,
-        resume,
-      });
+      const result =
+        opts.driver === 'claude-cli'
+          ? await compileAuthViaClaudeCli({
+              session: opts.session,
+              absoluteToolDir: opts.toolDir,
+              sessionPath: opts.sessionPath,
+              systemPromptPath: opts.systemPromptPath,
+              deadlineMs: opts.deadlineMs,
+              startTime: opts.startTime,
+              onProgress: wrappedOnProgress,
+              authMode,
+              resume,
+            })
+          : await compileViaCodexCli({
+              session: opts.session,
+              absoluteToolDir: opts.toolDir,
+              sessionPath: opts.sessionPath,
+              systemPromptPath: opts.systemPromptPath,
+              deadlineMs: opts.deadlineMs,
+              startTime: opts.startTime,
+              onProgress: wrappedOnProgress,
+              authMode,
+              resume,
+            });
       last = result;
       totalTurns += result.turns;
 
@@ -415,7 +445,7 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
           ...result,
           outcome: 'error',
           success: false,
-          message: 'checkpoint reached but no session id was captured — cannot resume the agent.',
+          message: `checkpoint reached but no ${opts.driver} session id was captured — cannot resume the agent.`,
         };
         break;
       }
@@ -424,34 +454,57 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
       let resultMsg: string;
       try {
         if (cp.kind === 'run_verification') {
-          const r = await verifier.runPhase(cp.phase, { otp_code: cp.otp_code });
-          // Record + immediately surface the result so the spinner reflects a
-          // failure the moment it happens — not only on the next agent turn.
-          lastVerification = {
-            phase: cp.phase,
-            ok: r.ok,
-            status: r.status,
-            error: r.error,
-            backend: r.usedBackend,
-            durationMs: r.durationMs,
-            checkpoint: 'run_verification',
-          };
-          opts.onProgress?.({
-            turn: totalTurns,
-            phase: 'tool',
-            elapsedMs: Date.now() - opts.startTime,
-            budgetMs: Math.max(0, opts.deadlineMs - Date.now()),
-            inputTokens: 0,
-            outputTokens: 0,
-            verificationCycle: 1,
-            maxVerificationCycles: 1,
-            segment: seg + 1,
-            maxSegments: MAX_AUTH_SEGMENTS,
-            attempt: verifier.attemptsUsed,
-            maxAttempts: verifier.maxInitiateAttempts,
-            lastVerification,
-          });
-          resultMsg = formatVerifyResult(cp.phase, r);
+          const preflightFailures = authWorkflowPreflightFailures(opts.toolDir, opts.session);
+          if (preflightFailures.length > 0) {
+            resultMsg = `run_verification was blocked before any live login was fired because workflow.json failed auth preflight:\n${preflightFailures
+              .map((failure) => `- ${failure}`)
+              .join('\n')}`;
+          } else {
+            const r = await verifier.runPhase(cp.phase, { otp_code: cp.otp_code });
+            writeFileSync(
+              verificationAttemptPath,
+              JSON.stringify(
+                {
+                  phase: cp.phase,
+                  ok: r.ok,
+                  status: r.status,
+                  error: r.error,
+                  backend: r.usedBackend,
+                  timestamp: Date.now(),
+                },
+                null,
+                2,
+              ),
+              'utf8',
+            );
+            // Record + immediately surface the result so the spinner reflects a
+            // failure the moment it happens — not only on the next agent turn.
+            lastVerification = {
+              phase: cp.phase,
+              ok: r.ok,
+              status: r.status,
+              error: r.error,
+              backend: r.usedBackend,
+              durationMs: r.durationMs,
+              checkpoint: 'run_verification',
+            };
+            opts.onProgress?.({
+              turn: totalTurns,
+              phase: 'tool',
+              elapsedMs: Date.now() - opts.startTime,
+              budgetMs: Math.max(0, opts.deadlineMs - Date.now()),
+              inputTokens: 0,
+              outputTokens: 0,
+              verificationCycle: 1,
+              maxVerificationCycles: 1,
+              segment: seg + 1,
+              maxSegments: MAX_AUTH_SEGMENTS,
+              attempt: verifier.attemptsUsed,
+              maxAttempts: verifier.maxInitiateAttempts,
+              lastVerification,
+            });
+            resultMsg = formatVerifyResult(cp.phase, r);
+          }
         } else if (cp.kind === 'prompt_user') {
           const answer = await onPrompt(cp.message, cp.options);
           resultMsg = `The user responded: ${answer || '(no input provided)'}`;
@@ -463,9 +516,10 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
         resultMsg = `The orchestrator could not perform ${cp.kind}: ${err instanceof Error ? err.message : String(err)}`;
       }
 
+      const resumeMessage = `[orchestrator result for your ${cp.kind} request]\n${resultMsg}\n\nProceed: shape any next phase from the recording if needed, then call the appropriate next tool (run_verification / prompt_user / wait_for_cooldown / done / give_up).`;
       resume = {
         sessionId: result.sessionId,
-        message: `[orchestrator result for your ${cp.kind} request]\n${resultMsg}\n\nProceed: shape any next phase from the recording if needed, then call the appropriate next tool (run_verification / prompt_user / wait_for_cooldown / done / give_up).`,
+        message: resumeMessage,
       };
     }
   } finally {

@@ -1,19 +1,73 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import {
-  MimeType,
-  type NodeTracerProvider,
-  type OpenInferenceSpanKind,
-  SemanticConventions,
-  SpanStatusCode,
-  getLLMAttributes,
-  register,
-  trace,
-} from '@arizeai/phoenix-otel';
-import type { AttributeValue, Attributes, Span } from '@opentelemetry/api';
 
-type TraceKind = OpenInferenceSpanKind | `${OpenInferenceSpanKind}`;
+type AttributeValue = string | number | boolean | string[] | number[] | boolean[];
+type Attributes = Record<string, AttributeValue>;
+export interface Span {
+  setStatus(status: { code: number; message?: string }): void;
+  setAttributes(attributes: Attributes): void;
+  recordException(exception: { name?: string; message?: string; stack?: string }): void;
+  end(): void;
+}
+
+const SpanStatusCode = {
+  OK: 1,
+  ERROR: 2,
+} as const;
+
+interface TraceApi {
+  getTracer(name: string): {
+    startActiveSpan<T>(
+      name: string,
+      options: { attributes?: Attributes },
+      fn: (span: Span) => Promise<T> | T,
+    ): Promise<T>;
+    startSpan(name: string, options: { attributes?: Attributes }): Span;
+  };
+  wrapSpanContext(context: { traceId: string; spanId: string; traceFlags: number }): Span;
+}
+
+type TraceKind = 'CHAIN' | 'AGENT' | 'LLM' | 'TOOL' | 'RETRIEVER' | 'EMBEDDING' | 'RERANKER';
 type TraceAttributes = Record<string, unknown>;
 type TraceLlmMessage = { role?: string; content?: string };
+type TraceProvider = { shutdown(): Promise<void> };
+
+const MimeType = {
+  TEXT: 'text/plain',
+  JSON: 'application/json',
+} as const;
+
+const SemanticConventions = {
+  INPUT_VALUE: 'input.value',
+  INPUT_MIME_TYPE: 'input.mime_type',
+  OUTPUT_VALUE: 'output.value',
+  OUTPUT_MIME_TYPE: 'output.mime_type',
+  OPENINFERENCE_SPAN_KIND: 'openinference.span.kind',
+  LLM_TOKEN_COUNT_PROMPT: 'llm.token_count.prompt',
+  LLM_TOKEN_COUNT_COMPLETION: 'llm.token_count.completion',
+  LLM_TOKEN_COUNT_TOTAL: 'llm.token_count.total',
+  LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ: 'llm.token_count.prompt_details.cache_read',
+  LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE: 'llm.token_count.prompt_details.cache_write',
+  LLM_COST_PROMPT: 'llm.cost.prompt',
+  LLM_COST_COMPLETION: 'llm.cost.completion',
+  LLM_COST_TOTAL: 'llm.cost.total',
+  LLM_COST_PROMPT_DETAILS_CACHE_READ: 'llm.cost.prompt_details.cache_read',
+  LLM_COST_PROMPT_DETAILS_CACHE_WRITE: 'llm.cost.prompt_details.cache_write',
+  LLM_COST_INPUT: 'llm.cost.prompt_details.input',
+  LLM_FINISH_REASON: 'llm.invocation.finish_reason',
+} as const;
+
+interface PhoenixOtelModule {
+  register(opts: {
+    projectName: string;
+    url?: string;
+    apiKey?: string;
+    batch?: boolean;
+  }): TraceProvider;
+}
+
+interface OpenTelemetryApiModule {
+  trace: TraceApi;
+}
 
 // ---------------------------------------------------------------------------
 // Cost accumulator — rolls up LLM costs from child spans to a parent span.
@@ -35,14 +89,16 @@ function getActiveCostAccumulator(): CostAccumulator | undefined {
   return costAccumulatorStorage.getStore();
 }
 
-let provider: NodeTracerProvider | null = null;
+let provider: TraceProvider | null = null;
+let traceApi: TraceApi | null = null;
 let attemptedInit = false;
 let suppressInit = false;
-const NOOP_SPAN: Span = trace.wrapSpanContext({
-  traceId: '0'.repeat(32),
-  spanId: '0'.repeat(16),
-  traceFlags: 0,
-});
+const NOOP_SPAN: Span = {
+  setStatus: () => {},
+  setAttributes: () => {},
+  recordException: () => {},
+  end: () => {},
+};
 
 export function suppressTracingInit(): void {
   suppressInit = true;
@@ -79,7 +135,7 @@ function validateTracingUrl(raw: string | undefined): string | undefined {
   }
 }
 
-function ensureTracingInitialized(): void {
+async function ensureTracingInitialized(): Promise<void> {
   if (attemptedInit || suppressInit || !isTracingEnabled()) return;
   attemptedInit = true;
   // The OTEL SDK default is 128 attributes per span. getLLMAttributes() flattens
@@ -92,12 +148,21 @@ function ensureTracingInitialized(): void {
   const url = validateTracingUrl(
     process.env.PHOENIX_COLLECTOR_ENDPOINT ?? process.env.PHOENIX_HOST,
   );
-  provider = register({
-    projectName: process.env.IMPRINT_TRACE_PROJECT ?? 'imprint',
-    url,
-    apiKey: process.env.PHOENIX_API_KEY,
-    batch: traceBatchEnabled(process.env.IMPRINT_TRACE_BATCH),
-  });
+  try {
+    const otel = (await import('@opentelemetry/api')) as OpenTelemetryApiModule;
+    traceApi = otel.trace;
+    const phoenix = (await import('@arizeai/phoenix-otel')) as PhoenixOtelModule;
+    provider = phoenix.register({
+      projectName: process.env.IMPRINT_TRACE_PROJECT ?? 'imprint',
+      url,
+      apiKey: process.env.PHOENIX_API_KEY,
+      batch: traceBatchEnabled(process.env.IMPRINT_TRACE_BATCH),
+    });
+  } catch (err) {
+    process.stderr.write(
+      `[imprint] warning: tracing requested but telemetry packages could not be loaded; continuing without export (${err instanceof Error ? err.message : String(err)})\n`,
+    );
+  }
 }
 
 export function traceBatchEnabled(value: string | undefined): boolean {
@@ -254,8 +319,9 @@ export async function traced<T>(
   if (!isTracingEnabled()) {
     return await fn(NOOP_SPAN);
   }
-  ensureTracingInitialized();
-  const tracer = trace.getTracer('imprint');
+  await ensureTracingInitialized();
+  const tracer = traceApi?.getTracer('imprint');
+  if (!tracer) return await fn(NOOP_SPAN);
   return await tracer.startActiveSpan(
     name,
     { attributes: openInferenceAttributes(kind, attributes) },
@@ -333,8 +399,14 @@ export function startTraceSpan(
   attributes?: TraceAttributes,
 ): Span | null {
   if (!isTracingEnabled()) return null;
-  ensureTracingInitialized();
-  return trace.getTracer('imprint').startSpan(name, {
+  ensureTracingInitialized().catch((err) => {
+    process.stderr.write(
+      `[imprint] warning: failed to initialize tracing (${err instanceof Error ? err.message : String(err)})\n`,
+    );
+  });
+  const tracer = traceApi?.getTracer('imprint');
+  if (!tracer) return null;
+  return tracer.startSpan(name, {
     attributes: openInferenceAttributes(kind, attributes),
   });
 }
@@ -391,7 +463,7 @@ export function llmSpanAttributes(opts: {
         })
       : {};
   return {
-    ...getLLMAttributes({
+    ...localLlmAttributes({
       provider: openInferenceProvider(opts.provider),
       system: opts.provider,
       modelName: opts.model,
@@ -433,6 +505,48 @@ export function llmSpanAttributes(opts: {
         }
       : {}),
   };
+}
+
+function localLlmAttributes(opts: {
+  provider: string;
+  system: string;
+  modelName?: string;
+  invocationParameters?: Record<string, unknown>;
+  inputMessages?: TraceLlmMessage[];
+  outputMessages?: TraceLlmMessage[];
+  tokenCount?: { prompt?: number; completion?: number; total?: number };
+}): Attributes {
+  const attrs: Attributes = {
+    'llm.provider': opts.provider,
+    'llm.system': opts.system,
+  };
+  if (opts.modelName) attrs['llm.model_name'] = opts.modelName;
+  if (opts.invocationParameters) {
+    attrs['llm.invocation_parameters'] = JSON.stringify(opts.invocationParameters);
+  }
+  if (opts.tokenCount?.prompt !== undefined) {
+    attrs[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = opts.tokenCount.prompt;
+  }
+  if (opts.tokenCount?.completion !== undefined) {
+    attrs[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = opts.tokenCount.completion;
+  }
+  if (opts.tokenCount?.total !== undefined) {
+    attrs[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = opts.tokenCount.total;
+  }
+  for (const [prefix, messages] of [
+    ['input', opts.inputMessages],
+    ['output', opts.outputMessages],
+  ] as const) {
+    messages?.forEach((message, index) => {
+      if (message.role !== undefined) {
+        attrs[`llm.${prefix}_messages.${index}.message.role`] = message.role;
+      }
+      if (message.content !== undefined) {
+        attrs[`llm.${prefix}_messages.${index}.message.content`] = message.content;
+      }
+    });
+  }
+  return attrs;
 }
 
 export function traceLlmMessages(messages: TraceLlmMessage[]): TraceLlmMessage[] {

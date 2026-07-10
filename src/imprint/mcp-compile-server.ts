@@ -24,7 +24,12 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { authExternalVerification, buildAuthCompileTools } from './auth-compile-tools.ts';
+import {
+  authExternalVerification,
+  authGiveUpPreflightFailures,
+  authWorkflowPreflightFailures,
+  buildAuthCompileTools,
+} from './auth-compile-tools.ts';
 import {
   type AuthToolPlan,
   type SharedModuleManifestEntry,
@@ -176,7 +181,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
         {
           name: 'run_verification',
           description:
-            'Hand the current workflow.json to the verification stage to run LIVE (the only thing that fires a real login). phase="initiate" sends the OTP/push (reaches AWAITING_2FA); phase="submit_otp" submits an otp_code; phase="complete" polls a push. After calling this you MUST stop — the orchestrator runs it and resumes you with the result as a new message. Do NOT call any other tool in the same turn.',
+            'Hand the current workflow.json to the verification stage to run LIVE (the only thing that fires a real login). phase="initiate" sends the OTP/push (reaches AWAITING_2FA); once initiate reaches AWAITING_2FA or ok:true, repeat initiate calls are cached to avoid re-triggering login rate limits. phase="submit_otp" submits an otp_code; phase="complete" polls a push. After calling this you MUST stop — the orchestrator runs it and resumes you with the result as a new message. Do NOT call any other tool in the same turn.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -233,7 +238,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     {
       capabilities: { tools: {} },
       instructions: isAuthMode
-        ? 'These tools let you turn the captured login + 2FA flow into an auth workflow.json. Read the recording, write workflow.json, test it live with run_verification (AWAITING_2FA = success), and call done() when login works. The done tool verifies the workflow structure and will tell you what to fix.'
+        ? 'These tools let you turn the captured login + 2FA flow into an auth workflow.json. Read the recording, write workflow.json, test it live with run_verification (AWAITING_2FA = initiate success; repeat initiate checks are cached), and call done() when login works. The done tool verifies the workflow structure and will tell you what to fix.'
         : 'These tools let you reverse-engineer the captured session into workflow.json + parser.ts + parser.test.ts. Read the recording, write the artifacts, run tests, and call done() when verified. The done tool runs external verification and will tell you what to fix if anything is wrong.',
     },
   );
@@ -268,6 +273,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
         const failures = authExternalVerification(
           opts.toolDir,
           (opts.authToolPlan?.captures ?? []).map((c) => ({ name: c.name, usedAs: c.usedAs })),
+          { requireLiveAttempt: true },
         );
         if (failures.length === 0) {
           const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
@@ -431,6 +437,22 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
     // Auth-mode checkpoint tools — record the request and end the segment. The
     // orchestrator performs the action live and resumes the agent with the result.
     if (name === 'run_verification' || name === 'prompt_user' || name === 'wait_for_cooldown') {
+      if (name === 'run_verification') {
+        const failures = authWorkflowPreflightFailures(opts.toolDir, session);
+        if (failures.length > 0) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: `run_verification blocked by auth workflow preflight. Fix workflow.json before requesting live verification:\n${failures
+                  .map((failure) => `- ${failure}`)
+                  .join('\n')}`,
+              },
+            ],
+          };
+        }
+      }
       if (checkpointWritten) {
         return {
           isError: true,
@@ -462,6 +484,26 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
       const reason = (args as { reason?: string }).reason ?? 'unknown';
       const whatWasTried = (args as { what_was_tried?: string }).what_was_tried ?? '';
       log(`give_up() called: ${reason}`);
+      if (isAuthMode) {
+        const failures = authGiveUpPreflightFailures(
+          opts.toolDir,
+          session,
+          opts.authToolPlan?.loginRequestSeqs ?? [],
+        );
+        if (failures.length > 0) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: `give_up blocked by auth verification policy:\n${failures
+                  .map((failure) => `- ${failure}`)
+                  .join('\n')}`,
+              },
+            ],
+          };
+        }
+      }
       const sentinel = pathJoin(opts.toolDir, GIVE_UP_SENTINEL);
       writeFileSync(
         sentinel,

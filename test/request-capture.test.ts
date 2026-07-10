@@ -17,4 +17,21 @@ describe('jsonpath', () => {
     expect(jsonpath(root, '[customers.userInformation.accountNumber]')).toBe('12345');
     expect(jsonpath(root, '$.[customers.userInformation.accountNumber]')).toBe('12345');
   });
+
+  test('supports compact and standard field predicates', () => {
+    const root = {
+      challenges: [
+        { category: 'SMS', token: 'sms-token' },
+        { category: 'PUSH_NOTIFICATION', token: 'push-token' },
+      ],
+    };
+
+    expect(jsonpath(root, 'challenges[category=PUSH_NOTIFICATION].token')).toBe('push-token');
+    expect(jsonpath(root, "$.challenges[?(@.category=='PUSH_NOTIFICATION')].token")).toBe(
+      'push-token',
+    );
+    expect(jsonpath(root, '$.challenges[?(@.category=="PUSH_NOTIFICATION")].token')).toBe(
+      'push-token',
+    );
+  });
 });

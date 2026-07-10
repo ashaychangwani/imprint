@@ -160,6 +160,119 @@ describe('runPlaybook', () => {
     expect(r.message).toContain('Playbook step 1/1 (navigate) timed out');
   });
 
+  it('treats networkidle wait timeouts as soft after navigation', async () => {
+    const stubPage = {
+      on: () => {},
+      goto: async () => undefined,
+      waitForLoadState: async (state: string) => {
+        if (state === 'networkidle') throw new Error('Timeout 10ms exceeded');
+      },
+      screenshot: async () => Buffer.from(''),
+    } as unknown as import('playwright').Page;
+
+    const r = await runPlaybook({
+      playbook: MIN_PLAYBOOK,
+      params: { q: 'hello' },
+      pageOverride: stubPage,
+      stepTimeoutMs: 10,
+      maxDurationMs: 100,
+      screenshotTimeoutMs: 10,
+    });
+
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toBe('BAD_RESPONSE');
+    expect(r.message).toContain('No captured XHR matched');
+    expect(r.message).not.toContain('networkidle');
+  });
+
+  it('substitutes credential placeholders before typing into fields', async () => {
+    const typed: string[] = [];
+    const locator = {
+      locator: () => locator,
+      first: () => locator,
+      waitFor: async () => undefined,
+      fill: async () => undefined,
+      pressSequentially: async (value: string) => {
+        typed.push(value);
+      },
+      selectOption: async () => undefined,
+    };
+    const stubPage = {
+      on: () => {},
+      frames: () => [],
+      mainFrame: () => ({}),
+      locator: () => locator,
+      screenshot: async () => Buffer.from(''),
+    } as unknown as import('playwright').Page;
+
+    const r = await runPlaybook({
+      playbook: {
+        toolName: 'credential_type_test',
+        summary: 'fixture',
+        parameters: [],
+        steps: [
+          {
+            action: 'type',
+            locators: [{ by: 'css', value: '#username' }],
+            value: '${credential.username}',
+          },
+        ],
+        result: {
+          source: 'xhr',
+          url_pattern: '/never',
+          extract: '*',
+          return_as: 'result',
+        },
+      },
+      params: {},
+      pageOverride: stubPage,
+      credentials: {
+        site: 'fixture-site',
+        cookies: [],
+        values: { username: 'compile-user' },
+        storage: [],
+      },
+      stepTimeoutMs: 10,
+      maxDurationMs: 100,
+      screenshotTimeoutMs: 10,
+    });
+
+    expect(typed).toEqual(['compile-user']);
+    expect(r.ok).toBe(false);
+  });
+
+  it('returns AUTH_EXPIRED when a data playbook navigation lands on a login page', async () => {
+    const stubPage = {
+      on: () => {},
+      goto: async () => {
+        throw new Error('Timeout 30000ms exceeded while navigating');
+      },
+      url: () => 'https://example.com/login',
+      locator: () => ({
+        first: () => ({
+          isVisible: async () => true,
+        }),
+      }),
+      screenshot: async () => Buffer.from(''),
+    } as unknown as import('playwright').Page;
+
+    const r = await runPlaybook({
+      playbook: MIN_PLAYBOOK,
+      params: { q: 'hello' },
+      pageOverride: stubPage,
+      stepTimeoutMs: 10,
+      maxDurationMs: 100,
+      screenshotTimeoutMs: 10,
+      failOnAuthRedirect: true,
+    });
+
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toBe('AUTH_EXPIRED');
+    expect(r.message).toContain('login page');
+  });
+
   it('extracts a best-effort 2FA-chain token from a matching XHR (Component D)', () => {
     // A login playbook's OTP-send step mints a single-use token in its response;
     // extractPlaybookCaptures pulls it out so the runtime can carry it across the

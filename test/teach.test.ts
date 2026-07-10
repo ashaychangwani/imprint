@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve as pathResolve } from 'node:path';
 import { VERB_HELP } from '../src/cli.ts';
-import type { CompileAgentProgress } from '../src/imprint/compile-agent-types.ts';
+import type {
+  CompileAgentProgress,
+  CompileAgentResult,
+} from '../src/imprint/compile-agent-types.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
 import { localSessionsDir, localSiteDir } from '../src/imprint/paths.ts';
 import {
@@ -14,6 +17,7 @@ import {
 } from '../src/imprint/teach-state.ts';
 import {
   assertCandidateToolName,
+  assertSuccessfulAuthCompile,
   buildTeachProviderPickerOptions,
   buildTeachStateFromSession,
   formatAuthProgress,
@@ -21,8 +25,11 @@ import {
   promptForTeachProvider,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
+  selectCompleteAuthCredentials,
   updateCandidateStageCheckpoints,
+  writeQuickBackendsCache,
 } from '../src/imprint/teach.ts';
+import { WorkflowSchema } from '../src/imprint/types.ts';
 
 describe('teach verb', () => {
   it('has a VERB_HELP entry', () => {
@@ -37,6 +44,115 @@ describe('teach verb', () => {
     expect(flags).toContain('--persist-profile');
     expect(flags).toContain('--no-interactive');
     expect(flags).toContain('--all-tools');
+  });
+});
+
+describe('teach auth compile boundary', () => {
+  const result = (overrides: Partial<CompileAgentResult>): CompileAgentResult => ({
+    success: false,
+    outcome: 'error',
+    message: 'fixture auth failure',
+    conversationLogPath: '/tmp/fixture-auth-log.json',
+    turns: 1,
+    durationMs: 1,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    ...overrides,
+  });
+
+  it('rejects failed auth before data tools can compile', () => {
+    expect(() => assertSuccessfulAuthCompile(result({}))).toThrow(
+      'Auth agent did not complete successfully: fixture auth failure',
+    );
+  });
+
+  it('rejects an auth success that produced no workflow', () => {
+    expect(() =>
+      assertSuccessfulAuthCompile(result({ success: true, outcome: 'done', message: 'done' })),
+    ).toThrow('Auth agent reported success without producing workflow.json.');
+  });
+
+  it('accepts a verified auth workflow', () => {
+    expect(() =>
+      assertSuccessfulAuthCompile(
+        result({
+          success: true,
+          outcome: 'done',
+          message: 'done',
+          workflowPath: '/tmp/authenticate_fixture/workflow.json',
+        }),
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe('teach auth credential precedence', () => {
+  it('selects a complete stored set and ignores unrelated credentials', () => {
+    expect(
+      selectCompleteAuthCredentials(
+        { username: 'fixture-user', password: 'fixture-password', unused: 'extra' },
+        ['username', 'password'],
+      ),
+    ).toEqual({ username: 'fixture-user', password: 'fixture-password' });
+  });
+
+  it('rejects a partial or blank stored set so another source can be used', () => {
+    expect(
+      selectCompleteAuthCredentials({ username: 'fixture-user' }, ['username', 'password']),
+    ).toBeNull();
+    expect(
+      selectCompleteAuthCredentials({ username: 'fixture-user', password: '' }, [
+        'username',
+        'password',
+      ]),
+    ).toBeNull();
+  });
+
+  it('accepts an empty requirement for credential-free auth', () => {
+    expect(selectCompleteAuthCredentials({ unused: 'extra' }, [])).toEqual({});
+  });
+});
+
+describe('teach quick backend cache', () => {
+  it('re-probes a cache from an older imprint version or workflow', async () => {
+    const dir = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-backends-'));
+    const workflow = WorkflowSchema.parse({
+      toolName: 'search_hotels',
+      intent: { description: 'Search hotels' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/hotels', headers: {} }],
+      site: 'fixture-site',
+    });
+    writeFileSync(
+      pathResolve(dir, 'backends.json'),
+      JSON.stringify({
+        probedAt: '2025-01-01T00:00:00.000Z',
+        imprintVersion: '0.1.0',
+        schemaVersion: 2,
+        workflowHash: 'stale-workflow-hash',
+        preferredOrder: ['stealth-fetch'],
+        results: {},
+      }),
+    );
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response('', { status: 403 })) as unknown as typeof fetch;
+    try {
+      await writeQuickBackendsCache(dir, workflow);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const cache = JSON.parse(readFileSync(pathResolve(dir, 'backends.json'), 'utf8')) as {
+      imprintVersion: string;
+      workflowHash: string;
+      preferredOrder: string[];
+    };
+    expect(cache.imprintVersion).toBe('0.6.0');
+    expect(cache.workflowHash).not.toBe('stale-workflow-hash');
+    expect(cache.preferredOrder).toEqual(['stealth-fetch']);
   });
 });
 

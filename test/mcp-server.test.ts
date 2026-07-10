@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { buildJsonSchema, runSerializedBySite } from '../src/imprint/mcp-server.ts';
+import {
+  auditToolDeadlineMs,
+  buildJsonSchema,
+  runSerializedBySite,
+} from '../src/imprint/mcp-server.ts';
 import type { WorkflowParameter } from '../src/imprint/types.ts';
 
 function deferred<T = void>(): {
@@ -50,6 +54,56 @@ describe('buildJsonSchema', () => {
     expect(props.query?.description).toBe('Search text.');
     // `query` has no default → required; `limit` has a default → optional.
     expect(schema.required).toEqual(['query']);
+  });
+
+  it('surfaces finite parameter choices as a JSON Schema enum', () => {
+    const params: WorkflowParameter[] = [
+      {
+        name: 'action',
+        type: 'string',
+        description: 'Authentication phase.',
+        default: 'initiate',
+        choices: ['initiate', 'complete', 'submit_otp'],
+      },
+    ];
+    const schema = buildJsonSchema(params);
+    const props = schema.properties as
+      | Record<string, { enum?: Array<string | number | boolean> } | undefined>
+      | undefined;
+    expect(props?.action?.enum).toEqual(['initiate', 'complete', 'submit_otp']);
+    expect(schema.required).toBeUndefined();
+  });
+});
+
+describe('auditToolDeadlineMs', () => {
+  it('defaults paced audit MCP calls to the 270s internal budget', () => {
+    const prevDeadline = process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS;
+    const prevPacing = process.env.IMPRINT_AUDIT_PACING_MS;
+    try {
+      process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = undefined;
+      process.env.IMPRINT_AUDIT_PACING_MS = '5000';
+      expect(auditToolDeadlineMs()).toBe(270_000);
+    } finally {
+      if (prevDeadline === undefined) process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = undefined;
+      else process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = prevDeadline;
+      if (prevPacing === undefined) process.env.IMPRINT_AUDIT_PACING_MS = undefined;
+      else process.env.IMPRINT_AUDIT_PACING_MS = prevPacing;
+    }
+  });
+
+  it('honors an explicit audit MCP deadline override', () => {
+    const prevDeadline = process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS;
+    const prevPacing = process.env.IMPRINT_AUDIT_PACING_MS;
+    try {
+      process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = '42000';
+      process.env.IMPRINT_AUDIT_PACING_MS = '5000';
+      expect(auditToolDeadlineMs()).toBe(42_000);
+    } finally {
+      if (prevDeadline === undefined) process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = undefined;
+      else process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS = prevDeadline;
+      if (prevPacing === undefined) process.env.IMPRINT_AUDIT_PACING_MS = undefined;
+      else process.env.IMPRINT_AUDIT_PACING_MS = prevPacing;
+    }
   });
 });
 

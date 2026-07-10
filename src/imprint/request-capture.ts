@@ -13,6 +13,7 @@
  *   - an object key:            `reauth.mfaId`
  *   - a numeric array index:    `items[0]` (bracket) or `items.0` (dot)
  *   - a field-match predicate:  `challenges[type=push]`
+ *   - a JSONPath predicate:     `challenges[?(@.type=='push')]`
  *     → the FIRST array element whose `element[field]` stringifies to the value.
  *  The predicate makes captures robust to non-deterministic array ordering — e.g.
  *  a 2FA endpoint that returns its SMS/email/push challenges in a varying order, so
@@ -39,13 +40,8 @@ export function jsonpath(root: unknown, path: string): unknown {
       if (/^\d+$/.test(inner)) {
         tokens.push({ kind: 'index', v: Number.parseInt(inner, 10) });
       } else {
-        const eq = inner.indexOf('=');
-        if (eq >= 0)
-          tokens.push({
-            kind: 'pred',
-            k: inner.slice(0, eq).trim(),
-            v: inner.slice(eq + 1).trim(),
-          });
+        const predicate = parseFieldPredicate(inner);
+        if (predicate) tokens.push(predicate);
         else tokens.push({ kind: 'key', v: inner });
       }
     }
@@ -71,6 +67,36 @@ export function jsonpath(root: unknown, path: string): unknown {
     }
   }
   return cur;
+}
+
+export function captureValueMatches(
+  value: unknown,
+  equals?: string | number | boolean | null,
+): boolean {
+  if (equals !== undefined) return Object.is(value, equals);
+  return value !== undefined && value !== null && value !== '';
+}
+
+function parseFieldPredicate(inner: string): { kind: 'pred'; k: string; v: string } | null {
+  const standard = /^\?\(\s*@\.([A-Za-z_$][\w$-]*)\s*==\s*(.+?)\s*\)$/.exec(inner);
+  if (standard?.[1] && standard[2] !== undefined) {
+    return { kind: 'pred', k: standard[1], v: unquotePredicateValue(standard[2]) };
+  }
+
+  const eq = inner.indexOf('=');
+  if (eq < 1 || inner[eq + 1] === '=') return null;
+  return {
+    kind: 'pred',
+    k: inner.slice(0, eq).trim(),
+    v: unquotePredicateValue(inner.slice(eq + 1).trim()),
+  };
+}
+
+function unquotePredicateValue(value: string): string {
+  const first = value[0];
+  return value.length >= 2 && (first === "'" || first === '"') && value.at(-1) === first
+    ? value.slice(1, -1)
+    : value;
 }
 
 /** Read a response header value, honoring the capture `mode`. Multi-valued

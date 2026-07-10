@@ -417,7 +417,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       "Drive a headless agent against a site's MCP tools, exercise each one, and compute a deterministic accuracy score. Verdicts come from the agent; the score is computed by imprint.",
     usage: [
-      'imprint audit <site> [--min-score <n>] [--out <path>] [--model <name>] [--timeout <duration>] [--json]',
+      'imprint audit <site> [--min-score <n>] [--out <path>] [--provider <name>] [--model <name>] [--timeout <duration>] [--json]',
     ],
     flags: [
       {
@@ -430,8 +430,12 @@ export const VERB_HELP: Record<string, VerbHelp> = {
           'Where to write the JSON report (default ~/.imprint/<site>/.audit-report.json).',
       },
       {
+        name: '--provider <name>',
+        description: 'Audit-agent provider: claude-cli or codex-cli (default claude-cli).',
+      },
+      {
         name: '--model <name>',
-        description: 'Override the auditor model (default Opus via claude-cli).',
+        description: 'Override the auditor model (default is provider-specific).',
       },
       {
         name: '--timeout <duration>',

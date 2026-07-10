@@ -111,6 +111,8 @@ const WorkflowParameterSchema = z.object({
   name: z.string(),
   type: z.enum(['string', 'number', 'boolean']),
   description: z.string(),
+  /** Optional finite choices to surface as JSON Schema enum values. */
+  choices: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
   /** Optional with this default if set. */
   default: z.union([z.string(), z.number(), z.boolean()]).optional(),
   /** Whether a `param:<name>` integration test verified this parameter's effect
@@ -152,6 +154,13 @@ const CaptureCommonSchema = z.object({
   capability: StateCapabilitySchema.optional().default('ordinary_http'),
 });
 
+const CaptureEqualsSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const RequestCaptureCommonSchema = CaptureCommonSchema.extend({
+  /** Optional exact scalar match. This also makes an explicitly matched empty
+   *  string or null a valid capture value. */
+  equals: CaptureEqualsSchema.optional(),
+});
+
 const CookieCaptureSchema = CaptureCommonSchema.extend({
   source: z.literal('cookie'),
   cookie: z.string(),
@@ -163,21 +172,21 @@ const CookieCaptureSchema = CaptureCommonSchema.extend({
 });
 
 const RequestCaptureSchema = z.discriminatedUnion('source', [
-  CaptureCommonSchema.extend({
+  RequestCaptureCommonSchema.extend({
     source: z.literal('json'),
     path: z.string(),
   }),
-  CaptureCommonSchema.extend({
+  RequestCaptureCommonSchema.extend({
     source: z.literal('response_header'),
     header: z.string(),
     mode: z.enum(['first', 'last', 'all']).optional().default('last'),
   }),
-  CaptureCommonSchema.extend({
+  RequestCaptureCommonSchema.extend({
     source: z.literal('text_regex'),
     pattern: z.string(),
     group: z.number().int().nonnegative().optional().default(1),
   }),
-  CookieCaptureSchema,
+  CookieCaptureSchema.extend({ equals: CaptureEqualsSchema.optional() }),
 ]);
 export type RequestCapture = z.infer<typeof RequestCaptureSchema>;
 
@@ -231,6 +240,28 @@ const WorkflowRequestSchema = z.object({
   url: z.string(),
   headers: z.record(z.string()),
   body: z.string().optional(),
+  /** Execute this GET as a top-level browser navigation instead of fetch().
+   *  This lets the recorded page run its own JavaScript and mint coupled browser
+   *  state (for example an OAuth PKCE verifier/challenge pair) without teaching
+   *  Imprint site- or framework-specific crypto/cookie formats. */
+  mode: z.enum(['fetch', 'navigate']).optional(),
+  /** Bounded completion criteria for mode="navigate". Predicates are ANDed.
+   *  With no predicate, navigation completes at the selected lifecycle event. */
+  navigation: z
+    .object({
+      waitUntil: z.enum(['domcontentloaded', 'load']).optional(),
+      timeoutMs: z.number().int().positive().optional(),
+      pollIntervalMs: z.number().int().positive().optional(),
+      urlIncludes: z.string().min(1).optional(),
+      cookie: z
+        .object({
+          name: z.string().min(1),
+          domain: z.string().min(1).optional(),
+          path: z.string().min(1).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   /** Names → jsonpath expressions; later requests reference via ${response[N].name}. */
   extract: z.record(z.string()).optional(),
   captures: z.array(RequestCaptureSchema).optional(),
@@ -273,9 +304,9 @@ const AuthConfigSchema = z
     pollIntervalMs: z.number().int().positive().default(3000),
     maxPollAttempts: z.number().int().positive().default(60),
     /** Push only: a recording-grounded capture that resolves on the *approved*
-     *  poll response (and not on the pending ones). When it yields a non-empty
-     *  value the poll is done. Omitted → fall back to "a session Set-Cookie
-     *  appeared". Replaces hardcoded body-substring matching. */
+     *  poll response (and not on the pending ones). It may use `equals` when a
+     *  scalar field changes to a terminal value, including an empty string.
+     *  Omitted → fall back to "a session Set-Cookie appeared". */
     pollTerminal: RequestCaptureSchema.optional(),
     /** OTP only: the names of `${state.X}` values captured from the initiate
      *  response that the completion (submit_otp) requests need (e.g. a reauth
@@ -298,6 +329,7 @@ const AuthConfigSchema = z
      *  (`${credential.NAME}`). Grounded in the recording; channel/site-agnostic. */
     sessionCapture: z.array(RequestCaptureSchema).default([]),
   })
+  .strict()
   .optional();
 export type AuthConfig = z.infer<typeof AuthConfigSchema>;
 
@@ -331,10 +363,11 @@ export const WorkflowSchema = z.object({
    *
    *  Return value:
    *  - `string` — the transformed URL (backward-compatible).
-   *  - `{ url: string; body?: string; headers?: Record<string, string> }` —
+   *  - `{ url?: string; body?: string; headers?: Record<string, string>; skip?: boolean }` —
    *    URL plus optional body and header overrides for complex body formats
    *    (JSPB, nested JSON-in-form) where placeholder substitution alone
-   *    cannot handle the encoding.
+   *    cannot handle the encoding. `skip: true` skips this request, for
+   *    conditional follow-up requests such as pagination/detail calls.
    *
    *  The optional 4th arg `params` carries the resolved workflow parameters
    *  so the transform can construct request bodies programmatically. */
@@ -412,6 +445,12 @@ export type ToolResult<T = unknown> =
        *  that the caller must echo back on the submit_otp call (stateless
        *  state-chain bridge). Names are declared in authConfig.twoFactorContext. */
       twoFactorContext?: Record<string, unknown>;
+      /** Internal verifier progress that must survive a retry of the same auth
+       *  phase. This is consumed by AuthVerifier and is not compiler input. */
+      _authContinuation?: {
+        pushApproved?: true;
+        nextRequestIndex?: number;
+      };
       loginResponsePreview?: string;
     };
 

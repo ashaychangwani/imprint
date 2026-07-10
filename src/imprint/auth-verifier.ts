@@ -3,12 +3,20 @@
  * flow. It is the ONLY thing that fires a real login at the site (the compile
  * agent shapes artifacts from the recording and never logs in itself).
  *
- * The whole point is ONE persistent browser session across the two 2FA phases:
+ * The primary path is ONE persistent browser session across the two 2FA phases:
  * a per-instance `cdpPool` is passed to every `runWorkflowWithLadder` call, so
  * the cdp-replay rung reuses the same live Chrome page across phase 1 (send the
  * OTP / push) → user input → phase 2 (submit the OTP / poll). Launching a fresh
  * browser between phases would reset a server-side challenge or drop a
  * single-use in-page token, so the pool is the load-bearing piece.
+ *
+ * A constrained exception exists for browser-minted credential submissions:
+ * if cdp-replay cannot replay the recorded credential POST far enough to reach
+ * 2FA and the tool directory contains a login playbook, initiate may run via
+ * playbook. That path carries only serializable state into phase 2 (cookies /
+ * localStorage persisted by the playbook runner plus twoFactorContext captures)
+ * and is therefore used only when the credential POST itself must be minted by
+ * the live page.
  *
  * Lifecycle: the orchestrator (teach) creates one AuthVerifier per auth run,
  * calls `runPhase` as the agent requests verifications, and ALWAYS calls
@@ -19,6 +27,8 @@
  * by the compiled `workflow.json` / `authConfig` and the ladder.
  */
 
+import { existsSync } from 'node:fs';
+import { dirname, join as pathJoin } from 'node:path';
 import { runWorkflowWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { createLog } from './log.ts';
@@ -98,6 +108,10 @@ export class AuthVerifier {
   /** twoFactorContext echoed by the most recent initiate, threaded into the
    *  completion phase so submit_otp can resolve `${state.X}`. */
   private lastTwoFactorContext: Record<string, unknown> | undefined;
+  /** Most recent initiate that proved the login reaches its success signal.
+   *  Repeating initiate before a completion failure would fire another real
+   *  login / OTP / push for no new signal, so return the cached proof instead. */
+  private cachedInitiateSuccess: AuthPhaseResult | undefined;
   private readonly maxInitiate: number;
   /** Public so the orchestrator's progress line can show "attempt N/M". */
   readonly maxInitiateAttempts: number;
@@ -135,6 +149,12 @@ export class AuthVerifier {
    *  `initiate` is budget-capped; the completion phases reuse the prior context. */
   async runPhase(phase: AuthPhase, opts?: { otp_code?: string }): Promise<AuthPhaseResult> {
     if (phase === 'initiate') {
+      if (this.cachedInitiateSuccess) {
+        return cachedAuthPhaseResult(
+          this.cachedInitiateSuccess,
+          'Already verified initiate live — returning the cached success signal to avoid firing another real login / OTP / push. Continue with the completion phase if 2FA is pending, or call done if the login is already complete.',
+        );
+      }
       // Gate 1: challenge budget — bounds OTPs/pushes the user actually sees.
       if (this.challengesIssued >= this.maxInitiate) {
         return {
@@ -164,12 +184,12 @@ export class AuthVerifier {
     if (phase === 'submit_otp' && opts?.otp_code) params.otp_code = opts.otp_code;
 
     const t0 = Date.now();
-    const ladder = await ladderRunner({
+    let ladder = await ladderRunner({
       workflowPath: this.workflowPath,
       params,
       credentials: this.credentials,
       cdpPool: this.cdpPool,
-      // Pin every phase to cdp-replay. This is the load-bearing decision for 2FA:
+      // Pin every phase to cdp-replay first. This is the load-bearing decision for 2FA:
       // ONLY the cdp-replay rung keeps a live browser in `cdpPool`, and the
       // AWAITING_2FA carve-out in runCdpReplay retains it across the user-input
       // gap — so phase 2 reuses the EXACT session (cookies + server challenge +
@@ -177,40 +197,32 @@ export class AuthVerifier {
       // returning AWAITING_2FA wins (often fetch/fetch-bootstrap), which is
       // stateless across calls → the completion poll/re-login 401s with
       // "tokens missing". cdp-replay is also the most anti-bot-robust rung, so
-      // there's no downside for an (infrequent) auth flow.
+      // there's no downside for an (infrequent) auth flow. Initiate may retry
+      // through a sibling playbook only when cdp-replay fails before delivering
+      // any challenge and the page itself must mint the credential submit.
       forceBackend: 'cdp-replay',
       // Carry the echoed challenge token into the completion phase so the same
       // session's submit_otp resolves ${state.X}. (Cookies ride the shared
       // pool/jar; this covers body-returned tokens.)
       initialState: phase === 'initiate' ? undefined : this.lastTwoFactorContext,
     });
+    if (phase === 'initiate' && shouldTryAuthPlaybook(ladder.result, this.workflowPath)) {
+      log('phase=initiate cdp-replay did not reach 2FA; trying auth playbook fallback');
+      ladder = await ladderRunner({
+        workflowPath: this.workflowPath,
+        params,
+        credentials: this.credentials,
+        cdpPool: this.cdpPool,
+        forceBackend: 'playbook',
+      });
+    }
     const durationMs = Date.now() - t0;
 
     const r = ladder.result;
-    if (phase === 'initiate') {
-      // Every try counts toward the attempt cap…
-      this.initiateAttempts += 1;
-      // …but only a delivered challenge (completed login or AWAITING_2FA) counts
-      // toward the user-visible challenge budget. A pre-challenge failure (403,
-      // network, bad-response) sent no OTP/push, so it must not burn it. Strictly
-      // `ok || AWAITING_2FA` — AUTH_EXPIRED / RATE_LIMITED are non-transport but
-      // are NOT delivered challenges.
-      if (r.ok || r.error === 'AWAITING_2FA') this.challengesIssued += 1;
-    }
-    if (!r.ok && r.error === 'AWAITING_2FA' && r.twoFactorContext) {
-      this.lastTwoFactorContext = r.twoFactorContext;
-    }
-    log(
-      `phase=${phase} backend=${ladder.usedBackend} ok=${r.ok}${r.ok ? '' : ` error=${r.error}`} in ${durationMs}ms`,
-    );
-
-    // Surface the full picture to the compile agent: concrete status code, the
-    // response body preview (the initiate preview on AWAITING_2FA; the failing
-    // body otherwise), backend, timing, and the carried challenge context.
     const responseBodyPreview = !r.ok
       ? (r.responseBodyPreview ?? r.loginResponsePreview)
       : r.loginResponsePreview;
-    return {
+    const phaseResult: AuthPhaseResult = {
       ok: r.ok,
       error: r.ok ? undefined : r.error,
       message: r.ok ? undefined : r.message,
@@ -221,6 +233,42 @@ export class AuthVerifier {
       responseBodyPreview,
       durationMs,
     };
+    if (phase === 'initiate') {
+      // Every try counts toward the attempt cap…
+      this.initiateAttempts += 1;
+      // …but only a delivered challenge (completed login or AWAITING_2FA) counts
+      // toward the user-visible challenge budget. A pre-challenge failure (403,
+      // network, bad-response) sent no OTP/push, so it must not burn it. Strictly
+      // `ok || AWAITING_2FA` — AUTH_EXPIRED / RATE_LIMITED are non-transport but
+      // are NOT delivered challenges.
+      if (r.ok || r.error === 'AWAITING_2FA') this.challengesIssued += 1;
+      if (r.ok || r.error === 'AWAITING_2FA') this.cachedInitiateSuccess = phaseResult;
+    } else if (!r.ok) {
+      this.cachedInitiateSuccess = undefined;
+    }
+    if (!r.ok && r.error === 'AWAITING_2FA' && r.twoFactorContext) {
+      this.lastTwoFactorContext = r.twoFactorContext;
+    }
+    if (!r.ok && r._authContinuation?.pushApproved) {
+      this.lastTwoFactorContext = {
+        ...this.lastTwoFactorContext,
+        __imprintPushApproved: true,
+      };
+    }
+    if (!r.ok && r._authContinuation?.nextRequestIndex !== undefined) {
+      this.lastTwoFactorContext = {
+        ...this.lastTwoFactorContext,
+        __imprintNextRequestIndex: r._authContinuation.nextRequestIndex,
+      };
+    }
+    log(
+      `phase=${phase} backend=${ladder.usedBackend} ok=${r.ok}${r.ok ? '' : ` error=${r.error}`} in ${durationMs}ms`,
+    );
+
+    // Surface the full picture to the compile agent: concrete status code, the
+    // response body preview (the initiate preview on AWAITING_2FA; the failing
+    // body otherwise), backend, timing, and the carried challenge context.
+    return phaseResult;
   }
 
   /** Close every pooled browser. MUST be called (teach's `finally`) — the pool
@@ -231,4 +279,26 @@ export class AuthVerifier {
     }
     this.cdpPool.clear();
   }
+}
+
+function shouldTryAuthPlaybook(
+  result: Awaited<ReturnType<LadderRunner>>['result'],
+  workflowPath: string,
+): boolean {
+  if (process.env.IMPRINT_AUTH_ALLOW_PLAYBOOK_FALLBACK !== '1') return false;
+  if (result.ok || result.error === 'AWAITING_2FA') return false;
+  const playbookPath = pathJoin(dirname(workflowPath), 'playbook.yaml');
+  if (!existsSync(playbookPath)) return false;
+  return ['STATE_MISSING', 'BAD_RESPONSE', 'FORBIDDEN', 'NETWORK', 'AUTH_EXPIRED'].includes(
+    result.error,
+  );
+}
+
+function cachedAuthPhaseResult(cached: AuthPhaseResult, cacheMessage: string): AuthPhaseResult {
+  return {
+    ...cached,
+    message: cached.message ? `${cacheMessage}\n\nCached result: ${cached.message}` : cacheMessage,
+    usedBackend: 'cached',
+    durationMs: 0,
+  };
 }

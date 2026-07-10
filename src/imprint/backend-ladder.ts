@@ -36,6 +36,7 @@ import { RuntimeCookieJar } from './cookie-jar.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
 import {
+  type BrowserNavigationTransport,
   type CredentialStore,
   executeWorkflow,
   loadCredentialStore,
@@ -259,6 +260,14 @@ export function __resetCompilePacingForTest(): void {
   compileLastRequestAt.clear();
 }
 
+export function cdpReplayPoolKey(site: string, baseUrl: string): string {
+  try {
+    return `${site}::${new URL(baseUrl).origin}`;
+  } catch {
+    return `${site}::${baseUrl}`;
+  }
+}
+
 /** Expand a replayBackend choice into a concrete ladder. 'auto' prefers
  *  the probed order (if any), then appends the default fallback ladder.
  *  Explicit choice → single rung. */
@@ -306,6 +315,10 @@ export async function runWithLadder(
      *  submit_otp so a body-returned token (e.g. a reauth mfaId) resolves on the
      *  stateless second call. Undefined for every non-auth call → no effect. */
     initialState?: Record<string, unknown>;
+    /** Optional credential override used by auth verification. Workflow rungs
+     *  already receive this through the generated tool function; the playbook
+     *  rung needs it explicitly so DOM login steps can type live credentials. */
+    credentials?: CredentialStore;
   },
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
@@ -369,14 +382,26 @@ export async function runWithLadder(
           const fetchOpts: Record<string, unknown> = {};
           if (proxyFetch) fetchOpts.fetchImpl = proxyFetch;
           if (options?.initialState) fetchOpts.initialState = options.initialState;
+          if (options?.credentials) fetchOpts.credentials = options.credentials;
           result = await tool.toolFn(params, fetchOpts);
           break;
         }
         case 'fetch-bootstrap':
-          result = await runFetchBootstrap(tool, params, options?.initialState);
+          result = await runFetchBootstrap(
+            tool,
+            params,
+            options?.initialState,
+            options?.credentials,
+          );
           break;
         case 'cdp-replay':
-          result = await runCdpReplay(tool, params, options?.cdpPool, options?.initialState);
+          result = await runCdpReplay(
+            tool,
+            params,
+            options?.cdpPool,
+            options?.initialState,
+            options?.credentials,
+          );
           break;
         case 'stealth-fetch': {
           const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
@@ -396,7 +421,11 @@ export async function runWithLadder(
             options?.initialState || bootstrapState
               ? { ...options?.initialState, ...bootstrapState }
               : undefined;
-          result = await tool.toolFn(paramsWithDefaults, { fetchImpl: sf.fetchImpl, initialState });
+          result = await tool.toolFn(paramsWithDefaults, {
+            fetchImpl: sf.fetchImpl,
+            initialState,
+            credentials: options?.credentials,
+          });
           break;
         }
         case 'playbook': {
@@ -408,11 +437,13 @@ export async function runWithLadder(
             playbook: playbookPath(assetRoot, tool.site, tool.dir),
             params: paramsWithDefaults,
             site: tool.site,
+            credentials: options?.credentials,
             stepTimeoutMs: playbookBackendStepTimeoutMs(),
             maxDurationMs: playbookBackendTimeoutMs(),
             // A login playbook mints a fresh session — persist it so downstream
             // data tools reuse the cookies.
             persistCookies: tool.workflow.toolKind === 'authenticate',
+            failOnAuthRedirect: tool.workflow.toolKind !== 'authenticate',
           });
           result = reshapePlaybookAuthResult(result, tool.workflow, paramsWithDefaults);
           break;
@@ -797,6 +828,30 @@ function jarLikelyStale(result: ToolResult): boolean {
   return !result.ok && (result.error === 'FORBIDDEN' || result.error === 'AUTH_EXPIRED');
 }
 
+function credentialSeedCookies(credentials: CredentialStore): MintedJar['cookies'] {
+  return credentials.cookies
+    .filter((c) => c.name && c.value && c.domain)
+    .map((c) => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      path: c.path ?? '/',
+      expires: c.expires,
+      httpOnly: c.httpOnly,
+      secure: c.secure,
+      sameSite: c.sameSite,
+    }));
+}
+
+function uniqueSeedCookies(cookies: MintedJar['cookies']): MintedJar['cookies'] | undefined {
+  if (cookies.length === 0) return undefined;
+  const byScope = new Map<string, MintedJar['cookies'][number]>();
+  for (const c of cookies) {
+    byScope.set(`${c.domain}\t${c.path ?? '/'}\t${c.name}`, c);
+  }
+  return [...byScope.values()];
+}
+
 /**
  * fetch-bootstrap rung — the API anti-bot path. Mint a validated session jar via
  * cdp-browser (real Chrome, used ONLY to bootstrap), CLOSE the browser, then
@@ -812,6 +867,7 @@ async function runFetchBootstrap(
   tool: ResolvedTool,
   params: Record<string, string | number | boolean>,
   callerState?: Record<string, unknown>,
+  credentialOverride?: CredentialStore,
 ): Promise<ToolResult> {
   let baseUrl: string;
   try {
@@ -825,12 +881,13 @@ async function runFetchBootstrap(
     };
   }
 
-  const credentials = (await loadCredentialStore(tool.site)) ?? {
-    site: tool.site,
-    cookies: [],
-    values: {},
-    storage: [],
-  };
+  const credentials = credentialOverride ??
+    (await loadCredentialStore(tool.site)) ?? {
+      site: tool.site,
+      cookies: [],
+      values: {},
+      storage: [],
+    };
   const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   const bootstrapUrl = tool.workflow.bootstrap
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
@@ -948,6 +1005,7 @@ async function runCdpReplay(
   params: Record<string, string | number | boolean>,
   cdpPool?: Map<string, CdpBrowserFetch>,
   callerState?: Record<string, unknown>,
+  credentialOverride?: CredentialStore,
 ): Promise<ToolResult> {
   let baseUrl: string;
   try {
@@ -961,19 +1019,20 @@ async function runCdpReplay(
     };
   }
 
-  const credentials = (await loadCredentialStore(tool.site)) ?? {
-    site: tool.site,
-    cookies: [],
-    values: {},
-    storage: [],
-  };
+  const credentials = credentialOverride ??
+    (await loadCredentialStore(tool.site)) ?? {
+      site: tool.site,
+      cookies: [],
+      values: {},
+      storage: [],
+    };
   const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   const bootstrapUrl = tool.workflow.bootstrap
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
 
   const siteDir = pathResolve(tool.dir, '..');
-  const poolKey = tool.site;
+  const poolKey = cdpReplayPoolKey(tool.site, baseUrl);
   const pooled = cdpPool?.get(poolKey);
   const ownsSession = !pooled;
 
@@ -992,15 +1051,18 @@ async function runCdpReplay(
     // otherwise re-arm itself every run (initiate writes a jar that the next initiate
     // seeds → cascade of 403s). Data tools still seed (they reuse an authed session).
     if (tool.workflow.toolKind !== 'authenticate') {
+      const seeds: MintedJar['cookies'] = [];
       try {
         const rec = newestRecording(siteDir);
         let cached = loadJar(siteDir);
         if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
         if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
-        if (cached?.cookies.length) seedCookies = cached.cookies;
+        if (cached?.cookies.length) seeds.push(...cached.cookies);
       } catch {
         // best-effort
       }
+      seeds.push(...credentialSeedCookies(credentials));
+      seedCookies = uniqueSeedCookies(seeds);
     }
     cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({
       baseUrl,
@@ -1053,6 +1115,13 @@ async function runCdpReplay(
       credentials: bootstrappedCredentials,
       initialState: { ...callerState, ...captureResult.state },
       fetchImpl: cf.fetchImpl,
+      browser:
+        cf.navigate && cf.snapshotCookies
+          ? {
+              navigate: cf.navigate.bind(cf),
+              snapshotCookies: cf.snapshotCookies.bind(cf),
+            }
+          : undefined,
     });
 
     if (result.ok) {
@@ -1459,7 +1528,7 @@ function playbookPath(assetRoot: string, site: string, toolDir?: string): string
  * carry any best-effort `twoFactorContext` token the playbook captured (named
  * per `authConfig.twoFactorContext`) across the stateless initiate→submit_otp
  * gap. Only fires on the login/initiate action; submit_otp/complete run via
- * the fetch path, not the playbook.
+ * the workflow requests, not the playbook.
  */
 export function reshapePlaybookAuthResult(
   result: ToolResult,
@@ -1565,6 +1634,7 @@ export async function runWorkflowWithLadder(opts: {
       const o = fnOpts as
         | {
             fetchImpl?: typeof fetch;
+            browser?: BrowserNavigationTransport;
             initialState?: Record<string, unknown>;
             credentials?: CredentialStore;
           }
@@ -1575,6 +1645,7 @@ export async function runWorkflowWithLadder(opts: {
         credentials: o?.credentials ?? opts.credentials,
         workflowPath: opts.workflowPath,
         fetchImpl: o?.fetchImpl,
+        browser: o?.browser,
         initialState: o?.initialState,
       });
     },
@@ -1652,6 +1723,7 @@ export async function runWorkflowWithLadder(opts: {
         skipBootstrapSplice: true,
         cdpPool,
         initialState: opts.initialState,
+        credentials: opts.credentials,
       });
     }
 
@@ -1712,6 +1784,7 @@ export async function runWorkflowWithLadder(opts: {
             skipBootstrapSplice: true,
             cdpPool,
             initialState: opts.initialState,
+            credentials: opts.credentials,
           });
           // A backend that finishes AFTER the probe returned (it lost the race but
           // is still cold-starting Chrome) pools its browser late — arm the idle
@@ -1779,6 +1852,7 @@ export async function runWorkflowWithLadder(opts: {
       const seqResult = await runWithLadder(ladder, tool, opts.params, assetRoot, stealthCache, {
         cdpPool,
         initialState: opts.initialState,
+        credentials: opts.credentials,
       });
       if (probeReachable(seqResult.result)) {
         compileWinningBackend.set(memoKey, seqResult.usedBackend);
@@ -1801,6 +1875,7 @@ export async function runWorkflowWithLadder(opts: {
       skipBootstrapSplice: true,
       cdpPool,
       initialState: opts.initialState,
+      credentials: opts.credentials,
     });
     if (isProbeReachable(result.result)) {
       compileWinningBackend.set(memoKey, result.usedBackend);

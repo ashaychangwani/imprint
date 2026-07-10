@@ -16,7 +16,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { resolveLadder, runWithLadder } from './backend-ladder.ts';
+import { cdpReplayPoolKey, resolveLadder, runWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { TimeoutError, withTimeoutCleanup } from './concurrency.ts';
 import { createLog } from './log.ts';
@@ -72,7 +72,10 @@ export function buildJsonSchema(
   parameters: WorkflowParameter[],
   opts?: { includeTwoFactorContext?: boolean },
 ): Tool['inputSchema'] {
-  const properties: Record<string, { type: string; description: string }> = {};
+  const properties: Record<
+    string,
+    { type: string; description: string; enum?: Array<string | number | boolean> }
+  > = {};
   const required: string[] = [];
   for (const p of parameters) {
     // Producer-sourced params: tell the orchestrating LLM where to mint/derive
@@ -81,7 +84,13 @@ export function buildJsonSchema(
     const description = p.sourcedFrom
       ? `${p.description} Obtain this value from the \`${p.sourcedFrom.tool}\` tool's \`${p.sourcedFrom.field}\` output — call \`${p.sourcedFrom.tool}\` first and reuse the value across calls (no need to re-fetch each time).`
       : p.description;
-    properties[p.name] = { type: p.type, description };
+    const property: { type: string; description: string; enum?: Array<string | number | boolean> } =
+      {
+        type: p.type,
+        description,
+      };
+    if (p.choices?.length) property.enum = p.choices;
+    properties[p.name] = property;
     if (p.default === undefined) required.push(p.name);
   }
   // Auth 2FA bridge (stateless): on the second (submit_otp) call the caller
@@ -122,10 +131,12 @@ export async function runSerializedBySite<T>(
   return await run;
 }
 
-function auditToolDeadlineMs(): number | undefined {
+const DEFAULT_AUDIT_TOOL_DEADLINE_MS = 270_000;
+
+export function auditToolDeadlineMs(): number | undefined {
   const raw = Number(process.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS);
   if (Number.isFinite(raw) && raw > 0) return raw;
-  if (process.env.IMPRINT_AUDIT_PACING_MS !== undefined) return 120_000;
+  if (process.env.IMPRINT_AUDIT_PACING_MS !== undefined) return DEFAULT_AUDIT_TOOL_DEADLINE_MS;
   return undefined;
 }
 
@@ -166,6 +177,23 @@ function buildServer(
   // idle-closed (below) — otherwise the next call would start at a now-cold
   // cdp-replay and re-pay the ~33s relaunch.
   const winnerCache = new Map<string, ConcreteBackend>();
+
+  async function closeCdpSessionsForSite(site: string): Promise<void> {
+    const prefix = `${site}::`;
+    const sessions = [...cdpPool.entries()].filter(
+      ([key]) => key === site || key.startsWith(prefix),
+    );
+    for (const [key, cf] of sessions) {
+      cdpPool.delete(key);
+      await cf.close().catch(() => {});
+    }
+  }
+
+  function hasCdpSessionForTool(tool: ResolvedTool): boolean {
+    const baseUrl = tool.workflow.requests[0]?.url;
+    if (!baseUrl) return false;
+    return cdpPool.has(cdpReplayPoolKey(tool.site, baseUrl));
+  }
 
   // Browser-backed rungs share per-site state (CDP page/session, stealth token,
   // winner memo, and backend cache). Parallel MCP calls can race that state and
@@ -247,11 +275,7 @@ function buildServer(
                 auditDeadlineMs,
                 `${tool.workflow.toolName} audit MCP call`,
                 () => {
-                  const cf = cdpPool.get(tool.site);
-                  if (cf) {
-                    cdpPool.delete(tool.site);
-                    cf.close().catch(() => {});
-                  }
+                  closeCdpSessionsForSite(tool.site).catch(() => {});
                   for (const key of winnerCache.keys()) {
                     if (key.startsWith(`${tool.site}:`)) winnerCache.delete(key);
                   }
@@ -272,15 +296,13 @@ function buildServer(
           };
         }
         // Reset the idle timer for this site's pooled Chrome.
-        if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
+        if (result.ok && usedBackend === 'cdp-replay' && hasCdpSessionForTool(tool)) {
           const prev = cdpIdleTimers.get(tool.site);
           if (prev) clearTimeout(prev);
           const timer = setTimeout(() => {
-            const cf = cdpPool.get(tool.site);
-            if (cf) {
+            if (hasCdpSessionForTool(tool)) {
               log(`closing idle CDP session for ${tool.site}`);
-              cf.close().catch(() => {});
-              cdpPool.delete(tool.site);
+              closeCdpSessionsForSite(tool.site).catch(() => {});
               cdpIdleTimers.delete(tool.site);
               // Drop this site's winner memo too: a memoized cdp-replay would now
               // point at a closed Chrome and re-pay the cold relaunch.

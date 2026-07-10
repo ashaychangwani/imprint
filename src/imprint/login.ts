@@ -10,7 +10,7 @@ import {
   upsertManifestEntry,
 } from './credential-store.ts';
 import { localSiteDir } from './paths.ts';
-import { captureHeader, jsonpath } from './request-capture.ts';
+import { captureHeader, captureValueMatches, jsonpath } from './request-capture.ts';
 import { type RequestCapture, type Session, SessionSchema, WorkflowSchema } from './types.ts';
 
 interface LoginOptions {
@@ -155,7 +155,7 @@ function resolveCapture(session: Session, capture: RequestCapture): string | und
       case 'cookie':
         continue; // cookies are persisted by collectCookies, not as secrets here
     }
-    if (value !== undefined && value !== null && value !== '') {
+    if (captureValueMatches(value, capture.equals)) {
       return Array.isArray(value) ? value.join(',') : String(value);
     }
   }

@@ -10,7 +10,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
-import { discoverTools, findToolFunction, toCamelCase } from '../src/imprint/tool-loader.ts';
+import {
+  buildZodValidator,
+  discoverTools,
+  findToolFunction,
+  toCamelCase,
+} from '../src/imprint/tool-loader.ts';
 
 let root: string;
 
@@ -66,6 +71,27 @@ describe('findToolFunction', () => {
   it('returns null when the export is not callable', () => {
     const mod = { WORKFLOW: { toolName: 'not_a_fn' } as never, notAFn: 'oops' };
     expect(findToolFunction(mod)).toBeNull();
+  });
+});
+
+describe('buildZodValidator', () => {
+  it('rejects values outside declared parameter choices', () => {
+    const validator = buildZodValidator([
+      {
+        name: 'action',
+        type: 'string',
+        description: 'Authentication phase.',
+        default: 'initiate',
+        choices: ['initiate', 'complete', 'submit_otp'],
+      },
+    ]);
+
+    expect(validator.safeParse({ action: 'complete' }).success).toBe(true);
+    const invalid = validator.safeParse({ action: 'start' });
+    expect(invalid.success).toBe(false);
+    if (!invalid.success) {
+      expect(invalid.error.issues[0]?.message).toContain('Expected one of');
+    }
   });
 });
 
@@ -175,6 +201,59 @@ export async function staleTool() {
 
     expect(out.map((tool) => tool.workflow.toolName)).toEqual(['stale_tool']);
     expect(readFileSync(pathResolve(dir, 'index.ts'), 'utf8')).toContain("'imprint/runtime'");
+  });
+
+  it('repairs wrappers whose embedded WORKFLOW drifted from workflow.json', async () => {
+    const dir = pathResolve(root, 'drift', 'drift_tool');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      pathResolve(dir, 'workflow.json'),
+      JSON.stringify(
+        {
+          toolName: 'drift_tool',
+          intent: { description: 'new workflow from disk' },
+          parameters: [
+            {
+              name: 'action',
+              type: 'string',
+              description: 'phase',
+              default: 'initiate',
+              choices: ['initiate', 'complete'],
+            },
+          ],
+          requests: [],
+          site: 'drift',
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    writeFileSync(
+      pathResolve(dir, 'index.ts'),
+      `
+export const WORKFLOW = {
+  toolName: 'drift_tool',
+  intent: { description: 'old embedded workflow' },
+  parameters: [],
+  requests: [],
+  site: 'drift',
+};
+export async function driftTool() {
+  return { ok: true, data: {} };
+}
+`,
+      'utf8',
+    );
+
+    const out = await discoverTools(root);
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.workflow.intent.description).toBe('new workflow from disk');
+    expect(out[0]?.workflow.parameters[0]?.choices).toEqual(['initiate', 'complete']);
+    const source = readFileSync(pathResolve(dir, 'index.ts'), 'utf8');
+    expect(source).toContain('new workflow from disk');
+    expect(source).toContain('"choices": [');
   });
 
   it('does not repair hand-written fixtures with type-only legacy imports', async () => {

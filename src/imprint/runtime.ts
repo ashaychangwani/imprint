@@ -19,7 +19,7 @@ import {
   saveSiteCookies,
   saveSiteSecret,
 } from './credential-store.ts';
-import { captureHeader, jsonpath } from './request-capture.ts';
+import { captureHeader, captureValueMatches, jsonpath } from './request-capture.ts';
 import type {
   RequestCapture,
   StateCapability,
@@ -31,6 +31,9 @@ import type {
 
 export { splitSetCookieHeader } from './cookie-jar.ts';
 
+const AUTH_PUSH_APPROVED_STATE_KEY = '__imprintPushApproved';
+const AUTH_NEXT_REQUEST_INDEX_STATE_KEY = '__imprintNextRequestIndex';
+
 export interface CredentialStore {
   site: string;
   /** Persisted via `imprint login`; sent on every same-domain request. */
@@ -39,6 +42,23 @@ export interface CredentialStore {
   values: Record<string, string>;
   /** Durable browser storage captured by `imprint login`; V1 seeds localStorage only. */
   storage?: StorageRecord[];
+}
+
+/** Browser-only workflow operations supplied by cdp-replay. Keeping this
+ *  transport generic lets pages mint coupled browser state through their own
+ *  JavaScript without adding OAuth-provider or frontend-framework logic here. */
+export interface BrowserNavigationTransport {
+  navigate(
+    url: string,
+    options?: {
+      waitUntil?: 'domcontentloaded' | 'load';
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+      urlIncludes?: string;
+      cookie?: { name: string; domain?: string; path?: string };
+    },
+  ): Promise<Response>;
+  snapshotCookies(): Promise<RuntimeCookie[]>;
 }
 
 /** Load credentials for a site from the credential manager (OS keychain →
@@ -85,6 +105,8 @@ interface ExecuteOptions {
   credentials?: CredentialStore;
   /** Override global fetch (tests, stealth-fetch). */
   fetchImpl?: typeof fetch;
+  /** Top-level document navigation, available only on cdp-replay. */
+  browser?: BrowserNavigationTransport;
   /** Per-request timeout in ms. Default 30000. */
   requestTimeoutMs?: number;
   /** Absolute path of workflow.json — required for parserModule resolution. */
@@ -156,7 +178,9 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   const dependencyPreflight = preflightStateDependencies(opts.workflow, state, stateCapabilities);
   if (!dependencyPreflight.ok) return dependencyPreflight.result;
 
-  type TransformResult = string | { url: string; body?: string; headers?: Record<string, string> };
+  type TransformResult =
+    | string
+    | { url?: string; body?: string; headers?: Record<string, string>; skip?: boolean };
   let requestTransform:
     | ((
         method: string,
@@ -205,7 +229,8 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         if (typeof transformResult === 'string') {
           subbed.url = transformResult;
         } else if (transformResult && typeof transformResult === 'object') {
-          subbed.url = transformResult.url;
+          if (transformResult.skip === true) continue;
+          if (typeof transformResult.url === 'string') subbed.url = transformResult.url;
           if (transformResult.body !== undefined) subbed.body = transformResult.body;
           if (transformResult.headers) {
             for (const [k, v] of Object.entries(transformResult.headers)) {
@@ -221,32 +246,56 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     const cookieHeader = cookieJar.getCookieHeader(subbed.url);
     if (cookieHeader && !hasHeader(subbed.headers, 'cookie')) subbed.headers.cookie = cookieHeader;
 
-    const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
-
     let resp: Response;
-    try {
-      resp = await fetchFn(subbed.url, {
-        method: subbed.method,
-        headers: subbed.headers,
-        body: subbed.body,
-        signal: controller.signal,
-        redirect: 'follow',
-      });
-    } catch (err) {
-      clearTimeout(timeoutHandle);
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('aborted') || msg.includes('AbortError')) {
+    if (req.mode === 'navigate') {
+      if (subbed.method.toUpperCase() !== 'GET') {
         return {
           ok: false,
-          error: 'NETWORK',
-          message: `Request ${i} timed out after ${timeoutMs}ms`,
-          remediation: 'Retry, or increase the timeout if the endpoint is slow.',
+          error: 'BAD_RESPONSE',
+          message: `Request ${i} uses mode="navigate" with ${subbed.method}; top-level navigation only supports GET.`,
         };
       }
-      return { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` };
+      if (!opts.browser) {
+        return {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: `Request ${i} requires top-level browser navigation; retry with cdp-replay.`,
+        };
+      }
+      try {
+        resp = await opts.browser.navigate(subbed.url, req.navigation);
+        for (const cookie of await opts.browser.snapshotCookies()) cookieJar.setCookie(cookie);
+        liveCredentials.cookies = cookieJar.toJSON();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: 'NETWORK', message: `Navigation ${i} failed: ${msg}` };
+      }
+    } else {
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        resp = await fetchFn(subbed.url, {
+          method: subbed.method,
+          headers: subbed.headers,
+          body: subbed.body,
+          signal: controller.signal,
+          redirect: 'follow',
+        });
+      } catch (err) {
+        clearTimeout(timeoutHandle);
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('aborted') || msg.includes('AbortError')) {
+          return {
+            ok: false,
+            error: 'NETWORK',
+            message: `Request ${i} timed out after ${timeoutMs}ms`,
+            remediation: 'Retry, or increase the timeout if the endpoint is slow.',
+          };
+        }
+        return { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` };
+      }
+      clearTimeout(timeoutHandle);
     }
-    clearTimeout(timeoutHandle);
 
     if (resp.status === 401) {
       const text = await safeText(resp);
@@ -378,7 +427,11 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     | { parsed: unknown; text: string; headers: Headers; requestUrl: string }
     | undefined;
 
-  const runRequests = async (startIdx: number, endIdx: number): Promise<ToolResult | null> => {
+  const runRequests = async (
+    startIdx: number,
+    endIdx: number,
+    onCompleted?: (nextRequestIndex: number) => void,
+  ): Promise<ToolResult | null> => {
     for (let i = startIdx; i < endIdx; i++) {
       const req = opts.workflow.requests[i];
       if (!req) continue;
@@ -400,23 +453,48 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       if (cookieHeader && !hasHeader(subbedReq.headers, 'cookie'))
         subbedReq.headers.cookie = cookieHeader;
 
-      const controller = new AbortController();
-      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
       let resp: Response;
-      try {
-        resp = await fetchFn(subbedReq.url, {
-          method: subbedReq.method,
-          headers: subbedReq.headers,
-          body: subbedReq.body,
-          signal: controller.signal,
-          redirect: 'follow',
-        });
-      } catch (err) {
+      if (req.mode === 'navigate') {
+        if (subbedReq.method.toUpperCase() !== 'GET') {
+          return {
+            ok: false,
+            error: 'BAD_RESPONSE',
+            message: `Auth request ${i} uses mode="navigate" with ${subbedReq.method}; top-level navigation only supports GET.`,
+          };
+        }
+        if (!opts.browser) {
+          return {
+            ok: false,
+            error: 'BAD_RESPONSE',
+            message: `Auth request ${i} requires top-level browser navigation; retry with cdp-replay.`,
+          };
+        }
+        try {
+          resp = await opts.browser.navigate(subbedReq.url, req.navigation);
+          for (const cookie of await opts.browser.snapshotCookies()) cookieJar.setCookie(cookie);
+          liveCredentials.cookies = cookieJar.toJSON();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, error: 'NETWORK', message: `Auth navigation ${i} failed: ${msg}` };
+        }
+      } else {
+        const controller = new AbortController();
+        const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          resp = await fetchFn(subbedReq.url, {
+            method: subbedReq.method,
+            headers: subbedReq.headers,
+            body: subbedReq.body,
+            signal: controller.signal,
+            redirect: 'follow',
+          });
+        } catch (err) {
+          clearTimeout(timeoutHandle);
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, error: 'NETWORK', message: `Auth request ${i} failed: ${msg}` };
+        }
         clearTimeout(timeoutHandle);
-        const msg = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: 'NETWORK', message: `Auth request ${i} failed: ${msg}` };
       }
-      clearTimeout(timeoutHandle);
 
       if (resp.status >= 400) {
         const text = await safeText(resp);
@@ -427,6 +505,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
           process.stderr.write(
             `[imprint runtime] optional auth request ${i} (${subbedReq.url}) returned ${resp.status} — skipping, continuing\n`,
           );
+          onCompleted?.(i + 1);
           continue;
         }
         return {
@@ -472,8 +551,16 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         requestUrl: subbedReq.url,
         cookieJar,
       });
-      if (!captureResult.ok) return captureResult.result;
+      if (!captureResult.ok) {
+        return {
+          ...captureResult.result,
+          status: resp.status,
+          responseBodyPreview: text.slice(0, 500),
+          loginResponsePreview,
+        };
+      }
       Object.assign(state, captureResult.value);
+      onCompleted?.(i + 1);
     }
     return null;
   };
@@ -514,6 +601,28 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     if (err) return err;
 
     if (authConfig && authConfig.twoFactorType !== 'none') {
+      const contextNames = authConfig.twoFactorContext ?? [];
+      const deliveryRequest = opts.workflow.requests[initiateCount - 1];
+      const deliveryEvidenceNames = (deliveryRequest?.captures ?? [])
+        .map((capture) => capture.name)
+        .filter((name) => contextNames.includes(name));
+      if (deliveryEvidenceNames.length === 0) {
+        return {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message:
+            'The final initiate request declares no captured twoFactorContext value, so Imprint cannot verify that the 2FA challenge was delivered.',
+        };
+      }
+      const missingEvidence = deliveryEvidenceNames.filter((name) => !(name in state));
+      if (missingEvidence.length > 0) {
+        return {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: `The final initiate request completed without challenge-delivery evidence: ${missingEvidence.join(', ')} was not captured.`,
+        };
+      }
+
       await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
       // Stateless state-chain bridge: each MCP call is a fresh executeAuthWorkflow
       // with a fresh `state`, so a token the login response returned in its body
@@ -521,7 +630,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       // declared twoFactorContext names out of the captured state and echo them
       // to the caller, who passes them back as initialState on the next call.
       const ctx: Record<string, unknown> = {};
-      for (const name of authConfig.twoFactorContext ?? []) {
+      for (const name of contextNames) {
         if (name in state) ctx[name] = state[name];
       }
       return {
@@ -543,7 +652,16 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   }
 
   if (action === 'complete') {
-    if (authConfig?.twoFactorType === 'push' && authConfig.pollEndpoint) {
+    let pushApproved = state[AUTH_PUSH_APPROVED_STATE_KEY] === true;
+    const storedNextRequestIndex = state[AUTH_NEXT_REQUEST_INDEX_STATE_KEY];
+    let nextRequestIndex =
+      typeof storedNextRequestIndex === 'number' &&
+      Number.isInteger(storedNextRequestIndex) &&
+      storedNextRequestIndex >= initiateCount &&
+      storedNextRequestIndex <= opts.workflow.requests.length
+        ? storedNextRequestIndex
+        : initiateCount;
+    if (authConfig?.twoFactorType === 'push' && authConfig.pollEndpoint && !pushApproved) {
       // The recorded default is generous (≈3 min) for a real run where a human
       // approves the push. An unattended *attempt* (e.g. `imprint teach
       // --no-interactive`) wants a short bound so it fails fast instead of
@@ -660,10 +778,26 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
           message: `Push notification was not approved after ${pollMax} attempts.`,
         };
       }
+      pushApproved = true;
+      state[AUTH_PUSH_APPROVED_STATE_KEY] = true;
     }
 
-    const err = await runRequests(initiateCount, opts.workflow.requests.length);
-    if (err) return err;
+    const err = await runRequests(nextRequestIndex, opts.workflow.requests.length, (nextIndex) => {
+      nextRequestIndex = nextIndex;
+      state[AUTH_NEXT_REQUEST_INDEX_STATE_KEY] = nextIndex;
+    });
+    if (err) {
+      if (!err.ok && (pushApproved || nextRequestIndex > initiateCount)) {
+        return {
+          ...err,
+          _authContinuation: {
+            ...(pushApproved ? { pushApproved: true as const } : {}),
+            nextRequestIndex,
+          },
+        };
+      }
+      return err;
+    }
 
     await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
     await persistSessionCapture();
@@ -671,8 +805,24 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   }
 
   if (action === 'submit_otp') {
-    const err = await runRequests(initiateCount, opts.workflow.requests.length);
-    if (err) return err;
+    const storedNextRequestIndex = state[AUTH_NEXT_REQUEST_INDEX_STATE_KEY];
+    let nextRequestIndex =
+      typeof storedNextRequestIndex === 'number' &&
+      Number.isInteger(storedNextRequestIndex) &&
+      storedNextRequestIndex >= initiateCount &&
+      storedNextRequestIndex <= opts.workflow.requests.length
+        ? storedNextRequestIndex
+        : initiateCount;
+    const err = await runRequests(nextRequestIndex, opts.workflow.requests.length, (nextIndex) => {
+      nextRequestIndex = nextIndex;
+      state[AUTH_NEXT_REQUEST_INDEX_STATE_KEY] = nextIndex;
+    });
+    if (err) {
+      if (!err.ok && nextRequestIndex > initiateCount) {
+        return { ...err, _authContinuation: { nextRequestIndex } };
+      }
+      return err;
+    }
 
     await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
     await persistSessionCapture();
@@ -1099,14 +1249,17 @@ function evaluateRequestCaptures(
       }
     }
 
-    if (value === undefined || value === null || value === '') {
+    if (!captureValueMatches(value, capture.equals)) {
       if (capture.required === false) continue;
       return missingState({
         name: capture.name,
         source: capture.source === 'cookie' ? 'cookie' : 'response',
         capability: capture.capability,
         failure: 'producer_ran_value_absent',
-        message: `Required capture "${capture.name}" (${capture.source}) did not produce a value.`,
+        message:
+          capture.equals === undefined
+            ? `Required capture "${capture.name}" (${capture.source}) did not produce a value.`
+            : `Required capture "${capture.name}" (${capture.source}) did not produce the expected value.`,
       });
     }
     values[capture.name] = value;

@@ -17,7 +17,11 @@ import {
   resetBackendCache,
   setBackendOverride,
 } from '../src/imprint/credential-store.ts';
-import { type CredentialStore, executeWorkflow } from '../src/imprint/runtime.ts';
+import {
+  type BrowserNavigationTransport,
+  type CredentialStore,
+  executeWorkflow,
+} from '../src/imprint/runtime.ts';
 import type { Workflow } from '../src/imprint/types.ts';
 
 // In-memory credential backend so saveSiteCookies() never touches the keychain
@@ -64,6 +68,175 @@ const creds: CredentialStore = { site: 'fix', cookies: [], values: { username: '
 afterEach(() => {
   setBackendOverride(null);
   resetBackendCache();
+});
+
+describe('browser-native auth navigation', () => {
+  it('runs the recorded page as a top-level navigation and persists its cross-origin cookies', async () => {
+    const backend = memBackend();
+    setBackendOverride(backend);
+    const navigations: Array<{ url: string; options: unknown }> = [];
+    const browser: BrowserNavigationTransport = {
+      async navigate(url, options) {
+        navigations.push({ url, options });
+        return new Response('<html>signed in</html>', {
+          status: 200,
+          headers: { 'x-imprint-final-url': 'https://travel.example.test/search' },
+        });
+      },
+      async snapshotCookies() {
+        return [
+          {
+            name: 'session-token',
+            value: 'LIVE-SESSION',
+            domain: 'travel.example.test',
+            path: '/',
+            secure: true,
+            httpOnly: true,
+            hostOnly: true,
+          },
+        ];
+      },
+    };
+    const workflow = {
+      toolName: 'authenticate_fix',
+      toolKind: 'authenticate',
+      intent: { description: 'auth through a relying-party document' },
+      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://prebooking.example.test/search-redirect',
+          headers: {},
+          mode: 'navigate',
+          navigation: {
+            timeoutMs: 90_000,
+            cookie: { name: 'session-token', domain: 'travel.example.test' },
+          },
+        },
+      ],
+      site: 'fix',
+      authConfig: {
+        twoFactorType: 'none',
+        initiateRequestCount: 1,
+        twoFactorContext: [],
+      },
+    } as unknown as Workflow;
+
+    const result = await executeWorkflow({
+      workflow,
+      params: { action: 'initiate' },
+      credentials: creds,
+      browser,
+      fetchImpl: (async () => {
+        throw new Error('navigation must not use fetch');
+      }) as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data).toEqual({ authenticated: true });
+    expect(navigations).toEqual([
+      {
+        url: 'https://prebooking.example.test/search-redirect',
+        options: {
+          timeoutMs: 90_000,
+          cookie: { name: 'session-token', domain: 'travel.example.test' },
+        },
+      },
+    ]);
+    expect((await backend.getCookies('fix')).map((cookie) => cookie.name)).toContain(
+      'session-token',
+    );
+  });
+});
+
+describe('2FA delivery evidence', () => {
+  const deliveryWorkflow = (): Workflow =>
+    ({
+      toolName: 'authenticate_fix',
+      toolKind: 'authenticate',
+      intent: { description: 'auth' },
+      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://fix.example/send-push',
+          headers: {},
+          captures: [
+            {
+              name: 'messageTrackingId',
+              source: 'json',
+              path: 'messageTrackingId',
+              required: false,
+            },
+          ],
+        },
+        { method: 'POST', url: 'https://fix.example/finish', headers: {} },
+      ],
+      site: 'fix',
+      authConfig: {
+        twoFactorType: 'push',
+        initiateRequestCount: 1,
+        twoFactorContext: ['messageTrackingId'],
+        pollEndpoint: 'https://fix.example/poll',
+      },
+    }) as Workflow;
+
+  it('does not claim 2FA delivery when the response lacks challenge evidence', async () => {
+    setBackendOverride(memBackend());
+    const result = await executeWorkflow({
+      workflow: deliveryWorkflow(),
+      params: { action: 'initiate' },
+      credentials: creds,
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected delivery verification failure');
+    expect(result.error).toBe('BAD_RESPONSE');
+    expect(result.message).toContain('messageTrackingId was not captured');
+  });
+
+  it('preserves the live response when a required challenge capture is missing', async () => {
+    setBackendOverride(memBackend());
+    const workflow = deliveryWorkflow();
+    const capture = workflow.requests[0]?.captures?.[0];
+    if (capture) capture.required = true;
+    const result = await executeWorkflow({
+      workflow,
+      params: { action: 'initiate' },
+      credentials: creds,
+      fetchImpl: (async () =>
+        new Response('{"error":"SYNTH-CHALLENGE-NOT-CREATED"}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })) as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected required capture failure');
+    expect(result.error).toBe('STATE_MISSING');
+    expect(result.status).toBe(200);
+    expect(result.responseBodyPreview).toContain('SYNTH-CHALLENGE-NOT-CREATED');
+  });
+
+  it('reports AWAITING_2FA only after challenge evidence is captured', async () => {
+    setBackendOverride(memBackend());
+    const result = await executeWorkflow({
+      workflow: deliveryWorkflow(),
+      params: { action: 'initiate' },
+      credentials: creds,
+      fetchImpl: (async () =>
+        new Response('{"messageTrackingId":"SYNTH-PUSH-1"}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })) as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected AWAITING_2FA');
+    expect(result.error).toBe('AWAITING_2FA');
+    expect(result.twoFactorContext).toEqual({ messageTrackingId: 'SYNTH-PUSH-1' });
+  });
 });
 
 describe('push poll terminal (recording-grounded)', () => {
@@ -118,6 +291,100 @@ describe('push poll terminal (recording-grounded)', () => {
     });
     expect(r.ok).toBe(true);
     expect(polls).toBe(3); // stopped exactly at the approved poll, not the first
+  });
+
+  it('supports an explicitly matched empty terminal value', async () => {
+    setBackendOverride(memBackend());
+    let polls = 0;
+    const fetchMock = (async (url: string) => {
+      if (String(url).includes('/poll')) {
+        polls += 1;
+        const body = polls >= 2 ? '{"challenge":""}' : '{"challenge":"pending"}';
+        return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const r = await executeWorkflow({
+      workflow: pushWorkflow({
+        name: 'approved',
+        source: 'json',
+        path: 'challenge',
+        equals: '',
+      }),
+      params: { action: 'complete' },
+      credentials: creds,
+      fetchImpl: fetchMock,
+    });
+    expect(r.ok).toBe(true);
+    expect(polls).toBe(2);
+  });
+
+  it('does not re-poll a consumed push approval when a later completion request is retried', async () => {
+    setBackendOverride(memBackend());
+    const workflow = pushWorkflow({
+      name: 'approved',
+      source: 'json',
+      path: 'challenge',
+      equals: '',
+    });
+    workflow.requests.push({
+      method: 'POST',
+      url: 'https://fix.example/consume-once',
+      headers: {},
+    });
+    workflow.requests.push({
+      method: 'POST',
+      url: 'https://fix.example/finish',
+      headers: {},
+    });
+
+    let polls = 0;
+    let consumes = 0;
+    let finishes = 0;
+    const fetchMock = (async (url: string) => {
+      if (String(url).includes('/poll')) {
+        polls += 1;
+        return new Response('{"challenge":""}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (String(url).includes('/consume-once')) {
+        consumes += 1;
+        return new Response('{}', { status: 200 });
+      }
+      if (String(url).includes('/finish')) {
+        finishes += 1;
+        return new Response('{}', { status: finishes === 1 ? 400 : 200 });
+      }
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const first = await executeWorkflow({
+      workflow,
+      params: { action: 'complete' },
+      credentials: creds,
+      fetchImpl: fetchMock,
+    });
+    expect(first.ok).toBe(false);
+    if (first.ok) throw new Error('expected the first finish request to fail');
+    expect(first._authContinuation).toEqual({ pushApproved: true, nextRequestIndex: 2 });
+
+    const second = await executeWorkflow({
+      workflow,
+      params: { action: 'complete' },
+      credentials: creds,
+      fetchImpl: fetchMock,
+      initialState: {
+        __imprintPushApproved: true,
+        __imprintNextRequestIndex: 2,
+      },
+    });
+    expect(second.ok).toBe(true);
+    expect(polls).toBe(1);
+    expect(consumes).toBe(1);
+    expect(finishes).toBe(2);
   });
 
   it('does NOT approve while the terminal field is absent (pending)', async () => {

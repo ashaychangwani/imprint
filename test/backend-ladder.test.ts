@@ -18,6 +18,7 @@ import {
   __setCdpJarMinterForTest,
   __setPlaybookRunnerForTest,
   __setProbeTimeoutMsForTest,
+  cdpReplayPoolKey,
   effectiveAutoLadder,
   evaluateBootstrapCapture,
   pickBaseUrl,
@@ -199,6 +200,151 @@ describe('pickProbeWinner (cdp-replay preferred over stealth-fetch)', () => {
 
   it('returns undefined when there are no winners', () => {
     expect(pickProbeWinner([])).toBeUndefined();
+  });
+});
+
+describe('cdpReplayPoolKey', () => {
+  it('scopes pooled CDP sessions by site and origin', () => {
+    expect(cdpReplayPoolKey('fixture-site', 'https://login.example.com/path')).toBe(
+      'fixture-site::https://login.example.com',
+    );
+    expect(cdpReplayPoolKey('fixture-site', 'https://travel.example.com/api')).toBe(
+      'fixture-site::https://travel.example.com',
+    );
+  });
+});
+
+describe('runWorkflowWithLadder — auth credential overrides', () => {
+  it('passes explicit credentials to a forced auth playbook rung', async () => {
+    const toolDir = pathJoin(root, 'fixture-site', 'authenticate_fixture');
+    mkdirSync(toolDir, { recursive: true });
+    const workflow: Workflow = {
+      toolName: 'authenticate_fixture',
+      toolKind: 'authenticate',
+      site: 'fixture-site',
+      intent: { description: 'auth fixture' },
+      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://login.example.com/session',
+          headers: {},
+          body: '{"username":"${credential.username}"}',
+        },
+      ],
+      authConfig: {
+        twoFactorType: 'none',
+        initiateRequestCount: 1,
+        pollIntervalMs: 3000,
+        maxPollAttempts: 80,
+        twoFactorContext: [],
+        crossOriginCookieReinjection: false,
+        sessionCapture: [],
+      },
+    };
+    writeFileSync(pathJoin(toolDir, 'workflow.json'), JSON.stringify(workflow), 'utf8');
+    writeFileSync(
+      pathJoin(toolDir, 'playbook.yaml'),
+      'toolName: authenticate_fixture\nparameters: []\nsteps: []\nresult: { source: dom, locators: [{ by: text, value: OK }], extract: text }\n',
+      'utf8',
+    );
+
+    let seenCredentials: CredentialStore | undefined;
+    __setPlaybookRunnerForTest(async (opts) => {
+      seenCredentials = opts.credentials;
+      return { ok: true, data: { reached: true } };
+    });
+
+    const credentials: CredentialStore = {
+      site: 'fixture-site',
+      cookies: [],
+      values: { username: 'compile-user', password: 'compile-pass' },
+      storage: [],
+    };
+    const result = await runWorkflowWithLadder({
+      workflowPath: pathJoin(toolDir, 'workflow.json'),
+      params: { action: 'initiate' },
+      credentials,
+      forceBackend: 'playbook',
+    });
+
+    expect(result.result.ok).toBe(true);
+    expect(result.usedBackend).toBe('playbook');
+    expect(seenCredentials?.values).toEqual({
+      username: 'compile-user',
+      password: 'compile-pass',
+    });
+  });
+
+  it('passes explicit credentials to a memoized auth playbook rung', async () => {
+    const toolDir = pathJoin(root, 'fixture-site', 'authenticate_fixture');
+    mkdirSync(toolDir, { recursive: true });
+    const workflow: Workflow = {
+      toolName: 'authenticate_fixture',
+      toolKind: 'authenticate',
+      site: 'fixture-site',
+      intent: { description: 'auth fixture' },
+      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://login.example.com/session',
+          headers: {},
+          body: '{"username":"${credential.username}"}',
+        },
+      ],
+      authConfig: {
+        twoFactorType: 'none',
+        initiateRequestCount: 1,
+        pollIntervalMs: 3000,
+        maxPollAttempts: 80,
+        twoFactorContext: [],
+        crossOriginCookieReinjection: false,
+        sessionCapture: [],
+      },
+    };
+    writeFileSync(pathJoin(toolDir, 'workflow.json'), JSON.stringify(workflow), 'utf8');
+    writeFileSync(
+      pathJoin(toolDir, 'playbook.yaml'),
+      'toolName: authenticate_fixture\nparameters: []\nsteps: []\nresult: { source: dom, locators: [{ by: text, value: OK }], extract: text }\n',
+      'utf8',
+    );
+    writeFileSync(
+      pathJoin(toolDir, 'backends.json'),
+      JSON.stringify({
+        probedAt: new Date().toISOString(),
+        imprintVersion: '0.1.0',
+        schemaVersion: 2,
+        preferredOrder: ['playbook'],
+        results: { playbook: { outcome: 'ok', durationMs: 10 } },
+      }),
+      'utf8',
+    );
+
+    let seenCredentials: CredentialStore | undefined;
+    __setPlaybookRunnerForTest(async (opts) => {
+      seenCredentials = opts.credentials;
+      return { ok: true, data: { reached: true } };
+    });
+
+    const credentials: CredentialStore = {
+      site: 'fixture-site',
+      cookies: [],
+      values: { username: 'compile-user', password: 'compile-pass' },
+      storage: [],
+    };
+    const result = await runWorkflowWithLadder({
+      workflowPath: pathJoin(toolDir, 'workflow.json'),
+      params: { action: 'initiate' },
+      credentials,
+    });
+
+    expect(result.result.ok).toBe(true);
+    expect(result.usedBackend).toBe('playbook');
+    expect(seenCredentials?.values).toEqual({
+      username: 'compile-user',
+      password: 'compile-pass',
+    });
   });
 });
 
@@ -1200,6 +1346,39 @@ describe('renderWorkflowRequests — offline param verification', () => {
     expect(act?.headers['X-Tok'] ?? act?.headers['x-tok']).toBe('deadbeef');
     expect(act?.body).toContain('q=hello');
   });
+
+  it('honors requestTransformModule skip results while rendering offline', async () => {
+    const toolDir = pathJoin(root, 'skip-render');
+    mkdirSync(toolDir, { recursive: true });
+    const wf: Workflow = {
+      toolName: 'skip_render_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [{ name: 'page', type: 'number', description: 'page', default: 1 }],
+      requestTransformModule: './request-transform.ts',
+      requests: [
+        { method: 'GET', url: 'https://example.com/search', headers: {} },
+        { method: 'GET', url: 'https://example.com/search/page', headers: {} },
+      ],
+    };
+    const workflowPath = pathJoin(toolDir, 'workflow.json');
+    writeFileSync(workflowPath, JSON.stringify(wf));
+    writeFileSync(
+      pathJoin(toolDir, 'request-transform.ts'),
+      `export function transform(_method, url, responses, params) {
+        if (responses.length > 0 && Number(params?.page ?? 1) <= 1) return { skip: true };
+        return { url };
+      }`,
+    );
+
+    const { requests } = await renderWorkflowRequests({
+      workflow: wf,
+      workflowPath,
+      params: { page: 1 },
+      recordedResponseFor: () => ({ status: 200, body: '{"ok":true}' }),
+    });
+    expect(requests.map((r) => r.url)).toEqual(['https://example.com/search']);
+  });
 });
 
 describe('fetch-bootstrap happy path (cdp jar minted → plain-fetch replay)', () => {
@@ -1448,6 +1627,8 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
       seenBootstrapUrl = opts.bootstrapUrl;
       return {
         fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+        navigate: async () => new Response('<html></html>', { status: 200 }),
+        snapshotCookies: async () => [],
         ensureBootstrapped: async () => [],
         mintJar: async () => defaultedJar,
         close: async () => {
@@ -1458,6 +1639,7 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     const tool = defaultedBootstrapTool('flights', (params, opts) => {
       seenParams = params;
       expect(opts.fetchImpl).toBeDefined();
+      expect(opts.browser).toBeDefined();
       return { ok: true, data: { via: 'cdp-replay' } };
     });
 
@@ -1611,6 +1793,35 @@ describe('cdp-replay cookie seeding by toolKind', () => {
     const r = await runWithLadder(['cdp-replay'], cdpTool('data'), {}, root, new Map());
     expect(r.usedBackend).toBe('cdp-replay');
     expect(cap.seen()?.map((c) => c.name)).toEqual(['_abck']);
+  });
+
+  it('a data tool seeds credential cookies into the cdp browser', async () => {
+    const cap = captureSeed();
+    const r = await runWithLadder(['cdp-replay'], cdpTool('sessioned'), {}, root, new Map(), {
+      credentials: {
+        site: 'sessioned',
+        values: {},
+        storage: [],
+        cookies: [
+          {
+            name: 'travel_session',
+            value: 'SESSION',
+            domain: '.sessioned.example.com',
+            path: '/',
+            secure: true,
+            httpOnly: true,
+          },
+        ],
+      },
+    });
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(cap.seen()).toEqual([
+      expect.objectContaining({
+        name: 'travel_session',
+        value: 'SESSION',
+        domain: '.sessioned.example.com',
+      }),
+    ]);
   });
 
   it('an authenticate tool starts clean — never seeds a prior session/anti-bot cookie', async () => {
@@ -1775,7 +1986,7 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
     expect(r3.result.ok).toBe(true);
     expect(createCount).toBe(1);
     expect(closes).toBe(0);
-    expect(cdpPool.has('google-flights')).toBe(true);
+    expect(cdpPool.has(cdpReplayPoolKey('google-flights', 'https://www.google.com'))).toBe(true);
     expect(requestBodies).toHaveLength(3);
     expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('SJC');
     expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('SAN');

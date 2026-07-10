@@ -717,6 +717,52 @@ describe('requestTransformModule', () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('skips a conditional request when transform returns skip true', async () => {
+    const requests: string[] = [];
+    const fetchMock = (async (url: string) => {
+      requests.push(url);
+      return new Response(JSON.stringify({ ok: true, url }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const workflow: Workflow = {
+      ...transformWorkflow,
+      parameters: [{ name: 'page', type: 'number', description: 'page', default: 1 }],
+      requests: [
+        { method: 'GET', url: 'https://api.example.com/search', headers: {} },
+        { method: 'GET', url: 'https://api.example.com/search/page', headers: {} },
+      ],
+    };
+
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-skip-'));
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform(method, url, responses, params) {
+          if (responses.length > 0 && Number(params?.page ?? 1) <= 1) return { skip: true };
+          return { url };
+        }`,
+      );
+
+      const r = await executeWorkflow({
+        workflow,
+        params: { page: 1 },
+        fetchImpl: fetchMock,
+        workflowPath: join(tmpDir, 'workflow.json'),
+      });
+      expect(r.ok).toBe(true);
+      expect(requests).toEqual(['https://api.example.com/search']);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('splitSetCookieHeader', () => {

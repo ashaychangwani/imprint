@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join as pathJoin } from 'node:path';
-import { findChromium } from './chromium.ts';
+import { defaultPlaywrightBrowsersPath, findChromium } from './chromium.ts';
 import { defaultHermesConfigPath } from './install.ts';
 import { getProviderStatuses } from './llm.ts';
 import { checkForUpdate } from './update.ts';
@@ -82,10 +82,7 @@ function checkPlaywrightChromium(): CheckResult {
   // useful as a separate line so users see whether the Playwright path
   // specifically is set up (matters for stealth-fetch + playbook backends).
   const cacheRoots = [
-    process.env.PLAYWRIGHT_BROWSERS_PATH,
-    process.env.HERMES_HOME
-      ? pathJoin(process.env.HERMES_HOME, '.cache', 'ms-playwright')
-      : undefined,
+    defaultPlaywrightBrowsersPath(),
     pathJoin(homedir(), 'Library/Caches/ms-playwright'),
     pathJoin(homedir(), '.cache/ms-playwright'),
   ].filter((root): root is string => Boolean(root));

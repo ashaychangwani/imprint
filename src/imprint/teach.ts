@@ -1,6 +1,6 @@
 /**
  * `imprint teach` — interactive pipeline that chains record → redact → generate
- * → compile-playbook → emit automatically, then presents a platform picker
+ * → emit automatically, then presents a platform picker
  * and outputs paste snippets or runs registration commands.
  *
  * Supports resuming from the last successful step, re-doing from a chosen
@@ -24,6 +24,7 @@ import {
   readBuildPlanFile,
   topoLevelsForTools,
 } from './build-plan.ts';
+import type { CompileAgentResult } from './compile-agent-types.ts';
 import {
   type CompileAgentProgress,
   type TriageResult,
@@ -117,6 +118,7 @@ import { planToolCompile } from './tool-plan.ts';
 import { setSpanAttributes, shutdownTracing, traced } from './tracing.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
 import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
+import { VERSION } from './version.ts';
 
 export {
   buildTeachStateFromSession,
@@ -1273,7 +1275,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // full) while dropping the bulk of telemetry/asset/noise requests — e.g. 415
   // vs 4396 requests on a big multi-tool site. Handing the agent the entire
   // redacted recording instead makes it burn its turn/time budget exploring
-  // thousands of irrelevant requests (the amex auth compile never converged on a
+  // thousands of irrelevant requests (large auth recordings otherwise may never converge on a
   // playbook because of this). The detect-candidates summary already triages;
   // this aligns the compile session with it.
   const triagedCandidate = redactedPath?.replace(/\.redacted\.json$/, '.triaged.json');
@@ -1398,6 +1400,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // before any tool (auth or data) compiles.
   if (stopIdx < STEPS.indexOf('generate')) await finishEarly();
 
+  const forceAuthCompile = process.env.IMPRINT_FORCE_AUTH_COMPILE === '1';
+  const skipAuthCompile = process.env.IMPRINT_SKIP_AUTH_COMPILE === '1';
+  if (authDetected && willGenerate && !buildPlanPath && !skipAuthCompile) {
+    throw new Error(
+      'Authentication was detected, but auth planning did not produce a build plan. Data-tool compilation was not started.',
+    );
+  }
+
   // ── auth-tool: agentic compile loop + interactive 2FA ──
   if (buildPlanPath && willGenerate) {
     const buildPlan = readBuildPlanFile(buildPlanPath);
@@ -1406,11 +1416,31 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       const redactedSession = SessionSchema.parse(
         JSON.parse(readFileSync(compileSessionPath, 'utf8')),
       );
+      // A resumed generate step may still have valid credentials from an earlier
+      // successful teach. Prefer those over values reconstructed from the old
+      // recording so a stale recording cannot overwrite the credential store.
+      if (!teachCredentials) {
+        const view = await loadSiteCredentials(site).catch(() => null);
+        const storedValues = selectCompleteAuthCredentials(
+          view?.values ?? {},
+          authPlan.credentialNames,
+        );
+        if (storedValues) {
+          teachCredentials = { site, values: storedValues };
+          if (authPlan.credentialNames.length > 0) {
+            p.log.info(
+              `Using stored credentials for "${site}": ${authPlan.credentialNames.join(', ')}`,
+            );
+          }
+        }
+      }
+
       // Passwordless / OTP-only logins (e.g. email + emailed code, magic link)
       // carry no password for the username+password extractor to pair, so
-      // teachCredentials is empty. Derive the planner-declared credential values
-      // from the recorded login request(s), persist them, and back-fill
-      // ${credential.X} into the redacted session the agent reads.
+      // teachCredentials can be empty. If no complete stored set exists, derive
+      // the planner-declared credential values from the recorded login request(s),
+      // persist them, and back-fill ${credential.X} into the redacted session the
+      // agent reads.
       if (!teachCredentials && sessionPath && existsSync(sessionPath)) {
         try {
           const rawForCreds = SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8')));
@@ -1445,19 +1475,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       // The recording can't always yield credentials — hosted/redirect logins
       // (Auth0, Okta, …) submit the password as a page navigation (no XHR body),
       // and the capture listener masks password fields. Before skipping, reuse
-      // anything already stored, then — when interactive — prompt for exactly the
-      // credentials the detection LLM identified for this login
+      // complete stored credentials above, then — when interactive — prompt for
+      // exactly the credentials the detection LLM identified for this login
       // (authPlan.credentialNames; the live 2FA code is intentionally not in that
       // list — it's entered during verification).
-      if (!teachCredentials) {
-        const view = await loadSiteCredentials(site).catch(() => null);
-        if (view && Object.keys(view.values).length > 0) {
-          teachCredentials = { site, values: view.values };
-          p.log.info(
-            `Using stored credentials for "${site}": ${Object.keys(view.values).join(', ')}`,
-          );
-        }
-      }
       if (!teachCredentials && !opts.noInteractive && authPlan.credentialNames.length > 0) {
         let detectedUsername: string | undefined;
         if (sessionPath && existsSync(sessionPath)) {
@@ -1476,12 +1497,23 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         });
       }
 
-      if (!teachCredentials) {
+      const authToolDir = localToolDir(site, authPlan.toolName);
+      const existingAuth = inspectExistingAuthCompile(authToolDir);
+
+      if (!forceAuthCompile && existingAuth.verified) {
+        p.log.info(
+          `Reusing verified auth tool "${authPlan.toolName}" (${existingAuth.workflowPath}). Set IMPRINT_FORCE_AUTH_COMPILE=1 to rebuild it.`,
+        );
+      } else if (!forceAuthCompile && skipAuthCompile && existingAuth.workflowExists) {
+        p.log.warn(
+          `Skipping auth compile for "${authPlan.toolName}" because IMPRINT_SKIP_AUTH_COMPILE=1 and an existing workflow is present (${existingAuth.workflowPath}).`,
+        );
+      } else if (!teachCredentials) {
         const hint = opts.noInteractive
           ? ` Set them with \`imprint credential set ${site} <name>\` (${authPlan.credentialNames.join(', ') || 'the login credentials'}), then resume with \`imprint teach ${site} --from-step generate\`.`
           : '';
-        p.log.warn(
-          `Auth tool "${authPlan.toolName}" was planned but no credentials are available — skipping auth compile.${hint} Data tools will attempt inline login.`,
+        throw new Error(
+          `Auth tool "${authPlan.toolName}" was planned but no credentials are available.${hint} Data-tool compilation was not started.`,
         );
       } else {
         spinner.start(`Compiling auth tool: ${authPlan.toolName}`);
@@ -1543,36 +1575,33 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           });
           unmuteLog();
 
-          if (!authResult.success || !authResult.workflowPath) {
-            spinner.stop('Auth tool compilation failed.');
-            p.log.warn(`Auth agent: ${authResult.message}\nData tools will attempt inline login.`);
-          } else {
-            emit({
-              workflowPath: authResult.workflowPath,
-              outDir: pathDirname(authResult.workflowPath),
-              force: true,
-            });
-            // The point of completing auth is a stored session token the data
-            // tools reuse. Confirm one was persisted before claiming success.
-            let sessionStored = false;
-            try {
-              const { loadSiteCredentials } = await import('./credential-store.ts');
-              const view = await loadSiteCredentials(site);
-              sessionStored = view.cookies.length > 0 || Object.keys(view.values).length > 0;
-            } catch {
-              /* non-fatal */
-            }
-            spinner.stop(
-              sessionStored
-                ? `Auth tool compiled + session stored (${authResult.turns} turns, ${Math.round(authResult.durationMs / 1000)}s) — data tools will reuse it.`
-                : `Auth tool compiled (${authResult.turns} turns) — no live session stored; data tools will be unverified until you run \`imprint login ${site}\`.`,
-            );
+          assertSuccessfulAuthCompile(authResult);
+          emit({
+            workflowPath: authResult.workflowPath,
+            outDir: pathDirname(authResult.workflowPath),
+            force: true,
+          });
+          // The point of completing auth is a stored session token the data
+          // tools reuse. Confirm one was persisted before claiming success.
+          let sessionStored = false;
+          try {
+            const { loadSiteCredentials } = await import('./credential-store.ts');
+            const view = await loadSiteCredentials(site);
+            sessionStored = view.cookies.length > 0 || Object.keys(view.values).length > 0;
+          } catch {
+            /* non-fatal */
           }
+          spinner.stop(
+            sessionStored
+              ? `Auth tool compiled + session stored (${authResult.turns} turns, ${Math.round(authResult.durationMs / 1000)}s) — data tools will reuse it.`
+              : `Auth tool compiled (${authResult.turns} turns) — no live session stored; data tools will be unverified until you run \`imprint login ${site}\`.`,
+          );
         } catch (err) {
           unmuteLog();
           spinner.stop('Auth tool compilation failed.');
-          p.log.warn(
-            `Auth tool failed: ${err instanceof Error ? err.message : String(err)}\nData tools will attempt inline login.`,
+          throw new Error(
+            `Auth stage failed; data-tool compilation was not started: ${err instanceof Error ? err.message : String(err)}`,
+            { cause: err },
           );
         }
       }
@@ -1679,9 +1708,9 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   // Surface any tools that shipped without a passing live integration test
-  // (waived during compile due to anti-bot / infra). These rely on the runtime
-  // playbook last-ditch path, which is a degraded fallback — operators should
-  // know rather than discover at audit/runtime.
+  // (waived during compile due to anti-bot / infra). These rely on runtime
+  // API backend escalation, so operators should know rather than discover at
+  // audit/runtime.
   const unverified = results.filter((r) => r.workflow.liveVerified === false);
   if (unverified.length > 0) {
     for (const r of unverified) {
@@ -1690,7 +1719,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         ? `${waiver.kind} (exhausted: ${waiver.exhaustedBackends.join(', ') || 'n/a'}; first error: ${waiver.firstError})`
         : 'reason not recorded';
       p.log.warn(
-        `tool "${r.workflow.toolName}" shipped without live verification: ${reason}\n  → runtime callers fall through to the playbook last-ditch rung; treat this tool as unverified until audit confirms it.`,
+        `tool "${r.workflow.toolName}" shipped without live verification: ${reason}\n  → runtime callers will rely on the API backend ladder; treat this tool as unverified until audit confirms it.`,
       );
     }
   }
@@ -2058,6 +2087,52 @@ function renderCompileSummary(summary: CompileOutcomeSummary): string[] {
   return lines;
 }
 
+type SuccessfulAuthCompile = CompileAgentResult & { success: true; workflowPath: string };
+
+export function assertSuccessfulAuthCompile(
+  result: CompileAgentResult,
+): asserts result is SuccessfulAuthCompile {
+  if (!result.success) {
+    throw new Error(`Auth agent did not complete successfully: ${result.message}`);
+  }
+  if (!result.workflowPath) {
+    throw new Error('Auth agent reported success without producing workflow.json.');
+  }
+}
+
+export function selectCompleteAuthCredentials(
+  values: Record<string, string>,
+  requiredNames: string[],
+): Record<string, string> | null {
+  const selected: Record<string, string> = {};
+  for (const name of requiredNames) {
+    const value = values[name];
+    if (typeof value !== 'string' || value.length === 0) return null;
+    selected[name] = value;
+  }
+  return selected;
+}
+
+function inspectExistingAuthCompile(toolDir: string): {
+  workflowExists: boolean;
+  workflowPath: string;
+  verified: boolean;
+} {
+  const workflowPath = pathJoin(toolDir, 'workflow.json');
+  const donePath = pathJoin(toolDir, '.compile-done.json');
+  const workflowExists = existsSync(workflowPath);
+  if (!workflowExists || !existsSync(donePath)) {
+    return { workflowExists, workflowPath, verified: false };
+  }
+
+  try {
+    const payload = JSON.parse(readFileSync(donePath, 'utf8')) as { verification?: unknown };
+    return { workflowExists, workflowPath, verified: payload.verification === 'passed' };
+  } catch {
+    return { workflowExists, workflowPath, verified: false };
+  }
+}
+
 async function compileSelectedCandidate(opts: {
   plan: CandidateCompilePlan;
   site: string;
@@ -2081,14 +2156,12 @@ async function compileSelectedCandidate(opts: {
   const workflowDir = localToolDir(site, toolName);
   mkdirSync(workflowDir, { recursive: true });
 
-  // The per-tool compile (generate → compile-playbook → emit) is ATOMIC by design:
+  // The per-tool compile (generate → emit) is atomic by design:
   // each phase gates on startIdx ONLY (not the window's stopIdx), so once started it
   // runs through emit. Stopping mid-compile would leave artifact gaps the result
   // tail (results array, register, audit) assumes exist — see the "Granularity"
-  // section of docs/plans/teach-phase-window.md. `--from-step` can RESUME mid-compile
-  // (each `else` branch loads the prior phase's artifact from disk); `--to-step`
-  // within the compile runs the whole unit and stops before register. Do NOT add a
-  // stopIdx gate here without also handling partial-artifact results downstream.
+  // section of docs/plans/teach-phase-window.md. `compile-playbook` is skipped
+  // by default and only runs when explicitly enabled via IMPRINT_ALLOW_PLAYBOOK_FALLBACK=1.
   // ── Step 1: plan THEN execute (workflow.json) ──
   let genResult: { workflow: Workflow; workflowPath: string } | undefined;
   if (startIdx <= STEPS.indexOf('generate')) {
@@ -2149,12 +2222,14 @@ async function compileSelectedCandidate(opts: {
     throw new Error(`generate step did not produce a workflow for "${toolName}".`);
   }
 
-  // ── Step 2: compile-playbook (after generate — runtime artifact, not needed for dual-pass) ──
+  // ── Step 2: compile-playbook (optional DOM fallback, disabled by default) ──
   let pbResult: { playbook: Playbook; playbookPath: string };
-  if (startIdx <= STEPS.indexOf('compile-playbook')) {
+  const playbookFallbackAllowed = process.env.IMPRINT_ALLOW_PLAYBOOK_FALLBACK === '1';
+  const playbookPath = pathJoin(workflowDir, 'playbook.yaml');
+  if (playbookFallbackAllowed && startIdx <= STEPS.indexOf('compile-playbook')) {
     const result = await compilePlaybook({
       sessionPath: opts.sessionPath,
-      outPath: pathJoin(workflowDir, 'playbook.yaml'),
+      outPath: playbookPath,
       llmConfig: { provider: opts.providerName },
       candidate: plan.candidate,
       sharedContext: plan.sharedContext,
@@ -2163,12 +2238,28 @@ async function compileSelectedCandidate(opts: {
     assertCandidateToolName('Compiled playbook', result.playbook.toolName, plan.candidate);
     pbResult = { playbook: result.playbook, playbookPath: result.playbookPath };
     updateCheckpoint(site, state, plan.workflowKey, 'compile-playbook');
-  } else {
-    const playbookPath = pathJoin(workflowDir, 'playbook.yaml');
+  } else if (playbookFallbackAllowed) {
     const { parsePlaybook } = await import('./playbook-parser.ts');
     const playbook = parsePlaybook(readFileSync(playbookPath, 'utf8'));
     assertCandidateToolName('Stored playbook', playbook.toolName, plan.candidate);
     pbResult = { playbook, playbookPath };
+  } else {
+    pbResult = {
+      playbookPath,
+      playbook: {
+        toolName: genResult.workflow.toolName,
+        summary: 'Playbook fallback disabled; use workflow.json API replay.',
+        parameters: genResult.workflow.parameters,
+        steps: [{ action: 'navigate', url: 'about:blank' }],
+        result: {
+          source: 'dom',
+          locators: [{ by: 'css', value: 'body' }],
+          extract: 'text',
+          return_as: 'result',
+        },
+        notes: 'No playbook.yaml was generated because IMPRINT_ALLOW_PLAYBOOK_FALLBACK is not set.',
+      },
+    };
   }
 
   // ── Step 3: emit ──
@@ -3046,13 +3137,55 @@ export function formatAuthProgress(progress: CompileAgentProgress): string {
 /**
  * After a workflow is emitted, quickly probe whether plain fetch works.
  * If it returns FORBIDDEN (bot protection), write a backends.json that
- * skips fetch so the MCP server goes straight to stealth-fetch → playbook.
+ * skips fetch so the MCP server goes straight to browser-capable API backends.
  * This avoids the ~16s wasted on failing backends when the MCP tool is called.
  */
-async function writeQuickBackendsCache(workflowDir: string, workflow: Workflow): Promise<void> {
+export async function writeQuickBackendsCache(
+  workflowDir: string,
+  workflow: Workflow,
+): Promise<void> {
   const backendsPath = pathJoin(workflowDir, 'backends.json');
-  if (existsSync(backendsPath)) return;
+  const playbookPath = pathJoin(workflowDir, 'playbook.yaml');
+  const allowPlaybookFallback =
+    process.env.IMPRINT_ALLOW_PLAYBOOK_FALLBACK === '1' && existsSync(playbookPath);
   const { createHash } = await import('node:crypto');
+  const wfHash = createHash('sha256')
+    .update(JSON.stringify(WorkflowSchema.parse(workflow)))
+    .digest('hex');
+
+  if (existsSync(backendsPath)) {
+    try {
+      const cache = JSON.parse(readFileSync(backendsPath, 'utf8')) as {
+        imprintVersion?: unknown;
+        schemaVersion?: unknown;
+        workflowHash?: unknown;
+        preferredOrder?: unknown;
+      };
+      const cacheMatchesWorkflow =
+        cache.imprintVersion === VERSION &&
+        cache.schemaVersion === 2 &&
+        cache.workflowHash === wfHash;
+      if (cacheMatchesWorkflow) {
+        if (
+          !allowPlaybookFallback &&
+          Array.isArray(cache.preferredOrder) &&
+          cache.preferredOrder.includes('playbook')
+        ) {
+          const preferredOrder = cache.preferredOrder.filter((backend) => backend !== 'playbook');
+          if (preferredOrder.length > 0) {
+            cache.preferredOrder = preferredOrder;
+            writeFileSync(backendsPath, `${JSON.stringify(cache, null, 2)}\n`);
+            return;
+          }
+        } else {
+          return;
+        }
+      }
+    } catch {
+      // Replace malformed teach-time cache data instead of preserving it.
+    }
+    rmSync(backendsPath, { force: true });
+  }
 
   const defaults: Record<string, string | number | boolean> = {};
   for (const param of workflow.parameters) {
@@ -3092,17 +3225,11 @@ async function writeQuickBackendsCache(workflowDir: string, workflow: Workflow):
       signal: AbortSignal.timeout(5000),
     });
 
-    const wfHash = createHash('sha256')
-      .update(JSON.stringify(WorkflowSchema.parse(workflow)))
-      .digest('hex');
-
-    const hasPlaybook = existsSync(pathJoin(workflowDir, 'playbook.yaml'));
-
     if (resp.status === 403) {
-      const preferred = hasPlaybook ? ['stealth-fetch', 'playbook'] : ['stealth-fetch'];
+      const preferred = allowPlaybookFallback ? ['stealth-fetch', 'playbook'] : ['stealth-fetch'];
       const cache = {
         probedAt: new Date().toISOString(),
-        imprintVersion: '0.1.0',
+        imprintVersion: VERSION,
         schemaVersion: 2,
         workflowHash: wfHash,
         preferredOrder: preferred,

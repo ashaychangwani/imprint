@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import {
   __setCdpBrowserFetchHooksForTest,
   createCdpBrowserFetch,
+  normalizeCdpResponseHeaders,
   parseSetCookieForCdp,
 } from '../src/imprint/cdp-browser-fetch.ts';
 
@@ -57,6 +58,22 @@ describe('parseSetCookieForCdp (cross-origin Set-Cookie re-injection)', () => {
       name: 'jwt',
       value: 'a.b=c',
       path: '/',
+    });
+  });
+});
+
+describe('normalizeCdpResponseHeaders', () => {
+  it('drops array indexes and invalid names while folding multiline values', () => {
+    expect(
+      normalizeCdpResponseHeaders({
+        50: '<https://example.test/a>; rel="preload"\n<https://example.test/b>; rel="preload"',
+        Link: '<https://example.test/a>; rel="preload"\n<https://example.test/b>; rel="preload"',
+        'X-Test': 'ok',
+        'bad header': 'ignored',
+      }),
+    ).toEqual({
+      link: '<https://example.test/a>; rel="preload", <https://example.test/b>; rel="preload"',
+      'x-test': 'ok',
     });
   });
 });

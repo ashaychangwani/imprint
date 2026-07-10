@@ -95,6 +95,53 @@ describe('authExternalVerification', () => {
     expect(authExternalVerification(writeWorkflow(validWorkflow()))).toEqual([]);
   });
 
+  it('flags auth playbooks that target a concrete personal device label', () => {
+    const toolDir = writeWorkflow(validWorkflow());
+    writeFileSync(
+      join(toolDir, 'playbook.yaml'),
+      `
+toolName: authenticate_x
+summary: login
+parameters: []
+steps:
+  - action: click
+    locators:
+      - { by: text, value: Pixel 10 Pro }
+result:
+  source: xhr
+  url_pattern: login
+  extract: '*'
+`,
+      'utf8',
+    );
+
+    const failures = authExternalVerification(toolDir);
+    expect(failures.some((f) => f.includes('account/device-specific'))).toBe(true);
+  });
+
+  it('allows generic auth playbook challenge labels', () => {
+    const toolDir = writeWorkflow(validWorkflow());
+    writeFileSync(
+      join(toolDir, 'playbook.yaml'),
+      `
+toolName: authenticate_x
+summary: login
+parameters: []
+steps:
+  - action: click
+    locators:
+      - { by: text, value: Push Notification }
+result:
+  source: xhr
+  url_pattern: login
+  extract: '*'
+`,
+      'utf8',
+    );
+
+    expect(authExternalVerification(toolDir)).toEqual([]);
+  });
+
   it('flags a workflow whose toolKind is not authenticate', () => {
     const wf = validWorkflow();
     wf.toolKind = 'data';

@@ -107,6 +107,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -119,7 +120,7 @@ ${paramTypeFields}
 
 export async function ${camelCase(workflow.toolName)}(
   ${workflow.parameters.length === 0 ? '_input' : 'input'}: ${pascalCase(workflow.toolName)}Input,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
@@ -131,6 +132,7 @@ ${defaultsBlock && requiredCopies ? requiredCopies : ''}
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });
