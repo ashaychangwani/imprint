@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'bun:test';
 import { TimeoutError } from '../src/imprint/concurrency.ts';
 import {
+  availableModelsForProvider,
   classifyCliFailure,
   cliStderrTail,
   codexAnalyzeArgs,
@@ -402,7 +403,19 @@ describe('provider status metadata', () => {
 
   it('uses a current Codex model for agentic compile by default', () => {
     withProviderEnv({}, () => {
-      expect(preferredAgentModel('codex-cli')).toBe('gpt-5.5');
+      expect(preferredAgentModel('codex-cli')).toBe('gpt-5.6-sol');
     });
+  });
+
+  it('offers the gpt-5.6 Codex models with sol as the only default', () => {
+    const models = availableModelsForProvider('codex-cli');
+    expect(models.slice(0, 3)).toEqual([
+      { model: 'gpt-5.6-sol', isDefault: true },
+      { model: 'gpt-5.6-terra', isDefault: false },
+      { model: 'gpt-5.6-luna', isDefault: false },
+    ]);
+    expect(models.filter((model) => model.isDefault)).toEqual([
+      { model: 'gpt-5.6-sol', isDefault: true },
+    ]);
   });
 });
