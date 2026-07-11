@@ -240,10 +240,10 @@ const WorkflowRequestSchema = z.object({
   url: z.string(),
   headers: z.record(z.string()),
   body: z.string().optional(),
-  /** Execute this GET as a top-level browser navigation instead of fetch().
+  /** Execute this GET or URL-encoded POST as a top-level browser navigation instead of fetch().
    *  This lets the recorded page run its own JavaScript and mint coupled browser
-   *  state (for example an OAuth PKCE verifier/challenge pair) without teaching
-   *  Imprint site- or framework-specific crypto/cookie formats. */
+   *  state, and lets form POSTs retain document-navigation semantics, without
+   *  teaching Imprint site- or framework-specific behavior. */
   mode: z.enum(['fetch', 'navigate']).optional(),
   /** Bounded completion criteria for mode="navigate". Predicates are ANDed.
    *  With no predicate, navigation completes at the selected lifecycle event. */

@@ -62,7 +62,7 @@ interface RunCompileMcpServerOptions {
   buildPlanPath?: string;
   /** Shared-module build manifest for this site (verified flags). */
   sharedModules?: SharedModuleManifestEntry[];
-  /** Present → run in AUTH mode: register the auth toolset (run_verification)
+  /** Present → run in AUTH mode: register the auth checkpoint toolset
    *  and run authExternalVerification in done() instead of the data-tool
    *  verification. */
   authToolPlan?: NonNullable<AuthToolPlan>;
@@ -73,8 +73,8 @@ interface RunCompileMcpServerOptions {
 
 const DONE_SENTINEL = '.compile-done.json';
 const GIVE_UP_SENTINEL = '.compile-give-up.json';
-/** Auth mode only: a mid-loop checkpoint the agent reaches (run_verification /
- *  prompt_user / wait_for_cooldown). The tool records the request here and the
+/** Auth mode only: a mid-loop checkpoint the agent reaches. The tool records
+ *  the request here and the
  *  agent STOPS; the orchestrator (teach) performs the action and resumes the
  *  agent (`claude --resume`) with the result. One pending checkpoint per segment. */
 const CHECKPOINT_SENTINEL = '.compile-checkpoint.json';
@@ -178,7 +178,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
         {
           name: 'run_verification',
           description:
-            'Run one action from the current workflow.json live in the verification browser. Supply the action name and only its declared parameters. Set freshSession only when observed evidence means the prior browser and continuation state must be discarded. After calling this, stop; the orchestrator resumes you with the observed result.',
+            'Run one action from the current workflow.json live in the verification browser. Supply the action name and only its declared parameters. Set freshSession only when observed evidence means the prior browser and continuation state must be discarded. Set cleanSession only when evidence requires also withholding stored cookies and browser storage. After calling this, stop; the orchestrator resumes you with the observed result.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -193,8 +193,32 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
                 description:
                   'Close and discard the prior verification browser and continuation state before running this action. Defaults to false.',
               },
+              cleanSession: {
+                type: 'boolean',
+                description:
+                  'Also withhold stored cookies and browser storage for this fresh run. Credential values remain available.',
+              },
             },
             required: ['action'],
+          },
+        },
+        {
+          name: 'inspect_verification_page',
+          description:
+            'Inspect the currently rendered page in the existing verification browser without navigating, resetting state, or running another auth action. Returns rendered body text, final URL, title, and optional cookie metadata (never cookie values). Use when observed verification evidence warrants inspecting the page. After calling this, stop; the orchestrator resumes you with the snapshot.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              maxChars: {
+                type: 'number',
+                description: 'Maximum rendered body-text characters to return (256–20000).',
+              },
+              includeCookies: {
+                type: 'boolean',
+                description:
+                  'Include cookie names, domains, paths, expirations, and flags. Cookie values are never returned. Defaults to true.',
+              },
+            },
           },
         },
         {
@@ -415,9 +439,18 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
 
     // Auth-mode checkpoint tools — record the request and end the segment. The
     // orchestrator performs the action live and resumes the agent with the result.
-    if (name === 'run_verification' || name === 'prompt_user' || name === 'wait_for_cooldown') {
+    if (
+      name === 'run_verification' ||
+      name === 'inspect_verification_page' ||
+      name === 'prompt_user' ||
+      name === 'wait_for_cooldown'
+    ) {
       if (name === 'run_verification') {
-        const failures = authWorkflowPreflightFailures(opts.toolDir, session);
+        const failures = authWorkflowPreflightFailures(
+          opts.toolDir,
+          session,
+          opts.authToolPlan?.credentialNames,
+        );
         if (failures.length > 0) {
           return {
             isError: true,

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { compileAuthAgent } from '../src/imprint/auth-compile-agent.ts';
 import {
+  AUTH_COMPILE_TOOL_NAMES,
   AUTH_VERIFICATION_ATTEMPT_SENTINEL,
   authExternalVerification,
   authWorkflowHash,
@@ -16,6 +17,8 @@ import { type Session, type Workflow, WorkflowSchema } from '../src/imprint/type
 
 const originalPath = process.env.PATH;
 const originalHome = process.env.IMPRINT_HOME;
+type VerifierRunner = NonNullable<Parameters<typeof __setAuthVerifierLadderForTest>[0]>;
+type VerifierRunnerArgs = Parameters<VerifierRunner>[0];
 
 function session(): Session {
   return {
@@ -63,6 +66,7 @@ function validWorkflow(): Workflow {
         method: 'POST',
         url: 'https://fixture.test/begin',
         headers: {},
+        body: 'username=${credential.username}&password=${credential.password}',
         captures: [{ source: 'json', name: 'ticket', path: 'ticket' }],
       },
       {
@@ -109,12 +113,18 @@ afterEach(() => {
   process.env.FAKE_CODEX_TOOL_DIR = undefined;
   process.env.FAKE_CODEX_EARLY_STOP = undefined;
   process.env.FAKE_CODEX_PROMPT_CHECKPOINT = undefined;
+  process.env.FAKE_CODEX_INSPECT_CHECKPOINT = undefined;
+  process.env.FAKE_CODEX_STDIN_LOG = undefined;
   process.env.FAKE_CLAUDE_ARGS_LOG = undefined;
   process.env.FAKE_CLAUDE_TOOL_DIR = undefined;
   __setAuthVerifierLadderForTest(null);
 });
 
 describe('auth compile tools', () => {
+  it('gives every provider the optional verification-page inspection tool', () => {
+    expect(AUTH_COMPILE_TOOL_NAMES).toContain('inspect_verification_page');
+  });
+
   it('does not allow auth agents to write playbook.yaml', async () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-tools-'));
     try {
@@ -146,6 +156,52 @@ describe('auth compile tools', () => {
       };
       writeWorkflow(dir, workflow);
       expect(authWorkflowPreflightFailures(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires every recording-planned credential in executable auth requests', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-credentials-'));
+    try {
+      const workflow = validWorkflow();
+      const first = workflow.requests[0];
+      if (!first) throw new Error('bad fixture');
+      first.body = 'username=${credential.username}';
+      writeWorkflow(dir, workflow);
+
+      const failures = authWorkflowPreflightFailures(dir, undefined, ['username', 'password']).join(
+        '\n',
+      );
+      expect(failures).not.toContain('planned credential "username"');
+      expect(failures).toContain('planned credential "password"');
+
+      first.body = 'username=${credential.username}&password=${credential.password}';
+      writeWorkflow(dir, workflow);
+      expect(authWorkflowPreflightFailures(dir, undefined, ['username', 'password'])).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not count credentials referenced only by unreachable requests', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-unreachable-credentials-'));
+    try {
+      const workflow = validWorkflow();
+      const first = workflow.requests[0];
+      if (!first) throw new Error('bad fixture');
+      first.body = 'username=${credential.username}';
+      workflow.requests.push({
+        method: 'POST',
+        url: 'https://fixture.test/unused',
+        headers: {},
+        body: 'password=${credential.password}',
+      });
+      writeWorkflow(dir, workflow);
+
+      expect(authWorkflowPreflightFailures(dir, undefined, ['password']).join('\n')).toContain(
+        'planned credential "password"',
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -276,7 +332,20 @@ const toolDir = process.env.FAKE_CODEX_TOOL_DIR;
 if (!toolDir) throw new Error('missing fake tool dir');
 const resumed = process.argv.includes('resume');
 const recoveryMarker = join(toolDir, '.fake-recovered');
-if (process.env.FAKE_CODEX_EARLY_STOP && !resumed) {
+const inspectionMarker = join(toolDir, '.fake-inspected');
+const prompt = await Bun.stdin.text();
+if (process.env.FAKE_CODEX_STDIN_LOG) {
+  writeFileSync(process.env.FAKE_CODEX_STDIN_LOG, prompt + '\\n---\\n', { flag: 'a' });
+}
+if (process.env.FAKE_CODEX_INSPECT_CHECKPOINT && !resumed) {
+  writeFileSync(join(toolDir, 'workflow.json'), ${JSON.stringify(workflow)});
+  writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'run_verification', action: 'finish', parameters: { answer: 'fixture-otp' } }));
+} else if (process.env.FAKE_CODEX_INSPECT_CHECKPOINT && !existsSync(inspectionMarker)) {
+  writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'inspect_verification_page', maxChars: 4096, includeCookies: true }));
+  writeFileSync(inspectionMarker, '1');
+} else if (process.env.FAKE_CODEX_INSPECT_CHECKPOINT) {
+  writeFileSync(join(toolDir, '.compile-done.json'), JSON.stringify({ verification: 'passed', summary: 'inspected' }));
+} else if (process.env.FAKE_CODEX_EARLY_STOP && !resumed) {
   writeFileSync(join(toolDir, 'workflow.json'), '{}');
 } else if (process.env.FAKE_CODEX_EARLY_STOP && !existsSync(recoveryMarker)) {
   writeFileSync(join(toolDir, 'workflow.json'), ${JSON.stringify(JSON.stringify(workflow))});
@@ -327,6 +396,73 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'fixtur
 }
 
 describe('compileAuthAgent with Codex', () => {
+  it('lets Codex inspect the existing verification page through a checkpoint', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-codex-inspect-'));
+    try {
+      const bin = pathJoin(root, 'bin');
+      const home = pathJoin(root, 'home');
+      mkdirSync(bin);
+      mkdirSync(home);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      process.env.IMPRINT_HOME = home;
+      process.env.FAKE_CODEX_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
+      process.env.FAKE_CODEX_ARGS_LOG = pathJoin(root, 'args.log');
+      process.env.FAKE_CODEX_STDIN_LOG = pathJoin(root, 'stdin.log');
+      process.env.FAKE_CODEX_INSPECT_CHECKPOINT = '1';
+      installFakeCodex(bin);
+      const sessionPath = pathJoin(root, 'session.json');
+      writeFileSync(sessionPath, JSON.stringify(session()));
+
+      __setAuthVerifierLadderForTest((async (args: VerifierRunnerArgs) => {
+        args.cdpPool?.set('fixture', {
+          inspectPage: async () => ({
+            url: 'https://fixture.test/auth-error',
+            title: 'Authentication error',
+            bodyText: 'Cookies are disabled for fixture-user and fixture-otp.',
+            cookies: [
+              {
+                name: 'transaction',
+                domain: '.fixture.test',
+                path: '/',
+                httpOnly: true,
+                secure: true,
+              },
+            ],
+          }),
+          close: async () => {},
+        } as never);
+        return {
+          result: { ok: true, data: { authenticated: true } },
+          usedBackend: 'cdp-replay',
+          attempts: [],
+        };
+      }) as VerifierRunner);
+
+      const result = await compileAuthAgent({
+        site: 'fixture-site',
+        session: session(),
+        sessionPath,
+        authToolPlan: plan(),
+        teachCredentials: {
+          site: 'fixture-site',
+          values: { username: 'fixture-user', password: 'fixture-pass' },
+        },
+        llmConfig: { provider: 'codex-cli', model: 'gpt-5.6-terra' },
+        maxDurationMs: 30_000,
+      });
+
+      expect(result).toMatchObject({ success: true, outcome: 'done', turns: 3 });
+      const prompts = readFileSync(process.env.FAKE_CODEX_STDIN_LOG, 'utf8');
+      expect(prompts).toContain('Current verification page snapshot');
+      expect(prompts).toContain('Cookies are disabled for [REDACTED] and [REDACTED].');
+      expect(prompts).toContain('"name": "transaction"');
+      expect(prompts).not.toContain('fixture-pass');
+      expect(prompts).not.toContain('fixture-otp');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('resumes the same Codex session after an arbitrary action checkpoint', async () => {
     const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-codex-'));
     try {
@@ -357,7 +493,7 @@ describe('compileAuthAgent with Codex', () => {
           site: 'fixture-site',
           values: { username: 'fixture-user', password: 'fixture-pass' },
         },
-        llmConfig: { provider: 'codex-cli' },
+        llmConfig: { provider: 'codex-cli', model: 'gpt-5.6-terra' },
         maxDurationMs: 30_000,
       });
       expect(result).toMatchObject({ success: true, outcome: 'done', turns: 2 });
@@ -369,6 +505,9 @@ describe('compileAuthAgent with Codex', () => {
       expect(commands).toHaveLength(2);
       expect(commands[1]).toContain('resume');
       expect(commands[1]).toContain('fixture-thread');
+      for (const command of commands) {
+        expect(command[command.indexOf('-m') + 1]).toBe('gpt-5.6-terra');
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -427,6 +566,7 @@ describe('compileAuthAgent with Codex', () => {
       process.env.IMPRINT_HOME = home;
       process.env.FAKE_CODEX_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
       process.env.FAKE_CODEX_PROMPT_CHECKPOINT = '1';
+      process.env.FAKE_CODEX_STDIN_LOG = pathJoin(root, 'stdin.log');
       installFakeCodex(bin);
       const sessionPath = pathJoin(root, 'session.json');
       writeFileSync(sessionPath, JSON.stringify(session()));
@@ -449,6 +589,9 @@ describe('compileAuthAgent with Codex', () => {
       });
 
       expect(result).toMatchObject({ success: true, outcome: 'done' });
+      const resumedPrompts = readFileSync(process.env.FAKE_CODEX_STDIN_LOG, 'utf8');
+      expect(resumedPrompts).toContain('${prompt.1}');
+      expect(resumedPrompts).not.toContain('confirmed');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -485,7 +628,7 @@ describe('compileAuthAgent with Claude', () => {
           site: 'fixture-site',
           values: { username: 'fixture-user', password: 'fixture-pass' },
         },
-        llmConfig: { provider: 'claude-cli' },
+        llmConfig: { provider: 'claude-cli', model: 'fixture-claude-model' },
         maxDurationMs: 30_000,
       });
 
@@ -497,6 +640,9 @@ describe('compileAuthAgent with Claude', () => {
       expect(commands).toHaveLength(2);
       expect(commands[1]).toContain('--resume');
       expect(commands[1]).toContain('fixture-claude-session');
+      for (const command of commands) {
+        expect(command[command.indexOf('--model') + 1]).toBe('fixture-claude-model');
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

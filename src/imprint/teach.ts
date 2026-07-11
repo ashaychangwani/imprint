@@ -7,6 +7,7 @@
  * step, and multiple workflows per site (each in its own subdirectory).
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import {
@@ -18,6 +19,7 @@ import {
 import * as p from '@clack/prompts';
 import type { OnDeadlineReached } from './agent.ts';
 import { compileAuthAgent } from './auth-compile-agent.ts';
+import { authWorkflowHash } from './auth-compile-tools.ts';
 import {
   type SharedModuleManifestEntry,
   buildPlanSidecarPath,
@@ -56,6 +58,7 @@ import {
   generateSkillMd,
 } from './integrations.ts';
 import {
+  type LLMOptions,
   type ProviderName,
   type ProviderStatus,
   detectTeachProvider,
@@ -118,6 +121,37 @@ import { planToolCompile } from './tool-plan.ts';
 import { setSpanAttributes, shutdownTracing, traced } from './tracing.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
 import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
+
+export function authCompileLlmConfig(provider: ProviderName, model: string): LLMOptions {
+  return { provider, model };
+}
+
+export function authCompletionMatches(
+  completion: WorkflowState['authCompletion'],
+  expected: { toolName: string; buildPlanHash: string; workflowHash: string },
+): boolean {
+  return Boolean(
+    completion &&
+      completion.toolName === expected.toolName &&
+      completion.buildPlanHash === expected.buildPlanHash &&
+      completion.workflowHash === expected.workflowHash,
+  );
+}
+
+export function hasDurableAuthState(
+  workflow: Workflow,
+  stored: { values: Record<string, string>; cookies: unknown[]; storage?: unknown[] },
+): boolean {
+  const required = workflow.authConfig?.persist ?? [];
+  if (required.length > 0) {
+    return required.every((name) => String(stored.values[name] ?? '').length > 0);
+  }
+  return stored.cookies.length > 0 || (stored.storage?.length ?? 0) > 0;
+}
+
+function fileSha256(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
 
 export {
   buildTeachStateFromSession,
@@ -1406,171 +1440,220 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     const buildPlan = readBuildPlanFile(buildPlanPath);
     if (buildPlan?.authTool) {
       const authPlan = buildPlan.authTool;
-      const redactedSession = SessionSchema.parse(
-        JSON.parse(readFileSync(compileSessionPath, 'utf8')),
+      const buildPlanHash = fileSha256(buildPlanPath);
+      const existingAuthWorkflowPath = pathJoin(
+        localToolDir(site, authPlan.toolName),
+        'workflow.json',
       );
-      // A resumed generate step may still have valid credentials from an earlier
-      // successful teach. Prefer those over values reconstructed from the old
-      // recording so a stale recording cannot overwrite the credential store.
-      if (!teachCredentials) {
-        const view = await loadSiteCredentials(site).catch(() => null);
-        const storedValues = selectCompleteAuthCredentials(
-          view?.values ?? {},
-          authPlan.credentialNames,
+      const existingAuthIndexPath = pathJoin(localToolDir(site, authPlan.toolName), 'index.ts');
+      const existingAuthWorkflow =
+        existsSync(existingAuthWorkflowPath) && existsSync(existingAuthIndexPath)
+          ? WorkflowSchema.parse(JSON.parse(readFileSync(existingAuthWorkflowPath, 'utf8')))
+          : undefined;
+      const storedAuthState = existingAuthWorkflow
+        ? await loadSiteCredentials(site).catch(() => null)
+        : null;
+      const existingAuthWorkflowHash = existingAuthWorkflow
+        ? authWorkflowHash(existingAuthWorkflow)
+        : undefined;
+      const reusableCompletion =
+        existingAuthWorkflow &&
+        existingAuthWorkflowHash &&
+        storedAuthState &&
+        hasDurableAuthState(existingAuthWorkflow, storedAuthState)
+          ? plans
+              .map((plan) => state.workflows[plan.workflowKey]?.authCompletion)
+              .find((completion) =>
+                authCompletionMatches(completion, {
+                  toolName: authPlan.toolName,
+                  buildPlanHash,
+                  workflowHash: existingAuthWorkflowHash as string,
+                }),
+              )
+          : undefined;
+      if (reusableCompletion) {
+        p.log.info(
+          `Reusing verified auth tool "${authPlan.toolName}"; auth artifacts are unchanged.`,
         );
-        if (storedValues) {
-          teachCredentials = { site, values: storedValues };
-          if (authPlan.credentialNames.length > 0) {
-            p.log.info(
-              `Using stored credentials for "${site}": ${authPlan.credentialNames.join(', ')}`,
-            );
-          }
-        }
-      }
-
-      // Passwordless / OTP-only logins (e.g. email + emailed code, magic link)
-      // carry no password for the username+password extractor to pair, so
-      // teachCredentials can be empty. If no complete stored set exists, derive
-      // the planner-declared credential values from the recorded login request(s),
-      // persist them, and back-fill ${credential.X} into the redacted session the
-      // agent reads.
-      if (!teachCredentials && sessionPath && existsSync(sessionPath)) {
-        try {
-          const rawForCreds = SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8')));
-          const derived = deriveLoginCredentials(
-            rawForCreds,
-            authPlan.credentialRequestSeqs,
+      } else {
+        const redactedSession = SessionSchema.parse(
+          JSON.parse(readFileSync(compileSessionPath, 'utf8')),
+        );
+        // A resumed generate step may still have valid credentials from an earlier
+        // successful teach. Prefer those over values reconstructed from the old
+        // recording so a stale recording cannot overwrite the credential store.
+        if (!teachCredentials) {
+          const view = await loadSiteCredentials(site).catch(() => null);
+          const storedValues = selectCompleteAuthCredentials(
+            view?.values ?? {},
             authPlan.credentialNames,
           );
-          if (Object.keys(derived.values).length > 0) {
-            const backend = await getCredentialBackend();
-            for (const [name, value] of Object.entries(derived.values)) {
-              await backend.setSecret(site, name, value);
-              upsertManifestEntry(site, {
-                name,
-                kind: 'username',
-                description: 'Login identifier',
-              });
+          if (storedValues) {
+            teachCredentials = { site, values: storedValues };
+            if (authPlan.credentialNames.length > 0) {
+              p.log.info(
+                `Using stored credentials for "${site}": ${authPlan.credentialNames.join(', ')}`,
+              );
             }
-            applyCredentialPlaceholders(redactedSession, derived.replacements);
-            teachCredentials = { site, values: derived.values };
-            p.log.success(
-              `Derived ${Object.keys(derived.values).length} credential(s) for passwordless login: ${Object.keys(derived.values).join(', ')}`,
+          }
+        }
+
+        // Passwordless / OTP-only logins (e.g. email + emailed code, magic link)
+        // carry no password for the username+password extractor to pair, so
+        // teachCredentials can be empty. If no complete stored set exists, derive
+        // the planner-declared credential values from the recorded login request(s),
+        // persist them, and back-fill ${credential.X} into the redacted session the
+        // agent reads.
+        if (!teachCredentials && sessionPath && existsSync(sessionPath)) {
+          try {
+            const rawForCreds = SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8')));
+            const derived = deriveLoginCredentials(
+              rawForCreds,
+              authPlan.credentialRequestSeqs,
+              authPlan.credentialNames,
+            );
+            if (Object.keys(derived.values).length > 0) {
+              const backend = await getCredentialBackend();
+              for (const [name, value] of Object.entries(derived.values)) {
+                await backend.setSecret(site, name, value);
+                upsertManifestEntry(site, {
+                  name,
+                  kind: 'username',
+                  description: 'Login identifier',
+                });
+              }
+              applyCredentialPlaceholders(redactedSession, derived.replacements);
+              teachCredentials = { site, values: derived.values };
+              p.log.success(
+                `Derived ${Object.keys(derived.values).length} credential(s) for passwordless login: ${Object.keys(derived.values).join(', ')}`,
+              );
+            }
+          } catch (err) {
+            p.log.warn(
+              `Credential derivation failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
-        } catch (err) {
-          p.log.warn(
-            `Credential derivation failed: ${err instanceof Error ? err.message : String(err)}`,
+        }
+
+        // The recording cannot always yield credentials because the capture layer
+        // masks sensitive fields. Reuse a complete stored set or prompt for the
+        // credential names identified during planning.
+        if (!teachCredentials && !opts.noInteractive && authPlan.credentialNames.length > 0) {
+          let detectedUsername: string | undefined;
+          if (sessionPath && existsSync(sessionPath)) {
+            try {
+              detectedUsername = detectRecordedUsername(
+                SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8'))),
+              );
+            } catch {
+              /* best-effort pre-fill only */
+            }
+          }
+          teachCredentials = await promptForCredentials({
+            site,
+            names: authPlan.credentialNames,
+            detectedUsername,
+          });
+        }
+
+        if (!teachCredentials) {
+          const hint = opts.noInteractive
+            ? ` Set them with \`imprint credential set ${site} <name>\` (${authPlan.credentialNames.join(', ') || 'the login credentials'}), then resume with \`imprint teach ${site} --from-step generate\`.`
+            : '';
+          throw new Error(
+            `Auth tool "${authPlan.toolName}" was planned but no credentials are available.${hint} Data-tool compilation was not started.`,
           );
         }
-      }
 
-      // The recording cannot always yield credentials because the capture layer
-      // masks sensitive fields. Reuse a complete stored set or prompt for the
-      // credential names identified during planning.
-      if (!teachCredentials && !opts.noInteractive && authPlan.credentialNames.length > 0) {
-        let detectedUsername: string | undefined;
-        if (sessionPath && existsSync(sessionPath)) {
-          try {
-            detectedUsername = detectRecordedUsername(
-              SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8'))),
-            );
-          } catch {
-            /* best-effort pre-fill only */
-          }
-        }
-        teachCredentials = await promptForCredentials({
-          site,
-          names: authPlan.credentialNames,
-          detectedUsername,
-        });
-      }
-
-      if (!teachCredentials) {
-        const hint = opts.noInteractive
-          ? ` Set them with \`imprint credential set ${site} <name>\` (${authPlan.credentialNames.join(', ') || 'the login credentials'}), then resume with \`imprint teach ${site} --from-step generate\`.`
-          : '';
-        throw new Error(
-          `Auth tool "${authPlan.toolName}" was planned but no credentials are available.${hint} Data-tool compilation was not started.`,
-        );
-      }
-
-      spinner.start(`Compiling auth tool: ${authPlan.toolName}`);
-      try {
-        muteLog();
-        const authResult = await compileAuthAgent({
-          site,
-          session: redactedSession,
-          sessionPath: compileSessionPath,
-          authToolPlan: authPlan,
-          teachCredentials,
-          llmConfig: { provider: compileProviderName },
-          maxDurationMs: 20 * 60 * 1000,
-          onProgress: (prog) => spinner.message(formatAuthProgress(prog)),
-          // Render agent-requested user input outside the spinner.
-          onPrompt: opts.noInteractive
-            ? undefined
-            : async (message, options) => {
-                unmuteLog();
-                spinner.stop('Authentication requires your input.');
-                let answer = '';
-                if (options && options.length > 0) {
-                  const sel = await p.select({
-                    message,
-                    options: options.map((o) => ({ value: o, label: o })),
-                  });
-                  answer = p.isCancel(sel) ? '' : String(sel);
-                } else {
-                  const txt = await p.text({ message, placeholder: 'type your answer' });
-                  answer = p.isCancel(txt) ? '' : String(txt ?? '');
-                }
-                muteLog();
-                spinner.start('Continuing authentication verification');
-                return answer;
-              },
-          // Honor an agent-requested delay without firing a live action.
-          onCooldown: async (minutes, reason) => {
-            const envMs = Number(process.env.IMPRINT_AUTH_COOLOFF_MS);
-            const ms = Number.isFinite(envMs) ? Math.max(0, envMs) : Math.max(0, minutes) * 60_000;
-            unmuteLog();
-            p.log.info(
-              `Cooling off ~${Math.round(ms / 60000)} min before retrying the login${reason ? ` (${reason})` : ''} — no login fires during the wait.`,
-            );
-            muteLog();
-            spinner.start(`Cooling off (~${Math.round(ms / 60000)} min, no login)…`);
-            await new Promise((resolve) => setTimeout(resolve, ms));
-          },
-        });
-        unmuteLog();
-
-        assertSuccessfulAuthCompile(authResult);
-        emit({
-          workflowPath: authResult.workflowPath,
-          outDir: pathDirname(authResult.workflowPath),
-          force: true,
-        });
-        // The point of completing auth is a stored session token the data
-        // tools reuse. Confirm one was persisted before claiming success.
-        let sessionStored = false;
+        spinner.start(`Compiling auth tool: ${authPlan.toolName}`);
         try {
-          const { loadSiteCredentials } = await import('./credential-store.ts');
-          const view = await loadSiteCredentials(site);
-          sessionStored = view.cookies.length > 0 || Object.keys(view.values).length > 0;
-        } catch {
-          /* non-fatal */
+          muteLog();
+          const authResult = await compileAuthAgent({
+            site,
+            session: redactedSession,
+            sessionPath: compileSessionPath,
+            authToolPlan: authPlan,
+            teachCredentials,
+            llmConfig: authCompileLlmConfig(compileProviderName, compileModel),
+            maxDurationMs: 20 * 60 * 1000,
+            onProgress: (prog) => spinner.message(formatAuthProgress(prog)),
+            // Render agent-requested user input outside the spinner.
+            onPrompt: opts.noInteractive
+              ? undefined
+              : async (message, options) => {
+                  unmuteLog();
+                  spinner.stop('Authentication requires your input.');
+                  let answer = '';
+                  if (options && options.length > 0) {
+                    const sel = await p.select({
+                      message,
+                      options: options.map((o) => ({ value: o, label: o })),
+                    });
+                    answer = p.isCancel(sel) ? '' : String(sel);
+                  } else {
+                    const txt = await p.text({ message, placeholder: 'type your answer' });
+                    answer = p.isCancel(txt) ? '' : String(txt ?? '');
+                  }
+                  muteLog();
+                  spinner.start('Continuing authentication verification');
+                  return answer;
+                },
+            // Honor an agent-requested delay without firing a live action.
+            onCooldown: async (minutes, reason) => {
+              const envMs = Number(process.env.IMPRINT_AUTH_COOLOFF_MS);
+              const ms = Number.isFinite(envMs)
+                ? Math.max(0, envMs)
+                : Math.max(0, minutes) * 60_000;
+              unmuteLog();
+              p.log.info(
+                `Cooling off ~${Math.round(ms / 60000)} min before retrying the login${reason ? ` (${reason})` : ''} — no login fires during the wait.`,
+              );
+              muteLog();
+              spinner.start(`Cooling off (~${Math.round(ms / 60000)} min, no login)…`);
+              await new Promise((resolve) => setTimeout(resolve, ms));
+            },
+          });
+          unmuteLog();
+
+          assertSuccessfulAuthCompile(authResult);
+          emit({
+            workflowPath: authResult.workflowPath,
+            outDir: pathDirname(authResult.workflowPath),
+            force: true,
+          });
+          const emittedWorkflow = WorkflowSchema.parse(
+            JSON.parse(readFileSync(authResult.workflowPath, 'utf8')),
+          );
+          const storedState = await loadSiteCredentials(site).catch(() => null);
+          const sessionStored = Boolean(
+            storedState && hasDurableAuthState(emittedWorkflow, storedState),
+          );
+          const completion = {
+            toolName: authPlan.toolName,
+            buildPlanHash,
+            workflowHash: authWorkflowHash(emittedWorkflow),
+            completedAt: new Date().toISOString(),
+          };
+          if (sessionStored) {
+            for (const plan of plans) {
+              const ws = state.workflows[plan.workflowKey];
+              if (ws) ws.authCompletion = completion;
+            }
+            saveTeachState(site, state);
+          }
+          spinner.stop(
+            sessionStored
+              ? `Auth tool compiled + session stored (${authResult.turns} turns, ${Math.round(authResult.durationMs / 1000)}s) — data tools will reuse it.`
+              : `Auth tool compiled (${authResult.turns} turns) — no live session stored; data tools will be unverified until you run \`imprint login ${site}\`.`,
+          );
+        } catch (err) {
+          unmuteLog();
+          spinner.stop('Auth tool compilation failed.');
+          throw new Error(
+            `Auth stage failed; data-tool compilation was not started: ${err instanceof Error ? err.message : String(err)}`,
+            { cause: err },
+          );
         }
-        spinner.stop(
-          sessionStored
-            ? `Auth tool compiled + session stored (${authResult.turns} turns, ${Math.round(authResult.durationMs / 1000)}s) — data tools will reuse it.`
-            : `Auth tool compiled (${authResult.turns} turns) — no live session stored; data tools will be unverified until you run \`imprint login ${site}\`.`,
-        );
-      } catch (err) {
-        unmuteLog();
-        spinner.stop('Auth tool compilation failed.');
-        throw new Error(
-          `Auth stage failed; data-tool compilation was not started: ${err instanceof Error ? err.message : String(err)}`,
-          { cause: err },
-        );
       }
     }
   }

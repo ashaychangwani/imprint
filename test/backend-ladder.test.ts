@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
+  __drainPendingProbeRunsForTest,
   __resetCompileCdpPoolForTest,
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
@@ -75,7 +76,8 @@ beforeEach(() => {
   __setProbeTimeoutMsForTest(1_000);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await __drainPendingProbeRunsForTest();
   rmSync(root, { recursive: true, force: true });
   __setCdpJarMinterForTest(null);
   __setCdpBrowserFetchFactoryForTest(null);
@@ -1087,16 +1089,15 @@ describe('runWorkflowWithLadder', () => {
       );
       // First call: parallel probe — fetch wins (fastest). Second call:
       // memo=fetch, sequential from the memoized winner.
+      const startedAt = Date.now();
       const a = await runWorkflowWithLadder({ workflowPath, params: {} });
-      // Let the losing parallel probe branches observe the short deadline before
-      // the temp workflow directory is removed in afterEach.
-      await new Promise((resolve) => setTimeout(resolve, 300));
       const b = await runWorkflowWithLadder({ workflowPath, params: {} });
       expect(a.usedBackend).toBe('fetch');
       expect(b.usedBackend).toBe('fetch');
       // Second call uses the memo path (sequential, single-rung)
       expect(b.attempts.map((x) => x.backend)).toEqual(['fetch']);
       expect(hits).toBeGreaterThanOrEqual(2);
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
     } finally {
       server.stop(true);
       __resetCompileWinningBackendForTest();
@@ -1545,6 +1546,106 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     expect(closes).toBe(1);
   });
 
+  it('retains an inspectable failed page when the caller owns the CDP pool', async () => {
+    let closes = 0;
+    const inspectPage = async () => ({
+      url: 'https://flights.example.com/auth-error',
+      title: 'Authentication error',
+      bodyText: 'Cookies are disabled.',
+      cookies: [],
+    });
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+      inspectPage,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {
+        closes++;
+      },
+    }));
+    const tool = defaultedBootstrapTool('flights', () => ({
+      ok: false,
+      error: 'BAD_RESPONSE',
+      message: 'The rendered page explains the failure.',
+    }));
+    const cdpPool = new Map();
+
+    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
+      cdpPool,
+    });
+
+    expect(r.result.ok).toBe(false);
+    const retained = cdpPool.get(cdpReplayPoolKey('flights', 'https://flights.example.com'));
+    expect(retained?.inspectPage).toBe(inspectPage);
+    expect(closes).toBe(0);
+  });
+
+  it('retains an inspectable browser after a navigation timeout', async () => {
+    let closes = 0;
+    let inspections = 0;
+    const inspectPage = async () => {
+      inspections++;
+      return {
+        url: 'https://flights.example.com/unexpected-page',
+        title: 'Unexpected page',
+        bodyText: 'The document loaded but did not match the expected URL.',
+        cookies: [],
+      };
+    };
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+      inspectPage,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {
+        closes++;
+      },
+    }));
+    const tool = defaultedBootstrapTool('flights', () => ({
+      ok: false,
+      error: 'NETWORK',
+      message: 'Navigation timed out waiting for the expected URL.',
+    }));
+    const cdpPool = new Map();
+
+    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
+      cdpPool,
+    });
+
+    expect(r.result.ok).toBe(false);
+    expect(inspections).toBe(1);
+    expect(
+      cdpPool.get(cdpReplayPoolKey('flights', 'https://flights.example.com'))?.inspectPage,
+    ).toBe(inspectPage);
+    expect(closes).toBe(0);
+  });
+
+  it('evicts a NETWORK failure when the browser liveness probe also fails', async () => {
+    let closes = 0;
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+      inspectPage: async () => {
+        throw new Error('CDP socket closed');
+      },
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {
+        closes++;
+      },
+    }));
+    const tool = defaultedBootstrapTool('flights', () => ({
+      ok: false,
+      error: 'NETWORK',
+      message: 'CDP transport failed.',
+    }));
+    const cdpPool = new Map();
+
+    await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), { cdpPool });
+
+    expect(cdpPool.size).toBe(0);
+    expect(closes).toBe(1);
+  });
+
   it('resolves response_header bootstrap captures from the cdp-replay minted jar', async () => {
     const jarWithHeaders: MintedJar = {
       ...defaultedJar,
@@ -1711,9 +1812,7 @@ describe('cdp-replay cookie seeding by toolKind', () => {
     ]);
   });
 
-  it('an authenticate tool starts clean — never seeds a prior session/anti-bot cookie', async () => {
-    // Regression: seeding a stale Akamai `_abck` from a prior run poisons the live
-    // sensor so the cross-origin credential POST is edge-403'd. Auth = fresh session.
+  it('an authenticate tool keeps credential cookies but not cached recording cookies', async () => {
     seedJarOnDisk('auth');
     const cap = captureSeed();
     const tool = cdpTool('auth', 'authenticate');
@@ -1731,8 +1830,8 @@ describe('cdp-replay cookie seeding by toolKind', () => {
         storage: [],
         cookies: [
           {
-            name: 'stale_session',
-            value: 'STALE',
+            name: 'trusted_device',
+            value: 'CURRENT',
             domain: '.auth.example.com',
             path: '/',
           },
@@ -1740,8 +1839,8 @@ describe('cdp-replay cookie seeding by toolKind', () => {
       },
     });
     expect(r.usedBackend).toBe('cdp-replay');
-    expect(cap.seen()).toBeUndefined();
-    expect(runtimeCookieNames).toEqual([]);
+    expect(cap.seen()?.map((cookie) => cookie.name)).toEqual(['trusted_device']);
+    expect(runtimeCookieNames).toEqual(['trusted_device']);
   });
 });
 

@@ -117,6 +117,8 @@ interface CompileViaClaudeCliOptions {
    *  When set, `--resume <sessionId>` is used and `message` replaces the initial
    *  prompt. Requires session persistence (auth mode keeps it on). */
   resume?: { sessionId: string; message: string };
+  /** Explicit model selected by the caller. Defaults to the provider preference. */
+  model?: string;
 }
 
 /** Options for the auth-compile entry point. A strict subset of the data
@@ -133,6 +135,7 @@ interface AuthCompileViaClaudeCliOptions {
   authMode: AuthCliCompileMode;
   /** Resume a prior segment (see CompileViaClaudeCliOptions.resume). */
   resume?: { sessionId: string; message: string };
+  model?: string;
 }
 
 /** Auth-compile entry point for claude-cli. Delegates to the same trace +
@@ -153,6 +156,7 @@ export function compileAuthViaClaudeCli(
     onDeadlineReached: opts.onDeadlineReached,
     authMode: opts.authMode,
     resume: opts.resume,
+    model: opts.model,
   });
 }
 
@@ -196,7 +200,7 @@ export async function compileViaClaudeCli(
       'imprint.site': opts.session.site,
       'imprint.tool_dir': opts.absoluteToolDir,
       'imprint.provider': 'claude-cli',
-      'imprint.model': preferredAgentModel('claude-cli'),
+      'imprint.model': opts.model ?? preferredAgentModel('claude-cli'),
     },
     async (span) => {
       const result = await compileViaClaudeCliImpl(opts);
@@ -210,7 +214,7 @@ export async function compileViaClaudeCli(
         'imprint.compile.cache_creation_input_tokens': result.cacheCreationInputTokens,
         ...llmSpanAttributes({
           provider: 'claude-cli',
-          model: preferredAgentModel('claude-cli'),
+          model: opts.model ?? preferredAgentModel('claude-cli'),
           // TOTAL prompt (uncached + cache); the cache split is passed separately
           // for cost. `result.inputTokens` alone is the uncached delta (often a
           // few hundred), which would mislabel `llm.token_count.prompt`.
@@ -408,7 +412,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     '--effort',
     COMPILE_EFFORT_LEVEL,
     '--model',
-    preferredAgentModel('claude-cli'),
+    opts.model ?? preferredAgentModel('claude-cli'),
     promptArg,
   ];
 

@@ -19,6 +19,8 @@ The runtime only executes the program you write.
    the observed status, body preview, continuation, and next action.
 5. Revise the artifact or continue through its actions. Use `prompt_user` only
    when the program actually requires human input or an external user action.
+   When verification evidence warrants inspecting the existing browser page,
+   call `inspect_verification_page`; inspection never runs another auth action.
 6. Call `done` only after a live action whose declared outcome is `success`
    returns `ok: true`.
 
@@ -30,6 +32,8 @@ observed result proves that state is no longer usable, you may set
 `freshSession: true` on the next `run_verification`. This discards the prior
 browser and continuation before running the requested action. Decide from live
 evidence; do not encode site or authentication-channel assumptions.
+Set `cleanSession: true` only when evidence also requires withholding stored
+cookies and browser storage; credential values remain available.
 
 ## Auth program
 
@@ -117,6 +121,14 @@ Use the standard workflow request schema: `method`, `url`, `headers`,
 optional string `body`, optional `captures`, optional `mode: "navigate"`
 with bounded navigation criteria, and optional `effect`.
 
+`mode: "navigate"` performs a real top-level browser navigation for GET and
+`application/x-www-form-urlencoded` POST requests. Use it when the recording
+shows a document form submission whose redirects or browser-owned state must be
+preserved. Its response exposes the browser's final URL in the synthetic
+`x-imprint-final-url` response header. Capture that header with
+`source: "response_header"` when a redirect URL carries state needed by a later
+request.
+
 Use runtime templates exactly as supported:
 `${credential.X}`, `${param.X}`, `${state.X}`,
 `${response[N].path}`, and `${generated.uuid|nonce|epoch_s|epoch_ms|iso8601}`.
@@ -125,8 +137,9 @@ Ground every request, capture, predicate, retry bound, navigation criterion, and
 transform in the recording. Preserve functional headers and request encoding.
 Do not store recorded secrets or one-time values as literals. When browser code
 must mint coupled state, represent the recorded page navigation or write a
-general request transform supported by live inputs; verification determines
-whether it works.
+general request transform supported by live inputs; if you write
+`request-transform.ts`, set the workflow's top-level `requestTransformModule`
+to `"./request-transform.ts"`. Verification determines whether it works.
 
 There is no auth playbook. Do not write, inspect, or depend on
 `playbook.yaml`.
@@ -134,5 +147,6 @@ There is no auth playbook. Do not write, inspect, or depend on
 ## Checkpoints
 
 One checkpoint call ends the current turn. After `run_verification`,
-`prompt_user`, or `wait_for_cooldown`, stop and wait for the orchestrator.
+`inspect_verification_page`, `prompt_user`, or `wait_for_cooldown`, stop and wait
+for the orchestrator.
 It will resume the same Claude or Codex session with the result.

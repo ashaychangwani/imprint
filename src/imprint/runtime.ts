@@ -48,6 +48,9 @@ export interface BrowserNavigationTransport {
   navigate(
     url: string,
     options?: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
       waitUntil?: 'domcontentloaded' | 'load';
       timeoutMs?: number;
       pollIntervalMs?: number;
@@ -245,13 +248,6 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 
     let resp: Response;
     if (req.mode === 'navigate') {
-      if (subbed.method.toUpperCase() !== 'GET') {
-        return {
-          ok: false,
-          error: 'BAD_RESPONSE',
-          message: `Request ${i} uses mode="navigate" with ${subbed.method}; top-level navigation only supports GET.`,
-        };
-      }
       if (!opts.browser) {
         return {
           ok: false,
@@ -260,7 +256,12 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         };
       }
       try {
-        resp = await opts.browser.navigate(subbed.url, req.navigation);
+        resp = await opts.browser.navigate(subbed.url, {
+          ...req.navigation,
+          method: subbed.method,
+          headers: subbed.headers,
+          body: subbed.body,
+        });
         for (const cookie of await opts.browser.snapshotCookies()) cookieJar.setCookie(cookie);
         liveCredentials.cookies = cookieJar.toJSON();
       } catch (err) {
@@ -546,21 +547,23 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
 
     let response: Response;
     if (req.mode === 'navigate') {
-      if (request.method.toUpperCase() !== 'GET' || !opts.browser) {
+      if (!opts.browser) {
         return {
           ok: false,
           result: {
             ok: false,
             error: 'BAD_RESPONSE',
-            message:
-              request.method.toUpperCase() !== 'GET'
-                ? `Request ${requestIndex} uses mode="navigate" with ${request.method}; navigation only supports GET.`
-                : `Request ${requestIndex} requires a browser navigation transport.`,
+            message: `Request ${requestIndex} requires a browser navigation transport.`,
           },
         };
       }
       try {
-        response = await opts.browser.navigate(request.url, req.navigation);
+        response = await opts.browser.navigate(request.url, {
+          ...req.navigation,
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        });
         for (const cookie of await opts.browser.snapshotCookies()) cookieJar.setCookie(cookie);
       } catch (err) {
         return {

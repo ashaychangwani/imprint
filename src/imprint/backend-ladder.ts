@@ -209,6 +209,38 @@ function sleepMs(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function settleProbeWithDeadline<T>(
+  inner: Promise<T>,
+  timeoutMs: number,
+  timeoutValue: T,
+): Promise<T> {
+  type Observed = { status: 'fulfilled'; value: T } | { status: 'rejected'; reason: unknown };
+  const observed: Promise<Observed> = inner.then(
+    (value) => ({ status: 'fulfilled', value }),
+    (reason) => ({ status: 'rejected', reason }),
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<'deadline'>((resolve) => {
+    timer = setTimeout(() => resolve('deadline'), timeoutMs);
+  });
+  const first = await Promise.race([observed, deadline]);
+  if (timer) clearTimeout(timer);
+  if (first === 'deadline') {
+    const pending = observed.then(() => undefined);
+    pendingProbeRuns.add(pending);
+    void pending.finally(() => pendingProbeRuns.delete(pending));
+    return timeoutValue;
+  }
+  if (first.status === 'rejected') throw first.reason;
+  return first.value;
+}
+
+const pendingProbeRuns = new Set<Promise<void>>();
+
+export async function __drainPendingProbeRunsForTest(): Promise<void> {
+  await Promise.allSettled([...pendingProbeRuns]);
+}
+
 function playbookBackendTimeoutMs(): number {
   return positiveEnvMs('IMPRINT_PLAYBOOK_BACKEND_TIMEOUT_MS', DEFAULT_PLAYBOOK_BACKEND_TIMEOUT_MS);
 }
@@ -1039,17 +1071,12 @@ async function runCdpReplay(
     log('cdp-replay: reusing pooled Chrome session');
     cf = pooled;
   } else {
-    let seedCookies: MintedJar['cookies'] | undefined;
-    // An authentication flow establishes a BRAND-NEW session and must start from a
-    // clean cookie slate. Seeding a prior run's cookies — especially anti-bot tokens
-    // (e.g. Akamai `_abck`/`bm_sz`) carried over from a cached `.cdp-jar.json` or an
-    // old recording — poisons the live sensor: the page still validates a fresh
-    // `_abck` to `~0~`, but the cross-origin credential POST is edge-403'd ("Failed
-    // to fetch", no ACAO). saveJar persists each cdp-replay session, so seeding would
-    // otherwise re-arm itself every run (initiate writes a jar that the next initiate
-    // seeds → cascade of 403s). Data tools still seed (they reuse an authed session).
+    const seeds: MintedJar['cookies'] = [];
+    // Cached replay jars are recording-derived and may be stale, so authenticate
+    // workflows do not inherit them implicitly. Current credential-store cookies
+    // are different: they represent durable device/session state and remain
+    // available unless the caller intentionally supplies a clean credential store.
     if (tool.workflow.toolKind !== 'authenticate') {
-      const seeds: MintedJar['cookies'] = [];
       try {
         const rec = newestRecording(siteDir);
         let cached = loadJar(siteDir);
@@ -1059,9 +1086,9 @@ async function runCdpReplay(
       } catch {
         // best-effort
       }
-      seeds.push(...credentialSeedCookies(credentials));
-      seedCookies = uniqueSeedCookies(seeds);
     }
+    seeds.push(...credentialSeedCookies(credentials));
+    const seedCookies = uniqueSeedCookies(seeds);
     cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({
       baseUrl,
       bootstrapUrl,
@@ -1084,7 +1111,7 @@ async function runCdpReplay(
     const bootstrappedCredentials: CredentialStore = {
       ...credentials,
       cookies: [
-        ...(tool.workflow.toolKind === 'authenticate' ? [] : credentials.cookies),
+        ...credentials.cookies,
         ...jar.cookies.map((c) => ({
           name: c.name,
           value: c.value,
@@ -1143,12 +1170,29 @@ async function runCdpReplay(
         // best-effort
       }
       // Deliberately do NOT close cf — the pool retains it for the completion phase.
-    } else {
-      if (ownsSession) {
-        await cf.close();
-      } else if (cdpPool && cdpToolResultImpliesDeadSession(result)) {
+    } else if (cdpPool) {
+      let sessionAlive = !cdpToolResultImpliesDeadSession(result);
+      if (!sessionAlive && cf.inspectPage) {
+        try {
+          await cf.inspectPage();
+          sessionAlive = true;
+        } catch {
+          // A failed liveness probe confirms that the transport is unusable.
+        }
+      }
+
+      if (sessionAlive) {
+        // A caller-owned pool also owns diagnostic failures. Keep the rendered
+        // page available so the caller can inspect what the browser actually saw
+        // before deciding whether to retry, revise the workflow, or reset state.
+        if (ownsSession) cdpPool.set(poolKey, cf);
+      } else {
         cdpPool.delete(poolKey);
         log('cdp-replay: evicted degraded session from pool');
+        await cf.close();
+      }
+    } else {
+      if (ownsSession) {
         await cf.close();
       }
     }
@@ -1160,7 +1204,7 @@ async function runCdpReplay(
       cdpPool.delete(poolKey);
       log('cdp-replay: evicted dead session from pool');
     }
-    if (ownsSession) await cf.close();
+    await cf.close();
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: 'NETWORK', message: `cdp-replay failed: ${msg}` };
   }
@@ -1712,32 +1756,17 @@ export async function runWorkflowWithLadder(opts: {
       const settled = await Promise.allSettled(
         probeBackends.map(async (b) => {
           const t0 = Date.now();
-          // Keep a handle to the real backend run (the race's non-timeout arm) so a
-          // backend that LOSES the deadline race — still launching Chrome in the
-          // background — gets settled and its pooled browser drained, not leaked,
-          // once the probe returns.
           const inner = runWithLadder([b], tool, opts.params, assetRoot, stealthCache, {
             skipBootstrapSplice: true,
             cdpPool,
             initialState: opts.initialState,
             credentials: opts.credentials,
           });
-          // A backend that finishes AFTER the probe returned (it lost the race but
-          // is still cold-starting Chrome) pools its browser late — arm the idle
-          // close so it's torn down rather than left lingering. (Caller-owned pool
-          // drains itself, so don't arm the global idle close for it.)
-          if (!usingCallerPool) void inner.finally(() => armCompileCdpIdleClose()).catch(() => {});
-          const r = await Promise.race([
-            inner,
-            sleepMs(PROBE_TIMEOUT_MS).then(
-              () =>
-                ({
-                  result: { ok: false, error: 'NETWORK', message: 'probe deadline exceeded' },
-                  usedBackend: b,
-                  attempts: [],
-                }) as LadderResult,
-            ),
-          ]);
+          const r = await settleProbeWithDeadline(inner, PROBE_TIMEOUT_MS, {
+            result: { ok: false, error: 'NETWORK', message: 'probe deadline exceeded' },
+            usedBackend: b,
+            attempts: [],
+          });
           return { backend: b, result: r, durationMs: Date.now() - t0 };
         }),
       );

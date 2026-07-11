@@ -48,6 +48,7 @@ import {
 } from './llm.ts';
 import { createLog } from './log.ts';
 import { localToolDir } from './paths.ts';
+import { loadCredentialStore } from './runtime.ts';
 import { type Session, WorkflowSchema } from './types.ts';
 
 const log = createLog('auth-compile-agent');
@@ -148,6 +149,7 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
         toolDir,
         authToolPlan,
         teachCredentials: opts.teachCredentials,
+        model: opts.llmConfig?.model,
         initialPrompt: initialUserMessage,
         onProgress: opts.onProgress,
         onPrompt: opts.onPrompt,
@@ -166,6 +168,7 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
         toolDir,
         authToolPlan,
         teachCredentials: opts.teachCredentials,
+        model: opts.llmConfig?.model,
         initialPrompt: initialUserMessage,
         onProgress: opts.onProgress,
         onPrompt: opts.onPrompt,
@@ -244,7 +247,10 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
     const failures = authExternalVerification(
       toolDir,
       (authToolPlan.captures ?? []).map((c) => ({ name: c.name, usedAs: c.usedAs })),
-      { requireLiveAttempt: true },
+      {
+        requireLiveAttempt: true,
+        requiredCredentialNames: authToolPlan.credentialNames,
+      },
     );
 
     if (failures.length === 0) {
@@ -290,6 +296,7 @@ interface AuthSegmentLoopOptions {
   toolDir: string;
   authToolPlan: NonNullable<AuthToolPlan>;
   teachCredentials: { site: string; values: Record<string, string> };
+  model?: string;
   initialPrompt: string;
   onProgress?: (p: CompileAgentProgress) => void;
   onPrompt?: (message: string, options?: string[]) => Promise<string>;
@@ -330,22 +337,23 @@ function formatVerifyResult(action: string, r: AuthActionResult): string {
 /**
  * Drive a CLI auth compile as a sequence of checkpointed SEGMENTS. The
  * agent shapes from the recording, then pauses at checkpoint tools; this loop
- * (the durable orchestrator) executes each checkpoint — run_verification on the
- * persistent AuthVerifier session, prompt_user via the TUI bridge, or a
- * cool-off wait — then feeds the result into the next segment. The ONE
- * stateful thing (the live browser) lives in the AuthVerifier and is drained at
- * the end. CLI conversation state is carried by provider-native resume
+ * (the durable orchestrator) executes each checkpoint — run_verification or
+ * page inspection on the persistent AuthVerifier session, prompt_user via the
+ * TUI bridge, or a cool-off wait — then feeds the result into the next segment.
+ * The ONE stateful thing (the live browser) lives in the AuthVerifier and is
+ * drained at the end. CLI conversation state is carried by provider-native resume
  * (`claude --resume`, `codex exec resume`), not retained here.
  */
 async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<CompileAgentResult> {
   const workflowPath = pathJoin(opts.toolDir, 'workflow.json');
   const verificationAttemptPath = pathJoin(opts.toolDir, AUTH_VERIFICATION_ATTEMPT_SENTINEL);
   if (existsSync(verificationAttemptPath)) unlinkSync(verificationAttemptPath);
+  const storedCredentials = await loadCredentialStore(opts.site);
   const credsForRun = {
     site: opts.site,
-    cookies: [],
-    values: opts.teachCredentials.values,
-    storage: [],
+    cookies: storedCredentials?.cookies ?? [],
+    values: { ...(storedCredentials?.values ?? {}), ...opts.teachCredentials.values },
+    storage: storedCredentials?.storage ?? [],
   };
   const verifier = new AuthVerifier(workflowPath, credsForRun);
   const authMode = {
@@ -366,6 +374,8 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
   // line so a failure (e.g. a 403) is visible the instant it happens.
   let lastVerification: CompileAgentProgress['lastVerification'];
   let segment = 0;
+  const promptSecrets = new Map<string, string>();
+  let promptSecretSequence = 0;
 
   try {
     while (true) {
@@ -395,6 +405,7 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
               onProgress: wrappedOnProgress,
               authMode,
               resume,
+              model: opts.model,
             })
           : await compileViaCodexCli({
               session: opts.session,
@@ -406,13 +417,18 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
               onProgress: wrappedOnProgress,
               authMode,
               resume,
+              model: opts.model,
             });
       last = result;
       totalTurns += result.turns;
 
       if (result.outcome !== 'checkpoint' || !result.checkpoint) {
         if (result.outcome === 'soft_cap' && result.sessionId && Date.now() < activeDeadlineMs) {
-          const failures = authWorkflowPreflightFailures(opts.toolDir, opts.session);
+          const failures = authWorkflowPreflightFailures(
+            opts.toolDir,
+            opts.session,
+            opts.authToolPlan.credentialNames,
+          );
           resume = {
             sessionId: result.sessionId,
             message: `You stopped without calling done, give_up, or recording a checkpoint. Continue the auth compile now.${
@@ -440,7 +456,11 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
       const checkpointStartedAt = Date.now();
       try {
         if (cp.kind === 'run_verification') {
-          const preflightFailures = authWorkflowPreflightFailures(opts.toolDir, opts.session);
+          const preflightFailures = authWorkflowPreflightFailures(
+            opts.toolDir,
+            opts.session,
+            opts.authToolPlan.credentialNames,
+          );
           if (Date.now() >= activeDeadlineMs) {
             resultMsg =
               'run_verification was blocked because the auth compile deadline expired; no live login was fired.';
@@ -454,8 +474,17 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
                 JSON.parse(readFileSync(pathJoin(opts.toolDir, 'workflow.json'), 'utf8')),
               ),
             );
-            const r = await verifier.runAction(cp.action, cp.parameters, {
+            const resolvedParameters = Object.fromEntries(
+              Object.entries(cp.parameters ?? {}).map(([name, value]) => [
+                name,
+                typeof value === 'string' && promptSecrets.has(value)
+                  ? (promptSecrets.get(value) ?? '')
+                  : value,
+              ]),
+            );
+            const r = await verifier.runAction(cp.action, resolvedParameters, {
               freshSession: cp.freshSession,
+              cleanSession: cp.cleanSession,
             });
             writeFileSync(
               verificationAttemptPath,
@@ -498,9 +527,21 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
             });
             resultMsg = formatVerifyResult(cp.action, r);
           }
+        } else if (cp.kind === 'inspect_verification_page') {
+          const inspected = await verifier.inspectPage({
+            maxChars: cp.maxChars,
+            includeCookies: cp.includeCookies,
+          });
+          resultMsg = inspected.ok
+            ? `Current verification page snapshot:\n${JSON.stringify(inspected, null, 2)}`
+            : `Verification page inspection was unavailable: ${inspected.message ?? 'unknown reason'}`;
         } else if (cp.kind === 'prompt_user') {
           const answer = await onPrompt(cp.message, cp.options);
-          resultMsg = `The user responded: ${answer || '(no input provided)'}`;
+          const reference = `\${prompt.${++promptSecretSequence}}`;
+          promptSecrets.set(reference, answer);
+          resultMsg = answer
+            ? `The user response is stored locally as ${reference}. Pass that exact reference as the appropriate run_verification parameter value; the orchestrator resolves it without exposing the answer to the model.`
+            : 'The user provided no input.';
         } else {
           await onCooldown(cp.minutes, cp.reason);
           resultMsg = `Requested delay of ~${cp.minutes} min completed; no live action ran during the wait.`;

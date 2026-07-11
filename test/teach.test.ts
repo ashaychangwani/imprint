@@ -19,9 +19,12 @@ import {
 import {
   assertCandidateToolName,
   assertSuccessfulAuthCompile,
+  authCompileLlmConfig,
+  authCompletionMatches,
   buildTeachProviderPickerOptions,
   buildTeachStateFromSession,
   formatAuthProgress,
+  hasDurableAuthState,
   mapLimit,
   promptForTeachProvider,
   resolveTeachStatePath,
@@ -29,6 +32,7 @@ import {
   selectCompleteAuthCredentials,
   updateCandidateStageCheckpoints,
 } from '../src/imprint/teach.ts';
+import { WorkflowSchema } from '../src/imprint/types.ts';
 
 describe('teach verb', () => {
   it('has a VERB_HELP entry', () => {
@@ -84,6 +88,50 @@ describe('teach auth compile boundary', () => {
         }),
       ),
     ).not.toThrow();
+  });
+
+  it('passes the selected provider and model into auth compilation', () => {
+    expect(authCompileLlmConfig('codex-cli', 'gpt-5.6-terra')).toEqual({
+      provider: 'codex-cli',
+      model: 'gpt-5.6-terra',
+    });
+  });
+
+  it('reuses auth completion only while the plan and workflow hashes match', () => {
+    const completion = {
+      toolName: 'authenticate_fixture',
+      buildPlanHash: 'plan-a',
+      workflowHash: 'workflow-a',
+      completedAt: '2026-07-11T00:00:00.000Z',
+    };
+    expect(authCompletionMatches(completion, completion)).toBe(true);
+    expect(authCompletionMatches(completion, { ...completion, buildPlanHash: 'plan-b' })).toBe(
+      false,
+    );
+    expect(authCompletionMatches(completion, { ...completion, workflowHash: 'workflow-b' })).toBe(
+      false,
+    );
+  });
+
+  it('requires declared persisted auth state instead of counting input credentials', () => {
+    const workflow = WorkflowSchema.parse({
+      toolName: 'authenticate_fixture',
+      toolKind: 'authenticate',
+      site: 'fixture',
+      intent: { description: 'fixture auth' },
+      parameters: [],
+      requests: [],
+      authConfig: { entry: 'start', persist: ['authorization'], actions: {} },
+    });
+    expect(
+      hasDurableAuthState(workflow, {
+        values: { username: 'user', password: 'pass' },
+        cookies: [],
+      }),
+    ).toBe(false);
+    expect(hasDurableAuthState(workflow, { values: { authorization: 'token' }, cookies: [] })).toBe(
+      true,
+    );
   });
 });
 

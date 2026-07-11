@@ -81,6 +81,12 @@ export type AuthCheckpoint =
       action: string;
       parameters?: Record<string, string | number | boolean>;
       freshSession?: boolean;
+      cleanSession?: boolean;
+    }
+  | {
+      kind: 'inspect_verification_page';
+      maxChars?: number;
+      includeCookies?: boolean;
     }
   | { kind: 'prompt_user'; message: string; options?: string[] }
   | { kind: 'wait_for_cooldown'; minutes: number; reason?: string };

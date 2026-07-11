@@ -67,6 +67,8 @@ interface CompileViaCodexCliOptions {
   authMode?: AuthCliCompileMode;
   /** Auth segments only: resume the same non-interactive Codex session. */
   resume?: { sessionId: string; message: string };
+  /** Explicit model selected by the caller. Defaults to the provider preference. */
+  model?: string;
 }
 
 interface CodexJsonEvent {
@@ -114,7 +116,7 @@ export async function compileViaCodexCli(
       'imprint.tool_name': opts.candidate?.toolName,
       'imprint.session_path': opts.sessionPath,
       'imprint.tool_dir': opts.absoluteToolDir,
-      'imprint.model': preferredAgentModel('codex-cli'),
+      'imprint.model': opts.model ?? preferredAgentModel('codex-cli'),
     },
     async (span) => {
       const result = await compileViaCodexCliImpl(opts, span);
@@ -187,7 +189,7 @@ async function compileViaCodexCliImpl(
     ];
     initialPrompt = opts.resume
       ? opts.resume.message
-      : buildAuthCodexInitialPrompt(opts.authMode.initialPrompt);
+      : buildAuthCodexInitialPrompt(systemPrompt, opts.authMode.initialPrompt);
   } else {
     mcpArgs = [
       'run',
@@ -222,7 +224,7 @@ ${formatToolPlan(opts.toolPlan)}
 Use the imprint-compile MCP tools to inspect the session, write artifacts, run tests, and call done(). Begin by calling read_session_summary, then proceed per the system instructions.`;
   }
 
-  const model = preferredAgentModel('codex-cli');
+  const model = opts.model ?? preferredAgentModel('codex-cli');
   const initialTokenCount = resolveTraceTokenCount(null, initialPrompt);
   const captureLlmIo = traceLlmIoEnabled();
   const mcpToolTimeoutSec = resolveMcpToolTimeoutSec(opts.deadlineMs);
@@ -356,29 +358,14 @@ function resolveMcpToolTimeoutSec(deadlineMs: number, now = Date.now()): number 
   );
 }
 
-function buildAuthCodexInitialPrompt(initialPrompt: string): string {
-  const authPrompt = stripAuthInitialFirstAction(initialPrompt);
-  return `You are compiling an Imprint authenticate tool with the imprint-compile MCP tools.
+function buildAuthCodexInitialPrompt(systemPrompt: string, initialPrompt: string): string {
+  return `<system_instructions>
+${systemPrompt}
+</system_instructions>
 
-${authPrompt}
+${initialPrompt}
 
-Auth compile rules:
-- Treat the recording as the source of truth. Inspect requests and responses before writing artifacts.
-- Write a canonical toolKind="authenticate" workflow. Keep network operations in requests; define authConfig.entry, arbitrary named actions, per-action parameters and steps, evidence, explicit carry/next state, retry bounds, and a declared success outcome from the recording.
-- Request steps reference indices in workflow.requests. A repeat block supplies until (a normal capture), intervalMs, and maxAttempts. onError is fail, continue, or retry; retry requires repeat bounds.
-- Use ordinary captures and exact runtime templates (\${credential.X}, \${param.X}, \${state.X}, \${response[N].path}, and supported \${generated.*} values). Use mode="navigate" or request-transform.ts when recording-grounded browser execution requires it.
-- Never write or depend on playbook.yaml. Do not inspect Imprint runtime source to infer site behavior.
-- run_verification accepts a declared action plus its scalar parameters. It is the only live login path. It reuses the verification session by default; set freshSession only when observed evidence requires discarding prior browser and continuation state. After any checkpoint call, stop and let the orchestrator resume you with observed facts.
-- Call done only after an action with a declared success outcome returns ok:true.
-
-Your first response MUST be a call to the imprint-compile read_session_summary tool. Do not answer in prose or spend the first turn planning before that tool call.`;
-}
-
-function stripAuthInitialFirstAction(initialPrompt: string): string {
-  return initialPrompt.replace(
-    /\n*MANDATORY FIRST ACTION:\s*call read_session_summary now\.\s*Do not write prose, do not inspect repository files, and do not plan silently before that tool call\.\s*After read_session_summary returns,\s*/m,
-    '\n',
-  );
+Codex provider framing: use only the imprint-compile MCP tools exposed for this task. Your first response must be the requested read_session_summary tool call, without preceding prose.`;
 }
 
 async function driveJsonl(
@@ -514,7 +501,7 @@ async function driveJsonl(
             ...(traceLlmIoEnabled()
               ? llmSpanAttributes({
                   provider: 'codex-cli',
-                  model: preferredAgentModel('codex-cli'),
+                  model: opts.model ?? preferredAgentModel('codex-cli'),
                   outputMessages: traceLlmMessages([{ role: 'assistant', content: agentMessage }]),
                   outputValue: agentMessage,
                 })

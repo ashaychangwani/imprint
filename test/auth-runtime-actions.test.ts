@@ -342,10 +342,10 @@ describe('auth action runtime', () => {
   });
 
   it('runs a recording-declared top-level navigation', async () => {
-    const navigations: string[] = [];
+    const navigations: Array<{ url: string; options: unknown }> = [];
     const browser: BrowserNavigationTransport = {
-      async navigate(url) {
-        navigations.push(url);
+      async navigate(url, options) {
+        navigations.push({ url, options });
         return new Response('{"arrived":true}');
       },
       async snapshotCookies() {
@@ -386,6 +386,69 @@ describe('auth action runtime', () => {
       }) as unknown as typeof fetch,
     });
     expect(result.ok).toBe(true);
-    expect(navigations).toEqual(['https://fixture.test/document']);
+    expect(navigations).toEqual([
+      {
+        url: 'https://fixture.test/document',
+        options: {
+          method: 'GET',
+          headers: {},
+          body: undefined,
+          urlIncludes: '/complete',
+        },
+      },
+    ]);
+  });
+
+  it('passes a transformed URL-encoded POST to top-level navigation', async () => {
+    const navigations: Array<{ url: string; options: unknown }> = [];
+    const wf = workflow({
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://fixture.test/login',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'username=${credential.username}&state=fresh',
+          mode: 'navigate',
+          navigation: { urlIncludes: '/password' },
+        },
+      ],
+      authConfig: {
+        entry: 'submit_identifier',
+        actions: {
+          submit_identifier: {
+            steps: [{ request: 0 }],
+            outcome: { type: 'success' },
+          },
+        },
+      },
+    });
+
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials: { ...credentials, values: { username: 'person@example.test' } },
+      browser: {
+        async navigate(url, options) {
+          navigations.push({ url, options });
+          return new Response('{}');
+        },
+        async snapshotCookies() {
+          return [];
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(navigations).toEqual([
+      {
+        url: 'https://fixture.test/login',
+        options: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'username=person%40example.test&state=fresh',
+          urlIncludes: '/password',
+        },
+      },
+    ]);
   });
 });

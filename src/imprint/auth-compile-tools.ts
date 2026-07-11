@@ -40,6 +40,7 @@ export const AUTH_COMPILE_TOOL_NAMES = [
   'read_file',
   'run_bash',
   'run_verification',
+  'inspect_verification_page',
   'prompt_user',
   'wait_for_cooldown',
 ] as const;
@@ -62,21 +63,25 @@ export function buildAuthCompileTools(
   ];
 }
 
-export function authWorkflowPreflightFailures(toolDir: string, _session?: Session): string[] {
+export function authWorkflowPreflightFailures(
+  toolDir: string,
+  _session?: Session,
+  requiredCredentialNames: readonly string[] = [],
+): string[] {
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   if (!existsSync(workflowPath)) return ['workflow.json does not exist'];
-  return parseWorkflow(workflowPath).failures;
+  return parseWorkflow(workflowPath, requiredCredentialNames).failures;
 }
 
 export function authExternalVerification(
   toolDir: string,
   requiredSessionCaptures: Array<{ name: string; usedAs?: string }> = [],
-  options: { requireLiveAttempt?: boolean } = {},
+  options: { requireLiveAttempt?: boolean; requiredCredentialNames?: readonly string[] } = {},
 ): string[] {
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   if (!existsSync(workflowPath)) return ['workflow.json does not exist'];
 
-  const parsed = parseWorkflow(workflowPath);
+  const parsed = parseWorkflow(workflowPath, options.requiredCredentialNames);
   if (!parsed.workflow) return parsed.failures;
   const failures = [...parsed.failures];
   const workflow = parsed.workflow;
@@ -105,7 +110,10 @@ export function authExternalVerification(
   return failures;
 }
 
-function parseWorkflow(path: string): { workflow?: Workflow; failures: string[] } {
+function parseWorkflow(
+  path: string,
+  requiredCredentialNames: readonly string[] = [],
+): { workflow?: Workflow; failures: string[] } {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, 'utf8'));
@@ -125,11 +133,14 @@ function parseWorkflow(path: string): { workflow?: Workflow; failures: string[] 
   }
   return {
     workflow: parsed.data,
-    failures: authProgramFailures(parsed.data),
+    failures: authProgramFailures(parsed.data, requiredCredentialNames),
   };
 }
 
-function authProgramFailures(workflow: Workflow): string[] {
+function authProgramFailures(
+  workflow: Workflow,
+  requiredCredentialNames: readonly string[] = [],
+): string[] {
   const failures: string[] = [];
   if (workflow.toolKind !== 'authenticate') {
     failures.push(`workflow.toolKind must be "authenticate"`);
@@ -137,6 +148,21 @@ function authProgramFailures(workflow: Workflow): string[] {
   }
   const config = workflow.authConfig;
   if (!config) return ['workflow.authConfig is missing'];
+
+  const reachableRequestIndexes = new Set(
+    Object.values(config.actions).flatMap((action) => action.steps.map((step) => step.request)),
+  );
+  const executable = JSON.stringify({
+    bootstrap: workflow.bootstrap,
+    requests: workflow.requests.filter((_, index) => reachableRequestIndexes.has(index)),
+  });
+  for (const name of requiredCredentialNames) {
+    if (!executable.includes(`\${credential.${name}}`)) {
+      failures.push(
+        `workflow must use planned credential ${JSON.stringify(name)} as \${credential.${name}} in an executable request or bootstrap`,
+      );
+    }
+  }
   if (!config.actions[config.entry]) {
     failures.push(`authConfig.entry references unknown action ${JSON.stringify(config.entry)}`);
   }

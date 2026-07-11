@@ -237,7 +237,7 @@ describe('compileViaCodexCli auth checkpoints', () => {
     }
   });
 
-  it('starts auth-mode codex with a compact prompt instead of the full markdown system prompt', async () => {
+  it('starts auth-mode codex with the canonical system prompt and provider framing', async () => {
     const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-codex-auth-compact-'));
     try {
       const binDir = pathJoin(root, 'bin');
@@ -252,7 +252,11 @@ describe('compileViaCodexCli auth checkpoints', () => {
       process.env.FAKE_CODEX_PROMPT_LOG = promptLog;
       const systemPromptPath = pathJoin(root, 'system.md');
       const sessionPath = pathJoin(root, 'session.json');
-      writeFileSync(systemPromptPath, 'system prompt', 'utf8');
+      writeFileSync(
+        systemPromptPath,
+        '# Canonical auth compiler\n\nCANONICAL_AUTH_PROMPT_MARKER',
+        'utf8',
+      );
       writeFileSync(sessionPath, JSON.stringify(fixtureSession()), 'utf8');
 
       const result = await compileViaCodexCli({
@@ -277,21 +281,54 @@ describe('compileViaCodexCli auth checkpoints', () => {
       expect(argRuns).toHaveLength(1);
       expect((argRuns[0] ?? '').split('\u0000')).not.toContain('resume');
       const prompts = readFileSync(promptLog, 'utf8').split('\n---PROMPT---\n');
-      expect(prompts[0] ?? '').toContain('Auth compile rules');
-      expect(prompts[0] ?? '').toContain('Your first response MUST be a call');
-      expect(prompts[0] ?? '').toContain('authConfig.entry');
-      expect(prompts[0] ?? '').toContain('arbitrary named actions');
-      expect(prompts[0] ?? '').toContain('Never write or depend on playbook.yaml');
-      expect(prompts[0] ?? '').toContain('declared success outcome');
-      expect(prompts[0] ?? '').not.toContain('initiateRequestCount');
-      expect(prompts[0] ?? '').not.toContain('twoFactorType');
-      expect(prompts[0] ?? '').not.toContain('system prompt');
-      expect(prompts[0] ?? '').not.toContain(
-        'MANDATORY FIRST ACTION: call read_session_summary now',
-      );
+      expect(prompts[0] ?? '').toContain('<system_instructions>');
+      expect(prompts[0] ?? '').toContain('CANONICAL_AUTH_PROMPT_MARKER');
+      expect(prompts[0] ?? '').toContain('compile authenticate_fixture');
+      expect(prompts[0] ?? '').toContain('MANDATORY FIRST ACTION: call read_session_summary now');
+      expect(prompts[0] ?? '').toContain('Codex provider framing:');
     } finally {
       process.env.FAKE_CODEX_ARGS_LOG = undefined;
       process.env.FAKE_CODEX_PROMPT_LOG = undefined;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('passes an explicitly selected model to codex', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-codex-auth-model-'));
+    try {
+      const binDir = pathJoin(root, 'bin');
+      const toolDir = pathJoin(root, 'tool');
+      mkdirSync(binDir, { recursive: true });
+      mkdirSync(toolDir, { recursive: true });
+      installFakeCodex(binDir);
+
+      const argsLog = pathJoin(root, 'args.log');
+      process.env.FAKE_CODEX_ARGS_LOG = argsLog;
+      const systemPromptPath = pathJoin(root, 'system.md');
+      const sessionPath = pathJoin(root, 'session.json');
+      writeFileSync(systemPromptPath, 'system prompt', 'utf8');
+      writeFileSync(sessionPath, JSON.stringify(fixtureSession()), 'utf8');
+
+      await compileViaCodexCli({
+        session: fixtureSession(),
+        absoluteToolDir: toolDir,
+        sessionPath,
+        systemPromptPath,
+        deadlineMs: Date.now() + 30_000,
+        startTime: Date.now(),
+        model: 'gpt-5.6-terra',
+        authMode: {
+          site: 'fixture-site',
+          authPlanJson: '{}',
+          allowedTools: [],
+          initialPrompt: 'compile authenticate_fixture',
+        },
+      });
+
+      const args = readFileSync(argsLog, 'utf8').trim().split('\u0000');
+      expect(args[args.indexOf('-m') + 1]).toBe('gpt-5.6-terra');
+    } finally {
+      process.env.FAKE_CODEX_ARGS_LOG = undefined;
       rmSync(root, { recursive: true, force: true });
     }
   });
