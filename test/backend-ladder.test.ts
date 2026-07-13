@@ -1094,6 +1094,11 @@ describe('runWorkflowWithLadder', () => {
           site: 'memo-site',
         }),
       );
+      saveCachedToken(pathJoin(root, 'memo-site'), {
+        cookies: [],
+        sensorHeaders: {},
+        bootstrappedAt: Date.now(),
+      });
       // First call: parallel probe — fetch wins (fastest). Second call:
       // memo=fetch, sequential from the memoized winner.
       const startedAt = Date.now();
