@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { buildJsonSchema, runSerializedBySite } from '../src/imprint/mcp-server.ts';
+import {
+  AuthContinuationStore,
+  buildJsonSchema,
+  runSerializedBySite,
+} from '../src/imprint/mcp-server.ts';
 import type { WorkflowParameter } from '../src/imprint/types.ts';
 
 function deferred<T = void>(): {
@@ -50,6 +54,72 @@ describe('buildJsonSchema', () => {
     expect(props.query?.description).toBe('Search text.');
     // `query` has no default → required; `limit` has a default → optional.
     expect(schema.required).toEqual(['query']);
+  });
+
+  it('surfaces finite parameter choices as a JSON Schema enum', () => {
+    const params: WorkflowParameter[] = [
+      {
+        name: 'action',
+        type: 'string',
+        description: 'Compiled action.',
+        default: 'begin',
+        choices: ['begin', 'finish'],
+      },
+    ];
+    const schema = buildJsonSchema(params);
+    const props = schema.properties as
+      | Record<string, { enum?: Array<string | number | boolean> } | undefined>
+      | undefined;
+    expect(props?.action?.enum).toEqual(['begin', 'finish']);
+    expect(schema.required).toBeUndefined();
+  });
+
+  it('advertises auth continuation as an opaque token', () => {
+    const schema = buildJsonSchema([], {
+      authConfig: {
+        entry: 'begin',
+        actions: {
+          begin: {
+            parameters: [],
+            steps: [{ request: 0, onError: 'fail' }],
+            outcome: { type: 'success', evidence: [] },
+          },
+        },
+        persist: [],
+        crossOriginCookieReinjection: false,
+      },
+    });
+    const props = schema.properties as Record<string, { type?: string } | undefined>;
+    expect(props.continuation?.type).toBe('string');
+  });
+});
+
+describe('AuthContinuationStore', () => {
+  it('returns state only once to the declared tool and next action', () => {
+    const store = new AuthContinuationStore();
+    const token = store.issue({
+      toolName: 'authenticate_fixture',
+      nextAction: 'finish',
+      state: { ticket: 'private-ticket' },
+    });
+
+    expect(store.consume(token, 'authenticate_fixture', 'finish')).toEqual({
+      ticket: 'private-ticket',
+    });
+    expect(store.consume(token, 'authenticate_fixture', 'finish')).toBeUndefined();
+  });
+
+  it('rejects forged tokens and consumes tokens used for the wrong action', () => {
+    const store = new AuthContinuationStore();
+    const token = store.issue({
+      toolName: 'authenticate_fixture',
+      nextAction: 'finish',
+      state: { ticket: 'private-ticket' },
+    });
+
+    expect(store.consume('forged', 'authenticate_fixture', 'finish')).toBeUndefined();
+    expect(store.consume(token, 'authenticate_fixture', 'other')).toBeUndefined();
+    expect(store.consume(token, 'authenticate_fixture', 'finish')).toBeUndefined();
   });
 });
 

@@ -18,7 +18,6 @@ import { createLog } from './log.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { isTelemetryRequest } from './telemetry.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
-import { TwoFactorTypeSchema } from './types.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
@@ -97,14 +96,8 @@ export const SharedCompileContextSchema = z.object({
   credentialNames: z.array(z.string()).default([]),
   tokenExtractionNotes: z.string().default(''),
   sharedHelperNotes: z.string().default(''),
-  twoFactorDetected: z.boolean().default(false),
-  twoFactorType: TwoFactorTypeSchema,
-  twoFactorRequestSeqs: z.array(z.number().int().nonnegative()).default([]),
-  authCompletionSeqs: z.array(z.number().int().nonnegative()).default([]),
-  /** OTP only: names of initiate-response fields the completion request reads
-   *  (chained as ${state.X}); listed structurally from the recording. */
-  twoFactorContext: z.array(z.string()).default([]),
-  twoFactorNotes: z.string().default(''),
+  authRequestSeqs: z.array(z.number().int().nonnegative()).default([]),
+  authNotes: z.string().default(''),
 });
 export type SharedCompileContext = z.infer<typeof SharedCompileContextSchema>;
 
@@ -115,7 +108,11 @@ export type SharedCompileContext = z.infer<typeof SharedCompileContextSchema>;
  *  replaying the login inline (which hammers the site at compile time). */
 export function sharedContextHasAuth(ctx: SharedCompileContext | undefined): boolean {
   if (!ctx) return false;
-  return ctx.twoFactorDetected || ctx.loginRequestSeqs.length > 0 || ctx.credentialNames.length > 0;
+  return (
+    ctx.authRequestSeqs.length > 0 ||
+    ctx.loginRequestSeqs.length > 0 ||
+    ctx.credentialNames.length > 0
+  );
 }
 
 export const ToolCandidateSchema = z.object({
@@ -338,6 +335,7 @@ export function buildSharedCompileContext(
   return {
     ...detection.sharedContext,
     loginRequestSeqs: [...new Set(detection.sharedContext.loginRequestSeqs)].sort((a, b) => a - b),
+    authRequestSeqs: [...new Set(detection.sharedContext.authRequestSeqs)].sort((a, b) => a - b),
   };
 }
 

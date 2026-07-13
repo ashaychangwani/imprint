@@ -24,7 +24,11 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { authExternalVerification, buildAuthCompileTools } from './auth-compile-tools.ts';
+import {
+  authExternalVerification,
+  authWorkflowPreflightFailures,
+  buildAuthCompileTools,
+} from './auth-compile-tools.ts';
 import {
   type AuthToolPlan,
   type SharedModuleManifestEntry,
@@ -50,8 +54,7 @@ interface RunCompileMcpServerOptions {
   sessionPath: string;
   /** Absolute path to the generated tool directory where artifacts go. */
   toolDir: string;
-  /** Hard cap on done() verification failures before we permanently fail.
-   *  Mirrors compile-agent.ts MAX_VERIFICATION_CYCLES. */
+  /** Data-tool cap on done() verification failures. Auth is deadline-bounded. */
   maxVerificationCycles?: number;
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
@@ -59,7 +62,7 @@ interface RunCompileMcpServerOptions {
   buildPlanPath?: string;
   /** Shared-module build manifest for this site (verified flags). */
   sharedModules?: SharedModuleManifestEntry[];
-  /** Present → run in AUTH mode: register the auth toolset (run_verification)
+  /** Present → run in AUTH mode: register the auth checkpoint toolset
    *  and run authExternalVerification in done() instead of the data-tool
    *  verification. */
   authToolPlan?: NonNullable<AuthToolPlan>;
@@ -70,15 +73,15 @@ interface RunCompileMcpServerOptions {
 
 const DONE_SENTINEL = '.compile-done.json';
 const GIVE_UP_SENTINEL = '.compile-give-up.json';
-/** Auth mode only: a mid-loop checkpoint the agent reaches (run_verification /
- *  prompt_user / wait_for_cooldown). The tool records the request here and the
+/** Auth mode only: a mid-loop checkpoint the agent reaches. The tool records
+ *  the request here and the
  *  agent STOPS; the orchestrator (teach) performs the action and resumes the
  *  agent (`claude --resume`) with the result. One pending checkpoint per segment. */
 const CHECKPOINT_SENTINEL = '.compile-checkpoint.json';
 
 export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Promise<void> {
   const isAuthMode = !!opts.authToolPlan;
-  const maxVerificationCycles = opts.maxVerificationCycles ?? (isAuthMode ? 3 : 5);
+  const maxVerificationCycles = opts.maxVerificationCycles ?? 5;
 
   // Load + auto-redact the session, exactly as compile-agent.ts does.
   let session: Session = loadJsonFile(
@@ -110,9 +113,8 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
 
   if (isAuthMode) {
     const site = opts.site ?? session.site;
-    // Credentials power the live run_verification tool (and any login playbook
-    // it drives). Loaded here (not passed on the command line) to keep secrets
-    // out of argv.
+    // Credentials power the orchestrator-owned live verifier. Load them here
+    // rather than passing secrets on the command line.
     const creds = await loadCredentialStore(site);
     const teachCredentials = { site, values: creds?.values ?? {} };
     compileTools = buildAuthCompileTools(session, opts.toolDir, opts.sessionPath, teachCredentials);
@@ -176,20 +178,53 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
         {
           name: 'run_verification',
           description:
-            'Hand the current workflow.json to the verification stage to run LIVE (the only thing that fires a real login). phase="initiate" sends the OTP/push (reaches AWAITING_2FA); phase="submit_otp" submits an otp_code; phase="complete" polls a push. After calling this you MUST stop — the orchestrator runs it and resumes you with the result as a new message. Do NOT call any other tool in the same turn.',
+            'Run one action from the current workflow.json live in the verification browser. Supply the action name and only its declared parameters. Set freshSession only when observed evidence means the prior browser and continuation state must be discarded. Set cleanSession only when evidence requires also withholding stored cookies and browser storage. After calling this, stop; the orchestrator resumes you with the observed result.',
           inputSchema: {
             type: 'object',
             properties: {
-              phase: { type: 'string', enum: ['initiate', 'submit_otp', 'complete'] },
-              otp_code: { type: 'string', description: 'For submit_otp only.' },
+              action: { type: 'string', description: 'An action declared in authConfig.actions.' },
+              parameters: {
+                type: 'object',
+                description:
+                  'Scalar values required by this action, keyed by workflow parameter name.',
+              },
+              freshSession: {
+                type: 'boolean',
+                description:
+                  'Close and discard the prior verification browser and continuation state before running this action. Defaults to false.',
+              },
+              cleanSession: {
+                type: 'boolean',
+                description:
+                  'Also withhold stored cookies and browser storage for this fresh run. Credential values remain available.',
+              },
             },
-            required: ['phase'],
+            required: ['action'],
+          },
+        },
+        {
+          name: 'inspect_verification_page',
+          description:
+            'Inspect the currently rendered page in the existing verification browser without navigating, resetting state, or running another auth action. Returns rendered body text, final URL, title, and optional cookie metadata (never cookie values). Use when observed verification evidence warrants inspecting the page. After calling this, stop; the orchestrator resumes you with the snapshot.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              maxChars: {
+                type: 'number',
+                description: 'Maximum rendered body-text characters to return (256–20000).',
+              },
+              includeCookies: {
+                type: 'boolean',
+                description:
+                  'Include cookie names, domains, paths, expirations, and flags. Cookie values are never returned. Defaults to true.',
+              },
+            },
           },
         },
         {
           name: 'prompt_user',
           description:
-            'Ask the human (in the teach TUI) to supply the live second factor — e.g. enter the code they received, click the emailed link then confirm, or approve the push then confirm. Provide a clear message and optional choice options. After calling this you MUST stop; the orchestrator collects the answer and resumes you with it.',
+            'Ask the human for input or an external action required by the compiled auth program. After calling this, stop; the orchestrator collects the answer and resumes you with it.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -206,7 +241,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
         {
           name: 'wait_for_cooldown',
           description:
-            'When a verification failed only because the site rate-flagged repeated logins (not a defect in your workflow), wait out a cool-off WITHOUT firing any login. After calling this you MUST stop; the orchestrator waits (informing the user) and resumes you so you can run_verification once more.',
+            'Request a delay without running any live action. Use only when the observed site response justifies waiting. After calling this, stop.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -233,7 +268,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     {
       capabilities: { tools: {} },
       instructions: isAuthMode
-        ? 'These tools let you turn the captured login + 2FA flow into an auth workflow.json. Read the recording, write workflow.json, test it live with run_verification (AWAITING_2FA = success), and call done() when login works. The done tool verifies the workflow structure and will tell you what to fix.'
+        ? 'Compile the recorded login into an auth action program in workflow.json. Define the actions, evidence, state carry, retries, and success criteria from the recording; run those actions live with run_verification, then call done after a declared success action passes.'
         : 'These tools let you reverse-engineer the captured session into workflow.json + parser.ts + parser.test.ts. Read the recording, write the artifacts, run tests, and call done() when verified. The done tool runs external verification and will tell you what to fix if anything is wrong.',
     },
   );
@@ -268,6 +303,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
         const failures = authExternalVerification(
           opts.toolDir,
           (opts.authToolPlan?.captures ?? []).map((c) => ({ name: c.name, usedAs: c.usedAs })),
+          { requireLiveAttempt: true },
         );
         if (failures.length === 0) {
           const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
@@ -292,41 +328,14 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
         }
 
         verificationFailures++;
-        log(`auth verification failed (cycle ${verificationFailures}/${maxVerificationCycles})`);
-        if (verificationFailures >= maxVerificationCycles) {
-          const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
-          writeFileSync(
-            sentinel,
-            JSON.stringify(
-              {
-                summary,
-                verification: 'failed',
-                cycles: verificationFailures,
-                failures,
-                timestamp: Date.now(),
-              },
-              null,
-              2,
-            ),
-            'utf8',
-          );
-          return {
-            isError: true,
-            content: [
-              {
-                type: 'text',
-                text: `Verification failed after ${maxVerificationCycles} cycles. Giving up. Final failures:\n${failures.map((f) => `- ${f}`).join('\n')}`,
-              },
-            ],
-          };
-        }
+        log(`auth verification failed (cycle ${verificationFailures})`);
 
         return {
           isError: true,
           content: [
             {
               type: 'text',
-              text: `You called done but verification failed (cycle ${verificationFailures}/${maxVerificationCycles}):
+              text: `You called done but verification failed (cycle ${verificationFailures}):
 
 ${failures.map((f) => `- ${f}`).join('\n')}
 
@@ -430,7 +439,32 @@ Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.tes
 
     // Auth-mode checkpoint tools — record the request and end the segment. The
     // orchestrator performs the action live and resumes the agent with the result.
-    if (name === 'run_verification' || name === 'prompt_user' || name === 'wait_for_cooldown') {
+    if (
+      name === 'run_verification' ||
+      name === 'inspect_verification_page' ||
+      name === 'prompt_user' ||
+      name === 'wait_for_cooldown'
+    ) {
+      if (name === 'run_verification') {
+        const failures = authWorkflowPreflightFailures(
+          opts.toolDir,
+          session,
+          opts.authToolPlan?.credentialNames,
+        );
+        if (failures.length > 0) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: `run_verification blocked by auth workflow preflight. Fix workflow.json before requesting live verification:\n${failures
+                  .map((failure) => `- ${failure}`)
+                  .join('\n')}`,
+              },
+            ],
+          };
+        }
+      }
       if (checkpointWritten) {
         return {
           isError: true,

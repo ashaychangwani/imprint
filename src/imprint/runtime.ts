@@ -14,12 +14,12 @@ import {
 } from './cookie-jar.ts';
 import {
   type StorageRecord,
+  commitSiteAuthState,
   loadSiteCredentials,
   readSiteManifest,
   saveSiteCookies,
-  saveSiteSecret,
 } from './credential-store.ts';
-import { captureHeader, jsonpath } from './request-capture.ts';
+import { captureHeader, captureValueMatches, jsonpath } from './request-capture.ts';
 import type {
   RequestCapture,
   StateCapability,
@@ -39,6 +39,26 @@ export interface CredentialStore {
   values: Record<string, string>;
   /** Durable browser storage captured by `imprint login`; V1 seeds localStorage only. */
   storage?: StorageRecord[];
+}
+
+/** Browser-only workflow operations supplied by cdp-replay. Keeping this
+ *  transport generic lets pages mint coupled browser state through their own
+ *  JavaScript without adding OAuth-provider or frontend-framework logic here. */
+export interface BrowserNavigationTransport {
+  navigate(
+    url: string,
+    options?: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      waitUntil?: 'domcontentloaded' | 'load';
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+      urlIncludes?: string;
+      cookie?: { name: string; domain?: string; path?: string };
+    },
+  ): Promise<Response>;
+  snapshotCookies(): Promise<RuntimeCookie[]>;
 }
 
 /** Load credentials for a site from the credential manager (OS keychain →
@@ -85,6 +105,8 @@ interface ExecuteOptions {
   credentials?: CredentialStore;
   /** Override global fetch (tests, stealth-fetch). */
   fetchImpl?: typeof fetch;
+  /** Top-level document navigation, available only on cdp-replay. */
+  browser?: BrowserNavigationTransport;
   /** Per-request timeout in ms. Default 30000. */
   requestTimeoutMs?: number;
   /** Absolute path of workflow.json — required for parserModule resolution. */
@@ -156,7 +178,9 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   const dependencyPreflight = preflightStateDependencies(opts.workflow, state, stateCapabilities);
   if (!dependencyPreflight.ok) return dependencyPreflight.result;
 
-  type TransformResult = string | { url: string; body?: string; headers?: Record<string, string> };
+  type TransformResult =
+    | string
+    | { url?: string; body?: string; headers?: Record<string, string>; skip?: boolean };
   let requestTransform:
     | ((
         method: string,
@@ -205,7 +229,8 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         if (typeof transformResult === 'string') {
           subbed.url = transformResult;
         } else if (transformResult && typeof transformResult === 'object') {
-          subbed.url = transformResult.url;
+          if (transformResult.skip === true) continue;
+          if (typeof transformResult.url === 'string') subbed.url = transformResult.url;
           if (transformResult.body !== undefined) subbed.body = transformResult.body;
           if (transformResult.headers) {
             for (const [k, v] of Object.entries(transformResult.headers)) {
@@ -221,68 +246,114 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     const cookieHeader = cookieJar.getCookieHeader(subbed.url);
     if (cookieHeader && !hasHeader(subbed.headers, 'cookie')) subbed.headers.cookie = cookieHeader;
 
-    const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
-
     let resp: Response;
-    try {
-      resp = await fetchFn(subbed.url, {
-        method: subbed.method,
-        headers: subbed.headers,
-        body: subbed.body,
-        signal: controller.signal,
-        redirect: 'follow',
-      });
-    } catch (err) {
-      clearTimeout(timeoutHandle);
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('aborted') || msg.includes('AbortError')) {
+    let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
+    if (req.mode === 'navigate') {
+      if (!opts.browser) {
         return {
           ok: false,
-          error: 'NETWORK',
-          message: `Request ${i} timed out after ${timeoutMs}ms`,
-          remediation: 'Retry, or increase the timeout if the endpoint is slow.',
+          error: 'BAD_RESPONSE',
+          message: `Request ${i} requires top-level browser navigation; retry with cdp-replay.`,
         };
       }
-      return { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` };
+      try {
+        resp = await opts.browser.navigate(subbed.url, {
+          ...req.navigation,
+          method: subbed.method,
+          headers: subbed.headers,
+          body: subbed.body,
+        });
+        for (const cookie of await opts.browser.snapshotCookies()) cookieJar.setCookie(cookie);
+        liveCredentials.cookies = cookieJar.toJSON();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: 'NETWORK', message: `Navigation ${i} failed: ${msg}` };
+      }
+    } else {
+      const controller = new AbortController();
+      responseAbortTimer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        resp = await fetchFn(subbed.url, {
+          method: subbed.method,
+          headers: subbed.headers,
+          body: subbed.body,
+          signal: controller.signal,
+          redirect: 'follow',
+        });
+      } catch (err) {
+        if (responseAbortTimer) clearTimeout(responseAbortTimer);
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('aborted') || msg.includes('AbortError')) {
+          return {
+            ok: false,
+            error: 'NETWORK',
+            message: `Request ${i} timed out after ${timeoutMs}ms`,
+            remediation: 'Retry, or increase the timeout if the endpoint is slow.',
+          };
+        }
+        return { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` };
+      }
     }
-    clearTimeout(timeoutHandle);
+
+    let text = '';
+    let responseReadError: string | undefined;
+    try {
+      text = await resp.text();
+    } catch (err) {
+      responseReadError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (responseAbortTimer) clearTimeout(responseAbortTimer);
+    }
+
+    const bodyPreview = responseReadError
+      ? `[response body unavailable: ${responseReadError}]`
+      : text;
 
     if (resp.status === 401) {
-      const text = await safeText(resp);
       return {
         ok: false,
         error: 'AUTH_EXPIRED',
-        message: `Request ${i} returned 401 — auth has likely expired: ${text.slice(0, 300)}`,
+        message: `Request ${i} returned 401 — auth has likely expired: ${bodyPreview.slice(0, 300)}`,
         remediation: `Run \`imprint login ${opts.workflow.site}\` to refresh credentials.`,
       };
     }
     if (resp.status === 403) {
       // 403 = bot detection / geo / ToS / missing capability. The body
       // usually disambiguates — surface it rather than guessing.
-      const text = await safeText(resp);
       return {
         ok: false,
         error: 'FORBIDDEN',
-        message: `Request ${i} returned 403: ${text.slice(0, 300)}`,
+        message: `Request ${i} returned 403: ${bodyPreview.slice(0, 300)}`,
         remediation: `Common causes: bot detection (Akamai/Cloudflare/DataDome), geo-block, expired credential, or ToS violation. Inspect the response body above; if it looks like bot detection, the captured workflow can't replay against this site without a real browser. If it's auth, try \`imprint login ${opts.workflow.site}\`.`,
       };
     }
     if (resp.status === 429) {
-      const text = await safeText(resp);
       return {
         ok: false,
         error: 'RATE_LIMITED',
-        message: `Request ${i} returned 429: ${text.slice(0, 300)}`,
+        message: `Request ${i} returned 429: ${bodyPreview.slice(0, 300)}`,
         remediation: 'Back off and retry after the Retry-After interval.',
       };
     }
     if (resp.status >= 400) {
-      const text = await safeText(resp);
       return {
         ok: false,
         error: 'BAD_RESPONSE',
-        message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${text.slice(0, 500)}`,
+        message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${bodyPreview.slice(0, 500)}`,
+      };
+    }
+    if (responseReadError) {
+      const timedOut =
+        responseReadError.includes('aborted') || responseReadError.includes('AbortError');
+      return {
+        ok: false,
+        error: 'NETWORK',
+        message: timedOut
+          ? `Request ${i} timed out after ${timeoutMs}ms`
+          : `Response ${i} could not be read: ${responseReadError}`,
+        remediation: timedOut
+          ? 'Retry, or increase the timeout if the endpoint is slow.'
+          : undefined,
       };
     }
 
@@ -296,7 +367,6 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       // Non-fatal; cookies stay as they were.
     }
 
-    const text = await safeText(resp);
     let parsed: unknown = text;
     try {
       parsed = JSON.parse(text);
@@ -354,347 +424,385 @@ function emptyStore(site: string): CredentialStore {
 }
 
 async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
+  const authConfig = opts.workflow.authConfig;
+  const params = { ...opts.params };
+  for (const parameter of opts.workflow.parameters) {
+    if (!(parameter.name in params) && parameter.default !== undefined) {
+      params[parameter.name] = parameter.default;
+    }
+  }
+  const actionName = String(params.action ?? authConfig?.entry ?? '');
+  const action = authConfig?.actions[actionName];
+  if (!authConfig || !action) {
+    return {
+      ok: false,
+      error: 'UNKNOWN',
+      message: `Unknown auth action ${JSON.stringify(actionName)}. Available actions: ${Object.keys(
+        authConfig?.actions ?? {},
+      ).join(', ')}`,
+    };
+  }
+
   const fetchFn = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.requestTimeoutMs ?? 30_000;
-  const action = String(opts.params?.action ?? 'initiate');
-  const authConfig = opts.workflow.authConfig;
-  const initiateCount = authConfig?.initiateRequestCount ?? opts.workflow.requests.length;
-
   const credentials =
     opts.credentials ??
     (await loadCredentialStore(opts.workflow.site)) ??
     emptyStore(opts.workflow.site);
-
   const cookieJar = new RuntimeCookieJar(credentials.cookies);
   const liveCredentials: CredentialStore = { ...credentials, cookies: cookieJar.toJSON() };
   const responseSlots: ResponseSlot[] = [];
-  const state: Record<string, unknown> = { ...(opts.initialState ?? {}) };
+  const initialState: Record<string, unknown> = { ...(opts.initialState ?? {}) };
+  const state: Record<string, unknown> = { ...initialState };
   const stateCapabilities = collectStateCapabilities(opts.workflow);
-  const params: Record<string, string | number | boolean> = { ...opts.params };
-  let loginResponsePreview: string | undefined;
-  /** Latest response context, used to resolve authConfig.sessionCapture against
-   *  the final completion response when the login succeeds. */
-  let lastAuthResponseCtx:
-    | { parsed: unknown; text: string; headers: Headers; requestUrl: string }
+  const missingParameters = action.parameters.filter((name) => !(name in params));
+  if (missingParameters.length > 0) {
+    return {
+      ok: false,
+      error: 'STATE_MISSING',
+      message: `Auth action ${JSON.stringify(actionName)} requires: ${missingParameters.join(', ')}.`,
+    };
+  }
+  let requestTransform:
+    | ((
+        method: string,
+        url: string,
+        responses: unknown[],
+        params?: Record<string, string | number | boolean>,
+      ) =>
+        | string
+        | { url?: string; body?: string; headers?: Record<string, string>; skip?: boolean })
     | undefined;
+  if (opts.workflow.requestTransformModule && opts.workflowPath) {
+    try {
+      const mod = await import(
+        pathResolve(dirname(opts.workflowPath), opts.workflow.requestTransformModule)
+      );
+      if (typeof mod.transform === 'function') requestTransform = mod.transform;
+    } catch {
+      // A missing transform is surfaced by the request that depended on it.
+    }
+  }
 
-  const runRequests = async (startIdx: number, endIdx: number): Promise<ToolResult | null> => {
-    for (let i = startIdx; i < endIdx; i++) {
-      const req = opts.workflow.requests[i];
-      if (!req) continue;
+  type ResponseContext = {
+    parsed: unknown;
+    text: string;
+    headers: Headers;
+    requestUrl: string;
+  };
+  let lastResponse: ResponseContext | undefined;
 
-      let subbedReq: SubstitutedRequest;
-      const subbedResult = substituteRequest(req, {
-        params,
-        credentials: liveCredentials,
-        responseSlots,
-        state,
-        cookieJar,
-        stateCapabilities,
-        requestUrlTemplate: req.url,
-      });
-      if (!subbedResult.ok) return subbedResult.result;
-      subbedReq = subbedResult.value;
+  const fail = (result: RuntimeErrorResult): RuntimeErrorResult => {
+    return {
+      ...result,
+      continuation: Object.keys(initialState).length > 0 ? initialState : undefined,
+    };
+  };
 
-      const cookieHeader = cookieJar.getCookieHeader(subbedReq.url);
-      if (cookieHeader && !hasHeader(subbedReq.headers, 'cookie'))
-        subbedReq.headers.cookie = cookieHeader;
+  const persistenceFailure = (material: string, err: unknown): RuntimeErrorResult =>
+    fail({
+      ok: false,
+      error: 'BAD_RESPONSE',
+      message: `Auth action ${JSON.stringify(actionName)} could not persist ${material}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
 
-      const controller = new AbortController();
-      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
-      let resp: Response;
+  const persistCookies = async (): Promise<RuntimeErrorResult | undefined> => {
+    try {
+      await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+      return undefined;
+    } catch (err) {
+      return persistenceFailure('session cookies', err);
+    }
+  };
+
+  const executeRequest = async (
+    requestIndex: number,
+  ): Promise<RuntimeResult<ResponseContext | undefined>> => {
+    const req = opts.workflow.requests[requestIndex];
+    if (!req) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: `Auth action ${JSON.stringify(actionName)} references missing request ${requestIndex}.`,
+        },
+      };
+    }
+
+    const substituted = substituteRequest(req, {
+      params,
+      credentials: liveCredentials,
+      responseSlots,
+      state,
+      cookieJar,
+      stateCapabilities,
+      requestUrlTemplate: req.url,
+    });
+    if (!substituted.ok) return substituted;
+    const request = substituted.value;
+
+    if (requestTransform) {
       try {
-        resp = await fetchFn(subbedReq.url, {
-          method: subbedReq.method,
-          headers: subbedReq.headers,
-          body: subbedReq.body,
+        const transformed = requestTransform(
+          request.method,
+          request.url,
+          responseSlots.map((slot) => slot.raw),
+          params,
+        );
+        if (typeof transformed === 'string') request.url = transformed;
+        else if (transformed) {
+          if (transformed.skip) return { ok: true, value: undefined };
+          if (transformed.url !== undefined) request.url = transformed.url;
+          if (transformed.body !== undefined) request.body = transformed.body;
+          if (transformed.headers) Object.assign(request.headers, transformed.headers);
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          result: {
+            ok: false,
+            error: 'BAD_RESPONSE',
+            message: `request transform failed for request ${requestIndex}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          },
+        };
+      }
+    }
+
+    const cookieHeader = cookieJar.getCookieHeader(request.url);
+    if (cookieHeader && !hasHeader(request.headers, 'cookie'))
+      request.headers.cookie = cookieHeader;
+
+    let response: Response;
+    let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
+    if (req.mode === 'navigate') {
+      if (!opts.browser) {
+        return {
+          ok: false,
+          result: {
+            ok: false,
+            error: 'BAD_RESPONSE',
+            message: `Request ${requestIndex} requires a browser navigation transport.`,
+          },
+        };
+      }
+      try {
+        response = await opts.browser.navigate(request.url, {
+          ...req.navigation,
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        });
+        for (const cookie of await opts.browser.snapshotCookies()) cookieJar.setCookie(cookie);
+      } catch (err) {
+        return {
+          ok: false,
+          result: {
+            ok: false,
+            error: 'NETWORK',
+            message: `Navigation ${requestIndex} failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          },
+        };
+      }
+    } else {
+      const controller = new AbortController();
+      responseAbortTimer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        response = await fetchFn(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
           signal: controller.signal,
           redirect: 'follow',
         });
       } catch (err) {
-        clearTimeout(timeoutHandle);
-        const msg = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: 'NETWORK', message: `Auth request ${i} failed: ${msg}` };
-      }
-      clearTimeout(timeoutHandle);
-
-      if (resp.status >= 400) {
-        const text = await safeText(resp);
-        // An OPTIONAL request (e.g. a "remember this device" registration that
-        // 4xxs when the device is already trusted, or a telemetry beacon) must
-        // not abort the flow — log and continue to the next (terminal) request.
-        if (req.optional) {
-          process.stderr.write(
-            `[imprint runtime] optional auth request ${i} (${subbedReq.url}) returned ${resp.status} — skipping, continuing\n`,
-          );
-          continue;
-        }
+        if (responseAbortTimer) clearTimeout(responseAbortTimer);
         return {
           ok: false,
-          error: resp.status === 401 ? 'AUTH_EXPIRED' : 'BAD_RESPONSE',
-          message: `Auth request ${i} (${subbedReq.method} ${subbedReq.url}) returned ${resp.status}: ${text.slice(0, 500)}`,
-          // Surface the concrete status + body so the auth compile agent sees the
-          // server's actual error (e.g. a 401 "tokens missing" vs a 400 schema
-          // error) without re-running — see run_verification's result.
-          status: resp.status,
-          responseBodyPreview: text.slice(0, 500),
+          result: {
+            ok: false,
+            error: 'NETWORK',
+            message: `Auth request ${requestIndex} failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          },
         };
       }
-
-      try {
-        for (const sc of extractSetCookieHeaders(resp.headers))
-          cookieJar.setCookieFromHeader(sc, subbedReq.url);
-        liveCredentials.cookies = cookieJar.toJSON();
-      } catch {
-        // Non-fatal
-      }
-
-      const text = await safeText(resp);
-      // Capture the last login-phase response for shape comparison
-      if (i < initiateCount) loginResponsePreview = text.slice(0, 500);
-
-      let parsed: unknown = text;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        // keep raw
-      }
-      // Remember the latest response so sessionCapture can be resolved against
-      // the final completion response after the login finishes.
-      lastAuthResponseCtx = { parsed, text, headers: resp.headers, requestUrl: subbedReq.url };
-      const aliases = evaluateLegacyExtract(req, parsed);
-      responseSlots.push({ raw: parsed, aliases });
-
-      const captureResult = evaluateRequestCaptures(req.captures ?? [], {
-        parsed,
-        text,
-        headers: resp.headers,
-        requestUrl: subbedReq.url,
-        cookieJar,
-      });
-      if (!captureResult.ok) return captureResult.result;
-      Object.assign(state, captureResult.value);
     }
-    return null;
-  };
 
-  // Persist durable session tokens (authConfig.sessionCapture) after a SUCCESSFUL
-  // login completion so data tools reuse them as ${credential.NAME} without
-  // re-running auth. Best-effort: a token that can't be resolved is skipped, not
-  // fatal. Cookies are persisted separately (saveSiteCookies). General — driven
-  // only by the declared captures + the recorded response shape.
-  const persistSessionCapture = async (): Promise<void> => {
-    const caps = authConfig?.sessionCapture ?? [];
-    if (caps.length === 0) return;
-    for (const cap of caps) {
-      let value: unknown;
-      if (lastAuthResponseCtx) {
-        const res = evaluateRequestCaptures([cap], {
-          parsed: lastAuthResponseCtx.parsed,
-          text: lastAuthResponseCtx.text,
-          headers: lastAuthResponseCtx.headers,
-          requestUrl: lastAuthResponseCtx.requestUrl,
-          cookieJar,
-        });
-        if (res.ok) value = res.value[cap.name];
-      }
-      if (value === undefined || value === null) value = state[cap.name];
-      if (value !== undefined && value !== null && String(value).length > 0) {
-        try {
-          await saveSiteSecret(opts.workflow.site, cap.name, String(value));
-        } catch {
-          /* non-fatal — cookies are the primary token */
-        }
-      }
+    let text = '';
+    let responseReadError: string | undefined;
+    try {
+      text = await response.text();
+    } catch (err) {
+      responseReadError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (responseAbortTimer) clearTimeout(responseAbortTimer);
     }
-  };
-
-  if (action === 'initiate') {
-    const err = await runRequests(0, initiateCount);
-    if (err) return err;
-
-    if (authConfig && authConfig.twoFactorType !== 'none') {
-      await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
-      // Stateless state-chain bridge: each MCP call is a fresh executeAuthWorkflow
-      // with a fresh `state`, so a token the login response returned in its body
-      // (e.g. a reauth mfaId) would be lost before submit_otp. Project the
-      // declared twoFactorContext names out of the captured state and echo them
-      // to the caller, who passes them back as initialState on the next call.
-      const ctx: Record<string, unknown> = {};
-      for (const name of authConfig.twoFactorContext ?? []) {
-        if (name in state) ctx[name] = state[name];
-      }
+    if (response.status >= 400) {
+      const bodyPreview = responseReadError
+        ? `[response body unavailable: ${responseReadError}]`
+        : text;
       return {
         ok: false,
-        error: 'AWAITING_2FA',
-        twoFactorType: authConfig.twoFactorType,
-        twoFactorContext: Object.keys(ctx).length > 0 ? ctx : undefined,
-        loginResponsePreview,
-        message: `2FA required (${authConfig.twoFactorType}). ${
-          authConfig.twoFactorType === 'push'
-            ? 'Approve the push notification on your device, then call again with action=complete.'
-            : 'Enter the code and call again with action=submit_otp, otp_code, and the echoed twoFactorContext.'
-        }`,
+        result: {
+          ok: false,
+          error: response.status === 401 ? 'AUTH_EXPIRED' : 'BAD_RESPONSE',
+          message: `Auth request ${requestIndex} (${request.method} ${request.url}) returned ${response.status}: ${bodyPreview.slice(0, 500)}`,
+          status: response.status,
+          responseBodyPreview: bodyPreview.slice(0, 500),
+        },
+      };
+    }
+    if (responseReadError) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          error: 'NETWORK',
+          message: `Auth response ${requestIndex} could not be read: ${responseReadError}`,
+        },
       };
     }
 
-    await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
-    return { ok: true, data: { authenticated: true }, loginResponsePreview };
-  }
+    for (const header of extractSetCookieHeaders(response.headers)) {
+      cookieJar.setCookieFromHeader(header, request.url);
+    }
+    liveCredentials.cookies = cookieJar.toJSON();
 
-  if (action === 'complete') {
-    if (authConfig?.twoFactorType === 'push' && authConfig.pollEndpoint) {
-      // The recorded default is generous (≈3 min) for a real run where a human
-      // approves the push. An unattended *attempt* (e.g. `imprint teach
-      // --no-interactive`) wants a short bound so it fails fast instead of
-      // blocking. IMPRINT_AUTH_POLL_ATTEMPTS lets any caller cap the poll
-      // without mutating the artifact; the runtime default stays generous.
-      const pollOverride = parsePositiveInt(process.env.IMPRINT_AUTH_POLL_ATTEMPTS);
-      const pollMax = pollOverride ?? authConfig.maxPollAttempts ?? 60;
-      const pollInterval = authConfig.pollIntervalMs ?? 3000;
-      const pollMethod = authConfig.pollMethod ?? 'POST';
-      // Many poll/status endpoints reject an empty body (they need the recorded
-      // JSON payload, e.g. `{mfaId,...}`). Substitute the declared pollBody once
-      // (state is fixed during the completion phase) against the same runtime as
-      // any request, so `${state.X}`/`${credential.X}`/`${param.X}` resolve.
-      const pollContentType =
-        authConfig.pollBody !== undefined
-          ? (authConfig.pollContentType ?? 'application/json')
-          : undefined;
-      let pollBody: string | undefined;
-      if (authConfig.pollBody !== undefined) {
-        const ctLower = (pollContentType ?? '').toLowerCase();
-        const bodyCtx: SubstitutionContext = ctLower.includes('json')
-          ? 'json-body'
-          : ctLower.includes('urlencoded') || authConfig.pollBody.includes('=')
-            ? 'form-body'
-            : 'opaque-body';
-        const pollBodyResult = substituteStringInternal(
-          authConfig.pollBody,
-          {
-            params,
-            credentials: liveCredentials,
-            responseSlots,
-            state,
-            cookieJar,
-            stateCapabilities,
-            requestUrlTemplate: authConfig.pollEndpoint,
-          },
-          bodyCtx,
-        );
-        if (!pollBodyResult.ok) return pollBodyResult.result;
-        pollBody = pollBodyResult.value;
-      }
-      let approved = false;
-      for (let attempt = 0; attempt < pollMax; attempt++) {
-        await sleep(pollInterval);
-        const cookieHeader = cookieJar.getCookieHeader(authConfig.pollEndpoint);
-        const pollHeaders: Record<string, string> = {};
-        if (cookieHeader) pollHeaders.cookie = cookieHeader;
-        if (pollContentType) pollHeaders['content-type'] = pollContentType;
-        // Bound each poll the same way as a normal request: without a timeout a
-        // pollEndpoint that accepts the connection but never responds hangs this
-        // single fetch forever, so the poll budget never advances and `complete`
-        // hangs indefinitely. An abort throws → caught below → next attempt.
-        const pollController = new AbortController();
-        const pollTimeout = setTimeout(() => pollController.abort(), timeoutMs);
-        try {
-          const pollResp = await fetchFn(authConfig.pollEndpoint, {
-            method: pollMethod,
-            headers: pollHeaders,
-            body: pollBody,
-            signal: pollController.signal,
-          });
-          if (pollResp.ok) {
-            const body = await safeText(pollResp);
-            let newSessionCookie = false;
-            try {
-              for (const sc of extractSetCookieHeaders(pollResp.headers)) {
-                cookieJar.setCookieFromHeader(sc, authConfig.pollEndpoint);
-                newSessionCookie = true;
-              }
-              liveCredentials.cookies = cookieJar.toJSON();
-            } catch {
-              /* non-fatal */
-            }
-            // Approval is recognized from the recording, not from hardcoded
-            // strings: `pollTerminal` is a capture the compile agent grounds in
-            // the recorded *approved* poll response (and which is absent on the
-            // pending ones). It is "done" once that capture yields a value.
-            // Fallback when no terminal was declared: a fresh session Set-Cookie
-            // appeared, the universal sign of a completed login.
-            if (authConfig.pollTerminal) {
-              let parsed: unknown = body;
-              try {
-                parsed = JSON.parse(body);
-              } catch {
-                /* keep raw */
-              }
-              const term = evaluateRequestCaptures([authConfig.pollTerminal], {
-                parsed,
-                text: body,
-                headers: pollResp.headers,
-                requestUrl: authConfig.pollEndpoint,
-                cookieJar,
-              });
-              if (term.ok && Object.keys(term.value).length > 0) {
-                approved = true;
-                break;
-              }
-            } else if (newSessionCookie) {
-              approved = true;
-              break;
-            }
-          }
-        } catch {
-          // retry (a network error or a timed-out abort falls through to the
-          // next poll attempt rather than failing the whole completion)
-        } finally {
-          clearTimeout(pollTimeout);
+    let parsed: unknown = text;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // Keep the raw body for text captures.
+    }
+    const context = { parsed, text, headers: response.headers, requestUrl: request.url };
+    responseSlots.push({ raw: parsed, aliases: evaluateLegacyExtract(req, parsed) });
+    const captures = evaluateRequestCaptures(req.captures ?? [], {
+      ...context,
+      cookieJar,
+    });
+    if (!captures.ok) {
+      return {
+        ok: false,
+        result: {
+          ...captures.result,
+          status: response.status,
+          responseBodyPreview: text.slice(0, 500),
+        },
+      };
+    }
+    Object.assign(state, captures.value);
+    lastResponse = context;
+    return { ok: true, value: context };
+  };
+
+  for (let stepIndex = 0; stepIndex < action.steps.length; stepIndex++) {
+    const step = action.steps[stepIndex];
+    if (!step) continue;
+    let matched = !step.repeat;
+
+    for (let attempt = 0; attempt < (step.repeat?.maxAttempts ?? 1); attempt++) {
+      if (attempt > 0 && step.repeat) await sleep(step.repeat.intervalMs);
+      const executed = await executeRequest(step.request);
+      if (!executed.ok) {
+        if (step.onError === 'continue') {
+          matched = true;
+          break;
         }
+        if (step.onError === 'retry' && step.repeat) continue;
+        return fail(executed.result);
       }
-      if (!approved) {
-        return {
-          ok: false,
-          error: 'UNKNOWN',
-          message: `Push notification was not approved after ${pollMax} attempts.`,
-        };
+      if (!step.repeat) break;
+      if (!executed.value) continue;
+
+      const until = evaluateRequestCaptures(
+        [{ ...step.repeat.until, required: false } as RequestCapture],
+        { ...executed.value, cookieJar },
+      );
+      if (until.ok && Object.hasOwn(until.value, step.repeat.until.name)) {
+        Object.assign(state, until.value);
+        matched = true;
+        break;
       }
     }
 
-    const err = await runRequests(initiateCount, opts.workflow.requests.length);
-    if (err) return err;
-
-    await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
-    await persistSessionCapture();
-    return { ok: true, data: { authenticated: true } };
+    if (!matched) {
+      return fail({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: `Auth action ${JSON.stringify(actionName)} did not satisfy the declared repeat condition for request ${step.request} after ${step.repeat?.maxAttempts ?? 1} attempts.`,
+      });
+    }
   }
 
-  if (action === 'submit_otp') {
-    const err = await runRequests(initiateCount, opts.workflow.requests.length);
-    if (err) return err;
-
-    await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
-    await persistSessionCapture();
-    return { ok: true, data: { authenticated: true } };
+  const missingEvidence = action.outcome.evidence.filter((name) => !Object.hasOwn(state, name));
+  if (missingEvidence.length > 0) {
+    return fail({
+      ok: false,
+      error: 'BAD_RESPONSE',
+      message: `Auth action ${JSON.stringify(actionName)} completed without declared evidence: ${missingEvidence.join(', ')}.`,
+    });
   }
 
-  return {
-    ok: false,
-    error: 'UNKNOWN',
-    message: `Unknown auth action: ${action}. Use 'initiate', 'complete', or 'submit_otp'.`,
-  };
+  if (action.outcome.type === 'pause') {
+    const missingCarry = action.outcome.carry.filter((name) => !Object.hasOwn(state, name));
+    if (missingCarry.length > 0) {
+      return fail({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: `Auth action ${JSON.stringify(actionName)} completed without declared carry state: ${missingCarry.join(', ')}.`,
+      });
+    }
+    const continuation = Object.fromEntries(
+      action.outcome.carry.map((name) => [name, state[name]]),
+    );
+    const cookieFailure = await persistCookies();
+    if (cookieFailure && !opts.browser) return cookieFailure;
+    const persistenceWarning = cookieFailure
+      ? ` ${cookieFailure.message} Continue in the current browser session.`
+      : '';
+    return {
+      ok: false,
+      error: 'ACTION_REQUIRED',
+      message: `${action.outcome.message}${persistenceWarning}`,
+      nextAction: action.outcome.next,
+      continuation,
+      responseBodyPreview: lastResponse?.text.slice(0, 500),
+    };
+  }
+
+  const missingPersisted = authConfig.persist.filter((name) => !Object.hasOwn(state, name));
+  if (missingPersisted.length > 0) {
+    return fail({
+      ok: false,
+      error: 'BAD_RESPONSE',
+      message: `Auth action ${JSON.stringify(actionName)} completed without declared persisted state: ${missingPersisted.join(', ')}.`,
+    });
+  }
+  const persistedSecrets: Record<string, string> = {};
+  for (const name of authConfig.persist) {
+    const value = state[name];
+    if (value !== undefined && value !== null && String(value) !== '') {
+      persistedSecrets[name] = String(value);
+    }
+  }
+  try {
+    await commitSiteAuthState(opts.workflow.site, cookieJar.toJSON(), persistedSecrets);
+  } catch (err) {
+    return persistenceFailure('authenticated session state', err);
+  }
+  return { ok: true, data: { authenticated: true } };
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Parse a strictly-positive integer from an env string; undefined otherwise. */
-function parsePositiveInt(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  const n = Number.parseInt(value, 10);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 interface SubstitutedRequest {
@@ -1099,14 +1207,17 @@ function evaluateRequestCaptures(
       }
     }
 
-    if (value === undefined || value === null || value === '') {
+    if (!captureValueMatches(value, capture.equals)) {
       if (capture.required === false) continue;
       return missingState({
         name: capture.name,
         source: capture.source === 'cookie' ? 'cookie' : 'response',
         capability: capture.capability,
         failure: 'producer_ran_value_absent',
-        message: `Required capture "${capture.name}" (${capture.source}) did not produce a value.`,
+        message:
+          capture.equals === undefined
+            ? `Required capture "${capture.name}" (${capture.source}) did not produce a value.`
+            : `Required capture "${capture.name}" (${capture.source}) did not produce the expected value.`,
       });
     }
     values[capture.name] = value;
@@ -1205,14 +1316,6 @@ function encodePart(
   const beforeMatch = template.slice(0, idx);
   const inQuery = beforeMatch.includes('?');
   return inQuery ? encodeURIComponent(s) : encodeURI(s);
-}
-
-async function safeText(resp: Response): Promise<string> {
-  try {
-    return await resp.text();
-  } catch {
-    return '';
-  }
 }
 
 /** Build a clear, actionable error when a `${credential.NAME}` placeholder

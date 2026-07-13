@@ -17,4 +17,17 @@ describe('jsonpath', () => {
     expect(jsonpath(root, '[customers.userInformation.accountNumber]')).toBe('12345');
     expect(jsonpath(root, '$.[customers.userInformation.accountNumber]')).toBe('12345');
   });
+
+  test('supports compact and standard field predicates', () => {
+    const root = {
+      items: [
+        { category: 'SECONDARY', token: 'secondary-token' },
+        { category: 'PRIMARY', token: 'primary-token' },
+      ],
+    };
+
+    expect(jsonpath(root, 'items[category=PRIMARY].token')).toBe('primary-token');
+    expect(jsonpath(root, "$.items[?(@.category=='PRIMARY')].token")).toBe('primary-token');
+    expect(jsonpath(root, '$.items[?(@.category=="PRIMARY")].token')).toBe('primary-token');
+  });
 });

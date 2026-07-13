@@ -161,9 +161,12 @@ export function toCamelCase(snake: string): string {
     .join('');
 }
 
-/** Zod validator from workflow parameters — enforces the same contract
- *  for MCP args (from the LLM) and cron.json params. */
-export function buildZodValidator(parameters: WorkflowParameter[]): z.ZodObject<z.ZodRawShape> {
+/** Zod validator from workflow parameters. Auth actions select their own
+ * required subset at runtime, so the MCP transport accepts omitted fields. */
+export function buildZodValidator(
+  parameters: WorkflowParameter[],
+  options: { allOptional?: boolean } = {},
+): z.ZodObject<z.ZodRawShape> {
   const shape: z.ZodRawShape = {};
   for (const p of parameters) {
     let field: z.ZodType;
@@ -178,8 +181,13 @@ export function buildZodValidator(parameters: WorkflowParameter[]): z.ZodObject<
         field = z.boolean();
         break;
     }
+    if (p.choices?.length) {
+      field = field.refine((value) => p.choices?.includes(value), {
+        message: `Expected one of: ${p.choices.join(', ')}`,
+      });
+    }
     field = field.describe(p.description);
-    if (p.default !== undefined) field = field.optional();
+    if (p.default !== undefined || options.allOptional) field = field.optional();
     shape[p.name] = field;
   }
   return z.object(shape);

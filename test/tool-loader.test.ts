@@ -10,7 +10,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
-import { discoverTools, findToolFunction, toCamelCase } from '../src/imprint/tool-loader.ts';
+import {
+  buildZodValidator,
+  discoverTools,
+  findToolFunction,
+  toCamelCase,
+} from '../src/imprint/tool-loader.ts';
 
 let root: string;
 
@@ -66,6 +71,24 @@ describe('findToolFunction', () => {
   it('returns null when the export is not callable', () => {
     const mod = { WORKFLOW: { toolName: 'not_a_fn' } as never, notAFn: 'oops' };
     expect(findToolFunction(mod)).toBeNull();
+  });
+});
+
+describe('buildZodValidator', () => {
+  const parameters = [
+    {
+      name: 'confirmation',
+      type: 'string' as const,
+      description: 'Action-specific input.',
+    },
+  ];
+
+  it('requires ordinary tool parameters', () => {
+    expect(buildZodValidator(parameters).safeParse({}).success).toBe(false);
+  });
+
+  it('leaves auth parameters optional until the selected action is known', () => {
+    expect(buildZodValidator(parameters, { allOptional: true }).parse({})).toEqual({});
   });
 });
 

@@ -521,7 +521,7 @@ describe('sharedContextHasAuth', () => {
     expect(sharedContextHasAuth({ ...base, credentialNames: ['username'] })).toBe(true);
   });
 
-  it('true when 2FA was detected', () => {
-    expect(sharedContextHasAuth({ ...base, twoFactorDetected: true })).toBe(true);
+  it('true when related auth requests were detected', () => {
+    expect(sharedContextHasAuth({ ...base, authRequestSeqs: [43] })).toBe(true);
   });
 });

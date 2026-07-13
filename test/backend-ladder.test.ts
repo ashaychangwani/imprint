@@ -12,19 +12,20 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
+  __drainPendingProbeRunsForTest,
   __resetCompileCdpPoolForTest,
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
   __setCdpJarMinterForTest,
   __setPlaybookRunnerForTest,
   __setProbeTimeoutMsForTest,
+  cdpReplayPoolKey,
   effectiveAutoLadder,
   evaluateBootstrapCapture,
   pickBaseUrl,
   pickProbeWinner,
   prefersCdpReplayFirst,
   renderWorkflowRequests,
-  reshapePlaybookAuthResult,
   resolveLadder,
   runWithLadder,
   runWorkflowWithLadder,
@@ -32,8 +33,14 @@ import {
 import type { MintedJar } from '../src/imprint/cdp-browser-fetch.ts';
 import { type CredentialStore, executeWorkflow } from '../src/imprint/runtime.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
+import { saveCachedToken } from '../src/imprint/stealth-token-cache.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
-import type { ConcreteBackend, ToolResult, Workflow } from '../src/imprint/types.ts';
+import {
+  type ConcreteBackend,
+  type ToolResult,
+  type Workflow,
+  WorkflowSchema,
+} from '../src/imprint/types.ts';
 
 let root: string;
 
@@ -70,7 +77,8 @@ beforeEach(() => {
   __setProbeTimeoutMsForTest(1_000);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await __drainPendingProbeRunsForTest();
   rmSync(root, { recursive: true, force: true });
   __setCdpJarMinterForTest(null);
   __setCdpBrowserFetchFactoryForTest(null);
@@ -203,6 +211,34 @@ describe('pickProbeWinner (cdp-replay preferred over stealth-fetch)', () => {
 });
 
 describe('runWithLadder — single-rung explicit', () => {
+  it('never executes the playbook rung for authenticate workflows', async () => {
+    const behavior: FakeToolBehavior = { calls: { fetch: 0, stealth: 0 } };
+    const tool = makeFakeTool('auth-fixture', behavior);
+    tool.workflow = WorkflowSchema.parse({
+      ...tool.workflow,
+      toolKind: 'authenticate',
+      parameters: [{ name: 'action', type: 'string', description: 'action', default: 'login' }],
+      authConfig: {
+        entry: 'login',
+        actions: {
+          login: {
+            steps: [{ request: 0 }],
+            outcome: { type: 'success' },
+          },
+        },
+      },
+    });
+    let playbookCalls = 0;
+    __setPlaybookRunnerForTest(async () => {
+      playbookCalls++;
+      return { ok: true, data: {} };
+    });
+
+    const result = await runWithLadder(['playbook'], tool, {}, root, new Map());
+    expect(result.result.ok).toBe(false);
+    expect(playbookCalls).toBe(0);
+  });
+
   it('returns the fetch result directly when explicit "fetch"', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: { ok: true, data: { x: 1 } },
@@ -909,6 +945,7 @@ describe('runWorkflowWithLadder', () => {
       const { result, usedBackend } = await runWorkflowWithLadder({
         workflowPath,
         params: { q: 'hello' },
+        forceBackend: 'fetch',
       });
       expect(result.ok).toBe(true);
       expect(usedBackend).toBe('fetch');
@@ -960,6 +997,11 @@ describe('runWorkflowWithLadder', () => {
           results: {},
         }),
       );
+      saveCachedToken(pathJoin(root, 'mistrust-site'), {
+        cookies: [],
+        sensorHeaders: {},
+        bootstrappedAt: Date.now(),
+      });
 
       const { result, usedBackend, attempts } = await runWorkflowWithLadder({
         workflowPath,
@@ -1052,18 +1094,22 @@ describe('runWorkflowWithLadder', () => {
           site: 'memo-site',
         }),
       );
+      saveCachedToken(pathJoin(root, 'memo-site'), {
+        cookies: [],
+        sensorHeaders: {},
+        bootstrappedAt: Date.now(),
+      });
       // First call: parallel probe — fetch wins (fastest). Second call:
       // memo=fetch, sequential from the memoized winner.
+      const startedAt = Date.now();
       const a = await runWorkflowWithLadder({ workflowPath, params: {} });
-      // Let the losing parallel probe branches observe the short deadline before
-      // the temp workflow directory is removed in afterEach.
-      await new Promise((resolve) => setTimeout(resolve, 300));
       const b = await runWorkflowWithLadder({ workflowPath, params: {} });
       expect(a.usedBackend).toBe('fetch');
       expect(b.usedBackend).toBe('fetch');
       // Second call uses the memo path (sequential, single-rung)
       expect(b.attempts.map((x) => x.backend)).toEqual(['fetch']);
       expect(hits).toBeGreaterThanOrEqual(2);
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
     } finally {
       server.stop(true);
       __resetCompileWinningBackendForTest();
@@ -1199,6 +1245,39 @@ describe('renderWorkflowRequests — offline param verification', () => {
     // The capture resolved from the recorded response, fully offline.
     expect(act?.headers['X-Tok'] ?? act?.headers['x-tok']).toBe('deadbeef');
     expect(act?.body).toContain('q=hello');
+  });
+
+  it('honors requestTransformModule skip results while rendering offline', async () => {
+    const toolDir = pathJoin(root, 'skip-render');
+    mkdirSync(toolDir, { recursive: true });
+    const wf: Workflow = {
+      toolName: 'skip_render_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [{ name: 'page', type: 'number', description: 'page', default: 1 }],
+      requestTransformModule: './request-transform.ts',
+      requests: [
+        { method: 'GET', url: 'https://example.com/search', headers: {} },
+        { method: 'GET', url: 'https://example.com/search/page', headers: {} },
+      ],
+    };
+    const workflowPath = pathJoin(toolDir, 'workflow.json');
+    writeFileSync(workflowPath, JSON.stringify(wf));
+    writeFileSync(
+      pathJoin(toolDir, 'request-transform.ts'),
+      `export function transform(_method, url, responses, params) {
+        if (responses.length > 0 && Number(params?.page ?? 1) <= 1) return { skip: true };
+        return { url };
+      }`,
+    );
+
+    const { requests } = await renderWorkflowRequests({
+      workflow: wf,
+      workflowPath,
+      params: { page: 1 },
+      recordedResponseFor: () => ({ status: 200, body: '{"ok":true}' }),
+    });
+    expect(requests.map((r) => r.url)).toEqual(['https://example.com/search']);
   });
 });
 
@@ -1448,6 +1527,8 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
       seenBootstrapUrl = opts.bootstrapUrl;
       return {
         fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+        navigate: async () => new Response('<html></html>', { status: 200 }),
+        snapshotCookies: async () => [],
         ensureBootstrapped: async () => [],
         mintJar: async () => defaultedJar,
         close: async () => {
@@ -1458,6 +1539,7 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     const tool = defaultedBootstrapTool('flights', (params, opts) => {
       seenParams = params;
       expect(opts.fetchImpl).toBeDefined();
+      expect(opts.browser).toBeDefined();
       return { ok: true, data: { via: 'cdp-replay' } };
     });
 
@@ -1473,6 +1555,106 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
       return_date: '',
       adult_passengers_count: 1,
     });
+    expect(closes).toBe(1);
+  });
+
+  it('retains an inspectable failed page when the caller owns the CDP pool', async () => {
+    let closes = 0;
+    const inspectPage = async () => ({
+      url: 'https://flights.example.com/auth-error',
+      title: 'Authentication error',
+      bodyText: 'Cookies are disabled.',
+      cookies: [],
+    });
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+      inspectPage,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {
+        closes++;
+      },
+    }));
+    const tool = defaultedBootstrapTool('flights', () => ({
+      ok: false,
+      error: 'BAD_RESPONSE',
+      message: 'The rendered page explains the failure.',
+    }));
+    const cdpPool = new Map();
+
+    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
+      cdpPool,
+    });
+
+    expect(r.result.ok).toBe(false);
+    const retained = cdpPool.get(cdpReplayPoolKey('flights', 'https://flights.example.com'));
+    expect(retained?.inspectPage).toBe(inspectPage);
+    expect(closes).toBe(0);
+  });
+
+  it('retains an inspectable browser after a navigation timeout', async () => {
+    let closes = 0;
+    let inspections = 0;
+    const inspectPage = async () => {
+      inspections++;
+      return {
+        url: 'https://flights.example.com/unexpected-page',
+        title: 'Unexpected page',
+        bodyText: 'The document loaded but did not match the expected URL.',
+        cookies: [],
+      };
+    };
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+      inspectPage,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {
+        closes++;
+      },
+    }));
+    const tool = defaultedBootstrapTool('flights', () => ({
+      ok: false,
+      error: 'NETWORK',
+      message: 'Navigation timed out waiting for the expected URL.',
+    }));
+    const cdpPool = new Map();
+
+    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
+      cdpPool,
+    });
+
+    expect(r.result.ok).toBe(false);
+    expect(inspections).toBe(1);
+    expect(
+      cdpPool.get(cdpReplayPoolKey('flights', 'https://flights.example.com'))?.inspectPage,
+    ).toBe(inspectPage);
+    expect(closes).toBe(0);
+  });
+
+  it('evicts a NETWORK failure when the browser liveness probe also fails', async () => {
+    let closes = 0;
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+      inspectPage: async () => {
+        throw new Error('CDP socket closed');
+      },
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {
+        closes++;
+      },
+    }));
+    const tool = defaultedBootstrapTool('flights', () => ({
+      ok: false,
+      error: 'NETWORK',
+      message: 'CDP transport failed.',
+    }));
+    const cdpPool = new Map();
+
+    await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), { cdpPool });
+
+    expect(cdpPool.size).toBe(0);
     expect(closes).toBe(1);
   });
 
@@ -1613,20 +1795,64 @@ describe('cdp-replay cookie seeding by toolKind', () => {
     expect(cap.seen()?.map((c) => c.name)).toEqual(['_abck']);
   });
 
-  it('an authenticate tool starts clean — never seeds a prior session/anti-bot cookie', async () => {
-    // Regression: seeding a stale Akamai `_abck` from a prior run poisons the live
-    // sensor so the cross-origin credential POST is edge-403'd. Auth = fresh session.
+  it('a data tool seeds credential cookies into the cdp browser', async () => {
+    const cap = captureSeed();
+    const r = await runWithLadder(['cdp-replay'], cdpTool('sessioned'), {}, root, new Map(), {
+      credentials: {
+        site: 'sessioned',
+        values: {},
+        storage: [],
+        cookies: [
+          {
+            name: 'travel_session',
+            value: 'SESSION',
+            domain: '.sessioned.example.com',
+            path: '/',
+            secure: true,
+            httpOnly: true,
+          },
+        ],
+      },
+    });
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(cap.seen()).toEqual([
+      expect.objectContaining({
+        name: 'travel_session',
+        value: 'SESSION',
+        domain: '.sessioned.example.com',
+      }),
+    ]);
+  });
+
+  it('an authenticate tool keeps credential cookies but not cached recording cookies', async () => {
     seedJarOnDisk('auth');
     const cap = captureSeed();
-    const r = await runWithLadder(
-      ['cdp-replay'],
-      cdpTool('auth', 'authenticate'),
-      {},
-      root,
-      new Map(),
-    );
+    const tool = cdpTool('auth', 'authenticate');
+    let runtimeCookieNames: string[] | undefined;
+    tool.toolFn = async (_params, opts) => {
+      runtimeCookieNames = (opts?.credentials as CredentialStore | undefined)?.cookies.map(
+        (cookie) => cookie.name,
+      );
+      return { ok: true, data: { via: 'cdp-replay' } };
+    };
+    const r = await runWithLadder(['cdp-replay'], tool, {}, root, new Map(), {
+      credentials: {
+        site: 'auth',
+        values: {},
+        storage: [],
+        cookies: [
+          {
+            name: 'trusted_device',
+            value: 'CURRENT',
+            domain: '.auth.example.com',
+            path: '/',
+          },
+        ],
+      },
+    });
     expect(r.usedBackend).toBe('cdp-replay');
-    expect(cap.seen()).toBeUndefined();
+    expect(cap.seen()?.map((cookie) => cookie.name)).toEqual(['trusted_device']);
+    expect(runtimeCookieNames).toEqual(['trusted_device']);
   });
 });
 
@@ -1775,7 +2001,7 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
     expect(r3.result.ok).toBe(true);
     expect(createCount).toBe(1);
     expect(closes).toBe(0);
-    expect(cdpPool.has('google-flights')).toBe(true);
+    expect(cdpPool.has(cdpReplayPoolKey('google-flights', 'https://www.google.com'))).toBe(true);
     expect(requestBodies).toHaveLength(3);
     expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('SJC');
     expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('SAN');
@@ -2097,75 +2323,5 @@ describe('pickBaseUrl', () => {
   it('throws for empty requests', () => {
     const tool = toolWith([]);
     expect(() => pickBaseUrl(tool)).toThrow('has no requests');
-  });
-});
-
-describe('reshapePlaybookAuthResult', () => {
-  const authWorkflow = (over: Partial<Workflow['authConfig']> = {}): Workflow =>
-    ({
-      toolName: 'authenticate_fix',
-      toolKind: 'authenticate',
-      intent: { description: 'auth' },
-      parameters: [{ name: 'action', type: 'string', description: 'phase', default: 'initiate' }],
-      requests: [{ method: 'POST', url: 'https://fix.example/login', headers: {} }],
-      site: 'fix',
-      authConfig: {
-        twoFactorType: 'otp',
-        initiateRequestCount: 1,
-        twoFactorContext: ['SecurityCode'],
-        ...over,
-      },
-    }) as Workflow;
-
-  const okResult = (data: Record<string, unknown>): ToolResult => ({ ok: true, data });
-
-  it('reshapes a 2FA playbook ok:true into AWAITING_2FA carrying the captured token', () => {
-    const r = reshapePlaybookAuthResult(
-      okResult({ authenticated: true, SecurityCode: 'SYNTH-SEC-1' }),
-      authWorkflow(),
-      { action: 'initiate' },
-    );
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error('expected AWAITING_2FA');
-    expect(r.error).toBe('AWAITING_2FA');
-    expect(r.twoFactorType).toBe('otp');
-    expect(r.twoFactorContext).toEqual({ SecurityCode: 'SYNTH-SEC-1' });
-  });
-
-  it('reshapes with undefined twoFactorContext when no token was captured', () => {
-    const r = reshapePlaybookAuthResult(okResult({ authenticated: true }), authWorkflow(), {
-      action: 'initiate',
-    });
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error('expected AWAITING_2FA');
-    expect(r.error).toBe('AWAITING_2FA');
-    expect(r.twoFactorContext).toBeUndefined();
-  });
-
-  it('leaves a no-2FA authenticate ok:true untouched (full login)', () => {
-    const r = reshapePlaybookAuthResult(
-      okResult({ authenticated: true }),
-      authWorkflow({ twoFactorType: 'none' }),
-      { action: 'initiate' },
-    );
-    expect(r.ok).toBe(true);
-  });
-
-  it('does NOT reshape submit_otp/complete actions (those run via fetch)', () => {
-    for (const action of ['submit_otp', 'complete']) {
-      const r = reshapePlaybookAuthResult(okResult({ authenticated: true }), authWorkflow(), {
-        action,
-      });
-      expect(r.ok).toBe(true);
-    }
-  });
-
-  it('passes through a failed result and non-authenticate tools unchanged', () => {
-    const failed: ToolResult = { ok: false, error: 'NETWORK', message: 'boom' };
-    expect(reshapePlaybookAuthResult(failed, authWorkflow(), { action: 'initiate' })).toBe(failed);
-
-    const dataTool = { ...authWorkflow(), toolKind: 'read' } as unknown as Workflow;
-    const ok = okResult({ x: 1 });
-    expect(reshapePlaybookAuthResult(ok, dataTool, { action: 'initiate' })).toBe(ok);
   });
 });

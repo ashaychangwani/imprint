@@ -29,7 +29,11 @@ import {
   relativeToLocalSite,
   resolveLocalSitePath,
 } from './paths.ts';
-import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
+import {
+  type SharedCompileContext,
+  SharedCompileContextSchema,
+  type ToolCandidate,
+} from './tool-candidates.ts';
 
 export const TEACH_STEPS = [
   'record',
@@ -65,6 +69,14 @@ export interface WorkflowState {
    *  asserts a tool imports the modules the plan assigned it; entries with
    *  `verified: false` are excluded from that assertion. */
   sharedModules?: SharedModuleManifestEntry[];
+  /** A verified auth prerequisite that may be reused by a resumed generate.
+   *  Both hashes must still match, otherwise teach reruns auth compilation. */
+  authCompletion?: {
+    toolName: string;
+    buildPlanHash: string;
+    workflowHash: string;
+    completedAt: string;
+  };
   /** Non-fatal flags raised by upstream stages that downstream stages (and
    *  the user) should know about. Currently used by the redact stage to
    *  record `'credentials_not_paired'` when a password-shaped body field
@@ -93,6 +105,11 @@ export function loadTeachState(site: string): TeachState {
   if (!existsSync(loadPath)) return { workflows: {} };
   try {
     const state = JSON.parse(readFileSync(loadPath, 'utf8')) as TeachState;
+    for (const workflow of Object.values(state.workflows)) {
+      if (!workflow.sharedContext) continue;
+      const parsed = SharedCompileContextSchema.safeParse(workflow.sharedContext);
+      workflow.sharedContext = parsed.success ? parsed.data : undefined;
+    }
     return isLegacy ? normalizeLegacyTeachState(site, state) : state;
   } catch {
     return { workflows: {} };

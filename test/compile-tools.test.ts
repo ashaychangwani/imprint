@@ -155,12 +155,8 @@ describe('compile tools request compaction', () => {
         credentialNames: [],
         tokenExtractionNotes: '',
         sharedHelperNotes: '',
-        twoFactorDetected: false,
-        twoFactorType: 'none' as const,
-        twoFactorRequestSeqs: [],
-        authCompletionSeqs: [],
-        twoFactorContext: [],
-        twoFactorNotes: '',
+        authRequestSeqs: [4],
+        authNotes: '',
       },
     }).find((tool) => tool.name === 'read_session_summary');
     if (!readSummary) throw new Error('read_session_summary tool missing');

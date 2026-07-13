@@ -3,26 +3,36 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve as pathResolve } from 'node:path';
 import { VERB_HELP } from '../src/cli.ts';
-import type { CompileAgentProgress } from '../src/imprint/compile-agent-types.ts';
+import type {
+  CompileAgentProgress,
+  CompileAgentResult,
+} from '../src/imprint/compile-agent-types.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
 import { localSessionsDir, localSiteDir } from '../src/imprint/paths.ts';
 import {
   type TeachState,
   type WorkflowState,
   discoverOrphanSession,
+  loadTeachState,
   pruneStalePendingTeachWorkflows,
 } from '../src/imprint/teach-state.ts';
 import {
   assertCandidateToolName,
+  assertSuccessfulAuthCompile,
+  authCompileLlmConfig,
+  authCompletionMatches,
   buildTeachProviderPickerOptions,
   buildTeachStateFromSession,
   formatAuthProgress,
+  hasDurableAuthState,
   mapLimit,
   promptForTeachProvider,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
+  selectCompleteAuthCredentials,
   updateCandidateStageCheckpoints,
 } from '../src/imprint/teach.ts';
+import { WorkflowSchema } from '../src/imprint/types.ts';
 
 describe('teach verb', () => {
   it('has a VERB_HELP entry', () => {
@@ -37,6 +47,118 @@ describe('teach verb', () => {
     expect(flags).toContain('--persist-profile');
     expect(flags).toContain('--no-interactive');
     expect(flags).toContain('--all-tools');
+  });
+});
+
+describe('teach auth compile boundary', () => {
+  const result = (overrides: Partial<CompileAgentResult>): CompileAgentResult => ({
+    success: false,
+    outcome: 'error',
+    message: 'fixture auth failure',
+    conversationLogPath: '/tmp/fixture-auth-log.json',
+    turns: 1,
+    durationMs: 1,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    ...overrides,
+  });
+
+  it('rejects failed auth before data tools can compile', () => {
+    expect(() => assertSuccessfulAuthCompile(result({}))).toThrow(
+      'Auth agent did not complete successfully: fixture auth failure',
+    );
+  });
+
+  it('rejects an auth success that produced no workflow', () => {
+    expect(() =>
+      assertSuccessfulAuthCompile(result({ success: true, outcome: 'done', message: 'done' })),
+    ).toThrow('Auth agent reported success without producing workflow.json.');
+  });
+
+  it('accepts a verified auth workflow', () => {
+    expect(() =>
+      assertSuccessfulAuthCompile(
+        result({
+          success: true,
+          outcome: 'done',
+          message: 'done',
+          workflowPath: '/tmp/authenticate_fixture/workflow.json',
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('passes the selected provider and model into auth compilation', () => {
+    expect(authCompileLlmConfig('codex-cli', 'gpt-5.6-terra')).toEqual({
+      provider: 'codex-cli',
+      model: 'gpt-5.6-terra',
+    });
+  });
+
+  it('reuses auth completion only while the plan and workflow hashes match', () => {
+    const completion = {
+      toolName: 'authenticate_fixture',
+      buildPlanHash: 'plan-a',
+      workflowHash: 'workflow-a',
+      completedAt: '2026-07-11T00:00:00.000Z',
+    };
+    expect(authCompletionMatches(completion, completion)).toBe(true);
+    expect(authCompletionMatches(completion, { ...completion, buildPlanHash: 'plan-b' })).toBe(
+      false,
+    );
+    expect(authCompletionMatches(completion, { ...completion, workflowHash: 'workflow-b' })).toBe(
+      false,
+    );
+  });
+
+  it('requires declared persisted auth state instead of counting input credentials', () => {
+    const workflow = WorkflowSchema.parse({
+      toolName: 'authenticate_fixture',
+      toolKind: 'authenticate',
+      site: 'fixture',
+      intent: { description: 'fixture auth' },
+      parameters: [],
+      requests: [],
+      authConfig: { entry: 'start', persist: ['authorization'], actions: {} },
+    });
+    expect(
+      hasDurableAuthState(workflow, {
+        values: { username: 'user', password: 'pass' },
+        cookies: [],
+      }),
+    ).toBe(false);
+    expect(hasDurableAuthState(workflow, { values: { authorization: 'token' }, cookies: [] })).toBe(
+      true,
+    );
+  });
+});
+
+describe('teach auth credential precedence', () => {
+  it('selects a complete stored set and ignores unrelated credentials', () => {
+    expect(
+      selectCompleteAuthCredentials(
+        { username: 'fixture-user', password: 'fixture-password', unused: 'extra' },
+        ['username', 'password'],
+      ),
+    ).toEqual({ username: 'fixture-user', password: 'fixture-password' });
+  });
+
+  it('rejects a partial or blank stored set so another source can be used', () => {
+    expect(
+      selectCompleteAuthCredentials({ username: 'fixture-user' }, ['username', 'password']),
+    ).toBeNull();
+    expect(
+      selectCompleteAuthCredentials({ username: 'fixture-user', password: '' }, [
+        'username',
+        'password',
+      ]),
+    ).toBeNull();
+  });
+
+  it('accepts an empty requirement for credential-free auth', () => {
+    expect(selectCompleteAuthCredentials({ unused: 'extra' }, [])).toEqual({});
   });
 });
 
@@ -118,6 +240,33 @@ describe('teach session state helpers', () => {
     expect(resolveTeachStatePath('google-flights', '')).toBeNull();
     expect(resolveTeachStatePath('google-flights', '   ')).toBeNull();
     expect(resolveTeachStatePath('google-flights', undefined)).toBeNull();
+  });
+
+  it('normalizes shared context saved before neutral auth fields existed', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      const siteDir = localSiteDir('legacy-auth');
+      mkdirSync(siteDir, { recursive: true });
+      writeFileSync(
+        pathResolve(siteDir, '.teach-state.json'),
+        JSON.stringify({
+          workflows: {
+            search: workflowState({
+              sharedContext: {
+                loginRequestSeqs: [5],
+                credentialNames: ['username'],
+                twoFactorType: 'push',
+              } as unknown as WorkflowState['sharedContext'],
+            }),
+          },
+        }),
+      );
+
+      const context = loadTeachState('legacy-auth').workflows.search?.sharedContext;
+      expect(context?.authRequestSeqs).toEqual([]);
+      expect(context?.authNotes).toBe('');
+      expect(context).not.toHaveProperty('twoFactorType');
+    });
   });
 
   it('resolves relative state paths under ~/.imprint and preserves absolute paths', () => {
@@ -414,14 +563,12 @@ describe('formatAuthProgress', () => {
     expect(formatAuthProgress(base({ turn: 29 }))).toBe('Auth compile: turn 29');
   });
 
-  it('a failed verification surfaces phase, error, status, and attempt', () => {
+  it('a failed verification surfaces action, error, and status', () => {
     const s = formatAuthProgress(
       base({
         turn: 30,
-        attempt: 2,
-        maxAttempts: 5,
         lastVerification: {
-          phase: 'initiate',
+          action: 'begin',
           ok: false,
           error: 'FORBIDDEN',
           status: 403,
@@ -430,27 +577,25 @@ describe('formatAuthProgress', () => {
       }),
     );
     expect(s).toContain('turn 30');
-    expect(s).toContain('initiate FAILED');
+    expect(s).toContain('begin FAILED');
     expect(s).toContain('FORBIDDEN');
     expect(s).toContain('HTTP 403');
-    expect(s).toContain('attempt 2/5');
-    expect(s).toContain('retrying');
+    expect(s).toContain('revising');
   });
 
   it('a successful verification falls back to the plain turn line', () => {
     const s = formatAuthProgress(
-      base({ turn: 31, lastVerification: { phase: 'complete', ok: true } }),
+      base({ turn: 31, lastVerification: { action: 'finish', ok: true } }),
     );
     expect(s).toBe('Auth compile: turn 31');
   });
 
-  it('omits the attempt suffix when attempt counts are absent', () => {
+  it('shows a generic action failure', () => {
     const s = formatAuthProgress(
-      base({ turn: 5, lastVerification: { phase: 'initiate', ok: false, error: 'NETWORK' } }),
+      base({ turn: 5, lastVerification: { action: 'begin', ok: false, error: 'NETWORK' } }),
     );
-    expect(s).toContain('initiate FAILED');
+    expect(s).toContain('begin FAILED');
     expect(s).toContain('NETWORK');
-    expect(s).not.toContain('attempt');
   });
 
   it('the per-segment offset makes the turn monotonic (no reset across segments)', () => {

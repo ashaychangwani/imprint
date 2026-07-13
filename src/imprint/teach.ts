@@ -7,6 +7,7 @@
  * step, and multiple workflows per site (each in its own subdirectory).
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import {
@@ -18,12 +19,14 @@ import {
 import * as p from '@clack/prompts';
 import type { OnDeadlineReached } from './agent.ts';
 import { compileAuthAgent } from './auth-compile-agent.ts';
+import { authWorkflowHash } from './auth-compile-tools.ts';
 import {
   type SharedModuleManifestEntry,
   buildPlanSidecarPath,
   readBuildPlanFile,
   topoLevelsForTools,
 } from './build-plan.ts';
+import type { CompileAgentResult } from './compile-agent-types.ts';
 import {
   type CompileAgentProgress,
   type TriageResult,
@@ -55,6 +58,7 @@ import {
   generateSkillMd,
 } from './integrations.ts';
 import {
+  type LLMOptions,
   type ProviderName,
   type ProviderStatus,
   detectTeachProvider,
@@ -117,6 +121,37 @@ import { planToolCompile } from './tool-plan.ts';
 import { setSpanAttributes, shutdownTracing, traced } from './tracing.ts';
 import { CronConfigSchema, SessionSchema, WorkflowSchema } from './types.ts';
 import type { CronConfig, Playbook, Session, Workflow } from './types.ts';
+
+export function authCompileLlmConfig(provider: ProviderName, model: string): LLMOptions {
+  return { provider, model };
+}
+
+export function authCompletionMatches(
+  completion: WorkflowState['authCompletion'],
+  expected: { toolName: string; buildPlanHash: string; workflowHash: string },
+): boolean {
+  return Boolean(
+    completion &&
+      completion.toolName === expected.toolName &&
+      completion.buildPlanHash === expected.buildPlanHash &&
+      completion.workflowHash === expected.workflowHash,
+  );
+}
+
+export function hasDurableAuthState(
+  workflow: Workflow,
+  stored: { values: Record<string, string>; cookies: unknown[]; storage?: unknown[] },
+): boolean {
+  const required = workflow.authConfig?.persist ?? [];
+  if (required.length > 0) {
+    return required.every((name) => String(stored.values[name] ?? '').length > 0);
+  }
+  return stored.cookies.length > 0 || (stored.storage?.length ?? 0) > 0;
+}
+
+function fileSha256(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
 
 export {
   buildTeachStateFromSession,
@@ -957,16 +992,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
             allLoginSeqs.length > 0
               ? {
                   sharedContext: {
-                    loginRequestSeqs: allLoginSeqs,
+                    loginRequestSeqs: credentialSeqs,
                     credentialNames: [],
                     tokenExtractionNotes: '',
                     sharedHelperNotes: '',
-                    twoFactorDetected: false,
-                    twoFactorType: 'none' as const,
-                    twoFactorRequestSeqs: [],
-                    authCompletionSeqs: [],
-                    twoFactorContext: [],
-                    twoFactorNotes: '',
+                    authRequestSeqs: allLoginSeqs,
+                    authNotes: '',
                   },
                 }
               : {},
@@ -1273,7 +1304,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // full) while dropping the bulk of telemetry/asset/noise requests — e.g. 415
   // vs 4396 requests on a big multi-tool site. Handing the agent the entire
   // redacted recording instead makes it burn its turn/time budget exploring
-  // thousands of irrelevant requests (the amex auth compile never converged on a
+  // thousands of irrelevant requests (large auth recordings otherwise may never converge on a
   // playbook because of this). The detect-candidates summary already triages;
   // this aligns the compile session with it.
   const triagedCandidate = redactedPath?.replace(/\.redacted\.json$/, '.triaged.json');
@@ -1398,92 +1429,142 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // before any tool (auth or data) compiles.
   if (stopIdx < STEPS.indexOf('generate')) await finishEarly();
 
+  if (authDetected && willGenerate && !buildPlanPath) {
+    throw new Error(
+      'Authentication was detected, but auth planning did not produce a build plan. Data-tool compilation was not started.',
+    );
+  }
+
   // ── auth-tool: agentic compile loop + interactive 2FA ──
   if (buildPlanPath && willGenerate) {
     const buildPlan = readBuildPlanFile(buildPlanPath);
     if (buildPlan?.authTool) {
       const authPlan = buildPlan.authTool;
-      const redactedSession = SessionSchema.parse(
-        JSON.parse(readFileSync(compileSessionPath, 'utf8')),
+      const buildPlanHash = fileSha256(buildPlanPath);
+      const existingAuthWorkflowPath = pathJoin(
+        localToolDir(site, authPlan.toolName),
+        'workflow.json',
       );
-      // Passwordless / OTP-only logins (e.g. email + emailed code, magic link)
-      // carry no password for the username+password extractor to pair, so
-      // teachCredentials is empty. Derive the planner-declared credential values
-      // from the recorded login request(s), persist them, and back-fill
-      // ${credential.X} into the redacted session the agent reads.
-      if (!teachCredentials && sessionPath && existsSync(sessionPath)) {
-        try {
-          const rawForCreds = SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8')));
-          const derived = deriveLoginCredentials(
-            rawForCreds,
-            authPlan.loginRequestSeqs,
-            authPlan.credentialNames,
-          );
-          if (Object.keys(derived.values).length > 0) {
-            const backend = await getCredentialBackend();
-            for (const [name, value] of Object.entries(derived.values)) {
-              await backend.setSecret(site, name, value);
-              upsertManifestEntry(site, {
-                name,
-                kind: 'username',
-                description: 'Login identifier',
-              });
-            }
-            applyCredentialPlaceholders(redactedSession, derived.replacements);
-            teachCredentials = { site, values: derived.values };
-            p.log.success(
-              `Derived ${Object.keys(derived.values).length} credential(s) for passwordless login: ${Object.keys(derived.values).join(', ')}`,
-            );
-          }
-        } catch (err) {
-          p.log.warn(
-            `Credential derivation failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-
-      // The recording can't always yield credentials — hosted/redirect logins
-      // (Auth0, Okta, …) submit the password as a page navigation (no XHR body),
-      // and the capture listener masks password fields. Before skipping, reuse
-      // anything already stored, then — when interactive — prompt for exactly the
-      // credentials the detection LLM identified for this login
-      // (authPlan.credentialNames; the live 2FA code is intentionally not in that
-      // list — it's entered during verification).
-      if (!teachCredentials) {
-        const view = await loadSiteCredentials(site).catch(() => null);
-        if (view && Object.keys(view.values).length > 0) {
-          teachCredentials = { site, values: view.values };
-          p.log.info(
-            `Using stored credentials for "${site}": ${Object.keys(view.values).join(', ')}`,
-          );
-        }
-      }
-      if (!teachCredentials && !opts.noInteractive && authPlan.credentialNames.length > 0) {
-        let detectedUsername: string | undefined;
-        if (sessionPath && existsSync(sessionPath)) {
-          try {
-            detectedUsername = detectRecordedUsername(
-              SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8'))),
-            );
-          } catch {
-            /* best-effort pre-fill only */
-          }
-        }
-        teachCredentials = await promptForCredentials({
-          site,
-          names: authPlan.credentialNames,
-          detectedUsername,
-        });
-      }
-
-      if (!teachCredentials) {
-        const hint = opts.noInteractive
-          ? ` Set them with \`imprint credential set ${site} <name>\` (${authPlan.credentialNames.join(', ') || 'the login credentials'}), then resume with \`imprint teach ${site} --from-step generate\`.`
-          : '';
-        p.log.warn(
-          `Auth tool "${authPlan.toolName}" was planned but no credentials are available — skipping auth compile.${hint} Data tools will attempt inline login.`,
+      const existingAuthIndexPath = pathJoin(localToolDir(site, authPlan.toolName), 'index.ts');
+      const existingAuthWorkflow =
+        existsSync(existingAuthWorkflowPath) && existsSync(existingAuthIndexPath)
+          ? WorkflowSchema.parse(JSON.parse(readFileSync(existingAuthWorkflowPath, 'utf8')))
+          : undefined;
+      const storedAuthState = existingAuthWorkflow
+        ? await loadSiteCredentials(site).catch(() => null)
+        : null;
+      const existingAuthWorkflowHash = existingAuthWorkflow
+        ? authWorkflowHash(existingAuthWorkflow)
+        : undefined;
+      const reusableCompletion =
+        existingAuthWorkflow &&
+        existingAuthWorkflowHash &&
+        storedAuthState &&
+        hasDurableAuthState(existingAuthWorkflow, storedAuthState)
+          ? plans
+              .map((plan) => state.workflows[plan.workflowKey]?.authCompletion)
+              .find((completion) =>
+                authCompletionMatches(completion, {
+                  toolName: authPlan.toolName,
+                  buildPlanHash,
+                  workflowHash: existingAuthWorkflowHash as string,
+                }),
+              )
+          : undefined;
+      if (reusableCompletion) {
+        p.log.info(
+          `Reusing verified auth tool "${authPlan.toolName}"; auth artifacts are unchanged.`,
         );
       } else {
+        const redactedSession = SessionSchema.parse(
+          JSON.parse(readFileSync(compileSessionPath, 'utf8')),
+        );
+        // A resumed generate step may still have valid credentials from an earlier
+        // successful teach. Prefer those over values reconstructed from the old
+        // recording so a stale recording cannot overwrite the credential store.
+        if (!teachCredentials) {
+          const view = await loadSiteCredentials(site).catch(() => null);
+          const storedValues = selectCompleteAuthCredentials(
+            view?.values ?? {},
+            authPlan.credentialNames,
+          );
+          if (storedValues) {
+            teachCredentials = { site, values: storedValues };
+            if (authPlan.credentialNames.length > 0) {
+              p.log.info(
+                `Using stored credentials for "${site}": ${authPlan.credentialNames.join(', ')}`,
+              );
+            }
+          }
+        }
+
+        // Passwordless / OTP-only logins (e.g. email + emailed code, magic link)
+        // carry no password for the username+password extractor to pair, so
+        // teachCredentials can be empty. If no complete stored set exists, derive
+        // the planner-declared credential values from the recorded login request(s),
+        // persist them, and back-fill ${credential.X} into the redacted session the
+        // agent reads.
+        if (!teachCredentials && sessionPath && existsSync(sessionPath)) {
+          try {
+            const rawForCreds = SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8')));
+            const derived = deriveLoginCredentials(
+              rawForCreds,
+              authPlan.credentialRequestSeqs,
+              authPlan.credentialNames,
+            );
+            if (Object.keys(derived.values).length > 0) {
+              const backend = await getCredentialBackend();
+              for (const [name, value] of Object.entries(derived.values)) {
+                await backend.setSecret(site, name, value);
+                upsertManifestEntry(site, {
+                  name,
+                  kind: 'username',
+                  description: 'Login identifier',
+                });
+              }
+              applyCredentialPlaceholders(redactedSession, derived.replacements);
+              teachCredentials = { site, values: derived.values };
+              p.log.success(
+                `Derived ${Object.keys(derived.values).length} credential(s) for passwordless login: ${Object.keys(derived.values).join(', ')}`,
+              );
+            }
+          } catch (err) {
+            p.log.warn(
+              `Credential derivation failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+
+        // The recording cannot always yield credentials because the capture layer
+        // masks sensitive fields. Reuse a complete stored set or prompt for the
+        // credential names identified during planning.
+        if (!teachCredentials && !opts.noInteractive && authPlan.credentialNames.length > 0) {
+          let detectedUsername: string | undefined;
+          if (sessionPath && existsSync(sessionPath)) {
+            try {
+              detectedUsername = detectRecordedUsername(
+                SessionSchema.parse(JSON.parse(readFileSync(sessionPath, 'utf8'))),
+              );
+            } catch {
+              /* best-effort pre-fill only */
+            }
+          }
+          teachCredentials = await promptForCredentials({
+            site,
+            names: authPlan.credentialNames,
+            detectedUsername,
+          });
+        }
+
+        if (!teachCredentials) {
+          const hint = opts.noInteractive
+            ? ` Set them with \`imprint credential set ${site} <name>\` (${authPlan.credentialNames.join(', ') || 'the login credentials'}), then resume with \`imprint teach ${site} --from-step generate\`.`
+            : '';
+          throw new Error(
+            `Auth tool "${authPlan.toolName}" was planned but no credentials are available.${hint} Data-tool compilation was not started.`,
+          );
+        }
+
         spinner.start(`Compiling auth tool: ${authPlan.toolName}`);
         try {
           muteLog();
@@ -1493,23 +1574,15 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
             sessionPath: compileSessionPath,
             authToolPlan: authPlan,
             teachCredentials,
-            llmConfig: { provider: compileProviderName },
-            // Browser-minted logins compile on the playbook rung — each live test
-            // launches a real browser (navigate + anti-bot settle + form submit),
-            // which is far slower than an API replay. Give the agent room to write
-            // and iterate a playbook, not just a workflow.json.
+            llmConfig: authCompileLlmConfig(compileProviderName, compileModel),
             maxDurationMs: 20 * 60 * 1000,
             onProgress: (prog) => spinner.message(formatAuthProgress(prog)),
-            // Interactive 2FA bridge: the agent (via the verification stage) reaches
-            // the OTP/push challenge, then asks the user — here — for the live second
-            // factor. Stop the spinner + unmute logs around the prompt so it renders
-            // cleanly, then restore. Omitted in --no-interactive (the agent falls
-            // back to an unattended placeholder attempt).
+            // Render agent-requested user input outside the spinner.
             onPrompt: opts.noInteractive
               ? undefined
               : async (message, options) => {
                   unmuteLog();
-                  spinner.stop('2FA required — your input needed.');
+                  spinner.stop('Authentication requires your input.');
                   let answer = '';
                   if (options && options.length > 0) {
                     const sel = await p.select({
@@ -1522,16 +1595,15 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
                     answer = p.isCancel(txt) ? '' : String(txt ?? '');
                   }
                   muteLog();
-                  spinner.start('Completing 2FA verification');
+                  spinner.start('Continuing authentication verification');
                   return answer;
                 },
-            // Cool-off bridge: wait out a rate-flag with NO login, informing the
-            // user. Bounded to 10 min; overridable via IMPRINT_AUTH_COOLOFF_MS.
+            // Honor an agent-requested delay without firing a live action.
             onCooldown: async (minutes, reason) => {
               const envMs = Number(process.env.IMPRINT_AUTH_COOLOFF_MS);
               const ms = Number.isFinite(envMs)
                 ? Math.max(0, envMs)
-                : Math.min(Math.max(minutes, 1), 10) * 60_000;
+                : Math.max(0, minutes) * 60_000;
               unmuteLog();
               p.log.info(
                 `Cooling off ~${Math.round(ms / 60000)} min before retrying the login${reason ? ` (${reason})` : ''} — no login fires during the wait.`,
@@ -1543,36 +1615,43 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           });
           unmuteLog();
 
-          if (!authResult.success || !authResult.workflowPath) {
-            spinner.stop('Auth tool compilation failed.');
-            p.log.warn(`Auth agent: ${authResult.message}\nData tools will attempt inline login.`);
-          } else {
-            emit({
-              workflowPath: authResult.workflowPath,
-              outDir: pathDirname(authResult.workflowPath),
-              force: true,
-            });
-            // The point of completing auth is a stored session token the data
-            // tools reuse. Confirm one was persisted before claiming success.
-            let sessionStored = false;
-            try {
-              const { loadSiteCredentials } = await import('./credential-store.ts');
-              const view = await loadSiteCredentials(site);
-              sessionStored = view.cookies.length > 0 || Object.keys(view.values).length > 0;
-            } catch {
-              /* non-fatal */
+          assertSuccessfulAuthCompile(authResult);
+          emit({
+            workflowPath: authResult.workflowPath,
+            outDir: pathDirname(authResult.workflowPath),
+            force: true,
+          });
+          const emittedWorkflow = WorkflowSchema.parse(
+            JSON.parse(readFileSync(authResult.workflowPath, 'utf8')),
+          );
+          const storedState = await loadSiteCredentials(site).catch(() => null);
+          const sessionStored = Boolean(
+            storedState && hasDurableAuthState(emittedWorkflow, storedState),
+          );
+          const completion = {
+            toolName: authPlan.toolName,
+            buildPlanHash,
+            workflowHash: authWorkflowHash(emittedWorkflow),
+            completedAt: new Date().toISOString(),
+          };
+          if (sessionStored) {
+            for (const plan of plans) {
+              const ws = state.workflows[plan.workflowKey];
+              if (ws) ws.authCompletion = completion;
             }
-            spinner.stop(
-              sessionStored
-                ? `Auth tool compiled + session stored (${authResult.turns} turns, ${Math.round(authResult.durationMs / 1000)}s) — data tools will reuse it.`
-                : `Auth tool compiled (${authResult.turns} turns) — no live session stored; data tools will be unverified until you run \`imprint login ${site}\`.`,
-            );
+            saveTeachState(site, state);
           }
+          spinner.stop(
+            sessionStored
+              ? `Auth tool compiled + session stored (${authResult.turns} turns, ${Math.round(authResult.durationMs / 1000)}s) — data tools will reuse it.`
+              : `Auth tool compiled (${authResult.turns} turns) — no live session stored; data tools will be unverified until you run \`imprint login ${site}\`.`,
+          );
         } catch (err) {
           unmuteLog();
           spinner.stop('Auth tool compilation failed.');
-          p.log.warn(
-            `Auth tool failed: ${err instanceof Error ? err.message : String(err)}\nData tools will attempt inline login.`,
+          throw new Error(
+            `Auth stage failed; data-tool compilation was not started: ${err instanceof Error ? err.message : String(err)}`,
+            { cause: err },
           );
         }
       }
@@ -2056,6 +2135,32 @@ function renderCompileSummary(summary: CompileOutcomeSummary): string[] {
     }
   }
   return lines;
+}
+
+type SuccessfulAuthCompile = CompileAgentResult & { success: true; workflowPath: string };
+
+export function assertSuccessfulAuthCompile(
+  result: CompileAgentResult,
+): asserts result is SuccessfulAuthCompile {
+  if (!result.success) {
+    throw new Error(`Auth agent did not complete successfully: ${result.message}`);
+  }
+  if (!result.workflowPath) {
+    throw new Error('Auth agent reported success without producing workflow.json.');
+  }
+}
+
+export function selectCompleteAuthCredentials(
+  values: Record<string, string>,
+  requiredNames: string[],
+): Record<string, string> | null {
+  const selected: Record<string, string> = {};
+  for (const name of requiredNames) {
+    const value = values[name];
+    if (typeof value !== 'string' || value.length === 0) return null;
+    selected[name] = value;
+  }
+  return selected;
 }
 
 async function compileSelectedCandidate(opts: {
@@ -3022,21 +3127,14 @@ function formatCompileProgress(progress: CompileAgentProgress): string {
   return `Compiling • ${activity} (${formatElapsed(progress.elapsedMs)}${retry})`;
 }
 
-/** Build the auth-compile spinner line. Pure (formatting only). The turn is
- *  monotonic across resumable segments (no per-segment reset). When the most
- *  recent live verification FAILED, surface the reason (phase + error + HTTP
- *  status) and which live-login attempt of the budget it was — so the user sees
- *  what happened and why it's taking longer, not a silently-resetting counter. */
+/** Build the auth-compile spinner line. Turns stay monotonic across resumed
+ *  segments; live failures surface the requested action and observed status. */
 export function formatAuthProgress(progress: CompileAgentProgress): string {
   const base = `Auth compile: turn ${progress.turn}`;
   const lv = progress.lastVerification;
   if (lv && !lv.ok) {
     const status = typeof lv.status === 'number' ? ` HTTP ${lv.status}` : '';
-    const attempt =
-      typeof progress.attempt === 'number' && typeof progress.maxAttempts === 'number'
-        ? `; attempt ${progress.attempt}/${progress.maxAttempts}`
-        : '';
-    return `${base} — verify ${lv.phase} FAILED (${lv.error ?? 'error'}${status})${attempt} — agent retrying`;
+    return `${base} — verify ${lv.action} FAILED (${lv.error ?? 'error'}${status}) — agent revising`;
   }
   return base;
 }

@@ -82,6 +82,7 @@ export function buildCompileTools(
   const tools = [
     buildReadSessionSummaryTool(session, context),
     buildReadRequestTool(session),
+    buildSearchRequestsTool(session),
     buildRevealRequestTool(sessionPath),
     buildDiffRequestForEventTool(session, context),
     buildReadResponseBodyTool(session),
@@ -887,6 +888,63 @@ export function buildReadRequestTool(session: Session): AgentTool {
       };
 
       return { result: JSON.stringify(summary, null, 2) };
+    },
+  };
+}
+
+export function buildSearchRequestsTool(session: Session): AgentTool {
+  return {
+    name: 'search_requests',
+    description:
+      'Search recorded requests by method, resource type, URL fragment, response status, and sequence range. Returns exact seq IDs for read_request/read_response_body.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        method: { type: 'string' },
+        resourceType: { type: 'string' },
+        urlContains: { type: 'string' },
+        status: { type: 'number' },
+        afterSeq: { type: 'number' },
+        beforeSeq: { type: 'number' },
+        limit: { type: 'number', description: 'Default 50, maximum 200' },
+      },
+      required: [],
+    },
+    handler: async (input: unknown) => {
+      const filters = input as {
+        method?: string;
+        resourceType?: string;
+        urlContains?: string;
+        status?: number;
+        afterSeq?: number;
+        beforeSeq?: number;
+        limit?: number;
+      };
+      const method = filters.method?.toUpperCase();
+      const resourceType = filters.resourceType?.toLowerCase();
+      const url = filters.urlContains?.toLowerCase();
+      const requests = session.requests
+        .filter((request) => {
+          if (method && request.method.toUpperCase() !== method) return false;
+          if (resourceType && request.resourceType?.toLowerCase() !== resourceType) return false;
+          if (url && !request.url.toLowerCase().includes(url)) return false;
+          if (filters.status !== undefined && request.response?.status !== filters.status)
+            return false;
+          if (filters.afterSeq !== undefined && request.seq <= filters.afterSeq) return false;
+          if (filters.beforeSeq !== undefined && request.seq >= filters.beforeSeq) return false;
+          return true;
+        })
+        .sort((a, b) => a.seq - b.seq)
+        .slice(0, Math.max(1, Math.min(200, Math.trunc(filters.limit ?? 50))))
+        .map((request) => ({
+          seq: request.seq,
+          resourceType: request.resourceType,
+          method: request.method,
+          url: request.url,
+          status: request.response?.status,
+          mimeType: request.response?.mimeType,
+        }));
+      return { result: JSON.stringify({ count: requests.length, requests }, null, 2) };
     },
   };
 }
@@ -3307,7 +3365,7 @@ export function contractedInputGate(
       unresolved++;
       const how =
         ri.source === 'auth'
-          ? `wire it as \`${token}\` (the authenticate tool persists it via sessionCapture)`
+          ? `wire it as \`${token}\` (the authenticate tool names it in authConfig.persist)`
           : ri.source === 'browser_state'
             ? `wire it as \`${token}\` and add the capture/bootstrap that produces it`
             : ri.source === 'generated'

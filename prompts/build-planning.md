@@ -8,7 +8,7 @@ You receive:
 
 - `site`, `url`, `narration` — what the user was doing. When several captures were merged, `narration` includes `[Recording from <timestamp>] <url>` boundary lines marking where each capture begins (the same logical request may then appear once per capture, often with a different entity/token).
 - `selectedTools[]` — the tools that WILL be compiled: `{ toolName, description, expectedOutput, requestSeqs, dependencySeqs, likelyParams }`. You must emit exactly one `perTool` entry for each.
-- `sharedContext` — `{ loginRequestSeqs, credentialNames, tokenExtractionNotes, sharedHelperNotes, twoFactorDetected, twoFactorType, twoFactorRequestSeqs, authCompletionSeqs, twoFactorContext, twoFactorNotes }` from candidate detection.
+- `sharedContext` — `{ loginRequestSeqs, credentialNames, tokenExtractionNotes, sharedHelperNotes, authRequestSeqs, authNotes }` from candidate detection.
 - `ephemeralValues[]` — values that differed across two independent replays (highest-confidence signal for signing tokens / per-call state): `{ classification, originalSeq, location, producerSeq, producerPath, suggestedStateName }`. `browser_minted` with a high-entropy query-param `location` is the canonical sign of client-side URL signing → a `request-transform` module.
 - `tokenContractHints[]` — producer→consumer opaque-token edges DETECTED DETERMINISTICALLY from the dual-pass diff: `{ consumerTool, consumerParam, consumerLocation, producerTool, producerField, producerPath }`. Each is a grounded `server_derived` value `consumerTool` sends that was produced in `producerTool`'s response. These are pre-computed for you and are AUTHORITATIVE — you MUST declare each as a `tokenParams` (consumer) + `emitsTokens` (producer) contract per rule 12. Refine the rough `consumerParam`/`producerField` names and the `shape` from the recording, but do not drop an edge. (Any edge you miss is reconciled in deterministically, but declaring it yourself lets you pick the right `shape`.)
 - `requiredInputHints[]` — the GENERAL dependency contract DETECTED DETERMINISTICALLY from the recording: `{ consumerTool, input: { location, source, wiring, ... }, authCapture? }`. Each `input` is one thing a tool's request needs and where it comes from — `auth` (a login-minted session token → `${credential.X}`), `producer_tool` (a sibling token → param), `browser_state` (a captured `${state.X}` or, for a `referer` location, a `bootstrap.url`), `generated` (a per-call `${generated.uuid|epoch_ms|epoch_s|iso8601|nonce}`), or `static` (a page-minted app constant emitted verbatim). These are AUTHORITATIVE — copy each into the owning tool's `requiredInputs[]` (rule 13). For an `auth` input, also ensure `authTool.captures` carries its `authCapture` so the login persists it. Any input you drop is reconciled in deterministically, but declaring it yourself lets you refine the name/notes.
@@ -40,17 +40,15 @@ You receive:
       "sourceSeqs": [number]
     }
   ],
-  "authTool": {                                     // OPTIONAL — whenever the recording has a login (sharedContext.loginRequestSeqs non-empty), with or without 2FA
+  "authTool": {                                     // OPTIONAL — whenever sharedContext contains authentication requests
     "toolName": "authenticate_<site>",
-    "loginRequestSeqs": [number],
-    "twoFactorRequestSeqs": [number],
-    "twoFactorType": "none" | "otp" | "push",       // structural: none = login completes in the login request(s); otp = code typed back; push = poll until approved
-    "twoFactorContext": [string],                   // otp only: initiate-response fields the submit_otp request chains via ${state.X}
+    "credentialRequestSeqs": [number],
+    "authRequestSeqs": [number],
     "credentialNames": ["username", "password"],
     "captures": [
       { "name": "session_cookie", "source": "cookie", "locator": "cookie_name", "usedAs": "cookie" }
     ],
-    "notes": "how the 2FA flow works: trigger, wait/poll (name the approval marker for push), completion"
+    "notes": "recorded auth request/response relationships; the auth compile agent decides actions"
   },
   "perTool": [
     {
@@ -89,10 +87,17 @@ You receive:
 
 1. **Emit exactly one `perTool` entry per `selectedTools` entry**, using the same `toolName`. Do not invent or drop tools.
 2. **Only hoist a shared module when ≥2 selected tools genuinely share it.** Single-use logic stays inside that tool's own parser.ts / request-transform.ts — do NOT create a `_shared/` module for it.
-3. **`request-transform`** — URL signing or body construction shared across tools. Wire-up: the consuming tool sets `requestTransformModule: "../_shared/<name>.ts"`. Ground it in `ephemeralValues` (browser_minted, high-entropy query param) and `sourceSeqs`. The exported `transform(method, url, responses, params?)` returns the signed URL (or `{ url, body? }`).
+3. **`request-transform`** — URL signing or body construction shared across tools. Wire-up: the consuming tool sets `requestTransformModule: "../_shared/<name>.ts"`. Ground it in `ephemeralValues` (browser_minted, high-entropy query param) and `sourceSeqs`. The exported `transform(method, url, responses, params?)` returns the signed URL (or `{ url?, body?, headers?, skip? }`).
 4. **`parser-helper`** — a decoder/normalizer ≥2 tools' parsers call (e.g. a shared JSPB walker, a shared field mapper). The consuming tool's parser.ts does `import { ... } from '../_shared/<name>.ts'`. Ground it in a captured response body (`sourceSeqs`).
 5. **`types`** — shared TypeScript interfaces used by ≥2 parsers. Type-only; no runtime behavior.
-6. **Auth is NEVER a shared module.** Whenever the recording has a **login** (`sharedContext.loginRequestSeqs` is non-empty — credentials were submitted, **with OR without 2FA**), declare an `authTool` entry: a standalone `authenticate_<site>` tool that handles the full login. Carry `twoFactorType` from `sharedContext` (structural: `none` = the login completes in the login request(s), no second step; `otp` = a code typed back into a later request; `push` = poll one endpoint until it flips/sets a session cookie), and for `otp` carry `twoFactorContext` (the initiate-response fields the completion request chains). Data tools for the same site set `authRecipe.required: false` and `dependsOnAuth: true` — they reuse the session a prior `authenticate_<site>` call stored, so the login runs **once**, not once per tool (re-logging-in inline for every tool hammers the site and gets rate-flagged at compile time). Only when there is **no login at all** (`loginRequestSeqs` empty), omit `authTool` and set `authRecipe.required: false` with empty arrays. `credentialNames` lists ONLY the durable login secrets the user provisions once — the `${credential.*}` fields in the login request(s), typically `username` + `password`. NEVER include the live one-time 2FA code in `credentialNames`: it is covered by `twoFactorType`/`twoFactorContext` and entered fresh at runtime, never stored.
+6. **Auth is NEVER a shared module.** When `sharedContext.authRequestSeqs` or
+   `loginRequestSeqs` is non-empty, declare one standalone
+   `authenticate_<site>` tool. Copy credential-bearing requests to
+   `credentialRequestSeqs` and all related auth requests to `authRequestSeqs`.
+   Do not prescribe phases or action boundaries; the auth compile agent derives
+   them from the recording. Data tools set `authRecipe.required: false` and
+   `dependsOnAuth: true` so they reuse the stored session. `credentialNames`
+   contains durable provisioned values only, never live one-time input.
 7. **`exportSignatures` must be real TypeScript signatures** the builder will implement and the verifier will check for. List every public export.
 8. **`spec` must be concrete enough to implement and test** — name the inputs, the exact output, and the `sourceSeqs` that prove it (e.g. "given the URL at seq 41 with the `sig` param stripped, regenerate `sig` to match the recorded value").
 9. **`dependsOn` only references other `sharedModules[].path`.** No cycles.

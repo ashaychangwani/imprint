@@ -29,6 +29,7 @@
  */
 
 import CDP from 'chrome-remote-interface';
+import { getDomain } from 'tldts';
 import { AKAMAI_SENSOR_COOKIE, abckFlag, isAbckValidated } from './bot-defense.ts';
 import {
   __registerChromePid,
@@ -96,6 +97,27 @@ export function jarCookiesValidated(cookies: Array<{ name: string; value: string
 export interface CdpBrowserFetch {
   /** typeof fetch — executes the request inside the live trusted Chrome page. */
   readonly fetchImpl: typeof fetch;
+  /** Perform a real top-level document navigation and wait for recording-grounded
+   *  URL/cookie evidence. Page JavaScript owns all browser-minted state. */
+  navigate?(
+    url: string,
+    options?: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      waitUntil?: 'domcontentloaded' | 'load';
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+      urlIncludes?: string;
+      cookie?: { name: string; domain?: string; path?: string };
+    },
+  ): Promise<Response>;
+  /** Snapshot every cookie in this dedicated browser, including cookies minted
+   *  on origins reached by redirects rather than the bootstrap origin. */
+  snapshotCookies?(): Promise<MintedJar['cookies']>;
+  /** Inspect the currently rendered page without navigating or mutating browser
+   *  state. Cookie values are intentionally excluded from this diagnostic view. */
+  inspectPage?(): Promise<CdpPageSnapshot>;
   /** Force the bootstrap navigation + `_abck` validation now; returns the
    *  session cookies so callers can read session tokens (CSRF) for `${state.X}`. */
   ensureBootstrapped(): Promise<Array<{ name: string; value: string }>>;
@@ -105,6 +127,252 @@ export interface CdpBrowserFetch {
   mintJar(): Promise<MintedJar>;
   /** Close the CDP client and the Chrome process. */
   close(): Promise<void>;
+}
+
+export interface CdpPageSnapshot {
+  url: string;
+  title: string;
+  bodyText: string;
+  cookies: Array<{
+    name: string;
+    domain: string;
+    path: string;
+    expires?: number;
+    httpOnly?: boolean;
+    secure?: boolean;
+    sameSite?: string;
+  }>;
+}
+
+export function buildFormPostNavigationExpr(url: string, body: string): string {
+  return `(() => {
+    const targetUrl = new URL(${JSON.stringify(url)}, location.href).href;
+    const params = Array.from(new URLSearchParams(${JSON.stringify(body)}));
+    const targetNames = new Set(params.map(([name]) => name));
+    const forms = Array.from(document.forms).filter(
+      (candidate) => candidate.method.toUpperCase() === 'POST',
+    );
+    const isSubmitter = (control) => {
+      const tag = control.tagName;
+      const type = String(control.type || '').toLowerCase();
+      return (tag === 'BUTTON' && (type === '' || type === 'submit')) ||
+        (tag === 'INPUT' && (type === 'submit' || type === 'image'));
+    };
+    const canAssign = (control, value) => {
+      if (isSubmitter(control)) return String(control.value) === value;
+      const type = String(control.type || '').toLowerCase();
+      if (type === 'checkbox' || type === 'radio') return String(control.value) === value;
+      return !control.disabled && control.name;
+    };
+    const assign = (control, value) => {
+      const type = String(control.type || '').toLowerCase();
+      if (type === 'checkbox' || type === 'radio') {
+        control.checked = String(control.value) === value;
+      } else {
+        control.value = value;
+      }
+    };
+    const planForm = (candidate) => {
+      const controls = Array.from(candidate.elements);
+      const submitterIndexes = controls
+        .map((control, index) => isSubmitter(control) && !control.disabled ? index : -1)
+        .filter((index) => index >= 0);
+      const choices = submitterIndexes.length > 0 ? submitterIndexes : [-1];
+      const validPlans = [];
+      for (const submitterIndex of choices) {
+        const clone = candidate.cloneNode(true);
+        const cloneControls = Array.from(clone.elements);
+        const used = new Set();
+        const assignments = [];
+        let possible = true;
+        for (const [name, value] of params) {
+          const indexes = cloneControls
+            .map((control, index) => control.name === name && !used.has(index) ? index : -1)
+            .filter((index) => index >= 0);
+          const exact = indexes.find((index) => String(cloneControls[index].value) === value);
+          const compatible = indexes.find((index) => canAssign(cloneControls[index], value));
+          const index = exact ?? compatible;
+          if (index === undefined) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = name;
+            input.value = value;
+            clone.appendChild(input);
+            assignments.push({ index: -1, name, value });
+            continue;
+          }
+          if (isSubmitter(cloneControls[index]) && index !== submitterIndex) {
+            possible = false;
+            break;
+          }
+          used.add(index);
+          assignments.push({ index, name, value });
+          if (!isSubmitter(cloneControls[index])) assign(cloneControls[index], value);
+        }
+        if (!possible) continue;
+        const cloneSubmitter = submitterIndex >= 0 ? cloneControls[submitterIndex] : undefined;
+        let encoded;
+        try {
+          encoded = Array.from(new FormData(clone, cloneSubmitter))
+            .filter(([name]) => targetNames.has(name))
+            .map(([name, value]) => [name, String(value)]);
+        } catch {
+          continue;
+        }
+        if (JSON.stringify(encoded) !== JSON.stringify(params)) continue;
+        validPlans.push({ submitterIndex, assignments });
+      }
+      if (validPlans.length !== 1) return null;
+      const action = candidate.getAttribute('action') || location.href;
+      const actionMatches = new URL(action, location.href).href === targetUrl;
+      const candidateControls = Array.from(candidate.elements);
+      const namedPairs = params.filter(([name]) =>
+        candidateControls.some((control) => control.name === name),
+      );
+      const exactPairs = params.filter(([name, value]) =>
+        candidateControls.some(
+          (control) => control.name === name && String(control.value) === value,
+        ),
+      );
+      if (!actionMatches) return null;
+      return {
+        form: candidate,
+        actionMatches,
+        namedPairs: namedPairs.length,
+        exactPairs: exactPairs.length,
+        ...validPlans[0],
+      };
+    };
+    const plans = forms.map(planForm).filter(Boolean);
+    plans.sort((left, right) =>
+      Number(right.actionMatches) - Number(left.actionMatches) ||
+      right.namedPairs - left.namedPairs ||
+      right.exactPairs - left.exactPairs,
+    );
+    const best = plans[0];
+    const next = plans[1];
+    const tied = best && next && best.actionMatches === next.actionMatches &&
+      best.namedPairs === next.namedPairs && best.exactPairs === next.exactPairs;
+    const renderedForm = Boolean(best && !tied);
+    const form = renderedForm ? best.form : document.createElement('form');
+    window.__imprintForm = form;
+    form.method = 'POST';
+    form.setAttribute('action', targetUrl);
+
+    if (!renderedForm) {
+      form.style.display = 'none';
+      for (const [name, value] of params) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      }
+      const parent = document.body || document.documentElement;
+      if (!parent) throw new Error('document has no element that can contain a POST form');
+      parent.appendChild(form);
+      form.submit();
+      return { action: 'submitted', renderedForm: false };
+    }
+
+    const typedFields = [];
+    for (const assignment of best.assignments) {
+      if (assignment.index < 0) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = assignment.name;
+        input.value = assignment.value;
+        form.appendChild(input);
+        continue;
+      }
+      const control = form.elements[assignment.index];
+      if (isSubmitter(control)) continue;
+      const type = String(control.type || '').toLowerCase();
+      if (['email', 'password', 'search', 'tel', 'text', 'url'].includes(type) || control.tagName === 'TEXTAREA') {
+        control.value = '';
+        typedFields.push({ index: assignment.index, value: assignment.value });
+        continue;
+      }
+      assign(control, assignment.value);
+      control.dispatchEvent(new Event('input', { bubbles: true }));
+      control.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const submitter = best.submitterIndex >= 0 ? form.elements[best.submitterIndex] : null;
+    if (submitter) {
+      const rect = submitter.getBoundingClientRect();
+      const style = getComputedStyle(submitter);
+      const visible = rect.width > 0 && rect.height > 0 && style.pointerEvents !== 'none' &&
+        style.visibility !== 'hidden';
+      if (!visible) throw new Error('recorded form submitter is not interactable');
+      window.__imprintSubmitter = submitter;
+      submitter.focus();
+      submitter.addEventListener('click', () => { window.__imprintFormClickObserved = true; }, { once: true });
+      return {
+        action: 'click',
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        tag: submitter.tagName,
+        type: submitter.type,
+        typedFields,
+        renderedForm: true,
+      };
+    }
+    if (typeof form.requestSubmit === 'function') form.requestSubmit();
+    else form.submit();
+    return { action: 'submitted', renderedForm: true };
+  })()`;
+}
+
+export function validateFormPostNavigationHeaders(headers: Record<string, string>): void {
+  const entries = Object.entries(headers);
+  const unsupported = entries.filter(
+    ([name]) => !['content-type', 'cookie'].includes(name.toLowerCase()),
+  );
+  if (unsupported.length > 0) {
+    throw new Error(
+      `top-level form POST cannot preserve request header(s): ${unsupported
+        .map(([name]) => name)
+        .join(', ')}`,
+    );
+  }
+  const contentTypes = entries
+    .filter(([name]) => name.toLowerCase() === 'content-type')
+    .map(([, value]) => value);
+  if (contentTypes.length !== 1) {
+    throw new Error('top-level form POST requires an explicit Content-Type header');
+  }
+  const mediaType = contentTypes[0]?.split(';', 1)[0]?.trim().toLowerCase();
+  if (mediaType !== 'application/x-www-form-urlencoded') {
+    throw new Error(
+      `top-level form POST requires application/x-www-form-urlencoded, got ${contentTypes[0]}`,
+    );
+  }
+}
+
+export function parseCdpPageInspectionResult(evaluation: {
+  result?: { value?: unknown };
+  exceptionDetails?: { text?: string; exception?: { description?: string } };
+}): { url: string; title: string; bodyText: string } {
+  if (evaluation.exceptionDetails) {
+    const detail =
+      evaluation.exceptionDetails.exception?.description ??
+      evaluation.exceptionDetails.text ??
+      'unknown page evaluation error';
+    throw new Error(`rendered page inspection failed: ${detail}`);
+  }
+  const value = evaluation.result?.value;
+  if (!value || typeof value !== 'object') {
+    throw new Error('rendered page inspection returned no page snapshot');
+  }
+  const page = value as { url?: unknown; title?: unknown; bodyText?: unknown };
+  if (typeof page.url !== 'string' || !page.url.startsWith('http')) {
+    throw new Error('rendered page inspection returned no usable URL');
+  }
+  return {
+    url: page.url,
+    title: typeof page.title === 'string' ? page.title : '',
+    bodyText: typeof page.bodyText === 'string' ? page.bodyText : '',
+  };
 }
 
 export interface CdpBrowserFetchOptions {
@@ -145,6 +413,14 @@ export interface CdpBrowserFetchOptions {
     sameSite?: string;
     expires?: number;
   }>;
+  /** Browser storage to restore before page scripts run. Entries are scoped to
+   * their recorded origin and applied on every matching document navigation. */
+  seedStorage?: Array<{
+    origin: string;
+    kind: 'localStorage' | 'sessionStorage';
+    key: string;
+    value: string;
+  }>;
   /** Opt-in: write a cross-origin response's `Set-Cookie` back into the browser
    *  cookie jar (the cross-origin plain-fetch path can't do this itself). OFF by
    *  default — it changes the jar, so it must be a DELIBERATE decision grounded in
@@ -160,6 +436,24 @@ type LaunchedChromium = Awaited<ReturnType<typeof launchChromium>>;
 type ChromiumLauncher = (opts: Parameters<typeof launchChromium>[0]) => Promise<LaunchedChromium>;
 type CdpConnector = (port: number) => Promise<CdpClient>;
 
+export function buildStorageSeedExpression(
+  records: NonNullable<CdpBrowserFetchOptions['seedStorage']>,
+): string {
+  return `(() => {
+    if (typeof window !== 'undefined' && window.top !== window) return;
+    const records = ${JSON.stringify(records)};
+    for (const record of records) {
+      if (record.origin !== location.origin) continue;
+      try {
+        const storage = record.kind === 'sessionStorage' ? sessionStorage : localStorage;
+        if (storage.getItem(record.key) === null) storage.setItem(record.key, record.value);
+      } catch (error) {
+        throw new Error('__IMPRINT_STORAGE_SEED_FAILED__' + record.kind + ':' + record.key + ':' + String(error));
+      }
+    }
+  })();`;
+}
+
 let chromiumLauncherForTest: ChromiumLauncher | null = null;
 let cdpConnectorForTest: CdpConnector | null = null;
 
@@ -170,49 +464,45 @@ export function __setCdpBrowserFetchHooksForTest(
   cdpConnectorForTest = hooks?.connectCdp ?? null;
 }
 
-/** The registrable domain (eTLD+1, approximated) of a host: the last two labels,
- *  or last three when the penultimate label is a known two-part public suffix
- *  (co.uk, com.au, …). Used to decide whether a cross-origin request is a SIBLING
- *  subdomain under the SAME site (e.g. `global.americanexpress.com` vs
- *  `www.americanexpress.com` → both `americanexpress.com`) versus a genuinely
+export function normalizeCdpResponseHeaders(
+  input: Record<string, unknown>,
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [rawName, rawValue] of Object.entries(input)) {
+    if (rawValue == null || /^\d+$/.test(rawName)) continue;
+    const name = rawName.toLowerCase();
+    const value = String(rawValue).replace(/[\r\n]+/g, ', ');
+    try {
+      const probe = new Headers();
+      probe.set(name, value);
+      const normalized = probe.get(name);
+      if (normalized !== null) headers[name] = normalized;
+    } catch {
+      // CDP may expose malformed pseudo/array entries for large response
+      // headers. They are metadata only and must not fail navigation replay.
+    }
+  }
+  return headers;
+}
+
+/** The registrable domain (eTLD+1) of a host. Private suffixes are enabled so
+ *  independent tenants such as `foo.github.io` never share browser credentials.
+ *  Used to decide whether a cross-origin request is a SIBLING
+ *  subdomain under the SAME site (e.g. `login.example.com` vs
+ *  `www.example.com` → both `example.com`) versus a genuinely
  *  third-party origin (analytics/CDN). Siblings share the page's anti-bot umbrella
  *  and the recording proves they accept the credentialed cross-origin request, so
  *  they must be issued IN-PAGE (live sensor + Chrome CORS) — not via plain fetch.
  *  Site-agnostic: no host literals, derived purely from the URL structure. */
 function registrableDomain(host: string): string {
-  const labels = host.toLowerCase().split('.').filter(Boolean);
-  if (labels.length <= 2) return labels.join('.');
-  // Common multi-part public suffixes where eTLD+1 needs three labels.
-  const twoPartTld = new Set([
-    'co.uk',
-    'co.jp',
-    'co.kr',
-    'co.in',
-    'co.nz',
-    'co.za',
-    'com.au',
-    'com.br',
-    'com.cn',
-    'com.mx',
-    'com.sg',
-    'com.hk',
-    'com.tr',
-    'org.uk',
-    'gov.uk',
-    'ac.uk',
-    'net.au',
-    'org.au',
-  ]);
-  const lastTwo = labels.slice(-2).join('.');
-  if (twoPartTld.has(lastTwo)) return labels.slice(-3).join('.');
-  return lastTwo;
+  return getDomain(host, { allowPrivateDomains: true }) ?? '';
 }
 
 /** Two origins are SIBLINGS when they share a registrable domain but differ in
  *  origin (subdomain and/or scheme). A request to a sibling origin is still under
  *  the page's site/anti-bot umbrella, so it should ride the live in-page sensor +
  *  Chrome's credentialed-CORS engine rather than escaping to plain fetch. */
-function isSiblingOrigin(originA: string, originB: string): boolean {
+export function isSiblingOrigin(originA: string, originB: string): boolean {
   if (originA === originB) return false;
   try {
     const a = new URL(originA);
@@ -235,7 +525,7 @@ function isSiblingOrigin(originA: string, originB: string): boolean {
  *  origin's cookie jar, so we must NOT pass a manual Cookie header (it's stripped
  *  by the caller anyway). `fullUrl` may be same-origin OR an absolute sibling URL.
  *
- *  Some SPAs monkeypatch window.fetch (AmEx's app.js throws from its patched
+ *  Some SPAs monkeypatch window.fetch (application code may throw from its patched
  *  version), so we grab the native fetch from a hidden iframe whose fresh
  *  browsing context has the unpatched global but shares the page cookie jar.
  *  The iframe stays alive until the body is read, then is removed.
@@ -251,7 +541,7 @@ function isSiblingOrigin(originA: string, originB: string): boolean {
  *  origin + native fetch + preflight 200; about:blank/srcdoc → `null`). For a
  *  same-origin request the document origin already equals the request origin, so
  *  `about:blank` (faster, no load wait) is fine and this stays unset. */
-function buildInPageFetchExpr(
+export function buildInPageFetchExpr(
   fullUrl: string,
   method: string,
   headers: Record<string, string>,
@@ -289,19 +579,22 @@ function buildInPageFetchExpr(
           } catch (_) {}
           const ctrl = new AbortController();
           const to = setTimeout(() => ctrl.abort(), ${reqTimeoutMs});
-          const r = await _f(${JSON.stringify(fullUrl)}, {
-            method: ${JSON.stringify(method)},
-            headers: ${JSON.stringify(headers)},
-            ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
-            credentials: 'include',
-            signal: ctrl.signal,
-          });
-          clearTimeout(to);
-          const text = await r.text();
-          const h = {};
-          r.headers.forEach((v, k) => { h[k] = v; });
-          if (ifr) ifr.remove();
-          return { ok: true, status: r.status, body: text, headers: h };
+          try {
+            const r = await _f(${JSON.stringify(fullUrl)}, {
+              method: ${JSON.stringify(method)},
+              headers: ${JSON.stringify(headers)},
+              ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
+              credentials: 'include',
+              signal: ctrl.signal,
+            });
+            const text = await r.text();
+            const h = {};
+            r.headers.forEach((v, k) => { h[k] = v; });
+            if (ifr) ifr.remove();
+            return { ok: true, status: r.status, body: text, headers: h };
+          } finally {
+            clearTimeout(to);
+          }
         } catch (e) {
           if (ifr) try { ifr.remove(); } catch (_) {}
           return { ok: false, error: String(e) };
@@ -387,6 +680,13 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   let bootstrapped = false;
   let appliedUa: string | undefined;
   let bootstrapResponseHeaders: Record<string, string> = {};
+  let currentPageUrl = navUrl;
+  let mainFrameId: string | undefined;
+  let lastDocumentResponse: {
+    url: string;
+    status: number;
+    headers: Record<string, string>;
+  } | null = null;
 
   async function close(): Promise<void> {
     const c = client;
@@ -397,6 +697,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     bootstrapped = false;
     appliedUa = undefined;
     bootstrapResponseHeaders = {};
+    currentPageUrl = navUrl;
+    mainFrameId = undefined;
+    lastDocumentResponse = null;
     try {
       await withTimeout(Promise.resolve(c?.close()), 'CDP client close', 2_000);
     } catch {
@@ -444,15 +747,32 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       await withTimeout(Runtime.enable(), 'CDP Runtime.enable', cdpCommandTimeoutMs);
       await withTimeout(Network.enable(), 'CDP Network.enable', cdpCommandTimeoutMs);
       await withTimeout(Page.enable(), 'CDP Page.enable', cdpCommandTimeoutMs);
+      if (typeof Page.getFrameTree === 'function') {
+        const tree = await withTimeout(
+          Page.getFrameTree(),
+          'CDP Page.getFrameTree',
+          cdpCommandTimeoutMs,
+        );
+        mainFrameId = tree.frameTree?.frame?.id;
+      }
       bootstrapResponseHeaders = {};
       let navDocumentResponseUrl = '';
       const onResponseReceived = (event: {
         type?: string;
-        response?: { url?: string; headers?: Record<string, unknown> };
+        frameId?: string;
+        response?: { url?: string; status?: number; headers?: Record<string, unknown> };
       }) => {
         if (event.type !== 'Document') return;
+        if (mainFrameId && event.frameId && event.frameId !== mainFrameId) return;
         const url = event.response?.url;
         if (!url) return;
+        currentPageUrl = url;
+        const headers = normalizeCdpResponseHeaders(event.response?.headers ?? {});
+        lastDocumentResponse = {
+          url,
+          status: Number(event.response?.status ?? 200),
+          headers,
+        };
         try {
           const responseUrl = new URL(url);
           const targetUrl = new URL(navUrl);
@@ -461,11 +781,6 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           return;
         }
         navDocumentResponseUrl = url;
-        const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(event.response?.headers ?? {})) {
-          if (v == null) continue;
-          headers[k.toLowerCase()] = String(v);
-        }
         bootstrapResponseHeaders = headers;
       };
       Network.responseReceived(onResponseReceived);
@@ -525,6 +840,40 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       } catch {
         // best-effort — a headed launch already has a clean UA
       }
+      let storageSeedError: string | undefined;
+      if (opts.seedStorage && opts.seedStorage.length > 0) {
+        if (
+          typeof Page.addScriptToEvaluateOnNewDocument !== 'function' ||
+          typeof Runtime.exceptionThrown !== 'function'
+        ) {
+          throw new Error('CDP cannot restore required browser storage before navigation');
+        }
+        Runtime.exceptionThrown(
+          (event: {
+            exceptionDetails?: { text?: string; exception?: { description?: string } };
+          }) => {
+            const detail =
+              event.exceptionDetails?.exception?.description ?? event.exceptionDetails?.text ?? '';
+            const marker = '__IMPRINT_STORAGE_SEED_FAILED__';
+            const markerIndex = detail.indexOf(marker);
+            if (markerIndex >= 0) storageSeedError = detail.slice(markerIndex + marker.length);
+          },
+        );
+        try {
+          await withTimeout(
+            Page.addScriptToEvaluateOnNewDocument({
+              source: buildStorageSeedExpression(opts.seedStorage),
+            }),
+            'CDP Page.addScriptToEvaluateOnNewDocument(storage)',
+            cdpCommandTimeoutMs,
+          );
+          log(`registered ${opts.seedStorage.length} browser storage seed entries`);
+        } catch (err) {
+          throw new Error(
+            `browser storage seed registration failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
       // Navigate now (post-override). Page.navigate stalls forever on an Akamai
       // origin ONLY when the UA still says HeadlessChrome; with the override it
       // loads normally. Bound the CDP command and proceed regardless — _abck
@@ -545,6 +894,10 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         }
       } catch (err) {
         log(`navigation issue (continuing): ${err instanceof Error ? err.message : String(err)}`);
+      }
+      await sleep(0);
+      if (typeof storageSeedError === 'string') {
+        throw new Error(`browser storage seed execution failed: ${storageSeedError}`);
       }
       // Give the sensor JS time to start.
       await sleep(3000);
@@ -661,7 +1014,22 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     const c = await ensure();
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-    const fullUrl = url.startsWith('http') ? url : `${baseOrigin}${url}`;
+    let pageUrl = currentPageUrl;
+    try {
+      const { result } = await withTimeout(
+        c.Runtime.evaluate({ expression: 'location.href', returnByValue: true }),
+        'CDP Runtime.evaluate(location.href)',
+        shortCdpTimeoutMs,
+      );
+      if (typeof result.value === 'string' && result.value.startsWith('http')) {
+        pageUrl = result.value;
+        currentPageUrl = pageUrl;
+      }
+    } catch {
+      // Fall back to the last observed Document URL.
+    }
+    const pageOrigin = new URL(pageUrl).origin;
+    const fullUrl = new URL(url, pageUrl).toString();
     const method = (init?.method ?? 'GET').toUpperCase();
     const headers: Record<string, string> = {};
     if (init?.headers) {
@@ -777,8 +1145,8 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     };
 
     // Cross-origin routing. A request to a SIBLING origin (same registrable domain
-    // as the live page, e.g. www → global on `americanexpress.com`) is still under
-    // the page's anti-bot umbrella: the recording shows AmEx CORS-allows the
+    // as the live page, e.g. www → login on `example.com`) is still under
+    // the page's anti-bot umbrella when the site CORS-allows the
     // credentialed cross-origin POST (ACAO names the page origin, ACA-credentials
     // true), and Akamai edge-403s the SAME request when it leaves the browser as a
     // plain fetch (no live sensor, no isTrusted, no `Origin` the edge expects). So
@@ -789,8 +1157,8 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     // ONLY if the browser genuinely CORS-blocks it (in-page payload ok:false). A
     // genuinely third-party origin (analytics/CDN) — NOT a sibling — keeps the plain
     // fetch path: it isn't behind this site's wall and may not CORS-allow the page.
-    if (requestOrigin !== baseOrigin) {
-      if (isSiblingOrigin(requestOrigin, baseOrigin)) {
+    if (requestOrigin !== pageOrigin) {
+      if (isSiblingOrigin(requestOrigin, pageOrigin)) {
         log(`cross-origin SIBLING ${method} ${requestOrigin} via in-page fetch`);
         // Use a SAME-ORIGIN iframe (loaded from the page origin) for the unpatched
         // fetch — NOT about:blank, whose opaque ("null") origin would make the
@@ -799,7 +1167,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         // src gives the iframe the live document's true origin (empirically
         // verified). `/favicon.ico` is a universal, cheap same-origin resource; its
         // status is irrelevant — only that the iframe inherits the origin.
-        const sameOriginIframeSrc = `${baseOrigin}/favicon.ico`;
+        const sameOriginIframeSrc = `${pageOrigin}/favicon.ico`;
         let payload:
           | { ok: true; status: number; body: string; headers: Record<string, string> }
           | { ok: false; error: string };
@@ -827,7 +1195,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
     // Execute the fetch INSIDE the trusted page. credentials:'include' so the
     // browser attaches the validated session cookies. Uses the shared in-page
-    // mechanism (iframe-escape for monkeypatched window.fetch — e.g. AmEx's SPA).
+    // mechanism (iframe-escape for a monkeypatched window.fetch).
     const payload = await runInPageFetch();
     if (!payload.ok) {
       // Surface as a network-style failure so the ladder treats it like a fetch throw.
@@ -839,8 +1207,416 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     });
   }) as typeof fetch;
 
+  const snapshotAllCookies = async (c: CdpClient): Promise<MintedJar['cookies']> => {
+    const cookies: MintedJar['cookies'] = [];
+    try {
+      // With no URL filter CDP returns the dedicated browser's complete jar.
+      // This includes host-only cookies minted on relying-party origins reached
+      // through redirects, which a bootstrap-origin-only query cannot see.
+      const res = await withTimeout(
+        c.Network.getCookies({}),
+        'CDP Network.getCookies(all origins)',
+        cdpCommandTimeoutMs,
+      );
+      for (const ck of res.cookies as unknown as Array<Record<string, unknown>>) {
+        cookies.push({
+          name: ck.name as string,
+          value: ck.value as string,
+          domain: ck.domain as string,
+          path: (ck.path as string) ?? '/',
+          expires:
+            typeof ck.expires === 'number' && ck.expires > 0 ? (ck.expires as number) : undefined,
+          httpOnly: ck.httpOnly as boolean | undefined,
+          secure: ck.secure as boolean | undefined,
+          sameSite: ck.sameSite as string | undefined,
+        });
+      }
+    } catch {
+      // best-effort
+    }
+    return cookies;
+  };
+
+  const readCurrentPageUrl = async (c: CdpClient): Promise<string> => {
+    try {
+      const { result } = await withTimeout(
+        c.Runtime.evaluate({ expression: 'location.href', returnByValue: true }),
+        'CDP Runtime.evaluate(location.href)',
+        shortCdpTimeoutMs,
+      );
+      if (typeof result.value === 'string' && result.value.startsWith('http')) {
+        currentPageUrl = result.value;
+      }
+    } catch {
+      // Fall back to the last Document response observed by Network.
+    }
+    return currentPageUrl;
+  };
+
+  const navigate = async (
+    rawUrl: string,
+    options: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      waitUntil?: 'domcontentloaded' | 'load';
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+      urlIncludes?: string;
+      cookie?: { name: string; domain?: string; path?: string };
+    } = {},
+  ): Promise<Response> => {
+    const c = await ensure();
+    const startUrl = await readCurrentPageUrl(c);
+    const targetUrl = new URL(rawUrl, startUrl).toString();
+    const method = (options.method ?? 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'POST') {
+      throw new Error(`top-level browser navigation does not support ${method}`);
+    }
+    if (method === 'POST') {
+      validateFormPostNavigationHeaders(options.headers ?? {});
+    }
+    const timeoutMs = options.timeoutMs ?? 60_000;
+    const pollIntervalMs = options.pollIntervalMs ?? 250;
+    const lifecyclePromise = (
+      options.waitUntil === 'domcontentloaded'
+        ? c.Page.domContentEventFired()
+        : c.Page.loadEventFired()
+    ).then(
+      () => true,
+      () => false,
+    );
+
+    lastDocumentResponse = null;
+    if (method === 'GET') {
+      await withTimeout(
+        c.Page.navigate({ url: targetUrl }),
+        `CDP Page.navigate(${new URL(targetUrl).origin})`,
+        Math.min(timeoutMs, cdpCommandTimeoutMs),
+      );
+    } else {
+      const evaluation = await withTimeout(
+        c.Runtime.evaluate({
+          expression: buildFormPostNavigationExpr(targetUrl, options.body ?? ''),
+          returnByValue: true,
+        }),
+        `CDP Runtime.evaluate(form POST to ${new URL(targetUrl).origin})`,
+        Math.min(timeoutMs, cdpCommandTimeoutMs),
+      );
+      if (evaluation.exceptionDetails) {
+        const detail =
+          evaluation.exceptionDetails.exception?.description ?? evaluation.exceptionDetails.text;
+        throw new Error(`browser form preparation failed: ${detail}`);
+      }
+      const directive = evaluation.result.value as
+        | {
+            action?: unknown;
+            x?: unknown;
+            y?: unknown;
+            tag?: unknown;
+            type?: unknown;
+            typedFields?: unknown;
+          }
+        | undefined;
+      if (
+        directive?.action === 'click' &&
+        typeof directive.x === 'number' &&
+        typeof directive.y === 'number'
+      ) {
+        await withTimeout(
+          c.Page.bringToFront(),
+          'CDP Page.bringToFront(form)',
+          cdpCommandTimeoutMs,
+        );
+        const typedFields = Array.isArray(directive.typedFields)
+          ? directive.typedFields.filter(
+              (field): field is { index: number; value: string } =>
+                Boolean(field) &&
+                typeof field === 'object' &&
+                typeof (field as { index?: unknown }).index === 'number' &&
+                typeof (field as { value?: unknown }).value === 'string',
+            )
+          : [];
+        for (const field of typedFields) {
+          const focused = await withTimeout(
+            c.Runtime.evaluate({
+              expression: `(() => {
+                const control = window.__imprintForm?.elements?.[${field.index}];
+                if (!control) return false;
+                control.focus();
+                control.value = '';
+                return document.activeElement === control;
+              })()`,
+              returnByValue: true,
+            }),
+            'CDP Runtime.evaluate(form field focus)',
+            cdpCommandTimeoutMs,
+          );
+          if (focused.result.value !== true) {
+            throw new Error(`browser form field at index ${field.index} could not be focused`);
+          }
+          for (const character of field.value) {
+            await withTimeout(
+              c.Input.dispatchKeyEvent({ type: 'char', text: character }),
+              'CDP Input.dispatchKeyEvent(form character)',
+              cdpCommandTimeoutMs,
+            );
+            await sleep(15 + Math.floor(Math.random() * 26));
+          }
+        }
+        const focusProbe = await withTimeout(
+          c.Runtime.evaluate({
+            expression:
+              'window.__imprintSubmitter?.focus(); document.activeElement === window.__imprintSubmitter',
+            returnByValue: true,
+          }),
+          'CDP Runtime.evaluate(form focus restore)',
+          cdpCommandTimeoutMs,
+        );
+        const targetProbe = await withTimeout(
+          c.Runtime.evaluate({
+            expression: `(() => {
+              const target = window.__imprintSubmitter;
+              if (!target) return null;
+              const rect = target.getBoundingClientRect();
+              const x = rect.left + rect.width / 2;
+              const y = rect.top + rect.height / 2;
+              const hit = document.elementFromPoint(x, y);
+              return { x, y, hit: hit === target || target.contains(hit) };
+            })()`,
+            returnByValue: true,
+          }),
+          'CDP Runtime.evaluate(form click target)',
+          cdpCommandTimeoutMs,
+        );
+        const liveTarget = targetProbe.result.value as {
+          x?: unknown;
+          y?: unknown;
+          hit?: unknown;
+        } | null;
+        if (typeof liveTarget?.x !== 'number' || typeof liveTarget.y !== 'number') {
+          throw new Error('browser form submit control lost its rendered position');
+        }
+        const clickX = liveTarget.x;
+        const clickY = liveTarget.y;
+        log(
+          `form POST: trusted click on ${String(directive.tag ?? 'control')} type=${String(directive.type ?? 'unknown')} focused=${focusProbe.result.value === true} hit=${liveTarget.hit === true}`,
+        );
+        const timestamp = Date.now() / 1000;
+        await withTimeout(
+          c.Input.dispatchMouseEvent({
+            type: 'mouseMoved',
+            x: clickX,
+            y: clickY,
+            timestamp,
+          }),
+          'CDP Input.dispatchMouseEvent(form mouseMoved)',
+          cdpCommandTimeoutMs,
+        );
+        await sleep(100);
+        await withTimeout(
+          c.Input.dispatchMouseEvent({
+            type: 'mousePressed',
+            button: 'left',
+            buttons: 1,
+            clickCount: 1,
+            x: clickX,
+            y: clickY,
+            timestamp,
+          }),
+          'CDP Input.dispatchMouseEvent(form mousePressed)',
+          cdpCommandTimeoutMs,
+        );
+        await sleep(50);
+        await withTimeout(
+          c.Input.dispatchMouseEvent({
+            type: 'mouseReleased',
+            button: 'left',
+            clickCount: 1,
+            x: clickX,
+            y: clickY,
+            timestamp: Date.now() / 1000,
+          }),
+          'CDP Input.dispatchMouseEvent(form mouseReleased)',
+          cdpCommandTimeoutMs,
+        );
+        await sleep(250);
+        const clickProbe = await withTimeout(
+          c.Runtime.evaluate({
+            expression: 'window.__imprintFormClickObserved === true',
+            returnByValue: true,
+          }),
+          'CDP Runtime.evaluate(form click probe)',
+          cdpCommandTimeoutMs,
+        ).catch(() => null);
+        let clickObserved = clickProbe?.result.value === true;
+        const navigationObserved = lastDocumentResponse !== null;
+        log(`form POST: click observed=${clickObserved} navigation observed=${navigationObserved}`);
+        if (!clickObserved && !navigationObserved) {
+          await withTimeout(
+            c.Input.dispatchKeyEvent({
+              type: 'rawKeyDown',
+              key: 'Enter',
+              code: 'Enter',
+              windowsVirtualKeyCode: 13,
+              nativeVirtualKeyCode: 13,
+            }),
+            'CDP Input.dispatchKeyEvent(form Enter down)',
+            cdpCommandTimeoutMs,
+          );
+          await sleep(50);
+          await withTimeout(
+            c.Input.dispatchKeyEvent({
+              type: 'keyUp',
+              key: 'Enter',
+              code: 'Enter',
+              windowsVirtualKeyCode: 13,
+              nativeVirtualKeyCode: 13,
+            }),
+            'CDP Input.dispatchKeyEvent(form Enter up)',
+            cdpCommandTimeoutMs,
+          );
+          await sleep(250);
+          const keyProbe = await withTimeout(
+            c.Runtime.evaluate({
+              expression: 'window.__imprintFormClickObserved === true',
+              returnByValue: true,
+            }),
+            'CDP Runtime.evaluate(form key probe)',
+            cdpCommandTimeoutMs,
+          ).catch(() => null);
+          clickObserved = keyProbe?.result.value === true;
+          log(`form POST: Enter fallback click observed=${clickObserved}`);
+        }
+      }
+    }
+
+    const hasPredicate = Boolean(options.urlIncludes || options.cookie);
+    if (!hasPredicate) {
+      await withTimeout(lifecyclePromise, `CDP Page.${options.waitUntil ?? 'load'}`, timeoutMs);
+    } else {
+      const deadline = Date.now() + timeoutMs;
+      let lastUrl = targetUrl;
+      while (Date.now() < deadline) {
+        lastUrl = await readCurrentPageUrl(c);
+        const urlMatches = !options.urlIncludes || lastUrl.includes(options.urlIncludes);
+        let cookieMatches = !options.cookie;
+        if (options.cookie) {
+          const expectedDomain = options.cookie.domain?.replace(/^\./, '').toLowerCase();
+          const allCookies = await snapshotAllCookies(c);
+          cookieMatches = allCookies.some((cookie) => {
+            if (cookie.name !== options.cookie?.name) return false;
+            if (
+              expectedDomain &&
+              cookie.domain.replace(/^\./, '').toLowerCase() !== expectedDomain
+            ) {
+              return false;
+            }
+            return !options.cookie?.path || cookie.path === options.cookie.path;
+          });
+        }
+        if (urlMatches && cookieMatches) break;
+        await sleep(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
+      }
+
+      await withTimeout(
+        lifecyclePromise,
+        `CDP Page.${options.waitUntil ?? 'load'} after navigation predicate`,
+        Math.max(1, deadline - Date.now()),
+      );
+      // The lifecycle event precedes some async form/challenge initialization.
+      await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
+
+      const finalUrl = await readCurrentPageUrl(c);
+      const allCookies = await snapshotAllCookies(c);
+      const expectedDomain = options.cookie?.domain?.replace(/^\./, '').toLowerCase();
+      const matchedCookie = !options.cookie
+        ? true
+        : allCookies.some((cookie) => {
+            if (cookie.name !== options.cookie?.name) return false;
+            if (
+              expectedDomain &&
+              cookie.domain.replace(/^\./, '').toLowerCase() !== expectedDomain
+            ) {
+              return false;
+            }
+            return !options.cookie?.path || cookie.path === options.cookie.path;
+          });
+      if ((options.urlIncludes && !finalUrl.includes(options.urlIncludes)) || !matchedCookie) {
+        const criteria = [
+          options.urlIncludes ? `URL containing ${JSON.stringify(options.urlIncludes)}` : null,
+          options.cookie ? `cookie ${options.cookie.name}` : null,
+        ]
+          .filter(Boolean)
+          .join(' and ');
+        throw new Error(
+          `browser navigation timed out after ${timeoutMs}ms waiting for ${criteria}; final URL was ${finalUrl}`,
+        );
+      }
+    }
+
+    currentPageUrl = await readCurrentPageUrl(c);
+    let html = '';
+    try {
+      const { result } = await withTimeout(
+        c.Runtime.evaluate({
+          expression: 'document.documentElement.outerHTML',
+          returnByValue: true,
+        }),
+        'CDP Runtime.evaluate(document HTML after navigate)',
+        cdpCommandTimeoutMs,
+      );
+      html = String(result.value ?? '');
+    } catch {
+      // A navigation can still be successful when the final document is empty.
+    }
+    const doc = lastDocumentResponse as {
+      url: string;
+      status: number;
+      headers: Record<string, string>;
+    } | null;
+    const status = doc && doc.status >= 200 && doc.status <= 599 ? doc.status : 200;
+    return new Response(html, {
+      status,
+      headers: new Headers({
+        ...(doc?.headers ?? {}),
+        'x-imprint-final-url': currentPageUrl,
+      }),
+    });
+  };
+
   return {
     fetchImpl,
+    navigate,
+    async inspectPage(): Promise<CdpPageSnapshot> {
+      const c = await ensure();
+      const evaluation = await withTimeout(
+        c.Runtime.evaluate({
+          expression:
+            '({ url: location.href, title: document.title, bodyText: document.body?.innerText ?? "" })',
+          returnByValue: true,
+        }),
+        'CDP Runtime.evaluate(rendered page inspection)',
+        cdpCommandTimeoutMs,
+      );
+      const page = parseCdpPageInspectionResult(evaluation);
+      const cookies = await snapshotAllCookies(c);
+      return {
+        ...page,
+        cookies: cookies.map((cookie) => ({
+          name: cookie.name,
+          domain: cookie.domain,
+          path: cookie.path,
+          expires: cookie.expires,
+          httpOnly: cookie.httpOnly,
+          secure: cookie.secure,
+          sameSite: cookie.sameSite,
+        })),
+      };
+    },
+    async snapshotCookies() {
+      return snapshotAllCookies(await ensure());
+    },
     async ensureBootstrapped() {
       const c = await ensure();
       try {
@@ -859,29 +1635,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     },
     async mintJar(): Promise<MintedJar> {
       const c = await ensure();
-      const cookies: MintedJar['cookies'] = [];
-      try {
-        const res = await withTimeout(
-          c.Network.getCookies({ urls: [baseOrigin] }),
-          'CDP Network.getCookies',
-          cdpCommandTimeoutMs,
-        );
-        for (const ck of res.cookies as unknown as Array<Record<string, unknown>>) {
-          cookies.push({
-            name: ck.name as string,
-            value: ck.value as string,
-            domain: ck.domain as string,
-            path: (ck.path as string) ?? '/',
-            expires:
-              typeof ck.expires === 'number' && ck.expires > 0 ? (ck.expires as number) : undefined,
-            httpOnly: ck.httpOnly as boolean | undefined,
-            secure: ck.secure as boolean | undefined,
-            sameSite: ck.sameSite as string | undefined,
-          });
-        }
-      } catch {
-        // best-effort
-      }
+      const cookies = await snapshotAllCookies(c);
       let html = '';
       try {
         const { result } = await withTimeout(

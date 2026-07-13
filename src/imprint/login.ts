@@ -10,8 +10,15 @@ import {
   upsertManifestEntry,
 } from './credential-store.ts';
 import { localSiteDir } from './paths.ts';
-import { captureHeader, jsonpath } from './request-capture.ts';
-import { type RequestCapture, type Session, SessionSchema, WorkflowSchema } from './types.ts';
+import { recordedRequestMatchesWorkflow } from './recording-request.ts';
+import { captureHeader, captureValueMatches, jsonpath } from './request-capture.ts';
+import {
+  type RequestCapture,
+  type Session,
+  SessionSchema,
+  type WorkflowRequest,
+  WorkflowSchema,
+} from './types.ts';
 
 interface LoginOptions {
   site: string;
@@ -48,7 +55,7 @@ export async function login(opts: LoginOptions): Promise<LoginResult> {
     upsertManifestEntry(opts.site, {
       name,
       kind: 'opaque',
-      description: 'Captured from the recorded login response (authConfig.sessionCapture)',
+      description: 'Captured from the recorded login response (authConfig.persist)',
     });
   }
 
@@ -73,8 +80,22 @@ function collectCookies(session: Session) {
 
 function collectStorage(session: Session): StorageRecord[] {
   const snaps = session.storageSnapshots ?? [];
-  const end = snaps.filter((s) => s.label === 'end');
-  const chosen = end.length > 0 ? end : snaps.filter((s) => s.label === 'start');
+  const byOrigin = new Map<
+    string,
+    { start?: (typeof snaps)[number]; end?: (typeof snaps)[number] }
+  >();
+  for (const snap of snaps) {
+    if (snap.label === 'manual') continue;
+    const candidates = byOrigin.get(snap.origin) ?? {};
+    const current = candidates[snap.label];
+    if (!current || snap.timestamp >= current.timestamp) candidates[snap.label] = snap;
+    byOrigin.set(snap.origin, candidates);
+  }
+  const chosen: (typeof snaps)[number][] = [];
+  for (const { start, end } of byOrigin.values()) {
+    const snap = end ?? start;
+    if (snap) chosen.push(snap);
+  }
   const byKey = new Map<string, StorageRecord>();
   for (const snap of chosen) {
     for (const [key, value] of Object.entries(snap.localStorage ?? {})) {
@@ -85,16 +106,28 @@ function collectStorage(session: Session): StorageRecord[] {
         value,
       });
     }
+    for (const [key, value] of Object.entries(snap.sessionStorage ?? {})) {
+      byKey.set(`${snap.origin}\0sessionStorage\0${key}`, {
+        origin: snap.origin,
+        kind: 'sessionStorage',
+        key,
+        value,
+      });
+    }
   }
   return Array.from(byKey.values());
 }
 
-/** Gather every durable `authConfig.sessionCapture` declared by the site's
- *  compiled workflows (`~/.imprint/<site>/<tool>/workflow.json`). Deduped by
- *  name (first workflow to declare a capture wins). Returns `[]` when the site
- *  has no compiled tools or none declare captures — there is no per-site code,
- *  so a new authed site works as soon as its workflow declares what it needs. */
-function collectSessionCaptures(site: string): RequestCapture[] {
+/** Gather the request captures named by each auth program's `persist` list. */
+interface SessionCaptureBinding {
+  capture: RequestCapture;
+  recordingRequestSeq?: number;
+  method: string;
+  url: string;
+  body?: string;
+}
+
+function collectSessionCaptures(site: string): SessionCaptureBinding[] {
   const siteDir = localSiteDir(site);
   let entries: string[];
   try {
@@ -102,8 +135,27 @@ function collectSessionCaptures(site: string): RequestCapture[] {
   } catch {
     return [];
   }
-  const captures: RequestCapture[] = [];
-  const seen = new Set<string>();
+  const captures: SessionCaptureBinding[] = [];
+  const byName = new Map<string, SessionCaptureBinding>();
+  const addCapture = (capture: RequestCapture, request: WorkflowRequest): void => {
+    const binding = {
+      capture,
+      recordingRequestSeq: request.recordingRequestSeq,
+      method: request.method,
+      url: request.url,
+      body: request.body,
+    };
+    const existing = byName.get(capture.name);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(binding)) {
+      throw new Error(
+        `Persisted capture ${JSON.stringify(capture.name)} has conflicting producing requests. Regenerate the auth workflow with unique capture names.`,
+      );
+    }
+    if (!existing) {
+      byName.set(capture.name, binding);
+      captures.push(binding);
+    }
+  };
   for (const entry of entries) {
     let workflow: ReturnType<typeof WorkflowSchema.parse>;
     try {
@@ -113,10 +165,21 @@ function collectSessionCaptures(site: string): RequestCapture[] {
     } catch {
       continue; // not a tool dir, unreadable, or not a valid workflow
     }
-    for (const capture of workflow.authConfig?.sessionCapture ?? []) {
-      if (seen.has(capture.name)) continue;
-      seen.add(capture.name);
-      captures.push(capture);
+    const persisted = new Set(workflow.authConfig?.persist ?? []);
+    for (const request of workflow.requests) {
+      for (const capture of request.captures ?? []) {
+        if (!persisted.has(capture.name)) continue;
+        addCapture(capture, request);
+      }
+    }
+    for (const action of Object.values(workflow.authConfig?.actions ?? {})) {
+      for (const step of action.steps) {
+        const capture = step.repeat?.until;
+        const request = workflow.requests[step.request];
+        if (capture && request && persisted.has(capture.name)) {
+          addCapture(capture, request);
+        }
+      }
     }
   }
   return captures;
@@ -127,12 +190,28 @@ function collectSessionCaptures(site: string): RequestCapture[] {
  *  the runtime uses, so a locator behaves identically here and during replay.
  *  Cookie-source captures are skipped (cookies are persisted wholesale by
  *  `collectCookies`). */
-function resolveCapture(session: Session, capture: RequestCapture): string | undefined {
-  for (const req of session.requests) {
+function resolveCapture(session: Session, binding: SessionCaptureBinding): string | undefined {
+  const workflowRequest = { method: binding.method, url: binding.url, body: binding.body };
+  const exact =
+    binding.recordingRequestSeq === undefined
+      ? undefined
+      : session.requests.find(
+          (request) =>
+            request.seq === binding.recordingRequestSeq &&
+            recordedRequestMatchesWorkflow(request, workflowRequest),
+        );
+  const fallback = session.requests
+    .filter(
+      (request) => request !== exact && recordedRequestMatchesWorkflow(request, workflowRequest),
+    )
+    .reverse();
+  const requests = exact ? [exact, ...fallback] : fallback;
+  for (const req of requests) {
     const response = req.response;
     if (!response) continue;
     const body = response.body ?? '';
     let value: unknown;
+    const { capture } = binding;
     switch (capture.source) {
       case 'json': {
         let parsed: unknown;
@@ -145,7 +224,10 @@ function resolveCapture(session: Session, capture: RequestCapture): string | und
         break;
       }
       case 'response_header':
-        value = captureHeader(new Headers(response.headers ?? {}), capture.header, capture.mode);
+        value =
+          capture.header.toLowerCase() === 'x-imprint-final-url'
+            ? req.url
+            : captureHeader(new Headers(response.headers ?? {}), capture.header, capture.mode);
         break;
       case 'text_regex': {
         const match = body.match(new RegExp(capture.pattern));
@@ -155,20 +237,20 @@ function resolveCapture(session: Session, capture: RequestCapture): string | und
       case 'cookie':
         continue; // cookies are persisted by collectCookies, not as secrets here
     }
-    if (value !== undefined && value !== null && value !== '') {
+    if (captureValueMatches(value, capture.equals)) {
       return Array.isArray(value) ? value.join(',') : String(value);
     }
   }
   return undefined;
 }
 
-/** Resolve all of a site's declared `sessionCapture` credential slots from the
+/** Resolve all captures selected by a site's `authConfig.persist` list from the
  *  recording. Fully generic — no per-site logic. Exported for tests. */
 export function extractCredentials(site: string, session: Session): Record<string, string> {
   const values: Record<string, string> = {};
-  for (const capture of collectSessionCaptures(site)) {
-    const value = resolveCapture(session, capture);
-    if (value !== undefined) values[capture.name] = value;
+  for (const binding of collectSessionCaptures(site)) {
+    const value = resolveCapture(session, binding);
+    if (value !== undefined) values[binding.capture.name] = value;
   }
   return values;
 }

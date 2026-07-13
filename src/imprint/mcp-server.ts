@@ -4,6 +4,7 @@
  * See docs/getting-started.md for Claude Desktop / mcp-inspector wire-up.
  */
 
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
 import { resolve as pathResolve } from 'node:path';
@@ -30,7 +31,7 @@ import {
   buildZodValidator,
   discoverTools,
 } from './tool-loader.ts';
-import type { ConcreteBackend, ToolResult, WorkflowParameter } from './types.ts';
+import type { ConcreteBackend, ToolResult, Workflow, WorkflowParameter } from './types.ts';
 import { VERSION } from './version.ts';
 
 interface RunMcpServerOptions {
@@ -70,9 +71,12 @@ function buildToolDescription(w: ResolvedTool['workflow']): string {
  *  workflow parameters rather than going through Zod. */
 export function buildJsonSchema(
   parameters: WorkflowParameter[],
-  opts?: { includeTwoFactorContext?: boolean },
+  opts?: { authConfig?: Workflow['authConfig'] },
 ): Tool['inputSchema'] {
-  const properties: Record<string, { type: string; description: string }> = {};
+  const properties: Record<
+    string,
+    { type: string; description: string; enum?: Array<string | number | boolean> }
+  > = {};
   const required: string[] = [];
   for (const p of parameters) {
     // Producer-sourced params: tell the orchestrating LLM where to mint/derive
@@ -81,18 +85,24 @@ export function buildJsonSchema(
     const description = p.sourcedFrom
       ? `${p.description} Obtain this value from the \`${p.sourcedFrom.tool}\` tool's \`${p.sourcedFrom.field}\` output — call \`${p.sourcedFrom.tool}\` first and reuse the value across calls (no need to re-fetch each time).`
       : p.description;
-    properties[p.name] = { type: p.type, description };
-    if (p.default === undefined) required.push(p.name);
+    const property: { type: string; description: string; enum?: Array<string | number | boolean> } =
+      {
+        type: p.type,
+        description,
+      };
+    if (p.choices?.length) property.enum = p.choices;
+    properties[p.name] = property;
+    if (p.default === undefined && !opts?.authConfig) required.push(p.name);
   }
-  // Auth 2FA bridge (stateless): on the second (submit_otp) call the caller
-  // passes back the `twoFactorContext` object echoed verbatim in the prior
-  // AWAITING_2FA result, so a login token captured on the first call is
-  // available to the completion request. Never required (absent on initiate).
-  if (opts?.includeTwoFactorContext) {
-    properties.twoFactorContext = {
-      type: 'object',
-      description:
-        'Only for the submit_otp call: pass back the `twoFactorContext` object returned verbatim in the previous AWAITING_2FA response.',
+  if (opts?.authConfig) {
+    properties.action = {
+      type: 'string',
+      description: `Auth action to run. Defaults to ${JSON.stringify(opts.authConfig.entry)}.`,
+      enum: Object.keys(opts.authConfig.actions),
+    };
+    properties.continuation = {
+      type: 'string',
+      description: 'One-use opaque token returned by the previous auth action.',
     };
   }
   return {
@@ -103,6 +113,33 @@ export function buildJsonSchema(
 }
 
 const log = createLog('mcp');
+
+interface StoredAuthContinuation {
+  toolName: string;
+  nextAction?: string;
+  state: Record<string, unknown>;
+}
+
+export class AuthContinuationStore {
+  private readonly values = new Map<string, StoredAuthContinuation>();
+
+  issue(value: StoredAuthContinuation): string {
+    const token = randomUUID();
+    this.values.set(token, value);
+    return token;
+  }
+
+  consume(token: string, toolName: string, action: string): Record<string, unknown> | undefined {
+    const value = this.values.get(token);
+    this.values.delete(token);
+    if (!value || value.toolName !== toolName || value.nextAction !== action) return undefined;
+    return value.state;
+  }
+
+  clear(): void {
+    this.values.clear();
+  }
+}
 
 export async function runSerializedBySite<T>(
   queues: Map<string, Promise<void>>,
@@ -141,12 +178,20 @@ function buildServer(
     {
       capabilities: { tools: {} },
       instructions:
-        'Imprint runs deterministic workflows captured from real browser sessions. Tools prefer fetch API replay, may use gated fetch-bootstrap only for declared browser-minted state, then cdp-replay (API requests run inside a live trusted Chrome so a protected POST refreshes its anti-bot token between calls) for multi-step state-changing flows, then stealth-fetch for bot-defense state, and playbook only for full DOM interaction. Error codes: AUTH_EXPIRED (401, call authenticate_<site> if available or run `imprint login <site>`); AWAITING_2FA (2FA required — approve push / enter OTP then call again with action=complete); STATE_MISSING (required cookie/state was unavailable or ambiguous); FORBIDDEN (403); RATE_LIMITED (429, back off); BAD_RESPONSE (other 4xx/5xx); NETWORK (fetch failed); UNKNOWN (everything else).',
+        'Imprint runs deterministic workflows captured from real browser sessions. Data tools can escalate through API, browser, and playbook backends. Authenticate tools execute their compiled action program without playbooks. Error codes: AUTH_EXPIRED (401); ACTION_REQUIRED (run nextAction and pass continuation back unchanged); STATE_MISSING; FORBIDDEN; RATE_LIMITED; BAD_RESPONSE; NETWORK; UNKNOWN.',
     },
   );
 
   const validators = new Map(
-    tools.map((t) => [t.workflow.toolName, buildZodValidator(t.workflow.parameters)] as const),
+    tools.map(
+      (t) =>
+        [
+          t.workflow.toolName,
+          buildZodValidator(t.workflow.parameters, {
+            allOptional: t.workflow.toolKind === 'authenticate',
+          }),
+        ] as const,
+    ),
   );
 
   // Per-site stealth-fetch cache so the ~12s bootstrap runs once per site.
@@ -156,6 +201,7 @@ function buildServer(
   // the first successful call so subsequent calls reuse it (~2-5s vs ~33s).
   const cdpPool = new Map<string, CdpBrowserFetch>();
   const cdpIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const authContinuations = new AuthContinuationStore();
   const CDP_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
   // Per-tool memo of the winning backend for THIS server session. After the
@@ -208,16 +254,31 @@ function buildServer(
       string | number | boolean
     >;
 
-    // Auth 2FA bridge (stateless): the validator strips unknown keys, so read the
-    // echoed `twoFactorContext` from the raw arguments and seed it as initialState
-    // so a token captured on the initiate call resolves on this submit_otp call.
     const rawArgs = (req.params.arguments ?? {}) as Record<string, unknown>;
-    const initialState =
-      tool.workflow.toolKind === 'authenticate' &&
-      rawArgs.twoFactorContext &&
-      typeof rawArgs.twoFactorContext === 'object'
-        ? (rawArgs.twoFactorContext as Record<string, unknown>)
-        : undefined;
+    if (tool.workflow.toolKind === 'authenticate' && typeof rawArgs.action === 'string') {
+      args.action = rawArgs.action;
+    }
+    let initialState: Record<string, unknown> | undefined;
+    if (tool.workflow.toolKind === 'authenticate' && rawArgs.continuation !== undefined) {
+      const action = String(args.action ?? tool.workflow.authConfig?.entry ?? '');
+      if (typeof rawArgs.continuation !== 'string') {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'Invalid continuation token.' }],
+        };
+      }
+      initialState = authContinuations.consume(
+        rawArgs.continuation,
+        tool.workflow.toolName,
+        action,
+      );
+      if (!initialState) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'Invalid or expired continuation token.' }],
+        };
+      }
+    }
 
     try {
       return await runSerializedBySite(siteExecutionQueues, tool.site, async () => {
@@ -293,7 +354,16 @@ function buildServer(
           cdpIdleTimers.set(tool.site, timer);
         }
         if (!result.ok) {
-          const text = formatToolError(result);
+          const continuationToken =
+            tool.workflow.toolKind === 'authenticate' && result.continuation
+              ? authContinuations.issue({
+                  toolName: tool.workflow.toolName,
+                  nextAction:
+                    result.nextAction ?? String(args.action ?? tool.workflow.authConfig?.entry),
+                  state: result.continuation,
+                })
+              : undefined;
+          const text = formatToolError(result, continuationToken);
           return {
             isError: true,
             content: [{ type: 'text', text: `${text}\n(backend: ${usedBackend})` }],
@@ -331,12 +401,16 @@ function buildServer(
     for (const timer of cdpIdleTimers.values()) clearTimeout(timer);
     cdpIdleTimers.clear();
     winnerCache.clear();
+    authContinuations.clear();
   }
 
   return { server, closeCdpPool };
 }
 
-function formatToolError(result: Extract<ToolResult, { ok: false }>): string {
+function formatToolError(
+  result: Extract<ToolResult, { ok: false }>,
+  continuationToken?: string,
+): string {
   const lines = [`[${result.error}] ${result.message}`];
   if (result.error === 'STATE_MISSING' && result.missing?.length) {
     for (const item of result.missing) {
@@ -345,11 +419,8 @@ function formatToolError(result: Extract<ToolResult, { ok: false }>): string {
       );
     }
   }
-  // Auth 2FA bridge (stateless): echo the captured login context back to the
-  // caller so it can pass it as `twoFactorContext` on the submit_otp call.
-  if (result.error === 'AWAITING_2FA' && result.twoFactorContext) {
-    lines.push(`  twoFactorContext: ${JSON.stringify(result.twoFactorContext)}`);
-  }
+  if (result.nextAction) lines.push(`  nextAction: ${result.nextAction}`);
+  if (continuationToken) lines.push(`  continuation: ${JSON.stringify(continuationToken)}`);
   if (result.remediation) lines.push(`  → ${result.remediation}`);
   return lines.join('\n');
 }
@@ -370,7 +441,7 @@ export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
     return {
       ...t,
       inputSchema: buildJsonSchema(t.workflow.parameters, {
-        includeTwoFactorContext: t.workflow.toolKind === 'authenticate',
+        authConfig: t.workflow.toolKind === 'authenticate' ? t.workflow.authConfig : undefined,
       }),
       playbookPath: existsSync(playbookPath) ? playbookPath : undefined,
       preferredOrder: cacheStatus.status === 'ok' ? cacheStatus.cache.preferredOrder : undefined,

@@ -10,10 +10,14 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
-import { type Span, context as otelContext } from '@opentelemetry/api';
+import type { Span } from '@opentelemetry/api';
 import type { AuthCliCompileMode } from './auth-compile-tools.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
-import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
+import type {
+  AuthCheckpoint,
+  CompileAgentProgress,
+  CompileAgentResult,
+} from './compile-agent-types.ts';
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
@@ -61,11 +65,17 @@ interface CompileViaCodexCliOptions {
   toolPlan?: string;
   /** Present → drive an auth compile rather than a data compile. */
   authMode?: AuthCliCompileMode;
+  /** Auth segments only: resume the same non-interactive Codex session. */
+  resume?: { sessionId: string; message: string };
+  /** Explicit model selected by the caller. Defaults to the provider preference. */
+  model?: string;
 }
 
 interface CodexJsonEvent {
   type: string;
   thread_id?: string;
+  response_item?: unknown;
+  event_msg?: unknown;
   item?: {
     id?: string;
     type?: string;
@@ -106,7 +116,7 @@ export async function compileViaCodexCli(
       'imprint.tool_name': opts.candidate?.toolName,
       'imprint.session_path': opts.sessionPath,
       'imprint.tool_dir': opts.absoluteToolDir,
-      'imprint.model': preferredAgentModel('codex-cli'),
+      'imprint.model': opts.model ?? preferredAgentModel('codex-cli'),
     },
     async (span) => {
       const result = await compileViaCodexCliImpl(opts, span);
@@ -129,7 +139,11 @@ async function compileViaCodexCliImpl(
   traceSpan?: Span,
 ): Promise<CompileAgentResult> {
   mkdirSync(opts.absoluteToolDir, { recursive: true });
-  for (const name of [COMPILE_SENTINELS.done, COMPILE_SENTINELS.giveUp]) {
+  for (const name of [
+    COMPILE_SENTINELS.done,
+    COMPILE_SENTINELS.giveUp,
+    COMPILE_SENTINELS.checkpoint,
+  ]) {
     const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
       try {
@@ -153,7 +167,9 @@ async function compileViaCodexCliImpl(
   }
 
   // Auth and data compiles share the spawn + JSONL driver below; only the MCP
-  // server args and the initial prompt body differ.
+  // server args and the initial prompt body differ. Auth compiles are resumable
+  // segments; resumed segments get only the orchestrator result as the next
+  // user message because Codex restores the prior conversation by session id.
   let mcpArgs: string[];
   let initialPrompt: string;
 
@@ -171,13 +187,9 @@ async function compileViaCodexCliImpl(
       '--auth-plan-json',
       opts.authMode.authPlanJson,
     ];
-    initialPrompt = `<system_instructions>
-${systemPrompt}
-</system_instructions>
-
-${opts.authMode.initialPrompt}
-
-Use the imprint-compile MCP tools to inspect the session, write workflow.json, test it live, and call done() when the auth works.`;
+    initialPrompt = opts.resume
+      ? opts.resume.message
+      : buildAuthCodexInitialPrompt(systemPrompt, opts.authMode.initialPrompt);
   } else {
     mcpArgs = [
       'run',
@@ -212,7 +224,7 @@ ${formatToolPlan(opts.toolPlan)}
 Use the imprint-compile MCP tools to inspect the session, write artifacts, run tests, and call done(). Begin by calling read_session_summary, then proceed per the system instructions.`;
   }
 
-  const model = preferredAgentModel('codex-cli');
+  const model = opts.model ?? preferredAgentModel('codex-cli');
   const initialTokenCount = resolveTraceTokenCount(null, initialPrompt);
   const captureLlmIo = traceLlmIoEnabled();
   const mcpToolTimeoutSec = resolveMcpToolTimeoutSec(opts.deadlineMs);
@@ -237,15 +249,18 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     'imprint.compile.initial_prompt_chars': initialPrompt.length,
   });
 
+  const execArgs = opts.resume
+    ? ['exec', 'resume']
+    : [
+        'exec',
+        // Data compiles are single-shot. Auth compiles need persisted sessions
+        // because run_verification checkpoints resume through `codex exec resume`.
+        ...(!opts.authMode ? ['--ephemeral'] : []),
+      ];
+
   const args = [
     '-a',
     'never',
-    'exec',
-    '--json',
-    '--ephemeral',
-    '--ignore-user-config',
-    '--ignore-rules',
-    '--skip-git-repo-check',
     '-C',
     REPO_ROOT,
     '-s',
@@ -261,11 +276,26 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     '-c',
     `mcp_servers.${MCP_SERVER_NAME}.tool_timeout_sec=${mcpToolTimeoutSec}`,
     '-c',
+    `mcp_servers.${MCP_SERVER_NAME}.required=true`,
+    '-c',
     'shell_environment_policy.inherit=all',
+    ...execArgs,
+    // Compiler subprocesses need only the explicitly configured imprint MCP
+    // server. Desktop plugins add unrelated tools/instructions and can delay the
+    // mandatory first auth MCP call long enough to trip the progress watchdog.
+    '--disable',
+    'plugins',
+    '--json',
+    '--ignore-user-config',
+    '--ignore-rules',
+    '--skip-git-repo-check',
+    ...(opts.resume ? [opts.resume.sessionId] : []),
     '-',
   ];
 
-  log(`spawning codex (mcp-server=${MCP_SERVER_NAME})`);
+  log(
+    `spawning codex (mcp-server=${MCP_SERVER_NAME}${opts.resume ? `, resume=${opts.resume.sessionId.slice(0, 8)}` : ''})`,
+  );
 
   let child: ChildProcess;
   try {
@@ -273,6 +303,11 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
       cwd: REPO_ROOT,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      // The npm `codex` launcher is a Node wrapper around the native binary.
+      // Give the wrapper and its descendants a dedicated process group so a
+      // watchdog can terminate the whole tree, including descendants that keep
+      // the inherited stdout pipe open after the wrapper exits.
+      detached: true,
     });
   } catch (err) {
     return finalErrorResult(opts, `failed to spawn codex-cli: ${errMsg(err)}`);
@@ -282,7 +317,7 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     child.stdin?.end(initialPrompt);
   } catch (err) {
     try {
-      child.kill('SIGTERM');
+      signalCodexProcessTree(child, 'SIGTERM');
     } catch {
       // already gone
     }
@@ -323,30 +358,39 @@ function resolveMcpToolTimeoutSec(deadlineMs: number, now = Date.now()): number 
   );
 }
 
+function buildAuthCodexInitialPrompt(systemPrompt: string, initialPrompt: string): string {
+  return `<system_instructions>
+${systemPrompt}
+</system_instructions>
+
+${initialPrompt}
+
+Codex provider framing: use only the imprint-compile MCP tools exposed for this task. Your first response must be the requested read_session_summary tool call, without preceding prose.`;
+}
+
 async function driveJsonl(
   child: ChildProcess,
   opts: CompileViaCodexCliOptions,
   traceSpan?: Span,
 ): Promise<CompileAgentResult> {
-  // Capture OTel context so child-process event handlers can parent spans
-  // under the current compile.codex_cli_agent span. Bun's event emitters
-  // don't propagate AsyncLocalStorage, so without this the agent.turn.*
-  // spans appear as orphaned root traces in Phoenix.
-  const parentCtx = otelContext.active();
-
   const conversationLog: unknown[] = [];
   const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
+  const rawStdoutPath = pathJoin(opts.absoluteToolDir, '.codex-stdout.jsonl');
+  const rawStderrPath = pathJoin(opts.absoluteToolDir, '.codex-stderr.log');
   const flushLog = (): void => {
     try {
       writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
     } catch {}
   };
+  const rawStdoutChunks: string[] = [];
+  const rawStderrChunks: string[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
   let turn = 0;
   let lastErrorMessage = '';
   let stderrBuf = '';
   let agentMessageCount = 0;
+  let capturedSessionId: string | undefined;
   const toolSpans = new Map<string, Span>();
   let currentTurnSpan: Span | null = null;
 
@@ -361,139 +405,183 @@ async function driveJsonl(
       inputTokens,
       outputTokens,
       verificationCycle: 1,
-      maxVerificationCycles: MAX_VERIFICATION_CYCLES,
+      maxVerificationCycles: opts.authMode ? undefined : MAX_VERIFICATION_CYCLES,
     });
   };
 
   const doneSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.done);
   const giveUpSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.giveUp);
-
-  const sentinelTimer = setInterval(() => {
-    if (!existsSync(doneSentinel) && !existsSync(giveUpSentinel)) return;
+  const checkpointSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.checkpoint);
+  const workflowPath = pathJoin(opts.absoluteToolDir, 'workflow.json');
+  const parserPath = pathJoin(opts.absoluteToolDir, 'parser.ts');
+  const parserTestPath = pathJoin(opts.absoluteToolDir, 'parser.test.ts');
+  const terminateChild = (graceMs: number): void => {
     try {
-      child.kill('SIGTERM');
+      signalCodexProcessTree(child, 'SIGTERM');
     } catch {
       // already gone
     }
-  }, 500);
-
-  const deadlineTimer = setTimeout(
-    () => {
-      log('wall-clock deadline exceeded, terminating codex');
+    const forceTimer = setTimeout(() => {
       try {
-        child.kill('SIGTERM');
-        setTimeout(() => {
-          if (!child.killed) child.kill('SIGKILL');
-        }, 5000);
+        signalCodexProcessTree(child, 'SIGKILL');
       } catch {
         // already gone
       }
+    }, graceMs);
+    forceTimer.unref?.();
+  };
+  const deadlineTimer = setTimeout(
+    () => {
+      log('wall-clock deadline exceeded, terminating codex');
+      terminateChild(5000);
     },
     Math.max(0, opts.deadlineMs - Date.now()),
   );
 
   let stdoutBuf = '';
   child.stdout?.on('data', (chunk: Buffer) => {
-    otelContext.with(parentCtx, () => {
-      stdoutBuf += chunk.toString('utf8');
-      while (true) {
-        const nl = stdoutBuf.indexOf('\n');
-        if (nl < 0) break;
-        const line = stdoutBuf.slice(0, nl).trim();
-        stdoutBuf = stdoutBuf.slice(nl + 1);
-        if (!line) continue;
+    const chunkText = chunk.toString('utf8');
+    rawStdoutChunks.push(chunkText);
+    stdoutBuf += chunkText;
+    while (true) {
+      const nl = stdoutBuf.indexOf('\n');
+      if (nl < 0) break;
+      const line = stdoutBuf.slice(0, nl).trim();
+      stdoutBuf = stdoutBuf.slice(nl + 1);
+      if (!line) continue;
 
-        let evt: CodexJsonEvent;
-        try {
-          evt = JSON.parse(line) as CodexJsonEvent;
-        } catch (err) {
-          log(`unparseable jsonl line: ${errMsg(err)}`);
-          continue;
-        }
-
-        conversationLog.push(evt);
-
-        if (evt.type === 'thread.started') {
-          log(`thread_id=${evt.thread_id ?? '(none)'}`);
-          setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
-          continue;
-        }
-
-        if (evt.type === 'turn.started') {
-          if (currentTurnSpan) endTraceSpan(currentTurnSpan);
-          flushLog();
-          turn++;
-          currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
-            'imprint.agent.turn': turn,
-            'imprint.agent.cumulative_input_tokens': inputTokens,
-            'imprint.agent.cumulative_output_tokens': outputTokens,
-          });
-          fireProgress('thinking');
-          continue;
-        }
-
-        if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
-          const agentMessage = codexAgentMessageText(evt.item);
-          if (agentMessage && evt.type === 'item.completed') {
-            agentMessageCount++;
-            setSpanAttributes(traceSpan, {
-              'imprint.codex.agent_messages': agentMessageCount,
-              'imprint.codex.last_agent_message_chars': agentMessage.length,
-              ...(traceLlmIoEnabled()
-                ? llmSpanAttributes({
-                    provider: 'codex-cli',
-                    model: preferredAgentModel('codex-cli'),
-                    outputMessages: traceLlmMessages([
-                      { role: 'assistant', content: agentMessage },
-                    ]),
-                    outputValue: agentMessage,
-                  })
-                : {}),
-            });
-            continue;
-          }
-          const toolName = codexToolName(evt.item);
-          if (toolName) {
-            traceCodexToolEvent(toolSpans, evt.type, evt.item, toolName);
-            fireProgress(evt.type === 'item.started' ? 'tool' : 'thinking', toolName);
-          }
-          continue;
-        }
-
-        if (evt.type === 'turn.completed') {
-          const turnInput = evt.usage?.input_tokens ?? 0;
-          const turnOutput = evt.usage?.output_tokens ?? 0;
-          inputTokens += turnInput;
-          outputTokens += turnOutput;
-          if (currentTurnSpan) {
-            setSpanAttributes(currentTurnSpan, {
-              'imprint.agent.turn_input_tokens': turnInput,
-              'imprint.agent.turn_output_tokens': turnOutput,
-            });
-            endTraceSpan(currentTurnSpan);
-            currentTurnSpan = null;
-          }
-          continue;
-        }
-
-        if (evt.type === 'error' || evt.type === 'turn.failed') {
-          lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
-        }
+      let evt: CodexJsonEvent;
+      try {
+        evt = JSON.parse(line) as CodexJsonEvent;
+      } catch (err) {
+        log(`unparseable jsonl line: ${errMsg(err)}`);
+        continue;
       }
-    });
+
+      conversationLog.push(evt);
+
+      if (evt.type === 'thread.started') {
+        log(`thread_id=${evt.thread_id ?? '(none)'}`);
+        setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
+        if (evt.thread_id) capturedSessionId = evt.thread_id;
+        continue;
+      }
+
+      if (evt.type === 'turn.started') {
+        if (currentTurnSpan) endTraceSpan(currentTurnSpan);
+        flushLog();
+        turn++;
+        currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
+          'imprint.agent.turn': turn,
+          'imprint.agent.cumulative_input_tokens': inputTokens,
+          'imprint.agent.cumulative_output_tokens': outputTokens,
+        });
+        fireProgress('thinking');
+        continue;
+      }
+
+      const normalizedToolEvt = normalizeCodexToolEvent(evt);
+      if (normalizedToolEvt) {
+        const { eventType, item } = normalizedToolEvt;
+        const toolName = codexToolName(item);
+        if (toolName) {
+          traceCodexToolEvent(toolSpans, eventType, item, toolName);
+          fireProgress(eventType === 'item.started' ? 'tool' : 'thinking', toolName);
+        }
+        continue;
+      }
+
+      if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
+        const agentMessage = codexAgentMessageText(evt.item);
+        if (agentMessage && evt.type === 'item.completed') {
+          agentMessageCount++;
+          setSpanAttributes(traceSpan, {
+            'imprint.codex.agent_messages': agentMessageCount,
+            'imprint.codex.last_agent_message_chars': agentMessage.length,
+            ...(traceLlmIoEnabled()
+              ? llmSpanAttributes({
+                  provider: 'codex-cli',
+                  model: opts.model ?? preferredAgentModel('codex-cli'),
+                  outputMessages: traceLlmMessages([{ role: 'assistant', content: agentMessage }]),
+                  outputValue: agentMessage,
+                })
+              : {}),
+          });
+          continue;
+        }
+        continue;
+      }
+
+      if (evt.type === 'turn.completed') {
+        const turnInput = evt.usage?.input_tokens ?? 0;
+        const turnOutput = evt.usage?.output_tokens ?? 0;
+        inputTokens += turnInput;
+        outputTokens += turnOutput;
+        if (currentTurnSpan) {
+          setSpanAttributes(currentTurnSpan, {
+            'imprint.agent.turn_input_tokens': turnInput,
+            'imprint.agent.turn_output_tokens': turnOutput,
+          });
+          endTraceSpan(currentTurnSpan);
+          currentTurnSpan = null;
+        }
+        continue;
+      }
+
+      if (evt.type === 'error' || evt.type === 'turn.failed') {
+        lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
+      }
+    }
   });
 
   child.stderr?.on('data', (chunk: Buffer) => {
     const s = chunk.toString('utf8');
+    rawStderrChunks.push(s);
     stderrBuf += s;
     log(`[codex stderr] ${s.trim()}`);
   });
 
   const exitCode: number = await new Promise((resolve) => {
-    child.once('exit', (code) => resolve(code ?? -1));
-    child.once('error', () => resolve(-1));
+    let resolved = false;
+    let forcedKillTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (code: number): void => {
+      if (resolved) return;
+      resolved = true;
+      if (forcedKillTimer) clearTimeout(forcedKillTimer);
+      clearInterval(sentinelTimer);
+      resolve(code);
+    };
+    const terminateForSentinel = (): void => {
+      try {
+        signalCodexProcessTree(child, 'SIGTERM');
+      } catch {
+        // already gone
+      }
+      forcedKillTimer = setTimeout(() => {
+        if (resolved) return;
+        try {
+          signalCodexProcessTree(child, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+        // A checkpoint sentinel is enough to let the auth orchestrator proceed;
+        // don't wait forever for Codex to acknowledge SIGTERM.
+        finish(-1);
+      }, 2000);
+      forcedKillTimer.unref?.();
+    };
+    const sentinelTimer = setInterval(() => {
+      const checkpointReached = opts.authMode && existsSync(checkpointSentinel);
+      if (!existsSync(doneSentinel) && !existsSync(giveUpSentinel) && !checkpointReached) return;
+      terminateForSentinel();
+    }, 500);
+    child.once('close', (code) => {
+      finish(code ?? -1);
+    });
+    child.once('error', () => {
+      finish(-1);
+    });
   });
-  clearInterval(sentinelTimer);
   clearTimeout(deadlineTimer);
   if (currentTurnSpan) endTraceSpan(currentTurnSpan);
   for (const span of toolSpans.values()) endTraceSpan(span);
@@ -503,11 +591,13 @@ async function driveJsonl(
     log(`unflushed stdout tail (${stdoutBuf.length} bytes) discarded`);
   }
 
+  try {
+    writeFileSync(rawStdoutPath, rawStdoutChunks.join(''), 'utf8');
+    writeFileSync(rawStderrPath, rawStderrChunks.join(''), 'utf8');
+  } catch {
+    // best effort diagnostics
+  }
   flushLog();
-
-  const workflowPath = pathJoin(opts.absoluteToolDir, 'workflow.json');
-  const parserPath = pathJoin(opts.absoluteToolDir, 'parser.ts');
-  const parserTestPath = pathJoin(opts.absoluteToolDir, 'parser.test.ts');
 
   const verifiedOk =
     existsSync(doneSentinel) &&
@@ -539,6 +629,7 @@ async function driveJsonl(
     | 'outputTokens'
     | 'cacheReadInputTokens'
     | 'cacheCreationInputTokens'
+    | 'sessionId'
   > = {
     workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
     parserPath: existsSync(parserPath) ? parserPath : undefined,
@@ -550,7 +641,31 @@ async function driveJsonl(
     outputTokens,
     cacheReadInputTokens: 0,
     cacheCreationInputTokens: 0,
+    sessionId: capturedSessionId,
   };
+
+  // Auth segment: the agent paused at a checkpoint for the orchestrator to act.
+  // The auth orchestrator resumes the same Codex session with the checkpoint
+  // result after running live verification.
+  if (opts.authMode && existsSync(checkpointSentinel)) {
+    let cp: AuthCheckpoint | undefined;
+    try {
+      const raw = readFileSync(checkpointSentinel, 'utf8').trim();
+      const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : undefined;
+      if (parsed && typeof parsed.kind === 'string') cp = parsed as unknown as AuthCheckpoint;
+    } catch (err) {
+      log(`failed to parse checkpoint sentinel: ${errMsg(err)}`);
+    }
+    if (cp) {
+      return {
+        success: false,
+        outcome: 'checkpoint',
+        checkpoint: cp,
+        message: `checkpoint:${cp.kind}`,
+        ...baseResult,
+      };
+    }
+  }
 
   if (existsSync(doneSentinel)) {
     let payload: {
@@ -624,6 +739,18 @@ async function driveJsonl(
   };
 }
 
+function signalCodexProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to the direct child when process groups are unavailable.
+    }
+  }
+  child.kill(signal);
+}
+
 function traceCodexToolEvent(
   spans: Map<string, Span>,
   eventType: string,
@@ -668,6 +795,72 @@ function traceCodexToolEvent(
   setSpanAttributes(span, completionAttributes);
   endTraceSpan(span, toolError);
   spans.delete(id);
+}
+
+function normalizeCodexToolEvent(evt: CodexJsonEvent):
+  | {
+      eventType: 'item.started' | 'item.completed';
+      item: NonNullable<CodexJsonEvent['item']>;
+    }
+  | undefined {
+  if (
+    (evt.type === 'item.started' || evt.type === 'item.completed') &&
+    evt.item &&
+    codexToolName(evt.item)
+  ) {
+    return { eventType: evt.type, item: evt.item };
+  }
+
+  const responseItem = isRecord(evt.response_item)
+    ? evt.response_item
+    : evt.type === 'response_item' && isRecord(evt.item)
+      ? evt.item
+      : undefined;
+  if (responseItem) {
+    const responseType = stringField(responseItem, 'type');
+    const name = stringField(responseItem, 'name') ?? stringField(responseItem, 'tool_name');
+    if (responseType === 'function_call' && name) {
+      return {
+        eventType:
+          stringField(responseItem, 'status') === 'in_progress' ? 'item.started' : 'item.completed',
+        item: {
+          id: stringField(responseItem, 'id') ?? stringField(responseItem, 'call_id'),
+          type: 'mcp_tool_call',
+          name,
+          arguments: responseItem.arguments,
+          status: stringField(responseItem, 'status'),
+        },
+      };
+    }
+  }
+
+  const eventMsg = isRecord(evt.event_msg)
+    ? evt.event_msg
+    : evt.type === 'event_msg' && isRecord(evt.item)
+      ? evt.item
+      : undefined;
+  if (eventMsg) {
+    const name = stringField(eventMsg, 'name') ?? stringField(eventMsg, 'tool_name');
+    if (name) {
+      const msgType = stringField(eventMsg, 'type') ?? evt.type;
+      return {
+        eventType:
+          msgType.includes('start') || msgType.includes('begin')
+            ? 'item.started'
+            : 'item.completed',
+        item: {
+          id: stringField(eventMsg, 'id') ?? stringField(eventMsg, 'call_id'),
+          type: 'mcp_tool_call',
+          name,
+          status: stringField(eventMsg, 'status'),
+          result: eventMsg.result ?? eventMsg.output,
+          error: eventMsg.error,
+        },
+      };
+    }
+  }
+
+  return undefined;
 }
 
 function codexAgentMessageText(item: NonNullable<CodexJsonEvent['item']>): string | undefined {
@@ -728,6 +921,11 @@ function codexToolError(item: NonNullable<CodexJsonEvent['item']>): Error | unde
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
 }
 
 function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): CompileAgentResult {
