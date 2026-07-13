@@ -14,6 +14,8 @@ import {
   validateFormPostNavigationHeaders,
 } from '../src/imprint/cdp-browser-fetch.ts';
 
+const browserIt = process.env.CI !== 'true' || process.env.RUN_BROWSER_TESTS === '1' ? it : it.skip;
+
 describe('buildInPageFetchExpr', () => {
   it('keeps the request timeout active while reading the response body', async () => {
     let abortedDuringBodyRead = false;
@@ -143,96 +145,102 @@ describe('buildFormPostNavigationExpr', () => {
     expect(expression).toContain('form.submit()');
   });
 
-  it('executes a matching rendered form with duplicate fields and the recorded submitter', async () => {
-    const browser = await chromium.launch({ headless: true });
-    try {
-      const page = await browser.newPage();
-      await page.setContent(`
+  browserIt(
+    'executes a matching rendered form with duplicate fields and the recorded submitter',
+    async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const page = await browser.newPage();
+        await page.setContent(`
         <form method="post" action="https://login.example.test/continue">
           <input type="hidden" name="action" value="default">
           <input type="email" name="username">
           <button type="submit" name="action" value="continue">Continue</button>
         </form>
       `);
-      await page.addScriptTag({
-        content: `document.forms[0].addEventListener('submit', (event) => {
+        await page.addScriptTag({
+          content: `document.forms[0].addEventListener('submit', (event) => {
           event.preventDefault();
           globalThis.captured = Array.from(new FormData(event.currentTarget, event.submitter))
             .map(([name, value]) => [name, String(value)]);
         });`,
-      });
-      const expression = buildFormPostNavigationExpr(
-        'https://login.example.test/continue',
-        'action=default&username=person%40example.test&action=continue',
-      );
-      await page.addScriptTag({ content: `globalThis.directive = ${expression};` });
-      const directive = await page.evaluate('globalThis.directive');
-      expect(directive).toMatchObject({ action: 'click', renderedForm: true });
-      await page.addScriptTag({
-        content: `for (const field of ${JSON.stringify(
-          (directive as { typedFields: unknown }).typedFields,
-        )}) {
+        });
+        const expression = buildFormPostNavigationExpr(
+          'https://login.example.test/continue',
+          'action=default&username=person%40example.test&action=continue',
+        );
+        await page.addScriptTag({ content: `globalThis.directive = ${expression};` });
+        const directive = await page.evaluate('globalThis.directive');
+        expect(directive).toMatchObject({ action: 'click', renderedForm: true });
+        await page.addScriptTag({
+          content: `for (const field of ${JSON.stringify(
+            (directive as { typedFields: unknown }).typedFields,
+          )}) {
           globalThis.__imprintForm.elements[field.index].value = field.value;
         }
         globalThis.__imprintSubmitter.click();`,
-      });
+        });
 
-      const captured = (await page.evaluate('globalThis.captured')) as unknown;
-      expect(captured).toEqual([
-        ['action', 'default'],
-        ['username', 'person@example.test'],
-        ['action', 'continue'],
-      ]);
-      expect(await page.locator('input[type=hidden][name=action]').inputValue()).toBe('default');
-    } finally {
-      await browser.close();
-    }
-  });
+        const captured = (await page.evaluate('globalThis.captured')) as unknown;
+        expect(captured).toEqual([
+          ['action', 'default'],
+          ['username', 'person@example.test'],
+          ['action', 'continue'],
+        ]);
+        expect(await page.locator('input[type=hidden][name=action]').inputValue()).toBe('default');
+      } finally {
+        await browser.close();
+      }
+    },
+  );
 
-  it('uses an exact synthetic form instead of hijacking an unrelated rendered form', async () => {
-    const browser = await chromium.launch({ headless: true });
-    try {
-      const page = await browser.newPage();
-      await page.setContent(`
+  browserIt(
+    'uses an exact synthetic form instead of hijacking an unrelated rendered form',
+    async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const page = await browser.newPage();
+        await page.setContent(`
         <form id="unrelated" method="post" action="https://example.test/newsletter">
           <input name="email">
           <button type="submit">Subscribe</button>
         </form>
       `);
-      await page.addScriptTag({
-        content: `HTMLFormElement.prototype.submit = function submit() {
+        await page.addScriptTag({
+          content: `HTMLFormElement.prototype.submit = function submit() {
           globalThis.submitted = {
             id: this.id,
             action: this.action,
             fields: Array.from(new FormData(this)).map(([name, value]) => [name, String(value)]),
           };
         };`,
-      });
-      const expression = buildFormPostNavigationExpr(
-        'https://login.example.test/continue',
-        'email=person%40example.test&scope=openid&scope=profile',
-      );
-      await page.addScriptTag({ content: `globalThis.directive = ${expression};` });
-      const directive = await page.evaluate('globalThis.directive');
+        });
+        const expression = buildFormPostNavigationExpr(
+          'https://login.example.test/continue',
+          'email=person%40example.test&scope=openid&scope=profile',
+        );
+        await page.addScriptTag({ content: `globalThis.directive = ${expression};` });
+        const directive = await page.evaluate('globalThis.directive');
 
-      expect(directive).toEqual({ action: 'submitted', renderedForm: false });
-      const submitted = (await page.evaluate('globalThis.submitted')) as unknown;
-      expect(submitted).toEqual({
-        id: '',
-        action: 'https://login.example.test/continue',
-        fields: [
-          ['email', 'person@example.test'],
-          ['scope', 'openid'],
-          ['scope', 'profile'],
-        ],
-      });
-      expect(await page.locator('#unrelated').getAttribute('action')).toBe(
-        'https://example.test/newsletter',
-      );
-    } finally {
-      await browser.close();
-    }
-  });
+        expect(directive).toEqual({ action: 'submitted', renderedForm: false });
+        const submitted = (await page.evaluate('globalThis.submitted')) as unknown;
+        expect(submitted).toEqual({
+          id: '',
+          action: 'https://login.example.test/continue',
+          fields: [
+            ['email', 'person@example.test'],
+            ['scope', 'openid'],
+            ['scope', 'profile'],
+          ],
+        });
+        expect(await page.locator('#unrelated').getAttribute('action')).toBe(
+          'https://example.test/newsletter',
+        );
+      } finally {
+        await browser.close();
+      }
+    },
+  );
 });
 
 describe('isSiblingOrigin', () => {
