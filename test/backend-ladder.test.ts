@@ -944,6 +944,7 @@ describe('runWorkflowWithLadder', () => {
       const { result, usedBackend } = await runWorkflowWithLadder({
         workflowPath,
         params: { q: 'hello' },
+        forceBackend: 'fetch',
       });
       expect(result.ok).toBe(true);
       expect(usedBackend).toBe('fetch');
