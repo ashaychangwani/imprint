@@ -33,6 +33,7 @@ import {
 import type { MintedJar } from '../src/imprint/cdp-browser-fetch.ts';
 import { type CredentialStore, executeWorkflow } from '../src/imprint/runtime.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
+import { saveCachedToken } from '../src/imprint/stealth-token-cache.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import {
   type ConcreteBackend,
@@ -996,6 +997,11 @@ describe('runWorkflowWithLadder', () => {
           results: {},
         }),
       );
+      saveCachedToken(pathJoin(root, 'mistrust-site'), {
+        cookies: [],
+        sensorHeaders: {},
+        bootstrappedAt: Date.now(),
+      });
 
       const { result, usedBackend, attempts } = await runWorkflowWithLadder({
         workflowPath,
