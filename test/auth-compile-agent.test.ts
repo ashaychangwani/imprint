@@ -315,6 +315,151 @@ describe('auth compile tools', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('requires persisted captures to identify their producing recorded request', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-capture-seq-'));
+    try {
+      const workflow = validWorkflow();
+      const authConfig = workflow.authConfig;
+      const request = workflow.requests[0];
+      if (!authConfig || !request) throw new Error('bad fixture');
+      authConfig.persist = ['ticket'];
+      writeWorkflow(dir, workflow);
+      expect(authWorkflowPreflightFailures(dir).join('\n')).toContain('recordingRequestSeq');
+
+      request.recordingRequestSeq = 7;
+      writeWorkflow(dir, workflow);
+      const recorded = session();
+      recorded.requests = [
+        {
+          seq: 7,
+          timestamp: 1,
+          method: 'POST',
+          url: 'https://fixture.test/begin',
+          headers: {},
+          body: 'username=fixture&password=fixture',
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: {},
+            body: '{"ticket":"fixture-ticket"}',
+            mimeType: 'application/json',
+          },
+        },
+      ];
+      expect(authWorkflowPreflightFailures(dir, recorded)).toEqual([]);
+
+      const recordedRequest = recorded.requests[0];
+      if (!recordedRequest?.response) throw new Error('bad recorded fixture');
+      recordedRequest.method = 'GET';
+      expect(authWorkflowPreflightFailures(dir, recorded).join('\n')).toContain(
+        'does not match its workflow request',
+      );
+      recordedRequest.method = 'POST';
+      recordedRequest.response.body = '{}';
+      expect(authWorkflowPreflightFailures(dir, recorded).join('\n')).toContain('is not produced');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('grounds the navigation final URL header in the recorded request URL', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-final-url-'));
+    try {
+      const workflow = validWorkflow();
+      const request = workflow.requests[0];
+      const authConfig = workflow.authConfig;
+      if (!request || !authConfig) throw new Error('bad fixture');
+      request.recordingRequestSeq = 3;
+      request.captures = [
+        {
+          name: 'ticket',
+          source: 'response_header',
+          header: 'x-imprint-final-url',
+          mode: 'first',
+          required: true,
+          capability: 'ordinary_http',
+        },
+      ];
+      authConfig.persist = ['ticket'];
+      writeWorkflow(dir, workflow);
+      const recorded = session();
+      recorded.requests = [
+        {
+          seq: 3,
+          timestamp: 1,
+          method: 'POST',
+          url: 'https://fixture.test/begin',
+          headers: {},
+          body: 'username=fixture&password=fixture',
+          resourceType: 'Document',
+          response: { status: 200, headers: {}, body: '<html></html>', mimeType: 'text/html' },
+        },
+      ];
+
+      expect(authWorkflowPreflightFailures(dir, recorded)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects duplicate capture names and grounds persisted polling captures', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-capture-owner-'));
+    try {
+      const duplicate = validWorkflow();
+      const duplicateRequest = duplicate.requests[1];
+      const duplicateCapture = duplicate.requests[0]?.captures?.[0];
+      if (!duplicateRequest || duplicateCapture?.source !== 'json') throw new Error('bad fixture');
+      duplicateRequest.captures = [{ ...duplicateCapture }];
+      writeWorkflow(dir, duplicate);
+      expect(authWorkflowPreflightFailures(dir).join('\n')).toContain(
+        'capture name "ticket" must be unique',
+      );
+
+      const repeatOnly = validWorkflow();
+      const repeatAuthConfig = repeatOnly.authConfig;
+      const begin = repeatAuthConfig?.actions.begin;
+      const repeatCapture = repeatOnly.requests[0]?.captures?.[0];
+      if (!repeatAuthConfig || !begin || repeatCapture?.source !== 'json') {
+        throw new Error('bad fixture');
+      }
+      begin.steps[0] = {
+        request: 0,
+        onError: 'retry',
+        repeat: {
+          until: { ...repeatCapture, name: 'poll_token', path: 'poll_token' },
+          intervalMs: 1,
+          maxAttempts: 2,
+        },
+      };
+      const repeatRequest = repeatOnly.requests[0];
+      if (!repeatRequest) throw new Error('bad fixture');
+      repeatRequest.recordingRequestSeq = 12;
+      repeatAuthConfig.persist = ['poll_token'];
+      writeWorkflow(dir, repeatOnly);
+      const recorded = session();
+      recorded.requests = [
+        {
+          seq: 12,
+          timestamp: 1,
+          method: 'POST',
+          url: 'https://fixture.test/begin',
+          headers: {},
+          body: 'username=fixture&password=fixture',
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: {},
+            body: '{"poll_token":"grounded-token"}',
+            mimeType: 'application/json',
+          },
+        },
+      ];
+      expect(authWorkflowPreflightFailures(dir, recorded)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 function installFakeCodex(binDir: string): void {

@@ -1093,6 +1093,7 @@ async function runCdpReplay(
       baseUrl,
       bootstrapUrl,
       seedCookies,
+      seedStorage: credentials.storage,
       // Run HEADED for authentication: a strong anti-bot edge (e.g. Akamai Bot
       // Manager) fingerprints headless Chrome beyond the `HeadlessChrome` UA token
       // we strip, so a cross-origin credential POST that 403s headless passes

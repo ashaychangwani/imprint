@@ -413,6 +413,14 @@ export interface CdpBrowserFetchOptions {
     sameSite?: string;
     expires?: number;
   }>;
+  /** Browser storage to restore before page scripts run. Entries are scoped to
+   * their recorded origin and applied on every matching document navigation. */
+  seedStorage?: Array<{
+    origin: string;
+    kind: 'localStorage' | 'sessionStorage';
+    key: string;
+    value: string;
+  }>;
   /** Opt-in: write a cross-origin response's `Set-Cookie` back into the browser
    *  cookie jar (the cross-origin plain-fetch path can't do this itself). OFF by
    *  default — it changes the jar, so it must be a DELIBERATE decision grounded in
@@ -427,6 +435,24 @@ type CdpClient = Awaited<ReturnType<typeof CDP>>;
 type LaunchedChromium = Awaited<ReturnType<typeof launchChromium>>;
 type ChromiumLauncher = (opts: Parameters<typeof launchChromium>[0]) => Promise<LaunchedChromium>;
 type CdpConnector = (port: number) => Promise<CdpClient>;
+
+export function buildStorageSeedExpression(
+  records: NonNullable<CdpBrowserFetchOptions['seedStorage']>,
+): string {
+  return `(() => {
+    if (typeof window !== 'undefined' && window.top !== window) return;
+    const records = ${JSON.stringify(records)};
+    for (const record of records) {
+      if (record.origin !== location.origin) continue;
+      try {
+        const storage = record.kind === 'sessionStorage' ? sessionStorage : localStorage;
+        if (storage.getItem(record.key) === null) storage.setItem(record.key, record.value);
+      } catch (error) {
+        throw new Error('__IMPRINT_STORAGE_SEED_FAILED__' + record.kind + ':' + record.key + ':' + String(error));
+      }
+    }
+  })();`;
+}
 
 let chromiumLauncherForTest: ChromiumLauncher | null = null;
 let cdpConnectorForTest: CdpConnector | null = null;
@@ -515,7 +541,7 @@ export function isSiblingOrigin(originA: string, originB: string): boolean {
  *  origin + native fetch + preflight 200; about:blank/srcdoc → `null`). For a
  *  same-origin request the document origin already equals the request origin, so
  *  `about:blank` (faster, no load wait) is fine and this stays unset. */
-function buildInPageFetchExpr(
+export function buildInPageFetchExpr(
   fullUrl: string,
   method: string,
   headers: Record<string, string>,
@@ -553,19 +579,22 @@ function buildInPageFetchExpr(
           } catch (_) {}
           const ctrl = new AbortController();
           const to = setTimeout(() => ctrl.abort(), ${reqTimeoutMs});
-          const r = await _f(${JSON.stringify(fullUrl)}, {
-            method: ${JSON.stringify(method)},
-            headers: ${JSON.stringify(headers)},
-            ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
-            credentials: 'include',
-            signal: ctrl.signal,
-          });
-          clearTimeout(to);
-          const text = await r.text();
-          const h = {};
-          r.headers.forEach((v, k) => { h[k] = v; });
-          if (ifr) ifr.remove();
-          return { ok: true, status: r.status, body: text, headers: h };
+          try {
+            const r = await _f(${JSON.stringify(fullUrl)}, {
+              method: ${JSON.stringify(method)},
+              headers: ${JSON.stringify(headers)},
+              ${body !== null ? `body: ${JSON.stringify(body)},` : ''}
+              credentials: 'include',
+              signal: ctrl.signal,
+            });
+            const text = await r.text();
+            const h = {};
+            r.headers.forEach((v, k) => { h[k] = v; });
+            if (ifr) ifr.remove();
+            return { ok: true, status: r.status, body: text, headers: h };
+          } finally {
+            clearTimeout(to);
+          }
         } catch (e) {
           if (ifr) try { ifr.remove(); } catch (_) {}
           return { ok: false, error: String(e) };
@@ -811,6 +840,40 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       } catch {
         // best-effort — a headed launch already has a clean UA
       }
+      let storageSeedError: string | undefined;
+      if (opts.seedStorage && opts.seedStorage.length > 0) {
+        if (
+          typeof Page.addScriptToEvaluateOnNewDocument !== 'function' ||
+          typeof Runtime.exceptionThrown !== 'function'
+        ) {
+          throw new Error('CDP cannot restore required browser storage before navigation');
+        }
+        Runtime.exceptionThrown(
+          (event: {
+            exceptionDetails?: { text?: string; exception?: { description?: string } };
+          }) => {
+            const detail =
+              event.exceptionDetails?.exception?.description ?? event.exceptionDetails?.text ?? '';
+            const marker = '__IMPRINT_STORAGE_SEED_FAILED__';
+            const markerIndex = detail.indexOf(marker);
+            if (markerIndex >= 0) storageSeedError = detail.slice(markerIndex + marker.length);
+          },
+        );
+        try {
+          await withTimeout(
+            Page.addScriptToEvaluateOnNewDocument({
+              source: buildStorageSeedExpression(opts.seedStorage),
+            }),
+            'CDP Page.addScriptToEvaluateOnNewDocument(storage)',
+            cdpCommandTimeoutMs,
+          );
+          log(`registered ${opts.seedStorage.length} browser storage seed entries`);
+        } catch (err) {
+          throw new Error(
+            `browser storage seed registration failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
       // Navigate now (post-override). Page.navigate stalls forever on an Akamai
       // origin ONLY when the UA still says HeadlessChrome; with the override it
       // loads normally. Bound the CDP command and proceed regardless — _abck
@@ -831,6 +894,10 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         }
       } catch (err) {
         log(`navigation issue (continuing): ${err instanceof Error ? err.message : String(err)}`);
+      }
+      await sleep(0);
+      if (typeof storageSeedError === 'string') {
+        throw new Error(`browser storage seed execution failed: ${storageSeedError}`);
       }
       // Give the sensor JS time to start.
       await sleep(3000);

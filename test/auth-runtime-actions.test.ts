@@ -55,6 +55,8 @@ const credentials: CredentialStore = {
   values: { username: 'fixture-user', password: 'fixture-pass' },
 };
 
+let backend: CredentialBackend;
+
 function workflow(input: {
   parameters?: unknown[];
   requests: unknown[];
@@ -80,7 +82,10 @@ function workflow(input: {
   });
 }
 
-beforeEach(() => setBackendOverride(memoryBackend()));
+beforeEach(() => {
+  backend = memoryBackend();
+  setBackendOverride(backend);
+});
 afterEach(() => {
   setBackendOverride(null);
   resetBackendCache();
@@ -220,6 +225,297 @@ describe('auth action runtime', () => {
     });
     expect(result).toMatchObject({ ok: false, error: 'BAD_RESPONSE' });
     if (!result.ok) expect(result.message).toContain('missingToken');
+  });
+
+  it('does not persist response cookies when declared success evidence is missing', async () => {
+    const wf = workflow({
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://fixture.test/finish',
+          headers: {},
+          captures: [
+            { source: 'json', name: 'authenticated', path: 'authenticated', equals: true },
+          ],
+        },
+      ],
+      authConfig: {
+        entry: 'finish',
+        actions: {
+          finish: {
+            steps: [{ request: 0 }],
+            outcome: { type: 'success', evidence: ['authenticated'] },
+          },
+        },
+        persist: [],
+        crossOriginCookieReinjection: false,
+      },
+    });
+
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      fetchImpl: (async () =>
+        new Response('{"authenticated":false}', {
+          headers: { 'set-cookie': 'sid=unverified; Path=/; Secure' },
+        })) as unknown as typeof fetch,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: 'STATE_MISSING' });
+    expect(await backend.getCookies('fixture-auth')).toEqual([]);
+  });
+
+  it('persists cookies after a valid pause so the 2FA action can continue', async () => {
+    const wf = workflow({
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://fixture.test/start',
+          headers: {},
+          captures: [{ source: 'json', name: 'ticket', path: 'ticket' }],
+        },
+      ],
+      authConfig: {
+        entry: 'start',
+        actions: {
+          start: {
+            steps: [{ request: 0 }],
+            outcome: {
+              type: 'pause',
+              next: 'finish',
+              evidence: ['ticket'],
+              carry: ['ticket'],
+              message: 'Enter the code.',
+            },
+          },
+          finish: {
+            steps: [{ request: 0 }],
+            outcome: { type: 'success' },
+          },
+        },
+        persist: [],
+        crossOriginCookieReinjection: false,
+      },
+    });
+
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      fetchImpl: (async () =>
+        new Response('{"ticket":"ticket-1"}', {
+          headers: { 'set-cookie': 'challenge=active; Path=/; Secure' },
+        })) as unknown as typeof fetch,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: 'ACTION_REQUIRED' });
+    expect(await backend.getCookies('fixture-auth')).toMatchObject([
+      { name: 'challenge', value: 'active' },
+    ]);
+  });
+
+  it('preserves the 2FA continuation only when a browser session is retained', async () => {
+    const failingBackend = memoryBackend();
+    failingBackend.setCookies = async () => {
+      throw new Error('fixture cookie write failed');
+    };
+    backend = failingBackend;
+    setBackendOverride(failingBackend);
+    const wf = workflow({
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://fixture.test/start',
+          headers: {},
+          captures: [{ source: 'json', name: 'ticket', path: 'ticket' }],
+        },
+      ],
+      authConfig: {
+        entry: 'start',
+        actions: {
+          start: {
+            steps: [{ request: 0 }],
+            outcome: {
+              type: 'pause',
+              next: 'finish',
+              evidence: ['ticket'],
+              carry: ['ticket'],
+              message: 'Enter the code.',
+            },
+          },
+          finish: {
+            steps: [{ request: 0 }],
+            outcome: { type: 'success' },
+          },
+        },
+        persist: [],
+        crossOriginCookieReinjection: false,
+      },
+    });
+
+    const withoutBrowser = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      fetchImpl: (async () => new Response('{"ticket":"ticket-1"}')) as unknown as typeof fetch,
+    });
+
+    expect(withoutBrowser).toMatchObject({ ok: false, error: 'BAD_RESPONSE' });
+    if (!withoutBrowser.ok) expect(withoutBrowser.message).toContain('fixture cookie write failed');
+
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      browser: {
+        async navigate() {
+          throw new Error('not used by this workflow');
+        },
+        async snapshotCookies() {
+          return [];
+        },
+      },
+      fetchImpl: (async () => new Response('{"ticket":"ticket-1"}')) as unknown as typeof fetch,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'ACTION_REQUIRED',
+      nextAction: 'finish',
+      continuation: { ticket: 'ticket-1' },
+    });
+    if (!result.ok) expect(result.message).toContain('fixture cookie write failed');
+  });
+
+  it('fails authentication when a required captured secret cannot be persisted', async () => {
+    const failingBackend = memoryBackend();
+    failingBackend.setSecret = async () => {
+      throw new Error('fixture write failed');
+    };
+    backend = failingBackend;
+    setBackendOverride(failingBackend);
+    const wf = workflow({
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://fixture.test/finish',
+          headers: {},
+          captures: [{ source: 'json', name: 'access_token', path: 'access_token' }],
+        },
+      ],
+      authConfig: {
+        entry: 'finish',
+        actions: {
+          finish: {
+            steps: [{ request: 0 }],
+            outcome: { type: 'success', evidence: ['access_token'] },
+          },
+        },
+        persist: ['access_token'],
+        crossOriginCookieReinjection: false,
+      },
+    });
+
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      fetchImpl: (async () =>
+        new Response('{"access_token":"fixture-token"}', {
+          headers: { 'set-cookie': 'sid=verified; Path=/; Secure' },
+        })) as unknown as typeof fetch,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: 'BAD_RESPONSE' });
+    if (!result.ok) expect(result.message).toContain('fixture write failed');
+    expect(await backend.getCookies('fixture-auth')).toEqual([]);
+  });
+
+  it('rolls back cookies and earlier secrets when a later secret write fails', async () => {
+    const failingBackend = memoryBackend();
+    await failingBackend.setCookies('fixture-auth', [
+      { name: 'sid', value: 'old-cookie', domain: 'fixture.test', path: '/' },
+    ]);
+    await failingBackend.setSecret('fixture-auth', 'first_token', 'old-first');
+    await failingBackend.setSecret('fixture-auth', 'second_token', 'old-second');
+    const writeSecret = failingBackend.setSecret.bind(failingBackend);
+    let shouldFail = true;
+    failingBackend.setSecret = async (site, name, value) => {
+      if (name === 'second_token' && shouldFail) {
+        shouldFail = false;
+        throw new Error('second secret failed');
+      }
+      await writeSecret(site, name, value);
+    };
+    backend = failingBackend;
+    setBackendOverride(failingBackend);
+    const wf = workflow({
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://fixture.test/finish',
+          headers: {},
+          captures: [
+            { source: 'json', name: 'first_token', path: 'first' },
+            { source: 'json', name: 'second_token', path: 'second' },
+          ],
+        },
+      ],
+      authConfig: {
+        entry: 'finish',
+        actions: {
+          finish: {
+            steps: [{ request: 0 }],
+            outcome: { type: 'success', evidence: ['first_token', 'second_token'] },
+          },
+        },
+        persist: ['first_token', 'second_token'],
+        crossOriginCookieReinjection: false,
+      },
+    });
+
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      fetchImpl: (async () =>
+        new Response('{"first":"new-first","second":"new-second"}', {
+          headers: { 'set-cookie': 'sid=new-cookie; Path=/; Secure' },
+        })) as unknown as typeof fetch,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: 'BAD_RESPONSE' });
+    expect(await backend.getSecret('fixture-auth', 'first_token')).toBe('old-first');
+    expect(await backend.getSecret('fixture-auth', 'second_token')).toBe('old-second');
+    expect(await backend.getCookies('fixture-auth')).toEqual([
+      { name: 'sid', value: 'old-cookie', domain: 'fixture.test', path: '/' },
+    ]);
+  });
+
+  it('keeps HTTP status classification when an auth error body cannot be read', async () => {
+    const wf = workflow({
+      requests: [{ method: 'GET', url: 'https://fixture.test/login', headers: {} }],
+      authConfig: {
+        entry: 'login',
+        actions: { login: { steps: [{ request: 0 }], outcome: { type: 'success' } } },
+      },
+    });
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      fetchImpl: (async () =>
+        ({
+          status: 401,
+          headers: new Headers(),
+          async text() {
+            throw new Error('body stream reset');
+          },
+        }) as unknown as Response) as unknown as typeof fetch,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: 'AUTH_EXPIRED', status: 401 });
   });
 
   it('repeats a request until an exact empty scalar is observed', async () => {

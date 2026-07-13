@@ -18,6 +18,8 @@ import {
   buildSearchRequestsTool,
   buildWriteFileTool,
 } from './compile-tools.ts';
+import { recordedRequestMatchesWorkflow } from './recording-request.ts';
+import { captureHeader, captureValueMatches, jsonpath } from './request-capture.ts';
 import { type Session, type Workflow, WorkflowSchema } from './types.ts';
 
 type TeachCredentials = { site: string; values: Record<string, string> };
@@ -65,12 +67,12 @@ export function buildAuthCompileTools(
 
 export function authWorkflowPreflightFailures(
   toolDir: string,
-  _session?: Session,
+  session?: Session,
   requiredCredentialNames: readonly string[] = [],
 ): string[] {
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   if (!existsSync(workflowPath)) return ['workflow.json does not exist'];
-  return parseWorkflow(workflowPath, requiredCredentialNames).failures;
+  return parseWorkflow(workflowPath, requiredCredentialNames, session).failures;
 }
 
 export function authExternalVerification(
@@ -113,6 +115,7 @@ export function authExternalVerification(
 function parseWorkflow(
   path: string,
   requiredCredentialNames: readonly string[] = [],
+  session?: Session,
 ): { workflow?: Workflow; failures: string[] } {
   let raw: unknown;
   try {
@@ -133,13 +136,14 @@ function parseWorkflow(
   }
   return {
     workflow: parsed.data,
-    failures: authProgramFailures(parsed.data, requiredCredentialNames),
+    failures: authProgramFailures(parsed.data, requiredCredentialNames, session),
   };
 }
 
 function authProgramFailures(
   workflow: Workflow,
   requiredCredentialNames: readonly string[] = [],
+  session?: Session,
 ): string[] {
   const failures: string[] = [];
   if (workflow.toolKind !== 'authenticate') {
@@ -188,12 +192,38 @@ function authProgramFailures(
 
   const parameters = new Set(workflow.parameters.map((parameter) => parameter.name));
   const captures = new Set<string>();
+  const captureOwners = new Map<
+    string,
+    {
+      request: Workflow['requests'][number];
+      capture: NonNullable<Workflow['requests'][number]['captures']>[number];
+    }
+  >();
   for (const request of workflow.requests) {
-    for (const capture of request.captures ?? []) captures.add(capture.name);
+    for (const capture of request.captures ?? []) {
+      if (captures.has(capture.name)) {
+        failures.push(
+          `capture name ${JSON.stringify(capture.name)} must be unique across the auth workflow`,
+        );
+      }
+      captures.add(capture.name);
+      captureOwners.set(capture.name, { request, capture });
+    }
   }
   for (const action of Object.values(config.actions)) {
     for (const step of action.steps) {
-      if (step.repeat) captures.add(step.repeat.until.name);
+      if (step.repeat) {
+        if (captures.has(step.repeat.until.name)) {
+          failures.push(
+            `capture name ${JSON.stringify(step.repeat.until.name)} must be unique across the auth workflow`,
+          );
+        }
+        captures.add(step.repeat.until.name);
+        const request = workflow.requests[step.request];
+        if (request) {
+          captureOwners.set(step.repeat.until.name, { request, capture: step.repeat.until });
+        }
+      }
     }
   }
 
@@ -247,12 +277,69 @@ function authProgramFailures(
   for (const name of config.persist) {
     if (!captures.has(name)) {
       failures.push(`authConfig.persist references unknown capture ${JSON.stringify(name)}`);
+      continue;
+    }
+    const owner = captureOwners.get(name);
+    if (!owner) continue;
+    const { request, capture } = owner;
+    if (request.recordingRequestSeq === undefined) {
+      failures.push(
+        `persisted capture ${JSON.stringify(name)} must declare recordingRequestSeq on its producing request`,
+      );
+    } else if (session) {
+      const recorded = session.requests.find(
+        (candidate) => candidate.seq === request.recordingRequestSeq,
+      );
+      if (!recorded) {
+        failures.push(
+          `persisted capture ${JSON.stringify(name)} references missing recorded request seq ${request.recordingRequestSeq}`,
+        );
+      } else if (!recordedRequestMatchesWorkflow(recorded, request)) {
+        failures.push(
+          `persisted capture ${JSON.stringify(name)} recordingRequestSeq ${request.recordingRequestSeq} does not match its workflow request`,
+        );
+      } else {
+        if (!recordedResponseProducesCapture(recorded, capture)) {
+          failures.push(
+            `persisted capture ${JSON.stringify(name)} is not produced by recorded request seq ${request.recordingRequestSeq}`,
+          );
+        }
+      }
     }
   }
   if (!reachableSuccess(config.entry, config.actions)) {
     failures.push('authConfig.entry cannot reach a success outcome');
   }
   return failures;
+}
+
+function recordedResponseProducesCapture(
+  request: Session['requests'][number],
+  capture: NonNullable<Workflow['requests'][number]['captures']>[number],
+): boolean {
+  const response = request.response;
+  if (!response || capture.source === 'cookie') return false;
+  const body = response.body ?? '';
+  let value: unknown;
+  if (capture.source === 'json') {
+    try {
+      value = jsonpath(JSON.parse(body), capture.path);
+    } catch {
+      return false;
+    }
+  } else if (capture.source === 'response_header') {
+    value =
+      capture.header.toLowerCase() === 'x-imprint-final-url'
+        ? request.url
+        : captureHeader(new Headers(response.headers), capture.header, capture.mode);
+  } else {
+    try {
+      value = new RegExp(capture.pattern).exec(body)?.[capture.group ?? 1];
+    } catch {
+      return false;
+    }
+  }
+  return captureValueMatches(value, capture.equals);
 }
 
 function reachableSuccess(

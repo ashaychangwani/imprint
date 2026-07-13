@@ -4,11 +4,18 @@
  * Covers the external verification gate and scripted agent loops via MockLLM.
  */
 
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
+import type { CompileAgentResult } from '../src/imprint/compile-agent-types.ts';
+import {
+  __setCompileAgentCliCompilersForTest,
+  compileAgent,
+} from '../src/imprint/compile-agent.ts';
 import type { Session } from '../src/imprint/types.ts';
+
+afterEach(() => __setCompileAgentCliCompilersForTest(null));
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
@@ -75,6 +82,53 @@ function cleanup(setup: TestSetup) {
 // verification checks below are sufficient to verify the external verification gate.
 
 describe('compileAgent — external verification checks', () => {
+  it('forwards the selected model to Claude and Codex data compilers', async () => {
+    const seen: Array<{ provider: string; model?: string }> = [];
+    const result: CompileAgentResult = {
+      success: false,
+      outcome: 'give_up',
+      message: 'fixture stop',
+      conversationLogPath: '/tmp/fixture-log.json',
+      turns: 0,
+      durationMs: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    };
+    __setCompileAgentCliCompilersForTest({
+      claude: async (opts) => {
+        seen.push({ provider: 'claude-cli', model: opts.model });
+        return result;
+      },
+      codex: async (opts) => {
+        seen.push({ provider: 'codex-cli', model: opts.model });
+        return result;
+      },
+    });
+    const claudeSetup = createTestSession();
+    const codexSetup = createTestSession();
+    try {
+      await compileAgent({
+        sessionPath: claudeSetup.sessionPath,
+        outDir: claudeSetup.toolDir,
+        llmConfig: { provider: 'claude-cli', model: 'fixture-claude-data' },
+      });
+      await compileAgent({
+        sessionPath: codexSetup.sessionPath,
+        outDir: codexSetup.toolDir,
+        llmConfig: { provider: 'codex-cli', model: 'fixture-codex-data' },
+      });
+      expect(seen).toEqual([
+        { provider: 'claude-cli', model: 'fixture-claude-data' },
+        { provider: 'codex-cli', model: 'fixture-codex-data' },
+      ]);
+    } finally {
+      cleanup(claudeSetup);
+      cleanup(codexSetup);
+    }
+  });
+
   it('verification: workflow.json must exist', async () => {
     const setup = createTestSession();
 

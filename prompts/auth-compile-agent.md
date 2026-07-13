@@ -118,8 +118,12 @@ semantics.
 ## Request construction
 
 Use the standard workflow request schema: `method`, `url`, `headers`,
-optional string `body`, optional `captures`, optional `mode: "navigate"`
-with bounded navigation criteria, and optional `effect`.
+`recordingRequestSeq`, optional string `body`, optional `captures`, optional
+`mode: "navigate"` with bounded navigation criteria, and optional `effect`.
+Set `recordingRequestSeq` to the exact `seq` from `read_request` that grounds
+the request. It is required on requests whose captures appear in
+`authConfig.persist`, so `imprint login` extracts each value only from its
+producing recorded response.
 
 `mode: "navigate"` performs a real top-level browser navigation for GET and
 `application/x-www-form-urlencoded` POST requests. Use it when the recording

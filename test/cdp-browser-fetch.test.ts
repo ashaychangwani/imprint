@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { runInNewContext } from 'node:vm';
 import { chromium } from 'playwright';
 import {
   __setCdpBrowserFetchHooksForTest,
   buildFormPostNavigationExpr,
+  buildInPageFetchExpr,
+  buildStorageSeedExpression,
   createCdpBrowserFetch,
   isSiblingOrigin,
   normalizeCdpResponseHeaders,
@@ -10,6 +13,112 @@ import {
   parseSetCookieForCdp,
   validateFormPostNavigationHeaders,
 } from '../src/imprint/cdp-browser-fetch.ts';
+
+describe('buildInPageFetchExpr', () => {
+  it('keeps the request timeout active while reading the response body', async () => {
+    let abortedDuringBodyRead = false;
+    const expression = buildInPageFetchExpr('https://example.test/slow', 'GET', {}, null, 5);
+    const result = await runInNewContext(expression, {
+      AbortController,
+      clearTimeout,
+      setTimeout,
+      fetch: async (_url: string, init: RequestInit) => ({
+        status: 200,
+        headers: new Headers(),
+        async text() {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          abortedDuringBodyRead = Boolean(init.signal?.aborted);
+          return 'ok';
+        },
+      }),
+    });
+
+    expect(JSON.parse(result)).toMatchObject({ ok: true, body: 'ok' });
+    expect(abortedDuringBodyRead).toBe(true);
+  });
+
+  it('clears page-side timers when fetch rejects', async () => {
+    const active = new Set<ReturnType<typeof setTimeout>>();
+    const trackedSetTimeout = (callback: () => void, ms: number) => {
+      const handle = setTimeout(() => {
+        active.delete(handle);
+        callback();
+      }, ms);
+      active.add(handle);
+      return handle;
+    };
+    const trackedClearTimeout = (handle: ReturnType<typeof setTimeout>) => {
+      active.delete(handle);
+      clearTimeout(handle);
+    };
+    const failingFetch = async () => {
+      throw new Error('fixture fetch failed');
+    };
+    const expression = buildInPageFetchExpr('https://example.test/fail', 'GET', {}, null, 60_000);
+    const result = await runInNewContext(expression, {
+      AbortController,
+      setTimeout: trackedSetTimeout,
+      clearTimeout: trackedClearTimeout,
+      fetch: failingFetch,
+      document: {
+        createElement: () => ({
+          style: {},
+          contentWindow: { fetch: failingFetch },
+          remove() {},
+        }),
+        body: { appendChild() {} },
+      },
+    });
+
+    expect(JSON.parse(result)).toMatchObject({ ok: false });
+    expect(active.size).toBe(0);
+  });
+});
+
+describe('buildStorageSeedExpression', () => {
+  it('restores only missing storage values for the current origin', () => {
+    const local = new Map<string, string>([['local', 'rotated-live-value']]);
+    const session = new Map<string, string>();
+    const expression = buildStorageSeedExpression([
+      { origin: 'https://fixture.test', kind: 'localStorage', key: 'local', value: 'one' },
+      { origin: 'https://fixture.test', kind: 'sessionStorage', key: 'session', value: 'two' },
+      { origin: 'https://other.test', kind: 'sessionStorage', key: 'wrong', value: 'three' },
+    ]);
+
+    runInNewContext(expression, {
+      location: { origin: 'https://fixture.test' },
+      localStorage: {
+        getItem: (key: string) => local.get(key) ?? null,
+        setItem: (key: string, value: string) => local.set(key, value),
+      },
+      sessionStorage: {
+        getItem: (key: string) => session.get(key) ?? null,
+        setItem: (key: string, value: string) => session.set(key, value),
+      },
+    });
+
+    expect(Object.fromEntries(local)).toEqual({ local: 'rotated-live-value' });
+    expect(Object.fromEntries(session)).toEqual({ session: 'two' });
+  });
+
+  it('surfaces storage access failures with a tagged browser exception', () => {
+    const expression = buildStorageSeedExpression([
+      { origin: 'https://fixture.test', kind: 'localStorage', key: 'token', value: 'value' },
+    ]);
+
+    expect(() =>
+      runInNewContext(expression, {
+        location: { origin: 'https://fixture.test' },
+        localStorage: {
+          getItem() {
+            throw new Error('storage blocked');
+          },
+        },
+        sessionStorage: {},
+      }),
+    ).toThrow('__IMPRINT_STORAGE_SEED_FAILED__localStorage:token');
+  });
+});
 
 describe('buildFormPostNavigationExpr', () => {
   it('preserves duplicate URL-encoded fields and safely quotes the destination', () => {

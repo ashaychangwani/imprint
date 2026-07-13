@@ -51,6 +51,19 @@ const log = createLog('compile-agent');
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const PROMPTS_DIR = pathJoin(REPO_ROOT, 'prompts');
 
+let claudeCliCompiler = compileViaClaudeCli;
+let codexCliCompiler = compileViaCodexCli;
+
+export function __setCompileAgentCliCompilersForTest(
+  compilers: {
+    claude?: typeof compileViaClaudeCli;
+    codex?: typeof compileViaCodexCli;
+  } | null,
+): void {
+  claudeCliCompiler = compilers?.claude ?? compileViaClaudeCli;
+  codexCliCompiler = compilers?.codex ?? compileViaCodexCli;
+}
+
 /** Re-exported for callers (cli, teach) that need to display the selected
  *  model before kicking off the agent loop. */
 export function resolveCompileAgentModel(provider: ProviderName): string {
@@ -232,7 +245,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
   } else {
     const resolvedProvider = resolveProvider(opts.llmConfig);
     if (resolvedProvider.name === 'claude-cli') {
-      return await compileViaClaudeCli({
+      return await claudeCliCompiler({
         session,
         absoluteToolDir,
         sessionPath: opts.sessionPath,
@@ -247,10 +260,11 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         buildPlanPath: opts.buildPlanPath,
         sharedModules: opts.sharedModules,
         toolPlan: opts.toolPlan,
+        model: opts.llmConfig?.model,
       });
     }
     if (resolvedProvider.name === 'codex-cli') {
-      return await compileViaCodexCli({
+      return await codexCliCompiler({
         session,
         absoluteToolDir,
         sessionPath: opts.sessionPath,
@@ -264,6 +278,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         buildPlanPath: opts.buildPlanPath,
         sharedModules: opts.sharedModules,
         toolPlan: opts.toolPlan,
+        model: opts.llmConfig?.model,
       });
     }
     if (!isToolUseProvider(resolvedProvider)) {

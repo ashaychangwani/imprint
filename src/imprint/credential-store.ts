@@ -120,12 +120,8 @@ class KeyringBackend implements CredentialBackend {
 
   async getSecret(site: string, name: string): Promise<string | null> {
     const entry = new this.Entry(SERVICE_NAME, this.accountFor(site, name));
-    try {
-      const v = entry.getPassword();
-      return typeof v === 'string' && v.length > 0 ? v : null;
-    } catch {
-      return null;
-    }
+    const v = entry.getPassword();
+    return typeof v === 'string' && v.length > 0 ? v : null;
   }
 
   async setSecret(site: string, name: string, value: string): Promise<void> {
@@ -135,11 +131,7 @@ class KeyringBackend implements CredentialBackend {
 
   async deleteSecret(site: string, name: string): Promise<void> {
     const entry = new this.Entry(SERVICE_NAME, this.accountFor(site, name));
-    try {
-      entry.deletePassword();
-    } catch {
-      // Already absent — fine.
-    }
+    entry.deletePassword();
   }
 
   async listSecrets(site: string): Promise<string[]> {
@@ -157,23 +149,15 @@ class KeyringBackend implements CredentialBackend {
 
   async getCookies(site: string): Promise<CookieRecord[]> {
     const entry = new this.Entry(SERVICE_NAME, this.cookieAccount(site));
-    try {
-      const v = entry.getPassword();
-      if (typeof v !== 'string' || v.length === 0) return [];
-      return JSON.parse(v) as CookieRecord[];
-    } catch {
-      return [];
-    }
+    const v = entry.getPassword();
+    if (typeof v !== 'string' || v.length === 0) return [];
+    return JSON.parse(v) as CookieRecord[];
   }
 
   async setCookies(site: string, cookies: CookieRecord[]): Promise<void> {
     const entry = new this.Entry(SERVICE_NAME, this.cookieAccount(site));
     if (cookies.length === 0) {
-      try {
-        entry.deletePassword();
-      } catch {
-        /* ignore */
-      }
+      entry.deletePassword();
       return;
     }
     entry.setPassword(JSON.stringify(cookies));
@@ -181,23 +165,15 @@ class KeyringBackend implements CredentialBackend {
 
   async getStorage(site: string): Promise<StorageRecord[]> {
     const entry = new this.Entry(SERVICE_NAME, this.storageAccount(site));
-    try {
-      const v = entry.getPassword();
-      if (typeof v !== 'string' || v.length === 0) return [];
-      return JSON.parse(v) as StorageRecord[];
-    } catch {
-      return [];
-    }
+    const v = entry.getPassword();
+    if (typeof v !== 'string' || v.length === 0) return [];
+    return JSON.parse(v) as StorageRecord[];
   }
 
   async setStorage(site: string, storage: StorageRecord[]): Promise<void> {
     const entry = new this.Entry(SERVICE_NAME, this.storageAccount(site));
     if (storage.length === 0) {
-      try {
-        entry.deletePassword();
-      } catch {
-        /* ignore */
-      }
+      entry.deletePassword();
       return;
     }
     entry.setPassword(JSON.stringify(storage));
@@ -719,8 +695,50 @@ export async function saveSiteStorage(site: string, storage: StorageRecord[]): P
   await backend.setStorage?.(site, storage);
 }
 
-/** Persist one action-program capture named by `authConfig.persist`. */
-export async function saveSiteSecret(site: string, name: string, value: string): Promise<void> {
+/** Replace the durable auth material as one logical commit. Backends such as
+ * the OS keyring do not expose transactions, so restore the complete prior
+ * snapshot if any write fails rather than leaving mixed-session state. */
+export async function commitSiteAuthState(
+  site: string,
+  cookies: CookieRecord[],
+  secrets: Record<string, string>,
+): Promise<void> {
   const backend = await getCredentialBackend();
-  await backend.setSecret(site, name, value);
+  const previousCookies = await backend.getCookies(site);
+  const previousSecrets = new Map<string, string | null>();
+  for (const name of Object.keys(secrets)) {
+    previousSecrets.set(name, await backend.getSecret(site, name));
+  }
+
+  try {
+    await backend.setCookies(site, cookies);
+    for (const [name, value] of Object.entries(secrets)) {
+      await backend.setSecret(site, name, value);
+    }
+  } catch (err) {
+    const rollbackFailures: string[] = [];
+    try {
+      await backend.setCookies(site, previousCookies);
+    } catch (rollbackErr) {
+      rollbackFailures.push(
+        `cookies: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
+      );
+    }
+    for (const [name, value] of previousSecrets) {
+      try {
+        if (value === null) await backend.deleteSecret(site, name);
+        else await backend.setSecret(site, name, value);
+      } catch (rollbackErr) {
+        rollbackFailures.push(
+          `${name}: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
+        );
+      }
+    }
+    const original = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      rollbackFailures.length > 0
+        ? `${original}; rollback also failed for ${rollbackFailures.join(', ')}`
+        : original,
+    );
+  }
 }

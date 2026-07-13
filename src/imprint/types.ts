@@ -235,6 +235,10 @@ export type BootstrapCapture = z.infer<typeof BootstrapCaptureSchema>;
 
 const WorkflowRequestSchema = z.object({
   method: z.string(),
+  /** Sequence number of the captured request that grounds this workflow request.
+   *  Auth login uses this to resolve persisted captures only against their
+   *  producing recorded response. */
+  recordingRequestSeq: z.number().int().nonnegative().optional(),
   /** Template; ${param.X} substitutes a parameter, ${response[N].path} an
    *  earlier extracted value. */
   url: z.string(),

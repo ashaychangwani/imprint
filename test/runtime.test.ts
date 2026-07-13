@@ -170,6 +170,51 @@ describe('executeWorkflow', () => {
     expect(r.data).toBe('<html><body>Hello</body></html>');
   });
 
+  it('keeps the request timeout active while reading the response body', async () => {
+    const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      return {
+        status: 200,
+        headers: new Headers(),
+        text: () =>
+          new Promise<string>((_resolve, reject) => {
+            signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+          }),
+      } as Response;
+    }) as typeof fetch;
+
+    const r = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'slow' },
+      credentials: STORE,
+      fetchImpl: fetchMock,
+      requestTimeoutMs: 5,
+    });
+
+    expect(r).toMatchObject({ ok: false, error: 'NETWORK' });
+    if (!r.ok) expect(r.message).toContain('timed out after 5ms');
+  });
+
+  it('keeps HTTP status classification when an error body cannot be read', async () => {
+    const r = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'expired' },
+      credentials: STORE,
+      fetchImpl: (async () =>
+        ({
+          status: 401,
+          headers: new Headers(),
+          async text() {
+            throw new Error('body stream reset');
+          },
+        }) as unknown as Response) as unknown as typeof fetch,
+    });
+
+    expect(r).toMatchObject({ ok: false, error: 'AUTH_EXPIRED' });
+  });
+
   it('substitutes parameter.default when the caller omits the param', async () => {
     // Regression: runtime used to treat `default` as a presence-sentinel only.
     // `${param.q}` would still throw STATE_MISSING because the substitution

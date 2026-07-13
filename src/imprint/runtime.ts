@@ -14,10 +14,10 @@ import {
 } from './cookie-jar.ts';
 import {
   type StorageRecord,
+  commitSiteAuthState,
   loadSiteCredentials,
   readSiteManifest,
   saveSiteCookies,
-  saveSiteSecret,
 } from './credential-store.ts';
 import { captureHeader, captureValueMatches, jsonpath } from './request-capture.ts';
 import type {
@@ -247,6 +247,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     if (cookieHeader && !hasHeader(subbed.headers, 'cookie')) subbed.headers.cookie = cookieHeader;
 
     let resp: Response;
+    let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
     if (req.mode === 'navigate') {
       if (!opts.browser) {
         return {
@@ -270,7 +271,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       }
     } else {
       const controller = new AbortController();
-      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+      responseAbortTimer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         resp = await fetchFn(subbed.url, {
           method: subbed.method,
@@ -280,7 +281,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           redirect: 'follow',
         });
       } catch (err) {
-        clearTimeout(timeoutHandle);
+        if (responseAbortTimer) clearTimeout(responseAbortTimer);
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('aborted') || msg.includes('AbortError')) {
           return {
@@ -292,44 +293,67 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         }
         return { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` };
       }
-      clearTimeout(timeoutHandle);
     }
 
+    let text = '';
+    let responseReadError: string | undefined;
+    try {
+      text = await resp.text();
+    } catch (err) {
+      responseReadError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (responseAbortTimer) clearTimeout(responseAbortTimer);
+    }
+
+    const bodyPreview = responseReadError
+      ? `[response body unavailable: ${responseReadError}]`
+      : text;
+
     if (resp.status === 401) {
-      const text = await safeText(resp);
       return {
         ok: false,
         error: 'AUTH_EXPIRED',
-        message: `Request ${i} returned 401 — auth has likely expired: ${text.slice(0, 300)}`,
+        message: `Request ${i} returned 401 — auth has likely expired: ${bodyPreview.slice(0, 300)}`,
         remediation: `Run \`imprint login ${opts.workflow.site}\` to refresh credentials.`,
       };
     }
     if (resp.status === 403) {
       // 403 = bot detection / geo / ToS / missing capability. The body
       // usually disambiguates — surface it rather than guessing.
-      const text = await safeText(resp);
       return {
         ok: false,
         error: 'FORBIDDEN',
-        message: `Request ${i} returned 403: ${text.slice(0, 300)}`,
+        message: `Request ${i} returned 403: ${bodyPreview.slice(0, 300)}`,
         remediation: `Common causes: bot detection (Akamai/Cloudflare/DataDome), geo-block, expired credential, or ToS violation. Inspect the response body above; if it looks like bot detection, the captured workflow can't replay against this site without a real browser. If it's auth, try \`imprint login ${opts.workflow.site}\`.`,
       };
     }
     if (resp.status === 429) {
-      const text = await safeText(resp);
       return {
         ok: false,
         error: 'RATE_LIMITED',
-        message: `Request ${i} returned 429: ${text.slice(0, 300)}`,
+        message: `Request ${i} returned 429: ${bodyPreview.slice(0, 300)}`,
         remediation: 'Back off and retry after the Retry-After interval.',
       };
     }
     if (resp.status >= 400) {
-      const text = await safeText(resp);
       return {
         ok: false,
         error: 'BAD_RESPONSE',
-        message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${text.slice(0, 500)}`,
+        message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${bodyPreview.slice(0, 500)}`,
+      };
+    }
+    if (responseReadError) {
+      const timedOut =
+        responseReadError.includes('aborted') || responseReadError.includes('AbortError');
+      return {
+        ok: false,
+        error: 'NETWORK',
+        message: timedOut
+          ? `Request ${i} timed out after ${timeoutMs}ms`
+          : `Response ${i} could not be read: ${responseReadError}`,
+        remediation: timedOut
+          ? 'Retry, or increase the timeout if the endpoint is slow.'
+          : undefined,
       };
     }
 
@@ -343,7 +367,6 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       // Non-fatal; cookies stay as they were.
     }
 
-    const text = await safeText(resp);
     let parsed: unknown = text;
     try {
       parsed = JSON.parse(text);
@@ -469,20 +492,29 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   };
   let lastResponse: ResponseContext | undefined;
 
-  const persistCookies = async (): Promise<void> => {
-    try {
-      await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
-    } catch {
-      // Cookie persistence is best effort; the live browser still owns its jar.
-    }
-  };
-
-  const fail = async (result: RuntimeErrorResult): Promise<RuntimeErrorResult> => {
-    await persistCookies();
+  const fail = (result: RuntimeErrorResult): RuntimeErrorResult => {
     return {
       ...result,
       continuation: Object.keys(initialState).length > 0 ? initialState : undefined,
     };
+  };
+
+  const persistenceFailure = (material: string, err: unknown): RuntimeErrorResult =>
+    fail({
+      ok: false,
+      error: 'BAD_RESPONSE',
+      message: `Auth action ${JSON.stringify(actionName)} could not persist ${material}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
+
+  const persistCookies = async (): Promise<RuntimeErrorResult | undefined> => {
+    try {
+      await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
+      return undefined;
+    } catch (err) {
+      return persistenceFailure('session cookies', err);
+    }
   };
 
   const executeRequest = async (
@@ -546,6 +578,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       request.headers.cookie = cookieHeader;
 
     let response: Response;
+    let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
     if (req.mode === 'navigate') {
       if (!opts.browser) {
         return {
@@ -579,7 +612,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       }
     } else {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      responseAbortTimer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         response = await fetchFn(request.url, {
           method: request.method,
@@ -589,6 +622,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
           redirect: 'follow',
         });
       } catch (err) {
+        if (responseAbortTimer) clearTimeout(responseAbortTimer);
         return {
           ok: false,
           result: {
@@ -599,21 +633,40 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
             }`,
           },
         };
-      } finally {
-        clearTimeout(timer);
       }
     }
 
-    const text = await safeText(response);
+    let text = '';
+    let responseReadError: string | undefined;
+    try {
+      text = await response.text();
+    } catch (err) {
+      responseReadError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (responseAbortTimer) clearTimeout(responseAbortTimer);
+    }
     if (response.status >= 400) {
+      const bodyPreview = responseReadError
+        ? `[response body unavailable: ${responseReadError}]`
+        : text;
       return {
         ok: false,
         result: {
           ok: false,
           error: response.status === 401 ? 'AUTH_EXPIRED' : 'BAD_RESPONSE',
-          message: `Auth request ${requestIndex} (${request.method} ${request.url}) returned ${response.status}: ${text.slice(0, 500)}`,
+          message: `Auth request ${requestIndex} (${request.method} ${request.url}) returned ${response.status}: ${bodyPreview.slice(0, 500)}`,
           status: response.status,
-          responseBodyPreview: text.slice(0, 500),
+          responseBodyPreview: bodyPreview.slice(0, 500),
+        },
+      };
+    }
+    if (responseReadError) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          error: 'NETWORK',
+          message: `Auth response ${requestIndex} could not be read: ${responseReadError}`,
         },
       };
     }
@@ -664,7 +717,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
           break;
         }
         if (step.onError === 'retry' && step.repeat) continue;
-        return await fail(executed.result);
+        return fail(executed.result);
       }
       if (!step.repeat) break;
       if (!executed.value) continue;
@@ -681,7 +734,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     }
 
     if (!matched) {
-      return await fail({
+      return fail({
         ok: false,
         error: 'BAD_RESPONSE',
         message: `Auth action ${JSON.stringify(actionName)} did not satisfy the declared repeat condition for request ${step.request} after ${step.repeat?.maxAttempts ?? 1} attempts.`,
@@ -689,11 +742,9 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     }
   }
 
-  await persistCookies();
-
   const missingEvidence = action.outcome.evidence.filter((name) => !Object.hasOwn(state, name));
   if (missingEvidence.length > 0) {
-    return await fail({
+    return fail({
       ok: false,
       error: 'BAD_RESPONSE',
       message: `Auth action ${JSON.stringify(actionName)} completed without declared evidence: ${missingEvidence.join(', ')}.`,
@@ -703,7 +754,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   if (action.outcome.type === 'pause') {
     const missingCarry = action.outcome.carry.filter((name) => !Object.hasOwn(state, name));
     if (missingCarry.length > 0) {
-      return await fail({
+      return fail({
         ok: false,
         error: 'BAD_RESPONSE',
         message: `Auth action ${JSON.stringify(actionName)} completed without declared carry state: ${missingCarry.join(', ')}.`,
@@ -712,10 +763,15 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     const continuation = Object.fromEntries(
       action.outcome.carry.map((name) => [name, state[name]]),
     );
+    const cookieFailure = await persistCookies();
+    if (cookieFailure && !opts.browser) return cookieFailure;
+    const persistenceWarning = cookieFailure
+      ? ` ${cookieFailure.message} Continue in the current browser session.`
+      : '';
     return {
       ok: false,
       error: 'ACTION_REQUIRED',
-      message: action.outcome.message,
+      message: `${action.outcome.message}${persistenceWarning}`,
       nextAction: action.outcome.next,
       continuation,
       responseBodyPreview: lastResponse?.text.slice(0, 500),
@@ -724,21 +780,23 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
 
   const missingPersisted = authConfig.persist.filter((name) => !Object.hasOwn(state, name));
   if (missingPersisted.length > 0) {
-    return await fail({
+    return fail({
       ok: false,
       error: 'BAD_RESPONSE',
       message: `Auth action ${JSON.stringify(actionName)} completed without declared persisted state: ${missingPersisted.join(', ')}.`,
     });
   }
+  const persistedSecrets: Record<string, string> = {};
   for (const name of authConfig.persist) {
     const value = state[name];
     if (value !== undefined && value !== null && String(value) !== '') {
-      try {
-        await saveSiteSecret(opts.workflow.site, name, String(value));
-      } catch {
-        // Cookies remain the primary durable session material.
-      }
+      persistedSecrets[name] = String(value);
     }
+  }
+  try {
+    await commitSiteAuthState(opts.workflow.site, cookieJar.toJSON(), persistedSecrets);
+  } catch (err) {
+    return persistenceFailure('authenticated session state', err);
   }
   return { ok: true, data: { authenticated: true } };
 }
@@ -1258,14 +1316,6 @@ function encodePart(
   const beforeMatch = template.slice(0, idx);
   const inQuery = beforeMatch.includes('?');
   return inQuery ? encodeURIComponent(s) : encodeURI(s);
-}
-
-async function safeText(resp: Response): Promise<string> {
-  try {
-    return await resp.text();
-  } catch {
-    return '';
-  }
 }
 
 /** Build a clear, actionable error when a `${credential.NAME}` placeholder
