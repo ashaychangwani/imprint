@@ -66,6 +66,10 @@ interface CompileOptions {
    *  skips its own triageRequests() LLM call and merges the shared selectedSeqs
    *  with any per-tool preserveSeqs locally. */
   preTriagedSession?: TriageResult;
+  /** Authoritative, post-verification workflow contract. Playbook compilation
+   *  uses this instead of re-inferring the public parameter surface from the
+   *  recording candidate. */
+  workflow?: Workflow;
 }
 
 // ─── generate (workflow.json) ────────────────────────────────────────────────
@@ -93,6 +97,8 @@ interface GenerateOptions extends CompileOptions {
    *  response parsing, shared-module imports). Injected into the agent's initial
    *  message so the compile follows it. */
   toolPlan?: string;
+  /** Bounded teach resume: revise the current artifact from durable feedback. */
+  revisionMode?: boolean;
 }
 
 interface GenerateResult {
@@ -136,6 +142,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         buildPlanPath: opts.buildPlanPath,
         sharedModules: opts.sharedModules,
         toolPlan: opts.toolPlan,
+        revisionMode: opts.revisionMode,
       });
 
       setSpanAttributes(span, {
@@ -216,6 +223,10 @@ function relocateGeneratedWorkflow(workflowPath: string, workflow: Workflow): st
     '.compile-log.json',
     '.compile-done.json',
     '.compile-give-up.json',
+    '.live-verifier-log.jsonl',
+    '.live-verification-evidence.json',
+    '.live-verification.json',
+    'backends.json',
   ]) {
     const source = pathJoin(sourceDir, artifact);
     if (!existsSync(source)) continue;
@@ -791,10 +802,18 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
     `compiling playbook from ${session.events.length} events / ${xhrs.length} XHRs / ${session.narration.length} narration lines…`,
   );
 
+  const workflowContract = opts.workflow
+    ? {
+        toolName: opts.workflow.toolName,
+        parameters: opts.workflow.parameters,
+        limitations: opts.workflow.limitations ?? [],
+      }
+    : undefined;
   const slimmed = {
     site: session.site,
     url: compactUrlForLlm(session.url),
     candidate: opts.candidate,
+    workflowContract,
     sharedContext: opts.sharedContext,
     narration: session.narration,
     events: session.events,
@@ -812,6 +831,10 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
     opts.candidate
       ? `\n\nCandidate scope:\nCompile only this candidate: ${JSON.stringify(opts.candidate, null, 2)}\nShared context: ${JSON.stringify(opts.sharedContext ?? {}, null, 2)}\nThe playbook toolName and parameters must match the selected candidate/workflow, not any other action in the recording.\n`
       : ''
+  }${
+    workflowContract
+      ? `\n\nAuthoritative verified workflow contract:\n${JSON.stringify(workflowContract, null, 2)}\nThis contract supersedes candidate likelyParams and raw recording branches. Use exactly these public parameters. Never resurrect an omitted parameter or reference it in a step. When a limitation omits a recorded branch, leave that branch out of the playbook and retain the limitation in notes if useful.\n`
+      : ''
   }`;
 
   const llm = resolveProvider(opts.llmConfig ?? {});
@@ -825,13 +848,21 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       playbook = parsePlaybook(stripCodeFences(lastResult.text).trim());
+      if (opts.workflow) {
+        const contractFailures = playbookWorkflowContractFailures(playbook, opts.workflow);
+        if (contractFailures.length > 0) {
+          throw new Error(
+            `playbook conflicts with the authoritative verified workflow contract:\n- ${contractFailures.join('\n- ')}`,
+          );
+        }
+      }
       lastErr = undefined;
       break;
     } catch (err) {
       lastErr = err;
       if (attempt === 0) {
-        log('playbook YAML failed to parse, retrying with error feedback…');
-        const fixPrompt = `Your previous output was invalid YAML. The parser error was:\n\n${err instanceof Error ? err.message : String(err)}\n\nFix the YAML and return the corrected playbook. Output ONLY valid YAML, no prose.`;
+        log('playbook failed validation, retrying with error feedback…');
+        const fixPrompt = `Your previous playbook was invalid. The validation error was:\n\n${err instanceof Error ? err.message : String(err)}\n\nReason about the verified workflow contract, fix the YAML, and return the corrected playbook. Output ONLY valid YAML, no prose.`;
         lastResult = await llm.analyze(systemPrompt, `${JSON.stringify(slimmed)}\n\n${fixPrompt}`);
         llmInputTokens = addNullable(llmInputTokens, lastResult.inputTokens);
         llmOutputTokens = addNullable(llmOutputTokens, lastResult.outputTokens);
@@ -866,6 +897,44 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
     outputTokens: addNullable(triageTokens.output, llmOutputTokens),
     durationMs: triageTokens.durationMs + llmDurationMs,
   };
+}
+
+/**
+ * Check only the compatibility boundary required for API→playbook fallback.
+ * The playbook agent remains free to choose DOM actions and locators, but it
+ * cannot change the verified public tool surface or depend on hidden inputs.
+ */
+export function playbookWorkflowContractFailures(playbook: Playbook, workflow: Workflow): string[] {
+  const failures: string[] = [];
+  if (playbook.toolName !== workflow.toolName) {
+    failures.push(
+      `toolName ${JSON.stringify(playbook.toolName)} must equal ${JSON.stringify(workflow.toolName)}`,
+    );
+  }
+
+  const workflowNames = new Set(workflow.parameters.map((parameter) => parameter.name));
+  const playbookNames = new Set(playbook.parameters.map((parameter) => parameter.name));
+  const missing = [...workflowNames].filter((name) => !playbookNames.has(name)).sort();
+  const unexpected = [...playbookNames].filter((name) => !workflowNames.has(name)).sort();
+  if (missing.length > 0) {
+    failures.push(`missing public parameter(s): ${missing.join(', ')}`);
+  }
+  if (unexpected.length > 0) {
+    failures.push(`unexpected parameter(s): ${unexpected.join(', ')}`);
+  }
+
+  const hiddenReferences = new Set<string>();
+  const executableText = JSON.stringify({ steps: playbook.steps, result: playbook.result });
+  for (const match of executableText.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+    const name = match[1];
+    if (name && !workflowNames.has(name)) hiddenReferences.add(name);
+  }
+  if (hiddenReferences.size > 0) {
+    failures.push(
+      `step/result references hidden parameter(s): ${[...hiddenReferences].sort().join(', ')}`,
+    );
+  }
+  return failures;
 }
 
 function addNullable(a: number | null, b: number | null): number | null {

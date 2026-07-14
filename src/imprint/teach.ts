@@ -69,6 +69,7 @@ import { loadJsonFile } from './load-json.ts';
 import { createLog, muteLog, unmuteLog } from './log.ts';
 import { MultiProgress } from './multi-progress.ts';
 import { localSiteDir, localToolDir } from './paths.ts';
+import { rebindExistingBackendsCacheToWorkflow } from './probe-backends.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import { record } from './record.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
@@ -161,9 +162,11 @@ export {
 
 /**
  * How many compile agents run in parallel when more than one tool is selected.
+ * Each compiler can now invoke a separate live semantic verifier, so keep this
+ * at 2 to avoid provider rate-limit bursts and same-site anti-bot pressure.
  * Single-tool runs still use concurrency 1.
  */
-const COMPILE_CONCURRENCY = 3;
+const COMPILE_CONCURRENCY = 2;
 
 /** Module logger — suppressed during teach's spinner phases via muteLog(). */
 const log = createLog('teach');
@@ -1218,21 +1221,36 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       });
     }
     // A `--from-step` resume into plan-prereqs/generate reconstructs the prior
-    // run's tools from persisted state (shared-module planning needs ≥2 tools, and
-    // a multi-tool generate resumes all of them) — not just the most-recent
-    // workflow. selectMultiToolResumePlans scopes this to the same recording as the
+    // run's tools from persisted state (shared-module planning may need ≥2 tools).
+    // An explicit --all-tools or interactive resume keeps the full set; documented
+    // non-interactive behavior selects only the persisted primary candidate.
+    // selectMultiToolResumePlans scopes reconstruction to the same recording as the
     // resume target and to tools that actually reached `startFrom`'s prerequisites,
     // so a sibling from a different run can't be compiled against the wrong session
     // and one that failed earlier can't crash loading a missing artifact. Confined
     // to --from-step so interactive resume keeps its single-tool behavior.
     const allCandidatePlans: CandidateCompilePlan[] = [];
     if (opts.fromStep) {
-      const selection = selectMultiToolResumePlans(state, workflowKey, startFrom);
+      let plannedToolNames: Set<string> | undefined;
+      const persistedBuildPlanPath = resolveTeachStatePath(site, ws?.buildPlanPath);
+      if (persistedBuildPlanPath && existsSync(persistedBuildPlanPath)) {
+        const persistedBuildPlan = readBuildPlanFile(persistedBuildPlanPath);
+        if (persistedBuildPlan) {
+          plannedToolNames = new Set(persistedBuildPlan.perTool.map((tool) => tool.toolName));
+        }
+      }
+      const selection = selectMultiToolResumePlans(state, workflowKey, startFrom, {
+        noInteractive: opts.noInteractive,
+        allTools: opts.allTools,
+        plannedToolNames,
+      });
       for (const { workflowKey: skippedKey, reason } of selection.skipped) {
         p.log.warn(
           reason === 'different-recording'
             ? `Skipping tool "${skippedKey}" for --from-step ${startFrom}: it belongs to a different recording than the resume target.`
-            : `Skipping tool "${skippedKey}" for --from-step ${startFrom}: its prior run didn't reach "${startFrom}" — resume an earlier step or re-run it.`,
+            : reason === 'not-in-build-plan'
+              ? `Skipping tool "${skippedKey}" for --from-step ${startFrom}: it is not in the current build plan.`
+              : `Skipping tool "${skippedKey}" for --from-step ${startFrom}: its prior run didn't reach "${startFrom}" — resume an earlier step or re-run it.`,
         );
       }
       for (const sel of selection.plans) {
@@ -1681,6 +1699,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       allTools: opts.allTools,
       buildPlanPath: buildPlanPath || undefined,
       sharedModules: sharedModulesManifest.length > 0 ? sharedModulesManifest : undefined,
+      resumeExistingArtifacts: Boolean(opts.fromStep),
     });
   } finally {
     unmuteLog();
@@ -1770,6 +1789,21 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         : 'reason not recorded';
       p.log.warn(
         `tool "${r.workflow.toolName}" shipped without live verification: ${reason}\n  → runtime callers fall through to the playbook last-ditch rung; treat this tool as unverified until audit confirms it.`,
+      );
+    }
+  }
+
+  // Capability reductions are agent decisions, not silent compile losses.
+  // Keep the reasoning in workflow.json and repeat it in the final teach
+  // result so operators can distinguish an intentionally smaller honest tool
+  // from a compiler that simply forgot an input.
+  for (const result of results) {
+    for (const limitation of result.workflow.limitations ?? []) {
+      const omitted = limitation.omittedParameters?.length
+        ? `; omitted inputs: ${limitation.omittedParameters.join(', ')}`
+        : '';
+      p.log.warn(
+        `tool "${result.workflow.toolName}" capability limitation — ${limitation.feature}: ${limitation.reason}${omitted}`,
       );
     }
   }
@@ -1918,6 +1952,9 @@ async function compileCandidatePlans(opts: {
   buildPlanPath?: string;
   /** Shared-module build manifest (verified flags) for this site. */
   sharedModules?: SharedModuleManifestEntry[];
+  /** The user explicitly resumed a prior teach phase; generated artifacts that
+   *  already exist are revision inputs, not disposable scratch output. */
+  resumeExistingArtifacts?: boolean;
 }): Promise<TeachToolResult[]> {
   const concurrency = opts.plans.length === 1 ? 1 : COMPILE_CONCURRENCY;
   const mp = opts.plans.length > 1 ? new MultiProgress() : null;
@@ -2179,12 +2216,15 @@ async function compileSelectedCandidate(opts: {
   teachCredentials?: { site: string; values: Record<string, string> };
   buildPlanPath?: string;
   sharedModules?: SharedModuleManifestEntry[];
+  resumeExistingArtifacts?: boolean;
 }): Promise<TeachToolResult> {
   const { plan, site, state } = opts;
   const startIdx = STEPS.indexOf(plan.startFrom);
   const toolName = plan.candidate?.toolName ?? plan.workflowKey;
   const workflowDir = localToolDir(site, toolName);
   mkdirSync(workflowDir, { recursive: true });
+  const revisionMode =
+    Boolean(opts.resumeExistingArtifacts) && existsSync(pathJoin(workflowDir, 'workflow.json'));
 
   // The per-tool compile (generate → compile-playbook → emit) is ATOMIC by design:
   // each phase gates on startIdx ONLY (not the window's stopIdx), so once started it
@@ -2203,19 +2243,20 @@ async function compileSelectedCandidate(opts: {
     // mapping, request construction, response parsing, shared-module imports),
     // then run a single compile that follows it. Best-effort — a timeout or
     // error yields no plan and the compile proceeds exactly as before.
-    const toolPlan = plan.candidate
-      ? await planToolCompile({
-          site,
-          toolName,
-          candidate: plan.candidate,
-          sharedContext: plan.sharedContext,
-          sessionPath: opts.sessionPath,
-          buildPlanPath: opts.buildPlanPath,
-          sharedModules: opts.sharedModules,
-          providerName: opts.providerName,
-          model: opts.compileModel,
-        })
-      : undefined;
+    const toolPlan =
+      plan.candidate && !revisionMode
+        ? await planToolCompile({
+            site,
+            toolName,
+            candidate: plan.candidate,
+            sharedContext: plan.sharedContext,
+            sessionPath: opts.sessionPath,
+            buildPlanPath: opts.buildPlanPath,
+            sharedModules: opts.sharedModules,
+            providerName: opts.providerName,
+            model: opts.compileModel,
+          })
+        : undefined;
 
     const result = await generate({
       sessionPath: opts.sessionPath,
@@ -2232,6 +2273,7 @@ async function compileSelectedCandidate(opts: {
       buildPlanPath: opts.buildPlanPath,
       sharedModules: opts.sharedModules,
       toolPlan,
+      revisionMode,
     });
 
     assertCandidateToolName('Compiled workflow', result.workflow.toolName, plan.candidate);
@@ -2253,6 +2295,16 @@ async function compileSelectedCandidate(opts: {
   if (!genResult) {
     throw new Error(`generate step did not produce a workflow for "${toolName}".`);
   }
+  // Semantic verification may revise the workflow after generate() returns
+  // (for example, omitting an unsupported secondary parameter and recording a
+  // limitation). Reload that final artifact before compiling any fallback so
+  // later agents cannot work from the pre-verification object.
+  genResult.workflow = loadJsonFile(
+    genResult.workflowPath,
+    WorkflowSchema,
+    { notFound: `workflow.json not found at ${genResult.workflowPath}` },
+    'workflow.json',
+  );
 
   // ── Step 2: compile-playbook (after generate — runtime artifact, not needed for dual-pass) ──
   let pbResult: { playbook: Playbook; playbookPath: string };
@@ -2262,6 +2314,7 @@ async function compileSelectedCandidate(opts: {
       outPath: pathJoin(workflowDir, 'playbook.yaml'),
       llmConfig: { provider: opts.providerName },
       candidate: plan.candidate,
+      workflow: genResult.workflow,
       sharedContext: plan.sharedContext,
       preTriagedSession: opts.sharedTriageResult,
     });
@@ -2292,6 +2345,11 @@ async function compileSelectedCandidate(opts: {
 
   exportSiteManifest(site, workflowDir, genResult.workflow, pbResult.playbook);
 
+  // Emission and post-verification annotations can change workflow.json's
+  // metadata hash without changing the already-proven transport behavior.
+  // Reuse the existing no-network rebind so a bounded resume does not trigger
+  // an unnecessary comprehensive probe on its first real call.
+  rebindExistingBackendsCacheToWorkflow(workflowDir);
   await writeQuickBackendsCache(workflowDir, genResult.workflow);
 
   return {

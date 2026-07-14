@@ -114,7 +114,24 @@ The site is blocking API replay or needs browser-minted state. Three escalating 
    ```bash
    imprint compile-playbook ~/.imprint/<site>/sessions/<ts>.redacted.json
    ```
-   With a `playbook.yaml` present, the `auto` ladder escalates to a real DOM walk when API replay modes cannot satisfy the workflow.
+With a `playbook.yaml` present, the `auto` ladder escalates to a real DOM walk when API replay modes cannot satisfy the workflow.
+
+## Teach stalls or fails during final live verification
+
+The final verifier writes an append-only event stream and durable receipts beside each tool:
+
+```bash
+tail -f ~/.imprint/<site>/<toolName>/.live-verifier-log.jsonl
+jq . ~/.imprint/<site>/<toolName>/.live-verification-evidence.json
+```
+
+`prepare_live_backend` checks `backends.json` before the integration suite starts. A missing or invalid preference runs the normal comprehensive probe on a separate infrastructure budget; compiler revisions retain and rebind an already-proven preference without network I/O. The suite timeout begins after preparation and uses only the selected backend. Only a transport, network, or browser-infrastructure failure justifies a forced reprobe; empty or incorrect output goes back to the compiler unchanged.
+
+Every suite gets a `suite-N` receipt before Bun launches. The receipt ends as `passed`, `failed`, `timed_out`, or `aborted` and retains bounded sanitized stdout/stderr, test names, backend selection, and completed call labels. This means an empty call list is diagnosable rather than being mistaken for a successful semantic review. Reports contain no evidence IDs; readable labels are navigation aids only.
+
+If a live search returns an unexpected empty collection, inspect the exact final response before changing backend policy. Document requests often record an HTML/JavaScript shell while the useful content appears only after client-side rendering in later DOM events. In that case the compiler should use the existing request `mode: "navigate"` and train the parser against the rendered response—not selectors borrowed from a sibling detail endpoint. A request transform returning `{ url }` does not erase an existing request body or headers; only fields explicitly returned by the transform override the workflow request.
+
+The verifier evaluates the core intent separately from secondary parameters. A known-broken secondary input returns `changes_required`; the compiler then repairs it from evidence or removes it from the public contract and records the reason in `workflow.limitations`. A grounded but genuinely untestable input can remain exposed as `verified:false`. Neither mechanism permits a failing core tool to ship.
 
 ## Auth compile: an expected user action never arrives
 
@@ -225,6 +242,11 @@ Tools with a **large filter surface** (a search tool exposing 10+ optional filte
 ```bash
 IMPRINT_TEACH_TIMEOUT=30m scripts/teach-from-scratch.sh <site>
 ```
+
+This archives prior compiled outputs under `/tmp`, preserves recordings and
+analyzed candidate state, and runs the explicit `plan-prereqs → emit` phase
+window. If candidate detection has not completed, finish that analysis first;
+the reteach script intentionally does not rediscover tools.
 
 If a tool consistently fails to compile within the timeout (e.g. due to bot defense on verification), try a faster model:
 

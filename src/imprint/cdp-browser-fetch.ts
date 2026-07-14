@@ -94,6 +94,27 @@ export function jarCookiesValidated(cookies: Array<{ name: string; value: string
   return cookies.some((c) => c.name === 'bm_sv');
 }
 
+export function buildNavigationSelectorExpression(selector: string): string {
+  return `document.querySelector(${JSON.stringify(selector)}) !== null`;
+}
+
+export function buildNavigationClickTargetExpression(selector: string): string {
+  return `(() => {
+    const target = document.querySelector(${JSON.stringify(selector)});
+    if (!(target instanceof Element)) return null;
+    target.scrollIntoView({ block: 'center', inline: 'center' });
+    const rect = target.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    if (target.matches(':disabled')) return null;
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    if (hit !== target && !target.contains(hit) && !hit?.contains(target)) return null;
+    target.focus();
+    return { x, y };
+  })()`;
+}
+
 export interface CdpBrowserFetch {
   /** typeof fetch — executes the request inside the live trusted Chrome page. */
   readonly fetchImpl: typeof fetch;
@@ -109,6 +130,9 @@ export interface CdpBrowserFetch {
       timeoutMs?: number;
       pollIntervalMs?: number;
       urlIncludes?: string;
+      selector?: string;
+      actions?: Array<{ action: 'click'; selector: string }>;
+      resultSelector?: string;
       cookie?: { name: string; domain?: string; path?: string };
     },
   ): Promise<Response>;
@@ -1253,6 +1277,49 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     return currentPageUrl;
   };
 
+  const dispatchTrustedClick = async (
+    c: CdpClient,
+    x: number,
+    y: number,
+    label: string,
+    timeoutMs: number,
+  ): Promise<void> => {
+    await withTimeout(c.Page.bringToFront(), `CDP Page.bringToFront(${label})`, timeoutMs);
+    const timestamp = Date.now() / 1000;
+    await withTimeout(
+      c.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y, timestamp }),
+      `CDP Input.dispatchMouseEvent(${label} mouseMoved)`,
+      timeoutMs,
+    );
+    await sleep(100);
+    await withTimeout(
+      c.Input.dispatchMouseEvent({
+        type: 'mousePressed',
+        button: 'left',
+        buttons: 1,
+        clickCount: 1,
+        x,
+        y,
+        timestamp,
+      }),
+      `CDP Input.dispatchMouseEvent(${label} mousePressed)`,
+      timeoutMs,
+    );
+    await sleep(50);
+    await withTimeout(
+      c.Input.dispatchMouseEvent({
+        type: 'mouseReleased',
+        button: 'left',
+        clickCount: 1,
+        x,
+        y,
+        timestamp: Date.now() / 1000,
+      }),
+      `CDP Input.dispatchMouseEvent(${label} mouseReleased)`,
+      timeoutMs,
+    );
+  };
+
   const navigate = async (
     rawUrl: string,
     options: {
@@ -1263,6 +1330,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       timeoutMs?: number;
       pollIntervalMs?: number;
       urlIncludes?: string;
+      selector?: string;
+      actions?: Array<{ action: 'click'; selector: string }>;
+      resultSelector?: string;
       cookie?: { name: string; domain?: string; path?: string };
     } = {},
   ): Promise<Response> => {
@@ -1402,44 +1472,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         log(
           `form POST: trusted click on ${String(directive.tag ?? 'control')} type=${String(directive.type ?? 'unknown')} focused=${focusProbe.result.value === true} hit=${liveTarget.hit === true}`,
         );
-        const timestamp = Date.now() / 1000;
-        await withTimeout(
-          c.Input.dispatchMouseEvent({
-            type: 'mouseMoved',
-            x: clickX,
-            y: clickY,
-            timestamp,
-          }),
-          'CDP Input.dispatchMouseEvent(form mouseMoved)',
-          cdpCommandTimeoutMs,
-        );
-        await sleep(100);
-        await withTimeout(
-          c.Input.dispatchMouseEvent({
-            type: 'mousePressed',
-            button: 'left',
-            buttons: 1,
-            clickCount: 1,
-            x: clickX,
-            y: clickY,
-            timestamp,
-          }),
-          'CDP Input.dispatchMouseEvent(form mousePressed)',
-          cdpCommandTimeoutMs,
-        );
-        await sleep(50);
-        await withTimeout(
-          c.Input.dispatchMouseEvent({
-            type: 'mouseReleased',
-            button: 'left',
-            clickCount: 1,
-            x: clickX,
-            y: clickY,
-            timestamp: Date.now() / 1000,
-          }),
-          'CDP Input.dispatchMouseEvent(form mouseReleased)',
-          cdpCommandTimeoutMs,
-        );
+        await dispatchTrustedClick(c, clickX, clickY, 'form', cdpCommandTimeoutMs);
         await sleep(250);
         const clickProbe = await withTimeout(
           c.Runtime.evaluate({
@@ -1491,15 +1524,28 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       }
     }
 
-    const hasPredicate = Boolean(options.urlIncludes || options.cookie);
+    const selectorExists = async (selector?: string): Promise<boolean> => {
+      if (!selector) return true;
+      const evaluated = await withTimeout(
+        c.Runtime.evaluate({
+          expression: buildNavigationSelectorExpression(selector),
+          returnByValue: true,
+        }),
+        'CDP Runtime.evaluate(navigation selector)',
+        cdpCommandTimeoutMs,
+      );
+      return evaluated.result.value === true;
+    };
+    const hasPredicate = Boolean(options.urlIncludes || options.selector || options.cookie);
+    const deadline = Date.now() + timeoutMs;
     if (!hasPredicate) {
       await withTimeout(lifecyclePromise, `CDP Page.${options.waitUntil ?? 'load'}`, timeoutMs);
     } else {
-      const deadline = Date.now() + timeoutMs;
       let lastUrl = targetUrl;
       while (Date.now() < deadline) {
         lastUrl = await readCurrentPageUrl(c);
         const urlMatches = !options.urlIncludes || lastUrl.includes(options.urlIncludes);
+        const selectorMatches = await selectorExists(options.selector);
         let cookieMatches = !options.cookie;
         if (options.cookie) {
           const expectedDomain = options.cookie.domain?.replace(/^\./, '').toLowerCase();
@@ -1515,7 +1561,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
             return !options.cookie?.path || cookie.path === options.cookie.path;
           });
         }
-        if (urlMatches && cookieMatches) break;
+        if (urlMatches && selectorMatches && cookieMatches) break;
         await sleep(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
       }
 
@@ -1528,6 +1574,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
 
       const finalUrl = await readCurrentPageUrl(c);
+      const finalSelectorMatches = await selectorExists(options.selector);
       const allCookies = await snapshotAllCookies(c);
       const expectedDomain = options.cookie?.domain?.replace(/^\./, '').toLowerCase();
       const matchedCookie = !options.cookie
@@ -1542,9 +1589,14 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
             }
             return !options.cookie?.path || cookie.path === options.cookie.path;
           });
-      if ((options.urlIncludes && !finalUrl.includes(options.urlIncludes)) || !matchedCookie) {
+      if (
+        (options.urlIncludes && !finalUrl.includes(options.urlIncludes)) ||
+        !finalSelectorMatches ||
+        !matchedCookie
+      ) {
         const criteria = [
           options.urlIncludes ? `URL containing ${JSON.stringify(options.urlIncludes)}` : null,
+          options.selector ? `CSS selector ${JSON.stringify(options.selector)}` : null,
           options.cookie ? `cookie ${options.cookie.name}` : null,
         ]
           .filter(Boolean)
@@ -1553,6 +1605,47 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           `browser navigation timed out after ${timeoutMs}ms waiting for ${criteria}; final URL was ${finalUrl}`,
         );
       }
+    }
+
+    for (const interaction of options.actions ?? []) {
+      if (interaction.action !== 'click') continue;
+      const target = await withTimeout(
+        c.Runtime.evaluate({
+          expression: buildNavigationClickTargetExpression(interaction.selector),
+          returnByValue: true,
+        }),
+        `CDP Runtime.evaluate(navigation click target ${JSON.stringify(interaction.selector)})`,
+        Math.max(1, deadline - Date.now()),
+      ).catch(() => null);
+      const point = target?.result.value as { x?: unknown; y?: unknown } | null | undefined;
+      if (typeof point?.x !== 'number' || typeof point.y !== 'number') {
+        throw new Error(
+          `browser navigation action could not find a visible click target for ${JSON.stringify(interaction.selector)}`,
+        );
+      }
+      await dispatchTrustedClick(
+        c,
+        point.x,
+        point.y,
+        'navigation',
+        Math.max(1, deadline - Date.now()),
+      );
+      await sleep(150);
+    }
+
+    if (options.resultSelector) {
+      let matched = false;
+      while (Date.now() < deadline) {
+        matched = await selectorExists(options.resultSelector).catch(() => false);
+        if (matched) break;
+        await sleep(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
+      }
+      if (!matched) {
+        throw new Error(
+          `browser navigation timed out after ${timeoutMs}ms waiting for post-action CSS selector ${JSON.stringify(options.resultSelector)}`,
+        );
+      }
+      await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
     }
 
     currentPageUrl = await readCurrentPageUrl(c);

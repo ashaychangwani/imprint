@@ -410,19 +410,31 @@ interface MultiToolResumeSelection {
     candidate: WorkflowState['candidate'];
     sharedContext: WorkflowState['sharedContext'];
   }[];
-  skipped: { workflowKey: string; reason: 'different-recording' | 'not-resumable' }[];
+  skipped: {
+    workflowKey: string;
+    reason: 'different-recording' | 'not-resumable' | 'not-in-build-plan';
+  }[];
 }
 
 export function selectMultiToolResumePlans(
   state: TeachState,
   targetWorkflowKey: string,
   fromStep: TeachStep,
+  opts?: {
+    noInteractive?: boolean;
+    allTools?: boolean;
+    plannedToolNames?: ReadonlySet<string>;
+  },
 ): MultiToolResumeSelection {
   const target = state.workflows[targetWorkflowKey];
   const plans: MultiToolResumeSelection['plans'] = [];
   const skipped: MultiToolResumeSelection['skipped'] = [];
   for (const [key, ws] of Object.entries(state.workflows)) {
     if (key.startsWith('_pending_') || !ws.candidate) continue;
+    if (opts?.plannedToolNames && !opts.plannedToolNames.has(ws.candidate.toolName)) {
+      skipped.push({ workflowKey: key, reason: 'not-in-build-plan' });
+      continue;
+    }
     if (target && ws.sessionPath !== target.sessionPath) {
       skipped.push({ workflowKey: key, reason: 'different-recording' });
       continue;
@@ -432,6 +444,11 @@ export function selectMultiToolResumePlans(
       continue;
     }
     plans.push({ workflowKey: key, candidate: ws.candidate, sharedContext: ws.sharedContext });
+  }
+  if (opts?.noInteractive && !opts.allTools && plans.length > 1) {
+    const primary = plans.find((plan) => plan.candidate?.primary);
+    const selected = primary ?? plans.find((plan) => plan.workflowKey === targetWorkflowKey);
+    return { plans: selected ? [selected] : [], skipped };
   }
   return { plans, skipped };
 }

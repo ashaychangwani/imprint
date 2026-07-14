@@ -25,7 +25,6 @@ function loadDotenv(): void {
     if (!(key in process.env)) process.env[key] = value;
   }
 }
-
 loadDotenv();
 
 /** Parse a duration string: "5m" → 300000, "1h" → 3600000, "30s" → 30000, "5000" → 5000.
@@ -1533,6 +1532,8 @@ async function main(argv: string[]): Promise<number> {
           'build-plan-path': { type: 'string' },
           'shared-modules-json': { type: 'string' },
           'auth-plan-json': { type: 'string' },
+          'revision-mode': { type: 'boolean' },
+          provider: { type: 'string' },
           site: { type: 'string' },
         },
         allowPositionals: false,
@@ -1571,8 +1572,89 @@ async function main(argv: string[]): Promise<number> {
         buildPlanPath: values['build-plan-path'],
         sharedModules,
         authToolPlan: authToolPlan ?? undefined,
+        revisionMode: values['revision-mode'],
+        provider: values.provider as
+          | 'anthropic-api'
+          | 'claude-cli'
+          | 'codex-cli'
+          | 'cursor-cli'
+          | undefined,
         site: values.site,
       });
+      return 0;
+    }
+
+    // Hidden semantic-verifier MCP server. It exposes backend preparation,
+    // verifier-owned suite/targeted calls, and structured report submission.
+    case '__mcp-live-verifier-server': {
+      const { values } = parseArgs({
+        args: argv.slice(1),
+        options: {
+          'workflow-path': { type: 'string' },
+          'report-path': { type: 'string' },
+          'log-path': { type: 'string' },
+          attempt: { type: 'string' },
+          'session-label': { type: 'string' },
+        },
+        allowPositionals: false,
+      });
+      if (!values['workflow-path'] || !values['report-path'] || !values['session-label']) {
+        console.error(
+          'error: __mcp-live-verifier-server requires --workflow-path <path>, --report-path <path>, and --session-label <label>',
+        );
+        return 2;
+      }
+      const { runLiveVerifierMcpServer } = await import('./imprint/mcp-live-verifier-server.ts');
+      await runLiveVerifierMcpServer({
+        workflowPath: values['workflow-path'],
+        reportPath: values['report-path'],
+        sessionLabel: values['session-label'],
+        logPath: values['log-path'],
+        attempt: values.attempt ? Number.parseInt(values.attempt, 10) : undefined,
+      });
+      return 0;
+    }
+
+    // Hidden one-shot worker for compile-time live verification. The MCP
+    // verifier owns this worker as a detached process group, so a wedged
+    // browser-backed probe can be terminated without killing the verifier that
+    // must still write an inconclusive/changes-required report.
+    case '__probe-live-verification-backends': {
+      const { values } = parseArgs({
+        args: argv.slice(1),
+        options: {
+          'workflow-path': { type: 'string' },
+          'out-path': { type: 'string' },
+        },
+        allowPositionals: false,
+      });
+      if (!values['workflow-path'] || !values['out-path']) {
+        console.error(
+          'error: __probe-live-verification-backends requires --workflow-path <path> and --out-path <path>',
+        );
+        return 2;
+      }
+      const rawParams = await Bun.stdin.text();
+      const params = rawParams.trim()
+        ? (JSON.parse(rawParams) as Record<string, string | number | boolean>)
+        : {};
+      const { resolveWorkflowTool } = await import('./imprint/backend-ladder.ts');
+      const { probeResolvedTool } = await import('./imprint/probe-backends.ts');
+      const workflowPath = values['workflow-path'];
+      const tool = resolveWorkflowTool(workflowPath);
+      const assetRoot = resolve(dirname(workflowPath), '..', '..');
+      const result = await probeResolvedTool(
+        { site: tool.site, paramOverrides: params },
+        assetRoot,
+        tool,
+        values['out-path'],
+      );
+      console.log(
+        JSON.stringify({
+          outPath: result.outPath,
+          preferredBackend: result.cache.preferredOrder[0],
+        }),
+      );
       return 0;
     }
 

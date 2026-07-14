@@ -107,7 +107,7 @@ export async function probeAllBackends(
   return results;
 }
 
-async function probeResolvedTool(
+export async function probeResolvedTool(
   opts: Pick<ProbeBackendsOptions, 'site' | 'paramOverrides'>,
   assetRoot: string,
   tool: ResolvedTool,
@@ -333,6 +333,48 @@ function capabilityHash(workflow: ResolvedTool['workflow']): string {
   return createHash('sha256').update(JSON.stringify(caps)).digest('hex');
 }
 
+/** Carry a previously proven backend preference across a compile-time workflow
+ * revision without performing network I/O. Runtime cache loading remains
+ * hash-strict; this adapter deliberately rebinds only after the verifier has
+ * decided the existing preference is still applicable. */
+export function rebindBackendsCacheToWorkflow(
+  tool: Pick<ResolvedTool, 'workflow' | 'dir'>,
+  cache: BackendsCache,
+  outPath = pathResolve(tool.dir, 'backends.json'),
+): BackendsCache {
+  const rebound: BackendsCache = {
+    ...cache,
+    workflowHash: workflowHash(tool.workflow),
+    capabilityHash: capabilityHash(tool.workflow),
+  };
+  BackendsCacheSchema.parse(rebound);
+  writeFileSync(outPath, `${JSON.stringify(rebound, null, 2)}\n`);
+  return rebound;
+}
+
+/** Rebind an already-proven cache after compile-time metadata is stamped onto
+ * workflow.json. This performs no network I/O and intentionally does nothing
+ * for missing/invalid caches. */
+export function rebindExistingBackendsCacheToWorkflow(toolDir: string): BackendsCache | null {
+  const workflowPath = pathResolve(toolDir, 'workflow.json');
+  if (!existsSync(workflowPath)) return null;
+
+  let workflow: ResolvedTool['workflow'];
+  try {
+    workflow = WorkflowSchema.parse(JSON.parse(readFileSync(workflowPath, 'utf8')));
+  } catch {
+    return null;
+  }
+
+  const assetRoot = pathResolve(toolDir, '..', '..');
+  const status = loadBackendsCacheStatus(workflow.site, assetRoot, toolDir, {
+    warn: false,
+    toolName: workflow.toolName,
+  });
+  if (status.status !== 'ok' && status.status !== 'stale') return null;
+  return rebindBackendsCacheToWorkflow({ workflow, dir: toolDir }, status.cache);
+}
+
 export function persistRuntimeBackendsCache(opts: {
   tool: ResolvedTool;
   assetRoot: string;
@@ -343,6 +385,18 @@ export function persistRuntimeBackendsCache(opts: {
     warn: false,
     toolName: opts.tool.workflow.toolName,
   });
+  const soleAttempt = opts.attempts.length === 1 ? opts.attempts[0] : undefined;
+  if (
+    status.status === 'ok' &&
+    status.cache.preferredOrder[0] === opts.usedBackend &&
+    soleAttempt?.backend === opts.usedBackend &&
+    soleAttempt.outcome === 'ok'
+  ) {
+    // A normal call through the already-proven preferred backend is not a
+    // probe or a new backend-learning event. Preserve the original probe time
+    // and its richer cold/warm/ranking diagnostics byte-for-byte on disk.
+    return status.cache;
+  }
   const results: BackendsCache['results'] =
     status.status === 'ok' ? { ...status.cache.results } : {};
 

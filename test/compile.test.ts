@@ -18,13 +18,14 @@ import {
   defaultCompilePlaybookPath,
   findAuthAdjacentSeqs,
   findCredentialBearingSeqs,
+  playbookWorkflowContractFailures,
   rescueActionAlignedRepeatedSeqs,
   resolveDefaultCompilePlaybookPath,
   selectTriageCandidateRequests,
   shrinkSession,
   triageBodySnippet,
 } from '../src/imprint/compile.ts';
-import type { Session } from '../src/imprint/types.ts';
+import type { Playbook, Session, Workflow } from '../src/imprint/types.ts';
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -439,6 +440,67 @@ describe('compilePlaybook defaults', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('playbookWorkflowContractFailures', () => {
+  const workflow: Workflow = {
+    toolName: 'search_rental_cars',
+    intent: { description: 'Search rental cars' },
+    parameters: [
+      { name: 'pickup_location', type: 'string', description: 'Pickup city or airport' },
+      { name: 'dropoff_location', type: 'string', description: 'Dropoff city or airport' },
+    ],
+    requests: [],
+    site: 'costco-car-rental',
+    limitations: [
+      {
+        feature: 'agency selection',
+        reason: 'The recording does not establish a general mapping.',
+        omittedParameters: ['agency_locations'],
+      },
+    ],
+  };
+
+  function playbook(overrides: Partial<Playbook> = {}): Playbook {
+    return {
+      toolName: 'search_rental_cars',
+      summary: 'Search rental cars',
+      parameters: workflow.parameters,
+      steps: [{ action: 'navigate', url: 'https://example.com/search' }],
+      result: {
+        source: 'dom',
+        locators: [{ by: 'css', value: '.result' }],
+        extract: 'text',
+        return_as: 'results',
+      },
+      ...overrides,
+    };
+  }
+
+  it('accepts a fallback with the verified public parameter surface', () => {
+    expect(playbookWorkflowContractFailures(playbook(), workflow)).toEqual([]);
+  });
+
+  it('rejects a candidate parameter resurrected after verification omitted it', () => {
+    const value = playbook({
+      parameters: [
+        ...workflow.parameters,
+        { name: 'agency_locations', type: 'string', description: 'Agency locations' },
+      ],
+      steps: [
+        { action: 'navigate', url: 'https://example.com/search' },
+        {
+          action: 'click',
+          locators: [{ by: 'text', value_pattern: '${agency_locations}' }],
+        },
+      ],
+    });
+
+    expect(playbookWorkflowContractFailures(value, workflow)).toEqual([
+      'unexpected parameter(s): agency_locations',
+      'step/result references hidden parameter(s): agency_locations',
+    ]);
   });
 });
 

@@ -14,7 +14,8 @@
  * loss.
  */
 
-import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -40,8 +41,15 @@ import {
   buildCompileTools,
   externalVerification,
 } from './compile-tools.ts';
+import {
+  mergeSemanticParamVerification,
+  runLiveSemanticVerification,
+  semanticVerificationFailures,
+} from './live-verifier.ts';
+import type { ProviderName } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
+import { rebindExistingBackendsCacheToWorkflow } from './probe-backends.ts';
 import { redactSession } from './redact.ts';
 import { loadCredentialStore } from './runtime.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
@@ -69,6 +77,11 @@ interface RunCompileMcpServerOptions {
   /** Site slug (required in auth mode) — used to load credentials for the live
    *  auth-test tools. */
   site?: string;
+  /** Compile provider. The independent verifier uses the same provider family
+   * with its dedicated review model (Terra for Codex, latest Sonnet for Claude). */
+  provider?: ProviderName;
+  /** Bounded resume of an already-generated data tool. */
+  revisionMode?: boolean;
 }
 
 const DONE_SENTINEL = '.compile-done.json';
@@ -79,9 +92,48 @@ const GIVE_UP_SENTINEL = '.compile-give-up.json';
  *  agent (`claude --resume`) with the result. One pending checkpoint per segment. */
 const CHECKPOINT_SENTINEL = '.compile-checkpoint.json';
 
+const COMPILE_ARTIFACT_FILES = [
+  'workflow.json',
+  'parser.ts',
+  'parser.test.ts',
+  'integration.test.ts',
+  'playbook.yaml',
+] as const;
+
+interface PendingInconclusiveDecision {
+  artifactFingerprint: string;
+  report: Awaited<ReturnType<typeof runLiveSemanticVerification>>;
+}
+
+function compileArtifactFingerprint(toolDir: string): string {
+  const hash = createHash('sha256');
+  for (const relativePath of COMPILE_ARTIFACT_FILES) {
+    const absolutePath = pathJoin(toolDir, relativePath);
+    hash.update(relativePath);
+    hash.update('\0');
+    if (existsSync(absolutePath)) hash.update(readFileSync(absolutePath));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+export function canAcceptInconclusiveDecision(opts: {
+  pendingFingerprint?: string;
+  currentFingerprint: string;
+  acceptInconclusive?: boolean;
+  inconclusiveReason?: string;
+}): boolean {
+  return (
+    opts.acceptInconclusive === true &&
+    Boolean(opts.inconclusiveReason?.trim()) &&
+    opts.pendingFingerprint === opts.currentFingerprint
+  );
+}
+
 export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Promise<void> {
   const isAuthMode = !!opts.authToolPlan;
   const maxVerificationCycles = opts.maxVerificationCycles ?? 5;
+  let pendingInconclusive: PendingInconclusiveDecision | undefined;
 
   // Load + auto-redact the session, exactly as compile-agent.ts does.
   let session: Session = loadJsonFile(
@@ -125,6 +177,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
       sharedContext: opts.sharedContext,
       buildPlanPath: opts.buildPlanPath,
       sharedModules: opts.sharedModules,
+      revisionMode: opts.revisionMode,
     });
 
     // Resolve the shared modules + producer→consumer token contracts + the general
@@ -148,6 +201,16 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
       type: 'object',
       properties: {
         summary: { type: 'string', description: 'Brief summary of what was accomplished' },
+        accept_inconclusive: {
+          type: 'boolean',
+          description:
+            'After an infrastructure-only inconclusive verifier result, explicitly ship the unchanged deterministic artifact without a liveVerified stamp.',
+        },
+        inconclusive_reason: {
+          type: 'string',
+          description:
+            'Compiler reasoning for accepting the unchanged artifact after reviewing the inconclusive verifier evidence.',
+        },
       },
       required: ['summary'],
     },
@@ -294,7 +357,12 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
 
     // Custom done — runs verification inline.
     if (name === 'done') {
-      const summary = (args as { summary?: string }).summary ?? 'Task completed';
+      const doneArgs = args as {
+        summary?: string;
+        accept_inconclusive?: boolean;
+        inconclusive_reason?: string;
+      };
+      const summary = doneArgs.summary ?? 'Task completed';
       log(`done() called: ${summary}`);
 
       // Auth mode: lightweight structural verification (the agent already proved
@@ -345,7 +413,7 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
         };
       }
 
-      const { failures, warnings, paramVerification, liveVerification } =
+      const { failures, warnings, paramVerification, integrationEvidence } =
         await externalVerification(opts.toolDir, session, opts.sessionPath, {
           expectedToolName: opts.candidate?.toolName,
           likelyParams: opts.candidate?.likelyParams,
@@ -361,40 +429,153 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
           requiredInputs,
           credentialValues,
           credentialNames: opts.sharedContext?.credentialNames,
+          deferLiveIntegrationToSemanticAgent: true,
         });
       if (warnings.length > 0) {
         log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
       }
       if (failures.length === 0) {
-        // Persist per-parameter verified flags + the live-verification stamp
-        // onto workflow.json. Audit and teach read the stamp.
-        applyLiveVerification(opts.toolDir, liveVerification);
-        const paramWarnings = applyParamVerification(opts.toolDir, paramVerification);
-        if (paramWarnings.length > 0) {
-          log(`parameter verification:\n${paramWarnings.join('\n')}`);
-        }
-        const allWarnings = [...warnings, ...paramWarnings];
-        const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
-        writeFileSync(
-          sentinel,
-          JSON.stringify(
-            { summary, verification: 'passed', warnings: allWarnings, timestamp: Date.now() },
-            null,
-            2,
-          ),
-          'utf8',
-        );
-        log(`verification passed; wrote ${sentinel}`);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: 'DONE_VERIFIED — verification passed. The orchestrator will exit shortly. Do not call any more tools.',
-            },
-          ],
-        };
-      }
+        if (!opts.provider) {
+          failures.push('compile provider was not supplied to the independent semantic verifier');
+        } else {
+          const currentFingerprint = compileArtifactFingerprint(opts.toolDir);
+          if (
+            pendingInconclusive &&
+            canAcceptInconclusiveDecision({
+              pendingFingerprint: pendingInconclusive.artifactFingerprint,
+              currentFingerprint,
+              acceptInconclusive: doneArgs.accept_inconclusive,
+              inconclusiveReason: doneArgs.inconclusive_reason,
+            })
+          ) {
+            const semantic = pendingInconclusive.report;
+            const semanticParams = mergeSemanticParamVerification(
+              paramVerification,
+              semantic.report,
+            );
+            const paramWarnings = applyParamVerification(opts.toolDir, semanticParams);
+            const allWarnings = [
+              ...warnings,
+              `independent semantic verification was inconclusive: ${semantic.report.summary}`,
+              ...paramWarnings,
+            ];
+            const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
+            writeFileSync(
+              sentinel,
+              JSON.stringify(
+                {
+                  summary,
+                  verification: 'passed',
+                  liveVerified: false,
+                  semanticVerification: {
+                    status: semantic.report.status,
+                    provider: semantic.provider,
+                    model: semantic.model,
+                    attempts: semantic.attempts,
+                    evidenceArtifact: semantic.report.evidenceArtifact,
+                    logArtifact: semantic.report.logArtifact,
+                  },
+                  compilerDecision: {
+                    decision: 'ship_unverified',
+                    reason: doneArgs.inconclusive_reason?.trim(),
+                  },
+                  warnings: allWarnings,
+                  timestamp: Date.now(),
+                },
+                null,
+                2,
+              ),
+              'utf8',
+            );
+            log(`compiler accepted unchanged inconclusive artifact; wrote ${sentinel}`);
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `DONE_UNVERIFIED — deterministic verification passed and the compiler explicitly accepted the unchanged artifact after an infrastructure-only inconclusive live review. Evidence: ${semantic.report.evidenceArtifact ?? '.live-verification-evidence.json'}. Verifier log: ${semantic.report.logArtifact ?? '.live-verifier-log.jsonl'}. The orchestrator will exit shortly. Do not call any more tools.`,
+                },
+              ],
+            };
+          }
 
+          if (
+            pendingInconclusive &&
+            pendingInconclusive.artifactFingerprint !== currentFingerprint
+          ) {
+            log('compile artifacts changed after inconclusive review; running verification again');
+            pendingInconclusive = undefined;
+          }
+          const semantic = await runLiveSemanticVerification({
+            provider: opts.provider,
+            toolDir: opts.toolDir,
+            evidence: integrationEvidence,
+          });
+          if (semantic.report.status === 'inconclusive') {
+            pendingInconclusive = {
+              artifactFingerprint: compileArtifactFingerprint(opts.toolDir),
+              report: semantic,
+            };
+          } else {
+            pendingInconclusive = undefined;
+          }
+          const semanticFailures = semanticVerificationFailures(semantic.report);
+          failures.push(...semanticFailures);
+          if (semantic.report.status === 'approved_with_gaps') {
+            warnings.push(
+              `independent semantic verification approved with gaps: ${semantic.report.gaps.join('; ')}`,
+            );
+          }
+          if (semanticFailures.length === 0) {
+            const semanticParams = mergeSemanticParamVerification(
+              paramVerification,
+              semantic.report,
+            );
+            // Only the independent semantic agent can mint liveVerified=true.
+            applyLiveVerification(opts.toolDir, undefined);
+            const paramWarnings = applyParamVerification(opts.toolDir, semanticParams);
+            // liveVerified/parameter annotations are metadata-only, but they
+            // change the hash-strict workflow cache key. Keep the verifier's
+            // already-proven backend preference current without probing again.
+            rebindExistingBackendsCacheToWorkflow(opts.toolDir);
+            if (paramWarnings.length > 0) {
+              log(`parameter verification:\n${paramWarnings.join('\n')}`);
+            }
+            const allWarnings = [...warnings, ...paramWarnings];
+            const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
+            writeFileSync(
+              sentinel,
+              JSON.stringify(
+                {
+                  summary,
+                  verification: 'passed',
+                  semanticVerification: {
+                    status: semantic.report.status,
+                    provider: semantic.provider,
+                    model: semantic.model,
+                    attempts: semantic.attempts,
+                    evidenceArtifact: semantic.report.evidenceArtifact,
+                    logArtifact: semantic.report.logArtifact,
+                  },
+                  warnings: allWarnings,
+                  timestamp: Date.now(),
+                },
+                null,
+                2,
+              ),
+              'utf8',
+            );
+            log(`verification passed; wrote ${sentinel}`);
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `DONE_VERIFIED — deterministic checks and independent live semantic verification passed (${semantic.report.status}). Evidence: ${semantic.report.evidenceArtifact ?? '.live-verification-evidence.json'}. Verifier log: ${semantic.report.logArtifact ?? '.live-verifier-log.jsonl'}. The orchestrator will exit shortly. Do not call any more tools.`,
+                },
+              ],
+            };
+          }
+        }
+      }
       verificationFailures++;
       log(`verification failed (cycle ${verificationFailures}/${maxVerificationCycles})`);
       if (verificationFailures >= maxVerificationCycles) {
@@ -431,9 +612,18 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
 ${failures.map((f) => `- ${f}`).join('\n')}
 
 Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.test.ts), fix the issues, re-run tests, and call done again when fixed.`;
+      const compilerDecisionGuidance = `\n\nUse the verifier's semantic evidence, not a requirement for 100% of the original candidate inputs. If the core intent works but a secondary parameter cannot be supported from the recording and live evidence without guessing, remove that parameter and add workflow.limitations with omittedParameters and a specific reason. Close that omission over its dependencies: also remove dependent public inputs and narrow parameter/intent descriptions so callers cannot still enter the unsupported branch indirectly. Do not use a limitation to hide a broken core tool, and do not keep a known broken or ignored public input.`;
+      const inconclusiveDecisionGuidance = pendingInconclusive
+        ? '\n\nThe live verifier was infrastructure-only inconclusive. Review its evidence and log. If they expose a tool defect, revise the artifacts and call done normally so verification reruns. If they expose no tool-level defect and the deterministic artifact should ship explicitly unverified, call done again without changing compile artifacts, set accept_inconclusive=true, and provide your concrete reasoning in inconclusive_reason. This compiler decision is persisted and does not mint liveVerified.'
+        : '';
       return {
         isError: true,
-        content: [{ type: 'text', text: continuationMessage }],
+        content: [
+          {
+            type: 'text',
+            text: continuationMessage + compilerDecisionGuidance + inconclusiveDecisionGuidance,
+          },
+        ],
       };
     }
 

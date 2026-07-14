@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Wipe a site's compiled artifacts (never its recordings) and re-teach it from
-# scratch with Phoenix tracing on. This is the acceptance entry point: a full
-# from-scratch run is what the ≥95% audit gate is measured against.
+# Re-run a site's bounded compile window with Phoenix tracing on. Existing
+# generated artifacts and durable verifier feedback stay in place so compile
+# agents revise proven work instead of recreating it from raw capture.
 #
 # Usage:
 #   scripts/teach-from-scratch.sh <site> [--keep-shared]
 #
 #   <site>          Imprint site label under ${IMPRINT_HOME:-$HOME/.imprint}.
-#   --keep-shared   Reuse the verified _shared/ modules + .build-plan.json
-#                   (fast iteration); still wipes per-tool dirs + teach state.
+#   --keep-shared   Resume at generate and reuse the verified _shared/ modules
+#                   + .build-plan.json. Without it, resume at plan-prereqs so
+#                   shared planning is refreshed before revising the tools.
 #
-# Always preserves sessions/ — recordings are expensive and never regenerated.
+# Always preserves sessions/, .teach-state.json, and classification artifacts.
 
 usage() {
   echo "usage: $(basename "$0") <site> [--keep-shared]" >&2
@@ -71,75 +72,32 @@ echo "[teach-from-scratch] site dir:  $RESOLVED_SITE_DIR"
 if [[ "$KEEP_SHARED" -eq 1 ]]; then
   echo "[teach-from-scratch] mode:      --keep-shared (reuse _shared/ + .build-plan.json)"
 else
-  echo "[teach-from-scratch] mode:      full from scratch"
+  echo "[teach-from-scratch] mode:      rebuild compile window"
 fi
 
-# Always wipe teach state so the run starts clean.
-WIPED=()
-if [[ -e "$RESOLVED_SITE_DIR/.teach-state.json" ]]; then
-  rm -f "$RESOLVED_SITE_DIR/.teach-state.json"
-  WIPED+=(".teach-state.json")
-fi
-
-if [[ "$KEEP_SHARED" -eq 0 ]]; then
-  if [[ -e "$RESOLVED_SITE_DIR/.build-plan.json" ]]; then
-    rm -f "$RESOLVED_SITE_DIR/.build-plan.json"
-    WIPED+=(".build-plan.json")
-  fi
-  if [[ -d "$RESOLVED_SITE_DIR/_shared" ]]; then
-    rm -rf "$RESOLVED_SITE_DIR/_shared"
-    WIPED+=("_shared/")
-  fi
-fi
-
-# Remove every immediate subdirectory (the per-tool dirs) except sessions/ and,
-# when --keep-shared, _shared/.
-for entry in "$RESOLVED_SITE_DIR"/*/; do
-  [[ -d "$entry" ]] || continue
-  name="$(basename "$entry")"
-  [[ "$name" == "sessions" ]] && continue
-  if [[ "$KEEP_SHARED" -eq 1 && "$name" == "_shared" ]]; then
-    continue
-  fi
-  rm -rf "$entry"
-  WIPED+=("$name/")
-done
-
-if [[ "${#WIPED[@]}" -gt 0 ]]; then
-  echo "[teach-from-scratch] wiped:     ${WIPED[*]}"
-else
-  echo "[teach-from-scratch] wiped:     (nothing — already clean)"
-fi
-echo "[teach-from-scratch] preserved: sessions/"
-
-# Compile from the EXISTING recordings, not a fresh capture. Plain
-# `teach <site> --no-interactive` would launch chromium and block on a new
-# recording. Prefer the richest narrated recording artifact so a site with
-# historical combined sessions does not silently regress to a small single
-# recording. Raw sessions are ideal, but older/manual runs may only have the
-# combined triaged artifact left; teach can still consume that as --from-session.
-SESSION=""
-SESSION_SCORE=-1
-for f in "$RESOLVED_SITE_DIR"/sessions/*.json; do
-  [[ -f "$f" ]] || continue
-  base="$(basename "$f")"
-  case "$base" in
-    *.redacted.*) continue ;;
-  esac
-  score="$(
-    jq -r '((.narration // []) | length) * 100000 + ((.requests // []) | length)' "$f" 2>/dev/null || echo -1
-  )"
-  if [[ "$score" =~ ^[0-9]+$ && "$score" -gt "$SESSION_SCORE" ]]; then
-    SESSION_SCORE="$score"
-    SESSION="$f"
-  fi
-done
-
-if [[ -z "$SESSION" ]]; then
-  echo "error: no recording artifact found in $RESOLVED_SITE_DIR/sessions/ — record one first (imprint record \"$SITE\")" >&2
+STATE_PATH="$RESOLVED_SITE_DIR/.teach-state.json"
+if [[ ! -f "$STATE_PATH" ]]; then
+  echo "error: analyzed teach state not found: $STATE_PATH" >&2
+  echo "       run teach through detect-candidates first; reteaches resume with --from-step plan-prereqs." >&2
   exit 1
 fi
-echo "[teach-from-scratch] session:   $(basename "$SESSION") (richest existing recording artifact)"
+
+CANDIDATE_COUNT="$(jq '[.workflows[] | select(.candidate != null)] | length' "$STATE_PATH")"
+INCOMPLETE_CANDIDATES="$(
+  jq '[.workflows[] | select(.candidate != null and ((.completedSteps // []) | index("detect-candidates") | not))] | length' "$STATE_PATH"
+)"
+if [[ "$CANDIDATE_COUNT" -eq 0 || "$INCOMPLETE_CANDIDATES" -ne 0 ]]; then
+  echo "error: teach state has not completed candidate detection for every candidate workflow" >&2
+  echo "       finish analysis first; this script only runs --from-step plan-prereqs --to-step emit." >&2
+  exit 1
+fi
+
+FROM_STEP="plan-prereqs"
+if [[ "$KEEP_SHARED" -eq 1 ]]; then
+  FROM_STEP="generate"
+fi
+echo "[teach-from-scratch] preserved: sessions/ generated tools/ verifier feedback/ teach state/ backend cache/"
+echo "[teach-from-scratch] window:    $FROM_STEP → emit"
 
 # Per-tool compile timeout passthrough (heavy multi-filter search tools need
 # more than the 20-min default once parameter-fidelity verification runs).
@@ -154,5 +112,5 @@ TEACH_PROVIDER="${IMPRINT_TEACH_PROVIDER:-codex-cli}"
 IMPRINT_TRACE=1 \
 PHOENIX_COLLECTOR_ENDPOINT="${PHOENIX_COLLECTOR_ENDPOINT:-http://localhost:6006}" \
   bun run "$REPO/src/cli.ts" teach "$SITE" \
-    --from-session "$SESSION" \
+    --from-step "$FROM_STEP" --to-step emit \
     --no-interactive --all-tools --provider "$TEACH_PROVIDER" "${TIMEOUT_ARGS[@]}"

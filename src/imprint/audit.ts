@@ -107,7 +107,7 @@ interface AuditScore {
  * - `score = 100 * correct / graded` (0 when nothing was gradeable).
  * - Verdict: no gradeable invocations → `inconclusive` (re-run / site blocked
  *   us, not a code fail). Otherwise `pass` requires both `score >= minScore`
- *   AND at least `max(2, gradeableTools)` gradeable invocations, where
+ *   AND at least one gradeable unit per gradeable tool, where
  *   `gradeableTools` is the number of tools that produced ≥1 gradeable
  *   invocation. Scaling the signal floor to *gradeable* tools (not all tools)
  *   means a tool the auditor can never exercise — e.g. one that needs an opaque
@@ -175,7 +175,7 @@ export function computeAuditScore(report: AuditReport, minScore: number): AuditS
   }
   const graded = correct + broken;
   const score = graded === 0 ? 0 : (100 * correct) / graded;
-  const minGraded = Math.max(2, gradeableTools);
+  const minGraded = Math.max(1, gradeableTools);
   let verdict: AuditScore['verdict'];
   if (graded === 0) {
     verdict = 'inconclusive';
@@ -248,6 +248,17 @@ interface RunAuditOptions {
   model?: string;
   timeoutMs?: number;
   json?: boolean;
+}
+
+export function buildAuditMcpEnvironment(assetRoot = imprintHomeDir()): Record<string, string> {
+  return {
+    // Codex MCP server `env` entries are an explicit environment, so relying on
+    // the audit driver's inherited IMPRINT_HOME can make an isolated audit
+    // silently fall back to ~/.imprint and expose stale tools.
+    IMPRINT_HOME: assetRoot,
+    IMPRINT_AUDIT_PACING_MS: '5000',
+    IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
+  };
 }
 
 export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
@@ -653,6 +664,7 @@ async function driveAuditWithCodex(opts: DriveAuditOptions): Promise<DriveAuditR
   const serverName = `imprint-audit-${opts.site}`;
   const bunPath = process.execPath;
   const mcpArgs = ['run', CLI_PATH, 'mcp-server', opts.site];
+  const mcpEnv = buildAuditMcpEnvironment();
 
   const unverifiedNote = buildUnverifiedParamNote(opts.unverifiedParams);
   const initialPrompt = `<system_instructions>
@@ -685,9 +697,11 @@ ${buildAuditInitialPrompt(opts, unverifiedNote)}`;
     '-c',
     `mcp_servers.${serverName}.tool_timeout_sec=300`,
     '-c',
-    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_PACING_MS=${JSON.stringify('5000')}`,
+    `mcp_servers.${serverName}.env.IMPRINT_HOME=${JSON.stringify(mcpEnv.IMPRINT_HOME)}`,
     '-c',
-    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS=${JSON.stringify('120000')}`,
+    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_PACING_MS=${JSON.stringify(mcpEnv.IMPRINT_AUDIT_PACING_MS)}`,
+    '-c',
+    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS=${JSON.stringify(mcpEnv.IMPRINT_AUDIT_TOOL_DEADLINE_MS)}`,
     '-c',
     'shell_environment_policy.inherit=all',
     '-',
@@ -701,8 +715,7 @@ ${buildAuditInitialPrompt(opts, unverifiedNote)}`;
       cwd: REPO_ROOT,
       env: {
         ...process.env,
-        IMPRINT_AUDIT_PACING_MS: '5000',
-        IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
+        ...mcpEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

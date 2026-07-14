@@ -5,6 +5,8 @@ import {
   __setCdpBrowserFetchHooksForTest,
   buildFormPostNavigationExpr,
   buildInPageFetchExpr,
+  buildNavigationClickTargetExpression,
+  buildNavigationSelectorExpression,
   buildStorageSeedExpression,
   createCdpBrowserFetch,
   isSiblingOrigin,
@@ -15,6 +17,28 @@ import {
 } from '../src/imprint/cdp-browser-fetch.ts';
 
 const browserIt = process.env.CI !== 'true' || process.env.RUN_BROWSER_TESTS === '1' ? it : it.skip;
+
+describe('buildNavigationSelectorExpression', () => {
+  it('quotes arbitrary CSS selectors as data instead of executable source', () => {
+    const selector = '[data-name="quoted"]\\path';
+    const expression = buildNavigationSelectorExpression(selector);
+
+    expect(expression).toBe(`document.querySelector(${JSON.stringify(selector)}) !== null`);
+    expect(expression).not.toContain('querySelector([data-name');
+  });
+});
+
+describe('buildNavigationClickTargetExpression', () => {
+  it('quotes dynamic selectors and rejects hidden, disabled, or occluded targets', () => {
+    const selector = '[data-location-id="S1"]\\path';
+    const expression = buildNavigationClickTargetExpression(selector);
+
+    expect(expression).toContain(`document.querySelector(${JSON.stringify(selector)})`);
+    expect(expression).toContain("target.matches(':disabled')");
+    expect(expression).toContain('document.elementFromPoint(x, y)');
+    expect(expression).not.toContain('querySelector([data-location-id');
+  });
+});
 
 describe('buildInPageFetchExpr', () => {
   it('keeps the request timeout active while reading the response body', async () => {

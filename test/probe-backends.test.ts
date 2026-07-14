@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
@@ -19,6 +19,7 @@ import {
   probeAllBackends,
   probeCandidateBackendsForWorkflow,
   rankSuccessfulBackends,
+  rebindExistingBackendsCacheToWorkflow,
 } from '../src/imprint/probe-backends.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import { type BackendsCache, BackendsCacheSchema, WorkflowSchema } from '../src/imprint/types.ts';
@@ -260,6 +261,41 @@ describe('loadBackendsCache', () => {
 
     expect(loadBackendsCache('defaults', root, dir)?.preferredOrder).toEqual(['fetch']);
   });
+
+  it('rebinds a proven cache after metadata-only compiler annotations without probing', () => {
+    const dir = pathResolve(root, 'metadata', 'search_items');
+    mkdirSync(dir, { recursive: true });
+    const workflow = {
+      toolName: 'search_items',
+      intent: { description: 'Search items' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/items', headers: {} }],
+      site: 'metadata',
+      liveVerified: true,
+    };
+    writeFileSync(pathResolve(dir, 'workflow.json'), JSON.stringify(workflow));
+    writeFileSync(
+      pathResolve(dir, 'backends.json'),
+      JSON.stringify({
+        probedAt: '2026-07-14T00:00:00.000Z',
+        imprintVersion: '0.6.1',
+        schemaVersion: 2,
+        workflowHash: 'pre-metadata-workflow-hash',
+        capabilityHash: 'same-capabilities',
+        preferredOrder: ['cdp-replay'],
+        results: { 'cdp-replay': { outcome: 'ok', durationMs: 1_000 } },
+      }),
+    );
+
+    const rebound = rebindExistingBackendsCacheToWorkflow(dir);
+
+    expect(rebound?.preferredOrder).toEqual(['cdp-replay']);
+    expect(rebound?.workflowHash).not.toBe('pre-metadata-workflow-hash');
+    expect(loadBackendsCacheStatus('metadata', root, dir, { warn: false }).status).toBe('ok');
+    expect(JSON.parse(readFileSync(pathResolve(dir, 'backends.json'), 'utf8')).workflowHash).toBe(
+      rebound?.workflowHash,
+    );
+  });
 });
 
 describe('backend preference ranking', () => {
@@ -305,6 +341,71 @@ describe('backend preference ranking', () => {
 });
 
 describe('runtime backend learning', () => {
+  it('does not rewrite a valid cache when its preferred backend succeeds', () => {
+    const dir = pathResolve(root, 'learn-preferred', 'search_learn');
+    mkdirSync(dir, { recursive: true });
+    const workflow = WorkflowSchema.parse({
+      toolName: 'search_learn',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+      site: 'learn-preferred',
+    });
+    const workflowJson = JSON.stringify(workflow);
+    writeFileSync(pathResolve(dir, 'workflow.json'), workflowJson);
+    const cachePath = pathResolve(dir, 'backends.json');
+    const original = `${JSON.stringify(
+      {
+        probedAt: '2026-05-03T22:00:00.000Z',
+        imprintVersion: '0.1.0',
+        schemaVersion: 2,
+        workflowHash: createHash('sha256').update(workflowJson).digest('hex'),
+        preferredOrder: ['cdp-replay', 'stealth-fetch'],
+        results: {
+          'cdp-replay': {
+            outcome: 'ok',
+            durationMs: 12_000,
+            coldDurationMs: 12_000,
+            warmDurationMs: 2_000,
+            rankingDurationMs: 2_000,
+          },
+          'stealth-fetch': { outcome: 'ok', durationMs: 20_000 },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    writeFileSync(cachePath, original);
+    const tool: ResolvedTool = {
+      site: 'learn-preferred',
+      dir,
+      workflow,
+      toolFn: async () => ({ ok: true, data: {} }),
+    };
+
+    const cache = persistRuntimeBackendsCache({
+      tool,
+      assetRoot: root,
+      usedBackend: 'cdp-replay',
+      attempts: [
+        {
+          backend: 'cdp-replay',
+          outcome: 'ok',
+          detail: 'succeeded with an empty semantic result',
+          durationMs: 38_000,
+        },
+      ],
+    });
+
+    expect(cache?.probedAt).toBe('2026-05-03T22:00:00.000Z');
+    expect(cache?.results['cdp-replay']).toMatchObject({
+      coldDurationMs: 12_000,
+      warmDurationMs: 2_000,
+      rankingDurationMs: 2_000,
+    });
+    expect(readFileSync(cachePath, 'utf8')).toBe(original);
+  });
+
   it('persists the successful runtime backend ahead of failed rungs', () => {
     const dir = pathResolve(root, 'learn', 'search_learn');
     mkdirSync(dir, { recursive: true });

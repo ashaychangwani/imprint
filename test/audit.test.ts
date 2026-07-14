@@ -4,6 +4,7 @@ import {
   AuditReportSchema,
   auditHasCorrectSignal,
   buildAuditInitialPrompt,
+  buildAuditMcpEnvironment,
   buildTokenDepNote,
   buildUnverifiedParamNote,
   computeAuditScore,
@@ -11,6 +12,16 @@ import {
   ungradeableToolNames,
   untestableParams,
 } from '../src/imprint/audit.ts';
+
+describe('buildAuditMcpEnvironment', () => {
+  it('pins the MCP child to the same isolated asset root as the audit driver', () => {
+    expect(buildAuditMcpEnvironment('/tmp/imprint-isolated-audit')).toEqual({
+      IMPRINT_HOME: '/tmp/imprint-isolated-audit',
+      IMPRINT_AUDIT_PACING_MS: '5000',
+      IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
+    });
+  });
+});
 
 /** Build a report from a flat list of verdicts spread across one tool. */
 function reportFromVerdicts(
@@ -33,7 +44,7 @@ function reportFromVerdicts(
 
 describe('computeAuditScore', () => {
   it('passes when all graded are correct and graded >= the signal floor', () => {
-    // One gradeable tool → floor = max(2, 1) = 2; 4 graded clears it.
+    // One gradeable tool → floor 1; 4 graded clears it.
     const report = reportFromVerdicts(['correct', 'correct', 'correct', 'correct']);
     const score = computeAuditScore(report, 95);
     expect(score.correct).toBe(4);
@@ -63,13 +74,14 @@ describe('computeAuditScore', () => {
     expect(score.verdict).toBe('inconclusive');
   });
 
-  it('fails a 100% score with insufficient signal (graded below the floor of 2)', () => {
-    // One gradeable tool with a single graded invocation → floor 2, graded 1 → fail.
+  it('passes one correct core call when later attempts are only infrastructure failures', () => {
+    // Agent-classified infra and bad params are not product defects. One
+    // correct call supplies the intended one-signal floor for one tool.
     const report = reportFromVerdicts(['correct', 'infra', 'bad_params']);
     const score = computeAuditScore(report, 95);
     expect(score.score).toBe(100);
     expect(score.graded).toBe(1);
-    expect(score.verdict).toBe('fail');
+    expect(score.verdict).toBe('pass');
   });
 
   it('excludes infra and bad_params from the denominator', () => {
@@ -256,7 +268,7 @@ describe('computeAuditScore', () => {
       ],
     });
     const score = computeAuditScore(report, 95);
-    // floor = max(2, gradeableTools=1) = 2; graded 2 clears it.
+    // floor = gradeableTools=1; graded 2 clears it.
     expect(score.correct).toBe(2);
     expect(score.graded).toBe(2);
     expect(score.score).toBe(100);
@@ -486,6 +498,14 @@ describe('audit prompt construction', () => {
       'Promo/coupon/voucher/discount-code parameters require a known valid code',
     );
     expect(prompt).toContain('do not invent a random code and call an unchanged response no_op');
+  });
+
+  it('requires affirmative evidence before conditional parameters are graded defective', async () => {
+    const prompt = await Bun.file(new URL('../prompts/audit-agent.md', import.meta.url)).text();
+
+    expect(prompt).toContain('A single unchanged comparison is not enough for conditional inputs');
+    expect(prompt).toContain('An empty result is not automatically broken');
+    expect(prompt).toContain('Preserve that ambiguity for the compiler or human reviewer');
   });
 
   it('prioritizes unverified params without exempting bot-defended idempotent reads', () => {

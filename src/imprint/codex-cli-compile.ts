@@ -7,7 +7,7 @@
  * success only after the MCP done() tool writes the verified sentinel.
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
 import type { Span } from '@opentelemetry/api';
@@ -46,6 +46,12 @@ const MAX_VERIFICATION_CYCLES = 5;
 const MIN_MCP_TOOL_TIMEOUT_SEC = 300;
 const MAX_MCP_TOOL_TIMEOUT_SEC = 1800;
 
+function formatRevisionMode(enabled: boolean | undefined): string {
+  return enabled
+    ? 'REVISION MODE: inspect read_session_summary.revisionContext and the listed existing artifacts/diagnostics first. Preserve proven behavior; repair or honestly narrow only what evidence contradicts.'
+    : '';
+}
+
 interface CompileViaCodexCliOptions {
   session: Session;
   absoluteToolDir: string;
@@ -63,6 +69,8 @@ interface CompileViaCodexCliOptions {
   sharedModules?: SharedModuleManifestEntry[];
   /** Per-tool implementation plan injected into the agent's initial message. */
   toolPlan?: string;
+  /** Revise existing generated artifacts from durable verification feedback. */
+  revisionMode?: boolean;
   /** Present → drive an auth compile rather than a data compile. */
   authMode?: AuthCliCompileMode;
   /** Auth segments only: resume the same non-interactive Codex session. */
@@ -199,10 +207,13 @@ async function compileViaCodexCliImpl(
       sessionPathAbs,
       '--tool-dir',
       opts.absoluteToolDir,
+      '--provider',
+      'codex-cli',
       ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
       ...(opts.sharedContext ? ['--shared-context-json', JSON.stringify(opts.sharedContext)] : []),
       ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
       ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
+      ...(opts.revisionMode ? ['--revision-mode'] : []),
     ];
     const { assignedSharedModules } = resolvePlanSliceFromFile(
       opts.buildPlanPath,
@@ -220,6 +231,7 @@ Tool directory: ${opts.absoluteToolDir}
 You will write artifacts into the tool directory.
 ${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModules)}
 ${formatToolPlan(opts.toolPlan)}
+${formatRevisionMode(opts.revisionMode)}
 
 Use the imprint-compile MCP tools to inspect the session, write artifacts, run tests, and call done(). Begin by calling read_session_summary, then proceed per the system instructions.`;
   }
@@ -324,7 +336,20 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     return finalErrorResult(opts, `failed to send prompt to codex-cli: ${errMsg(err)}`);
   }
 
-  const result = await driveJsonl(child, opts, traceSpan);
+  const terminateOnParentExit = (): void => {
+    try {
+      signalCodexProcessTree(child, 'SIGTERM');
+    } catch {
+      // Parent shutdown is best-effort; the OS may already have reaped the child.
+    }
+  };
+  process.once('exit', terminateOnParentExit);
+  let result: CompileAgentResult;
+  try {
+    result = await driveJsonl(child, opts, traceSpan);
+  } finally {
+    process.removeListener('exit', terminateOnParentExit);
+  }
   const hasActualUsage = result.inputTokens > 0 || result.outputTokens > 0;
   const inputTokenCount = resolveTraceTokenCount(
     hasActualUsage ? result.inputTokens : null,
@@ -381,6 +406,15 @@ async function driveJsonl(
     try {
       writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
     } catch {}
+  };
+  let flushLogTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleLogFlush = (): void => {
+    if (flushLogTimer) return;
+    flushLogTimer = setTimeout(() => {
+      flushLogTimer = undefined;
+      flushLog();
+    }, 50);
+    flushLogTimer.unref?.();
   };
   const rawStdoutChunks: string[] = [];
   const rawStderrChunks: string[] = [];
@@ -459,6 +493,11 @@ async function driveJsonl(
       }
 
       conversationLog.push(evt);
+      // Keep the human-readable compile log current during a long agent turn.
+      // Rewriting is throttled so streamed bursts do not cause one full-file
+      // write per JSONL event, while a stalled/crashed turn still leaves the
+      // latest tool activity visible on disk.
+      scheduleLogFlush();
 
       if (evt.type === 'thread.started') {
         log(`thread_id=${evt.thread_id ?? '(none)'}`);
@@ -597,6 +636,7 @@ async function driveJsonl(
   } catch {
     // best effort diagnostics
   }
+  if (flushLogTimer) clearTimeout(flushLogTimer);
   flushLog();
 
   const verifiedOk =
@@ -739,8 +779,59 @@ async function driveJsonl(
   };
 }
 
+export function collectDescendantPids(
+  rows: Array<{ pid: number; ppid: number }>,
+  rootPid: number,
+): number[] {
+  const childrenByParent = new Map<number, number[]>();
+  for (const row of rows) {
+    const children = childrenByParent.get(row.ppid) ?? [];
+    children.push(row.pid);
+    childrenByParent.set(row.ppid, children);
+  }
+  const descendants: number[] = [];
+  const visit = (pid: number): void => {
+    for (const childPid of childrenByParent.get(pid) ?? []) {
+      visit(childPid);
+      descendants.push(childPid);
+    }
+  };
+  visit(rootPid);
+  return descendants;
+}
+
+function liveDescendantPids(rootPid: number): number[] {
+  const ps = spawnSync('ps', ['-axo', 'pid=,ppid='], { encoding: 'utf8' });
+  if (ps.status !== 0 || typeof ps.stdout !== 'string') return [];
+  const rows = ps.stdout
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/).map(Number))
+    .filter((pair): pair is [number, number] => pair.length === 2 && pair.every(Number.isFinite))
+    .map(([pid, ppid]) => ({ pid, ppid }));
+  return collectDescendantPids(rows, rootPid);
+}
+
+function signalPidOrGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+    return;
+  } catch {
+    // The descendant may not lead its own group. Fall back to the process itself.
+  }
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // already gone
+  }
+}
+
 function signalCodexProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.pid !== undefined) {
+    // Codex-launched MCP servers may create their own process groups. Killing only
+    // the detached Codex group leaves those grandchildren running after Ctrl-C,
+    // where they can keep compiling and issuing live calls. Snapshot and terminate
+    // descendants deepest-first while the parent relationship still exists.
+    for (const pid of liveDescendantPids(child.pid)) signalPidOrGroup(pid, signal);
     try {
       process.kill(-child.pid, signal);
       return;
