@@ -57,6 +57,7 @@ import {
 } from './types.ts';
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
+const MAX_SHARED_MODULE_SOURCE_CHARS = 50_000;
 
 // Env var read by the agent-written parser.test.ts to locate the redacted
 // session. The test loads it, finds the load-bearing request seq, and feeds
@@ -212,6 +213,7 @@ function buildReadBuildPlanTool(
               kind: m.kind,
               purpose: m.purpose,
               exportSignatures: m.exportSignatures,
+              ...readAssignedSharedModuleSource(buildPlanPath, m.path),
             })),
             parserGuidance: slice.tool.parserGuidance,
             paramChecklist: slice.tool.paramChecklist,
@@ -235,6 +237,30 @@ function buildReadBuildPlanTool(
         ),
       };
     },
+  };
+}
+
+function readAssignedSharedModuleSource(
+  buildPlanPath: string,
+  modulePath: string,
+): { source?: string; sourceTruncated?: boolean; sourceUnavailable?: string } {
+  const siteDir = realpathSync(dirname(buildPlanPath));
+  const candidate = pathJoin(siteDir, modulePath);
+  if (!existsSync(candidate)) {
+    return { sourceUnavailable: 'The verified shared module file is missing.' };
+  }
+
+  const resolved = realpathSync(candidate);
+  const relative = pathRelative(siteDir, resolved);
+  if (relative.startsWith('..') || relative === '') {
+    return { sourceUnavailable: 'The shared module resolved outside the site directory.' };
+  }
+
+  const source = readFileSync(resolved, 'utf8');
+  if (source.length <= MAX_SHARED_MODULE_SOURCE_CHARS) return { source };
+  return {
+    source: source.slice(0, MAX_SHARED_MODULE_SOURCE_CHARS),
+    sourceTruncated: true,
   };
 }
 

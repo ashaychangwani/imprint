@@ -172,7 +172,18 @@ export function resolveWorkflowTriagedPath(
   if (!ws) return null;
 
   const explicitPath = resolveTeachStatePath(site, ws.triagedPath);
-  if (explicitPath) return explicitPath;
+  if (explicitPath) {
+    // Older/resumed runs could accidentally triage an already-triaged session,
+    // leaving state pointed at `*.triaged.triaged.json`. Prefer the original
+    // single-triaged sibling when it still exists: it contains the complete
+    // load-bearing request set, while the second pass may have filtered requests
+    // selected by the first pass.
+    const singleTriagedPath = explicitPath.replace(/(?:\.triaged){2,}\.json$/, '.triaged.json');
+    if (singleTriagedPath !== explicitPath && existsSync(singleTriagedPath)) {
+      return singleTriagedPath;
+    }
+    return explicitPath;
+  }
 
   if (!ws.completedSteps.includes('triage')) return null;
 
@@ -186,7 +197,20 @@ export function resolveWorkflowTriagedPath(
 export function toRelativeTeachStatePath(site: string, absPath: string): string {
   const localRelative = relativeToLocalSite(site, absPath);
   if (localRelative) return localRelative;
-  return `_external_/${pathBasename(absPath)}`;
+  // External artifacts are not copied under the site root. Persist their real
+  // absolute path so a later bounded resume can still resolve them; the former
+  // `_external_/<basename>` label looked portable but pointed at no actual file.
+  return pathResolve(absPath);
+}
+
+const TOOL_SCOPED_RESUME_STEPS = new Set<TeachStep>(['generate', 'compile-playbook', 'emit']);
+
+/** `--tool` scopes the atomic per-tool compile unit. Earlier phases operate on
+ * the recording as a whole, while register is site-level, so accepting the flag
+ * there would either ignore it or falsely claim the run was bounded. */
+export function validateToolScopedResumeStep(fromStep: TeachStep | undefined): string | null {
+  if (fromStep && TOOL_SCOPED_RESUME_STEPS.has(fromStep)) return null;
+  return 'error: --tool is only supported for bounded compile resumes starting at generate, compile-playbook, or emit';
 }
 
 export function buildTeachStateFromSession(
@@ -366,6 +390,7 @@ export function resolveStepStartTarget(
   site: string,
   state: TeachState,
   fromStep: TeachStep,
+  toolName?: string,
 ): { workflowKey: string; ws: WorkflowState } {
   // Exclude in-progress `_pending_*` placeholders: they never carry a candidate
   // and never reached far enough, so a stale one with a newer timestamp would
@@ -380,6 +405,19 @@ export function resolveStepStartTarget(
         '  --from-step resumes a previous run; run a full `imprint teach` first (or omit --from-step).',
       ].join('\n'),
     );
+  }
+  if (toolName) {
+    const target = entries.find(
+      ([workflowKey, ws]) => workflowKey === toolName || ws.candidate?.toolName === toolName,
+    );
+    if (!target) {
+      throw new Error(
+        `Cannot resume tool "${toolName}" for "${site}": it is not present in the persisted teach state.`,
+      );
+    }
+    const [workflowKey, ws] = target;
+    assertResumableAt(site, workflowKey, ws, fromStep);
+    return { workflowKey, ws };
   }
   // Most-recently-updated resumable workflow — the run a developer just executed
   // and wants to resume a single phase of. Newly discovered orphan sessions can
@@ -423,6 +461,7 @@ export function selectMultiToolResumePlans(
   opts?: {
     noInteractive?: boolean;
     allTools?: boolean;
+    toolName?: string;
     plannedToolNames?: ReadonlySet<string>;
   },
 ): MultiToolResumeSelection {
@@ -444,6 +483,17 @@ export function selectMultiToolResumePlans(
       continue;
     }
     plans.push({ workflowKey: key, candidate: ws.candidate, sharedContext: ws.sharedContext });
+  }
+  if (opts?.toolName) {
+    const selected = plans.find(
+      (plan) => plan.workflowKey === opts.toolName || plan.candidate?.toolName === opts.toolName,
+    );
+    if (!selected) {
+      throw new Error(
+        `Cannot resume tool "${opts.toolName}": it is not resumable from "${fromStep}" in the selected recording.`,
+      );
+    }
+    return { plans: [selected], skipped };
   }
   if (opts?.noInteractive && !opts.allTools && plans.length > 1) {
     const primary = plans.find((plan) => plan.candidate?.primary);

@@ -41,6 +41,78 @@ function makeSummaryRequest(seq: number, timestamp: number): Session['requests']
 }
 
 describe('compile tools state hints', () => {
+  it('surfaces the source of verified shared modules assigned to the tool', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-compile-plan-'));
+    try {
+      const toolDir = pathJoin(root, 'search_items');
+      mkdirSync(pathJoin(root, '_shared'), { recursive: true });
+      mkdirSync(toolDir, { recursive: true });
+      writeFileSync(
+        pathJoin(root, '_shared', 'request.ts'),
+        'export function transform(params: unknown) { return params; }\n',
+      );
+      const buildPlanPath = pathJoin(root, '.build-plan.json');
+      writeFileSync(
+        buildPlanPath,
+        JSON.stringify({
+          sharedModules: [
+            {
+              path: '_shared/request.ts',
+              kind: 'request-transform',
+              purpose: 'Build the shared request shape',
+              exportSignatures: ['export function transform(params: unknown): unknown'],
+              spec: 'Reuse the recorded request shape.',
+            },
+          ],
+          perTool: [
+            {
+              toolName: 'search_items',
+              usesSharedModules: ['_shared/request.ts'],
+            },
+          ],
+        }),
+      );
+
+      const session: Session = {
+        site: 'test',
+        startedAt: '2026-05-04T00:00:00.000Z',
+        url: 'https://example.com/start',
+        imprintVersion: '0.1.0',
+        requests: [],
+        events: [],
+        narration: [],
+        cookieSnapshots: [],
+        storageSnapshots: [],
+      };
+      const readPlan = buildCompileTools(session, toolDir, '/tmp/session.json', {
+        buildPlanPath,
+        candidate: {
+          toolName: 'search_items',
+          description: 'Search items',
+          rationale: 'primary intent',
+          confidence: 1,
+          primary: true,
+          requestSeqs: [],
+          representativeSeqs: [],
+          dependencySeqs: [],
+          eventSeqs: [],
+          expectedOutput: 'Matching items',
+          likelyParams: [],
+        },
+        sharedModules: [{ path: '_shared/request.ts', kind: 'request-transform', verified: true }],
+      }).find((tool) => tool.name === 'read_build_plan');
+      if (!readPlan) throw new Error('missing read_build_plan');
+
+      const result = JSON.parse((await readPlan.handler({})).result);
+      expect(result.sharedModulesToImport[0]).toMatchObject({
+        importPath: '../_shared/request.ts',
+        source: 'export function transform(params: unknown) { return params; }\n',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('surfaces existing artifacts and durable feedback for a bounded revision', async () => {
     const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-compile-revision-'));
     try {
