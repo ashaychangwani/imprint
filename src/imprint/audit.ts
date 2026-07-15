@@ -94,17 +94,17 @@ interface AuditScore {
   verdict: 'pass' | 'fail' | 'inconclusive' | 'timeout';
 }
 
-export interface ExpectedAuditTool {
+interface ExpectedAuditTool {
   name: string;
   parameters: readonly string[];
 }
 
-export interface MissingAuditedParameter {
+interface MissingAuditedParameter {
   tool: string;
   name: string;
 }
 
-export interface AuditEvaluation {
+interface AuditEvaluation {
   score: AuditScore;
   missingTools: string[];
   missingParameters: MissingAuditedParameter[];
