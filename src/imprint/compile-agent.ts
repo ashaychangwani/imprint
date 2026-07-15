@@ -11,6 +11,7 @@ import { join as pathJoin } from 'node:path';
 import {
   type AgentProgress,
   type AgentResult,
+  type AgentTool,
   type OnDeadlineReached,
   doneTool,
   giveUpTool,
@@ -19,7 +20,12 @@ import {
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import { compileViaClaudeCli } from './claude-cli-compile.ts';
 import { compileViaCodexCli } from './codex-cli-compile.ts';
-import type { CompileAgentProgress, CompileAgentResult } from './compile-agent-types.ts';
+import {
+  type CompileAgentProgress,
+  type CompileAgentResult,
+  advanceIncompleteSemanticVerificationRuns,
+  advanceSemanticVerificationCycle,
+} from './compile-agent-types.ts';
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import {
   applyLiveVerification,
@@ -29,11 +35,13 @@ import {
 } from './compile-tools.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import {
+  isInfrastructureOnlyInconclusiveReport,
   mergeSemanticParamVerification,
   runLiveSemanticVerification,
   semanticVerificationFailures,
 } from './live-verifier.ts';
 import {
+  DEFAULT_VERIFICATION_PROVIDER,
   type LLMOptions,
   type ProviderName,
   type ToolUseProvider,
@@ -43,6 +51,11 @@ import {
 } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
+import {
+  canAcceptInconclusiveDecision,
+  compileArtifactFingerprint,
+  inconclusiveDecisionAtSemanticCap,
+} from './mcp-compile-server.ts';
 import { localSiteDir } from './paths.ts';
 import { rebindExistingBackendsCacheToWorkflow } from './probe-backends.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
@@ -56,6 +69,31 @@ const log = createLog('compile-agent');
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const PROMPTS_DIR = pathJoin(REPO_ROOT, 'prompts');
+
+function compileDoneTool(): AgentTool {
+  const tool = doneTool();
+  return {
+    ...tool,
+    description:
+      'Call this when compilation is complete. After an infrastructure-only inconclusive live review, call it again on unchanged artifacts with an explicit acceptance decision and reasoning.',
+    input_schema: {
+      ...tool.input_schema,
+      properties: {
+        ...tool.input_schema.properties,
+        accept_inconclusive: {
+          type: 'boolean',
+          description:
+            'Explicitly ship an unchanged deterministic artifact after an infrastructure-only inconclusive live review.',
+        },
+        inconclusive_reason: {
+          type: 'string',
+          description:
+            'Concrete compiler reasoning for accepting the unchanged artifact without a liveVerified stamp.',
+        },
+      },
+    },
+  };
+}
 
 let claudeCliCompiler = compileViaClaudeCli;
 let codexCliCompiler = compileViaCodexCli;
@@ -237,7 +275,7 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
       sharedModules: opts.sharedModules,
       revisionMode: opts.revisionMode,
     }),
-    doneTool(),
+    compileDoneTool(),
     giveUpTool(),
   ];
 
@@ -327,12 +365,20 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
   let conversationLog: AgentResult['conversationLog'] = [];
 
   const MAX_VERIFICATION_CYCLES = 5;
-  let verificationCycle = 0;
+  const MAX_INCOMPLETE_VERIFIER_RUNS = 2;
+  let semanticVerificationCycles = 0;
+  let incompleteVerifierRuns = 0;
+  let pendingInconclusive:
+    | {
+        artifactFingerprint: string;
+        report: Awaited<ReturnType<typeof runLiveSemanticVerification>>;
+      }
+    | undefined;
   let result: AgentResult | null = null;
   let currentInitialMessage = initialUserMessage;
 
-  while (verificationCycle < MAX_VERIFICATION_CYCLES) {
-    verificationCycle++;
+  while (true) {
+    const currentSemanticCycle = Math.min(semanticVerificationCycles + 1, MAX_VERIFICATION_CYCLES);
 
     // Wrap the user's onProgress callback to inject verification cycle info
     const userOnProgress = opts.onProgress;
@@ -340,7 +386,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       ? (p: AgentProgress) =>
           userOnProgress({
             ...p,
-            verificationCycle,
+            verificationCycle: currentSemanticCycle,
             maxVerificationCycles: MAX_VERIFICATION_CYCLES,
           })
       : undefined;
@@ -399,42 +445,48 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
     }
 
+    let semanticReviewCompleted = false;
+    let semanticReviewAttempted = false;
     if (failures.length === 0) {
-      const semanticVerificationStartedAt = Date.now();
-      const semantic = await runLiveSemanticVerification({
-        provider: provider.name,
-        toolDir: absoluteToolDir,
-        evidence: integrationEvidence,
-        // Live semantic verification is a distinct phase. Do not inherit a
-        // nearly exhausted compile-agent deadline.
-      });
-      deadlineMs += Date.now() - semanticVerificationStartedAt;
-      failures.push(...semanticVerificationFailures(semantic.report));
-      if (semantic.report.status === 'approved_with_gaps') {
-        warnings.push(
-          `independent semantic verification approved with gaps: ${semantic.report.gaps.join('; ')}`,
-        );
-      }
-      if (failures.length === 0) {
-        // Success (possibly with explicit semantic gaps). Persist per-parameter
-        // flags and mint liveVerified=true only after independent approval.
-        applyLiveVerification(absoluteToolDir, undefined);
+      const doneInput = result.doneInput ?? {};
+      const currentFingerprint = compileArtifactFingerprint(absoluteToolDir);
+      if (
+        pendingInconclusive &&
+        canAcceptInconclusiveDecision({
+          semanticVerificationCycles,
+          maxVerificationCycles: MAX_VERIFICATION_CYCLES,
+          completedReview: pendingInconclusive.report.completedReview,
+          infrastructureOnly: isInfrastructureOnlyInconclusiveReport(
+            pendingInconclusive.report.report,
+          ),
+          pendingFingerprint: pendingInconclusive.artifactFingerprint,
+          currentFingerprint,
+          acceptInconclusive: doneInput.accept_inconclusive === true,
+          inconclusiveReason:
+            typeof doneInput.inconclusive_reason === 'string'
+              ? doneInput.inconclusive_reason
+              : undefined,
+        })
+      ) {
+        const semantic = pendingInconclusive.report;
+        const inconclusiveReason = String(doneInput.inconclusive_reason).trim();
+        applyLiveVerification(absoluteToolDir, {
+          kind: 'waived-infra',
+          firstError: inconclusiveReason,
+          exhaustedBackends: [],
+        });
         const paramWarnings = applyParamVerification(
           absoluteToolDir,
           mergeSemanticParamVerification(paramVerification, semantic.report),
         );
-        // liveVerified/parameter annotations change the hash-strict cache key,
-        // but not transport capabilities. Rebind the backend already exercised
-        // by the verifier instead of triggering another probe.
         rebindExistingBackendsCacheToWorkflow(absoluteToolDir);
-        const allWarnings = [...warnings, ...paramWarnings];
-        if (paramWarnings.length > 0) {
-          log(`parameter verification:\n${paramWarnings.join('\n')}`);
-        }
+        warnings.push(
+          `independent semantic verification was inconclusive: ${semantic.report.summary}`,
+          `compiler accepted the unchanged artifact without live verification: ${inconclusiveReason}`,
+          ...paramWarnings,
+        );
         message = result.doneSummary ?? 'Task completed';
-        if (allWarnings.length > 0) {
-          message += `\n\nWarnings:\n${allWarnings.join('\n')}`;
-        }
+        message += `\n\nWarnings:\n${warnings.join('\n')}`;
         if (!opts.keepTest) {
           for (const f of ['parser.test.ts', 'integration.test.ts']) {
             const testPath = pathJoin(absoluteToolDir, f);
@@ -443,22 +495,127 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         }
         break;
       }
+
+      const capDecision = inconclusiveDecisionAtSemanticCap({
+        semanticVerificationCycles,
+        maxVerificationCycles: MAX_VERIFICATION_CYCLES,
+        pendingFingerprint: pendingInconclusive?.artifactFingerprint,
+        currentFingerprint,
+      });
+      if (capDecision === 'fail-artifact-changed') {
+        pendingInconclusive = undefined;
+        failures.push(
+          'compile artifacts changed after the final allowed inconclusive semantic review; refusing to run an additional review beyond the semantic cycle cap',
+        );
+      } else if (capDecision === 'await-compiler-decision') {
+        failures.push(
+          'semantic review limit reached with an unchanged infrastructure-only inconclusive result; explicitly accept the unverified artifact with reasoning or revise it',
+        );
+      } else {
+        if (pendingInconclusive && pendingInconclusive.artifactFingerprint !== currentFingerprint) {
+          pendingInconclusive = undefined;
+        }
+        const semanticVerificationStartedAt = Date.now();
+        semanticReviewAttempted = true;
+        const semantic = await runLiveSemanticVerification({
+          provider: DEFAULT_VERIFICATION_PROVIDER,
+          toolDir: absoluteToolDir,
+          evidence: integrationEvidence,
+          // Live semantic verification is a distinct phase. Do not inherit a
+          // nearly exhausted compile-agent deadline.
+        });
+        deadlineMs += Date.now() - semanticVerificationStartedAt;
+        semanticReviewCompleted = semantic.completedReview;
+        if (semantic.report.status === 'inconclusive') {
+          pendingInconclusive = {
+            artifactFingerprint: compileArtifactFingerprint(absoluteToolDir),
+            report: semantic,
+          };
+        } else {
+          pendingInconclusive = undefined;
+        }
+        failures.push(...semanticVerificationFailures(semantic.report));
+        if (semantic.report.status === 'approved_with_gaps') {
+          warnings.push(
+            `independent semantic verification approved with gaps: ${semantic.report.gaps.join('; ')}`,
+          );
+        }
+        if (failures.length === 0) {
+          // Success (possibly with explicit semantic gaps). Persist per-parameter
+          // flags and mint liveVerified=true only after independent approval.
+          applyLiveVerification(absoluteToolDir, undefined);
+          const paramWarnings = applyParamVerification(
+            absoluteToolDir,
+            mergeSemanticParamVerification(paramVerification, semantic.report),
+          );
+          // liveVerified/parameter annotations change the hash-strict cache key,
+          // but not transport capabilities. Rebind the backend already exercised
+          // by the verifier instead of triggering another probe.
+          rebindExistingBackendsCacheToWorkflow(absoluteToolDir);
+          const allWarnings = [...warnings, ...paramWarnings];
+          if (paramWarnings.length > 0) {
+            log(`parameter verification:\n${paramWarnings.join('\n')}`);
+          }
+          message = result.doneSummary ?? 'Task completed';
+          if (allWarnings.length > 0) {
+            message += `\n\nWarnings:\n${allWarnings.join('\n')}`;
+          }
+          if (!opts.keepTest) {
+            for (const f of ['parser.test.ts', 'integration.test.ts']) {
+              const testPath = pathJoin(absoluteToolDir, f);
+              if (existsSync(testPath)) unlinkSync(testPath);
+            }
+          }
+          break;
+        }
+      }
     }
 
     // Verification failed — re-enter the loop with a continuation message
-    if (verificationCycle >= MAX_VERIFICATION_CYCLES) {
+    semanticVerificationCycles = advanceSemanticVerificationCycle(
+      semanticVerificationCycles,
+      semanticReviewCompleted,
+    );
+    incompleteVerifierRuns = advanceIncompleteSemanticVerificationRuns(
+      incompleteVerifierRuns,
+      semanticReviewAttempted,
+      semanticReviewCompleted,
+    );
+    if (incompleteVerifierRuns >= MAX_INCOMPLETE_VERIFIER_RUNS) {
       outcome = 'error';
-      message = `Verification failed after ${MAX_VERIFICATION_CYCLES} cycles. Final failures:\n${failures.join('\n')}`;
+      message = `Independent semantic verifier failed to complete after ${MAX_INCOMPLETE_VERIFIER_RUNS} bounded runs. Final failures:\n${failures.join('\n')}`;
+      break;
+    }
+    const awaitingFinalInconclusiveDecision =
+      semanticVerificationCycles >= MAX_VERIFICATION_CYCLES && pendingInconclusive !== undefined;
+    if (
+      semanticVerificationCycles >= MAX_VERIFICATION_CYCLES &&
+      !awaitingFinalInconclusiveDecision
+    ) {
+      outcome = 'error';
+      message = `Semantic verification failed after ${MAX_VERIFICATION_CYCLES} cycles. Final failures:\n${failures.join('\n')}`;
       break;
     }
 
-    log(`verification failed (cycle ${verificationCycle}), resuming agent loop...`);
-    currentInitialMessage = `You called done but verification failed:
+    const failurePhase = semanticReviewCompleted
+      ? `semantic verification failed (cycle ${semanticVerificationCycles}/${MAX_VERIFICATION_CYCLES})`
+      : semanticReviewAttempted
+        ? 'semantic verifier did not complete a review (semantic cycle limit unchanged)'
+        : 'deterministic verification failed (semantic cycle limit unchanged)';
+    log(`${failurePhase}, resuming agent loop...`);
+    currentInitialMessage = `You called done but ${failurePhase}:
 
 ${failures.map((f) => `- ${f}`).join('\n')}
 
 Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.test.ts), fix the issues, re-run tests, and call done again when fixed.`;
-    currentInitialMessage += `\n\nUse the verifier's semantic evidence, not a requirement for 100% of the original candidate inputs. If the core intent works but a secondary parameter cannot be supported from the recording and live evidence without guessing, remove that parameter and add workflow.limitations with omittedParameters and a specific reason. Do not use a limitation to hide a broken core tool, and do not keep a known broken or ignored public input.`;
+    currentInitialMessage += `\n\nUse the verifier's semantic evidence, not a requirement for 100% of the original candidate inputs. If the core intent works but a secondary parameter cannot be supported from the recording and live evidence without guessing, remove that parameter and add workflow.limitations with omittedParameters and a specific reason. Treat emitsTokens as downstream compatibility targets, not automatic definitions of producer success: when useful core records lack an optional consumer token, preserve the records and supported input classes, document the missing output and affected consumers, and leave those consumers limited/unverified. Narrow an input class only when its core results are unusable or misleading. Do not use a limitation to hide a broken core tool, and do not keep a known broken or ignored public input.`;
+    if (pendingInconclusive) {
+      currentInitialMessage +=
+        semanticVerificationCycles >= MAX_VERIFICATION_CYCLES &&
+        pendingInconclusive.report.completedReview
+          ? '\n\nThe final allowed live semantic review was infrastructure-only inconclusive. Review its evidence and log. If no tool defect is exposed and the unchanged deterministic artifact should ship explicitly unverified, call done again with accept_inconclusive=true and a concrete inconclusive_reason. This does not mint liveVerified.'
+          : '\n\nThe live verifier was infrastructure-only inconclusive. Review its evidence and log. Fix any exposed tool defect, or call done normally to request another independent review. Explicit unverified acceptance is available only after the semantic review limit is reached.';
+    }
   }
 
   // 10. Final flush of the complete conversation log

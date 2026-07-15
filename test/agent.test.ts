@@ -127,6 +127,7 @@ describe('runAgentLoop — loop semantics', () => {
 
     expect(result.outcome).toBe('done');
     expect(result.doneSummary).toBe('finished');
+    expect(result.doneInput).toEqual({ summary: 'finished' });
     expect(fooToolCalled).toBe(true);
     expect(result.turns).toBe(2);
     expect(llm.callCount).toBe(2);

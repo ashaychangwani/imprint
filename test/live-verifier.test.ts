@@ -22,6 +22,7 @@ import {
   buildVerifierArtifactContext,
   compactVerifierEvidenceContext,
   hasSuiteReceiptForSession,
+  isInfrastructureOnlyInconclusiveReport,
   mergeSemanticParamVerification,
   namespaceLiveIntegrationEvidence,
   persistLiveVerificationEvidence,
@@ -161,6 +162,16 @@ describe('live semantic verification report', () => {
         baseline: { ...approved.baseline, verdict: 'tool_broken' },
       }),
     ).toThrow('approval requires a semantically_correct baseline');
+  });
+
+  it('does not classify an inconclusive core-tool defect as infrastructure-only', () => {
+    const report = LiveVerificationReportSchema.parse({
+      ...approved,
+      status: 'inconclusive',
+      baseline: { verdict: 'tool_broken', reason: 'The search returned the wrong entity.' },
+      gaps: ['Live behavior is not acceptable.'],
+    });
+    expect(isInfrastructureOnlyInconclusiveReport(report)).toBe(false);
   });
 
   it('appends sanitized verifier events without overwriting an earlier attempt', () => {

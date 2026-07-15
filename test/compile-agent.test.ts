@@ -10,6 +10,10 @@ import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import type { CompileAgentResult } from '../src/imprint/compile-agent-types.ts';
 import {
+  advanceIncompleteSemanticVerificationRuns,
+  advanceSemanticVerificationCycle,
+} from '../src/imprint/compile-agent-types.ts';
+import {
   __setCompileAgentCliCompilersForTest,
   compileAgent,
 } from '../src/imprint/compile-agent.ts';
@@ -76,6 +80,46 @@ function cleanup(setup: TestSetup) {
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe('semantic verification cycle budget', () => {
+  it('does not charge deterministic preflight failures', () => {
+    expect(advanceSemanticVerificationCycle(2, false)).toBe(2);
+  });
+
+  it('charges a completed independent semantic review', () => {
+    expect(advanceSemanticVerificationCycle(2, true)).toBe(3);
+  });
+
+  it('keeps deterministic retries outside the five-review limit', () => {
+    let cycles = 0;
+    for (let retry = 0; retry < 12; retry++) {
+      cycles = advanceSemanticVerificationCycle(cycles, false);
+    }
+    expect(cycles).toBe(0);
+
+    for (let review = 0; review < 4; review++) {
+      cycles = advanceSemanticVerificationCycle(cycles, true);
+      cycles = advanceSemanticVerificationCycle(cycles, false);
+    }
+    expect(cycles).toBe(4);
+    expect(advanceSemanticVerificationCycle(cycles, true)).toBe(5);
+  });
+});
+
+describe('incomplete semantic verifier budget', () => {
+  it('counts attempted provider failures without charging deterministic failures', () => {
+    let failures = advanceIncompleteSemanticVerificationRuns(0, false, false);
+    expect(failures).toBe(0);
+    failures = advanceIncompleteSemanticVerificationRuns(failures, true, false);
+    expect(failures).toBe(1);
+    failures = advanceIncompleteSemanticVerificationRuns(failures, true, false);
+    expect(failures).toBe(2);
+  });
+
+  it('resets after a completed independent review', () => {
+    expect(advanceIncompleteSemanticVerificationRuns(1, true, true)).toBe(0);
+  });
+});
 
 // Note: Full agent loop tests with mocked provider are possible via the
 // llmProvider injection option (see CompileAgentOptions), but the file-based

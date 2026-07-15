@@ -168,6 +168,17 @@ export const LiveVerificationReportSchema = z
 
 type LiveVerificationReport = z.infer<typeof LiveVerificationReportSchema>;
 
+export function isInfrastructureOnlyInconclusiveReport(report: LiveVerificationReport): boolean {
+  return (
+    report.status === 'inconclusive' &&
+    report.baseline.verdict === 'infrastructure' &&
+    report.issues.length === 0 &&
+    report.parameters.every(
+      (parameter) => parameter.verdict === 'works' || parameter.verdict === 'untestable',
+    )
+  );
+}
+
 interface LiveIntegrationSuiteResult {
   exitCode: number;
   timedOut: boolean;
@@ -747,6 +758,10 @@ interface LiveSemanticVerificationResult {
   provider: ProviderName;
   model: string;
   attempts: number;
+  /** True only when an independent verifier returned a schema-valid report.
+   * Provider startup/input failures synthesize an inconclusive report for
+   * compiler feedback but do not consume a semantic-review cycle. */
+  completedReview: boolean;
 }
 
 export async function runLiveSemanticVerification(opts: {
@@ -874,6 +889,7 @@ export async function runLiveSemanticVerification(opts: {
         provider: opts.provider,
         model,
         attempts: attempt,
+        completedReview: true,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -936,7 +952,13 @@ export async function runLiveSemanticVerification(opts: {
     status: 'inconclusive',
     attempts: 2,
   });
-  return { report: inconclusive, provider: opts.provider, model, attempts: 2 };
+  return {
+    report: inconclusive,
+    provider: opts.provider,
+    model,
+    attempts: 2,
+    completedReview: false,
+  };
 }
 
 function mergePersistedRecords(

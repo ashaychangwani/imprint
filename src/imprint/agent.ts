@@ -49,6 +49,10 @@ export type OnDeadlineReached = () => Promise<number | null>;
 export interface AgentResult {
   outcome: 'done' | 'give_up' | 'timeout' | 'soft_cap' | 'error';
   doneSummary?: string;
+  /** Raw arguments supplied to the reserved done tool. Callers with a richer
+   * done contract can make a post-verification decision without teaching the
+   * generic agent loop about that contract. */
+  doneInput?: Record<string, unknown>;
   giveUpReason?: string;
   giveUpDetail?: string;
   errorMessage?: string;
@@ -294,12 +298,13 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
           // Check for done() or give_up() first
           for (const block of toolUseBlocks) {
             if (block.name === 'done') {
-              const input = block.input as { summary?: string };
+              const input = block.input as Record<string, unknown>;
               return {
                 action: 'return',
                 result: {
                   outcome: 'done',
-                  doneSummary: input.summary ?? 'Task completed',
+                  doneSummary: typeof input.summary === 'string' ? input.summary : 'Task completed',
+                  doneInput: input,
                   turns: turn,
                   durationMs: Date.now() - startTime,
                   inputTokens,

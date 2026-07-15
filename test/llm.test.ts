@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'bun:test';
 import { TimeoutError } from '../src/imprint/concurrency.ts';
 import {
+  DEFAULT_VERIFICATION_PROVIDER,
   availableModelsForProvider,
   classifyCliFailure,
   cliStderrTail,
@@ -421,6 +422,7 @@ describe('provider status metadata', () => {
   });
 
   it('pins the independent Codex verifier to Terra', () => {
+    expect(DEFAULT_VERIFICATION_PROVIDER).toBe('codex-cli');
     expect(preferredVerificationModel('codex-cli')).toBe('gpt-5.6-terra');
   });
 
