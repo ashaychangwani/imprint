@@ -43,7 +43,14 @@ const SYSTEM_PROMPT_PATH = pathJoin(REPO_ROOT, 'prompts', 'live-verifier-agent.m
 const MCP_SERVER_NAME = 'imprint-live-verifier';
 export const LIVE_VERIFICATION_EVIDENCE_FILE = '.live-verification-evidence.json';
 const LIVE_VERIFIER_LOG_FILE = '.live-verifier-log.jsonl';
-const BACKEND_PREPARATION_BUDGET_MS = 2 * 60_000;
+// Cheap probes normally finish well inside the original two-minute window and
+// skip browser transports. The larger ceiling is for the fallback path: a cold
+// CDP request must finish before fetch-bootstrap gets its own browser attempt.
+// Comprehensive preparation is sequential on purpose: concurrent browser
+// transports can trip shared anti-bot/session defenses. Reserve enough time
+// for the normal fetch/stealth/playbook candidates plus CDP and fetch-bootstrap
+// fallbacks; the former 240s cap could kill CDP after a 150s playbook attempt.
+const BACKEND_PREPARATION_BUDGET_MS = 8 * 60_000;
 const MAX_CREDITED_BACKEND_PREPARATIONS = 2;
 const BACKEND_PROBE_SHUTDOWN_GRACE_MS = 5_000;
 let evidenceTempSequence = 0;
@@ -628,6 +635,11 @@ async function runBackendProbeSubprocess(opts: {
   attempt?: number;
   label: string;
 }): Promise<Awaited<ReturnType<typeof probeResolvedTool>>> {
+  const previousCacheContents = existsSync(opts.outPath)
+    ? readFileSync(opts.outPath, 'utf8')
+    : undefined;
+  const tool = resolveWorkflowTool(opts.workflowPath);
+  const assetRoot = pathJoin(tool.dir, '..', '..');
   const child = spawn(
     process.execPath,
     [
@@ -674,6 +686,30 @@ async function runBackendProbeSubprocess(opts: {
     unregisterParentCleanup();
   }
   if (outcome.timedOut) {
+    // probeResolvedTool checkpoints every successful candidate. If a later
+    // optional rung consumed the aggregate deadline, use the new valid cache
+    // instead of discarding an already-proven backend. Do not reuse an unchanged
+    // pre-probe cache: forceReprobe may have been requested because it failed.
+    const currentCacheContents = existsSync(opts.outPath)
+      ? readFileSync(opts.outPath, 'utf8')
+      : undefined;
+    const cacheStatus = loadBackendsCacheStatus(tool.site, assetRoot, tool.dir, {
+      warn: false,
+      toolName: tool.workflow.toolName,
+    });
+    if (
+      currentCacheContents !== undefined &&
+      currentCacheContents !== previousCacheContents &&
+      cacheStatus.status === 'ok'
+    ) {
+      appendLiveVerifierLog(opts.logPath, {
+        type: 'backend.probe.partial-cache-recovered',
+        attempt: opts.attempt,
+        label: opts.label,
+        preferredOrder: cacheStatus.cache.preferredOrder,
+      });
+      return { cache: cacheStatus.cache, outPath: opts.outPath };
+    }
     throw new Error(
       `backend probe exceeded its separate ${Math.round(BACKEND_PREPARATION_BUDGET_MS / 1_000)}s budget and was terminated`,
     );
@@ -684,8 +720,6 @@ async function runBackendProbeSubprocess(opts: {
     );
   }
 
-  const tool = resolveWorkflowTool(opts.workflowPath);
-  const assetRoot = pathJoin(tool.dir, '..', '..');
   const cacheStatus = loadBackendsCacheStatus(tool.site, assetRoot, tool.dir, {
     warn: false,
     toolName: tool.workflow.toolName,

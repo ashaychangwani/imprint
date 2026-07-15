@@ -26,6 +26,7 @@ import {
   BackendsCacheSchema,
   type ConcreteBackend,
   CronConfigSchema,
+  type ToolResult,
   WorkflowSchema,
 } from './types.ts';
 import { VERSION } from './version.ts';
@@ -120,20 +121,32 @@ export async function probeResolvedTool(
   log(`probing backends for ${tool.workflow.toolName}…`);
   log(`  params: ${JSON.stringify(params)}`);
 
-  // Try every backend (single-rung ladders) — operators want the full
-  // matrix, not just the first that worked. cdp-replay is included so it
-  // lands in preferredOrder when it works — without it, runtime always
-  // falls through fetch-bootstrap (~30-60s) before reaching the spliced-in
-  // cdp-replay rung, wasting time on every call.
+  // Probe the workflow's normal candidates first. Plain workflows keep the
+  // cheap fetch/stealth/playbook path; browser-backed API transports are only
+  // added if none of those candidates works.
   const stealthCache = new Map<string, StealthFetch>();
   const cdpPool = new Map<string, CdpBrowserFetch>();
   const allBackends = probeCandidateBackendsForWorkflow(tool.workflow);
   const results: BackendsCache['results'] = {};
   const working: BackendProbeCandidate[] = [];
   const preferredMaxMs = preferredBackendMaxMs();
+  const persistCurrentCache = (): BackendsCache => {
+    const cache: BackendsCache = {
+      probedAt: new Date().toISOString(),
+      imprintVersion: VERSION,
+      schemaVersion: 2,
+      workflowHash: workflowHash(tool.workflow),
+      capabilityHash: workflowCapabilityHash(tool.workflow),
+      preferredOrder: rankSuccessfulBackends(working),
+      results,
+    };
+    BackendsCacheSchema.parse(cache);
+    writeFileSync(outPath, `${JSON.stringify(cache, null, 2)}\n`);
+    return cache;
+  };
 
-  try {
-    for (const backend of allBackends) {
+  const probeCandidates = async (backends: ConcreteBackend[]): Promise<void> => {
+    for (const backend of backends) {
       log(`probing ${backend}…`);
       const t0 = Date.now();
       const { result, attempts } = await runWithLadder(
@@ -146,6 +159,14 @@ export async function probeResolvedTool(
       );
       const durationMs = Date.now() - t0;
       const attempt = attempts[0];
+
+      const invariantFailure = backendInvariantProbeFailure(result);
+      if (invariantFailure) {
+        log(`  ${backend}: workflow rejected the request before transport — stopping probe`);
+        throw new Error(
+          `Backend-independent workflow failure for ${tool.workflow.toolName}: ${invariantFailure}`,
+        );
+      }
 
       if (!attempt) {
         results[backend] = { outcome: 'skipped', detail: 'no attempt recorded' };
@@ -189,6 +210,11 @@ export async function probeResolvedTool(
           ...(warm?.ok ? { warmDurationMs: warm.durationMs, rankingDurationMs } : {}),
           tooSlow,
         });
+        // Keep a valid preferred backend durable as soon as one succeeds. A
+        // later optional candidate may tarpit until the aggregate preparation
+        // deadline; losing this earlier success would force an unnecessary
+        // reprobe and leave the suite with no prepared backend.
+        persistCurrentCache();
         log(
           `  ${backend}: OK in ${durationMs}ms${warm?.ok ? ` (warm ${warm.durationMs}ms)` : ''}${tooSlow ? ' (cold slow)' : ''}`,
         );
@@ -212,6 +238,14 @@ export async function probeResolvedTool(
         log(`  ${backend}: ${result.error} — ${result.message.slice(0, 100)}`);
       }
     }
+  };
+
+  try {
+    await probeCandidates(allBackends);
+    if (working.length === 0 && !allBackends.includes('cdp-replay')) {
+      log('default backends failed; probing browser-backed API fallbacks…');
+      await probeCandidates(['cdp-replay', 'fetch-bootstrap']);
+    }
   } finally {
     await closeProbeCdpPool(cdpPool);
   }
@@ -224,22 +258,22 @@ export async function probeResolvedTool(
     );
   }
 
-  const preferredOrder = rankSuccessfulBackends(working);
-  const cache: BackendsCache = {
-    probedAt: new Date().toISOString(),
-    imprintVersion: VERSION,
-    schemaVersion: 2,
-    workflowHash: workflowHash(tool.workflow),
-    capabilityHash: workflowCapabilityHash(tool.workflow),
-    preferredOrder,
-    results,
-  };
-  BackendsCacheSchema.parse(cache); // catch schema drift early
-
-  writeFileSync(outPath, `${JSON.stringify(cache, null, 2)}\n`);
-  log(`wrote ${outPath} — preferred: ${preferredOrder.join(' → ')}`);
+  const cache = persistCurrentCache();
+  log(`wrote ${outPath} — preferred: ${cache.preferredOrder.join(' → ')}`);
 
   return { cache, outPath };
+}
+
+/**
+ * Some generated-workflow failures happen before any HTTP request is sent.
+ * Retrying those through browser-backed transports is both expensive and
+ * misleading: a different transport cannot repair a deterministic transform.
+ * Keep remote HTTP BAD_RESPONSE failures probeable because bot defenses can
+ * return backend-specific 4xx responses.
+ */
+export function backendInvariantProbeFailure(result: ToolResult): string | null {
+  if (result.ok || result.error !== 'BAD_RESPONSE') return null;
+  return /^request transform failed for request \d+:/i.test(result.message) ? result.message : null;
 }
 
 export function rankSuccessfulBackends(candidates: BackendProbeCandidate[]): ConcreteBackend[] {
@@ -302,9 +336,10 @@ function preferredBackendMaxMs(): number {
 
 function workflowNeedsBootstrap(workflow: ResolvedTool['workflow']): boolean {
   if (workflow.bootstrap) return true;
-  return workflow.requests.some((r) =>
-    (r.captures ?? []).some(
-      (c) => c.capability === 'browser_bootstrap' || c.capability === 'stealth_bootstrap',
+  return workflow.requests.some((request) =>
+    (request.captures ?? []).some(
+      (capture) =>
+        capture.capability === 'browser_bootstrap' || capture.capability === 'stealth_bootstrap',
     ),
   );
 }
@@ -313,7 +348,7 @@ export function probeCandidateBackendsForWorkflow(
   workflow: ResolvedTool['workflow'],
 ): ConcreteBackend[] {
   return workflowNeedsBootstrap(workflow) || prefersCdpReplayFirst(workflow)
-    ? ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']
+    ? ['fetch', 'cdp-replay', 'fetch-bootstrap', 'stealth-fetch', 'playbook']
     : ['fetch', 'stealth-fetch', 'playbook'];
 }
 

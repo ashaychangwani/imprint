@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
+  backendInvariantProbeFailure,
   canRebindBackendsCacheToWorkflow,
   loadBackendsCache,
   loadBackendsCacheStatus,
@@ -763,10 +764,16 @@ describe('probeCandidateBackendsForWorkflow', () => {
       site: 'stateful',
     });
 
-    expect(probeCandidateBackendsForWorkflow(workflow)).toContain('cdp-replay');
+    expect(probeCandidateBackendsForWorkflow(workflow)).toEqual([
+      'fetch',
+      'cdp-replay',
+      'fetch-bootstrap',
+      'stealth-fetch',
+      'playbook',
+    ]);
   });
 
-  it('keeps cdp-replay out of plain workflows with no browser-state need', () => {
+  it('keeps browser-backed API probes deferred for plain workflows', () => {
     const workflow = WorkflowSchema.parse({
       toolName: 'plain_search',
       intent: { description: 'x' },
@@ -780,6 +787,35 @@ describe('probeCandidateBackendsForWorkflow', () => {
       'stealth-fetch',
       'playbook',
     ]);
+  });
+});
+
+describe('backendInvariantProbeFailure', () => {
+  it('stops probing for deterministic request-transform failures', () => {
+    expect(
+      backendInvariantProbeFailure({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'request transform failed for request 0: brands must be a non-empty array',
+      }),
+    ).toBe('request transform failed for request 0: brands must be a non-empty array');
+  });
+
+  it('keeps remote BAD_RESPONSE and transport failures eligible for fallback', () => {
+    expect(
+      backendInvariantProbeFailure({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'Request 0 returned 400: sensor headers required',
+      }),
+    ).toBeNull();
+    expect(
+      backendInvariantProbeFailure({
+        ok: false,
+        error: 'NETWORK',
+        message: 'request timed out',
+      }),
+    ).toBeNull();
   });
 });
 
@@ -810,6 +846,10 @@ describe('probeAllBackends', () => {
     expect(results.map((r) => r.cache.preferredOrder.sort())).toEqual([
       ['fetch', 'stealth-fetch'],
       ['fetch', 'stealth-fetch'],
+    ]);
+    expect(results.map((r) => Object.keys(r.cache.results).sort())).toEqual([
+      ['fetch', 'playbook', 'stealth-fetch'],
+      ['fetch', 'playbook', 'stealth-fetch'],
     ]);
     expect(
       loadBackendsCache('multi', root, pathResolve(site, 'first_tool'))?.preferredOrder,
