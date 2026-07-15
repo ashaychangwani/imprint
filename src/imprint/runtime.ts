@@ -41,6 +41,44 @@ export interface CredentialStore {
   storage?: StorageRecord[];
 }
 
+type NavigationOptions = NonNullable<WorkflowRequest['navigation']>;
+type RequestTransformResult =
+  | string
+  | {
+      url?: string;
+      body?: string;
+      headers?: Record<string, string>;
+      navigation?: Partial<NavigationOptions>;
+      skip?: boolean;
+    };
+
+function mergeNavigationOptions(
+  base: WorkflowRequest['navigation'],
+  override: Partial<NavigationOptions>,
+): NavigationOptions {
+  if (
+    override.actions !== undefined &&
+    (!Array.isArray(override.actions) ||
+      override.actions.length === 0 ||
+      override.actions.some(
+        (entry) =>
+          !entry ||
+          entry.action !== 'click' ||
+          typeof entry.selector !== 'string' ||
+          entry.selector.length === 0,
+      ))
+  ) {
+    throw new Error('request transform returned invalid navigation click actions');
+  }
+  if (
+    override.resultSelector !== undefined &&
+    (typeof override.resultSelector !== 'string' || override.resultSelector.length === 0)
+  ) {
+    throw new Error('request transform returned an invalid navigation result selector');
+  }
+  return { ...base, ...override } as NavigationOptions;
+}
+
 /** Browser-only workflow operations supplied by cdp-replay. Keeping this
  *  transport generic lets pages mint coupled browser state through their own
  *  JavaScript without adding OAuth-provider or frontend-framework logic here. */
@@ -55,6 +93,9 @@ export interface BrowserNavigationTransport {
       timeoutMs?: number;
       pollIntervalMs?: number;
       urlIncludes?: string;
+      selector?: string;
+      actions?: Array<{ action: 'click'; selector: string }>;
+      resultSelector?: string;
       cookie?: { name: string; domain?: string; path?: string };
     },
   ): Promise<Response>;
@@ -178,16 +219,13 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   const dependencyPreflight = preflightStateDependencies(opts.workflow, state, stateCapabilities);
   if (!dependencyPreflight.ok) return dependencyPreflight.result;
 
-  type TransformResult =
-    | string
-    | { url?: string; body?: string; headers?: Record<string, string>; skip?: boolean };
   let requestTransform:
     | ((
         method: string,
         url: string,
         responses: unknown[],
         params?: Record<string, string | number | boolean>,
-      ) => TransformResult)
+      ) => RequestTransformResult)
     | null = null;
   if (opts.workflow.requestTransformModule && opts.workflowPath) {
     try {
@@ -217,6 +255,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     });
     if (!subbedResult.ok) return subbedResult.result;
     const subbed = subbedResult.value;
+    let navigation = req.navigation;
 
     if (requestTransform) {
       try {
@@ -237,9 +276,18 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
               subbed.headers[k] = v;
             }
           }
+          if (transformResult.navigation) {
+            navigation = mergeNavigationOptions(navigation, transformResult.navigation);
+          }
         }
-      } catch {
-        // Non-fatal — proceed with the original request.
+      } catch (err) {
+        return {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: `request transform failed for request ${i}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
       }
     }
 
@@ -258,7 +306,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       }
       try {
         resp = await opts.browser.navigate(subbed.url, {
-          ...req.navigation,
+          ...navigation,
           method: subbed.method,
           headers: subbed.headers,
           body: subbed.body,
@@ -469,9 +517,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         url: string,
         responses: unknown[],
         params?: Record<string, string | number | boolean>,
-      ) =>
-        | string
-        | { url?: string; body?: string; headers?: Record<string, string>; skip?: boolean })
+      ) => RequestTransformResult)
     | undefined;
   if (opts.workflow.requestTransformModule && opts.workflowPath) {
     try {
@@ -543,6 +589,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     });
     if (!substituted.ok) return substituted;
     const request = substituted.value;
+    let navigation = req.navigation;
 
     if (requestTransform) {
       try {
@@ -558,6 +605,9 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
           if (transformed.url !== undefined) request.url = transformed.url;
           if (transformed.body !== undefined) request.body = transformed.body;
           if (transformed.headers) Object.assign(request.headers, transformed.headers);
+          if (transformed.navigation) {
+            navigation = mergeNavigationOptions(navigation, transformed.navigation);
+          }
         }
       } catch (err) {
         return {
@@ -592,7 +642,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       }
       try {
         response = await opts.browser.navigate(request.url, {
-          ...req.navigation,
+          ...navigation,
           method: request.method,
           headers: request.headers,
           body: request.body,

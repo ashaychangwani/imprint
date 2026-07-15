@@ -61,10 +61,20 @@ interface ResolvedTool extends DiscoveredTool {
 /** Tool description shown to MCP clients. Includes the operator's
  *  recorded narration when present — surprisingly load-bearing for the
  *  LLM picking the right tool. */
-function buildToolDescription(w: ResolvedTool['workflow']): string {
+export function buildToolDescription(w: ResolvedTool['workflow']): string {
   const base = w.intent.description;
   const said = w.intent.userSaid?.trim();
-  return said ? `${base}\n\nRecording context: "${said}"` : base;
+  const context = said ? `${base}\n\nRecording context: "${said}"` : base;
+  if (!w.limitations?.length) return context;
+  const limitations = w.limitations
+    .map((entry) => {
+      const omitted = entry.omittedParameters?.length
+        ? ` Omitted inputs: ${entry.omittedParameters.join(', ')}.`
+        : '';
+      return `- ${entry.feature}: ${entry.reason}${omitted}`;
+    })
+    .join('\n');
+  return `${context}\n\nKnown limitations:\n${limitations}`;
 }
 
 /** MCP advertises tool input as JSON Schema; build it directly from

@@ -11,6 +11,11 @@ You will receive a JSON object with this shape:
   "site": "string",
   "url": "string (starting URL)",
   "candidate": { "toolName": "optional selected tool scope", "...": "..." },
+  "workflowContract": {
+    "toolName": "authoritative post-verification tool name",
+    "parameters": ["authoritative public workflow parameters"],
+    "limitations": ["features deliberately omitted after live verification"]
+  },
   "sharedContext": { "loginRequestSeqs": [1], "...": "optional shared auth/helper guidance" },
   "narration": [
     { "timestamp": ms, "text": "what the user said they were doing" }
@@ -32,6 +37,8 @@ You will receive a JSON object with this shape:
 Most events are noise — focus changes, hover, accidental clicks the user reverted. The narration is your highest-signal input: timestamps tell you which events the user actually meant.
 
 If `candidate` is present, compile only that candidate. Ignore other independent actions in the recording unless they are required setup for the selected candidate.
+
+If `workflowContract` is present, it is authoritative and supersedes candidate `likelyParams` and raw recording branches. The workflow may have deliberately omitted an unsupported secondary feature after live verification. Use exactly the contract's public parameters, never reference an omitted parameter in a step, and leave out any recorded branch that cannot run without such a parameter. Do not guess a replacement.
 
 ## Output
 
@@ -201,7 +208,7 @@ result:
 
 7. **Keep step descriptions short.** No need for verbose human-readable titles — the YAML is the spec.
 
-8. **The toolName and parameters should match workflow.json EXACTLY when both are produced from the same session.** This lets cron/MCP fall back from API to playbook with the same params.
+8. **The toolName and parameters must match `workflowContract` EXACTLY when it is provided.** It is the post-verification workflow.json contract and takes precedence over candidate `likelyParams`. Never resurrect an omitted parameter or use it in `${...}` step interpolation. This lets cron/MCP fall back from API to playbook with the same params.
 
 9. **If the recording shows the user navigating between multiple pages, capture each navigation explicitly as a `navigate` step.** Don't assume single-page.
 

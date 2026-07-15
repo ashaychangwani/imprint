@@ -39,7 +39,7 @@ import type {
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
-import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
+import { COMPILE_SENTINELS, compileDeadlineAfterVerification } from './mcp-compile-server.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   endTraceSpan,
@@ -59,6 +59,12 @@ const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
 const MCP_SERVER_NAME = 'imprint-compile';
 const MAX_VERIFICATION_CYCLES = 5;
+
+function formatRevisionMode(enabled: boolean | undefined): string {
+  return enabled
+    ? 'REVISION MODE: inspect read_session_summary.revisionContext and the listed existing artifacts/diagnostics first. Preserve proven behavior; repair or honestly narrow only what evidence contradicts.'
+    : '';
+}
 
 /**
  * Thinking effort for the compile agent. Deliberately `high`, not `max`:
@@ -110,6 +116,8 @@ interface CompileViaClaudeCliOptions {
   sharedModules?: SharedModuleManifestEntry[];
   /** Per-tool implementation plan injected into the agent's initial message. */
   toolPlan?: string;
+  /** Revise existing generated artifacts from durable verification feedback. */
+  revisionMode?: boolean;
   /** Present → drive an auth compile rather than a data compile. */
   authMode?: AuthCliCompileMode;
   /** Auth segments only: resume a prior segment's claude session with a new user
@@ -275,6 +283,7 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
     COMPILE_SENTINELS.done,
     COMPILE_SENTINELS.giveUp,
     COMPILE_SENTINELS.checkpoint,
+    COMPILE_SENTINELS.verificationState,
   ]) {
     const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
@@ -325,10 +334,13 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
       sessionPathAbs,
       '--tool-dir',
       opts.absoluteToolDir,
+      '--provider',
+      'claude-cli',
       ...(opts.candidate ? ['--candidate-json', JSON.stringify(opts.candidate)] : []),
       ...(opts.sharedContext ? ['--shared-context-json', JSON.stringify(opts.sharedContext)] : []),
       ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
       ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
+      ...(opts.revisionMode ? ['--revision-mode'] : []),
     ];
     allowedToolNames = [
       'read_session_summary',
@@ -355,6 +367,7 @@ Tool directory: ${opts.absoluteToolDir}
 You will write artifacts into the tool directory.
 ${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModules)}
 ${formatToolPlan(opts.toolPlan)}
+${formatRevisionMode(opts.revisionMode)}
 
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
   }
@@ -425,19 +438,14 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     child = spawn('claude', args, {
       cwd: REPO_ROOT,
       // Claude CLI's default MCP_TOOL_TIMEOUT is 60s. The compile MCP
-      // server's `done` tool runs external verification inline — bun test
-      // (up to 60s × 3 retries for the integration suite + 120s for the
-      // parser suite) plus typechecking. On bot-protected sites where the
-      // integration test escalates fetch → fetch-bootstrap → stealth-fetch
-      // for every assertion, a single bun test pass can run 30s × 3
-      // rungs × N tests = 10-15 min before the outer wrapper kills it,
-      // and 3 retries push the total well past 30 min. A 10-min cap was
-      // not enough — set 30 min so the worst-case verification can
-      // actually complete and the agent receives the failure feedback
-      // (and ships with `liveVerified: false` via the waiver path)
-      // rather than getting `-32000: Connection closed` mid-call and
-      // wasting the rest of its turn budget. Honor user-set env so an
-      // operator on a fast network can tighten without editing source.
+      // server's `done` tool runs external verification inline: one live
+      // integration suite, parser tests, typechecking, and a fresh semantic
+      // verifier agent that may make a narrowly targeted follow-up call. On
+      // bot-protected sites one suite can still take 10-15 minutes as each
+      // assertion escalates fetch → fetch-bootstrap → stealth-fetch. Keep the
+      // 30-minute cap so the agent receives semantic feedback rather than an
+      // MCP connection-close midway through review. Honor user-set env so an
+      // operator on a fast network can tighten it without editing source.
       // Connection-startup timeout stays at 60s for cold Playwright boot.
       env: {
         ...process.env,
@@ -516,9 +524,19 @@ async function driveStreamJson(
   };
 
   const scheduleDeadlineCheck = (): ReturnType<typeof setTimeout> => {
-    const remaining = Math.max(0, currentDeadlineMs - Date.now());
+    const effectiveDeadlineMs = compileDeadlineAfterVerification(
+      opts.absoluteToolDir,
+      currentDeadlineMs,
+    );
+    const remaining = Math.max(0, effectiveDeadlineMs - Date.now());
     return setTimeout(async () => {
       if (childExited) return;
+      // done() verification runs in the MCP child. Re-read its lifecycle clock
+      // before killing the compiler so only reasoning time counts here.
+      if (Date.now() < compileDeadlineAfterVerification(opts.absoluteToolDir, currentDeadlineMs)) {
+        deadlineTimer = scheduleDeadlineCheck();
+        return;
+      }
       if (opts.onDeadlineReached) {
         const extensionMs = await opts.onDeadlineReached();
         if (childExited) return;
@@ -748,7 +766,11 @@ async function driveStreamJson(
   }
 
   // Wall-clock deadline exceeded?
-  if (Date.now() > currentDeadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {
+  if (
+    Date.now() > compileDeadlineAfterVerification(opts.absoluteToolDir, currentDeadlineMs) &&
+    !existsSync(doneSentinel) &&
+    !existsSync(giveUpSentinel)
+  ) {
     return {
       success: false,
       outcome: 'timeout',

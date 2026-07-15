@@ -11,7 +11,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -27,6 +29,11 @@ import {
   readBuildPlanFile,
   resolveAssignedModules,
 } from './build-plan.ts';
+import {
+  LIVE_EVIDENCE_PATH_ENV,
+  type LiveIntegrationEvidence,
+  readLiveIntegrationEvidence,
+} from './compile-verification.ts';
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import {
@@ -80,7 +87,7 @@ export function buildCompileTools(
     ? { IMPRINT_TEACH_CREDENTIALS: JSON.stringify(context.teachCredentials) }
     : undefined;
   const tools = [
-    buildReadSessionSummaryTool(session, context),
+    buildReadSessionSummaryTool(session, context, toolDir),
     buildReadRequestTool(session),
     buildSearchRequestsTool(session),
     buildRevealRequestTool(sessionPath),
@@ -115,6 +122,10 @@ export interface CompileToolContext {
   buildPlanPath?: string;
   /** Shared-module build manifest (verified flags) for this site. */
   sharedModules?: SharedModuleManifestEntry[];
+  /** A bounded teach resume is revising an already-generated tool. Surface the
+   *  existing artifact and durable verifier/audit feedback to the agent so it
+   *  preserves proven behavior instead of re-deriving the tool from raw capture. */
+  revisionMode?: boolean;
 }
 
 // ─── Tool: read_build_plan ───────────────────────────────────────────────────
@@ -164,7 +175,7 @@ function buildReadBuildPlanTool(
           ? ` The producer declares shape: ${producerShape}. If that shape contains requiredKeys=[...], request-transform.ts must decode/unpack the fresh value and reference each required key in the outgoing request.`
           : '';
         tokenNotes.push(
-          `CONSUMER CONTRACT: param \`${tp.param}\` is an opaque token minted by the \`${tp.sourceTool}\` tool's \`${tp.sourceField}\` output.${shapeNote} Write a CHAINED \`param:${tp.param}\` integration test that calls \`runWorkflowWithLadder\` on \`../${tp.sourceTool}/workflow.json\` directly inside the \`param:${tp.param}\` test block, reads \`${tp.sourceField}\` from the producer's ACTUAL output shape (top-level field, or an item in any returned collection such as flights/items/results), and passes THAT fresh value (not the recorded constant) into this tool — then asserts the response is non-empty. When several params come from the same producer, mint once and choose one producer item containing all sibling fields so the values stay from the same result. On producer bot/infra error, rethrow so the suite waives; if the producer ran but the field is absent, fix the producer parser/output contract instead of waiving. Do not fabricate a fallback value or mutate producer.result.data to make the test pass.`,
+          `CONSUMER CONTRACT: param \`${tp.param}\` is an opaque token minted by the \`${tp.sourceTool}\` tool's \`${tp.sourceField}\` output.${shapeNote} Write a CHAINED \`param:${tp.param}\` integration test that calls \`runCapturedIntegrationCase\` on \`../${tp.sourceTool}/workflow.json\` directly inside the \`param:${tp.param}\` test block, reads \`${tp.sourceField}\` from the producer's ACTUAL output shape (top-level field, or an item in any returned collection such as flights/items/results), and passes THAT fresh value (not the recorded constant) into this tool — then asserts the response is non-empty. When several params come from the same producer, mint once and choose one producer item containing all sibling fields so the values stay from the same result. On producer bot/infra error, rethrow so the suite waives; if the producer ran but the field is absent, fix the producer parser/output contract instead of waiving. Do not fabricate a fallback value or mutate producer.result.data to make the test pass.`,
         );
       }
       // Per-source wiring guidance for the general dependency contract. These are
@@ -232,6 +243,7 @@ function buildReadBuildPlanTool(
 export function buildReadSessionSummaryTool(
   session: Session,
   context: CompileToolContext,
+  toolDir?: string,
 ): AgentTool {
   return {
     name: 'read_session_summary',
@@ -343,6 +355,10 @@ export function buildReadSessionSummaryTool(
         captureHints: captureHints.length > 0 ? captureHints : undefined,
         paramGroundingHints: paramGroundingHints.length > 0 ? paramGroundingHints : undefined,
         inputProvenanceHints: inputProvenanceHints.length > 0 ? inputProvenanceHints : undefined,
+        revisionContext:
+          context.revisionMode && toolDir
+            ? buildExistingArtifactRevisionContext(toolDir)
+            : undefined,
         loadBearingRequests,
       };
 
@@ -358,6 +374,65 @@ export function buildReadSessionSummaryTool(
       (summary as any).loadBearingRequests = reducedRequests;
       return { result: JSON.stringify(summary, null, 2) };
     },
+  };
+}
+
+const REVISION_ARTIFACT_NAMES = [
+  'workflow.json',
+  'parser.ts',
+  'request-transform.ts',
+  'integration.test.ts',
+  'playbook.yaml',
+] as const;
+
+const REVISION_DIAGNOSTIC_NAMES = [
+  '.live-verification.json',
+  '.live-verification-evidence.json',
+  '.live-verifier-log.jsonl',
+] as const;
+
+/** Describe, but do not interpret or gate on, prior compile evidence. The
+ *  compile agent owns the judgment: it can read any listed file through the
+ *  existing read_file tool and decide what to preserve, repair, narrow, or
+ *  document. This is intentionally agent context rather than another runtime
+ *  validator. */
+function buildExistingArtifactRevisionContext(toolDir: string): Record<string, unknown> {
+  const describe = (name: string): { path: string; bytes: number } | null => {
+    const absolute = pathJoin(toolDir, name);
+    if (!existsSync(absolute)) return null;
+    try {
+      return { path: name, bytes: statSync(absolute).size };
+    } catch {
+      return null;
+    }
+  };
+
+  const artifacts = REVISION_ARTIFACT_NAMES.map(describe).filter(
+    (entry): entry is { path: string; bytes: number } => entry !== null,
+  );
+  const diagnostics = REVISION_DIAGNOSTIC_NAMES.map(describe).filter(
+    (entry): entry is { path: string; bytes: number } => entry !== null,
+  );
+  const notesDir = pathJoin(toolDir, 'notes');
+  const feedbackNotes = existsSync(notesDir)
+    ? readdirSync(notesDir)
+        .filter((name) => name.endsWith('.md'))
+        .sort()
+        .map((name) => describe(pathJoin('notes', name)))
+        .filter((entry): entry is { path: string; bytes: number } => entry !== null)
+    : [];
+
+  return {
+    mode: 'revise_existing_artifact',
+    instruction: [
+      'This bounded resume is a revision, not a from-scratch compile.',
+      'Read the existing workflow, parser, request transform, integration test, durable live-verification diagnostics, and feedback notes before re-reading raw recording bodies.',
+      'Preserve behavior that live evidence proves works. Repair or narrow only the behavior contradicted by evidence.',
+      'If a secondary branch cannot be grounded, remove its dependent parameters and claims together and record the reasoning in workflow limitations; do not guess.',
+    ].join(' '),
+    existingArtifacts: artifacts,
+    durableDiagnostics: diagnostics,
+    feedbackNotes,
   };
 }
 
@@ -1345,6 +1420,7 @@ export async function runCommand(
   cwd: string,
   timeoutMs: number,
   extraEnv?: Record<string, string>,
+  onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void,
 ): Promise<{ result: string; isError?: boolean }> {
   return new Promise((resolve) => {
     // `detached: true` makes the child its own process-group leader so a timeout
@@ -1362,11 +1438,15 @@ export async function runCommand(
     const TRUNCATE_LIMIT = 16 * 1024; // 16KB
 
     proc.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
+      const text = chunk.toString();
+      stdout += text;
+      onOutput?.('stdout', text);
     });
 
     proc.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
+      const text = chunk.toString();
+      stderr += text;
+      onOutput?.('stderr', text);
     });
 
     const timeout = setTimeout(() => {
@@ -1716,7 +1796,7 @@ interface BunTestRun {
 
 /** Per-exposed-parameter verification outcome. `verified` is true only when a
  *  `param:<name>` integration test actually ran green against live data. */
-interface ParamVerification {
+export interface ParamVerification {
   name: string;
   verified: boolean;
   /** Why an exposed param is unverified. Undefined when `verified` is true.
@@ -1727,7 +1807,7 @@ interface ParamVerification {
    *  - `waived-chain`: the param is a producer-sourced token but the producer
    *    tool could not be run at compile time (anti-bot / not compiled), so the
    *    chain could not be verified. */
-  reason?: 'waived-bot' | 'waived-infra' | 'annotated' | 'waived-chain';
+  reason?: 'waived-bot' | 'waived-infra' | 'annotated' | 'waived-chain' | 'semantic-gap';
   /** For a producer-sourced token param, the sibling tool + output field its
    *  value comes from. Stamped into workflow.json (`param.sourcedFrom`) so the
    *  MCP description tells the orchestrating LLM where to mint it and the audit
@@ -1751,11 +1831,15 @@ interface TokenSource {
  * bot-defense / infra detection and error surfacing) and the per-test pass/fail
  * names via a JUnit report written to a transient file in the tool dir.
  */
-async function runBunTestWithResults(
+export async function runBunTestWithResults(
   testPath: string,
   toolDir: string,
   timeoutMs: number,
   env: Record<string, string> = {},
+  opts: {
+    bail?: boolean;
+    onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void;
+  } = {},
 ): Promise<BunTestRun> {
   const junitPath = pathJoin(toolDir, `.imprint-junit-${basename(testPath)}.xml`);
   try {
@@ -1764,10 +1848,11 @@ async function runBunTestWithResults(
     // best-effort
   }
   const result = await runCommand(
-    `bun test ${testPath} --reporter=junit --reporter-outfile=${junitPath}`,
+    `bun test ${testPath} --reporter=junit --reporter-outfile=${junitPath}${opts.bail ? ' --bail=1' : ''}`,
     toolDir,
     timeoutMs,
     env,
+    opts.onOutput,
   );
   const output = JSON.parse(result.result) as {
     stdout: string;
@@ -1800,6 +1885,10 @@ async function runBunTestWithResults(
 interface TestBlock {
   title: string;
   body: string;
+}
+
+function hasCapturedLiveWorkflowCall(source: string): boolean {
+  return /\b(?:runWorkflowWithLadder|runCapturedIntegrationCase)\s*\(/.test(source);
 }
 
 /** Split a test file into `test(...)` / `it(...)` blocks (title + source from
@@ -2241,7 +2330,7 @@ export function classifyParamCoverage(opts: {
       if (passedLive) {
         const chained =
           !!block &&
-          /runWorkflowWithLadder\s*\(/.test(block.body) &&
+          hasCapturedLiveWorkflowCall(block.body) &&
           SIBLING_WORKFLOW_RE.test(block.body);
         if (chained) {
           paramVerification.push({ name: lp.name, verified: true, sourcedFrom });
@@ -2269,7 +2358,7 @@ export function classifyParamCoverage(opts: {
     if (passedLive) {
       // Anti-tautology: a passing per-param test must actually exercise the live
       // workflow, not assert a constant.
-      if (block && !/runWorkflowWithLadder\s*\(/.test(block.body)) {
+      if (block && !hasCapturedLiveWorkflowCall(block.body)) {
         tautological.push(lp.name);
       } else {
         paramVerification.push({ name: lp.name, verified: true });
@@ -2302,7 +2391,7 @@ export function hasLiveBaselineWorkflowTest(integrationSrc: string): boolean {
   return extractTestBlocks(integrationSrc).some(
     (block) =>
       !block.title.includes('param:') &&
-      /\brunWorkflowWithLadder\s*\(/.test(block.body) &&
+      hasCapturedLiveWorkflowCall(block.body) &&
       !returnsOnFailedResult.test(block.body) &&
       (requiresOk.test(block.body) || throwsOnFailure.test(block.body)),
   );
@@ -3427,6 +3516,10 @@ export async function externalVerification(
      *  verifier blocks invented ${credential.X} placeholders that are not in this
      *  set or in requiredInputs. */
     credentialNames?: string[];
+    /** Agentic compile path only: validate the integration suite's source here,
+     *  but let the independent semantic verifier invoke the final live suite as
+     *  a tool. Parser/type/schema checks remain deterministic. */
+    deferLiveIntegrationToSemanticAgent?: boolean;
   } = {},
 ): Promise<{
   failures: string[];
@@ -3440,9 +3533,13 @@ export async function externalVerification(
     firstError: string;
     exhaustedBackends: string[];
   };
+  /** Actual tool-level inputs and parsed results captured by the single live
+   * integration run. The caller hands these to the independent semantic agent. */
+  integrationEvidence: LiveIntegrationEvidence[];
 }> {
   const failures: string[] = [];
   const warnings: string[] = [];
+  let integrationEvidence: LiveIntegrationEvidence[] = [];
   const paramVerification: ParamVerification[] = [];
   let liveVerification:
     | { kind: 'waived-bot' | 'waived-infra'; firstError: string; exhaustedBackends: string[] }
@@ -3647,6 +3744,7 @@ export async function externalVerification(
 
         const notTemplated: string[] = [];
         const inventedOnly: string[] = [];
+        const intentionallyOmitted: Array<{ name: string; feature: string; reason: string }> = [];
 
         for (const lp of opts.likelyParams) {
           const placeholder = `\${param.${lp.name}}`;
@@ -3684,7 +3782,19 @@ export async function externalVerification(
           }
 
           if (!inBody && !inHeader && !inOriginalQuery && !inInventedQuery) {
-            notTemplated.push(lp.name);
+            const limitation = workflow.limitations?.find((entry) =>
+              entry.omittedParameters?.includes(lp.name),
+            );
+            const stillDeclared = workflow.parameters.some((param) => param.name === lp.name);
+            if (limitation && !stillDeclared) {
+              intentionallyOmitted.push({
+                name: lp.name,
+                feature: limitation.feature,
+                reason: limitation.reason,
+              });
+            } else {
+              notTemplated.push(lp.name);
+            }
           } else if (!inBody && !inHeader && !inOriginalQuery && inInventedQuery) {
             inventedOnly.push(lp.name);
           }
@@ -3692,12 +3802,19 @@ export async function externalVerification(
 
         if (notTemplated.length > 0) {
           failures.push(
-            `${notTemplated.length} likelyParam(s) are not templated in any request: ${notTemplated.join(', ')}. Each must appear as \${param.NAME} in a request URL, body, or header. For parameters recorded as null or [] (filters the user toggled but didn\'t apply), find the correct position in the request body and replace the placeholder value with \${param.NAME}.`,
+            `${notTemplated.length} likelyParam(s) have no valid disposition: ${notTemplated.join(', ')}. Each must either appear as \${param.NAME} in a request URL, body, or header, or be removed from the public parameters list and named in workflow.limitations[].omittedParameters with an evidence-based reason. For parameters recorded as null or [] (filters the user toggled but didn\'t apply), find the correct position in the request body and replace the placeholder value with \${param.NAME}.`,
           );
         }
         if (inventedOnly.length > 0) {
           warnings.push(
             `${inventedOnly.length} likelyParam(s) are templated only in URL query params that do not exist in any recorded request URL: ${inventedOnly.join(', ')}. The API server likely ignores these invented params — wire them into the request body or an existing query param instead. For complex body formats, use a requestTransformModule to construct the body programmatically.`,
+          );
+        }
+        if (intentionallyOmitted.length > 0) {
+          warnings.push(
+            `${intentionallyOmitted.length} detector-suggested parameter(s) were intentionally omitted by the compile agent: ${intentionallyOmitted
+              .map(({ name, feature, reason }) => `${name} (${feature}: ${reason})`)
+              .join('; ')}. The limitations are retained in workflow.json and surfaced to callers.`,
           );
         }
       }
@@ -3816,8 +3933,13 @@ export async function externalVerification(
     if (!hasLiveBaselineWorkflowTest(integrationSrc)) {
       integrationOutcome = 'failed';
       failures.push(
-        'integration.test.ts has no strict baseline live workflow test: add a non-`param:` test that calls `runWorkflowWithLadder(...)` on this tool workflow, fails when `result.ok` is false, and asserts the successful response contains real data. Static workflow-shape assertions or green returns on bot/infra errors are not enough to verify a generated tool.',
+        'integration.test.ts has no strict baseline live workflow test: add a non-`param:` test that calls `runCapturedIntegrationCase(...)` on this tool workflow, fails when `result.ok` is false, and asserts the successful response contains real data. Static workflow-shape assertions or green returns on bot/infra errors are not enough to verify a generated tool.',
       );
+    } else if (opts.deferLiveIntegrationToSemanticAgent) {
+      // The independent verifier owns the final live execution. Keeping the
+      // suite out of this deterministic gate avoids two disconnected verdicts
+      // and lets the reviewer inspect the exact outputs it requested.
+      integrationOutcome = 'absent';
     } else {
       // Scale the verifier's live-test timeout to the suite size: the baseline plus
       // one live `runWorkflowWithLadder` per param, each gated by the ~25s compile
@@ -3827,26 +3949,30 @@ export async function externalVerification(
       const paramCount = opts.likelyParams?.length ?? 0;
       const pacingMs = Number(process.env.IMPRINT_COMPILE_ACT_SPACING_MS ?? 25_000) || 0;
       const verifierTimeoutMs = Math.min(120_000 + paramCount * (pacingMs + 20_000), 10 * 60_000);
-      let run: BunTestRun = {
-        stdout: '',
-        stderr: '',
-        exitCode: 1,
-        timedOut: false,
-        passed: new Set(),
-        failed: new Set(),
-      };
-      for (let attempt = 0; attempt < 3; attempt++) {
-        run = await runBunTestWithResults(integrationTestPath, toolDir, verifierTimeoutMs);
-        if (run.exitCode === 0) break;
-        // A timeout, bot-defense, or ladder-exhaustion failure will NOT clear on a
-        // retry — re-running only fires more state-changing calls and deepens the
-        // per-IP rate flag. One attempt is enough to classify it; stop early.
-        if (run.timedOut) break;
-        const out = `${run.stdout}\n${run.stderr}`;
-        const ladderExhausted =
-          /\bRATE_LIMITED\b|\bFORBIDDEN\b|\bNETWORK\b/.test(out) &&
-          /non-escalatable|giving up|ladder exhausted|all backends failed/.test(out);
-        if (isBotDefenseFailure(out) || ladderExhausted) break;
+      const evidencePath = pathJoin(
+        toolDir,
+        `.imprint-live-evidence-${process.pid}-${Date.now()}.jsonl`,
+      );
+      try {
+        if (existsSync(evidencePath)) unlinkSync(evidencePath);
+      } catch {
+        // best-effort cleanup before the run
+      }
+      const run = await runBunTestWithResults(integrationTestPath, toolDir, verifierTimeoutMs, {
+        [LIVE_EVIDENCE_PATH_ENV]: evidencePath,
+      });
+      try {
+        integrationEvidence = readLiveIntegrationEvidence(evidencePath);
+      } catch (error) {
+        failures.push(
+          `could not read captured live integration evidence: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      } finally {
+        try {
+          if (existsSync(evidencePath)) unlinkSync(evidencePath);
+        } catch {
+          // Evidence is ephemeral and intentionally never kept with artifacts.
+        }
       }
       integrationPassedTests = run.passed;
 
@@ -3862,7 +3988,11 @@ export async function externalVerification(
       integrationOutcome = verdict.outcome;
 
       if (verdict.outcome === 'passed') {
-        // exitCode 0 — nothing to surface.
+        if (integrationEvidence.length === 0) {
+          failures.push(
+            'integration.test.ts passed but captured no live evidence. Import `runCapturedIntegrationCase` from `imprint/compile-verification` and use it for every live workflow call so the independent verifier can inspect the actual tool inputs and parsed outputs.',
+          );
+        }
       } else if (verdict.captureFailName !== null) {
         const capName = verdict.captureFailName;
         // If the failing capture is a `response_header` on a REPLAYED workflow
@@ -3913,7 +4043,7 @@ export async function externalVerification(
         );
       } else {
         failures.push(
-          `bun test integration.test.ts exited ${run.exitCode} — the workflow failed to produce live data (tried 3 times).\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+          `bun test integration.test.ts exited ${run.exitCode} — the workflow failed to produce live data. The baseline suite runs exactly once per verification cycle.\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
         );
       }
     }
@@ -3930,7 +4060,8 @@ export async function externalVerification(
     !referencedStateBroken &&
     existsSync(integrationTestPath) &&
     opts.likelyParams &&
-    opts.likelyParams.length > 0
+    opts.likelyParams.length > 0 &&
+    !opts.deferLiveIntegrationToSemanticAgent
   ) {
     const integrationSrc = readFileSync(integrationTestPath, 'utf8');
 
@@ -4146,5 +4277,5 @@ export async function externalVerification(
     }
   }
 
-  return { failures, warnings, paramVerification, liveVerification };
+  return { failures, warnings, paramVerification, liveVerification, integrationEvidence };
 }

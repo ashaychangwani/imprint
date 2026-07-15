@@ -21,6 +21,7 @@ import {
   isValidProvider,
   normalizeCliAnalyzeOutput,
   preferredAgentModel,
+  preferredVerificationModel,
 } from '../src/imprint/llm.ts';
 
 describe('extractJsonObject', () => {
@@ -417,5 +418,20 @@ describe('provider status metadata', () => {
     expect(models.filter((model) => model.isDefault)).toEqual([
       { model: 'gpt-5.6-sol', isDefault: true },
     ]);
+  });
+
+  it('pins the independent Codex verifier to Terra', () => {
+    expect(preferredVerificationModel('codex-cli')).toBe('gpt-5.6-terra');
+  });
+
+  it('selects the latest ordered Sonnet for both Claude providers', () => {
+    expect(preferredVerificationModel('claude-cli')).toBe('claude-sonnet-4-6');
+    expect(preferredVerificationModel('anthropic-api')).toBe('claude-sonnet-4-6');
+  });
+
+  it('does not silently fall back for unsupported verifier providers', () => {
+    expect(() => preferredVerificationModel('cursor-cli')).toThrow(
+      'does not support live semantic verification',
+    );
   });
 });

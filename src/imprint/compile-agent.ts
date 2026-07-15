@@ -29,6 +29,11 @@ import {
 } from './compile-tools.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import {
+  mergeSemanticParamVerification,
+  runLiveSemanticVerification,
+  semanticVerificationFailures,
+} from './live-verifier.ts';
+import {
   type LLMOptions,
   type ProviderName,
   type ToolUseProvider,
@@ -39,6 +44,7 @@ import {
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { localSiteDir } from './paths.ts';
+import { rebindExistingBackendsCacheToWorkflow } from './probe-backends.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
@@ -114,6 +120,19 @@ interface CompileAgentOptions {
    *  response parsing, shared-module imports). Injected into the agent's initial
    *  message so the compile follows it. Generic — not tied to any site. */
   toolPlan?: string;
+  /** Revise an existing generated artifact, using durable verification feedback
+   *  as the starting point instead of rebuilding it from raw capture. */
+  revisionMode?: boolean;
+}
+
+function formatRevisionMode(enabled: boolean | undefined): string {
+  return enabled
+    ? [
+        'REVISION MODE: this is a bounded resume of an existing generated tool, not a from-scratch compile.',
+        'Use read_session_summary.revisionContext, then read the listed current artifacts and durable verification feedback before inspecting raw response bodies.',
+        'Preserve proven behavior and make the smallest evidence-backed repair or contract reduction.',
+      ].join(' ')
+    : '';
 }
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
@@ -216,6 +235,7 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
       teachCredentials: opts.teachCredentials,
       buildPlanPath: opts.buildPlanPath,
       sharedModules: opts.sharedModules,
+      revisionMode: opts.revisionMode,
     }),
     doneTool(),
     giveUpTool(),
@@ -229,11 +249,12 @@ Tool directory: ${absoluteToolDir}
 You will write artifacts into the tool directory.
 ${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModules)}
 ${formatToolPlan(opts.toolPlan)}
+${formatRevisionMode(opts.revisionMode)}
 
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
 
   // 7. Compute deadline
-  const deadlineMs = Date.now() + (opts.maxDurationMs ?? 20 * 60 * 1000);
+  let deadlineMs = Date.now() + (opts.maxDurationMs ?? 20 * 60 * 1000);
 
   // 8. Instantiate provider (or use injected one for testing).
   //    CLI providers take a different path: they don't implement Anthropic
@@ -260,6 +281,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         buildPlanPath: opts.buildPlanPath,
         sharedModules: opts.sharedModules,
         toolPlan: opts.toolPlan,
+        revisionMode: opts.revisionMode,
         model: opts.llmConfig?.model,
       });
     }
@@ -278,6 +300,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         buildPlanPath: opts.buildPlanPath,
         sharedModules: opts.sharedModules,
         toolPlan: opts.toolPlan,
+        revisionMode: opts.revisionMode,
         model: opts.llmConfig?.model,
       });
     }
@@ -351,11 +374,9 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     // Perform external verification
-    const { failures, warnings, paramVerification, liveVerification } = await externalVerification(
-      absoluteToolDir,
-      session,
-      sessionPathAbs,
-      {
+    const deterministicVerificationStartedAt = Date.now();
+    const { failures, warnings, paramVerification, integrationEvidence } =
+      await externalVerification(absoluteToolDir, session, sessionPathAbs, {
         expectedToolName: opts.candidate?.toolName,
         likelyParams: opts.candidate?.likelyParams,
         candidateRequestSeqs: opts.candidate?.requestSeqs,
@@ -370,35 +391,58 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         requiredInputs,
         credentialValues: opts.teachCredentials?.values,
         credentialNames: opts.sharedContext?.credentialNames,
-      },
-    );
+        deferLiveIntegrationToSemanticAgent: true,
+      });
+    deadlineMs += Date.now() - deterministicVerificationStartedAt;
 
     if (warnings.length > 0) {
       log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
     }
 
     if (failures.length === 0) {
-      // Success (possibly with warnings). Persist per-parameter verified flags
-      // and the live-verification stamp into workflow.json so downstream
-      // (audit, teach summary) can see which tools shipped without a passing
-      // live call.
-      applyLiveVerification(absoluteToolDir, liveVerification);
-      const paramWarnings = applyParamVerification(absoluteToolDir, paramVerification);
-      const allWarnings = [...warnings, ...paramWarnings];
-      if (paramWarnings.length > 0) {
-        log(`parameter verification:\n${paramWarnings.join('\n')}`);
+      const semanticVerificationStartedAt = Date.now();
+      const semantic = await runLiveSemanticVerification({
+        provider: provider.name,
+        toolDir: absoluteToolDir,
+        evidence: integrationEvidence,
+        // Live semantic verification is a distinct phase. Do not inherit a
+        // nearly exhausted compile-agent deadline.
+      });
+      deadlineMs += Date.now() - semanticVerificationStartedAt;
+      failures.push(...semanticVerificationFailures(semantic.report));
+      if (semantic.report.status === 'approved_with_gaps') {
+        warnings.push(
+          `independent semantic verification approved with gaps: ${semantic.report.gaps.join('; ')}`,
+        );
       }
-      message = result.doneSummary ?? 'Task completed';
-      if (allWarnings.length > 0) {
-        message += `\n\nWarnings:\n${allWarnings.join('\n')}`;
-      }
-      if (!opts.keepTest) {
-        for (const f of ['parser.test.ts', 'integration.test.ts']) {
-          const testPath = pathJoin(absoluteToolDir, f);
-          if (existsSync(testPath)) unlinkSync(testPath);
+      if (failures.length === 0) {
+        // Success (possibly with explicit semantic gaps). Persist per-parameter
+        // flags and mint liveVerified=true only after independent approval.
+        applyLiveVerification(absoluteToolDir, undefined);
+        const paramWarnings = applyParamVerification(
+          absoluteToolDir,
+          mergeSemanticParamVerification(paramVerification, semantic.report),
+        );
+        // liveVerified/parameter annotations change the hash-strict cache key,
+        // but not transport capabilities. Rebind the backend already exercised
+        // by the verifier instead of triggering another probe.
+        rebindExistingBackendsCacheToWorkflow(absoluteToolDir);
+        const allWarnings = [...warnings, ...paramWarnings];
+        if (paramWarnings.length > 0) {
+          log(`parameter verification:\n${paramWarnings.join('\n')}`);
         }
+        message = result.doneSummary ?? 'Task completed';
+        if (allWarnings.length > 0) {
+          message += `\n\nWarnings:\n${allWarnings.join('\n')}`;
+        }
+        if (!opts.keepTest) {
+          for (const f of ['parser.test.ts', 'integration.test.ts']) {
+            const testPath = pathJoin(absoluteToolDir, f);
+            if (existsSync(testPath)) unlinkSync(testPath);
+          }
+        }
+        break;
       }
-      break;
     }
 
     // Verification failed — re-enter the loop with a continuation message
@@ -414,6 +458,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
 ${failures.map((f) => `- ${f}`).join('\n')}
 
 Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.test.ts), fix the issues, re-run tests, and call done again when fixed.`;
+    currentInitialMessage += `\n\nUse the verifier's semantic evidence, not a requirement for 100% of the original candidate inputs. If the core intent works but a secondary parameter cannot be supported from the recording and live evidence without guessing, remove that parameter and add workflow.limitations with omittedParameters and a specific reason. Do not use a limitation to hide a broken core tool, and do not keep a known broken or ignored public input.`;
   }
 
   // 10. Final flush of the complete conversation log

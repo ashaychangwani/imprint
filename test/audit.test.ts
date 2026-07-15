@@ -4,13 +4,27 @@ import {
   AuditReportSchema,
   auditHasCorrectSignal,
   buildAuditInitialPrompt,
+  buildAuditMcpEnvironment,
   buildTokenDepNote,
   buildUnverifiedParamNote,
   computeAuditScore,
+  evaluateAuditReport,
   extractReport,
+  missingAuditedParameters,
+  missingAuditedToolNames,
   ungradeableToolNames,
   untestableParams,
 } from '../src/imprint/audit.ts';
+
+describe('buildAuditMcpEnvironment', () => {
+  it('pins the MCP child to the same isolated asset root as the audit driver', () => {
+    expect(buildAuditMcpEnvironment('/tmp/imprint-isolated-audit')).toEqual({
+      IMPRINT_HOME: '/tmp/imprint-isolated-audit',
+      IMPRINT_AUDIT_PACING_MS: '5000',
+      IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
+    });
+  });
+});
 
 /** Build a report from a flat list of verdicts spread across one tool. */
 function reportFromVerdicts(
@@ -33,7 +47,7 @@ function reportFromVerdicts(
 
 describe('computeAuditScore', () => {
   it('passes when all graded are correct and graded >= the signal floor', () => {
-    // One gradeable tool → floor = max(2, 1) = 2; 4 graded clears it.
+    // One gradeable tool → floor 1; 4 graded clears it.
     const report = reportFromVerdicts(['correct', 'correct', 'correct', 'correct']);
     const score = computeAuditScore(report, 95);
     expect(score.correct).toBe(4);
@@ -63,13 +77,14 @@ describe('computeAuditScore', () => {
     expect(score.verdict).toBe('inconclusive');
   });
 
-  it('fails a 100% score with insufficient signal (graded below the floor of 2)', () => {
-    // One gradeable tool with a single graded invocation → floor 2, graded 1 → fail.
+  it('passes one correct core call when later attempts are only infrastructure failures', () => {
+    // Agent-classified infra and bad params are not product defects. One
+    // correct call supplies the intended one-signal floor for one tool.
     const report = reportFromVerdicts(['correct', 'infra', 'bad_params']);
     const score = computeAuditScore(report, 95);
     expect(score.score).toBe(100);
     expect(score.graded).toBe(1);
-    expect(score.verdict).toBe('fail');
+    expect(score.verdict).toBe('pass');
   });
 
   it('excludes infra and bad_params from the denominator', () => {
@@ -256,7 +271,7 @@ describe('computeAuditScore', () => {
       ],
     });
     const score = computeAuditScore(report, 95);
-    // floor = max(2, gradeableTools=1) = 2; graded 2 clears it.
+    // floor = gradeableTools=1; graded 2 clears it.
     expect(score.correct).toBe(2);
     expect(score.graded).toBe(2);
     expect(score.score).toBe(100);
@@ -330,6 +345,218 @@ describe('ungradeableToolNames', () => {
       ],
     });
     expect(ungradeableToolNames(report)).toEqual(['still_ungradeable']);
+  });
+});
+
+describe('missingAuditedToolNames', () => {
+  it('distinguishes omitted tools from tools explicitly reported as ungradeable', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        { name: 'search', invocations: [{ ok: true, verdict: 'correct' }] },
+        { name: 'details', invocations: [{ ok: false, verdict: 'infra' }] },
+      ],
+    });
+
+    expect(missingAuditedToolNames(report, ['search', 'details', 'book'])).toEqual(['book']);
+  });
+
+  it('treats a named tool with no invocation records as missing an attempt', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        { name: 'search', invocations: [{ ok: true, verdict: 'correct' }] },
+        {
+          name: 'details',
+          invocations: [],
+          parameters: [{ name: 'id', verdict: 'untestable', reason: 'no opaque id' }],
+        },
+      ],
+    });
+
+    expect(missingAuditedToolNames(report, ['search', 'details'])).toEqual(['details']);
+  });
+});
+
+describe('missingAuditedParameters', () => {
+  it('counts every explicit verdict, including untestable, as parameter coverage', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [{ ok: true, verdict: 'correct' }],
+          parameters: [
+            { name: 'origin', verdict: 'works' },
+            { name: 'coupon', verdict: 'untestable', reason: 'no known valid code' },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      missingAuditedParameters(report, [
+        { name: 'search', parameters: ['origin', 'destination', 'coupon'] },
+      ]),
+    ).toEqual([{ tool: 'search', name: 'destination' }]);
+  });
+});
+
+describe('evaluateAuditReport coverage verdict', () => {
+  it('downgrades a passing subset when a named tool has no invocation attempt', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        { name: 'search', invocations: [{ ok: true, verdict: 'correct' }] },
+        {
+          name: 'details',
+          invocations: [],
+          parameters: [{ name: 'id', verdict: 'untestable', reason: 'no opaque id' }],
+        },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(report, 95, [
+      { name: 'search', parameters: [] },
+      { name: 'details', parameters: ['id'] },
+    ]);
+
+    expect(evaluation.score.score).toBe(100);
+    expect(evaluation.score.verdict).toBe('inconclusive');
+    expect(evaluation.missingTools).toEqual(['details']);
+    expect(evaluation.missingParameters).toEqual([]);
+  });
+
+  it('counts infra and bad_params invocation verdicts as tool attempts', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        { name: 'search', invocations: [{ ok: true, verdict: 'correct' }] },
+        { name: 'details', invocations: [{ ok: false, verdict: 'infra' }] },
+        { name: 'book', invocations: [{ ok: false, verdict: 'bad_params' }] },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(report, 95, [
+      { name: 'search', parameters: [] },
+      { name: 'details', parameters: [] },
+      { name: 'book', parameters: [] },
+    ]);
+
+    expect(evaluation.score.verdict).toBe('pass');
+    expect(evaluation.missingTools).toEqual([]);
+  });
+
+  it('downgrades an otherwise passing audit when an advertised parameter has no verdict', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [{ ok: true, verdict: 'correct' }],
+          parameters: [{ name: 'origin', verdict: 'works' }],
+        },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(report, 95, [
+      { name: 'search', parameters: ['origin', 'destination'] },
+    ]);
+
+    expect(evaluation.score.score).toBe(100);
+    expect(evaluation.score.verdict).toBe('inconclusive');
+    expect(evaluation.missingTools).toEqual([]);
+    expect(evaluation.missingParameters).toEqual([{ tool: 'search', name: 'destination' }]);
+  });
+
+  it('passes when every parameter has an explicit verdict, including untestable', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [{ ok: true, verdict: 'correct' }],
+          parameters: [
+            { name: 'origin', verdict: 'works' },
+            { name: 'coupon', verdict: 'untestable', reason: 'no known valid code' },
+          ],
+        },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(report, 95, [
+      { name: 'search', parameters: ['origin', 'coupon'] },
+    ]);
+
+    expect(evaluation.score.verdict).toBe('pass');
+    expect(evaluation.missingParameters).toEqual([]);
+  });
+
+  it('does not let duplicate or unknown tool reports inflate the score', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [{ ok: false, verdict: 'tool_broken' }],
+        },
+        {
+          name: 'search',
+          invocations: Array.from({ length: 20 }, () => ({ ok: true, verdict: 'correct' })),
+        },
+        {
+          name: 'invented_tool',
+          invocations: Array.from({ length: 20 }, () => ({ ok: true, verdict: 'correct' })),
+        },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(report, 95, [{ name: 'search', parameters: [] }]);
+
+    expect(evaluation.score.correct).toBe(0);
+    expect(evaluation.score.broken).toBe(1);
+    expect(evaluation.score.graded).toBe(1);
+    expect(evaluation.score.verdict).toBe('fail');
+  });
+
+  it('counts only the first verdict for each expected parameter', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [{ ok: true, verdict: 'correct' }],
+          parameters: [
+            { name: 'query', verdict: 'broken', reason: 'wrong result' },
+            { name: 'query', verdict: 'works', reason: 'duplicate positive claim' },
+            { name: 'invented', verdict: 'works', reason: 'not in the workflow' },
+          ],
+        },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(report, 50, [{ name: 'search', parameters: ['query'] }]);
+
+    expect(evaluation.score.correct).toBe(1);
+    expect(evaluation.score.broken).toBe(1);
+    expect(evaluation.score.paramsWorking).toBe(0);
+    expect(evaluation.score.paramsBroken).toBe(1);
+    expect(evaluation.score.graded).toBe(2);
+  });
+
+  it('preserves a single explicit untestable verdict while discarding duplicates', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'search',
+          invocations: [{ ok: true, verdict: 'correct' }],
+          parameters: [
+            { name: 'coupon', verdict: 'untestable', reason: 'no known valid code' },
+            { name: 'coupon', verdict: 'works', reason: 'duplicate claim' },
+          ],
+        },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(report, 95, [
+      { name: 'search', parameters: ['coupon'] },
+    ]);
+
+    expect(evaluation.score.verdict).toBe('pass');
+    expect(evaluation.score.paramsUntestable).toBe(1);
+    expect(evaluation.score.paramsWorking).toBe(0);
+    expect(evaluation.missingParameters).toEqual([]);
   });
 });
 
@@ -486,6 +713,14 @@ describe('audit prompt construction', () => {
       'Promo/coupon/voucher/discount-code parameters require a known valid code',
     );
     expect(prompt).toContain('do not invent a random code and call an unchanged response no_op');
+  });
+
+  it('requires affirmative evidence before conditional parameters are graded defective', async () => {
+    const prompt = await Bun.file(new URL('../prompts/audit-agent.md', import.meta.url)).text();
+
+    expect(prompt).toContain('A single unchanged comparison is not enough for conditional inputs');
+    expect(prompt).toContain('An empty result is not automatically broken');
+    expect(prompt).toContain('Preserve that ambiguity for the compiler or human reviewer');
   });
 
   it('prioritizes unverified params without exempting bot-defended idempotent reads', () => {

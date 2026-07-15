@@ -41,6 +41,43 @@ function makeSummaryRequest(seq: number, timestamp: number): Session['requests']
 }
 
 describe('compile tools state hints', () => {
+  it('surfaces existing artifacts and durable feedback for a bounded revision', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-compile-revision-'));
+    try {
+      mkdirSync(pathJoin(root, 'notes'), { recursive: true });
+      writeFileSync(pathJoin(root, 'workflow.json'), '{"toolName":"search_items"}');
+      writeFileSync(pathJoin(root, '.live-verification.json'), '{"verdict":"changes_required"}');
+      writeFileSync(pathJoin(root, 'notes', 'audit-feedback.md'), 'alternate input failed');
+
+      const session: Session = {
+        site: 'test',
+        startedAt: '2026-05-04T00:00:00.000Z',
+        url: 'https://example.com/start',
+        imprintVersion: '0.1.0',
+        requests: [],
+        events: [],
+        narration: [],
+        cookieSnapshots: [],
+        storageSnapshots: [],
+      };
+      const summaryTool = buildCompileTools(session, root, '/tmp/session.json', {
+        revisionMode: true,
+      }).find((tool) => tool.name === 'read_session_summary');
+      if (!summaryTool) throw new Error('missing read_session_summary');
+
+      const summary = JSON.parse((await summaryTool.handler({})).result);
+      expect(summary.revisionContext).toMatchObject({
+        mode: 'revise_existing_artifact',
+        existingArtifacts: [{ path: 'workflow.json' }],
+        durableDiagnostics: [{ path: '.live-verification.json' }],
+        feedbackNotes: [{ path: 'notes/audit-feedback.md' }],
+      });
+      expect(summary.revisionContext.instruction).toContain('not a from-scratch compile');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('surfaces redacted equality between an earlier Set-Cookie and a later request header', async () => {
     const session: Session = {
       site: 'test',
@@ -607,10 +644,147 @@ describe('extract', () => {
         ],
       });
 
-      expect(failures.some((f) => f.includes('not templated'))).toBe(true);
+      expect(failures.some((f) => f.includes('no valid disposition'))).toBe(true);
       expect(failures.some((f) => f.includes('max_price'))).toBe(true);
       expect(failures.some((f) => f.includes('sort_order'))).toBe(true);
       expect(failures.some((f) => f.includes('query'))).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts an omitted secondary likelyParam only when it is removed and documented', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-omitted-likelyparam-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'omitted-likelyparam-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://example.com/api/search?q=test',
+          headers: {},
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: JSON.stringify({ results: [] }),
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'search_items',
+            intent: { description: 'Search items' },
+            parameters: [{ name: 'query', type: 'string', description: 'Search query' }],
+            requests: [
+              {
+                method: 'GET',
+                url: 'https://example.com/api/search?q=${param.query}',
+                headers: { Accept: 'application/json' },
+              },
+            ],
+            limitations: [
+              {
+                feature: 'Maximum-price filter',
+                reason: 'No request field or live behavior in the recording grounds this filter.',
+                omittedParameters: ['max_price'],
+              },
+            ],
+            site: 'omitted-likelyparam-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const { failures, warnings } = await externalVerification(exampleDir, session, sessionPath, {
+        likelyParams: [
+          { name: 'query', type: 'string', description: 'Search query' },
+          { name: 'max_price', type: 'number', description: 'Maximum price filter' },
+        ],
+      });
+
+      expect(failures.some((failure) => failure.includes('max_price'))).toBe(false);
+      expect(warnings.some((warning) => warning.includes('max_price'))).toBe(true);
+      expect(warnings.some((warning) => warning.includes('intentionally omitted'))).toBe(true);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a documented likelyParam omission when the parameter remains public', async () => {
+    const repoRoot = pathJoin(import.meta.dir, '..');
+    const scratchRoot = pathJoin(repoRoot, '.context');
+    mkdirSync(scratchRoot, { recursive: true });
+    const exampleDir = mkdtempSync(pathJoin(scratchRoot, 'compile-public-omitted-param-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+
+    const session: Session = {
+      site: 'public-omitted-param-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/search',
+      imprintVersion: '0.1.0',
+      requests: [],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify(
+          {
+            toolName: 'search_items',
+            intent: { description: 'Search items' },
+            parameters: [
+              { name: 'max_price', type: 'number', description: 'Maximum price filter' },
+            ],
+            requests: [{ method: 'GET', url: 'https://example.com/api/search', headers: {} }],
+            limitations: [
+              {
+                feature: 'Maximum-price filter',
+                reason: 'No grounded request field.',
+                omittedParameters: ['max_price'],
+              },
+            ],
+            site: 'public-omitted-param-fixture',
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const { failures } = await externalVerification(exampleDir, session, sessionPath, {
+        likelyParams: [{ name: 'max_price', type: 'number', description: 'Maximum price filter' }],
+      });
+
+      expect(failures.some((failure) => failure.includes('max_price'))).toBe(true);
+      expect(failures.some((failure) => failure.includes('valid disposition'))).toBe(true);
     } finally {
       rmSync(exampleDir, { recursive: true, force: true });
     }
@@ -1065,7 +1239,8 @@ test('live API call returns trips', () => {
       const { failures } = await externalVerification(exampleDir, session, sessionPath);
       expect(
         failures.some(
-          (f) => f.includes('baseline live workflow test') && f.includes('runWorkflowWithLadder'),
+          (f) =>
+            f.includes('baseline live workflow test') && f.includes('runCapturedIntegrationCase'),
         ),
       ).toBe(true);
     } finally {
@@ -2031,6 +2206,41 @@ test('live API call returns upcoming trips for the authenticated account', () =>
 `;
     expect(hasLiveBaselineWorkflowTest(tautologicalSrc)).toBe(false);
     expect(hasLiveBaselineWorkflowTest(integrationSrc)).toBe(true);
+  });
+
+  it('accepts the compile-only captured wrapper as a real baseline workflow call', () => {
+    expect(
+      hasLiveBaselineWorkflowTest(`
+        test('live API call returns data', async () => {
+          const { result } = await runCapturedIntegrationCase({
+            caseName: 'live API call returns data',
+            workflowPath: WORKFLOW_PATH,
+            params: { query: 'tires' },
+          });
+          expect(result.ok).toBe(true);
+        });
+      `),
+    ).toBe(true);
+  });
+
+  it('counts a green captured-wrapper param test as live coverage', () => {
+    expect(
+      classifyParamCoverage({
+        likelyParams: [{ name: 'query' }],
+        integrationSrc: `
+          test('param:query filters results', async () => {
+            const { result } = await runCapturedIntegrationCase({
+              caseName: 'param:query filters results',
+              workflowPath: WORKFLOW_PATH,
+              params: { query: 'tires' },
+            });
+            expect(result.ok).toBe(true);
+          });
+        `,
+        passedTests: new Set(['param:query filters results']),
+        integrationOutcome: 'passed',
+      }).paramVerification,
+    ).toEqual([{ name: 'query', verified: true }]);
   });
 
   it('rejects a baseline test that exits green on a failed workflow result', () => {

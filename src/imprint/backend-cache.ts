@@ -15,7 +15,14 @@ export type BackendsCacheStatus =
       cache: BackendsCache;
     }
   | {
-      status: 'stale' | 'invalid';
+      status: 'stale';
+      path: string;
+      cache: BackendsCache;
+      reason: string;
+      remediation: string;
+    }
+  | {
+      status: 'invalid';
       path: string;
       reason: string;
       remediation: string;
@@ -66,6 +73,15 @@ export function loadBackendsCacheStatus(
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8'));
     const parsed = BackendsCacheSchema.parse(raw);
+    const invalidPreferredReason = invalidPreferredOrderReason(parsed);
+    if (invalidPreferredReason) {
+      if (opts.warn !== false) {
+        process.stderr.write(
+          `[imprint] backends.json at ${path} has unsafe preferred backends — ignoring (run \`${remediation}\` to regenerate): ${invalidPreferredReason}\n`,
+        );
+      }
+      return { status: 'invalid', path, reason: invalidPreferredReason, remediation };
+    }
     if (parsed.schemaVersion && parsed.schemaVersion >= 2 && parsed.workflowHash) {
       const workflowPath = pathResolve(toolDir, 'workflow.json');
       if (existsSync(workflowPath)) {
@@ -77,18 +93,9 @@ export function loadBackendsCacheStatus(
               `[imprint] backends.json at ${path} is stale for current workflow — ignoring (run \`${remediation}\` to regenerate)\n`,
             );
           }
-          return { status: 'stale', path, reason, remediation };
+          return { status: 'stale', path, cache: parsed, reason, remediation };
         }
       }
-    }
-    const invalidPreferredReason = invalidPreferredOrderReason(parsed);
-    if (invalidPreferredReason) {
-      if (opts.warn !== false) {
-        process.stderr.write(
-          `[imprint] backends.json at ${path} has unsafe preferred backends — ignoring (run \`${remediation}\` to regenerate): ${invalidPreferredReason}\n`,
-        );
-      }
-      return { status: 'invalid', path, reason: invalidPreferredReason, remediation };
     }
     return { status: 'ok', path, cache: parsed };
   } catch (err) {

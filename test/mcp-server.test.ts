@@ -2,9 +2,10 @@ import { describe, expect, it } from 'bun:test';
 import {
   AuthContinuationStore,
   buildJsonSchema,
+  buildToolDescription,
   runSerializedBySite,
 } from '../src/imprint/mcp-server.ts';
-import type { WorkflowParameter } from '../src/imprint/types.ts';
+import type { Workflow, WorkflowParameter } from '../src/imprint/types.ts';
 
 function deferred<T = void>(): {
   promise: Promise<T>;
@@ -91,6 +92,27 @@ describe('buildJsonSchema', () => {
     });
     const props = schema.properties as Record<string, { type?: string } | undefined>;
     expect(props.continuation?.type).toBe('string');
+  });
+});
+
+describe('buildToolDescription', () => {
+  it('surfaces agent-authored capability limitations and omitted inputs', () => {
+    const workflow = {
+      intent: { description: 'Search rental cars' },
+      limitations: [
+        {
+          feature: 'Vehicle-class filter',
+          reason: 'The recording did not contain a grounded request field for this filter.',
+          omittedParameters: ['vehicle_class'],
+        },
+      ],
+    } as Workflow;
+
+    const description = buildToolDescription(workflow);
+    expect(description).toContain('Known limitations:');
+    expect(description).toContain('Vehicle-class filter');
+    expect(description).toContain('The recording did not contain');
+    expect(description).toContain('Omitted inputs: vehicle_class');
   });
 });
 

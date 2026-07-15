@@ -257,6 +257,28 @@ const WorkflowRequestSchema = z.object({
       timeoutMs: z.number().int().positive().optional(),
       pollIntervalMs: z.number().int().positive().optional(),
       urlIncludes: z.string().min(1).optional(),
+      /** Wait until the rendered document contains this CSS selector before
+       * snapshotting outerHTML. Useful for pages whose meaningful results
+       * hydrate after the load event. */
+      selector: z.string().min(1).optional(),
+      /** Optional browser interactions performed after the initial navigation
+       * predicate is satisfied. This is a generic escape hatch for workflows
+       * whose next request is assembled from private in-page state rather than
+       * values serialized into HTML. */
+      actions: z
+        .array(
+          z
+            .object({
+              action: z.literal('click'),
+              selector: z.string().min(1),
+            })
+            .strict(),
+        )
+        .min(1)
+        .optional(),
+      /** After navigation actions run, wait for this rendered selector before
+       * snapshotting the final document. */
+      resultSelector: z.string().min(1).optional(),
       cookie: z
         .object({
           name: z.string().min(1),
@@ -371,15 +393,30 @@ export const WorkflowSchema = z.object({
    *
    *  Return value:
    *  - `string` — the transformed URL (backward-compatible).
-   *  - `{ url?: string; body?: string; headers?: Record<string, string>; skip?: boolean }` —
+   *  - `{ url?: string; body?: string; headers?: Record<string, string>; navigation?: object; skip?: boolean }` —
    *    URL plus optional body and header overrides for complex body formats
    *    (JSPB, nested JSON-in-form) where placeholder substitution alone
-   *    cannot handle the encoding. `skip: true` skips this request, for
+   *    cannot handle the encoding. `navigation` may supply dynamic browser
+   *    navigation actions derived from resolved parameters. `skip: true` skips this request, for
    *    conditional follow-up requests such as pagination/detail calls.
    *
    *  The optional 4th arg `params` carries the resolved workflow parameters
    *  so the transform can construct request bodies programmatically. */
   requestTransformModule: z.string().optional(),
+  /** Agent-authored capability limitations retained with the generated tool.
+   * A compiler may deliberately omit a secondary feature or parameter when the
+   * recording and live evidence cannot support it without guessing. Runtime
+   * execution does not interpret these notes; MCP descriptions and teach
+   * summaries surface them to callers and operators. */
+  limitations: z
+    .array(
+      z.object({
+        feature: z.string().min(1),
+        reason: z.string().min(1),
+        omittedParameters: z.array(z.string().min(1)).optional(),
+      }),
+    )
+    .optional(),
   /** Did this tool's integration test produce live data at compile time?
    *
    *  - `liveVerified: true` (default when present) — the integration test

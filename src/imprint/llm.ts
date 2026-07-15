@@ -1238,6 +1238,22 @@ export function preferredAgentModel(provider: ProviderName): string {
   }
 }
 
+/** Model policy for the independent live semantic verifier. Keep this separate
+ * from the compile-agent preference so the reviewer is intentionally a fresh,
+ * differently configured agent. No fallback is allowed: an unavailable model
+ * makes verification inconclusive and the compile fails closed. */
+export function preferredVerificationModel(provider: ProviderName): string {
+  if (provider === 'codex-cli') return 'gpt-5.6-terra';
+  if (provider === 'claude-cli' || provider === 'anthropic-api') {
+    const latestSonnet = availableModelsForProvider(provider).find((option) =>
+      option.model.startsWith('claude-sonnet-'),
+    );
+    if (latestSonnet) return latestSonnet.model;
+    throw new Error(`No Sonnet model is available for verification on ${provider}`);
+  }
+  throw new Error(`Provider ${provider} does not support live semantic verification`);
+}
+
 interface ModelOption {
   model: string;
   isDefault: boolean;

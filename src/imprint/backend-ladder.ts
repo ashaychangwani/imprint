@@ -1601,43 +1601,12 @@ export async function runWorkflowWithLadder(opts: {
   if (!existsSync(opts.workflowPath)) {
     throw new Error(`runWorkflowWithLadder: workflow.json not found at ${opts.workflowPath}`);
   }
-  const workflow = WorkflowSchema.parse(JSON.parse(readFileSync(opts.workflowPath, 'utf8')));
-  const toolDir = dirname(opts.workflowPath);
+  const tool = resolveWorkflowTool(opts.workflowPath, opts.credentials);
+  const workflow = tool.workflow;
+  const toolDir = tool.dir;
   // assetRoot only matters for playbook-rung path resolution, which this
   // ladder skips. Use a conventional value for completeness.
   const assetRoot = pathResolve(toolDir, '..', '..');
-
-  const tool: ResolvedTool = {
-    site: workflow.site ?? '',
-    dir: toolDir,
-    workflow,
-    toolFn: async (params, fnOpts) => {
-      // Thread ALL execution opts the rungs pass — fetchImpl (stealth), and
-      // crucially initialState + credentials minted by fetch-bootstrap's
-      // Chrome navigation. The production generated tool fn (tool-loader path)
-      // forwards these to executeWorkflow; this test/probe-path toolFn must do
-      // the same, otherwise a bootstrap-block tool's csrf/session state is
-      // silently dropped here and the integration test fails a workflow that
-      // actually works in production — a false waiver.
-      const o = fnOpts as
-        | {
-            fetchImpl?: typeof fetch;
-            browser?: BrowserNavigationTransport;
-            initialState?: Record<string, unknown>;
-            credentials?: CredentialStore;
-          }
-        | undefined;
-      return executeWorkflow({
-        workflow,
-        params: params as Record<string, string | number | boolean>,
-        credentials: o?.credentials ?? opts.credentials,
-        workflowPath: opts.workflowPath,
-        fetchImpl: o?.fetchImpl,
-        browser: o?.browser,
-        initialState: o?.initialState,
-      });
-    },
-  };
 
   const ladder: ConcreteBackend[] = ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
 
@@ -1848,6 +1817,51 @@ export async function runWorkflowWithLadder(opts: {
     // exit cleanly (no 30-min hang) and never leaks a browser.
     armCompileCdpIdleClose();
   }
+}
+
+/** Build the same in-memory tool used by compile-time integration execution,
+ * without requiring the emitted index.ts that production discovery loads.
+ * Backend probing reuses this adapter during final pre-emission verification. */
+export function resolveWorkflowTool(
+  workflowPath: string,
+  fallbackCredentials?: CredentialStore,
+): ResolvedTool {
+  if (!existsSync(workflowPath)) {
+    throw new Error(`resolveWorkflowTool: workflow.json not found at ${workflowPath}`);
+  }
+  const workflow = WorkflowSchema.parse(JSON.parse(readFileSync(workflowPath, 'utf8')));
+  const toolDir = dirname(workflowPath);
+  return {
+    site: workflow.site ?? '',
+    dir: toolDir,
+    workflow,
+    toolFn: async (params, fnOpts) => {
+      // Thread ALL execution opts the rungs pass — fetchImpl (stealth), and
+      // crucially initialState + credentials minted by fetch-bootstrap's
+      // Chrome navigation. The production generated tool fn (tool-loader path)
+      // forwards these to executeWorkflow; this test/probe-path toolFn must do
+      // the same, otherwise a bootstrap-block tool's csrf/session state is
+      // silently dropped here and the integration test fails a workflow that
+      // actually works in production — a false waiver.
+      const o = fnOpts as
+        | {
+            fetchImpl?: typeof fetch;
+            browser?: BrowserNavigationTransport;
+            initialState?: Record<string, unknown>;
+            credentials?: CredentialStore;
+          }
+        | undefined;
+      return executeWorkflow({
+        workflow,
+        params: params as Record<string, string | number | boolean>,
+        credentials: o?.credentials ?? fallbackCredentials,
+        workflowPath,
+        fetchImpl: o?.fetchImpl,
+        browser: o?.browser,
+        initialState: o?.initialState,
+      });
+    },
+  };
 }
 
 export interface RenderedRequest {

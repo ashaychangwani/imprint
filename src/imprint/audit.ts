@@ -94,6 +94,74 @@ interface AuditScore {
   verdict: 'pass' | 'fail' | 'inconclusive' | 'timeout';
 }
 
+interface ExpectedAuditTool {
+  name: string;
+  parameters: readonly string[];
+}
+
+interface MissingAuditedParameter {
+  tool: string;
+  name: string;
+}
+
+interface AuditEvaluation {
+  score: AuditScore;
+  missingTools: string[];
+  missingParameters: MissingAuditedParameter[];
+}
+
+/**
+ * Restrict an agent-authored report to the connected workflows before it is
+ * scored. Agent output is not a trusted inventory: it can repeat a tool or a
+ * parameter, or mention a tool that was never connected. Taking the first
+ * report for each expected name keeps the result deterministic and, more
+ * importantly, prevents repeated/unknown positive verdicts from inflating the
+ * acceptance score. Later duplicates remain available in the persisted raw
+ * report for diagnosis; they simply carry no grading weight.
+ */
+function normalizeAuditReport(
+  report: AuditReport,
+  expectedTools: readonly ExpectedAuditTool[],
+): AuditReport {
+  const firstToolByName = new Map<string, AuditReport['tools'][number]>();
+  for (const tool of report.tools) {
+    if (!firstToolByName.has(tool.name)) firstToolByName.set(tool.name, tool);
+  }
+
+  const normalizedTools: AuditReport['tools'] = [];
+  const seenExpectedTools = new Set<string>();
+  for (const expected of expectedTools) {
+    if (seenExpectedTools.has(expected.name)) continue;
+    seenExpectedTools.add(expected.name);
+
+    const reported = firstToolByName.get(expected.name);
+    if (!reported) continue;
+
+    const firstParameterByName = new Map<
+      string,
+      AuditReport['tools'][number]['parameters'][number]
+    >();
+    for (const parameter of reported.parameters) {
+      if (!firstParameterByName.has(parameter.name)) {
+        firstParameterByName.set(parameter.name, parameter);
+      }
+    }
+
+    const parameters: AuditReport['tools'][number]['parameters'] = [];
+    const seenExpectedParameters = new Set<string>();
+    for (const name of expected.parameters) {
+      if (seenExpectedParameters.has(name)) continue;
+      seenExpectedParameters.add(name);
+      const parameter = firstParameterByName.get(name);
+      if (parameter) parameters.push(parameter);
+    }
+
+    normalizedTools.push({ ...reported, parameters });
+  }
+
+  return { ...report, tools: normalizedTools };
+}
+
 /**
  * Pure, deterministic scoring over the model's verdicts.
  *
@@ -107,7 +175,7 @@ interface AuditScore {
  * - `score = 100 * correct / graded` (0 when nothing was gradeable).
  * - Verdict: no gradeable invocations → `inconclusive` (re-run / site blocked
  *   us, not a code fail). Otherwise `pass` requires both `score >= minScore`
- *   AND at least `max(2, gradeableTools)` gradeable invocations, where
+ *   AND at least one gradeable unit per gradeable tool, where
  *   `gradeableTools` is the number of tools that produced ≥1 gradeable
  *   invocation. Scaling the signal floor to *gradeable* tools (not all tools)
  *   means a tool the auditor can never exercise — e.g. one that needs an opaque
@@ -175,7 +243,7 @@ export function computeAuditScore(report: AuditReport, minScore: number): AuditS
   }
   const graded = correct + broken;
   const score = graded === 0 ? 0 : (100 * correct) / graded;
-  const minGraded = Math.max(2, gradeableTools);
+  const minGraded = Math.max(1, gradeableTools);
   let verdict: AuditScore['verdict'];
   if (graded === 0) {
     verdict = 'inconclusive';
@@ -223,6 +291,82 @@ export function ungradeableToolNames(report: AuditReport): string[] {
   return report.tools.filter((t) => !toolHasGradeableAuditSignal(t)).map((t) => t.name);
 }
 
+/** Connected tools for which the auditor reported no invocation attempt.
+ * Merely naming a tool (or reporting parameter verdicts) is not evidence that
+ * its core operation was called. This is distinct from an ungradeable tool: an
+ * explicit infra/bad_params invocation is useful attempt evidence, while zero
+ * invocation records gives us no evidence that the auditor called it at all. */
+export function missingAuditedToolNames(
+  report: AuditReport,
+  expectedToolNames: readonly string[],
+): string[] {
+  const attemptedNames = new Set(
+    report.tools.filter((tool) => tool.invocations.length > 0).map((tool) => tool.name),
+  );
+  return expectedToolNames.filter((name) => !attemptedNames.has(name));
+}
+
+/** Advertised workflow parameters absent from the auditor's final report.
+ * Every explicit parameter verdict counts as coverage, including `untestable`:
+ * the latter is an honest result, while omission provides no evidence that the
+ * auditor considered the parameter at all. */
+export function missingAuditedParameters(
+  report: AuditReport,
+  expectedTools: readonly ExpectedAuditTool[],
+): MissingAuditedParameter[] {
+  const reportedParameters = new Map<string, Set<string>>();
+  for (const tool of report.tools) {
+    const names = reportedParameters.get(tool.name) ?? new Set<string>();
+    for (const parameter of tool.parameters) names.add(parameter.name);
+    reportedParameters.set(tool.name, names);
+  }
+
+  const missing: MissingAuditedParameter[] = [];
+  for (const tool of expectedTools) {
+    const covered = reportedParameters.get(tool.name) ?? new Set<string>();
+    for (const name of tool.parameters) {
+      if (!covered.has(name)) missing.push({ tool: tool.name, name });
+    }
+  }
+  return missing;
+}
+
+/** Complete deterministic audit evaluation, including report coverage. A high
+ * score cannot pass when the auditor omitted a connected tool or advertised
+ * parameter; timeouts remain the highest-priority terminal verdict. */
+export function evaluateAuditReport(
+  report: AuditReport,
+  minScore: number,
+  expectedTools: readonly ExpectedAuditTool[],
+  timedOut = false,
+): AuditEvaluation {
+  const normalizedReport = normalizeAuditReport(report, expectedTools);
+  const rawScore = computeAuditScore(normalizedReport, minScore);
+  const missingTools = missingAuditedToolNames(
+    normalizedReport,
+    expectedTools.map((tool) => tool.name),
+  );
+  const missingParameters = missingAuditedParameters(normalizedReport, expectedTools);
+
+  let verdict = rawScore.verdict;
+  if (timedOut) {
+    verdict = 'timeout';
+  } else if (
+    rawScore.verdict === 'pass' &&
+    (!auditHasCorrectSignal(normalizedReport) ||
+      missingTools.length > 0 ||
+      missingParameters.length > 0)
+  ) {
+    verdict = 'inconclusive';
+  }
+
+  return {
+    score: { ...rawScore, verdict },
+    missingTools,
+    missingParameters,
+  };
+}
+
 /** Advertised parameters the auditor could not differentially test (opaque enum
  *  with no constructible value, or a state-changing/bot-defended tool). Surfaced
  *  so an unverifiable parameter is visible rather than silently passing. */
@@ -248,6 +392,17 @@ interface RunAuditOptions {
   model?: string;
   timeoutMs?: number;
   json?: boolean;
+}
+
+export function buildAuditMcpEnvironment(assetRoot = imprintHomeDir()): Record<string, string> {
+  return {
+    // Codex MCP server `env` entries are an explicit environment, so relying on
+    // the audit driver's inherited IMPRINT_HOME can make an isolated audit
+    // silently fall back to ~/.imprint and expose stale tools.
+    IMPRINT_HOME: assetRoot,
+    IMPRINT_AUDIT_PACING_MS: '5000',
+    IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
+  };
 }
 
 export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
@@ -278,7 +433,11 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         );
       }
 
-      const toolNames = tools.map((t) => t.workflow.toolName);
+      const expectedTools = tools.map((tool) => ({
+        name: tool.workflow.toolName,
+        parameters: tool.workflow.parameters.map((parameter) => parameter.name),
+      }));
+      const toolNames = expectedTools.map((tool) => tool.name);
       log(`auditing ${toolCount} tool(s) for site "${opts.site}": ${toolNames.join(', ')}`);
 
       // Parameters that shipped live-unverified at compile time (Fix D). Tell the
@@ -320,8 +479,6 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         tokenDeps,
       });
 
-      const rawScore = computeAuditScore(drive.report, opts.minScore);
-
       // Cross-reference compile-time live verification with the audit grade.
       // The downgrade rule's purpose is to surface "flying blind" runs —
       // ones where the gate has no positive evidence the framework works
@@ -331,7 +488,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       //       chained tool was unreachable from auditor's connected set).
       //   v2: downgrade only if a flying-blind tool had infra invocations
       //       → still over-attributed transient page-state to defects.
-      //   v3 (current): downgrade only when the audit produced ZERO
+      //   v3: downgrade only when the audit produced ZERO
       //       `correct` invocations across ALL tools. If even one
       //       invocation graded correctly, that's positive evidence the
       //       framework + runtime work for at least that tool — the
@@ -339,21 +496,32 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       //       signal. Tools that couldn't be exercised still surface via
       //       `ungradeableTools` / `unverifiedAndUngradeable` for visibility
       //       without spoiling a verdict the score honestly earned.
+      //   v4: retain v3's treatment of tools explicitly reported as
+      //       blocked, but require every connected tool to appear in the final
+      //       report. An omitted tool has no audit evidence at all, so a report
+      //       covering only a successful subset is inconclusive rather than a
+      //       pass.
+      //   v5: likewise require an explicit verdict for every
+      //       advertised workflow parameter. `untestable` is valid coverage;
+      //       silently omitting a parameter is not.
+      //   v6 (current): a connected tool must have at least one invocation
+      //       record. Merely naming it in the report or discussing its
+      //       parameters is not evidence that its core operation was attempted;
+      //       infra and bad_params invocations still count as honest attempts.
       const ungradeableNames = ungradeableToolNames(drive.report);
+      const evaluation = evaluateAuditReport(
+        drive.report,
+        opts.minScore,
+        expectedTools,
+        drive.timedOut,
+      );
+      const { missingTools: missingToolNames, missingParameters } = evaluation;
       const untestableParamList = untestableParams(drive.report);
       const unverifiedAndUngradeable = tools
         .filter((t) => t.workflow.liveVerified === false)
         .map((t) => t.workflow.toolName)
         .filter((name) => ungradeableNames.includes(name));
-      const anyCorrectAcrossAudit = auditHasCorrectSignal(drive.report);
-      let verdict = rawScore.verdict;
-      // Timeout takes precedence over inconclusive downgrade.
-      if (drive.timedOut) {
-        verdict = 'timeout';
-      } else if (rawScore.verdict === 'pass' && !anyCorrectAcrossAudit) {
-        verdict = 'inconclusive';
-      }
-      const score: AuditScore = { ...rawScore, verdict };
+      const score = evaluation.score;
 
       // Persist the auditor transcript next to the report so a stuck/killed run
       // can be inspected after the fact.
@@ -392,6 +560,8 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         'imprint.audit.tool_count': toolCount,
         'imprint.audit.verdict': score.verdict,
         'imprint.audit.unverified_and_ungradeable_count': unverifiedAndUngradeable.length,
+        'imprint.audit.missing_tool_count': missingToolNames.length,
+        'imprint.audit.missing_parameter_count': missingParameters.length,
         'imprint.audit.timed_out': drive.timedOut,
         'imprint.audit.turns': drive.turns,
         ...(drive.totalCostUsd != null ? { 'imprint.audit.cost_usd': drive.totalCostUsd } : {}),
@@ -414,6 +584,11 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         site: opts.site,
         toolCount,
         ungradeableTools: ungradeableNames,
+        /** Connected tools without an invocation record. A partial audit
+         *  cannot pass merely because the auditor named an uncalled tool. */
+        missingTools: missingToolNames,
+        /** Advertised workflow parameters absent from the auditor's report. */
+        missingParameters,
         /** Advertised parameters the auditor could not differentially test. */
         untestableParams: untestableParamList,
         /** Tools that shipped without live verification at compile time AND
@@ -445,6 +620,8 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
           transcriptPath,
           costUsd: drive.totalCostUsd,
           unverifiedAndUngradeable,
+          missingTools: missingToolNames,
+          missingParameters,
           report: drive.report,
         });
       }
@@ -653,6 +830,7 @@ async function driveAuditWithCodex(opts: DriveAuditOptions): Promise<DriveAuditR
   const serverName = `imprint-audit-${opts.site}`;
   const bunPath = process.execPath;
   const mcpArgs = ['run', CLI_PATH, 'mcp-server', opts.site];
+  const mcpEnv = buildAuditMcpEnvironment();
 
   const unverifiedNote = buildUnverifiedParamNote(opts.unverifiedParams);
   const initialPrompt = `<system_instructions>
@@ -685,9 +863,11 @@ ${buildAuditInitialPrompt(opts, unverifiedNote)}`;
     '-c',
     `mcp_servers.${serverName}.tool_timeout_sec=300`,
     '-c',
-    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_PACING_MS=${JSON.stringify('5000')}`,
+    `mcp_servers.${serverName}.env.IMPRINT_HOME=${JSON.stringify(mcpEnv.IMPRINT_HOME)}`,
     '-c',
-    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS=${JSON.stringify('120000')}`,
+    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_PACING_MS=${JSON.stringify(mcpEnv.IMPRINT_AUDIT_PACING_MS)}`,
+    '-c',
+    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS=${JSON.stringify(mcpEnv.IMPRINT_AUDIT_TOOL_DEADLINE_MS)}`,
     '-c',
     'shell_environment_policy.inherit=all',
     '-',
@@ -701,8 +881,7 @@ ${buildAuditInitialPrompt(opts, unverifiedNote)}`;
       cwd: REPO_ROOT,
       env: {
         ...process.env,
-        IMPRINT_AUDIT_PACING_MS: '5000',
-        IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
+        ...mcpEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -1209,6 +1388,8 @@ function printSummary(
     transcriptPath?: string;
     costUsd?: number | null;
     unverifiedAndUngradeable: string[];
+    missingTools: string[];
+    missingParameters: MissingAuditedParameter[];
     report: AuditReport;
   },
 ): void {
@@ -1255,12 +1436,30 @@ function printSummary(
       `[imprint]   ${extra.unverifiedAndUngradeable.length} tool(s) flying blind (no live verification at compile, no graded calls at audit): ${extra.unverifiedAndUngradeable.join(', ')}`,
     );
   }
+  if (extra.missingTools.length > 0) {
+    console.log(
+      `[imprint]   ${extra.missingTools.length} connected tool(s) have no invocation attempt in the auditor report: ${extra.missingTools.join(', ')}`,
+    );
+  }
+  if (extra.missingParameters.length > 0) {
+    console.log(
+      `[imprint]   ${extra.missingParameters.length} advertised parameter(s) missing from the auditor report: ${extra.missingParameters.map((parameter) => `${parameter.tool}.${parameter.name}`).join(', ')}`,
+    );
+  }
   if (score.verdict === 'timeout') {
     console.log(
       `[imprint]   audit was killed at the ${formatDeadline(extra.timeoutMs)} deadline before finishing — partial results only. Re-run with a longer --timeout, or inspect the transcript to see where it stalled.`,
     );
   } else if (score.verdict === 'inconclusive') {
-    if (extra.unverifiedAndUngradeable.length > 0) {
+    if (extra.missingTools.length > 0) {
+      console.log(
+        '[imprint]   verdict downgraded to inconclusive because the auditor did not record an invocation attempt for every connected tool.',
+      );
+    } else if (extra.missingParameters.length > 0) {
+      console.log(
+        '[imprint]   verdict downgraded to inconclusive because the auditor did not report every advertised parameter.',
+      );
+    } else if (extra.unverifiedAndUngradeable.length > 0) {
       console.log(
         '[imprint]   verdict downgraded to inconclusive because at least one tool has zero live signal anywhere.',
       );

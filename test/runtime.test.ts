@@ -689,6 +689,132 @@ describe('requestTransformModule', () => {
     }
   });
 
+  it('forwards dynamic navigation actions from the request transform', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-navigation-'));
+    const navigations: Array<{ url: string; options: unknown }> = [];
+    const workflow: Workflow = {
+      toolName: 'test_navigation_transform',
+      intent: { description: 'test' },
+      parameters: [{ name: 'selector', type: 'string', description: 'selector' }],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/start',
+          headers: {},
+          mode: 'navigate',
+          navigation: { selector: '#ready' },
+        },
+      ],
+      site: 'test',
+      requestTransformModule: './request-transform.ts',
+    };
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform(_method, url, _responses, params) {
+          return {
+            url,
+            navigation: {
+              actions: [{ action: 'click', selector: params.selector }],
+              resultSelector: '#done',
+            },
+          };
+        }`,
+      );
+
+      const result = await executeWorkflow({
+        workflow,
+        params: { selector: '[data-id="S1"]' },
+        workflowPath: join(tmpDir, 'workflow.json'),
+        browser: {
+          async navigate(url, options) {
+            navigations.push({ url, options });
+            return new Response('{}', {
+              headers: { 'content-type': 'application/json' },
+            });
+          },
+          async snapshotCookies() {
+            return [];
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(navigations).toEqual([
+        {
+          url: 'https://example.com/start',
+          options: {
+            method: 'GET',
+            headers: {},
+            body: undefined,
+            selector: '#ready',
+            actions: [{ action: 'click', selector: '[data-id="S1"]' }],
+            resultSelector: '#done',
+          },
+        },
+      ]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a request transform returns malformed navigation actions', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-bad-navigation-'));
+    const workflow: Workflow = {
+      toolName: 'test_bad_navigation_transform',
+      intent: { description: 'test' },
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/start',
+          headers: {},
+          mode: 'navigate',
+        },
+      ],
+      site: 'test',
+      requestTransformModule: './request-transform.ts',
+    };
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform() {
+          return { navigation: { actions: [{ action: 'click', selector: '' }] } };
+        }`,
+      );
+
+      const result = await executeWorkflow({
+        workflow,
+        params: {},
+        workflowPath: join(tmpDir, 'workflow.json'),
+        browser: {
+          async navigate() {
+            throw new Error('navigation should not run');
+          },
+          async snapshotCookies() {
+            return [];
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: expect.stringContaining('invalid navigation click actions'),
+      });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('backward-compatible: string return still works as URL-only transform', async () => {
     let capturedUrl = '';
     const fetchMock = (async (url: string) => {

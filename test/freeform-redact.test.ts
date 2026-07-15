@@ -50,4 +50,23 @@ describe('redactFreeformText (trimmed policy set)', () => {
     expect(r.redactionsCount).toBe(0);
     expect(r.redacted).toBe(ids);
   });
+
+  it('redacts UUID and 40-hex values only when they are authentication tokens', () => {
+    const uuid = '123e4567-e89b-42d3-a456-426614174000';
+    const hex = '0123456789abcdef0123456789abcdef01234567';
+    const input = [
+      `request_id=${uuid}`,
+      `Authorization: Bearer ${uuid}`,
+      `"access_token":"${hex}"`,
+      `content_hash=${hex}`,
+    ].join('\n');
+
+    const result = redactFreeformText(input);
+
+    expect(result.redactionsCount).toBeGreaterThanOrEqual(2);
+    expect(result.redacted).toContain(`request_id=${uuid}`);
+    expect(result.redacted).toContain(`content_hash=${hex}`);
+    expect(result.redacted).not.toContain(`Bearer ${uuid}`);
+    expect(result.redacted).not.toContain(`"${hex}"`);
+  });
 });

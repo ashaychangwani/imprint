@@ -207,6 +207,61 @@ describe('selectMultiToolResumePlans (multi-tool --from-step reconstruction)', (
     expect(sel.skipped).toEqual([]);
   });
 
+  it('keeps non-interactive resumes primary-only unless --all-tools is explicit', () => {
+    const state: TeachState = {
+      workflows: {
+        'tool-secondary': {
+          ...toolWs({ candidate: 'tool-secondary' }),
+          candidate: {
+            toolName: 'tool-secondary',
+            primary: false,
+          } as WorkflowState['candidate'],
+        },
+        'tool-primary': {
+          ...toolWs({ candidate: 'tool-primary' }),
+          candidate: {
+            toolName: 'tool-primary',
+            primary: true,
+          } as WorkflowState['candidate'],
+        },
+      },
+    };
+
+    const primaryOnly = selectMultiToolResumePlans(state, 'tool-secondary', 'generate', {
+      noInteractive: true,
+    });
+    expect(primaryOnly.plans.map((plan) => plan.workflowKey)).toEqual(['tool-primary']);
+
+    const all = selectMultiToolResumePlans(state, 'tool-secondary', 'generate', {
+      noInteractive: true,
+      allTools: true,
+    });
+    expect(all.plans.map((plan) => plan.workflowKey).sort()).toEqual([
+      'tool-primary',
+      'tool-secondary',
+    ]);
+  });
+
+  it('excludes stale same-recording candidates that are absent from the current build plan', () => {
+    const state: TeachState = {
+      workflows: {
+        'search-current': toolWs({ candidate: 'search-current' }),
+        'compare-renamed': toolWs({ candidate: 'compare-renamed' }),
+        'compare-stale': toolWs({ candidate: 'compare-stale' }),
+      },
+    };
+    const sel = selectMultiToolResumePlans(state, 'search-current', 'generate', {
+      allTools: true,
+      plannedToolNames: new Set(['search-current', 'compare-renamed']),
+    });
+
+    expect(sel.plans.map((plan) => plan.workflowKey).sort()).toEqual([
+      'compare-renamed',
+      'search-current',
+    ]);
+    expect(sel.skipped).toEqual([{ workflowKey: 'compare-stale', reason: 'not-in-build-plan' }]);
+  });
+
   it('skips a tool from a different recording (would compile against the wrong session)', () => {
     const state: TeachState = {
       workflows: {

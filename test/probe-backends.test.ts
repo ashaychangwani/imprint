@@ -9,16 +9,19 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
+  canRebindBackendsCacheToWorkflow,
   loadBackendsCache,
   loadBackendsCacheStatus,
   persistRuntimeBackendsCache,
   probeAllBackends,
   probeCandidateBackendsForWorkflow,
   rankSuccessfulBackends,
+  rebindExistingBackendsCacheToWorkflow,
+  workflowCapabilityHash,
 } from '../src/imprint/probe-backends.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import { type BackendsCache, BackendsCacheSchema, WorkflowSchema } from '../src/imprint/types.ts';
@@ -260,6 +263,188 @@ describe('loadBackendsCache', () => {
 
     expect(loadBackendsCache('defaults', root, dir)?.preferredOrder).toEqual(['fetch']);
   });
+
+  it('rebinds a proven cache after metadata-only compiler annotations without probing', () => {
+    const dir = pathResolve(root, 'metadata', 'search_items');
+    mkdirSync(dir, { recursive: true });
+    const workflow = {
+      toolName: 'search_items',
+      intent: { description: 'Search items' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/items', headers: {} }],
+      site: 'metadata',
+      liveVerified: true,
+    };
+    writeFileSync(pathResolve(dir, 'workflow.json'), JSON.stringify(workflow));
+    writeFileSync(
+      pathResolve(dir, 'backends.json'),
+      JSON.stringify({
+        probedAt: '2026-07-14T00:00:00.000Z',
+        imprintVersion: '0.6.1',
+        schemaVersion: 2,
+        workflowHash: 'pre-metadata-workflow-hash',
+        capabilityHash: workflowCapabilityHash(WorkflowSchema.parse(workflow)),
+        preferredOrder: ['cdp-replay'],
+        results: { 'cdp-replay': { outcome: 'ok', durationMs: 1_000 } },
+      }),
+    );
+
+    const rebound = rebindExistingBackendsCacheToWorkflow(dir);
+
+    expect(rebound?.preferredOrder).toEqual(['cdp-replay']);
+    expect(rebound?.workflowHash).not.toBe('pre-metadata-workflow-hash');
+    expect(loadBackendsCacheStatus('metadata', root, dir, { warn: false }).status).toBe('ok');
+    expect(JSON.parse(readFileSync(pathResolve(dir, 'backends.json'), 'utf8')).workflowHash).toBe(
+      rebound?.workflowHash,
+    );
+  });
+
+  it('does not rebind a fetch-first cache after the workflow becomes browser-dependent', () => {
+    const plain = WorkflowSchema.parse({
+      toolName: 'reserve_item',
+      intent: { description: 'Reserve an item' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/items', headers: {} }],
+      site: 'capability-change',
+    });
+    const browserDependent = WorkflowSchema.parse({
+      ...plain,
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://example.com/cart',
+          headers: { 'x-csrf': '${state.csrf}' },
+          body: '{}',
+        },
+        {
+          method: 'POST',
+          url: 'https://example.com/reserve',
+          headers: { 'x-csrf': '${state.csrf}' },
+          body: '{}',
+        },
+      ],
+    });
+    const cache: BackendsCache = {
+      probedAt: '2026-07-14T00:00:00.000Z',
+      imprintVersion: '0.6.1',
+      schemaVersion: 2,
+      workflowHash: 'plain-workflow',
+      capabilityHash: workflowCapabilityHash(plain),
+      preferredOrder: ['fetch'],
+      results: { fetch: { outcome: 'ok', durationMs: 20 } },
+    };
+
+    expect(canRebindBackendsCacheToWorkflow({ workflow: browserDependent }, cache)).toBe(false);
+  });
+
+  it('does not rebind when a bootstrap capture starts requiring a live DOM', () => {
+    const htmlCapture = WorkflowSchema.parse({
+      toolName: 'search_items',
+      intent: { description: 'Search items' },
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/items?csrf=${state.csrf}',
+          headers: {},
+        },
+      ],
+      site: 'capture-change',
+      bootstrap: {
+        url: 'https://example.com',
+        captures: [
+          {
+            name: 'csrf',
+            source: 'html_regex',
+            pattern: 'csrf=([^&]+)',
+            capability: 'browser_bootstrap',
+          },
+        ],
+      },
+    });
+    const domCapture = WorkflowSchema.parse({
+      ...htmlCapture,
+      bootstrap: {
+        ...htmlCapture.bootstrap,
+        captures: [
+          {
+            name: 'csrf',
+            source: 'dom_attribute',
+            selector: 'meta[name="csrf"]',
+            attribute: 'content',
+            capability: 'browser_bootstrap',
+          },
+        ],
+      },
+    });
+    const cache: BackendsCache = {
+      probedAt: '2026-07-14T00:00:00.000Z',
+      imprintVersion: '0.6.1',
+      schemaVersion: 2,
+      workflowHash: 'html-workflow',
+      capabilityHash: workflowCapabilityHash(htmlCapture),
+      preferredOrder: ['fetch-bootstrap'],
+      results: { 'fetch-bootstrap': { outcome: 'ok', durationMs: 500 } },
+    };
+
+    expect(workflowCapabilityHash(domCapture)).not.toBe(workflowCapabilityHash(htmlCapture));
+    expect(canRebindBackendsCacheToWorkflow({ workflow: domCapture }, cache)).toBe(false);
+  });
+
+  it('normalizes capture requirements without hashing capture names or match details', () => {
+    const first = WorkflowSchema.parse({
+      toolName: 'search_items',
+      intent: { description: 'Search items' },
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/items',
+          headers: {},
+          captures: [
+            { name: 'cursor', source: 'json', path: '$.next', required: false },
+            { name: 'request_id', source: 'response_header', header: 'x-request-id' },
+          ],
+        },
+      ],
+      site: 'normalized-captures',
+      bootstrap: {
+        url: 'https://example.com',
+        captures: [{ name: 'csrf', source: 'html_regex', pattern: 'csrf=([^&]+)' }],
+      },
+    });
+    const cosmeticRevision = WorkflowSchema.parse({
+      ...first,
+      requests: [
+        {
+          ...first.requests[0],
+          captures: [
+            { name: 'trace', source: 'response_header', header: 'traceparent' },
+            { name: 'page', source: 'json', path: '$.pagination.cursor', required: false },
+          ],
+        },
+      ],
+      bootstrap: {
+        ...first.bootstrap,
+        captures: [{ name: 'token', source: 'html_regex', pattern: 'token="([^"]+)"' }],
+      },
+    });
+    const requestCaptureRevision = WorkflowSchema.parse({
+      ...first,
+      requests: [
+        {
+          ...first.requests[0],
+          captures: [
+            { name: 'cursor', source: 'text_regex', pattern: 'next=([^&]+)', required: false },
+            { name: 'request_id', source: 'response_header', header: 'x-request-id' },
+          ],
+        },
+      ],
+    });
+
+    expect(workflowCapabilityHash(cosmeticRevision)).toBe(workflowCapabilityHash(first));
+    expect(workflowCapabilityHash(requestCaptureRevision)).not.toBe(workflowCapabilityHash(first));
+  });
 });
 
 describe('backend preference ranking', () => {
@@ -305,6 +490,71 @@ describe('backend preference ranking', () => {
 });
 
 describe('runtime backend learning', () => {
+  it('does not rewrite a valid cache when its preferred backend succeeds', () => {
+    const dir = pathResolve(root, 'learn-preferred', 'search_learn');
+    mkdirSync(dir, { recursive: true });
+    const workflow = WorkflowSchema.parse({
+      toolName: 'search_learn',
+      intent: { description: 'x' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/a', headers: {} }],
+      site: 'learn-preferred',
+    });
+    const workflowJson = JSON.stringify(workflow);
+    writeFileSync(pathResolve(dir, 'workflow.json'), workflowJson);
+    const cachePath = pathResolve(dir, 'backends.json');
+    const original = `${JSON.stringify(
+      {
+        probedAt: '2026-05-03T22:00:00.000Z',
+        imprintVersion: '0.1.0',
+        schemaVersion: 2,
+        workflowHash: createHash('sha256').update(workflowJson).digest('hex'),
+        preferredOrder: ['cdp-replay', 'stealth-fetch'],
+        results: {
+          'cdp-replay': {
+            outcome: 'ok',
+            durationMs: 12_000,
+            coldDurationMs: 12_000,
+            warmDurationMs: 2_000,
+            rankingDurationMs: 2_000,
+          },
+          'stealth-fetch': { outcome: 'ok', durationMs: 20_000 },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    writeFileSync(cachePath, original);
+    const tool: ResolvedTool = {
+      site: 'learn-preferred',
+      dir,
+      workflow,
+      toolFn: async () => ({ ok: true, data: {} }),
+    };
+
+    const cache = persistRuntimeBackendsCache({
+      tool,
+      assetRoot: root,
+      usedBackend: 'cdp-replay',
+      attempts: [
+        {
+          backend: 'cdp-replay',
+          outcome: 'ok',
+          detail: 'succeeded with an empty semantic result',
+          durationMs: 38_000,
+        },
+      ],
+    });
+
+    expect(cache?.probedAt).toBe('2026-05-03T22:00:00.000Z');
+    expect(cache?.results['cdp-replay']).toMatchObject({
+      coldDurationMs: 12_000,
+      warmDurationMs: 2_000,
+      rankingDurationMs: 2_000,
+    });
+    expect(readFileSync(cachePath, 'utf8')).toBe(original);
+  });
+
   it('persists the successful runtime backend ahead of failed rungs', () => {
     const dir = pathResolve(root, 'learn', 'search_learn');
     mkdirSync(dir, { recursive: true });

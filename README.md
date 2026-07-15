@@ -184,6 +184,8 @@ The full order is `fetch → fetch-bootstrap → cdp-replay → stealth-fetch �
 
 For bot-protected sites, `imprint probe-backends <site> --tool <toolName>` writes a `backends.json` preference cache so cron and MCP start from the known-good backend instead of rediscovering blocked rungs. Use `imprint probe-backends <site> --all` to refresh every tool in a multi-tool site; `imprint mcp status` reports stale or invalid backend caches before they quietly fall back to the default ladder. CDP replay records both cold and warm timings when it succeeds: a timeout-safe cold start may rank by its fast warm runtime, but a cold start above the preferred threshold stays behind cold-safe backends in durable cache order.
 
+During `imprint teach`, the independent final verifier uses the same probe before it runs the compiler-written integration suite. Probe time is separate from the suite timeout, and verification pins the selected backend. Compiler revisions reuse that proven preference without probing; only a transport/network/browser failure can prompt a reprobe. Semantic failures return directly to the compiler. Live verifier progress and retained suite receipts are written beside the generated tool as `.live-verifier-log.jsonl` and `.live-verification-evidence.json`.
+
 Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder always has a DOM fallback.
 
 ---

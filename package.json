@@ -6,7 +6,8 @@
   "exports": {
     "./runtime": "./src/imprint/runtime.ts",
     "./types": "./src/imprint/types.ts",
-    "./backend-ladder": "./src/imprint/backend-ladder.ts"
+    "./backend-ladder": "./src/imprint/backend-ladder.ts",
+    "./compile-verification": "./src/imprint/compile-verification.ts"
   },
   "license": "MIT",
   "author": "Ashay Changwani",

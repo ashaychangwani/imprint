@@ -123,6 +123,14 @@ const PROTECTED_PATTERNS = [
   /\b[0-9a-f]{40}\b/gi,
 ];
 
+// UUIDs and 40-hex identifiers are normally protected from generic secret
+// heuristics because they are common, benign IDs in recorded payloads. When
+// the same shapes occur immediately in an authentication context, however,
+// that context is the useful signal: redact only the value while continuing to
+// preserve identical bare IDs elsewhere.
+const CONTEXTUAL_PROTECTED_SECRET_RE =
+  /(\b(?:authorization|proxy-authorization)\b["']?\s*[:=]\s*["']?(?:bearer\s+)?|\bbearer\s+|\b(?:oauth(?:2)?(?:[_ -]?access)?[_ -]?token|access[_ -]?token)\b["']?\s*[:=]\s*["']?)([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[0-9a-f]{40})(?=["'\s,;&)}\]]|$)/gi;
+
 const REDACTOR = createRedactum({
   policies: FREEFORM_POLICIES,
   replacement: () => '[REDACTED]',
@@ -145,24 +153,37 @@ export function redactFreeformText(text: string): FreeformRedaction {
     return { redacted: text, redactionsCount: 0 };
   }
 
-  const protectedRanges = collectProtectedRanges(text);
+  let contextualRedactions = 0;
+  const contextuallyRedacted = text.replace(
+    CONTEXTUAL_PROTECTED_SECRET_RE,
+    (_match, prefix: string) => {
+      contextualRedactions++;
+      return `${prefix}[REDACTED]`;
+    },
+  );
+
+  const protectedRanges = collectProtectedRanges(contextuallyRedacted);
   if (protectedRanges.length === 0) {
-    return redactUnprotectedText(text);
+    const result = redactUnprotectedText(contextuallyRedacted);
+    return {
+      redacted: result.redacted,
+      redactionsCount: contextualRedactions + result.redactionsCount,
+    };
   }
 
   let redacted = '';
   let cursor = 0;
-  let redactionsCount = 0;
+  let redactionsCount = contextualRedactions;
   for (const range of protectedRanges) {
-    const segment = text.slice(cursor, range.start);
+    const segment = contextuallyRedacted.slice(cursor, range.start);
     const segmentResult = redactUnprotectedText(segment);
     redacted += segmentResult.redacted;
     redactionsCount += segmentResult.redactionsCount;
-    redacted += text.slice(range.start, range.end);
+    redacted += contextuallyRedacted.slice(range.start, range.end);
     cursor = range.end;
   }
 
-  const tail = redactUnprotectedText(text.slice(cursor));
+  const tail = redactUnprotectedText(contextuallyRedacted.slice(cursor));
   redacted += tail.redacted;
   redactionsCount += tail.redactionsCount;
 
