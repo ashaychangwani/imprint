@@ -6,12 +6,13 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join as pathJoin } from 'node:path';
+import { dirname, join as pathJoin } from 'node:path';
 import {
   LIVE_VERIFICATION_EVIDENCE_FILE,
   LiveVerificationReportSchema,
@@ -688,6 +689,9 @@ describe('live verifier backend preparation and suite receipts', () => {
     expect(result.evidence).toEqual([]);
     expect(result.receipt.status).toBe('failed');
     expect(existsSync(pathJoin(toolDir, 'second-ran'))).toBe(false);
+    expect(readlinkSync(pathJoin(dirname(dirname(toolDir)), 'node_modules', 'imprint'))).toBe(
+      pathJoin(import.meta.dir, '..'),
+    );
     const records = readPersistedLiveVerificationEvidence(
       pathJoin(toolDir, LIVE_VERIFICATION_EVIDENCE_FILE),
     );

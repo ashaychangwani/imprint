@@ -32,6 +32,7 @@ import {
   type probeResolvedTool,
   rebindBackendsCacheToWorkflow,
 } from './probe-backends.ts';
+import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import { loadCredentialStore } from './runtime.ts';
 import { isSensitiveKey } from './sensitive-keys.ts';
 import { buildZodValidator } from './tool-loader.ts';
@@ -258,6 +259,11 @@ export async function runLiveIntegrationSuite(opts: {
   reason?: string;
   sessionLabel?: string;
 }): Promise<LiveIntegrationSuiteResult> {
+  // The suite is launched directly from the generated tool directory, bypassing
+  // normal tool discovery. Repair a stale global/worktree runtime link here so
+  // imports such as `imprint/compile-verification` resolve against this running
+  // Imprint installation.
+  ensureImprintRuntimeLink(dirname(dirname(opts.toolDir)));
   const integrationPath = pathJoin(opts.toolDir, 'integration.test.ts');
   if (!existsSync(integrationPath)) throw new Error('integration.test.ts is missing');
   const workflowPath = pathJoin(opts.toolDir, 'workflow.json');
