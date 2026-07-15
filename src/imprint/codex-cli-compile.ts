@@ -21,7 +21,7 @@ import type {
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
-import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
+import { COMPILE_SENTINELS, compileDeadlineAfterVerification } from './mcp-compile-server.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   endTraceSpan,
@@ -43,7 +43,6 @@ const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
 const MCP_SERVER_NAME = 'imprint-compile';
 const MAX_VERIFICATION_CYCLES = 5;
-const MIN_MCP_TOOL_TIMEOUT_SEC = 300;
 const MAX_MCP_TOOL_TIMEOUT_SEC = 1800;
 
 function formatRevisionMode(enabled: boolean | undefined): string {
@@ -151,6 +150,7 @@ async function compileViaCodexCliImpl(
     COMPILE_SENTINELS.done,
     COMPILE_SENTINELS.giveUp,
     COMPILE_SENTINELS.checkpoint,
+    COMPILE_SENTINELS.verificationState,
   ]) {
     const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
@@ -239,7 +239,9 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
   const model = opts.model ?? preferredAgentModel('codex-cli');
   const initialTokenCount = resolveTraceTokenCount(null, initialPrompt);
   const captureLlmIo = traceLlmIoEnabled();
-  const mcpToolTimeoutSec = resolveMcpToolTimeoutSec(opts.deadlineMs);
+  // done() owns a separately bounded live-verification phase, so its transport
+  // timeout cannot be derived from the compiler's remaining reasoning budget.
+  const mcpToolTimeoutSec = MAX_MCP_TOOL_TIMEOUT_SEC;
   setSpanAttributes(traceSpan, {
     ...llmSpanAttributes({
       provider: 'codex-cli',
@@ -375,14 +377,6 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
   return result;
 }
 
-function resolveMcpToolTimeoutSec(deadlineMs: number, now = Date.now()): number {
-  const remainingSec = Math.ceil(Math.max(0, deadlineMs - now) / 1000);
-  return Math.max(
-    MIN_MCP_TOOL_TIMEOUT_SEC,
-    Math.min(MAX_MCP_TOOL_TIMEOUT_SEC, remainingSec || MIN_MCP_TOOL_TIMEOUT_SEC),
-  );
-}
-
 function buildAuthCodexInitialPrompt(systemPrompt: string, initialPrompt: string): string {
   return `<system_instructions>
 ${systemPrompt}
@@ -464,13 +458,26 @@ async function driveJsonl(
     }, graceMs);
     forceTimer.unref?.();
   };
-  const deadlineTimer = setTimeout(
-    () => {
-      log('wall-clock deadline exceeded, terminating codex');
-      terminateChild(5000);
-    },
-    Math.max(0, opts.deadlineMs - Date.now()),
-  );
+  let childExited = false;
+  const scheduleDeadlineCheck = (): ReturnType<typeof setTimeout> => {
+    const effectiveDeadlineMs = compileDeadlineAfterVerification(
+      opts.absoluteToolDir,
+      opts.deadlineMs,
+    );
+    return setTimeout(
+      () => {
+        if (childExited) return;
+        if (Date.now() < compileDeadlineAfterVerification(opts.absoluteToolDir, opts.deadlineMs)) {
+          deadlineTimer = scheduleDeadlineCheck();
+          return;
+        }
+        log('wall-clock deadline exceeded, terminating codex');
+        terminateChild(5000);
+      },
+      Math.max(0, effectiveDeadlineMs - Date.now()),
+    );
+  };
+  let deadlineTimer = scheduleDeadlineCheck();
 
   let stdoutBuf = '';
   child.stdout?.on('data', (chunk: Buffer) => {
@@ -621,6 +628,7 @@ async function driveJsonl(
       finish(-1);
     });
   });
+  childExited = true;
   clearTimeout(deadlineTimer);
   if (currentTurnSpan) endTraceSpan(currentTurnSpan);
   for (const span of toolSpans.values()) endTraceSpan(span);
@@ -752,7 +760,7 @@ async function driveJsonl(
     };
   }
 
-  if (Date.now() > opts.deadlineMs) {
+  if (Date.now() > compileDeadlineAfterVerification(opts.absoluteToolDir, opts.deadlineMs)) {
     return {
       success: false,
       outcome: 'timeout',

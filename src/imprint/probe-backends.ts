@@ -230,7 +230,7 @@ export async function probeResolvedTool(
     imprintVersion: VERSION,
     schemaVersion: 2,
     workflowHash: workflowHash(tool.workflow),
-    capabilityHash: capabilityHash(tool.workflow),
+    capabilityHash: workflowCapabilityHash(tool.workflow),
     preferredOrder,
     results,
   };
@@ -323,14 +323,37 @@ function workflowHash(workflow: ResolvedTool['workflow']): string {
     .digest('hex');
 }
 
-function capabilityHash(workflow: ResolvedTool['workflow']): string {
+export function workflowCapabilityHash(workflow: ResolvedTool['workflow']): string {
   const caps = {
     bootstrap: Boolean(workflow.bootstrap),
-    captures: workflow.requests.flatMap((r) =>
-      (r.captures ?? []).map((c) => `${c.source}:${c.name}:${c.capability}`),
-    ),
+    prefersCdpReplayFirst: prefersCdpReplayFirst(workflow),
+    requestModes: normalizedUnique(workflow.requests.map((request) => request.mode ?? 'fetch')),
+    captures: normalizedUnique([
+      ...(workflow.bootstrap?.captures ?? []).map(
+        (capture) => `bootstrap:${capture.source}:${capture.capability}:${capture.required}`,
+      ),
+      ...workflow.requests.flatMap((request) =>
+        (request.captures ?? []).map(
+          (capture) => `request:${capture.source}:${capture.capability}:${capture.required}`,
+        ),
+      ),
+    ]),
   };
   return createHash('sha256').update(JSON.stringify(caps)).digest('hex');
+}
+
+function normalizedUnique(values: string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+export function canRebindBackendsCacheToWorkflow(
+  tool: Pick<ResolvedTool, 'workflow'>,
+  cache: BackendsCache,
+): boolean {
+  return (
+    typeof cache.capabilityHash === 'string' &&
+    cache.capabilityHash === workflowCapabilityHash(tool.workflow)
+  );
 }
 
 /** Carry a previously proven backend preference across a compile-time workflow
@@ -342,10 +365,13 @@ export function rebindBackendsCacheToWorkflow(
   cache: BackendsCache,
   outPath = pathResolve(tool.dir, 'backends.json'),
 ): BackendsCache {
+  if (!canRebindBackendsCacheToWorkflow(tool, cache)) {
+    throw new Error('backend cache capabilities changed; run a fresh probe instead of rebinding');
+  }
   const rebound: BackendsCache = {
     ...cache,
     workflowHash: workflowHash(tool.workflow),
-    capabilityHash: capabilityHash(tool.workflow),
+    capabilityHash: workflowCapabilityHash(tool.workflow),
   };
   BackendsCacheSchema.parse(rebound);
   writeFileSync(outPath, `${JSON.stringify(rebound, null, 2)}\n`);
@@ -372,6 +398,7 @@ export function rebindExistingBackendsCacheToWorkflow(toolDir: string): Backends
     toolName: workflow.toolName,
   });
   if (status.status !== 'ok' && status.status !== 'stale') return null;
+  if (!canRebindBackendsCacheToWorkflow({ workflow }, status.cache)) return null;
   return rebindBackendsCacheToWorkflow({ workflow, dir: toolDir }, status.cache);
 }
 
@@ -462,7 +489,7 @@ export function persistRuntimeBackendsCache(opts: {
     imprintVersion: VERSION,
     schemaVersion: 2,
     workflowHash: workflowHash(opts.tool.workflow),
-    capabilityHash: capabilityHash(opts.tool.workflow),
+    capabilityHash: workflowCapabilityHash(opts.tool.workflow),
     preferredOrder,
     results,
   };

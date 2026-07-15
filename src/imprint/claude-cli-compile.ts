@@ -39,7 +39,7 @@ import type {
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
-import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
+import { COMPILE_SENTINELS, compileDeadlineAfterVerification } from './mcp-compile-server.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   endTraceSpan,
@@ -283,6 +283,7 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
     COMPILE_SENTINELS.done,
     COMPILE_SENTINELS.giveUp,
     COMPILE_SENTINELS.checkpoint,
+    COMPILE_SENTINELS.verificationState,
   ]) {
     const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
@@ -523,9 +524,19 @@ async function driveStreamJson(
   };
 
   const scheduleDeadlineCheck = (): ReturnType<typeof setTimeout> => {
-    const remaining = Math.max(0, currentDeadlineMs - Date.now());
+    const effectiveDeadlineMs = compileDeadlineAfterVerification(
+      opts.absoluteToolDir,
+      currentDeadlineMs,
+    );
+    const remaining = Math.max(0, effectiveDeadlineMs - Date.now());
     return setTimeout(async () => {
       if (childExited) return;
+      // done() verification runs in the MCP child. Re-read its lifecycle clock
+      // before killing the compiler so only reasoning time counts here.
+      if (Date.now() < compileDeadlineAfterVerification(opts.absoluteToolDir, currentDeadlineMs)) {
+        deadlineTimer = scheduleDeadlineCheck();
+        return;
+      }
       if (opts.onDeadlineReached) {
         const extensionMs = await opts.onDeadlineReached();
         if (childExited) return;
@@ -755,7 +766,11 @@ async function driveStreamJson(
   }
 
   // Wall-clock deadline exceeded?
-  if (Date.now() > currentDeadlineMs && !existsSync(doneSentinel) && !existsSync(giveUpSentinel)) {
+  if (
+    Date.now() > compileDeadlineAfterVerification(opts.absoluteToolDir, currentDeadlineMs) &&
+    !existsSync(doneSentinel) &&
+    !existsSync(giveUpSentinel)
+  ) {
     return {
       success: false,
       outcome: 'timeout',

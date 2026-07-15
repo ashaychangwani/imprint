@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -17,7 +17,7 @@ afterEach(() => {
 
 describe('live verifier MCP server', () => {
   it('joins a backend preparation already in flight instead of starting a duplicate probe', async () => {
-    const state: { current?: Promise<string> } = {};
+    const state: { current?: { promise: Promise<string>; forceReprobe: boolean } } = {};
     let starts = 0;
     let finish!: (value: string) => void;
     const start = () => {
@@ -26,8 +26,8 @@ describe('live verifier MCP server', () => {
         finish = resolve;
       });
     };
-    const first = joinBackendPreparation(state, start);
-    const second = joinBackendPreparation(state, start);
+    const first = joinBackendPreparation(state, false, start);
+    const second = joinBackendPreparation(state, false, start);
     expect(first.joined).toBe(false);
     expect(second.joined).toBe(true);
     expect(starts).toBe(1);
@@ -35,13 +35,38 @@ describe('live verifier MCP server', () => {
     expect(await first.promise).toBe('fetch');
     expect(await second.promise).toBe('fetch');
 
-    const third = joinBackendPreparation(state, async () => {
+    const third = joinBackendPreparation(state, false, async () => {
       starts++;
       return 'cdp-replay';
     });
     expect(third.joined).toBe(false);
     expect(await third.promise).toBe('cdp-replay');
     expect(starts).toBe(2);
+  });
+
+  it('queues a forced reprobe behind an ordinary preparation and lets later callers join it', async () => {
+    const state: { current?: { promise: Promise<string>; forceReprobe: boolean } } = {};
+    const finishes: Array<(value: string) => void> = [];
+    let starts = 0;
+    const start = () => {
+      starts++;
+      return new Promise<string>((resolve) => finishes.push(resolve));
+    };
+
+    const ordinary = joinBackendPreparation(state, false, start);
+    const forced = joinBackendPreparation(state, true, start);
+    const joinedForced = joinBackendPreparation(state, true, start);
+    expect(starts).toBe(1);
+    expect(forced.joined).toBe(false);
+    expect(joinedForced.joined).toBe(true);
+
+    finishes[0]?.('fetch');
+    expect(await ordinary.promise).toBe('fetch');
+    await Promise.resolve();
+    expect(starts).toBe(2);
+    finishes[1]?.('cdp-replay');
+    expect(await forced.promise).toBe('cdp-replay');
+    expect(await joinedForced.promise).toBe('cdp-replay');
   });
 
   it('stays alive through initialization and advertises only verifier tools', async () => {
@@ -189,16 +214,27 @@ describe('live verifier MCP server', () => {
     const client = new Client({ name: 'live-verifier-test', version: '1.0.0' });
     try {
       await client.connect(transport);
-      const first = await client.callTool({
-        name: 'run_live_integration_test',
-        arguments: { params: { query: 'tires' }, reason: 'initial semantic check' },
-      });
-      const second = await client.callTool({
-        name: 'run_live_integration_test',
-        arguments: { params: { query: 'tires' }, reason: 'confirm after backend review' },
-      });
+      const [first, second] = await Promise.all([
+        client.callTool({
+          name: 'run_live_integration_test',
+          arguments: { params: { query: 'tires' }, reason: 'initial semantic check' },
+        }),
+        client.callTool({
+          name: 'run_live_integration_test',
+          arguments: { params: { query: 'tires' }, reason: 'confirm after backend review' },
+        }),
+      ]);
       expect(first.isError).not.toBe(true);
       expect(second.isError).not.toBe(true);
+      const evidence = JSON.parse(
+        readFileSync(pathJoin(toolDir, '.live-verification-evidence.json'), 'utf8'),
+      ) as Array<{ label: string }>;
+      expect(
+        evidence
+          .map((item) => item.label)
+          .filter((label) => label.startsWith('targeted-call-'))
+          .sort(),
+      ).toEqual(['targeted-call-1', 'targeted-call-2']);
     } finally {
       await client.close();
       fixture.stop(true);

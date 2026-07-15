@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import {
@@ -8,6 +17,7 @@ import {
   LiveVerificationReportSchema,
   appendLiveVerifierLog,
   assertReportCoversWorkflowParameters,
+  backendPreparationDeadlineCreditMs,
   buildVerifierArtifactContext,
   hasSuiteReceiptForSession,
   mergeSemanticParamVerification,
@@ -15,6 +25,7 @@ import {
   persistLiveVerificationEvidence,
   prepareLiveVerificationBackend,
   readPersistedLiveVerificationEvidence,
+  registerOwnedProcessTreeCleanup,
   runLiveIntegrationSuite,
   semanticVerificationFailures,
   waitForOwnedProcessTree,
@@ -43,7 +54,12 @@ describe('verifier artifact context', () => {
     writeFileSync(
       pathJoin(siteDir, '.build-plan.json'),
       JSON.stringify({
-        perTool: [{ toolName: 'search_things', requiredInputs: [{ source: 'browser_state' }] }],
+        perTool: [
+          {
+            toolName: 'search_things',
+            requiredInputs: [{ source: 'browser_state' }],
+          },
+        ],
         dynamicValueFindings: [{ name: 'csrf' }],
       }),
     );
@@ -52,12 +68,18 @@ describe('verifier artifact context', () => {
       string,
       unknown
     >;
-    expect(context.workflow).toEqual({ toolName: 'search_things', requests: [] });
+    expect(context.workflow).toEqual({
+      toolName: 'search_things',
+      requests: [],
+    });
     expect(context.parser).toContain('parse');
     expect(context.integrationTests).toContain('live');
     expect(context.playbook).toContain('steps');
     expect(context.buildPlan).toEqual({
-      tool: { toolName: 'search_things', requiredInputs: [{ source: 'browser_state' }] },
+      tool: {
+        toolName: 'search_things',
+        requiredInputs: [{ source: 'browser_state' }],
+      },
       dynamicValueFindings: [{ name: 'csrf' }],
     });
   });
@@ -109,7 +131,12 @@ describe('live semantic verification report', () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-log-'));
     dirs.push(dir);
     const path = pathJoin(dir, '.live-verifier-log.jsonl');
-    appendLiveVerifierLog(path, { type: 'attempt.failed', attempt: 1, password: 'secret' });
+    appendLiveVerifierLog(path, {
+      type: 'attempt.failed',
+      attempt: 1,
+      password: 'secret',
+      stderr: 'request for bob@example.com used Authorization: Bearer secret-token-value',
+    });
     appendLiveVerifierLog(path, { type: 'attempt.started', attempt: 2 });
     const events = readFileSync(path, 'utf8')
       .trim()
@@ -117,6 +144,28 @@ describe('live semantic verification report', () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(events.map((event) => event.attempt)).toEqual([1, 2]);
     expect(events[0]?.password).toBe('[REDACTED]');
+    expect(events[0]?.stderr).not.toContain('bob@example.com');
+    expect(events[0]?.stderr).not.toContain('secret-token-value');
+  });
+
+  it('redacts shaped auth tokens in persisted verifier strings without hiding benign IDs', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-shaped-token-log-'));
+    dirs.push(dir);
+    const path = pathJoin(dir, '.live-verifier-log.jsonl');
+    const uuid = '123e4567-e89b-42d3-a456-426614174000';
+    const hex = '0123456789abcdef0123456789abcdef01234567';
+
+    appendLiveVerifierLog(path, {
+      type: 'tool.output',
+      stdout: `request_id=${uuid} Authorization: Bearer ${uuid}`,
+      stderr: `content_hash=${hex} access_token=${hex}`,
+    });
+
+    const persisted = readFileSync(path, 'utf8');
+    expect(persisted).toContain(`request_id=${uuid}`);
+    expect(persisted).toContain(`content_hash=${hex}`);
+    expect(persisted).not.toContain(`Bearer ${uuid}`);
+    expect(persisted).not.toContain(`access_token=${hex}`);
   });
 
   it('rejects a clean approval that quietly contains a non-working parameter', () => {
@@ -185,6 +234,8 @@ describe('live semantic verification report', () => {
     const persisted = JSON.parse(readFileSync(path, 'utf8')) as Array<Record<string, unknown>>;
     expect(persisted[0]?.label).toBe('baseline-search');
     expect((persisted[0]?.requestedParams as Record<string, unknown>).password).toBe('[REDACTED]');
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir).filter((name) => name.startsWith('evidence.json.tmp-'))).toEqual([]);
   });
 
   it('namespaces repeated call labels so compiler revisions retain both outputs', () => {
@@ -292,7 +343,13 @@ function fixtureTool(): {
       toolName: 'search_fixture',
       intent: { description: 'Search a fixture.' },
       parameters: [{ name: 'query', type: 'string', description: 'Search text.' }],
-      requests: [{ method: 'GET', url: 'https://example.com?q=${param.query}', headers: {} }],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com?q=${param.query}',
+          headers: {},
+        },
+      ],
       site: 'fixture-site',
     }),
   );
@@ -317,6 +374,190 @@ describe('live verifier backend preparation and suite receipts', () => {
     expect(Date.now() - startedAt).toBeLessThan(1_000);
   });
 
+  it('credits actual probe time but not valid-cache preparation time', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-deadline-'));
+    dirs.push(dir);
+    const logPath = pathJoin(dir, '.live-verifier-log.jsonl');
+    const startedAt = Date.parse('2026-07-14T00:00:00.000Z');
+    const events = [
+      {
+        timestamp: new Date(startedAt).toISOString(),
+        type: 'backend.prepare.started',
+        label: 'backend-preparation-1',
+      },
+      {
+        timestamp: new Date(startedAt + 10).toISOString(),
+        type: 'backend.prepare.completed',
+        label: 'backend-preparation-1',
+        reusedCache: true,
+        durationMs: 10,
+      },
+      {
+        timestamp: new Date(startedAt + 20).toISOString(),
+        type: 'backend.prepare.started',
+        label: 'backend-preparation-2',
+      },
+      {
+        timestamp: new Date(startedAt + 30_020).toISOString(),
+        type: 'backend.prepare.completed',
+        label: 'backend-preparation-2',
+        reusedCache: false,
+        durationMs: 30_000,
+      },
+      {
+        timestamp: new Date(startedAt + 30_030).toISOString(),
+        type: 'backend.prepare.started',
+        label: 'backend-preparation-3',
+      },
+    ];
+    writeFileSync(logPath, `${events.map((event) => JSON.stringify(event)).join('\n')}\n{partial`);
+    expect(backendPreparationDeadlineCreditMs(logPath, startedAt, startedAt + 50_030)).toBe(50_000);
+  });
+
+  it('escalates parent-signal cleanup when a detached child ignores SIGTERM', async () => {
+    const modulePath = pathJoin(process.cwd(), 'src', 'imprint', 'live-verifier.ts');
+    const childProgram =
+      'process.on("SIGTERM", () => {}); process.on("SIGINT", () => {}); setInterval(() => {}, 1000)';
+    const helperProgram = `
+      import { spawn } from 'node:child_process';
+      import { registerOwnedProcessTreeCleanup } from ${JSON.stringify(modulePath)};
+      process.on('SIGTERM', () => {});
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      registerOwnedProcessTreeCleanup(child, 50);
+      process.stdout.write(String(child.pid) + '\\n');
+      setInterval(() => {}, 1000);
+    `;
+    const helper = spawn(process.execPath, ['-e', helperProgram], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const childPid = await new Promise<number>((resolve, reject) => {
+      let stdout = '';
+      helper.stdout?.on('data', (chunk) => {
+        stdout += String(chunk);
+        const line = stdout.split('\n')[0];
+        if (line && /^\d+$/.test(line)) resolve(Number(line));
+      });
+      helper.once('error', reject);
+      helper.once('close', (code) => reject(new Error(`cleanup helper exited ${code}`)));
+    });
+    try {
+      helper.kill('SIGTERM');
+      let childAlive = true;
+      for (let attempt = 0; attempt < 20 && childAlive; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        try {
+          process.kill(childPid, 0);
+        } catch {
+          childAlive = false;
+        }
+      }
+      expect(childAlive).toBe(false);
+    } finally {
+      helper.kill('SIGKILL');
+      try {
+        process.kill(-childPid, 'SIGKILL');
+      } catch {
+        // The expected path already reaped the process group.
+      }
+    }
+  });
+
+  it('removes parent cleanup listeners immediately after normal completion', () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    const before = {
+      exit: process.listenerCount('exit'),
+      sigint: process.listenerCount('SIGINT'),
+      sigterm: process.listenerCount('SIGTERM'),
+    };
+    const unregister = registerOwnedProcessTreeCleanup(child, 50);
+    expect(process.listenerCount('exit')).toBe(before.exit + 1);
+    expect(process.listenerCount('SIGINT')).toBe(before.sigint + 1);
+    expect(process.listenerCount('SIGTERM')).toBe(before.sigterm + 1);
+
+    unregister();
+
+    expect(process.listenerCount('exit')).toBe(before.exit);
+    expect(process.listenerCount('SIGINT')).toBe(before.sigint);
+    expect(process.listenerCount('SIGTERM')).toBe(before.sigterm);
+    try {
+      if (child.pid === undefined) throw new Error('child process did not start');
+      process.kill(-child.pid, 'SIGKILL');
+    } catch {
+      child.kill('SIGKILL');
+    }
+  });
+
+  it('still reaps a stubborn grandchild after its direct child exits during shutdown', async () => {
+    const modulePath = pathJoin(process.cwd(), 'src', 'imprint', 'live-verifier.ts');
+    const grandchildProgram =
+      'process.on("SIGTERM", () => {}); process.on("SIGINT", () => {}); process.stdout.write("ready\\n"); setInterval(() => {}, 1000)';
+    const childProgram = `
+      const { spawn } = require('node:child_process');
+      const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildProgram)}], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      grandchild.stdout.once('data', () => {
+        process.stdout.write(String(grandchild.pid) + '\\n');
+      });
+      setInterval(() => {}, 1000);
+    `;
+    const helperProgram = `
+      import { spawn } from 'node:child_process';
+      import { registerOwnedProcessTreeCleanup } from ${JSON.stringify(modulePath)};
+      process.on('SIGTERM', () => {});
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const unregister = registerOwnedProcessTreeCleanup(child, 50);
+      child.once('close', unregister);
+      child.stdout.once('data', (chunk) => {
+        process.stdout.write(String(child.pid) + ':' + String(chunk));
+      });
+      setInterval(() => {}, 1000);
+    `;
+    const helper = spawn(process.execPath, ['-e', helperProgram], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const pids = await new Promise<{ child: number; grandchild: number }>((resolve, reject) => {
+      let stdout = '';
+      helper.stdout?.on('data', (chunk) => {
+        stdout += String(chunk);
+        const line = stdout.split('\n')[0];
+        const match = /^(\d+):(\d+)$/.exec(line ?? '');
+        if (match) resolve({ child: Number(match[1]), grandchild: Number(match[2]) });
+      });
+      helper.once('error', reject);
+      helper.once('close', (code) => reject(new Error(`cleanup helper exited ${code}`)));
+    });
+    try {
+      helper.kill('SIGTERM');
+      let grandchildAlive = true;
+      for (let attempt = 0; attempt < 20 && grandchildAlive; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        try {
+          process.kill(pids.grandchild, 0);
+        } catch {
+          grandchildAlive = false;
+        }
+      }
+      expect(grandchildAlive).toBe(false);
+    } finally {
+      helper.kill('SIGKILL');
+      try {
+        process.kill(-pids.child, 'SIGKILL');
+      } catch {
+        // The expected path already reaped the process group.
+      }
+    }
+  });
+
   it('reuses a valid backend cache without invoking the probe', async () => {
     const { toolDir, workflowPath, cache } = fixtureTool();
     writeFileSync(pathJoin(toolDir, 'backends.json'), JSON.stringify(cache));
@@ -335,15 +576,17 @@ describe('live verifier backend preparation and suite receipts', () => {
     expect(probes).toBe(0);
   });
 
-  it('rebinds a proven preference across compiler revisions without probing', async () => {
+  it('rebinds a proven preference across capability-preserving compiler revisions', async () => {
     const { toolDir, workflowPath, cache } = fixtureTool();
+    const { workflowCapabilityHash } = await import('../src/imprint/probe-backends.ts');
+    const workflow = JSON.parse(readFileSync(workflowPath, 'utf8'));
     writeFileSync(
       pathJoin(toolDir, 'backends.json'),
       JSON.stringify({
         ...cache,
         schemaVersion: 2,
         workflowHash: 'previous-compiler-revision',
-        capabilityHash: 'previous-capabilities',
+        capabilityHash: workflowCapabilityHash(workflow),
       }),
     );
     let probes = 0;
@@ -365,6 +608,40 @@ describe('live verifier backend preparation and suite receipts', () => {
     expect(rebound.workflowHash).not.toBe('previous-compiler-revision');
     expect(rebound.preferredOrder).toEqual(['fetch']);
     expect(probes).toBe(0);
+  });
+
+  it('probes again when a stale cache was proven for different capabilities', async () => {
+    const { toolDir, workflowPath, cache } = fixtureTool();
+    writeFileSync(
+      pathJoin(toolDir, 'backends.json'),
+      JSON.stringify({
+        ...cache,
+        schemaVersion: 2,
+        workflowHash: 'previous-compiler-revision',
+        capabilityHash: 'different-capabilities',
+      }),
+    );
+    let probes = 0;
+    const result = await prepareLiveVerificationBackend({
+      workflowPath,
+      params: { query: 'tires' },
+      reason: 'workflow capabilities changed',
+      probe: async (_opts, _root, _tool, outPath) => {
+        probes++;
+        if (!outPath) throw new Error('expected explicit cache path');
+        const { workflowCapabilityHash } = await import('../src/imprint/probe-backends.ts');
+        const current = {
+          ...cache,
+          schemaVersion: 2 as const,
+          workflowHash: 'current',
+          capabilityHash: workflowCapabilityHash(JSON.parse(readFileSync(workflowPath, 'utf8'))),
+        };
+        writeFileSync(outPath, JSON.stringify(current));
+        return { cache: current, outPath };
+      },
+    });
+    expect(result.reusedCache).toBe(false);
+    expect(probes).toBe(1);
   });
 
   it('uses the existing resolved-tool probe for a missing cache and for forced reprobe', async () => {
@@ -402,7 +679,11 @@ describe('live verifier backend preparation and suite receipts', () => {
       `import { expect, test } from 'bun:test';\nimport { writeFileSync } from 'node:fs';\ntest('first fails', () => expect(1).toBe(2));\ntest('second must not run', () => writeFileSync('second-ran', 'yes'));\n`,
     );
     const logPath = pathJoin(toolDir, '.live-verifier-log.jsonl');
-    const result = await runLiveIntegrationSuite({ toolDir, logPath, timeoutMs: 5_000 });
+    const result = await runLiveIntegrationSuite({
+      toolDir,
+      logPath,
+      timeoutMs: 5_000,
+    });
     expect(result.exitCode).not.toBe(0);
     expect(result.evidence).toEqual([]);
     expect(result.receipt.status).toBe('failed');
@@ -465,7 +746,11 @@ describe('live verifier backend preparation and suite receipts', () => {
       pathJoin(toolDir, LIVE_VERIFICATION_EVIDENCE_FILE),
     );
     expect(records).toContainEqual(
-      expect.objectContaining({ kind: 'suite', status: 'aborted', completedCallLabels: [] }),
+      expect.objectContaining({
+        kind: 'suite',
+        status: 'aborted',
+        completedCallLabels: [],
+      }),
     );
   });
 });

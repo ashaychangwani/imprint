@@ -44,6 +44,7 @@ import {
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { localSiteDir } from './paths.ts';
+import { rebindExistingBackendsCacheToWorkflow } from './probe-backends.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
@@ -253,7 +254,7 @@ ${formatRevisionMode(opts.revisionMode)}
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
 
   // 7. Compute deadline
-  const deadlineMs = Date.now() + (opts.maxDurationMs ?? 20 * 60 * 1000);
+  let deadlineMs = Date.now() + (opts.maxDurationMs ?? 20 * 60 * 1000);
 
   // 8. Instantiate provider (or use injected one for testing).
   //    CLI providers take a different path: they don't implement Anthropic
@@ -373,6 +374,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     // Perform external verification
+    const deterministicVerificationStartedAt = Date.now();
     const { failures, warnings, paramVerification, integrationEvidence } =
       await externalVerification(absoluteToolDir, session, sessionPathAbs, {
         expectedToolName: opts.candidate?.toolName,
@@ -391,18 +393,22 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         credentialNames: opts.sharedContext?.credentialNames,
         deferLiveIntegrationToSemanticAgent: true,
       });
+    deadlineMs += Date.now() - deterministicVerificationStartedAt;
 
     if (warnings.length > 0) {
       log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
     }
 
     if (failures.length === 0) {
+      const semanticVerificationStartedAt = Date.now();
       const semantic = await runLiveSemanticVerification({
         provider: provider.name,
         toolDir: absoluteToolDir,
         evidence: integrationEvidence,
-        deadlineMs,
+        // Live semantic verification is a distinct phase. Do not inherit a
+        // nearly exhausted compile-agent deadline.
       });
+      deadlineMs += Date.now() - semanticVerificationStartedAt;
       failures.push(...semanticVerificationFailures(semantic.report));
       if (semantic.report.status === 'approved_with_gaps') {
         warnings.push(
@@ -417,6 +423,10 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
           absoluteToolDir,
           mergeSemanticParamVerification(paramVerification, semantic.report),
         );
+        // liveVerified/parameter annotations change the hash-strict cache key,
+        // but not transport capabilities. Rebind the backend already exercised
+        // by the verifier instead of triggering another probe.
+        rebindExistingBackendsCacheToWorkflow(absoluteToolDir);
         const allWarnings = [...warnings, ...paramWarnings];
         if (paramWarnings.length > 0) {
           log(`parameter verification:\n${paramWarnings.join('\n')}`);

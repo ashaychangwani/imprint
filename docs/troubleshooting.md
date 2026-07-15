@@ -237,16 +237,17 @@ Each tool compiles with a **20-minute timeout** by default. The compile agent wr
 imprint teach <site> --timeout 30m
 ```
 
-Tools with a **large filter surface** (a search tool exposing 10+ optional filters) take the longest: before finishing, the compile agent verifies that *every* exposed parameter actually reproduces its recorded effect (parameter fidelity), so it never ships a filter it can't apply. That verification is thorough but slow — such tools routinely run 20-30 minutes. Give heavy-search sites more headroom with `--timeout 30m`. When running the from-scratch helper, set the same cap via its passthrough:
+Tools with a **large filter surface** (a search tool exposing 10+ optional filters) take the longest: before finishing, the compile agent reviews every exposed parameter and attempts to prove its effect against live data. A known-broken secondary parameter must be repaired or removed and recorded in `workflow.limitations`; a recording-grounded parameter whose live effect genuinely cannot be tested may instead ship explicitly marked `verified:false`. The independent verifier can return `approved_with_gaps` only when the core tool works and every named gap is untestable rather than broken. This review is thorough but does not require a synthetic 100% live-call success rate, and heavy-search tools can still take 20-30 minutes. Give them more headroom with `--timeout 30m`. When running the from-scratch helper, set the same cap via its passthrough:
 
 ```bash
 IMPRINT_TEACH_TIMEOUT=30m scripts/teach-from-scratch.sh <site>
 ```
 
-This archives prior compiled outputs under `/tmp`, preserves recordings and
-analyzed candidate state, and runs the explicit `plan-prereqs → emit` phase
-window. If candidate detection has not completed, finish that analysis first;
-the reteach script intentionally does not rediscover tools.
+This preserves prior compiled outputs and verifier feedback so compile agents
+can revise proven work, while also preserving recordings and analyzed candidate
+state. It runs the explicit `plan-prereqs → emit` phase window. If candidate
+detection has not completed, finish that analysis first; the reteach script
+intentionally does not rediscover tools.
 
 If a tool consistently fails to compile within the timeout (e.g. due to bot defense on verification), try a faster model:
 
@@ -360,7 +361,7 @@ Note `infra` and `bad_params` (the auditor's own parameter mistakes) are exclude
 
 ## A compiled tool exposes a parameter flagged `verified:false`
 
-This is expected, not a bug. The compile gate confirms each exposed parameter actually affects the response via a `param:<name>` integration test that runs against the live API. When that test can't run — the site's anti-bot defense waived the live suite at compile time (`verifyNote: waived-bot`/`waived-infra`), the recording had no discriminating value to test with (`annotated`), or the param is a producer-sourced token whose producer tool was unavailable at compile (`waived-chain`) — the parameter still ships (Imprint keeps it and **marks** it rather than silently dropping it) with `verified:false` and a `verifyNote` in `workflow.json`. Such params are exercised at runtime through the backend ladder (stealth-fetch / playbook), and `imprint audit` is told to probe them especially. If audit then classes one `tool_broken` (e.g. the param has no effect), regenerate or fix the tool. To see what shipped unverified, grep the tool's `workflow.json` for `"verified": false`.
+This is expected when the gap is explicit, not a claim that the parameter passed live verification. The compile gate reviews each exposed parameter. A passing `param:<name>` integration test records `verified:true`; when a live differential cannot safely or meaningfully run — the site's anti-bot defense would punish repeated calls (`verifyNote: waived-bot`/`waived-infra`), the recording has no discriminating value to test with (`annotated`), or a producer-sourced token's producer was unavailable (`waived-chain`) — a recording-grounded parameter can ship with `verified:false` and a `verifyNote` in `workflow.json`. The semantic verifier may approve that tool as `approved_with_gaps` only if the core task succeeds and the gap is genuinely untestable. A parameter shown to be a no-op or broken is not such a gap: the compiler must repair it or remove it from the public contract and explain the omission in `workflow.limitations`. Audit is told to probe unverified parameters especially. To see what shipped unverified, grep the tool's `workflow.json` for `"verified": false`.
 
 ## Compile blocked: "producer-sourced token param(s) lack a CHAINED `param:<name>` test"
 

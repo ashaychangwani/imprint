@@ -8,6 +8,7 @@
  *
  * Optional env:
  *   DG_POLL_MS=1000
+ *   DG_REQUEST_TIMEOUT_MS=15000
  */
 
 const DONE_MESSAGE = Array.from({ length: 1000 }, () => 'DONE').join(' ');
@@ -16,6 +17,7 @@ const cookie = Bun.env.DG_EPASS_COOKIE;
 const csrfToken = Bun.env.DG_CSRF_TOKEN;
 const patronID = Bun.env.DG_EPASS_PATRON_ID;
 const pollMs = Number(Bun.env.DG_POLL_MS ?? '1000');
+const requestTimeoutMs = Number(Bun.env.DG_REQUEST_TIMEOUT_MS ?? '15000');
 
 if (!cookie || !csrfToken || !patronID) {
   console.error(
@@ -30,6 +32,19 @@ if (!cookie || !csrfToken || !patronID) {
 if (!Number.isFinite(pollMs) || pollMs <= 0) {
   console.error('DG_POLL_MS must be a positive number.');
   process.exit(1);
+}
+
+if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
+  console.error('DG_REQUEST_TIMEOUT_MS must be a positive number.');
+  process.exit(1);
+}
+
+function sanitizedError(error: unknown): string {
+  let message = error instanceof Error ? error.message : String(error);
+  for (const secret of [cookie, csrfToken, patronID]) {
+    message = message.split(secret).join('[REDACTED]');
+  }
+  return message.length <= 500 ? message : `${message.slice(0, 500)}…`;
 }
 
 function buildUrl(): string {
@@ -75,6 +90,7 @@ function findDatesArray(value: unknown): unknown[] | null {
 
 async function pollOnce(): Promise<boolean> {
   const response = await fetch(buildUrl(), {
+    signal: AbortSignal.timeout(requestTimeoutMs),
     headers: {
       Accept: 'application/json, text/javascript, */*; q=0.01',
       'Accept-Language': 'en-US,en;q=0.9',
@@ -98,7 +114,7 @@ async function pollOnce(): Promise<boolean> {
   });
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
   }
 
   const payload: unknown = await response.json();
@@ -119,16 +135,18 @@ async function pollOnce(): Promise<boolean> {
   return true;
 }
 
+let consecutiveFailures = 0;
 while (true) {
   try {
     if (await pollOnce()) {
       process.exit(0);
     }
+    consecutiveFailures = 0;
   } catch (error) {
-    console.error(
-      `${new Date().toISOString()} ${error instanceof Error ? error.message : String(error)}`,
-    );
+    consecutiveFailures++;
+    console.error(`${new Date().toISOString()} ${sanitizedError(error)}`);
   }
 
-  await Bun.sleep(pollMs);
+  const retryMs = Math.min(60_000, pollMs * 2 ** Math.min(consecutiveFailures, 6));
+  await Bun.sleep(retryMs);
 }

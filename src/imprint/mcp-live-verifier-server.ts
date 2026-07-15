@@ -29,15 +29,24 @@ import { buildZodValidator } from './tool-loader.ts';
 import { WorkflowSchema } from './types.ts';
 
 export function joinBackendPreparation<T>(
-  state: { current?: Promise<T> },
+  state: { current?: { promise: Promise<T>; forceReprobe: boolean } },
+  forceReprobe: boolean,
   start: () => Promise<T>,
 ): { promise: Promise<T>; joined: boolean } {
-  if (state.current) return { promise: state.current, joined: true };
-  const started = start();
+  if (state.current && (!forceReprobe || state.current.forceReprobe)) {
+    return { promise: state.current.promise, joined: true };
+  }
+
+  // A forced reprobe must not be satisfied by an ordinary preparation that
+  // was already in flight. Queue it behind that preparation so both calls do
+  // not race while updating the same backend cache. Further callers can join
+  // the queued forced preparation.
+  const preceding = state.current?.promise;
+  const started = preceding ? preceding.then(start, start) : start();
   const promise = started.finally(() => {
-    if (state.current === promise) state.current = undefined;
+    if (state.current?.promise === promise) state.current = undefined;
   });
-  state.current = promise;
+  state.current = { promise, forceReprobe };
   return { promise, joined: false };
 }
 
@@ -151,9 +160,19 @@ export async function runLiveVerifierMcpServer(opts: {
   const credentials = (await loadCredentialStore(workflow.site)) ?? undefined;
   let submitted = false;
   const backendPreparation: {
-    current?: Promise<Awaited<ReturnType<typeof prepareLiveVerificationBackend>>>;
+    current?: {
+      promise: Promise<Awaited<ReturnType<typeof prepareLiveVerificationBackend>>>;
+      forceReprobe: boolean;
+    };
   } = {};
   const evidencePath = pathJoin(dirname(opts.reportPath), LIVE_VERIFICATION_EVIDENCE_FILE);
+  let targetedCallSequence = readPersistedLiveVerificationEvidence(evidencePath).reduce(
+    (highest, item) => {
+      const match = /^targeted-call-(\d+)$/.exec(item.label);
+      return match ? Math.max(highest, Number(match[1])) : highest;
+    },
+    0,
+  );
   const hasSuiteReceipt = (): boolean => hasSuiteReceiptForSession(evidencePath, opts.sessionLabel);
 
   const server = new Server(
@@ -176,12 +195,13 @@ export async function runLiveVerifierMcpServer(opts: {
       const parsed = validator.safeParse(input.params ?? {});
       if (!parsed.success) return errorResult(`invalid tool params: ${parsed.error.message}`);
       try {
-        const preparation = joinBackendPreparation(backendPreparation, () =>
+        const forceReprobe = input.forceReprobe === true;
+        const preparation = joinBackendPreparation(backendPreparation, forceReprobe, () =>
           prepareLiveVerificationBackend({
             workflowPath: opts.workflowPath,
             params: parsed.data as Record<string, string | number | boolean>,
             reason: input.reason as string,
-            forceReprobe: input.forceReprobe === true,
+            forceReprobe,
             logPath: opts.logPath,
             attempt: opts.attempt,
           }),
@@ -224,10 +244,7 @@ export async function runLiveVerifierMcpServer(opts: {
       }
       const parsed = validator.safeParse(input.params ?? {});
       if (!parsed.success) return errorResult(`invalid tool params: ${parsed.error.message}`);
-      const existingCalls = readPersistedLiveVerificationEvidence(evidencePath).filter((item) =>
-        item.label.startsWith('targeted-call-'),
-      ).length;
-      const label = `targeted-call-${existingCalls + 1}`;
+      const label = `targeted-call-${++targetedCallSequence}`;
       const startedAt = Date.now();
       appendLiveVerifierLog(opts.logPath, {
         type: 'targeted-call.started',

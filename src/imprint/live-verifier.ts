@@ -1,5 +1,12 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { z } from 'zod';
 import { type AgentTool, doneTool, runAgentLoop } from './agent.ts';
@@ -20,7 +27,11 @@ import {
   preferredVerificationModel,
   resolveProvider,
 } from './llm.ts';
-import { type probeResolvedTool, rebindBackendsCacheToWorkflow } from './probe-backends.ts';
+import {
+  canRebindBackendsCacheToWorkflow,
+  type probeResolvedTool,
+  rebindBackendsCacheToWorkflow,
+} from './probe-backends.ts';
 import { loadCredentialStore } from './runtime.ts';
 import { isSensitiveKey } from './sensitive-keys.ts';
 import { buildZodValidator } from './tool-loader.ts';
@@ -33,7 +44,9 @@ const MCP_SERVER_NAME = 'imprint-live-verifier';
 export const LIVE_VERIFICATION_EVIDENCE_FILE = '.live-verification-evidence.json';
 const LIVE_VERIFIER_LOG_FILE = '.live-verifier-log.jsonl';
 const BACKEND_PREPARATION_BUDGET_MS = 2 * 60_000;
+const MAX_CREDITED_BACKEND_PREPARATIONS = 2;
 const BACKEND_PROBE_SHUTDOWN_GRACE_MS = 5_000;
+let evidenceTempSequence = 0;
 
 const BaselineSchema = z
   .object({
@@ -206,7 +219,10 @@ export function namespaceLiveIntegrationEvidence(
   evidence: LiveIntegrationEvidence[],
   namespace: string,
 ): LiveIntegrationEvidence[] {
-  return evidence.map((item) => ({ ...item, label: `${namespace}/${item.label}` }));
+  return evidence.map((item) => ({
+    ...item,
+    label: `${namespace}/${item.label}`,
+  }));
 }
 
 export function assertReportCoversWorkflowParameters(
@@ -382,8 +398,9 @@ function sanitizeEvidenceValue(value: unknown, key?: string, depth = 0): unknown
   if (key && isSensitiveKey(key)) return '[REDACTED]';
   if (depth > 8) return '[TRUNCATED_DEPTH]';
   if (typeof value === 'string') {
-    if (value.length > 2_000) return `${value.slice(0, 2_000)}…[TRUNCATED:${value.length}]`;
-    return value;
+    const bounded =
+      value.length > 2_000 ? `${value.slice(0, 2_000)}…[TRUNCATED:${value.length}]` : value;
+    return redactFreeformText(bounded).redacted;
   }
   if (Array.isArray(value)) {
     const items = value
@@ -412,10 +429,22 @@ export function persistLiveVerificationEvidence(
   for (const item of evidence) {
     merged.set(item.label, sanitizeEvidenceValue(item) as PersistedLiveVerificationRecord);
   }
-  writeFileSync(path, `${JSON.stringify([...merged.values()], null, 2)}\n`, {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
+  const tempPath = `${path}.tmp-${process.pid}-${Date.now()}-${++evidenceTempSequence}`;
+  try {
+    writeFileSync(tempPath, `${JSON.stringify([...merged.values()], null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx',
+    });
+    renameSync(tempPath, path);
+  } catch (error) {
+    try {
+      if (existsSync(tempPath)) unlinkSync(tempPath);
+    } catch {
+      // Preserve the original write failure; temp cleanup is best effort.
+    }
+    throw error;
+  }
 }
 
 export function readPersistedLiveVerificationEvidence(
@@ -507,9 +536,11 @@ export async function prepareLiveVerificationBackend(opts: {
   ]);
 
   try {
-    const reusedCache = (status.status === 'ok' || status.status === 'stale') && !opts.forceReprobe;
+    const reusableStaleCache =
+      status.status === 'stale' && canRebindBackendsCacheToWorkflow(tool, status.cache);
+    const reusedCache = (status.status === 'ok' || reusableStaleCache) && !opts.forceReprobe;
     const cache = reusedCache
-      ? status.status === 'stale'
+      ? reusableStaleCache
         ? rebindBackendsCacheToWorkflow(tool, status.cache)
         : status.cache
       : opts.probe
@@ -564,6 +595,7 @@ export async function prepareLiveVerificationBackend(opts: {
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const durationMs = Date.now() - startedAt;
     persistLiveVerificationEvidence(evidencePath, [
       {
         kind: 'backend-preparation',
@@ -574,7 +606,7 @@ export async function prepareLiveVerificationBackend(opts: {
         reason: opts.reason,
         forceReprobe: opts.forceReprobe ?? false,
         error: message,
-        durationMs: Date.now() - startedAt,
+        durationMs,
       },
     ]);
     appendLiveVerifierLog(opts.logPath, {
@@ -582,6 +614,7 @@ export async function prepareLiveVerificationBackend(opts: {
       attempt: opts.attempt,
       label,
       error: message,
+      durationMs,
     });
     throw error;
   }
@@ -612,6 +645,7 @@ async function runBackendProbeSubprocess(opts: {
       stdio: ['pipe', 'pipe', 'pipe'],
     },
   );
+  const unregisterParentCleanup = registerOwnedProcessTreeCleanup(child);
   child.stdin?.end(JSON.stringify(opts.params));
 
   let stderr = '';
@@ -629,11 +663,16 @@ async function runBackendProbeSubprocess(opts: {
   child.stdout?.on('data', (chunk) => logChunk('stdout', chunk));
   child.stderr?.on('data', (chunk) => logChunk('stderr', chunk));
 
-  const outcome = await waitForOwnedProcessTree(
-    child,
-    BACKEND_PREPARATION_BUDGET_MS,
-    BACKEND_PROBE_SHUTDOWN_GRACE_MS,
-  );
+  let outcome: Awaited<ReturnType<typeof waitForOwnedProcessTree>>;
+  try {
+    outcome = await waitForOwnedProcessTree(
+      child,
+      BACKEND_PREPARATION_BUDGET_MS,
+      BACKEND_PROBE_SHUTDOWN_GRACE_MS,
+    );
+  } finally {
+    unregisterParentCleanup();
+  }
   if (outcome.timedOut) {
     throw new Error(
       `backend probe exceeded its separate ${Math.round(BACKEND_PREPARATION_BUDGET_MS / 1_000)}s budget and was terminated`,
@@ -677,7 +716,9 @@ export async function runLiveSemanticVerification(opts: {
   const evidencePath = pathJoin(opts.toolDir, LIVE_VERIFICATION_EVIDENCE_FILE);
   const logPath = pathJoin(opts.toolDir, LIVE_VERIFIER_LOG_FILE);
   const verifierSessionLabel = nextRecordLabel(evidencePath, 'verifier-session');
-  const sessionStartedAt = new Date().toISOString();
+  const sessionStartedAtMs = Date.now();
+  const sessionStartedAt = new Date(sessionStartedAtMs).toISOString();
+  const preparationBudget = { creditedCount: 0, creditMs: 0, grantedMs: 0 };
   let verifierSession: PersistedLiveVerificationRecord = {
     label: verifierSessionLabel,
     kind: 'verifier-session',
@@ -693,6 +734,9 @@ export async function runLiveSemanticVerification(opts: {
       ...invocationEvidence,
     ]);
   const attemptErrors: string[] = [];
+  // Verification gets its own reasoning window. Backend preparation is added
+  // separately below and both attempts share this one absolute deadline.
+  const verifierDeadlineMs = opts.deadlineMs ?? Date.now() + 10 * 60_000;
 
   persistLiveVerificationEvidence(evidencePath, accumulated);
   appendLiveVerifierLog(logPath, {
@@ -720,8 +764,6 @@ export async function runLiveSemanticVerification(opts: {
         attempt === 1
           ? initialMessage
           : `${initialMessage}\n\nRETRY NOTE: The prior verifier attempt ended without a usable report. Existing backend preparation, suite receipts, targeted-call outputs, and diagnostics are supplied above. Inspect them and use the live tools when useful; do not assume a successful call must be repeated.`;
-      const extendedDeadline =
-        (opts.deadlineMs ?? Date.now() + 10 * 60_000) + BACKEND_PREPARATION_BUDGET_MS;
       const report =
         opts.provider === 'anthropic-api'
           ? await runAnthropicVerifier({
@@ -729,7 +771,8 @@ export async function runLiveSemanticVerification(opts: {
               reportPath,
               initialMessage: retryMessage,
               model,
-              deadlineMs: extendedDeadline,
+              deadlineMs: verifierDeadlineMs,
+              preparationBudget,
               logPath,
               attempt,
               sessionLabel: verifierSessionLabel,
@@ -740,7 +783,8 @@ export async function runLiveSemanticVerification(opts: {
               reportPath,
               initialMessage: retryMessage,
               model,
-              deadlineMs: extendedDeadline,
+              deadlineMs: verifierDeadlineMs,
+              logSinceMs: sessionStartedAtMs,
               logPath,
               attempt,
               sessionLabel: verifierSessionLabel,
@@ -918,6 +962,16 @@ function buildInitialMessage(
   )}`;
 }
 
+function creditBackendPreparation(
+  budget: { creditedCount: number; creditMs: number },
+  durationMs: number,
+  reusedCache: boolean,
+): void {
+  if (reusedCache || budget.creditedCount >= MAX_CREDITED_BACKEND_PREPARATIONS) return;
+  budget.creditedCount++;
+  budget.creditMs += Math.min(Math.max(0, durationMs), BACKEND_PREPARATION_BUDGET_MS);
+}
+
 async function runAnthropicVerifier(opts: {
   workflowPath: string;
   reportPath: string;
@@ -927,6 +981,7 @@ async function runAnthropicVerifier(opts: {
   logPath: string;
   attempt: number;
   sessionLabel: string;
+  preparationBudget: { creditedCount: number; creditMs: number; grantedMs: number };
 }): Promise<LiveVerificationReport> {
   const provider = resolveProvider({
     provider: 'anthropic-api',
@@ -966,6 +1021,7 @@ async function runAnthropicVerifier(opts: {
         }
         const parsed = validator.safeParse(input.params ?? {});
         if (!parsed.success) return { result: parsed.error.message, isError: true };
+        const startedAt = Date.now();
         try {
           const result = await prepareLiveVerificationBackend({
             workflowPath: opts.workflowPath,
@@ -975,8 +1031,10 @@ async function runAnthropicVerifier(opts: {
             logPath: opts.logPath,
             attempt: opts.attempt,
           });
+          creditBackendPreparation(opts.preparationBudget, result.durationMs, result.reusedCache);
           return { result: JSON.stringify(result) };
         } catch (error) {
+          creditBackendPreparation(opts.preparationBudget, Date.now() - startedAt, false);
           return {
             result: error instanceof Error ? error.message : String(error),
             isError: true,
@@ -1145,6 +1203,12 @@ async function runAnthropicVerifier(opts: {
     deadlineMs: opts.deadlineMs ?? Date.now() + 10 * 60_000,
     softTurnCap: 12,
     llm: provider,
+    onDeadlineReached: async () => {
+      const extensionMs = opts.preparationBudget.creditMs - opts.preparationBudget.grantedMs;
+      if (extensionMs <= 0) return null;
+      opts.preparationBudget.grantedMs += extensionMs;
+      return extensionMs;
+    },
     onConversationUpdate: (conversation) => {
       for (const entry of conversation.slice(loggedConversationEntries)) {
         appendLiveVerifierLog(opts.logPath, {
@@ -1170,6 +1234,7 @@ async function runCliVerifier(opts: {
   logPath: string;
   attempt: number;
   sessionLabel: string;
+  logSinceMs: number;
 }): Promise<LiveVerificationReport> {
   if (opts.provider !== 'codex-cli' && opts.provider !== 'claude-cli') {
     throw new Error(`CLI verifier is unsupported for ${opts.provider}`);
@@ -1193,8 +1258,21 @@ async function runCliVerifier(opts: {
     opts.provider === 'codex-cli'
       ? spawnCodexVerifier(opts, mcpArgs)
       : spawnClaudeVerifier(opts, mcpArgs);
-  const timeoutMs = Math.max(1, (opts.deadlineMs ?? Date.now() + 10 * 60_000) - Date.now());
-  const { exitCode, stderr } = await waitForChild(child, timeoutMs, opts.logPath, opts.attempt);
+  const unregisterParentCleanup = registerOwnedProcessTreeCleanup(child);
+  const deadlineMs = opts.deadlineMs ?? Date.now() + 10 * 60_000;
+  let exitCode: number | null;
+  let stderr: string;
+  try {
+    ({ exitCode, stderr } = await waitForChild(
+      child,
+      deadlineMs,
+      opts.logPath,
+      opts.attempt,
+      opts.logSinceMs,
+    ));
+  } finally {
+    unregisterParentCleanup();
+  }
   if (!existsSync(opts.reportPath)) {
     throw new Error(
       `${opts.provider} semantic verifier exited ${exitCode} without a report${stderr ? `: ${stderr.slice(-1000)}` : ''}`,
@@ -1309,9 +1387,10 @@ function spawnClaudeVerifier(
 
 async function waitForChild(
   child: ChildProcess,
-  timeoutMs: number,
+  deadlineMs: number,
   logPath: string,
   attempt: number,
+  logSinceMs: number,
 ): Promise<{ exitCode: number | null; stderr: string }> {
   let stderr = '';
   // Always drain both pipes. CLI JSON streams can exceed the OS pipe buffer;
@@ -1334,12 +1413,23 @@ async function waitForChild(
   return await new Promise((resolve, reject) => {
     let timedOut = false;
     let forceTimer: ReturnType<typeof setTimeout> | undefined;
-    const timer = setTimeout(() => {
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearTimers = (): void => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (forceTimer) clearTimeout(forceTimer);
+    };
+    const timeOut = (): void => {
       timedOut = true;
+      const preparationCreditMs = backendPreparationDeadlineCreditMs(
+        logPath,
+        logSinceMs,
+        Date.now(),
+      );
       appendLiveVerifierLog(logPath, {
         type: 'provider.timeout',
         attempt,
-        timeoutMs,
+        deadlineMs,
+        preparationCreditMs,
       });
       signalVerifierProcessTree(child, 'SIGTERM');
       forceTimer = setTimeout(() => {
@@ -1347,15 +1437,28 @@ async function waitForChild(
         reject(new Error('semantic verifier timed out'));
       }, 5_000);
       forceTimer.unref?.();
-    }, timeoutMs);
+    };
+    const checkDeadline = (): void => {
+      const now = Date.now();
+      const preparationCreditMs = backendPreparationDeadlineCreditMs(logPath, logSinceMs, now);
+      const remainingMs = deadlineMs + preparationCreditMs - now;
+      if (remainingMs <= 0) {
+        timeOut();
+        return;
+      }
+      // Recheck periodically because preparation activity is written by the
+      // verifier MCP subprocess while this parent is waiting on the CLI.
+      deadlineTimer = setTimeout(checkDeadline, Math.min(remainingMs, 500));
+      deadlineTimer.unref?.();
+    };
+    checkDeadline();
     child.once('error', (error) => {
-      clearTimeout(timer);
-      if (forceTimer) clearTimeout(forceTimer);
+      clearTimers();
+      signalVerifierProcessTree(child, 'SIGKILL');
       reject(error);
     });
     child.once('close', (code) => {
-      clearTimeout(timer);
-      if (forceTimer) clearTimeout(forceTimer);
+      clearTimers();
       // Codex/Claude can exit while an MCP tool call is still in flight. Their
       // stdio MCP child (and a Chrome it launched) remains in the detached
       // verifier process group unless we explicitly reap the group here. A
@@ -1370,6 +1473,61 @@ async function waitForChild(
       else resolve({ exitCode: code, stderr });
     });
   });
+}
+
+export function backendPreparationDeadlineCreditMs(
+  logPath: string,
+  sinceMs: number,
+  nowMs = Date.now(),
+): number {
+  if (!existsSync(logPath)) return 0;
+  const preparations = new Map<
+    string,
+    { startedAtMs: number; durationMs?: number; reusedCache?: boolean }
+  >();
+  for (const line of readFileSync(logPath, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      // The append-only log can end in a partial line while the MCP process is writing.
+      continue;
+    }
+    const timestampMs =
+      typeof event.timestamp === 'string' ? Date.parse(event.timestamp) : Number.NaN;
+    if (!Number.isFinite(timestampMs) || timestampMs < sinceMs || typeof event.label !== 'string') {
+      continue;
+    }
+    if (event.type === 'backend.prepare.started') {
+      preparations.set(event.label, { startedAtMs: timestampMs });
+      continue;
+    }
+    if (event.type !== 'backend.prepare.completed' && event.type !== 'backend.prepare.failed') {
+      continue;
+    }
+    const preparation = preparations.get(event.label);
+    if (!preparation) continue;
+    preparation.durationMs =
+      typeof event.durationMs === 'number'
+        ? event.durationMs
+        : Math.max(0, timestampMs - preparation.startedAtMs);
+    preparation.reusedCache = event.reusedCache === true;
+  }
+
+  return [...preparations.values()]
+    .sort((a, b) => a.startedAtMs - b.startedAtMs)
+    .filter((preparation) => !preparation.reusedCache)
+    .slice(0, MAX_CREDITED_BACKEND_PREPARATIONS)
+    .reduce(
+      (total, preparation) =>
+        total +
+        Math.min(
+          Math.max(0, preparation.durationMs ?? nowMs - preparation.startedAtMs),
+          BACKEND_PREPARATION_BUDGET_MS,
+        ),
+      0,
+    );
 }
 
 export async function waitForOwnedProcessTree(
@@ -1412,6 +1570,56 @@ export async function waitForOwnedProcessTree(
       finish({ exitCode: code, timedOut });
     });
   });
+}
+
+export function registerOwnedProcessTreeCleanup(
+  child: ChildProcess,
+  shutdownGraceMs = BACKEND_PROBE_SHUTDOWN_GRACE_MS,
+): () => void {
+  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
+  const onExit = (): void => signalVerifierProcessTree(child, 'SIGKILL');
+  const signalHandlers = new Map<NodeJS.Signals, () => void>();
+  const forceTimers = new Set<ReturnType<typeof setTimeout>>();
+  let shutdownRequested = false;
+  const hadExistingHandler = new Map(
+    signals.map((signal) => [signal, process.listenerCount(signal) > 0]),
+  );
+  const unregisterSignals = (): void => {
+    for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
+  };
+  const unregister = (): void => {
+    unregisterSignals();
+    // Once parent shutdown has begun, the direct worker can exit before a
+    // browser or other detached descendant in its process group. Preserve the
+    // scheduled escalation and exit fallback in that case. Normal completion
+    // still removes every listener and timer immediately.
+    if (shutdownRequested) return;
+    process.removeListener('exit', onExit);
+    for (const timer of forceTimers) clearTimeout(timer);
+    forceTimers.clear();
+  };
+  process.once('exit', onExit);
+  for (const signal of signals) {
+    const handler = (): void => {
+      shutdownRequested = true;
+      unregisterSignals();
+      signalVerifierProcessTree(child, signal);
+      const forceTimer = setTimeout(() => {
+        forceTimers.delete(forceTimer);
+        signalVerifierProcessTree(child, 'SIGKILL');
+        if (forceTimers.size === 0) process.removeListener('exit', onExit);
+      }, shutdownGraceMs);
+      forceTimers.add(forceTimer);
+      forceTimer.unref?.();
+      // Let an existing teach/compile signal handler perform its own graceful
+      // shutdown. If this verifier is running standalone, restore the default
+      // behavior so installing cleanup does not accidentally swallow SIGINT.
+      if (!hadExistingHandler.get(signal)) process.kill(process.pid, signal);
+    };
+    signalHandlers.set(signal, handler);
+    process.once(signal, handler);
+  }
+  return unregister;
 }
 
 function signalVerifierProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {

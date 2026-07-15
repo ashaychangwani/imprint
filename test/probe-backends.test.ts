@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
+  canRebindBackendsCacheToWorkflow,
   loadBackendsCache,
   loadBackendsCacheStatus,
   persistRuntimeBackendsCache,
@@ -20,6 +21,7 @@ import {
   probeCandidateBackendsForWorkflow,
   rankSuccessfulBackends,
   rebindExistingBackendsCacheToWorkflow,
+  workflowCapabilityHash,
 } from '../src/imprint/probe-backends.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import { type BackendsCache, BackendsCacheSchema, WorkflowSchema } from '../src/imprint/types.ts';
@@ -281,7 +283,7 @@ describe('loadBackendsCache', () => {
         imprintVersion: '0.6.1',
         schemaVersion: 2,
         workflowHash: 'pre-metadata-workflow-hash',
-        capabilityHash: 'same-capabilities',
+        capabilityHash: workflowCapabilityHash(WorkflowSchema.parse(workflow)),
         preferredOrder: ['cdp-replay'],
         results: { 'cdp-replay': { outcome: 'ok', durationMs: 1_000 } },
       }),
@@ -295,6 +297,153 @@ describe('loadBackendsCache', () => {
     expect(JSON.parse(readFileSync(pathResolve(dir, 'backends.json'), 'utf8')).workflowHash).toBe(
       rebound?.workflowHash,
     );
+  });
+
+  it('does not rebind a fetch-first cache after the workflow becomes browser-dependent', () => {
+    const plain = WorkflowSchema.parse({
+      toolName: 'reserve_item',
+      intent: { description: 'Reserve an item' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://example.com/items', headers: {} }],
+      site: 'capability-change',
+    });
+    const browserDependent = WorkflowSchema.parse({
+      ...plain,
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://example.com/cart',
+          headers: { 'x-csrf': '${state.csrf}' },
+          body: '{}',
+        },
+        {
+          method: 'POST',
+          url: 'https://example.com/reserve',
+          headers: { 'x-csrf': '${state.csrf}' },
+          body: '{}',
+        },
+      ],
+    });
+    const cache: BackendsCache = {
+      probedAt: '2026-07-14T00:00:00.000Z',
+      imprintVersion: '0.6.1',
+      schemaVersion: 2,
+      workflowHash: 'plain-workflow',
+      capabilityHash: workflowCapabilityHash(plain),
+      preferredOrder: ['fetch'],
+      results: { fetch: { outcome: 'ok', durationMs: 20 } },
+    };
+
+    expect(canRebindBackendsCacheToWorkflow({ workflow: browserDependent }, cache)).toBe(false);
+  });
+
+  it('does not rebind when a bootstrap capture starts requiring a live DOM', () => {
+    const htmlCapture = WorkflowSchema.parse({
+      toolName: 'search_items',
+      intent: { description: 'Search items' },
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/items?csrf=${state.csrf}',
+          headers: {},
+        },
+      ],
+      site: 'capture-change',
+      bootstrap: {
+        url: 'https://example.com',
+        captures: [
+          {
+            name: 'csrf',
+            source: 'html_regex',
+            pattern: 'csrf=([^&]+)',
+            capability: 'browser_bootstrap',
+          },
+        ],
+      },
+    });
+    const domCapture = WorkflowSchema.parse({
+      ...htmlCapture,
+      bootstrap: {
+        ...htmlCapture.bootstrap,
+        captures: [
+          {
+            name: 'csrf',
+            source: 'dom_attribute',
+            selector: 'meta[name="csrf"]',
+            attribute: 'content',
+            capability: 'browser_bootstrap',
+          },
+        ],
+      },
+    });
+    const cache: BackendsCache = {
+      probedAt: '2026-07-14T00:00:00.000Z',
+      imprintVersion: '0.6.1',
+      schemaVersion: 2,
+      workflowHash: 'html-workflow',
+      capabilityHash: workflowCapabilityHash(htmlCapture),
+      preferredOrder: ['fetch-bootstrap'],
+      results: { 'fetch-bootstrap': { outcome: 'ok', durationMs: 500 } },
+    };
+
+    expect(workflowCapabilityHash(domCapture)).not.toBe(workflowCapabilityHash(htmlCapture));
+    expect(canRebindBackendsCacheToWorkflow({ workflow: domCapture }, cache)).toBe(false);
+  });
+
+  it('normalizes capture requirements without hashing capture names or match details', () => {
+    const first = WorkflowSchema.parse({
+      toolName: 'search_items',
+      intent: { description: 'Search items' },
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/items',
+          headers: {},
+          captures: [
+            { name: 'cursor', source: 'json', path: '$.next', required: false },
+            { name: 'request_id', source: 'response_header', header: 'x-request-id' },
+          ],
+        },
+      ],
+      site: 'normalized-captures',
+      bootstrap: {
+        url: 'https://example.com',
+        captures: [{ name: 'csrf', source: 'html_regex', pattern: 'csrf=([^&]+)' }],
+      },
+    });
+    const cosmeticRevision = WorkflowSchema.parse({
+      ...first,
+      requests: [
+        {
+          ...first.requests[0],
+          captures: [
+            { name: 'trace', source: 'response_header', header: 'traceparent' },
+            { name: 'page', source: 'json', path: '$.pagination.cursor', required: false },
+          ],
+        },
+      ],
+      bootstrap: {
+        ...first.bootstrap,
+        captures: [{ name: 'token', source: 'html_regex', pattern: 'token="([^"]+)"' }],
+      },
+    });
+    const requestCaptureRevision = WorkflowSchema.parse({
+      ...first,
+      requests: [
+        {
+          ...first.requests[0],
+          captures: [
+            { name: 'cursor', source: 'text_regex', pattern: 'next=([^&]+)', required: false },
+            { name: 'request_id', source: 'response_header', header: 'x-request-id' },
+          ],
+        },
+      ],
+    });
+
+    expect(workflowCapabilityHash(cosmeticRevision)).toBe(workflowCapabilityHash(first));
+    expect(workflowCapabilityHash(requestCaptureRevision)).not.toBe(workflowCapabilityHash(first));
   });
 });
 
