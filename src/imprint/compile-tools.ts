@@ -161,11 +161,11 @@ function buildReadBuildPlanTool(
       ];
       if (emitsTokens.length > 0) {
         tokenNotes.push(
-          `PRODUCER CONTRACT: your parser MUST emit ${emitsTokens
+          `PRODUCER COMPATIBILITY TARGET: emit ${emitsTokens
             .map((e) => `\`${e.field}\``)
             .join(
               ', ',
-            )} in each result item, in the exact shape described (the FULL value a sibling consumer needs — never a bare fragment). Sibling tools mint their input from these fields; the verifier fails this tool if a declared field is missing from the parser output.`,
+            )} in the exact shape described whenever a live result supplies or proves the full value a sibling consumer needs. Never fabricate a missing token. Useful core records may retain a null/absent token when workflow.limitations names the missing output and affected consumers; preserve their supported input classes. A missing downstream token alone is not a reason to discard valid producer records.`,
         );
       }
       for (const tp of tokenParams) {
@@ -176,7 +176,7 @@ function buildReadBuildPlanTool(
           ? ` The producer declares shape: ${producerShape}. If that shape contains requiredKeys=[...], request-transform.ts must decode/unpack the fresh value and reference each required key in the outgoing request.`
           : '';
         tokenNotes.push(
-          `CONSUMER CONTRACT: param \`${tp.param}\` is an opaque token minted by the \`${tp.sourceTool}\` tool's \`${tp.sourceField}\` output.${shapeNote} Write a CHAINED \`param:${tp.param}\` integration test that calls \`runCapturedIntegrationCase\` on \`../${tp.sourceTool}/workflow.json\` directly inside the \`param:${tp.param}\` test block, reads \`${tp.sourceField}\` from the producer's ACTUAL output shape (top-level field, or an item in any returned collection such as flights/items/results), and passes THAT fresh value (not the recorded constant) into this tool — then asserts the response is non-empty. When several params come from the same producer, mint once and choose one producer item containing all sibling fields so the values stay from the same result. On producer bot/infra error, rethrow so the suite waives; if the producer ran but the field is absent, fix the producer parser/output contract instead of waiving. Do not fabricate a fallback value or mutate producer.result.data to make the test pass.`,
+          `CONSUMER CONTRACT: param \`${tp.param}\` is an opaque token minted by the \`${tp.sourceTool}\` tool's \`${tp.sourceField}\` output.${shapeNote} Write a CHAINED \`param:${tp.param}\` integration test that calls \`runCapturedIntegrationCase\` on \`../${tp.sourceTool}/workflow.json\` directly inside the \`param:${tp.param}\` test block, reads \`${tp.sourceField}\` from the producer's ACTUAL output shape (top-level field, or an item in any returned collection such as flights/items/results), and passes THAT fresh value (not the recorded constant) into this tool — then asserts the response is non-empty. When several params come from the same producer, mint once and choose one producer item containing all sibling fields so the values stay from the same result. On producer bot/infra error, rethrow so the suite waives. If useful producer records legitimately lack the field, do not fabricate or mutate output: keep this consumer verified:false, waived-chain, or inconclusive with diagnostics, and require an honest producer limitation.`,
         );
       }
       // Per-source wiring guidance for the general dependency contract. These are
@@ -2410,6 +2410,7 @@ export function classifyIntegrationOutcome(input: {
  *  - chained pass → `{ verified: true, sourcedFrom }`
  *  - passed but not chained (the recorded-value tautology) → `unchained` (blocking)
  *  - suite waived (producer anti-bot) → `{ verified: false, reason: 'waived-chain' }`
+ *  - explicitly annotated unavailable producer output → `{ verified: false, reason: 'waived-chain' }`
  *  - else → `unchained` (blocking)
  */
 export function classifyParamCoverage(opts: {
@@ -2444,6 +2445,10 @@ export function classifyParamCoverage(opts: {
     const token = `param:${lp.name}`;
     const passedLive = [...opts.passedTests].some((n) => n.includes(token));
     const block = blocks.find((b) => b.title.includes(token));
+    const annotationRe = new RegExp(
+      `//\\s*exposed-but-not-verified[^\\n]*\\b${lp.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+    );
+    const isAnnotated = annotationRe.test(opts.integrationSrc);
 
     // Producer-sourced token param: requires a chained test that mints a fresh
     // value from the producer's sibling workflow.
@@ -2467,16 +2472,23 @@ export function classifyParamCoverage(opts: {
           reason: 'waived-chain',
           sourcedFrom,
         });
+      } else if (isAnnotated) {
+        // The compile agent may explicitly preserve a limited consumer when
+        // its producer returns useful core records but cannot mint this token.
+        // The durable verified:false+sourcedFrom stamp keeps orchestration
+        // honest; opaque defaults and passing recorded-token tests remain
+        // blocked by the independent guards above and below.
+        paramVerification.push({
+          name: lp.name,
+          verified: false,
+          reason: 'waived-chain',
+          sourcedFrom,
+        });
       } else {
         unchained.push(lp.name);
       }
       continue;
     }
-
-    const annotationRe = new RegExp(
-      `//\\s*exposed-but-not-verified[^\\n]*\\b${lp.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
-    );
-    const isAnnotated = annotationRe.test(opts.integrationSrc);
 
     if (passedLive) {
       // Anti-tautology: a passing per-param test must actually exercise the live
@@ -4279,7 +4291,7 @@ export async function externalVerification(
         })
         .join(', ');
       failures.push(
-        `${coverage.unchained.length} producer-sourced token param(s) lack a CHAINED \`param:<name>\` test that mints a FRESH value from the producer tool: ${details}. Each test must call runWorkflowWithLadder on the named producer's \`workflow.json\`, read the named field from its result, and pass THAT value (not the recorded constant) into this tool — then assert the response is non-empty. If the producer only emits a bare fragment, fix the PRODUCER to emit the full value this tool consumes. See prompts/compile-agent.md "Producer-sourced token parameters".`,
+        `${coverage.unchained.length} producer-sourced token param(s) lack a CHAINED \`param:<name>\` test that mints a FRESH value from the producer tool: ${details}. Each test must call runWorkflowWithLadder on the named producer's \`workflow.json\`, read the named field from its result, and pass THAT value (not the recorded constant) into this tool — then assert the response is non-empty. If live producer results legitimately cannot supply the token, keep the consumer explicitly unverified with an \`// exposed-but-not-verified: <param> ...\` annotation and document the producer/consumer limitation instead of fabricating it. See prompts/compile-agent.md "Producer-sourced token parameters".`,
       );
     }
   }
@@ -4305,9 +4317,9 @@ export async function externalVerification(
           missing.length === 1 ? 'it' : 'them'
         } as an input token, but parser.ts does not emit ${
           missing.length === 1 ? 'that field' : 'those fields'
-        }. Emit ${
+        }. Reference ${
           missing.length === 1 ? 'it' : 'each'
-        } in every result item under the EXACT field name (the full value a consumer needs, never a bare fragment) — see read_build_plan "emitsTokens".`,
+        } under the EXACT field name and emit the full value whenever live evidence supplies it; null/absent values are allowed only for useful records whose missing output and affected consumers are documented in workflow.limitations — see read_build_plan "emitsTokens".`,
       );
     }
 

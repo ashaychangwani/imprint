@@ -2563,6 +2563,39 @@ test('param:hotel_id selects the hotel', async () => {
     expect(paramVerification).toEqual([]);
   });
 
+  it('keeps an explicitly limited consumer unverified when no producer token is available', () => {
+    const limitedSrc = `${chainedSrc}\n// exposed-but-not-verified: hotel_id producer returned useful records without this token\n`;
+    const { unchained, paramVerification } = classifyParamCoverage({
+      likelyParams: [{ name: 'hotel_id' }],
+      integrationSrc: limitedSrc,
+      passedTests: new Set(['baseline']),
+      integrationOutcome: 'passed',
+      tokenSources,
+    });
+    expect(unchained).toEqual([]);
+    expect(paramVerification).toEqual([
+      {
+        name: 'hotel_id',
+        verified: false,
+        reason: 'waived-chain',
+        sourcedFrom: { tool: 'search_hotels', field: 'hotel_id' },
+      },
+    ]);
+  });
+
+  it('still blocks a falsely passing recorded-token test despite an annotation', () => {
+    const annotatedTautology = `${tautologicalChainSrc}\n// exposed-but-not-verified: hotel_id token unavailable\n`;
+    const { unchained, paramVerification } = classifyParamCoverage({
+      likelyParams: [{ name: 'hotel_id' }],
+      integrationSrc: annotatedTautology,
+      passedTests: new Set(['param:hotel_id selects the hotel']),
+      integrationOutcome: 'passed',
+      tokenSources,
+    });
+    expect(unchained).toEqual(['hotel_id']);
+    expect(paramVerification).toEqual([]);
+  });
+
   it('checks declared token params even when likelyParams omitted them', () => {
     const { paramVerification, unchained } = classifyParamCoverage({
       likelyParams: [],
