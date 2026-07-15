@@ -1,20 +1,156 @@
 import { describe, expect, it } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pathJoin } from 'node:path';
 import {
   type AuditReport,
   AuditReportSchema,
   auditHasCorrectSignal,
   buildAuditInitialPrompt,
+  buildAuditMcpCommandArgs,
   buildAuditMcpEnvironment,
   buildTokenDepNote,
   buildUnverifiedParamNote,
   computeAuditScore,
+  countDetectedToolNames,
+  detectedButUnemittedTools,
   evaluateAuditReport,
   extractReport,
   missingAuditedParameters,
   missingAuditedToolNames,
+  partitionAuditTools,
   ungradeableToolNames,
   untestableParams,
 } from '../src/imprint/audit.ts';
+import {
+  AUTH_VERIFICATION_ATTEMPT_SENTINEL,
+  authWorkflowHash,
+} from '../src/imprint/auth-compile-tools.ts';
+import type { TeachState } from '../src/imprint/teach-state.ts';
+import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
+import type { Workflow } from '../src/imprint/types.ts';
+
+function resolvedAuditTool(
+  dir: string,
+  name: string,
+  workflow: Partial<Workflow> = {},
+): ResolvedTool {
+  return {
+    site: 'fixture',
+    dir,
+    workflow: {
+      site: 'fixture',
+      toolName: name,
+      toolKind: 'data',
+      intent: { description: name },
+      parameters: [],
+      requests: [],
+      ...workflow,
+    } as Workflow,
+    toolFn: async () => ({ ok: true, data: {} }),
+  };
+}
+
+describe('partitionAuditTools', () => {
+  it('keeps data and direct-success auth eligible while excluding pause auth', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-audit-auth-'));
+    try {
+      const data = resolvedAuditTool(dir, 'search_items');
+      const passwordAuth = resolvedAuditTool(dir, 'authenticate_password', {
+        toolKind: 'authenticate',
+        authConfig: {
+          entry: 'login',
+          actions: {
+            login: {
+              parameters: [],
+              steps: [{ request: 0, onError: 'fail' }],
+              outcome: { type: 'success', evidence: [] },
+            },
+          },
+          persist: [],
+          crossOriginCookieReinjection: false,
+        },
+      });
+      const interactive = resolvedAuditTool(dir, 'authenticate_otp', {
+        toolKind: 'authenticate',
+        authConfig: {
+          entry: 'login',
+          actions: {
+            login: {
+              parameters: [],
+              steps: [{ request: 0, onError: 'fail' }],
+              outcome: {
+                type: 'pause',
+                next: 'verify_otp',
+                evidence: [],
+                carry: [],
+                message: 'Enter the one-time code sent to the user.',
+              },
+            },
+            verify_otp: {
+              parameters: [],
+              steps: [{ request: 1, onError: 'fail' }],
+              outcome: { type: 'success', evidence: [] },
+            },
+          },
+          persist: [],
+          crossOriginCookieReinjection: false,
+        },
+      });
+      const legacyInteractive = resolvedAuditTool(dir, 'legacy_authenticate_otp', {
+        toolKind: undefined,
+        authConfig: interactive.workflow.authConfig,
+      });
+      const malformedAuth = resolvedAuditTool(dir, 'authenticate_missing_config', {
+        toolKind: 'authenticate',
+        authConfig: undefined,
+      });
+      writeFileSync(
+        pathJoin(dir, AUTH_VERIFICATION_ATTEMPT_SENTINEL),
+        JSON.stringify({
+          action: 'verify_otp',
+          ok: true,
+          workflowHash: authWorkflowHash(interactive.workflow),
+          backend: 'cdp-replay',
+          timestamp: 123,
+        }),
+      );
+
+      const partition = partitionAuditTools([
+        data,
+        passwordAuth,
+        interactive,
+        legacyInteractive,
+        malformedAuth,
+      ]);
+      expect(partition.eligible.map((tool) => tool.workflow.toolName)).toEqual([
+        'search_items',
+        'authenticate_password',
+      ]);
+      expect(partition.nonInteractiveAuthNames).toEqual(['authenticate_password']);
+      expect(partition.skippedInteractiveAuth).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: 'authenticate_otp',
+            reason: expect.stringContaining('one-time code'),
+            verificationStatus: 'verified',
+            verificationBackend: 'cdp-replay',
+          }),
+          expect.objectContaining({
+            name: 'legacy_authenticate_otp',
+            reason: expect.stringContaining('one-time code'),
+          }),
+          expect.objectContaining({
+            name: 'authenticate_missing_config',
+            reason: expect.stringContaining('configuration is missing'),
+          }),
+        ]),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('buildAuditMcpEnvironment', () => {
   it('pins the MCP child to the same isolated asset root as the audit driver', () => {
@@ -23,6 +159,150 @@ describe('buildAuditMcpEnvironment', () => {
       IMPRINT_AUDIT_PACING_MS: '5000',
       IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
     });
+  });
+});
+
+describe('buildAuditMcpCommandArgs', () => {
+  it('passes the exact eligible tool allowlist to both audit MCP providers', () => {
+    expect(buildAuditMcpCommandArgs('fixture', ['search_items', 'quote_item'])).toEqual([
+      'run',
+      expect.stringContaining('src/cli.ts'),
+      'mcp-server',
+      'fixture',
+      '--include-tools',
+      'search_items,quote_item',
+    ]);
+  });
+});
+
+describe('detectedButUnemittedTools', () => {
+  it('reports failed candidates from the latest retained recording without scoring them', () => {
+    const state: TeachState = {
+      workflows: {
+        emitted: {
+          sessionPath: '/recordings/latest.json',
+          completedSteps: [
+            'record',
+            'redact',
+            'replay-and-diff',
+            'triage',
+            'detect-candidates',
+            'generate',
+            'emit',
+          ],
+          startedAt: '2026-07-15T00:00:00.000Z',
+          updatedAt: '2026-07-15T00:02:00.000Z',
+          candidate: {
+            toolName: 'search_items',
+            description: 'Search items',
+            rationale: 'primary intent',
+            confidence: 1,
+            primary: true,
+            requestSeqs: [],
+            representativeSeqs: [],
+            eventSeqs: [],
+            expectedOutput: 'items',
+            likelyParams: [],
+            dependencySeqs: [],
+          },
+        },
+        failed: {
+          sessionPath: '/recordings/latest.json',
+          completedSteps: [
+            'record',
+            'redact',
+            'replay-and-diff',
+            'triage',
+            'detect-candidates',
+            'plan-prereqs',
+          ],
+          error: 'compile agent did not produce a verified workflow.\nmore diagnostics',
+          startedAt: '2026-07-15T00:00:00.000Z',
+          updatedAt: '2026-07-15T00:03:00.000Z',
+          candidate: {
+            toolName: 'get_item_details',
+            description: 'Get details',
+            rationale: 'consumer',
+            confidence: 0.9,
+            primary: false,
+            requestSeqs: [],
+            representativeSeqs: [],
+            eventSeqs: [],
+            expectedOutput: 'details',
+            likelyParams: [],
+            dependencySeqs: [],
+          },
+        },
+        stale: {
+          sessionPath: '/recordings/old.json',
+          completedSteps: ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+          startedAt: '2026-07-14T00:00:00.000Z',
+          updatedAt: '2026-07-14T00:01:00.000Z',
+          candidate: {
+            toolName: 'old_tool',
+            description: 'Old tool',
+            rationale: 'stale',
+            confidence: 0.5,
+            primary: false,
+            requestSeqs: [],
+            representativeSeqs: [],
+            eventSeqs: [],
+            expectedOutput: 'old',
+            likelyParams: [],
+            dependencySeqs: [],
+          },
+        },
+      },
+    };
+
+    expect(detectedButUnemittedTools(state, ['search_items'])).toEqual([
+      {
+        name: 'get_item_details',
+        reason: 'compile agent did not produce a verified workflow.',
+        lastCompletedStep: 'plan-prereqs',
+      },
+    ]);
+    expect(
+      countDetectedToolNames(['search_items'], detectedButUnemittedTools(state, ['search_items'])),
+    ).toBe(2);
+  });
+
+  it('does not let an older same-named artifact hide a failed latest reteach', () => {
+    const state: TeachState = {
+      workflows: {
+        latest: {
+          sessionPath: '/recordings/latest.json',
+          completedSteps: ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+          error: 'latest compilation failed',
+          startedAt: '2026-07-15T00:00:00.000Z',
+          updatedAt: '2026-07-15T00:03:00.000Z',
+          candidate: {
+            toolName: 'search_items',
+            description: 'Search items',
+            rationale: 'primary intent',
+            confidence: 1,
+            primary: true,
+            requestSeqs: [],
+            representativeSeqs: [],
+            eventSeqs: [],
+            expectedOutput: 'items',
+            likelyParams: [],
+            dependencySeqs: [],
+          },
+        },
+      },
+    };
+
+    expect(detectedButUnemittedTools(state, ['search_items'])).toEqual([
+      {
+        name: 'search_items',
+        reason: 'latest compilation failed',
+        lastCompletedStep: 'detect-candidates',
+      },
+    ]);
+    expect(
+      countDetectedToolNames(['search_items'], detectedButUnemittedTools(state, ['search_items'])),
+    ).toBe(1);
   });
 });
 
@@ -671,6 +951,29 @@ describe('buildTokenDepNote', () => {
 });
 
 describe('audit prompt construction', () => {
+  it('limits direct-success authentication to one baseline and never recovers AUTH_EXPIRED', () => {
+    const prompt = buildAuditInitialPrompt(
+      {
+        site: 'example',
+        provider: 'codex-cli',
+        model: 'test-model',
+        timeoutMs: 60_000,
+        systemPromptPath: '/tmp/prompt.md',
+        toolNames: ['search_items', 'authenticate_password'],
+        nonInteractiveAuthNames: ['authenticate_password'],
+        unverifiedParams: [],
+        tokenDeps: [],
+      },
+      '',
+    );
+
+    expect(prompt).toContain('authenticate_password');
+    expect(prompt).toContain('Call each exactly once with one safe baseline');
+    expect(prompt).toContain('Never differentially probe or retry authentication actions');
+    expect(prompt).toContain('DATA tool returns AUTH_EXPIRED');
+    expect(prompt).toContain('do not call an authentication tool in response');
+  });
+
   it('does not tell the auditor to skip bot-defended read parameter probes', () => {
     const prompt = buildAuditInitialPrompt(
       {

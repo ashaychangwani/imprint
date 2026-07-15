@@ -49,6 +49,9 @@ interface RunMcpServerOptions {
   name?: string;
   /** Server version. */
   version?: string;
+  /** Optional exact tool-name allowlist. Used by audit sessions to keep
+   * human-interactive authentication workflows out of headless MCP exposure. */
+  includeToolNames?: readonly string[];
 }
 
 interface ResolvedTool extends DiscoveredTool {
@@ -56,6 +59,17 @@ interface ResolvedTool extends DiscoveredTool {
   playbookPath?: string;
   /** Probe-cached ladder; runtime starts here instead of the default. */
   preferredOrder?: ConcreteBackend[];
+}
+
+/** Exact allowlist selection used by bounded MCP sessions such as audit. An
+ * omitted allowlist preserves normal production behavior and exposes all tools. */
+export function selectMcpTools<T extends { workflow: { toolName: string } }>(
+  tools: readonly T[],
+  includeToolNames?: readonly string[],
+): T[] {
+  if (!includeToolNames) return [...tools];
+  const includedNames = new Set(includeToolNames);
+  return tools.filter((tool) => includedNames.has(tool.workflow.toolName));
 }
 
 /** Tool description shown to MCP clients. Includes the operator's
@@ -437,7 +451,8 @@ function formatToolError(
 
 export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
   const assetRoot = opts.assetRoot ?? imprintHomeDir();
-  const discovered = await discoverTools(assetRoot, opts.site, '[imprint mcp]');
+  const discoveredAll = await discoverTools(assetRoot, opts.site, '[imprint mcp]');
+  const discovered = selectMcpTools(discoveredAll, opts.includeToolNames);
   const tools: ResolvedTool[] = discovered.map((t) => {
     const playbookPath = pathResolve(t.dir, 'playbook.yaml');
     const cacheStatus = loadBackendsCacheStatus(t.site, assetRoot, t.dir, {

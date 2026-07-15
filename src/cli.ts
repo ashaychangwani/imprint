@@ -405,10 +405,14 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   'mcp-server': {
     summary: "Serve one site's generated tools as MCP (stdio default).",
-    usage: ['imprint mcp-server <site> [--http] [--port <num>]'],
+    usage: ['imprint mcp-server <site> [--http] [--port <num>] [--include-tools <names>]'],
     flags: [
       { name: '--http', description: 'Use Streamable HTTP transport instead of stdio.' },
       { name: '--port <num>', description: 'Port for HTTP transport (default 8765).' },
+      {
+        name: '--include-tools <names>',
+        description: 'Expose only these comma-separated generated tool names.',
+      },
     ],
     example: 'imprint mcp-server southwest',
   },
@@ -1117,6 +1121,7 @@ async function main(argv: string[]): Promise<number> {
         options: {
           http: { type: 'boolean' },
           port: { type: 'string' },
+          'include-tools': { type: 'string' },
         },
         allowPositionals: false,
       });
@@ -1125,6 +1130,10 @@ async function main(argv: string[]): Promise<number> {
         site,
         http: values.http,
         port: values.port ? Number(values.port) : undefined,
+        includeToolNames: values['include-tools']
+          ?.split(',')
+          .map((name) => name.trim())
+          .filter(Boolean),
       });
       return 0;
     }

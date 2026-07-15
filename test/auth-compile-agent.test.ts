@@ -10,6 +10,7 @@ import {
   authWorkflowHash,
   authWorkflowPreflightFailures,
   buildAuthCompileTools,
+  readAuthVerificationReceiptStatus,
 } from '../src/imprint/auth-compile-tools.ts';
 import { __setAuthVerifierLadderForTest } from '../src/imprint/auth-verifier.ts';
 import type { AuthToolPlan } from '../src/imprint/build-plan.ts';
@@ -297,6 +298,48 @@ describe('auth compile tools', () => {
       expect(authExternalVerification(dir, [], { requireLiveAttempt: true }).join('\n')).toContain(
         'changed after the most recent successful live auth verification',
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports missing, failed, verified, and stale auth receipts without rerunning auth', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-receipt-'));
+    try {
+      const workflow = validWorkflow();
+      writeWorkflow(dir, workflow);
+      expect(readAuthVerificationReceiptStatus(dir, workflow).status).toBe('missing');
+
+      writeFileSync(
+        pathJoin(dir, AUTH_VERIFICATION_ATTEMPT_SENTINEL),
+        JSON.stringify({ action: 'finish', ok: false, workflowHash: authWorkflowHash(workflow) }),
+      );
+      expect(readAuthVerificationReceiptStatus(dir, workflow).status).toBe('failed');
+
+      writeFileSync(
+        pathJoin(dir, AUTH_VERIFICATION_ATTEMPT_SENTINEL),
+        JSON.stringify({
+          action: 'finish',
+          ok: true,
+          workflowHash: authWorkflowHash(workflow),
+          backend: 'cdp-replay',
+          timestamp: 456,
+        }),
+      );
+      expect(readAuthVerificationReceiptStatus(dir, workflow)).toEqual(
+        expect.objectContaining({
+          status: 'verified',
+          action: 'finish',
+          backend: 'cdp-replay',
+          timestamp: 456,
+        }),
+      );
+
+      const changed = validWorkflow();
+      const request = changed.requests[1];
+      if (!request) throw new Error('bad fixture');
+      request.url = 'https://fixture.test/changed';
+      expect(readAuthVerificationReceiptStatus(dir, changed).status).toBe('stale');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

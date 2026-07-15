@@ -362,30 +362,81 @@ export function authWorkflowHash(workflow: Workflow): string {
   return createHash('sha256').update(JSON.stringify(workflow)).digest('hex');
 }
 
-function liveAttemptFailures(toolDir: string, workflow: Workflow): string[] {
+export interface AuthVerificationReceiptStatus {
+  status: 'verified' | 'stale' | 'failed' | 'missing';
+  reason: string;
+  action?: string;
+  backend?: string;
+  timestamp?: number;
+}
+
+/** Read the latest auth verification receipt without initiating authentication.
+ * The workflow hash is authoritative: a successful receipt for older generated
+ * code is diagnostic history, not current verification evidence. */
+export function readAuthVerificationReceiptStatus(
+  toolDir: string,
+  workflow: Workflow,
+): AuthVerificationReceiptStatus {
   const path = pathJoin(toolDir, AUTH_VERIFICATION_ATTEMPT_SENTINEL);
   if (!existsSync(path)) {
-    return ['no live auth verification attempt was recorded; call run_verification before done'];
+    return {
+      status: 'missing',
+      reason: 'no live auth verification attempt was recorded',
+    };
   }
 
-  let attempt: { action?: unknown; ok?: unknown; workflowHash?: unknown };
+  let attempt: {
+    action?: unknown;
+    ok?: unknown;
+    workflowHash?: unknown;
+    backend?: unknown;
+    timestamp?: unknown;
+  };
   try {
     attempt = JSON.parse(readFileSync(path, 'utf8')) as typeof attempt;
   } catch (err) {
-    return [
-      `live auth verification record is invalid: ${err instanceof Error ? err.message : String(err)}`,
-    ];
+    return {
+      status: 'failed',
+      reason: `live auth verification record is invalid: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
+  const details = {
+    ...(typeof attempt.action === 'string' ? { action: attempt.action } : {}),
+    ...(typeof attempt.backend === 'string' ? { backend: attempt.backend } : {}),
+    ...(typeof attempt.timestamp === 'number' ? { timestamp: attempt.timestamp } : {}),
+  };
   if (attempt.ok !== true || typeof attempt.action !== 'string') {
-    return ['the most recent live auth verification did not succeed'];
+    return {
+      status: 'failed',
+      reason: 'the most recent live auth verification did not succeed',
+      ...details,
+    };
   }
   if (attempt.workflowHash !== authWorkflowHash(workflow)) {
-    return ['workflow.json changed after the most recent successful live auth verification'];
+    return {
+      status: 'stale',
+      reason: 'workflow.json changed after the most recent successful live auth verification',
+      ...details,
+    };
   }
   const action = workflow.authConfig?.actions[attempt.action];
-  return action?.outcome.type === 'success'
-    ? []
-    : [
-        `the most recent successful live action ${JSON.stringify(attempt.action)} does not declare a success outcome`,
-      ];
+  if (action?.outcome.type !== 'success') {
+    return {
+      status: 'failed',
+      reason: `the most recent successful live action ${JSON.stringify(attempt.action)} does not declare a success outcome`,
+      ...details,
+    };
+  }
+  return {
+    status: 'verified',
+    reason: `live auth verification succeeded with action ${JSON.stringify(attempt.action)}`,
+    ...details,
+  };
+}
+
+function liveAttemptFailures(toolDir: string, workflow: Workflow): string[] {
+  const receipt = readAuthVerificationReceiptStatus(toolDir, workflow);
+  if (receipt.status === 'verified') return [];
+  const suffix = receipt.status === 'missing' ? '; call run_verification before done' : '';
+  return [`${receipt.reason}${suffix}`];
 }
