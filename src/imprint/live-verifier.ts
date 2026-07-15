@@ -474,7 +474,11 @@ export function readPersistedLiveVerificationEvidence(
 
 export function hasSuiteReceiptForSession(path: string, sessionLabel: string): boolean {
   return readPersistedLiveVerificationEvidence(path).some(
-    (item) => item.kind === 'suite' && item.verifierSession === sessionLabel,
+    (item) =>
+      item.kind === 'suite' &&
+      item.verifierSession === sessionLabel &&
+      item.status !== 'running' &&
+      typeof item.finishedAt === 'string',
   );
 }
 

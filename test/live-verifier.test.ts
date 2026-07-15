@@ -268,10 +268,26 @@ describe('live semantic verification report', () => {
         kind: 'suite',
         status: 'passed',
         verifierSession: 'verifier-session-1',
+        finishedAt: new Date().toISOString(),
       },
     ]);
     expect(hasSuiteReceiptForSession(path, 'verifier-session-1')).toBe(true);
     expect(hasSuiteReceiptForSession(path, 'verifier-session-2')).toBe(false);
+  });
+
+  it('does not treat an interrupted running suite as completed evidence', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-running-suite-'));
+    dirs.push(dir);
+    const path = pathJoin(dir, 'evidence.json');
+    persistLiveVerificationEvidence(path, [
+      {
+        label: 'suite-running',
+        kind: 'suite',
+        status: 'running',
+        verifierSession: 'verifier-session-1',
+      },
+    ]);
+    expect(hasSuiteReceiptForSession(path, 'verifier-session-1')).toBe(false);
   });
 
   it('turns expected-versus-observed review issues into compiler feedback', () => {
