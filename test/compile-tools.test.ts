@@ -2295,6 +2295,83 @@ test('live API call returns upcoming trips for the authenticated account', () =>
     ).toBe(true);
   });
 
+  it('accepts a fail-closed baseline that factors the captured call into a suite helper', () => {
+    expect(
+      hasLiveBaselineWorkflowTest(`
+        async function invoke(params) {
+          return await runCapturedIntegrationCase({
+            caseName: 'live API call returns data',
+            workflowPath: WORKFLOW_PATH,
+            params,
+          });
+        }
+
+        test('live API call returns data', async () => {
+          const { result } = await invoke({ query: 'tires' });
+          expect(result.ok).toBe(true);
+        });
+      `),
+    ).toBe(true);
+  });
+
+  it('does not let a captured call in a param test launder a synthetic baseline', () => {
+    expect(
+      hasLiveBaselineWorkflowTest(`
+        test('param:query filters results', async () => {
+          const { result } = await runCapturedIntegrationCase({
+            caseName: 'param:query filters results',
+            workflowPath: WORKFLOW_PATH,
+            params: { query: 'tires' },
+          });
+          expect(result.ok).toBe(true);
+        });
+
+        test('baseline', () => {
+          const result = { ok: true };
+          expect(result.ok).toBe(true);
+        });
+      `),
+    ).toBe(false);
+  });
+
+  it('does not let an unused captured-call helper launder a synthetic baseline', () => {
+    expect(
+      hasLiveBaselineWorkflowTest(`
+        async function invoke(params) {
+          return await runCapturedIntegrationCase({
+            caseName: 'unused helper',
+            workflowPath: WORKFLOW_PATH,
+            params,
+          });
+        }
+
+        test('baseline', () => {
+          const result = { ok: true };
+          expect(result.ok).toBe(true);
+        });
+      `),
+    ).toBe(false);
+  });
+
+  it('does not include an unused helper declared after a synthetic baseline', () => {
+    expect(
+      hasLiveBaselineWorkflowTest(`
+        test('baseline', () => {
+          const result = { ok: true };
+          expect(result.ok).toBe(true);
+        });
+
+        async function invoke(params) {
+          return await runCapturedIntegrationCase({
+            caseName: 'unused helper',
+            workflowPath: WORKFLOW_PATH,
+            params,
+          });
+        }
+      `),
+    ).toBe(false);
+  });
+
   it('counts a green captured-wrapper param test as live coverage', () => {
     expect(
       classifyParamCoverage({

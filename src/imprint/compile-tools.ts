@@ -1913,24 +1913,121 @@ interface TestBlock {
   body: string;
 }
 
+function matchingClosingBrace(source: string, openIndex: number): number | null {
+  let depth = 0;
+  let quote: "'" | '"' | '`' | null = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = openIndex; index < source.length; index++) {
+    const char = source[index] ?? '';
+    const next = source[index + 1] ?? '';
+    if (lineComment) {
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        index++;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      lineComment = true;
+      index++;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      index++;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '{') depth++;
+    if (char === '}' && --depth === 0) return index;
+  }
+  return null;
+}
+
 function hasCapturedLiveWorkflowCall(source: string): boolean {
   return /\b(?:runWorkflowWithLadder|runCapturedIntegrationCase)\s*\(/.test(source);
 }
 
-/** Split a test file into `test(...)` / `it(...)` blocks (title + source from
- *  that test's start to the next test's start). Good enough to check whether a
- *  named per-parameter test's body actually calls the workflow. */
+/** Resolve small local function wrappers around a captured workflow call. The
+ * generated suites commonly factor one invocation helper above their tests;
+ * keeping the resolution local prevents a call in an unrelated param test from
+ * laundering a synthetic baseline elsewhere in the file. */
+function capturedWorkflowHelperNames(source: string): Set<string> {
+  const functionRe = /\b(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g;
+  const functions = [...source.matchAll(functionRe)].map((match) => ({
+    name: match[1] ?? '',
+    index: match.index ?? 0,
+  }));
+  const testStarts = [...source.matchAll(/\b(?:test|it)\s*\(/g)].map((match) => match.index ?? 0);
+  const boundaries = [...functions.map((entry) => entry.index), ...testStarts, source.length].sort(
+    (a, b) => a - b,
+  );
+  const bodies = new Map<string, string>();
+  for (const entry of functions) {
+    const end = boundaries.find((boundary) => boundary > entry.index) ?? source.length;
+    bodies.set(entry.name, source.slice(entry.index, end));
+  }
+  const captured = new Set<string>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, body] of bodies) {
+      if (captured.has(name)) continue;
+      const callsCapturedHelper = [...captured].some((helper) =>
+        new RegExp(`\\b${helper.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(body),
+      );
+      if (hasCapturedLiveWorkflowCall(body) || callsCapturedHelper) {
+        captured.add(name);
+        changed = true;
+      }
+    }
+  }
+  return captured;
+}
+
+/** Split a test file into `test(...)` / `it(...)` blocks (title + callback
+ *  source). Good enough to check whether a named per-parameter test's body
+ *  actually calls the workflow. */
 export function extractTestBlocks(src: string): TestBlock[] {
   const re = /\b(?:test|it)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g;
-  const starts: Array<{ index: number; title: string }> = [];
+  const starts: Array<{ index: number; title: string; afterTitle: number }> = [];
   for (const m of src.matchAll(re)) {
-    starts.push({ index: m.index ?? 0, title: m[2] ?? '' });
+    starts.push({
+      index: m.index ?? 0,
+      title: m[2] ?? '',
+      afterTitle: (m.index ?? 0) + m[0].length,
+    });
   }
   const blocks: TestBlock[] = [];
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i];
     if (!start) continue;
-    const end = i + 1 < starts.length ? (starts[i + 1]?.index ?? src.length) : src.length;
+    const fallbackEnd = i + 1 < starts.length ? (starts[i + 1]?.index ?? src.length) : src.length;
+    const callbackOpen = src.indexOf('{', start.afterTitle);
+    const callbackClose =
+      callbackOpen >= 0 && callbackOpen < fallbackEnd
+        ? matchingClosingBrace(src, callbackOpen)
+        : null;
+    const end = callbackClose === null ? fallbackEnd : callbackClose + 1;
     blocks.push({ title: start.title, body: src.slice(start.index, end) });
   }
   return blocks;
@@ -2414,13 +2511,20 @@ export function hasLiveBaselineWorkflowTest(integrationSrc: string): boolean {
   const throwsOnFailure = /if\s*\(\s*!result\.ok\s*\)\s*\{[\s\S]{0,500}\bthrow\b/;
   const returnsOnFailedResult =
     /if\s*\([^)]*![^)]*\.result\.ok[\s\S]{0,200}\)\s*(?:\{[\s\S]{0,300}\breturn\b|return\b)/;
-  return extractTestBlocks(integrationSrc).some(
-    (block) =>
+  const capturedHelpers = capturedWorkflowHelperNames(integrationSrc);
+  return extractTestBlocks(integrationSrc).some((block) => {
+    const invokesCapturedWorkflow =
+      hasCapturedLiveWorkflowCall(block.body) ||
+      [...capturedHelpers].some((helper) =>
+        new RegExp(`\\b${helper.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(block.body),
+      );
+    return (
       !block.title.includes('param:') &&
-      hasCapturedLiveWorkflowCall(block.body) &&
+      invokesCapturedWorkflow &&
       !returnsOnFailedResult.test(block.body) &&
-      (requiresOk.test(block.body) || throwsOnFailure.test(block.body)),
-  );
+      (requiresOk.test(block.body) || throwsOnFailure.test(block.body))
+    );
+  });
 }
 
 /**
