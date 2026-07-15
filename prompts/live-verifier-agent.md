@@ -66,6 +66,11 @@ Judge all of the following:
   to use rolling future dates.
 - Submit exactly one verdict for every declared workflow parameter. Do not omit,
   duplicate, or invent parameter names.
+- Mark a parameter as working only with differential evidence: hold the other
+  inputs fixed, change that parameter to a materially distinct valid value, and
+  observe the promised request/result effect. A successful response alone does
+  not prove the parameter works; unchanged or non-discriminating output must be
+  reported as `no_op` or untestable with the concrete evidence.
 - Judge the core intent separately from secondary filters or options. A working
   core call with one broken secondary parameter is not `tool_broken`; report the
   parameter-specific failure and the otherwise-working core precisely.
