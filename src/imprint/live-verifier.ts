@@ -54,6 +54,8 @@ const LIVE_VERIFIER_LOG_FILE = '.live-verifier-log.jsonl';
 const BACKEND_PREPARATION_BUDGET_MS = 8 * 60_000;
 const MAX_CREDITED_BACKEND_PREPARATIONS = 2;
 const BACKEND_PROBE_SHUTDOWN_GRACE_MS = 5_000;
+const MAX_PROMPT_EVIDENCE_RECORDS = 48;
+const MAX_PROMPT_EVIDENCE_RECORD_CHARS = 8_000;
 let evidenceTempSequence = 0;
 
 const BaselineSchema = z
@@ -999,11 +1001,104 @@ function buildInitialMessage(
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
       artifactContext: buildVerifierArtifactContext(toolDir, workflow.toolName),
-      baselineEvidence: evidence,
+      baselineEvidence: compactVerifierEvidenceContext(evidence),
     },
     null,
     2,
   )}`;
+}
+
+/** Keep the verifier prompt bounded without weakening the durable evidence
+ * artifact. Full, sanitized receipts remain on disk; the model gets recent
+ * records with representative payload previews and navigation metadata. */
+export function compactVerifierEvidenceContext(
+  evidence: Array<LiveIntegrationEvidence | PersistedLiveVerificationRecord>,
+): unknown[] {
+  const omittedRecords = Math.max(0, evidence.length - MAX_PROMPT_EVIDENCE_RECORDS);
+  const selected = evidence.slice(-MAX_PROMPT_EVIDENCE_RECORDS);
+  const compacted = selected.map((record) => compactVerifierEvidenceRecord(record));
+  return omittedRecords > 0
+    ? [
+        {
+          kind: 'prompt-compaction',
+          omittedRecords,
+          note: `Full receipts remain in ${LIVE_VERIFICATION_EVIDENCE_FILE}.`,
+        },
+        ...compacted,
+      ]
+    : compacted;
+}
+
+function compactVerifierEvidenceRecord(
+  record: LiveIntegrationEvidence | PersistedLiveVerificationRecord,
+): unknown {
+  const compacted = compactVerifierValue(record, 0);
+  const serialized = JSON.stringify(compacted);
+  if (serialized.length <= MAX_PROMPT_EVIDENCE_RECORD_CHARS) return compacted;
+
+  const navigationKeys = [
+    'schemaVersion',
+    'kind',
+    'label',
+    'caseName',
+    'toolName',
+    'status',
+    'verifierSession',
+    'startedAt',
+    'finishedAt',
+    'requestedParams',
+    'effectiveParams',
+    'preferredBackend',
+    'usedBackend',
+    'attempts',
+    'durationMs',
+    'exitCode',
+    'timedOut',
+    'passedTests',
+    'failedTests',
+    'completedCallLabels',
+    'reason',
+    'error',
+  ] as const;
+  const source = record as Record<string, unknown>;
+  const navigation: Record<string, unknown> = {};
+  for (const key of navigationKeys) {
+    if (source[key] !== undefined) navigation[key] = compactVerifierValue(source[key], 0);
+  }
+  return {
+    ...navigation,
+    payloadPreview: clipVerifierString(serialized, MAX_PROMPT_EVIDENCE_RECORD_CHARS),
+    promptCompacted: true,
+    note: `Full receipt remains in ${LIVE_VERIFICATION_EVIDENCE_FILE}.`,
+  };
+}
+
+function compactVerifierValue(value: unknown, depth: number): unknown {
+  if (typeof value === 'string') return clipVerifierString(value, 2_000);
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= 6) return clipVerifierString(JSON.stringify(value), 2_000);
+  if (Array.isArray(value)) {
+    if (value.length <= 4) return value.map((item) => compactVerifierValue(item, depth + 1));
+    return [
+      ...value.slice(0, 3).map((item) => compactVerifierValue(item, depth + 1)),
+      { promptCompactedItems: value.length - 4 },
+      compactVerifierValue(value.at(-1), depth + 1),
+    ];
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      compactVerifierValue(item, depth + 1),
+    ]),
+  );
+}
+
+function clipVerifierString(value: string, maxChars: number): string {
+  const redacted = redactFreeformText(value).redacted;
+  if (redacted.length <= maxChars) return redacted;
+  const headChars = Math.ceil(maxChars * 0.6);
+  const tailChars = Math.floor(maxChars * 0.4);
+  return `${redacted.slice(0, headChars)}\n...[prompt preview truncated ${redacted.length - maxChars} chars]...\n${redacted.slice(-tailChars)}`;
 }
 
 function creditBackendPreparation(

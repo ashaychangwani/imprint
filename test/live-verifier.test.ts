@@ -20,6 +20,7 @@ import {
   assertReportCoversWorkflowParameters,
   backendPreparationDeadlineCreditMs,
   buildVerifierArtifactContext,
+  compactVerifierEvidenceContext,
   hasSuiteReceiptForSession,
   mergeSemanticParamVerification,
   namespaceLiveIntegrationEvidence,
@@ -83,6 +84,40 @@ describe('verifier artifact context', () => {
       },
       dynamicValueFindings: [{ name: 'csrf' }],
     });
+  });
+
+  it('bounds large retained live outputs while preserving durable navigation metadata', () => {
+    const evidence = Array.from({ length: 60 }, (_, index) => ({
+      schemaVersion: 1,
+      kind: 'call',
+      label: `targeted-call-${index + 1}`,
+      caseName: `case-${index + 1}`,
+      toolName: 'search_things',
+      requestedParams: { query: `query-${index + 1}` },
+      effectiveParams: { query: `query-${index + 1}` },
+      result: {
+        ok: true,
+        data: {
+          items: Array.from({ length: 100 }, (_, itemIndex) => ({
+            id: `${index}-${itemIndex}`,
+            description: 'representative live output '.repeat(100),
+          })),
+        },
+      },
+      usedBackend: 'fetch',
+      attempts: [{ backend: 'fetch', outcome: 'ok' }],
+      durationMs: 10,
+    }));
+
+    const context = compactVerifierEvidenceContext(evidence) as Array<Record<string, unknown>>;
+    const serialized = JSON.stringify(context);
+    expect(serialized.length).toBeLessThan(500_000);
+    expect(context[0]).toMatchObject({ kind: 'prompt-compaction', omittedRecords: 12 });
+    expect(context.at(-1)).toMatchObject({
+      label: 'targeted-call-60',
+      requestedParams: { query: 'query-60' },
+    });
+    expect(serialized).toContain(LIVE_VERIFICATION_EVIDENCE_FILE);
   });
 });
 
