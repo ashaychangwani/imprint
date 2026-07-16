@@ -6,7 +6,7 @@ Imprint emits [OpenTelemetry](https://opentelemetry.io/) spans in [OpenInference
 
 ```bash
 # Terminal 1 — start Phoenix
-pip install arize-phoenix && phoenix serve
+pip install "arize-phoenix>=11.4" && phoenix serve
 
 # Terminal 2 — run imprint with tracing
 IMPRINT_TRACE=1 imprint teach southwest --url https://www.southwest.com
@@ -41,25 +41,20 @@ Open `http://localhost:6006` → project "imprint" → traces.
 
 When tracing is enabled, `IMPRINT_TRACE_LLM_IO` and `IMPRINT_TRACE_TOOL_IO` default to on. Set them to `0` to capture structure without payloads.
 
-### Cost rate overrides
+### Cost ownership
 
-Cost is computed from a built-in rate table (`DEFAULT_MODEL_RATES` in `tracing.ts`) covering current Claude models. Override with env vars when using models not in the table or when rates change:
+Imprint emits OpenInference model, provider, total-token, and cache-token attributes. Phoenix calculates span, trace, and project costs from those attributes using its model pricing configuration. Update pricing in Phoenix under Settings → Models when a model is new or has custom rates; Imprint does not maintain a duplicate pricing table.
 
-| Variable | Example |
-|---|---|
-| `IMPRINT_TRACE_INPUT_USD_PER_1M` | `3` — global input rate fallback |
-| `IMPRINT_TRACE_OUTPUT_USD_PER_1M` | `15` — global output rate fallback |
-| `IMPRINT_TRACE_COST_<MODEL>_INPUT_USD_PER_1M` | `5` — model-specific override |
-| `IMPRINT_TRACE_COST_<PROVIDER>_<MODEL>_INPUT_USD_PER_1M` | `5` — provider+model-specific override |
+`scripts/analyze-phoenix.ts` requires Phoenix 11.4 or newer, where the GraphQL `costSummary` field was introduced. When Phoenix has no price for a model, the analyzer reports that model as **unpriced**; a trace containing both priced and unpriced models is explicitly labeled **partial** rather than presenting the priced subset as a complete total. Phoenix calculates costs asynchronously, so the analyzer briefly polls a newly completed trace. A null summary is pending during that bounded wait; if it remains unresolved, it is reported as **unknown (unpriced or cost pending)** for compatibility with Phoenix 11.4–11.7, which did not materialize cost rows for unmatched models.
 
-Model and provider names are uppercased with non-alphanumeric characters replaced by `_` (e.g. `claude-sonnet-4-5` → `CLAUDE_SONNET_4_5`). The resolution order is: provider+model-specific → model-specific → provider-specific → global fallback → built-in rate table.
+Previous releases accepted `IMPRINT_TRACE_*_USD_PER_1M` and `IMPRINT_TRACE_COST_*` variables for local pricing. They are no longer applied. Imprint prints a migration warning when one is present; move those rates to Phoenix Settings → Models.
 
 ## Trace hierarchy
 
 ### `imprint teach`
 
 ```
-cli.teach (AGENT)                          ← cost rollup: total tokens + cost from all children
+cli.teach (AGENT)                          ← Phoenix rolls up child costs for the trace
 ├─ teach.combine_sessions (CHAIN)          ← merge sibling recordings
 ├─ teach.record (CHAIN)                    ← live capture
 ├─ teach.redact (CHAIN)                    ← credential/PII scrub
@@ -73,11 +68,13 @@ cli.teach (AGENT)                          ← cost rollup: total tokens + cost 
 ├─ teach.plan_tool (AGENT)                 ← per-tool implementation plan
 │   └─ llm.analyze (LLM)
 ├─ compile.generate (AGENT)
-│   ├─ agent.turn.1 (CHAIN)               ← per-turn tokens
-│   │   ├─ llm.message_with_tools (LLM)   ← model, tokens, cost, stop reason
-│   │   ├─ agent.tool.read_session_summary (TOOL)
-│   │   └─ agent.tool.write_file (TOOL)
-│   └─ ...
+│   ├─ API-provider path
+│   │   └─ llm.message_with_tools (LLM)   ← one instrumented model call
+│   └─ CLI-provider path
+│       └─ compile.{codex,claude}_cli_agent (AGENT)
+│           ├─ agent.turn.1 (CHAIN)
+│           ├─ agent.tool.read_session_summary (TOOL)
+│           └─ compile.{codex,claude}_cli_usage (LLM) ← aggregate usage carrier
 └─ compile.playbook (CHAIN)
     ├─ compile.triage_requests (RETRIEVER)
     └─ llm.analyze (LLM)
@@ -86,46 +83,18 @@ cli.teach (AGENT)                          ← cost rollup: total tokens + cost 
 ### `imprint audit`
 
 ```
-cli.audit (AGENT)                          ← cost rollup
-└─ audit.session (AGENT)
-    └─ (headless claude drives the site's real MCP tools)
+cli.audit (AGENT)                          ← Phoenix rolls up child costs for the trace
+└─ audit.session (AGENT)                   ← discovery, tool-driving, grading, persistence
+    └─ audit.llm_usage (LLM)               ← aggregate CLI usage carrier, when usage exists
 ```
 
-## Cost rollup
+## Token and cost tracking
 
-Root spans (`cli.teach`, `cli.audit`) use `tracedWithCostRollup` to accumulate `llm.cost.*` and `llm.token_count.*` from every descendant LLM span. This means:
+Each LLM span carries `llm.model_name`, `llm.provider`, `llm.token_count.prompt`, `llm.token_count.completion`, and `llm.token_count.total`. When available, cache usage is emitted as `llm.token_count.prompt_details.cache_read` and `.cache_write`. `llm.token_count.prompt` is the total prompt (uncached + cache read + cache write), normalized by `totalPromptTokens()` for providers that report the parts separately.
 
-- **Child spans** (each `llm.message_with_tools`) carry their own per-call cost.
-- **Root spans** carry the **total** — the sum across all child LLM calls in the entire pipeline.
+Codex already includes cached input in its reported `input_tokens`, so Imprint passes that total through and emits `cached_input_tokens` only as a subset. Anthropic reports uncached input separately, so Imprint adds its cache-read and cache-write buckets to form the OpenInference prompt total.
 
-The rollup uses an `AsyncLocalStorage`-based accumulator. Every `llmCostAttributes` call checks for an active accumulator and adds its tokens and cost to the running total. When the root span completes, the accumulated totals are set as span attributes.
-
-### Cache-aware cost breakdown
-
-Prompt costs reflect the Anthropic cache split:
-
-| Token type | Rate multiplier | Attribute |
-|---|---|---|
-| Uncached input | 1.0× (full rate) | `llm.cost.input` |
-| Cache read | 0.1× | `llm.cost.prompt_details.cache_read` |
-| Cache write | 1.25× | `llm.cost.prompt_details.cache_write` |
-| Completion | 1.0× (output rate) | `llm.cost.completion` |
-
-`llm.cost.prompt` = uncached + cache read + cache write. `llm.cost.total` = prompt + completion.
-
-Token count attributes follow the same structure: `llm.token_count.prompt` is the **total** prompt tokens (uncached + cache read + cache write), not just the uncached portion. This normalization happens in `totalPromptTokens()` — Anthropic's API reports `input_tokens` as uncached only, with cache counts in separate fields.
-
-### Cost attributes on root vs child spans
-
-| Attribute | Child (`llm.message_with_tools`) | Root (`cli.teach`) |
-|---|---|---|
-| `llm.token_count.prompt` | This call's tokens | Sum of all calls |
-| `llm.token_count.completion` | This call's tokens | Sum of all calls |
-| `llm.cost.total` | This call's cost | Sum of all calls |
-| `llm.cost.prompt_details.cache_read` | This call's cache reads | Sum of all calls |
-| `imprint.llm.cost_estimated` | `true` | `true` |
-
-The `audit.session` span also carries `imprint.audit.cost_usd` — the auditor's CLI-reported cost figure (parsed from headless claude output). `llm.cost.*` on that span is the token-based estimate. The two may differ slightly (CLI reports its own accounting).
+External CLI agent sessions expose only aggregate usage rather than one event per underlying model request. Their surrounding workflow remains an `AGENT` span; Imprint emits a zero-duration child `LLM` span marked `imprint.llm.usage_aggregate=true` solely to carry the model and token attributes Phoenix needs for pricing. This prevents tool-driving latency from being mislabeled as LLM latency. The `audit.session` span can additionally carry `imprint.audit.cost_usd` when the CLI provider reports a cost directly.
 
 ## Stage attributes
 
@@ -143,7 +112,7 @@ Each pipeline stage carries end-attributes for fast triage without expanding chi
 
 ## Analyzing traces
 
-`scripts/analyze-phoenix.ts` reads `llm.cost.*` attributes from Phoenix's GraphQL API to produce per-stage and per-trace cost/token summaries:
+`scripts/analyze-phoenix.ts` reads Phoenix's calculated `costSummary` from its GraphQL API to produce per-stage and per-trace cost/token summaries:
 
 ```bash
 # Analyze the last teach trace
@@ -156,11 +125,11 @@ bun run scripts/analyze-phoenix.ts --trace-id <id>
 bun run scripts/analyze-phoenix.ts --kind audit --last 5
 ```
 
-The script reads the emitted `llm.cost.*` attributes directly — it does not recompute from a private rate table, so its numbers always match the app's pricing. It reads from non-root leaf spans to avoid double-counting against the rolled-up root totals.
+The script does not recompute pricing. Its trace total comes from Phoenix's trace-level cost summary, so it follows Phoenix's built-in or user-configured model rates. It paginates through every span in the trace, then checks every token-bearing LLM span and reports `unpriced`, `partial`, `cost pending`, or `unknown` instead of converting missing pricing to `$0`.
 
 ## Tips
 
 - **Debugging a teach failure**: Open the `cli.teach` trace. The failing stage has a red status — expand it to see the LLM call that errored. `teach.plan_prereqs` timeout, `teach.build_shared_module` with `ok=false`, an empty `teach.plan_tool`, or a `compile.generate` that gave up are the common failure modes.
 - **Debugging an audit failure**: The `audit.session` span carries `imprint.audit.verdict` and the per-invocation breakdown. When `imprint.audit.timed_out=true`, the verdict is `timeout` and the auditor's transcript is written next to the report for diagnosis.
-- **Cost estimation**: The built-in rate table covers Claude Opus 4.1 and 4.5–4.8, Sonnet 4.5–4.6, and Haiku 4.5. For other models, set the `IMPRINT_TRACE_COST_*` env vars.
+- **Cost configuration**: Keep Phoenix current and configure new or custom model prices under Settings → Models.
 - **Large traces**: Set `IMPRINT_TRACE_IO_MAX_CHARS=0` to suppress I/O capture entirely (structure-only traces). Set `IMPRINT_TRACE_BATCH=0` for short-lived runs where the process exits before the batch exporter flushes.

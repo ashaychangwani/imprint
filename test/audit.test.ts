@@ -6,6 +6,7 @@ import {
   type AuditReport,
   AuditReportSchema,
   auditHasCorrectSignal,
+  auditPromptTokens,
   buildAuditInitialPrompt,
   buildAuditMcpCommandArgs,
   buildAuditMcpEnvironment,
@@ -172,6 +173,16 @@ describe('buildAuditMcpCommandArgs', () => {
       '--include-tools',
       'search_items,quote_item',
     ]);
+  });
+});
+
+describe('auditPromptTokens', () => {
+  it('keeps Codex cached input as a subset of the reported prompt total', () => {
+    expect(auditPromptTokens('codex-cli', 100, 80, 0)).toBe(100);
+  });
+
+  it('adds Anthropic cache buckets to its uncached input delta', () => {
+    expect(auditPromptTokens('claude-cli', 100, 80, 20)).toBe(200);
   });
 });
 

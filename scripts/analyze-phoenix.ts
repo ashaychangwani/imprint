@@ -2,19 +2,18 @@
 /**
  * Analyze Phoenix traces for compile/audit agent performance + cost.
  *
- * Cost is read from the `llm.cost.*` attributes the app already emits on its
- * spans (the single source of truth in src/imprint/tracing.ts) — this script
- * does NOT recompute cost from a private rate table, so it can never drift from
- * the app's pricing or miss a newly added model. Root spans (`cli.teach`,
- * `cli.audit`) carry a rolled-up `llm.cost.total` from tracedWithCostRollup;
- * this script reads from non-root spans to avoid double-counting against
- * the leaf LLM/agent spans that feed the rollup.
+ * Cost is read from Phoenix's server-calculated `costSummary`. Imprint emits
+ * OpenInference model/provider/token attributes and Phoenix owns model pricing,
+ * cache discounts, and trace-level rollups.
  *
  * Usage: bun run scripts/analyze-phoenix.ts [--trace-id <id>] [--last <N>] [--kind teach|audit|all]
  */
 
 const PHOENIX_URL = process.env.PHOENIX_URL ?? 'http://localhost:6006';
 const PROJECT_ID = 'UHJvamVjdDoy'; // imprint project
+const TRACE_SPAN_PAGE_SIZE = 500;
+const COST_POLL_ATTEMPTS = 4;
+const COST_POLL_INTERVAL_MS = 2000;
 
 /** Root span names this script knows how to summarize. */
 const ROOT_KINDS: Record<string, string[]> = {
@@ -31,12 +30,19 @@ async function gql(query: string, variables?: Record<string, unknown>): Promise<
   });
   const json = (await resp.json()) as { data?: unknown; errors?: Array<{ message: string }> };
   if (json.errors) {
-    throw new Error(`GraphQL error: ${json.errors.map((e) => e.message).join(', ')}`);
+    throw new Error(phoenixGraphqlErrorMessage(json.errors.map((error) => error.message)));
   }
   return json.data;
 }
 
-interface SpanNode {
+export function phoenixGraphqlErrorMessage(messages: string[]): string {
+  if (messages.some((message) => /cannot query field ['"]?costSummary/i.test(message))) {
+    return 'Phoenix cost analysis requires Phoenix 11.4 or newer because this server does not expose GraphQL costSummary. Upgrade arize-phoenix, restart Phoenix, and retry.';
+  }
+  return `GraphQL error: ${messages.join(', ')}`;
+}
+
+export interface SpanNode {
   name: string;
   latencyMs: number;
   statusCode: string;
@@ -49,6 +55,15 @@ interface SpanNode {
   parentId: string | null;
   attributes: string;
   numChildSpans: number;
+  costSummary: CostSummary | null;
+  /** Local analyzer state after a bounded wait; never returned by Phoenix. */
+  costResolution?: 'unknown';
+}
+
+export interface CostSummary {
+  prompt: { cost: number | null; tokens: number | null };
+  completion: { cost: number | null; tokens: number | null };
+  total: { cost: number | null; tokens: number | null };
 }
 
 async function getRecentTraces(limit: number, rootNames: string[]) {
@@ -68,24 +83,83 @@ async function getRecentTraces(limit: number, rootNames: string[]) {
   return data.node.spans.edges.map((e) => e.node).filter((s) => rootNames.includes(s.name));
 }
 
+interface SpanPage {
+  spans: SpanNode[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+/** Collect every trace span page so cost completeness is never inferred from a prefix. */
+export async function collectSpanPages(
+  fetchPage: (after: string | null) => Promise<SpanPage>,
+): Promise<SpanNode[]> {
+  const spans: SpanNode[] = [];
+  const seenCursors = new Set<string>();
+  let after: string | null = null;
+  while (true) {
+    const page = await fetchPage(after);
+    spans.push(...page.spans);
+    if (!page.hasNextPage) return spans;
+    if (!page.endCursor || seenCursors.has(page.endCursor)) {
+      throw new Error('Phoenix returned an invalid or repeated span-page cursor.');
+    }
+    seenCursors.add(page.endCursor);
+    after = page.endCursor;
+  }
+}
+
 async function getTraceSpans(traceId: string): Promise<SpanNode[]> {
+  return await collectSpanPages(async (after) => {
+    const data = (await gql(
+      `query TraceSpans($after: String) {
+        node(id: "${PROJECT_ID}") {
+          ... on Project {
+            spans(first: ${TRACE_SPAN_PAGE_SIZE}, after: $after, sort: { col: startTime, dir: asc }, filterCondition: "trace_id == '${traceId}'") {
+              edges { node {
+                name latencyMs statusCode startTime endTime
+                context { traceId spanId }
+                parentId
+                tokenCountTotal tokenCountPrompt tokenCountCompletion
+                costSummary {
+                  prompt { cost tokens }
+                  completion { cost tokens }
+                  total { cost tokens }
+                }
+                attributes
+                numChildSpans
+              } }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }`,
+      { after },
+    )) as {
+      node: {
+        spans: {
+          edges: Array<{ node: SpanNode }>;
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+      };
+    };
+    return {
+      spans: data.node.spans.edges.map((edge) => edge.node),
+      ...data.node.spans.pageInfo,
+    };
+  });
+}
+
+async function getTraceCost(traceId: string): Promise<number | null> {
   const data = (await gql(`{
     node(id: "${PROJECT_ID}") {
       ... on Project {
-        spans(first: 500, sort: { col: startTime, dir: asc }, filterCondition: "trace_id == '${traceId}'") {
-          edges { node {
-            name latencyMs statusCode startTime endTime
-            context { traceId spanId }
-            parentId
-            tokenCountTotal tokenCountPrompt tokenCountCompletion
-            attributes
-            numChildSpans
-          } }
+        trace(traceId: "${traceId}") {
+          costSummary { total { cost } }
         }
       }
     }
-  }`)) as { node: { spans: { edges: Array<{ node: SpanNode }> } } };
-  return data.node.spans.edges.map((e) => e.node);
+  }`)) as { node: { trace: { costSummary: CostSummary } | null } };
+  return data.node.trace?.costSummary.total.cost ?? null;
 }
 
 function formatDuration(ms: number): string {
@@ -128,22 +202,152 @@ function attrStr(parsed: Record<string, unknown>, key: string): string | null {
   return typeof v === 'string' ? v : null;
 }
 
-/** Total emitted cost (USD) for one span, or null if it carries none. */
+/** Phoenix-calculated cost (USD) for one span, or null when unpriced. */
 function spanCostTotal(span: SpanNode): number | null {
-  return attrNum(parseAttrs(span.attributes), 'llm.cost.total');
+  return span.costSummary?.total.cost ?? null;
 }
 
-/** Sum emitted `llm.cost.total` across non-root spans. Root spans now carry a
- *  rolled-up total from tracedWithCostRollup, so they must be excluded to avoid
- *  double-counting against the leaf LLM/agent spans that feed the rollup. */
-function sumCostTotal(spans: SpanNode[]): number {
-  let total = 0;
-  for (const s of spans) {
-    if (!s.parentId) continue;
-    const c = spanCostTotal(s);
-    if (c != null) total += c;
+export interface PhoenixCostAvailability {
+  status: 'priced' | 'partial' | 'unpriced' | 'pending' | 'unknown' | 'no-usage';
+  cost: number | null;
+  unpricedModels: string[];
+  pendingModels: string[];
+  unknownModels: string[];
+}
+
+function isLlmUsageSpan(span: SpanNode): boolean {
+  const attrs = parseAttrs(span.attributes);
+  const kind = attrStr(attrs, 'openinference.span.kind');
+  const tokens = span.tokenCountTotal ?? attrNum(attrs, 'llm.token_count.total') ?? 0;
+  return kind === 'LLM' && tokens > 0;
+}
+
+function spanModel(span: SpanNode): string {
+  const attrs = parseAttrs(span.attributes);
+  return attrStr(attrs, 'llm.model_name') ?? attrStr(attrs, 'imprint.model') ?? 'unknown model';
+}
+
+/** Preserve whether Phoenix priced every LLM usage span; never coerce unknown cost to zero. */
+export function summarizePhoenixCost(
+  spans: SpanNode[],
+  traceCost: number | null = null,
+): PhoenixCostAvailability {
+  const usageSpans = spans.filter(isLlmUsageSpan);
+  if (usageSpans.length === 0) {
+    return {
+      status: 'no-usage',
+      cost: null,
+      unpricedModels: [],
+      pendingModels: [],
+      unknownModels: [],
+    };
   }
-  return total;
+  const pending = usageSpans.filter(
+    (span) => span.costSummary == null && span.costResolution !== 'unknown',
+  );
+  const unknown = usageSpans.filter((span) => span.costResolution === 'unknown');
+  const unpriced = usageSpans.filter(
+    (span) => span.costSummary != null && spanCostTotal(span) == null,
+  );
+  const priced = usageSpans.filter((span) => spanCostTotal(span) != null);
+  const pricedCost = priced.reduce((sum, span) => sum + (spanCostTotal(span) ?? 0), 0);
+  // Span costs and the trace rollup settle asynchronously. Never let a stale
+  // zero/partial trace rollup erase cost already materialized on child spans.
+  const availableCost = traceCost == null ? pricedCost : Math.max(traceCost, pricedCost);
+  const unpricedModels = [...new Set(unpriced.map(spanModel))].sort();
+  const pendingModels = [...new Set(pending.map(spanModel))].sort();
+  const unknownModels = [...new Set(unknown.map(spanModel))].sort();
+  if (pending.length > 0) {
+    return { status: 'pending', cost: null, unpricedModels, pendingModels, unknownModels };
+  }
+  if (unknown.length > 0 && priced.length === 0) {
+    return { status: 'unknown', cost: null, unpricedModels, pendingModels: [], unknownModels };
+  }
+  if (unpriced.length === usageSpans.length) {
+    return {
+      status: 'unpriced',
+      cost: null,
+      unpricedModels,
+      pendingModels: [],
+      unknownModels: [],
+    };
+  }
+  if (unpriced.length > 0 || unknown.length > 0) {
+    return {
+      status: 'partial',
+      cost: availableCost,
+      unpricedModels,
+      pendingModels: [],
+      unknownModels,
+    };
+  }
+  return {
+    status: 'priced',
+    cost: availableCost,
+    unpricedModels: [],
+    pendingModels: [],
+    unknownModels: [],
+  };
+}
+
+export function formatPhoenixCost(summary: PhoenixCostAvailability): string {
+  if (summary.status === 'pending') {
+    return `unknown (cost pending: ${summary.pendingModels.join(', ')})`;
+  }
+  if (summary.status === 'unpriced') {
+    return `unpriced (${summary.unpricedModels.join(', ')})`;
+  }
+  if (summary.status === 'unknown') {
+    const details = [
+      ...(summary.unpricedModels.length > 0
+        ? [`unpriced: ${summary.unpricedModels.join(', ')}`]
+        : []),
+      `unpriced or cost pending: ${summary.unknownModels.join(', ')}`,
+    ];
+    return `unknown (${details.join('; ')})`;
+  }
+  if (summary.status === 'partial') {
+    const details = [
+      ...(summary.unpricedModels.length > 0
+        ? [`unpriced: ${summary.unpricedModels.join(', ')}`]
+        : []),
+      ...(summary.unknownModels.length > 0
+        ? [`unpriced or cost pending: ${summary.unknownModels.join(', ')}`]
+        : []),
+    ];
+    return `${formatCost(summary.cost ?? 0)} (partial; ${details.join('; ')})`;
+  }
+  if (summary.status === 'no-usage') return 'unknown (no LLM usage)';
+  return formatCost(summary.cost ?? 0);
+}
+
+function hasPendingLlmCost(spans: SpanNode[]): boolean {
+  return spans.some((span) => isLlmUsageSpan(span) && span.costSummary == null);
+}
+
+/**
+ * Phoenix 11.4–11.7 leaves costSummary null forever for unmatched models.
+ * After the polling budget expires, null remains intrinsically ambiguous: an
+ * older Phoenix may have no row for an unmatched model, or a busy calculator
+ * may still be processing it. Mark that distinction explicitly instead of
+ * coercing it to either unpriced or zero.
+ */
+export function classifyUnresolvedCostsAsUnknown(spans: SpanNode[]): SpanNode[] {
+  return spans.map((span) => {
+    if (!isLlmUsageSpan(span) || span.costSummary != null) return span;
+    return { ...span, costResolution: 'unknown' };
+  });
+}
+
+async function getTraceSpansAfterCostSettle(traceId: string): Promise<SpanNode[]> {
+  let spans: SpanNode[] = [];
+  for (let attempt = 1; attempt <= COST_POLL_ATTEMPTS; attempt++) {
+    spans = await getTraceSpans(traceId);
+    if (!hasPendingLlmCost(spans)) return spans;
+    if (attempt === COST_POLL_ATTEMPTS) return classifyUnresolvedCostsAsUnknown(spans);
+    await new Promise((resolve) => setTimeout(resolve, COST_POLL_INTERVAL_MS));
+  }
+  return spans;
 }
 
 /** All descendant spans of `rootSpanId` (transitive children). */
@@ -172,7 +376,7 @@ function descendantsOf(spans: SpanNode[], rootSpanId: string): SpanNode[] {
   return out;
 }
 
-function printAuditSummary(span: SpanNode): void {
+function printAuditSummary(span: SpanNode, allSpans: SpanNode[]): void {
   const a = parseAttrs(span.attributes);
   const verdict = attrStr(a, 'imprint.audit.verdict') ?? '?';
   const score = attrNum(a, 'imprint.audit.score');
@@ -185,7 +389,7 @@ function printAuditSummary(span: SpanNode): void {
   const turns = attrNum(a, 'imprint.audit.turns');
   const timedOut = resolveAttr(a, 'imprint.audit.timed_out') === true;
   const costUsd = attrNum(a, 'imprint.audit.cost_usd');
-  const estCost = spanCostTotal(span);
+  const phoenixCost = summarizePhoenixCost([span, ...descendantsOf(allSpans, span.context.spanId)]);
 
   console.log('\nAudit:');
   console.log(
@@ -196,8 +400,8 @@ function printAuditSummary(span: SpanNode): void {
   );
   const costBits: string[] = [];
   if (costUsd != null) costBits.push(`reported ${formatCost(costUsd)}`);
-  if (estCost != null) costBits.push(`estimated ${formatCost(estCost)}`);
-  if (costBits.length > 0) console.log(`  cost: ${costBits.join(', ')}`);
+  costBits.push(`Phoenix ${formatPhoenixCost(phoenixCost)}`);
+  console.log(`  cost: ${costBits.join(', ')}`);
 }
 
 function printCompileSpan(span: SpanNode, allSpans: SpanNode[]): void {
@@ -212,9 +416,7 @@ function printCompileSpan(span: SpanNode, allSpans: SpanNode[]): void {
   const cacheRead = attrNum(a, 'imprint.compile.cache_read_input_tokens');
   const cacheCreate = attrNum(a, 'imprint.compile.cache_creation_input_tokens');
 
-  // Cost lives on the child compile.claude_cli_agent span(s), not this wrapper —
-  // sum the emitted cost across this span and its whole subtree.
-  const subtreeCost = sumCostTotal([span, ...descendantsOf(allSpans, span.context.spanId)]);
+  const subtreeCost = summarizePhoenixCost([span, ...descendantsOf(allSpans, span.context.spanId)]);
 
   console.log(`  ${status} ${toolName}`);
   console.log(
@@ -227,7 +429,7 @@ function printCompileSpan(span: SpanNode, allSpans: SpanNode[]): void {
   } else {
     console.log(`    Tokens: ${inputTokens ?? '?'} input, ${outputTokens ?? '?'} output`);
   }
-  console.log(`    Cost: ${formatCost(subtreeCost)}`);
+  console.log(`    Cost: ${formatPhoenixCost(subtreeCost)}`);
 
   // Child spans → tool-call breakdown.
   const children = allSpans.filter((s) => s.parentId === span.context.spanId);
@@ -317,22 +519,22 @@ function printCompileCriticalPath(compileSpans: SpanNode[]): void {
 }
 
 async function analyzeTrace(traceId: string) {
-  const spans = await getTraceSpans(traceId);
+  const spans = await getTraceSpansAfterCostSettle(traceId);
   const root = spans.find((s) => !s.parentId);
-  const rootCost = root ? spanCostTotal(root) : null;
-  const traceCost = rootCost ?? sumCostTotal(spans);
+  const traceCost = await getTraceCost(traceId);
+  const costAvailability = summarizePhoenixCost(spans, traceCost);
 
   console.log(`\n${'═'.repeat(80)}`);
   console.log(`Trace: ${traceId}`);
   console.log(
-    `Root: ${root?.name ?? '?'} | Duration: ${formatDuration(root?.latencyMs ?? 0)} | Status: ${root?.statusCode ?? '?'} | Total cost: ${formatCost(traceCost)}`,
+    `Root: ${root?.name ?? '?'} | Duration: ${formatDuration(root?.latencyMs ?? 0)} | Status: ${root?.statusCode ?? '?'} | Total cost: ${formatPhoenixCost(costAvailability)}`,
   );
   console.log(`Started: ${root?.startTime ?? '?'}`);
   console.log(`${'─'.repeat(80)}`);
 
   // Audit traces: summarize the audit.session span.
   const auditSpan = spans.find((s) => s.name === 'audit.session');
-  if (auditSpan) printAuditSummary(auditSpan);
+  if (auditSpan) printAuditSummary(auditSpan, spans);
 
   // Compile traces: per-tool compile breakdown.
   const compileSpans = spans.filter((s) => s.name === 'compile.generate');
@@ -364,24 +566,26 @@ async function analyzeTrace(traceId: string) {
   }
 }
 
-// Main
-const args = process.argv.slice(2);
-const traceIdIdx = args.indexOf('--trace-id');
-const lastIdx = args.indexOf('--last');
-const kindIdx = args.indexOf('--kind');
-const kind = (kindIdx >= 0 ? args[kindIdx + 1] : undefined) ?? 'all';
-const rootNames = ROOT_KINDS[kind] ?? ROOT_KINDS.all;
+async function main(args: string[]): Promise<void> {
+  const traceIdIdx = args.indexOf('--trace-id');
+  const lastIdx = args.indexOf('--last');
+  const kindIdx = args.indexOf('--kind');
+  const kind = (kindIdx >= 0 ? args[kindIdx + 1] : undefined) ?? 'all';
+  const rootNames = ROOT_KINDS[kind] ?? ROOT_KINDS.all ?? ['cli.teach', 'cli.audit'];
 
-if (traceIdIdx >= 0 && args[traceIdIdx + 1]) {
-  await analyzeTrace(args[traceIdIdx + 1] as string);
-} else {
-  const limit = lastIdx >= 0 ? Number.parseInt(args[lastIdx + 1] ?? '5', 10) : 5;
-  const traces = await getRecentTraces(limit + 15, rootNames);
-  const shown = traces.slice(0, limit);
-  console.log(
-    `Found ${traces.length} recent ${kind} trace(s) (${rootNames.join(', ')}); showing last ${shown.length}:\n`,
-  );
-  for (const trace of shown) {
-    await analyzeTrace(trace.context.traceId);
+  if (traceIdIdx >= 0 && args[traceIdIdx + 1]) {
+    await analyzeTrace(args[traceIdIdx + 1] as string);
+  } else {
+    const limit = lastIdx >= 0 ? Number.parseInt(args[lastIdx + 1] ?? '5', 10) : 5;
+    const traces = await getRecentTraces(limit + 15, rootNames);
+    const shown = traces.slice(0, limit);
+    console.log(
+      `Found ${traces.length} recent ${kind} trace(s) (${rootNames.join(', ')}); showing last ${shown.length}:\n`,
+    );
+    for (const trace of shown) {
+      await analyzeTrace(trace.context.traceId);
+    }
   }
 }
+
+if (import.meta.main) await main(process.argv.slice(2));

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import {
   estimateTokensFromText,
+  legacyTraceCostEnvNames,
   llmSpanAttributes,
   resolveTraceTokenCount,
   sanitizeTraceErrorMessage,
@@ -8,7 +9,6 @@ import {
   traceBatchEnabled,
   traceInputOutputAttributes,
   traceIoMaxChars,
-  traceLlmCostRates,
   traceLlmIoEnabled,
   traceToolIoEnabled,
 } from '../src/imprint/tracing.ts';
@@ -24,8 +24,6 @@ const ENV_KEYS = [
   'IMPRINT_TRACE_IO',
   'IMPRINT_TRACE_FULL',
   'IMPRINT_TRACE_IO_MAX_CHARS',
-  'IMPRINT_TRACE_INPUT_USD_PER_1M',
-  'IMPRINT_TRACE_OUTPUT_USD_PER_1M',
 ] as const;
 
 let savedEnv: Record<string, string | undefined>;
@@ -115,6 +113,22 @@ describe('trace I/O controls', () => {
   });
 });
 
+describe('legacy trace cost configuration', () => {
+  it('detects removed local-pricing variables but ignores current tracing settings', () => {
+    expect(
+      legacyTraceCostEnvNames({
+        IMPRINT_TRACE_INPUT_USD_PER_1M: '5',
+        IMPRINT_TRACE_COST_OPENAI_GPT_TEST_OUTPUT_USD_PER_1M: '30',
+        IMPRINT_TRACE_PROJECT: 'fixture',
+        IMPRINT_TRACE_OUTPUT_USD_PER_1M: '',
+      }),
+    ).toEqual([
+      'IMPRINT_TRACE_COST_OPENAI_GPT_TEST_OUTPUT_USD_PER_1M',
+      'IMPRINT_TRACE_INPUT_USD_PER_1M',
+    ]);
+  });
+});
+
 describe('trace error diagnostics', () => {
   it('caps verbose error messages before recording them on spans', () => {
     expect(sanitizeTraceErrorMessage('abcdef', 4)).toBe('abcd\n...[truncated 2 chars]');
@@ -122,7 +136,7 @@ describe('trace error diagnostics', () => {
   });
 });
 
-describe('LLM trace usage and cost attributes', () => {
+describe('LLM trace usage attributes', () => {
   it('estimates missing token counts from text', () => {
     expect(estimateTokensFromText('abcdefgh')).toBe(2);
     expect(resolveTraceTokenCount(12, 'ignored')).toEqual({
@@ -158,65 +172,7 @@ describe('LLM trace usage and cost attributes', () => {
     });
   });
 
-  it('falls back to built-in model rates when env vars are not set', () => {
-    // claude-opus-4-8 is the current default agent model; a missing entry here
-    // is what made the analysis script silently fall back to sonnet rates.
-    expect(traceLlmCostRates('claude-cli', 'claude-opus-4-8')).toEqual({
-      inputUsdPer1M: 5,
-      outputUsdPer1M: 25,
-    });
-    expect(traceLlmCostRates('claude-cli', 'claude-opus-4-7')).toEqual({
-      inputUsdPer1M: 5,
-      outputUsdPer1M: 25,
-    });
-    expect(traceLlmCostRates('claude-cli', 'claude-sonnet-4-6')).toEqual({
-      inputUsdPer1M: 3,
-      outputUsdPer1M: 15,
-    });
-    expect(traceLlmCostRates('claude-cli', 'unknown-model')).toBeNull();
-  });
-
-  it('prefers env vars over built-in model rates', () => {
-    process.env.IMPRINT_TRACE_INPUT_USD_PER_1M = '99';
-    process.env.IMPRINT_TRACE_OUTPUT_USD_PER_1M = '199';
-
-    expect(traceLlmCostRates('claude-cli', 'claude-opus-4-7')).toEqual({
-      inputUsdPer1M: 99,
-      outputUsdPer1M: 199,
-    });
-  });
-
-  it('calculates cost using cache-specific rates when cache tokens are provided', () => {
-    const attrs = llmSpanAttributes({
-      provider: 'claude-cli',
-      model: 'claude-opus-4-7',
-      inputTokens: 1_000_000,
-      outputTokens: 100_000,
-      cacheReadTokens: 800_000,
-      cacheWriteTokens: 100_000,
-    });
-
-    // uncached: 100K @ $5/M = $0.50
-    // cache read: 800K @ $0.50/M = $0.40
-    // cache write: 100K @ $6.25/M = $0.625
-    // total prompt = $1.525
-    // output: 100K @ $25/M = $2.50
-    const promptCost = attrs['llm.cost.prompt'] as number;
-    const completionCost = attrs['llm.cost.completion'] as number;
-    expect(promptCost).toBeCloseTo(1.525, 3);
-    expect(completionCost).toBeCloseTo(2.5, 3);
-    expect(attrs['llm.cost.total'] as number).toBeCloseTo(4.025, 3);
-  });
-
-  it('adds OpenInference token, cost, and message attributes when rates are configured', () => {
-    process.env.IMPRINT_TRACE_INPUT_USD_PER_1M = '2';
-    process.env.IMPRINT_TRACE_OUTPUT_USD_PER_1M = '10';
-
-    expect(traceLlmCostRates('codex-cli', 'gpt-test')).toEqual({
-      inputUsdPer1M: 2,
-      outputUsdPer1M: 10,
-    });
-
+  it('adds OpenInference model, token, and message attributes without local pricing', () => {
     const attrs = llmSpanAttributes({
       provider: 'codex-cli',
       model: 'gpt-test',
@@ -232,9 +188,11 @@ describe('LLM trace usage and cost attributes', () => {
     expect(attrs['llm.token_count.prompt']).toBe(1_000_000);
     expect(attrs['llm.token_count.completion']).toBe(500_000);
     expect(attrs['llm.token_count.total']).toBe(1_500_000);
-    expect(attrs['llm.cost.prompt']).toBe(2);
-    expect(attrs['llm.cost.completion']).toBe(5);
-    expect(attrs['llm.cost.total']).toBe(7);
+    expect(attrs['llm.model_name']).toBe('gpt-test');
+    expect(attrs['llm.provider']).toBe('openai');
+    expect(attrs['llm.cost.prompt']).toBeUndefined();
+    expect(attrs['llm.cost.completion']).toBeUndefined();
+    expect(attrs['llm.cost.total']).toBeUndefined();
     expect(attrs['llm.input_messages.0.message.role']).toBe('user');
     expect(attrs['llm.input_messages.0.message.content']).toBe('hello');
     expect(attrs['llm.output_messages.0.message.content']).toBe('world');
@@ -255,11 +213,11 @@ describe('LLM trace usage and cost attributes', () => {
     expect(totalPromptTokens(undefined, 1, 2)).toBeNull();
   });
 
-  it('charges cache reads at the discounted rate for the analyze path (opus-4-8)', () => {
+  it('emits the total prompt and cache breakdown Phoenix needs for server-side cost', () => {
     // Real numbers from a playbook-compilation llm.analyze call: 152 uncached,
     // 354,298 cache_read, 49,253 cache_write, 7,034 output. The analyze path now
     // feeds llmSpanAttributes the TOTAL prompt + the cache split (as traceAnalyze
-    // does), so the cached bulk bills at 0.1x rather than the full input rate.
+    // does), allowing Phoenix to apply the configured model pricing.
     const uncached = 152;
     const cacheRead = 354_298;
     const cacheWrite = 49_253;
@@ -273,42 +231,10 @@ describe('LLM trace usage and cost attributes', () => {
       cacheWriteTokens: cacheWrite,
     });
 
-    // token_count.prompt reflects the TOTAL prompt, not the uncached delta.
     expect(attrs['llm.token_count.prompt']).toBe(uncached + cacheRead + cacheWrite);
-
-    // prompt = uncached@$5/M + cacheRead@$0.5/M + cacheWrite@$6.25/M
-    const expectedPrompt =
-      (uncached / 1e6) * 5 + (cacheRead / 1e6) * 0.5 + (cacheWrite / 1e6) * 6.25;
-    expect(attrs['llm.cost.prompt'] as number).toBeCloseTo(expectedPrompt, 4);
-    expect(attrs['llm.cost.completion'] as number).toBeCloseTo((output / 1e6) * 25, 4);
-
-    // Regression guard: the old cache-blind path billed the whole prompt at the
-    // full input rate — far higher than the cache-aware figure.
-    const cacheBlindPrompt = ((uncached + cacheRead + cacheWrite) / 1e6) * 5;
-    expect(attrs['llm.cost.prompt'] as number).toBeLessThan(cacheBlindPrompt / 3);
-  });
-
-  it('emits cache cost detail attributes when cache tokens are present', () => {
-    const attrs = llmSpanAttributes({
-      provider: 'anthropic-api',
-      model: 'claude-sonnet-4-6',
-      inputTokens: 1_000_000,
-      outputTokens: 100_000,
-      cacheReadTokens: 800_000,
-      cacheWriteTokens: 100_000,
-    });
-
-    // uncached = 1M - 800K - 100K = 100K
-    // cache read cost: 800K @ $3/M * 0.1 = $0.24
-    // cache write cost: 100K @ $3/M * 1.25 = $0.375
-    // uncached input cost: 100K @ $3/M = $0.30
-    expect(attrs['llm.cost.prompt_details.cache_read'] as number).toBeCloseTo(0.24, 4);
-    expect(attrs['llm.cost.prompt_details.cache_write'] as number).toBeCloseTo(0.375, 4);
-    expect(attrs['llm.cost.prompt_details.input'] as number).toBeCloseTo(0.3, 4);
-
-    // Token count details
-    expect(attrs['llm.token_count.prompt_details.cache_read']).toBe(800_000);
-    expect(attrs['llm.token_count.prompt_details.cache_write']).toBe(100_000);
+    expect(attrs['llm.token_count.prompt_details.cache_read']).toBe(cacheRead);
+    expect(attrs['llm.token_count.prompt_details.cache_write']).toBe(cacheWrite);
+    expect(attrs['llm.cost.total']).toBeUndefined();
   });
 
   it('omits cache detail attributes when no cache tokens are present', () => {
@@ -319,46 +245,7 @@ describe('LLM trace usage and cost attributes', () => {
       outputTokens: 100_000,
     });
 
-    expect(attrs['llm.cost.prompt_details.cache_read']).toBeUndefined();
-    expect(attrs['llm.cost.prompt_details.cache_write']).toBeUndefined();
-    expect(attrs['llm.cost.prompt_details.input']).toBeUndefined();
     expect(attrs['llm.token_count.prompt_details.cache_read']).toBeUndefined();
     expect(attrs['llm.token_count.prompt_details.cache_write']).toBeUndefined();
-  });
-});
-
-describe('cost accumulator (tracedWithCostRollup internals)', () => {
-  // The accumulator is internal — tracedWithCostRollup wires it via
-  // AsyncLocalStorage. We test the public contract: llmSpanAttributes
-  // returns correct per-span cost, and the cache detail breakdown is present.
-  // The rollup is tested end-to-end via a real teach/audit run.
-
-  it('produces correct per-span costs for multiple independent calls', () => {
-    const call1 = llmSpanAttributes({
-      provider: 'anthropic-api',
-      model: 'claude-opus-4-8',
-      inputTokens: 100_000,
-      outputTokens: 10_000,
-      cacheReadTokens: 80_000,
-      cacheWriteTokens: 10_000,
-    });
-    const call2 = llmSpanAttributes({
-      provider: 'anthropic-api',
-      model: 'claude-sonnet-4-6',
-      inputTokens: 50_000,
-      outputTokens: 5_000,
-    });
-
-    expect(call1['llm.cost.total']).toBeGreaterThan(0);
-    expect(call2['llm.cost.total']).toBeGreaterThan(0);
-
-    // call1: uncached=10K@$5/M + cacheRead=80K@$0.5/M + cacheWrite=10K@$6.25/M + output=10K@$25/M
-    const expected1 =
-      (10_000 / 1e6) * 5 + (80_000 / 1e6) * 0.5 + (10_000 / 1e6) * 6.25 + (10_000 / 1e6) * 25;
-    expect(call1['llm.cost.total'] as number).toBeCloseTo(expected1, 4);
-
-    // call2: 50K@$3/M + output=5K@$15/M (no cache)
-    const expected2 = (50_000 / 1e6) * 3 + (5_000 / 1e6) * 15;
-    expect(call2['llm.cost.total'] as number).toBeCloseTo(expected2, 4);
   });
 });

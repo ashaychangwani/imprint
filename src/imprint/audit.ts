@@ -26,7 +26,7 @@ import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
 import { type TeachState, loadTeachState } from './teach-state.ts';
 import { type ResolvedTool, discoverTools } from './tool-loader.ts';
-import { llmSpanAttributes, setSpanAttributes, totalPromptTokens, traced } from './tracing.ts';
+import { recordLlmUsageSpan, setSpanAttributes, totalPromptTokens, traced } from './tracing.ts';
 
 const log = createLog('audit');
 
@@ -531,6 +531,20 @@ export function buildAuditMcpCommandArgs(site: string, toolNames: readonly strin
   return ['run', CLI_PATH, 'mcp-server', site, '--include-tools', toolNames.join(',')];
 }
 
+/** Normalize provider usage to OpenInference's total prompt-token contract. */
+export function auditPromptTokens(
+  provider: ProviderName,
+  inputTokens: number,
+  cacheReadTokens: number,
+  cacheWriteTokens: number,
+): number {
+  // Codex reports input_tokens as the total and cached_input_tokens as a subset.
+  // Anthropic reports input_tokens as the uncached delta, with cache buckets
+  // alongside it, so only Anthropic usage needs summing.
+  if (provider === 'codex-cli') return inputTokens;
+  return totalPromptTokens(inputTokens, cacheReadTokens, cacheWriteTokens) ?? inputTokens;
+}
+
 export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
   return await traced(
     'audit.session',
@@ -636,6 +650,28 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       if (auditedToolCount === 0) {
         log('all discovered tools require human-interactive authentication; auditor not spawned');
       }
+      recordLlmUsageSpan(
+        'audit.llm_usage',
+        {
+          provider,
+          model,
+          inputTokens: auditPromptTokens(
+            provider,
+            drive.inputTokens,
+            drive.cacheReadInputTokens,
+            drive.cacheCreationInputTokens,
+          ),
+          outputTokens: drive.outputTokens,
+          cacheReadTokens: drive.cacheReadInputTokens,
+          cacheWriteTokens: drive.cacheCreationInputTokens,
+        },
+        {
+          'imprint.audit.turns': drive.turns,
+          ...(drive.totalCostUsd != null
+            ? { 'imprint.audit.provider_reported_cost_usd': drive.totalCostUsd }
+            : {}),
+        },
+      );
 
       // Cross-reference compile-time live verification with the audit grade.
       // The downgrade rule's purpose is to surface "flying blind" runs —
@@ -695,15 +731,6 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         }
       }
 
-      // TOTAL prompt (uncached + cache) for the cost calc; the cache split is
-      // passed to llmSpanAttributes separately. Always a number here
-      // (drive.inputTokens is non-null), so the cost-suppression happens via the
-      // `|| undefined` at the call site below.
-      const totalInputTokens = totalPromptTokens(
-        drive.inputTokens,
-        drive.cacheReadInputTokens,
-        drive.cacheCreationInputTokens,
-      );
       setSpanAttributes(span, {
         'imprint.audit.score': score.score,
         'imprint.audit.correct': score.correct,
@@ -727,16 +754,6 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         'imprint.audit.timed_out': drive.timedOut,
         'imprint.audit.turns': drive.turns,
         ...(drive.totalCostUsd != null ? { 'imprint.audit.cost_usd': drive.totalCostUsd } : {}),
-        ...llmSpanAttributes({
-          provider,
-          model,
-          // `|| undefined`: when no usage was captured (e.g. spawn failure → 0
-          // tokens), suppress a bogus $0 cost instead of emitting it.
-          inputTokens: totalInputTokens || undefined,
-          outputTokens: drive.outputTokens || undefined,
-          cacheReadTokens: drive.cacheReadInputTokens || undefined,
-          cacheWriteTokens: drive.cacheCreationInputTokens || undefined,
-        }),
       });
 
       // Persist the full result (deterministic score + the raw model report).
@@ -1093,7 +1110,7 @@ ${buildAuditInitialPrompt(opts, unverifiedNote)}`;
     transcript: session.transcript,
     inputTokens: session.inputTokens,
     outputTokens: session.outputTokens,
-    cacheReadInputTokens: 0,
+    cacheReadInputTokens: session.cacheReadInputTokens,
     cacheCreationInputTokens: 0,
     totalCostUsd: null,
   };
@@ -1308,6 +1325,7 @@ async function collectCodexAssistantText(
   let turns = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadInputTokens = 0;
   const t0 = Date.now();
   const elapsedStr = (): string => {
     const s = Math.floor((Date.now() - t0) / 1000);
@@ -1357,6 +1375,7 @@ async function collectCodexAssistantText(
       if (evt.type === 'turn.completed') {
         inputTokens += evt.usage?.input_tokens ?? 0;
         outputTokens += evt.usage?.output_tokens ?? 0;
+        cacheReadInputTokens += evt.usage?.cached_input_tokens ?? 0;
         log(`[${elapsedStr()}] turn ${turns} completed`);
         continue;
       }
@@ -1411,7 +1430,7 @@ async function collectCodexAssistantText(
     turns,
     inputTokens,
     outputTokens,
-    cacheReadInputTokens: 0,
+    cacheReadInputTokens,
     cacheCreationInputTokens: 0,
     totalCostUsd: null,
   };
@@ -1461,6 +1480,8 @@ interface CodexStreamJsonEvent {
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
+    cached_input_tokens?: number;
+    reasoning_output_tokens?: number;
   };
   message?: string;
   error?: { message?: string };

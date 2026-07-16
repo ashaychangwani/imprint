@@ -10,7 +10,7 @@
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
-import type { Span } from '@opentelemetry/api';
+import { type Span, context as otelContext } from '@opentelemetry/api';
 import type { AuthCliCompileMode } from './auth-compile-tools.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import type {
@@ -25,13 +25,12 @@ import { COMPILE_SENTINELS, compileDeadlineAfterVerification } from './mcp-compi
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   endTraceSpan,
-  llmSpanAttributes,
-  resolveTraceTokenCount,
+  recordLlmUsageSpan,
   setSpanAttributes,
   startTraceSpan,
+  traceInputOutputAttributes,
   traceJsonInputOutputAttributes,
   traceLlmIoEnabled,
-  traceLlmMessages,
   traceToolIoEnabled,
   traced,
 } from './tracing.ts';
@@ -44,6 +43,80 @@ const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
 const MCP_SERVER_NAME = 'imprint-compile';
 const MAX_VERIFICATION_CYCLES = 5;
 const MAX_MCP_TOOL_TIMEOUT_SEC = 1800;
+const SENTINEL_USAGE_GRACE_MS = 15_000;
+
+interface SentinelGraceController {
+  observeSentinel(): void;
+  observeTurnCompleted(): void;
+  dispose(): void;
+}
+
+interface TurnActivityTracker {
+  isActive(): boolean;
+  started(): void;
+  completed(): void;
+}
+
+/** Track Codex turn lifecycle without depending on optional tracing spans. */
+export function createTurnActivityTracker(): TurnActivityTracker {
+  let active = false;
+  return {
+    isActive: () => active,
+    started: () => {
+      active = true;
+    },
+    completed: () => {
+      active = false;
+    },
+  };
+}
+
+/**
+ * Wait just long enough for the terminal Codex usage event after done/give_up.
+ * A completed turn terminates immediately; the timer is only a bounded fallback
+ * for CLI versions that never emit turn.completed.
+ */
+export function createSentinelGraceController(opts: {
+  hasActiveTurn: () => boolean;
+  terminate: () => void;
+  fallbackMs?: number;
+  schedule?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+  cancel?: (timer: ReturnType<typeof setTimeout>) => void;
+}): SentinelGraceController {
+  const schedule = opts.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+  const cancel = opts.cancel ?? clearTimeout;
+  let sentinelObserved = false;
+  let terminated = false;
+  let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const terminateOnce = (): void => {
+    if (terminated) return;
+    terminated = true;
+    if (fallbackTimer) cancel(fallbackTimer);
+    fallbackTimer = undefined;
+    opts.terminate();
+  };
+
+  return {
+    observeSentinel(): void {
+      sentinelObserved = true;
+      if (!opts.hasActiveTurn()) {
+        terminateOnce();
+        return;
+      }
+      if (fallbackTimer || terminated) return;
+      fallbackTimer = schedule(terminateOnce, opts.fallbackMs ?? SENTINEL_USAGE_GRACE_MS);
+      fallbackTimer.unref?.();
+    },
+    observeTurnCompleted(): void {
+      if (sentinelObserved) terminateOnce();
+    },
+    dispose(): void {
+      if (fallbackTimer) cancel(fallbackTimer);
+      fallbackTimer = undefined;
+    },
+  };
+}
 
 function formatRevisionMode(enabled: boolean | undefined): string {
   return enabled
@@ -127,6 +200,7 @@ export async function compileViaCodexCli(
     },
     async (span) => {
       const result = await compileViaCodexCliImpl(opts, span);
+      const model = opts.model ?? preferredAgentModel('codex-cli');
       setSpanAttributes(span, {
         'imprint.compile.outcome': result.outcome,
         'imprint.compile.success': result.success,
@@ -136,6 +210,20 @@ export async function compileViaCodexCli(
         'imprint.compile.output_tokens': result.outputTokens,
         'imprint.compile.conversation_log': result.conversationLogPath,
       });
+      // Codex reports input_tokens as the total prompt; cached_input_tokens is
+      // a subset, not an additional token bucket.
+      recordLlmUsageSpan(
+        'compile.codex_cli_usage',
+        {
+          provider: 'codex-cli',
+          model,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          cacheReadTokens: result.cacheReadInputTokens,
+          cacheWriteTokens: result.cacheCreationInputTokens,
+        },
+        { 'imprint.compile.turns': result.turns },
+      );
       return result;
     },
   );
@@ -237,30 +325,16 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
   }
 
   const model = opts.model ?? preferredAgentModel('codex-cli');
-  const initialTokenCount = resolveTraceTokenCount(null, initialPrompt);
   const captureLlmIo = traceLlmIoEnabled();
   // done() owns a separately bounded live-verification phase, so its transport
   // timeout cannot be derived from the compiler's remaining reasoning budget.
   const mcpToolTimeoutSec = MAX_MCP_TOOL_TIMEOUT_SEC;
   setSpanAttributes(traceSpan, {
-    ...llmSpanAttributes({
-      provider: 'codex-cli',
-      model,
-      inputTokens: initialTokenCount.tokens,
-      tokenCountsEstimated: true,
-      inputTokenSource: initialTokenCount.source,
-      inputMessages: captureLlmIo
-        ? traceLlmMessages([{ role: 'user', content: initialPrompt }])
-        : undefined,
-      inputValue: captureLlmIo ? initialPrompt : undefined,
-      invocationParameters: {
-        command: 'codex exec',
-        json: true,
-        sandbox: 'workspace-write',
-        tool_timeout_sec: mcpToolTimeoutSec,
-      },
-    }),
+    ...(captureLlmIo ? traceInputOutputAttributes('input', initialPrompt) : {}),
     'imprint.compile.initial_prompt_chars': initialPrompt.length,
+    'imprint.compile.command': 'codex exec',
+    'imprint.compile.sandbox': 'workspace-write',
+    'imprint.compile.tool_timeout_sec': mcpToolTimeoutSec,
   });
 
   const execArgs = opts.resume
@@ -352,27 +426,9 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
   } finally {
     process.removeListener('exit', terminateOnParentExit);
   }
-  const hasActualUsage = result.inputTokens > 0 || result.outputTokens > 0;
-  const inputTokenCount = resolveTraceTokenCount(
-    hasActualUsage ? result.inputTokens : null,
-    initialPrompt,
-  );
-  const outputTokenCount = resolveTraceTokenCount(
-    hasActualUsage ? result.outputTokens : null,
-    result.message,
-  );
   setSpanAttributes(traceSpan, {
-    ...llmSpanAttributes({
-      provider: 'codex-cli',
-      model,
-      inputTokens: inputTokenCount.tokens,
-      outputTokens: outputTokenCount.tokens,
-      tokenCountsEstimated:
-        inputTokenCount.source === 'estimated' || outputTokenCount.source === 'estimated',
-      inputTokenSource: inputTokenCount.source,
-      outputTokenSource: outputTokenCount.source,
-    }),
     'imprint.compile.message': result.message,
+    ...(captureLlmIo ? traceInputOutputAttributes('output', result.message) : {}),
   });
   return result;
 }
@@ -392,6 +448,10 @@ async function driveJsonl(
   opts: CompileViaCodexCliOptions,
   traceSpan?: Span,
 ): Promise<CompileAgentResult> {
+  // Bun's child-process event emitters do not preserve AsyncLocalStorage.
+  // Restore the compile span context inside stdout callbacks so turn/tool
+  // spans remain children of compile.codex_cli_agent in Phoenix.
+  const parentCtx = otelContext.active();
   const conversationLog: unknown[] = [];
   const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
   const rawStdoutPath = pathJoin(opts.absoluteToolDir, '.codex-stdout.jsonl');
@@ -414,6 +474,7 @@ async function driveJsonl(
   const rawStderrChunks: string[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadInputTokens = 0;
   let turn = 0;
   let lastErrorMessage = '';
   let stderrBuf = '';
@@ -421,6 +482,8 @@ async function driveJsonl(
   let capturedSessionId: string | undefined;
   const toolSpans = new Map<string, Span>();
   let currentTurnSpan: Span | null = null;
+  const turnActivity = createTurnActivityTracker();
+  let onTurnCompletedAfterSentinel: (() => void) | undefined;
 
   const budgetMs = Math.max(0, opts.deadlineMs - Date.now());
   const fireProgress = (phase: 'thinking' | 'tool', toolName?: string): void => {
@@ -481,103 +544,106 @@ async function driveJsonl(
 
   let stdoutBuf = '';
   child.stdout?.on('data', (chunk: Buffer) => {
-    const chunkText = chunk.toString('utf8');
-    rawStdoutChunks.push(chunkText);
-    stdoutBuf += chunkText;
-    while (true) {
-      const nl = stdoutBuf.indexOf('\n');
-      if (nl < 0) break;
-      const line = stdoutBuf.slice(0, nl).trim();
-      stdoutBuf = stdoutBuf.slice(nl + 1);
-      if (!line) continue;
+    otelContext.with(parentCtx, () => {
+      const chunkText = chunk.toString('utf8');
+      rawStdoutChunks.push(chunkText);
+      stdoutBuf += chunkText;
+      while (true) {
+        const nl = stdoutBuf.indexOf('\n');
+        if (nl < 0) break;
+        const line = stdoutBuf.slice(0, nl).trim();
+        stdoutBuf = stdoutBuf.slice(nl + 1);
+        if (!line) continue;
 
-      let evt: CodexJsonEvent;
-      try {
-        evt = JSON.parse(line) as CodexJsonEvent;
-      } catch (err) {
-        log(`unparseable jsonl line: ${errMsg(err)}`);
-        continue;
-      }
-
-      conversationLog.push(evt);
-      // Keep the human-readable compile log current during a long agent turn.
-      // Rewriting is throttled so streamed bursts do not cause one full-file
-      // write per JSONL event, while a stalled/crashed turn still leaves the
-      // latest tool activity visible on disk.
-      scheduleLogFlush();
-
-      if (evt.type === 'thread.started') {
-        log(`thread_id=${evt.thread_id ?? '(none)'}`);
-        setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
-        if (evt.thread_id) capturedSessionId = evt.thread_id;
-        continue;
-      }
-
-      if (evt.type === 'turn.started') {
-        if (currentTurnSpan) endTraceSpan(currentTurnSpan);
-        flushLog();
-        turn++;
-        currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
-          'imprint.agent.turn': turn,
-          'imprint.agent.cumulative_input_tokens': inputTokens,
-          'imprint.agent.cumulative_output_tokens': outputTokens,
-        });
-        fireProgress('thinking');
-        continue;
-      }
-
-      const normalizedToolEvt = normalizeCodexToolEvent(evt);
-      if (normalizedToolEvt) {
-        const { eventType, item } = normalizedToolEvt;
-        const toolName = codexToolName(item);
-        if (toolName) {
-          traceCodexToolEvent(toolSpans, eventType, item, toolName);
-          fireProgress(eventType === 'item.started' ? 'tool' : 'thinking', toolName);
-        }
-        continue;
-      }
-
-      if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
-        const agentMessage = codexAgentMessageText(evt.item);
-        if (agentMessage && evt.type === 'item.completed') {
-          agentMessageCount++;
-          setSpanAttributes(traceSpan, {
-            'imprint.codex.agent_messages': agentMessageCount,
-            'imprint.codex.last_agent_message_chars': agentMessage.length,
-            ...(traceLlmIoEnabled()
-              ? llmSpanAttributes({
-                  provider: 'codex-cli',
-                  model: opts.model ?? preferredAgentModel('codex-cli'),
-                  outputMessages: traceLlmMessages([{ role: 'assistant', content: agentMessage }]),
-                  outputValue: agentMessage,
-                })
-              : {}),
-          });
+        let evt: CodexJsonEvent;
+        try {
+          evt = JSON.parse(line) as CodexJsonEvent;
+        } catch (err) {
+          log(`unparseable jsonl line: ${errMsg(err)}`);
           continue;
         }
-        continue;
-      }
 
-      if (evt.type === 'turn.completed') {
-        const turnInput = evt.usage?.input_tokens ?? 0;
-        const turnOutput = evt.usage?.output_tokens ?? 0;
-        inputTokens += turnInput;
-        outputTokens += turnOutput;
-        if (currentTurnSpan) {
-          setSpanAttributes(currentTurnSpan, {
-            'imprint.agent.turn_input_tokens': turnInput,
-            'imprint.agent.turn_output_tokens': turnOutput,
-          });
-          endTraceSpan(currentTurnSpan);
-          currentTurnSpan = null;
+        conversationLog.push(evt);
+        // Keep the human-readable compile log current during a long agent turn.
+        // Rewriting is throttled so streamed bursts do not cause one full-file
+        // write per JSONL event, while a stalled/crashed turn still leaves the
+        // latest tool activity visible on disk.
+        scheduleLogFlush();
+
+        if (evt.type === 'thread.started') {
+          log(`thread_id=${evt.thread_id ?? '(none)'}`);
+          setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
+          if (evt.thread_id) capturedSessionId = evt.thread_id;
+          continue;
         }
-        continue;
-      }
 
-      if (evt.type === 'error' || evt.type === 'turn.failed') {
-        lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
+        if (evt.type === 'turn.started') {
+          turnActivity.started();
+          if (currentTurnSpan) endTraceSpan(currentTurnSpan);
+          flushLog();
+          turn++;
+          currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
+            'imprint.agent.turn': turn,
+            'imprint.agent.cumulative_input_tokens': inputTokens,
+            'imprint.agent.cumulative_output_tokens': outputTokens,
+          });
+          fireProgress('thinking');
+          continue;
+        }
+
+        const normalizedToolEvt = normalizeCodexToolEvent(evt);
+        if (normalizedToolEvt) {
+          const { eventType, item } = normalizedToolEvt;
+          const toolName = codexToolName(item);
+          if (toolName) {
+            traceCodexToolEvent(toolSpans, eventType, item, toolName);
+            fireProgress(eventType === 'item.started' ? 'tool' : 'thinking', toolName);
+          }
+          continue;
+        }
+
+        if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
+          const agentMessage = codexAgentMessageText(evt.item);
+          if (agentMessage && evt.type === 'item.completed') {
+            agentMessageCount++;
+            setSpanAttributes(traceSpan, {
+              'imprint.codex.agent_messages': agentMessageCount,
+              'imprint.codex.last_agent_message_chars': agentMessage.length,
+              ...(traceLlmIoEnabled()
+                ? traceInputOutputAttributes('output', agentMessage, undefined, 'agent_message')
+                : {}),
+            });
+            continue;
+          }
+          continue;
+        }
+
+        if (evt.type === 'turn.completed') {
+          const turnInput = evt.usage?.input_tokens ?? 0;
+          const turnOutput = evt.usage?.output_tokens ?? 0;
+          const turnCacheRead = evt.usage?.cached_input_tokens ?? 0;
+          inputTokens += turnInput;
+          outputTokens += turnOutput;
+          cacheReadInputTokens += turnCacheRead;
+          if (currentTurnSpan) {
+            setSpanAttributes(currentTurnSpan, {
+              'imprint.agent.turn_input_tokens': turnInput,
+              'imprint.agent.turn_output_tokens': turnOutput,
+              'imprint.agent.turn_cache_read_input_tokens': turnCacheRead,
+            });
+            endTraceSpan(currentTurnSpan);
+            currentTurnSpan = null;
+          }
+          turnActivity.completed();
+          onTurnCompletedAfterSentinel?.();
+          continue;
+        }
+
+        if (evt.type === 'error' || evt.type === 'turn.failed') {
+          lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
+        }
       }
-    }
+    });
   });
 
   child.stderr?.on('data', (chunk: Buffer) => {
@@ -593,6 +659,8 @@ async function driveJsonl(
     const finish = (code: number): void => {
       if (resolved) return;
       resolved = true;
+      sentinelGrace.dispose();
+      onTurnCompletedAfterSentinel = undefined;
       if (forcedKillTimer) clearTimeout(forcedKillTimer);
       clearInterval(sentinelTimer);
       resolve(code);
@@ -616,10 +684,17 @@ async function driveJsonl(
       }, 2000);
       forcedKillTimer.unref?.();
     };
+    const sentinelGrace = createSentinelGraceController({
+      // Turn lifecycle is independent of tracing. startTraceSpan() returns null
+      // when tracing is disabled, but terminal usage still must be captured.
+      hasActiveTurn: turnActivity.isActive,
+      terminate: terminateForSentinel,
+    });
+    onTurnCompletedAfterSentinel = sentinelGrace.observeTurnCompleted;
     const sentinelTimer = setInterval(() => {
       const checkpointReached = opts.authMode && existsSync(checkpointSentinel);
       if (!existsSync(doneSentinel) && !existsSync(giveUpSentinel) && !checkpointReached) return;
-      terminateForSentinel();
+      sentinelGrace.observeSentinel();
     }, 500);
     child.once('close', (code) => {
       finish(code ?? -1);
@@ -629,6 +704,7 @@ async function driveJsonl(
     });
   });
   childExited = true;
+  turnActivity.completed();
   clearTimeout(deadlineTimer);
   if (currentTurnSpan) endTraceSpan(currentTurnSpan);
   for (const span of toolSpans.values()) endTraceSpan(span);
@@ -687,7 +763,7 @@ async function driveJsonl(
     durationMs: Date.now() - opts.startTime,
     inputTokens,
     outputTokens,
-    cacheReadInputTokens: 0,
+    cacheReadInputTokens,
     cacheCreationInputTokens: 0,
     sessionId: capturedSessionId,
   };

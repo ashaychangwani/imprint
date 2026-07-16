@@ -43,7 +43,7 @@ import { COMPILE_SENTINELS, compileDeadlineAfterVerification } from './mcp-compi
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   endTraceSpan,
-  llmSpanAttributes,
+  recordLlmUsageSpan,
   setSpanAttributes,
   startTraceSpan,
   totalPromptTokens,
@@ -87,6 +87,28 @@ const USAGE_POLICY_REFUSAL =
 
 /** Total attempts (1 initial + retries) when a usage-policy refusal is hit. */
 const MAX_USAGE_POLICY_ATTEMPTS = 3;
+
+interface CompileUsageTotals {
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+}
+
+/** Add one paid CLI attempt to the aggregate usage reported for the compile. */
+export function addCompileUsageTotals(
+  totals: CompileUsageTotals,
+  attempt: CompileUsageTotals,
+): CompileUsageTotals {
+  return {
+    turns: totals.turns + attempt.turns,
+    inputTokens: totals.inputTokens + attempt.inputTokens,
+    outputTokens: totals.outputTokens + attempt.outputTokens,
+    cacheReadInputTokens: totals.cacheReadInputTokens + attempt.cacheReadInputTokens,
+    cacheCreationInputTokens: totals.cacheCreationInputTokens + attempt.cacheCreationInputTokens,
+  };
+}
 
 /** Exponential backoff with jitter between refusal retries. Spacing matters:
  *  bursts of near-identical requests raise the safety-filter trip rate. */
@@ -212,6 +234,7 @@ export async function compileViaClaudeCli(
     },
     async (span) => {
       const result = await compileViaClaudeCliImpl(opts);
+      const model = opts.model ?? preferredAgentModel('claude-cli');
       setSpanAttributes(span, {
         'imprint.compile.outcome': result.outcome,
         'imprint.compile.turns': result.turns,
@@ -220,9 +243,12 @@ export async function compileViaClaudeCli(
         'imprint.compile.output_tokens': result.outputTokens,
         'imprint.compile.cache_read_input_tokens': result.cacheReadInputTokens,
         'imprint.compile.cache_creation_input_tokens': result.cacheCreationInputTokens,
-        ...llmSpanAttributes({
+      });
+      recordLlmUsageSpan(
+        'compile.claude_cli_usage',
+        {
           provider: 'claude-cli',
-          model: opts.model ?? preferredAgentModel('claude-cli'),
+          model,
           // TOTAL prompt (uncached + cache); the cache split is passed separately
           // for cost. `result.inputTokens` alone is the uncached delta (often a
           // few hundred), which would mislabel `llm.token_count.prompt`.
@@ -234,8 +260,9 @@ export async function compileViaClaudeCli(
           outputTokens: result.outputTokens,
           cacheReadTokens: result.cacheReadInputTokens,
           cacheWriteTokens: result.cacheCreationInputTokens,
-        }),
-      });
+        },
+        { 'imprint.compile.turns': result.turns },
+      );
       return result;
     },
   );
@@ -251,11 +278,20 @@ async function compileViaClaudeCliImpl(
   opts: CompileViaClaudeCliOptions,
 ): Promise<CompileAgentResult> {
   let lastResult: CompileAgentResult | undefined;
+  let usageTotals: CompileUsageTotals = {
+    turns: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+  };
   for (let attempt = 1; attempt <= MAX_USAGE_POLICY_ATTEMPTS; attempt++) {
     const result = await runClaudeCliAttempt(opts);
+    usageTotals = addCompileUsageTotals(usageTotals, result);
+    const resultWithAggregateUsage = { ...result, ...usageTotals };
     const isRefusal = !result.success && USAGE_POLICY_REFUSAL.test(result.message ?? '');
-    if (!isRefusal) return result;
-    lastResult = result;
+    if (!isRefusal) return resultWithAggregateUsage;
+    lastResult = resultWithAggregateUsage;
     if (attempt < MAX_USAGE_POLICY_ATTEMPTS) {
       const backoffMs = usagePolicyBackoffMs(attempt);
       log(
