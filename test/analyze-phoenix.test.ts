@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type SpanNode,
+  collectSpanPages,
   formatPhoenixCost,
   phoenixGraphqlErrorMessage,
   summarizePhoenixCost,
@@ -40,6 +41,7 @@ describe('Phoenix cost availability', () => {
       status: 'unpriced',
       cost: null,
       unpricedModels: ['gpt-new'],
+      pendingModels: [],
     });
     expect(formatPhoenixCost(summary)).toBe('unpriced (gpt-new)');
   });
@@ -61,6 +63,35 @@ describe('Phoenix cost availability', () => {
 
     expect(summary.status).toBe('no-usage');
     expect(formatPhoenixCost(summary)).toBe('unknown (no LLM usage)');
+  });
+
+  it('does not call an asynchronously pending Phoenix cost unpriced', () => {
+    const pending = { ...llmSpan('gpt-priced', null), costSummary: null };
+    const summary = summarizePhoenixCost([pending], null);
+
+    expect(summary.status).toBe('pending');
+    expect(formatPhoenixCost(summary)).toBe('unknown (cost pending: gpt-priced)');
+  });
+
+  it('includes an unpriced LLM usage span from a later Phoenix page', async () => {
+    const cursors: Array<string | null> = [];
+    const spans = await collectSpanPages(async (after) => {
+      cursors.push(after);
+      return after == null
+        ? {
+            spans: [llmSpan('priced-model', 1.25)],
+            hasNextPage: true,
+            endCursor: 'page-2',
+          }
+        : {
+            spans: [llmSpan('unknown-model', null)],
+            hasNextPage: false,
+            endCursor: null,
+          };
+    });
+
+    expect(cursors).toEqual([null, 'page-2']);
+    expect(summarizePhoenixCost(spans, 1.25).status).toBe('partial');
   });
 });
 

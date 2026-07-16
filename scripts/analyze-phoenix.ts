@@ -11,6 +11,9 @@
 
 const PHOENIX_URL = process.env.PHOENIX_URL ?? 'http://localhost:6006';
 const PROJECT_ID = 'UHJvamVjdDoy'; // imprint project
+const TRACE_SPAN_PAGE_SIZE = 500;
+const COST_POLL_ATTEMPTS = 4;
+const COST_POLL_INTERVAL_MS = 2000;
 
 /** Root span names this script knows how to summarize. */
 const ROOT_KINDS: Record<string, string[]> = {
@@ -52,7 +55,7 @@ export interface SpanNode {
   parentId: string | null;
   attributes: string;
   numChildSpans: number;
-  costSummary: CostSummary;
+  costSummary: CostSummary | null;
 }
 
 export interface CostSummary {
@@ -78,29 +81,70 @@ async function getRecentTraces(limit: number, rootNames: string[]) {
   return data.node.spans.edges.map((e) => e.node).filter((s) => rootNames.includes(s.name));
 }
 
-async function getTraceSpans(traceId: string): Promise<SpanNode[]> {
-  const data = (await gql(`{
-    node(id: "${PROJECT_ID}") {
-      ... on Project {
-        spans(first: 500, sort: { col: startTime, dir: asc }, filterCondition: "trace_id == '${traceId}'") {
-          edges { node {
-            name latencyMs statusCode startTime endTime
-            context { traceId spanId }
-            parentId
-            tokenCountTotal tokenCountPrompt tokenCountCompletion
-            costSummary {
-              prompt { cost tokens }
-              completion { cost tokens }
-              total { cost tokens }
-            }
-            attributes
-            numChildSpans
-          } }
-        }
-      }
+interface SpanPage {
+  spans: SpanNode[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+/** Collect every trace span page so cost completeness is never inferred from a prefix. */
+export async function collectSpanPages(
+  fetchPage: (after: string | null) => Promise<SpanPage>,
+): Promise<SpanNode[]> {
+  const spans: SpanNode[] = [];
+  const seenCursors = new Set<string>();
+  let after: string | null = null;
+  while (true) {
+    const page = await fetchPage(after);
+    spans.push(...page.spans);
+    if (!page.hasNextPage) return spans;
+    if (!page.endCursor || seenCursors.has(page.endCursor)) {
+      throw new Error('Phoenix returned an invalid or repeated span-page cursor.');
     }
-  }`)) as { node: { spans: { edges: Array<{ node: SpanNode }> } } };
-  return data.node.spans.edges.map((e) => e.node);
+    seenCursors.add(page.endCursor);
+    after = page.endCursor;
+  }
+}
+
+async function getTraceSpans(traceId: string): Promise<SpanNode[]> {
+  return await collectSpanPages(async (after) => {
+    const data = (await gql(
+      `query TraceSpans($after: String) {
+        node(id: "${PROJECT_ID}") {
+          ... on Project {
+            spans(first: ${TRACE_SPAN_PAGE_SIZE}, after: $after, sort: { col: startTime, dir: asc }, filterCondition: "trace_id == '${traceId}'") {
+              edges { node {
+                name latencyMs statusCode startTime endTime
+                context { traceId spanId }
+                parentId
+                tokenCountTotal tokenCountPrompt tokenCountCompletion
+                costSummary {
+                  prompt { cost tokens }
+                  completion { cost tokens }
+                  total { cost tokens }
+                }
+                attributes
+                numChildSpans
+              } }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }`,
+      { after },
+    )) as {
+      node: {
+        spans: {
+          edges: Array<{ node: SpanNode }>;
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+      };
+    };
+    return {
+      spans: data.node.spans.edges.map((edge) => edge.node),
+      ...data.node.spans.pageInfo,
+    };
+  });
 }
 
 async function getTraceCost(traceId: string): Promise<number | null> {
@@ -162,9 +206,10 @@ function spanCostTotal(span: SpanNode): number | null {
 }
 
 export interface PhoenixCostAvailability {
-  status: 'priced' | 'partial' | 'unpriced' | 'no-usage';
+  status: 'priced' | 'partial' | 'unpriced' | 'pending' | 'no-usage';
   cost: number | null;
   unpricedModels: string[];
+  pendingModels: string[];
 }
 
 function isLlmUsageSpan(span: SpanNode): boolean {
@@ -186,26 +231,42 @@ export function summarizePhoenixCost(
 ): PhoenixCostAvailability {
   const usageSpans = spans.filter(isLlmUsageSpan);
   if (usageSpans.length === 0) {
-    return { status: 'no-usage', cost: null, unpricedModels: [] };
+    return { status: 'no-usage', cost: null, unpricedModels: [], pendingModels: [] };
   }
-  const unpriced = usageSpans.filter((span) => spanCostTotal(span) == null);
+  const pending = usageSpans.filter((span) => span.costSummary == null);
+  const unpriced = usageSpans.filter(
+    (span) => span.costSummary != null && spanCostTotal(span) == null,
+  );
   const priced = usageSpans.filter((span) => spanCostTotal(span) != null);
   const pricedCost = priced.reduce((sum, span) => sum + (spanCostTotal(span) ?? 0), 0);
   const unpricedModels = [...new Set(unpriced.map(spanModel))].sort();
+  const pendingModels = [...new Set(pending.map(spanModel))].sort();
+  if (pending.length > 0) {
+    return { status: 'pending', cost: null, unpricedModels, pendingModels };
+  }
   if (unpriced.length === usageSpans.length) {
-    return { status: 'unpriced', cost: null, unpricedModels };
+    return { status: 'unpriced', cost: null, unpricedModels, pendingModels: [] };
   }
   if (unpriced.length > 0) {
     return {
       status: 'partial',
       cost: traceCost ?? pricedCost,
       unpricedModels,
+      pendingModels: [],
     };
   }
-  return { status: 'priced', cost: traceCost ?? pricedCost, unpricedModels: [] };
+  return {
+    status: 'priced',
+    cost: traceCost ?? pricedCost,
+    unpricedModels: [],
+    pendingModels: [],
+  };
 }
 
 export function formatPhoenixCost(summary: PhoenixCostAvailability): string {
+  if (summary.status === 'pending') {
+    return `unknown (cost pending: ${summary.pendingModels.join(', ')})`;
+  }
   if (summary.status === 'unpriced') {
     return `unpriced (${summary.unpricedModels.join(', ')})`;
   }
@@ -214,6 +275,20 @@ export function formatPhoenixCost(summary: PhoenixCostAvailability): string {
   }
   if (summary.status === 'no-usage') return 'unknown (no LLM usage)';
   return formatCost(summary.cost ?? 0);
+}
+
+function hasPendingLlmCost(spans: SpanNode[]): boolean {
+  return spans.some((span) => isLlmUsageSpan(span) && span.costSummary == null);
+}
+
+async function getTraceSpansAfterCostSettle(traceId: string): Promise<SpanNode[]> {
+  let spans: SpanNode[] = [];
+  for (let attempt = 1; attempt <= COST_POLL_ATTEMPTS; attempt++) {
+    spans = await getTraceSpans(traceId);
+    if (!hasPendingLlmCost(spans) || attempt === COST_POLL_ATTEMPTS) return spans;
+    await new Promise((resolve) => setTimeout(resolve, COST_POLL_INTERVAL_MS));
+  }
+  return spans;
 }
 
 /** All descendant spans of `rootSpanId` (transitive children). */
@@ -385,7 +460,7 @@ function printCompileCriticalPath(compileSpans: SpanNode[]): void {
 }
 
 async function analyzeTrace(traceId: string) {
-  const spans = await getTraceSpans(traceId);
+  const spans = await getTraceSpansAfterCostSettle(traceId);
   const root = spans.find((s) => !s.parentId);
   const traceCost = await getTraceCost(traceId);
   const costAvailability = summarizePhoenixCost(spans, traceCost);

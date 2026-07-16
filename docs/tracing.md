@@ -45,7 +45,7 @@ When tracing is enabled, `IMPRINT_TRACE_LLM_IO` and `IMPRINT_TRACE_TOOL_IO` defa
 
 Imprint emits OpenInference model, provider, total-token, and cache-token attributes. Phoenix calculates span, trace, and project costs from those attributes using its model pricing configuration. Update pricing in Phoenix under Settings → Models when a model is new or has custom rates; Imprint does not maintain a duplicate pricing table.
 
-`scripts/analyze-phoenix.ts` requires Phoenix 11.4 or newer, where the GraphQL `costSummary` field was introduced. When Phoenix has no price for a model, the analyzer reports that model as **unpriced**; a trace containing both priced and unpriced models is explicitly labeled **partial** rather than presenting the priced subset as a complete total.
+`scripts/analyze-phoenix.ts` requires Phoenix 11.4 or newer, where the GraphQL `costSummary` field was introduced. When Phoenix has no price for a model, the analyzer reports that model as **unpriced**; a trace containing both priced and unpriced models is explicitly labeled **partial** rather than presenting the priced subset as a complete total. Phoenix calculates costs asynchronously, so the analyzer briefly polls a newly completed trace and reports a still-null span summary as **cost pending**, not unpriced.
 
 Previous releases accepted `IMPRINT_TRACE_*_USD_PER_1M` and `IMPRINT_TRACE_COST_*` variables for local pricing. They are no longer applied. Imprint prints a migration warning when one is present; move those rates to Phoenix Settings → Models.
 
@@ -125,7 +125,7 @@ bun run scripts/analyze-phoenix.ts --trace-id <id>
 bun run scripts/analyze-phoenix.ts --kind audit --last 5
 ```
 
-The script does not recompute pricing. Its trace total comes from Phoenix's trace-level cost summary, so it follows Phoenix's built-in or user-configured model rates. It also checks every token-bearing LLM span for a nullable cost and reports `unpriced`, `partial`, or `unknown` instead of converting missing pricing to `$0`.
+The script does not recompute pricing. Its trace total comes from Phoenix's trace-level cost summary, so it follows Phoenix's built-in or user-configured model rates. It paginates through every span in the trace, then checks every token-bearing LLM span and reports `unpriced`, `partial`, `cost pending`, or `unknown` instead of converting missing pricing to `$0`.
 
 ## Tips
 

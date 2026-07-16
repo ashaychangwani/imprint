@@ -10,7 +10,7 @@
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
-import type { Span } from '@opentelemetry/api';
+import { type Span, context as otelContext } from '@opentelemetry/api';
 import type { AuthCliCompileMode } from './auth-compile-tools.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import type {
@@ -43,12 +43,32 @@ const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
 const MCP_SERVER_NAME = 'imprint-compile';
 const MAX_VERIFICATION_CYCLES = 5;
 const MAX_MCP_TOOL_TIMEOUT_SEC = 1800;
-const SENTINEL_USAGE_GRACE_MS = 5000;
+const SENTINEL_USAGE_GRACE_MS = 15_000;
 
 interface SentinelGraceController {
   observeSentinel(): void;
   observeTurnCompleted(): void;
   dispose(): void;
+}
+
+interface TurnActivityTracker {
+  isActive(): boolean;
+  started(): void;
+  completed(): void;
+}
+
+/** Track Codex turn lifecycle without depending on optional tracing spans. */
+export function createTurnActivityTracker(): TurnActivityTracker {
+  let active = false;
+  return {
+    isActive: () => active,
+    started: () => {
+      active = true;
+    },
+    completed: () => {
+      active = false;
+    },
+  };
 }
 
 /**
@@ -428,6 +448,10 @@ async function driveJsonl(
   opts: CompileViaCodexCliOptions,
   traceSpan?: Span,
 ): Promise<CompileAgentResult> {
+  // Bun's child-process event emitters do not preserve AsyncLocalStorage.
+  // Restore the compile span context inside stdout callbacks so turn/tool
+  // spans remain children of compile.codex_cli_agent in Phoenix.
+  const parentCtx = otelContext.active();
   const conversationLog: unknown[] = [];
   const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
   const rawStdoutPath = pathJoin(opts.absoluteToolDir, '.codex-stdout.jsonl');
@@ -458,6 +482,7 @@ async function driveJsonl(
   let capturedSessionId: string | undefined;
   const toolSpans = new Map<string, Span>();
   let currentTurnSpan: Span | null = null;
+  const turnActivity = createTurnActivityTracker();
   let onTurnCompletedAfterSentinel: (() => void) | undefined;
 
   const budgetMs = Math.max(0, opts.deadlineMs - Date.now());
@@ -519,102 +544,106 @@ async function driveJsonl(
 
   let stdoutBuf = '';
   child.stdout?.on('data', (chunk: Buffer) => {
-    const chunkText = chunk.toString('utf8');
-    rawStdoutChunks.push(chunkText);
-    stdoutBuf += chunkText;
-    while (true) {
-      const nl = stdoutBuf.indexOf('\n');
-      if (nl < 0) break;
-      const line = stdoutBuf.slice(0, nl).trim();
-      stdoutBuf = stdoutBuf.slice(nl + 1);
-      if (!line) continue;
+    otelContext.with(parentCtx, () => {
+      const chunkText = chunk.toString('utf8');
+      rawStdoutChunks.push(chunkText);
+      stdoutBuf += chunkText;
+      while (true) {
+        const nl = stdoutBuf.indexOf('\n');
+        if (nl < 0) break;
+        const line = stdoutBuf.slice(0, nl).trim();
+        stdoutBuf = stdoutBuf.slice(nl + 1);
+        if (!line) continue;
 
-      let evt: CodexJsonEvent;
-      try {
-        evt = JSON.parse(line) as CodexJsonEvent;
-      } catch (err) {
-        log(`unparseable jsonl line: ${errMsg(err)}`);
-        continue;
-      }
-
-      conversationLog.push(evt);
-      // Keep the human-readable compile log current during a long agent turn.
-      // Rewriting is throttled so streamed bursts do not cause one full-file
-      // write per JSONL event, while a stalled/crashed turn still leaves the
-      // latest tool activity visible on disk.
-      scheduleLogFlush();
-
-      if (evt.type === 'thread.started') {
-        log(`thread_id=${evt.thread_id ?? '(none)'}`);
-        setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
-        if (evt.thread_id) capturedSessionId = evt.thread_id;
-        continue;
-      }
-
-      if (evt.type === 'turn.started') {
-        if (currentTurnSpan) endTraceSpan(currentTurnSpan);
-        flushLog();
-        turn++;
-        currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
-          'imprint.agent.turn': turn,
-          'imprint.agent.cumulative_input_tokens': inputTokens,
-          'imprint.agent.cumulative_output_tokens': outputTokens,
-        });
-        fireProgress('thinking');
-        continue;
-      }
-
-      const normalizedToolEvt = normalizeCodexToolEvent(evt);
-      if (normalizedToolEvt) {
-        const { eventType, item } = normalizedToolEvt;
-        const toolName = codexToolName(item);
-        if (toolName) {
-          traceCodexToolEvent(toolSpans, eventType, item, toolName);
-          fireProgress(eventType === 'item.started' ? 'tool' : 'thinking', toolName);
-        }
-        continue;
-      }
-
-      if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
-        const agentMessage = codexAgentMessageText(evt.item);
-        if (agentMessage && evt.type === 'item.completed') {
-          agentMessageCount++;
-          setSpanAttributes(traceSpan, {
-            'imprint.codex.agent_messages': agentMessageCount,
-            'imprint.codex.last_agent_message_chars': agentMessage.length,
-            ...(traceLlmIoEnabled()
-              ? traceInputOutputAttributes('output', agentMessage, undefined, 'agent_message')
-              : {}),
-          });
+        let evt: CodexJsonEvent;
+        try {
+          evt = JSON.parse(line) as CodexJsonEvent;
+        } catch (err) {
+          log(`unparseable jsonl line: ${errMsg(err)}`);
           continue;
         }
-        continue;
-      }
 
-      if (evt.type === 'turn.completed') {
-        const turnInput = evt.usage?.input_tokens ?? 0;
-        const turnOutput = evt.usage?.output_tokens ?? 0;
-        const turnCacheRead = evt.usage?.cached_input_tokens ?? 0;
-        inputTokens += turnInput;
-        outputTokens += turnOutput;
-        cacheReadInputTokens += turnCacheRead;
-        if (currentTurnSpan) {
-          setSpanAttributes(currentTurnSpan, {
-            'imprint.agent.turn_input_tokens': turnInput,
-            'imprint.agent.turn_output_tokens': turnOutput,
-            'imprint.agent.turn_cache_read_input_tokens': turnCacheRead,
-          });
-          endTraceSpan(currentTurnSpan);
-          currentTurnSpan = null;
+        conversationLog.push(evt);
+        // Keep the human-readable compile log current during a long agent turn.
+        // Rewriting is throttled so streamed bursts do not cause one full-file
+        // write per JSONL event, while a stalled/crashed turn still leaves the
+        // latest tool activity visible on disk.
+        scheduleLogFlush();
+
+        if (evt.type === 'thread.started') {
+          log(`thread_id=${evt.thread_id ?? '(none)'}`);
+          setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
+          if (evt.thread_id) capturedSessionId = evt.thread_id;
+          continue;
         }
-        onTurnCompletedAfterSentinel?.();
-        continue;
-      }
 
-      if (evt.type === 'error' || evt.type === 'turn.failed') {
-        lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
+        if (evt.type === 'turn.started') {
+          turnActivity.started();
+          if (currentTurnSpan) endTraceSpan(currentTurnSpan);
+          flushLog();
+          turn++;
+          currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
+            'imprint.agent.turn': turn,
+            'imprint.agent.cumulative_input_tokens': inputTokens,
+            'imprint.agent.cumulative_output_tokens': outputTokens,
+          });
+          fireProgress('thinking');
+          continue;
+        }
+
+        const normalizedToolEvt = normalizeCodexToolEvent(evt);
+        if (normalizedToolEvt) {
+          const { eventType, item } = normalizedToolEvt;
+          const toolName = codexToolName(item);
+          if (toolName) {
+            traceCodexToolEvent(toolSpans, eventType, item, toolName);
+            fireProgress(eventType === 'item.started' ? 'tool' : 'thinking', toolName);
+          }
+          continue;
+        }
+
+        if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
+          const agentMessage = codexAgentMessageText(evt.item);
+          if (agentMessage && evt.type === 'item.completed') {
+            agentMessageCount++;
+            setSpanAttributes(traceSpan, {
+              'imprint.codex.agent_messages': agentMessageCount,
+              'imprint.codex.last_agent_message_chars': agentMessage.length,
+              ...(traceLlmIoEnabled()
+                ? traceInputOutputAttributes('output', agentMessage, undefined, 'agent_message')
+                : {}),
+            });
+            continue;
+          }
+          continue;
+        }
+
+        if (evt.type === 'turn.completed') {
+          const turnInput = evt.usage?.input_tokens ?? 0;
+          const turnOutput = evt.usage?.output_tokens ?? 0;
+          const turnCacheRead = evt.usage?.cached_input_tokens ?? 0;
+          inputTokens += turnInput;
+          outputTokens += turnOutput;
+          cacheReadInputTokens += turnCacheRead;
+          if (currentTurnSpan) {
+            setSpanAttributes(currentTurnSpan, {
+              'imprint.agent.turn_input_tokens': turnInput,
+              'imprint.agent.turn_output_tokens': turnOutput,
+              'imprint.agent.turn_cache_read_input_tokens': turnCacheRead,
+            });
+            endTraceSpan(currentTurnSpan);
+            currentTurnSpan = null;
+          }
+          turnActivity.completed();
+          onTurnCompletedAfterSentinel?.();
+          continue;
+        }
+
+        if (evt.type === 'error' || evt.type === 'turn.failed') {
+          lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
+        }
       }
-    }
+    });
   });
 
   child.stderr?.on('data', (chunk: Buffer) => {
@@ -656,7 +685,9 @@ async function driveJsonl(
       forcedKillTimer.unref?.();
     };
     const sentinelGrace = createSentinelGraceController({
-      hasActiveTurn: () => currentTurnSpan !== null,
+      // Turn lifecycle is independent of tracing. startTraceSpan() returns null
+      // when tracing is disabled, but terminal usage still must be captured.
+      hasActiveTurn: turnActivity.isActive,
       terminate: terminateForSentinel,
     });
     onTurnCompletedAfterSentinel = sentinelGrace.observeTurnCompleted;
@@ -673,6 +704,7 @@ async function driveJsonl(
     });
   });
   childExited = true;
+  turnActivity.completed();
   clearTimeout(deadlineTimer);
   if (currentTurnSpan) endTraceSpan(currentTurnSpan);
   for (const span of toolSpans.values()) endTraceSpan(span);

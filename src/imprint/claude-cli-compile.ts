@@ -88,6 +88,26 @@ const USAGE_POLICY_REFUSAL =
 /** Total attempts (1 initial + retries) when a usage-policy refusal is hit. */
 const MAX_USAGE_POLICY_ATTEMPTS = 3;
 
+interface CompileUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+}
+
+/** Add one paid CLI attempt to the aggregate usage reported for the compile. */
+export function addCompileUsageTotals(
+  totals: CompileUsageTotals,
+  attempt: CompileUsageTotals,
+): CompileUsageTotals {
+  return {
+    inputTokens: totals.inputTokens + attempt.inputTokens,
+    outputTokens: totals.outputTokens + attempt.outputTokens,
+    cacheReadInputTokens: totals.cacheReadInputTokens + attempt.cacheReadInputTokens,
+    cacheCreationInputTokens: totals.cacheCreationInputTokens + attempt.cacheCreationInputTokens,
+  };
+}
+
 /** Exponential backoff with jitter between refusal retries. Spacing matters:
  *  bursts of near-identical requests raise the safety-filter trip rate. */
 function usagePolicyBackoffMs(attempt: number): number {
@@ -256,11 +276,19 @@ async function compileViaClaudeCliImpl(
   opts: CompileViaClaudeCliOptions,
 ): Promise<CompileAgentResult> {
   let lastResult: CompileAgentResult | undefined;
+  let usageTotals: CompileUsageTotals = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+  };
   for (let attempt = 1; attempt <= MAX_USAGE_POLICY_ATTEMPTS; attempt++) {
     const result = await runClaudeCliAttempt(opts);
+    usageTotals = addCompileUsageTotals(usageTotals, result);
+    const resultWithAggregateUsage = { ...result, ...usageTotals };
     const isRefusal = !result.success && USAGE_POLICY_REFUSAL.test(result.message ?? '');
-    if (!isRefusal) return result;
-    lastResult = result;
+    if (!isRefusal) return resultWithAggregateUsage;
+    lastResult = resultWithAggregateUsage;
     if (attempt < MAX_USAGE_POLICY_ATTEMPTS) {
       const backoffMs = usagePolicyBackoffMs(attempt);
       log(
