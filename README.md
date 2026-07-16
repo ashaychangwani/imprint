@@ -300,7 +300,7 @@ See [Sharing Skills](docs/credential-sharing.md) for the full flow.
 | [Sharing Skills](docs/credential-sharing.md) | Credential export/import and remote provisioning |
 | [MCP Maintenance](docs/mcp-maintenance.md) | Audit, disable, restore, and prune MCP state |
 | [Troubleshooting](docs/troubleshooting.md) | Common failures and fixes |
-| [Tracing](docs/tracing.md) | OpenTelemetry tracing, cost rollup, and Phoenix setup |
+| [Tracing](docs/tracing.md) | OpenTelemetry tracing, Phoenix-owned cost tracking, and setup |
 
 <details>
 <summary>More docs</summary>

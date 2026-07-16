@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import {
   estimateTokensFromText,
+  legacyTraceCostEnvNames,
   llmSpanAttributes,
   resolveTraceTokenCount,
   sanitizeTraceErrorMessage,
@@ -109,6 +110,22 @@ describe('trace I/O controls', () => {
     expect(attrs['imprint.trace.output.chars']).toBe(6);
     expect(attrs['imprint.trace.output.truncated']).toBe(true);
     expect(attrs['imprint.trace.output.max_chars']).toBe(0);
+  });
+});
+
+describe('legacy trace cost configuration', () => {
+  it('detects removed local-pricing variables but ignores current tracing settings', () => {
+    expect(
+      legacyTraceCostEnvNames({
+        IMPRINT_TRACE_INPUT_USD_PER_1M: '5',
+        IMPRINT_TRACE_COST_OPENAI_GPT_TEST_OUTPUT_USD_PER_1M: '30',
+        IMPRINT_TRACE_PROJECT: 'fixture',
+        IMPRINT_TRACE_OUTPUT_USD_PER_1M: '',
+      }),
+    ).toEqual([
+      'IMPRINT_TRACE_COST_OPENAI_GPT_TEST_OUTPUT_USD_PER_1M',
+      'IMPRINT_TRACE_INPUT_USD_PER_1M',
+    ]);
   });
 });
 

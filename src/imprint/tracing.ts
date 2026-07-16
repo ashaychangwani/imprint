@@ -59,6 +59,12 @@ function validateTracingUrl(raw: string | undefined): string | undefined {
 function ensureTracingInitialized(): void {
   if (attemptedInit || suppressInit || !isTracingEnabled()) return;
   attemptedInit = true;
+  const legacyCostEnv = legacyTraceCostEnvNames();
+  if (legacyCostEnv.length > 0) {
+    process.stderr.write(
+      `[imprint] warning: ${legacyCostEnv.join(', ')} ${legacyCostEnv.length === 1 ? 'is' : 'are'} no longer used; configure model pricing in Phoenix under Settings → Models\n`,
+    );
+  }
   // The OTEL SDK default is 128 attributes per span. getLLMAttributes() flattens
   // each input message into ~2+ attributes (role, content, tool_calls…), so a
   // 60-message conversation exceeds the cap and silently drops later attributes
@@ -79,6 +85,20 @@ function ensureTracingInitialized(): void {
 
 export function traceBatchEnabled(value: string | undefined): boolean {
   return value === undefined ? true : isTruthy(value);
+}
+
+/** Legacy local-pricing variables retained only to produce an upgrade warning. */
+export function legacyTraceCostEnvNames(
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  return Object.keys(env)
+    .filter(
+      (name) =>
+        /^IMPRINT_TRACE_(?:INPUT|PROMPT|OUTPUT|COMPLETION)_USD_PER_1M$/.test(name) ||
+        /^IMPRINT_TRACE_COST_.+_(?:INPUT|PROMPT|OUTPUT|COMPLETION)_USD_PER_1M$/.test(name),
+    )
+    .filter((name) => env[name] !== undefined && env[name] !== '')
+    .sort();
 }
 
 export function traceLlmIoEnabled(): boolean {
@@ -251,7 +271,7 @@ export function endTraceSpan(span: Span | null | undefined, err?: unknown): void
   span.end();
 }
 
-export function llmSpanAttributes(opts: {
+interface LlmSpanAttributeOptions {
   provider: string;
   model?: string;
   inputTokens?: number | null;
@@ -269,7 +289,9 @@ export function llmSpanAttributes(opts: {
   inputMimeType?: string;
   outputMimeType?: string;
   invocationParameters?: Record<string, unknown>;
-}): Attributes {
+}
+
+export function llmSpanAttributes(opts: LlmSpanAttributeOptions): Attributes {
   const prompt = opts.inputTokens ?? undefined;
   const completion = opts.outputTokens ?? undefined;
   const cacheRead = opts.cacheReadTokens ?? undefined;
@@ -316,6 +338,31 @@ export function llmSpanAttributes(opts: {
       ? { 'imprint.llm.output_tokens_source': opts.outputTokenSource }
       : {}),
   };
+}
+
+/**
+ * Record aggregate token usage reported by an external agent CLI without
+ * misclassifying the surrounding tool-driving workflow as one LLM invocation.
+ * The zero-duration child is deliberately marked as an aggregate usage carrier:
+ * Phoenix can price it, while workflow latency remains on the parent AGENT span.
+ */
+export function recordLlmUsageSpan(
+  name: string,
+  opts: LlmSpanAttributeOptions,
+  attributes: TraceAttributes = {},
+): void {
+  const hasUsage =
+    (opts.inputTokens ?? 0) > 0 ||
+    (opts.outputTokens ?? 0) > 0 ||
+    (opts.cacheReadTokens ?? 0) > 0 ||
+    (opts.cacheWriteTokens ?? 0) > 0;
+  if (!hasUsage) return;
+  const span = startTraceSpan(name, 'LLM', {
+    ...attributes,
+    'imprint.llm.usage_aggregate': true,
+    ...llmSpanAttributes(opts),
+  });
+  endTraceSpan(span);
 }
 
 export function traceLlmMessages(messages: TraceLlmMessage[]): TraceLlmMessage[] {

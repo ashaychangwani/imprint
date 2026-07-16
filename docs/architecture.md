@@ -276,17 +276,17 @@ The `audit` verb traces its own tree, so a failing acceptance run is debuggable 
 
 ```
 cli.audit (AGENT)
-└─ audit.session (LLM)          ← imprint.audit.{score, correct, broken, infra, bad_params, graded, params_working, params_no_op, params_broken, params_untestable, verdict, timed_out, turns, cost_usd}
-    └─ (headless claude drives the site's real mcp-server tools)
+└─ audit.session (AGENT)        ← imprint.audit.{score, correct, broken, infra, bad_params, graded, params_working, params_no_op, params_broken, params_untestable, verdict, timed_out, turns, cost_usd}
+    └─ audit.llm_usage (LLM)    ← aggregate CLI model/token usage, absent when no usage exists
 ```
 
-The `audit.session` span also carries the auditor's token usage and, when supplied by the provider, `imprint.audit.cost_usd`. Phoenix calculates model cost from the OpenInference model/provider/token attributes. When the deadline guard kills the run, `imprint.audit.timed_out=true` and the verdict is `timeout` (see [troubleshooting](troubleshooting.md#audit)); the auditor's transcript is written next to the report for diagnosis.
+The `audit.session` span carries the audit result and, when supplied by the provider, `imprint.audit.cost_usd`. Aggregate CLI token usage lives on its `audit.llm_usage` child so Phoenix can price it without classifying discovery, tool-driving, grading, and persistence as LLM latency. When the deadline guard kills the run, `imprint.audit.timed_out=true` and the verdict is `timeout` (see [troubleshooting](troubleshooting.md#audit)); the auditor's transcript is written next to the report for diagnosis.
 
 Each `agent.turn.N` span records per-turn input/output tokens and stop reason. Each `llm.message_with_tools` span records model, provider, token counts, and which tools the model called. Each `agent.tool.X` span records tool execution time, result size, and (when `IMPRINT_TRACE_TOOL_IO=1`) the input arguments and output.
 
 Stage spans carry their own end-attributes for fast triage: `teach.record` (`imprint.record.event_count`), `teach.redact` (`imprint.redact.*` counts), `teach.combine_sessions` (`imprint.combine.{session,request,narration}_count`), and `teach.plan_tool` (`imprint.tool_plan.chars` / `.skipped`). Opening the `cli.teach` trace lets you locate the failing stage by span status/attrs — a `teach.plan_prereqs` timeout, a `teach.build_shared_module` with `ok=false`, an empty `teach.plan_tool`, or a `compile.generate` that gave up.
 
-Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise. Imprint emits the prompt-cache split (`cache_read`/`cache_creation`) using OpenInference attributes; Phoenix owns model pricing and rolls span costs up to trace and project levels. `scripts/analyze-phoenix.ts` reads Phoenix's GraphQL `costSummary` and does not maintain a second rate table. See [tracing.md](tracing.md) for the full attribute reference.
+Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise. Imprint emits the prompt-cache split (`cache_read`/`cache_creation`) using OpenInference attributes; Phoenix owns model pricing and rolls span costs up to trace and project levels. `scripts/analyze-phoenix.ts` requires Phoenix 11.4+, reads GraphQL `costSummary`, and labels missing model prices as unpriced or partial rather than zero. See [tracing.md](tracing.md) for the full attribute reference.
 
 **Ephemeral artifacts** the compile-agent writes during a run but does not persist:
 

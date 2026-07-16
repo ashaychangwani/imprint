@@ -43,7 +43,7 @@ import { COMPILE_SENTINELS, compileDeadlineAfterVerification } from './mcp-compi
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   endTraceSpan,
-  llmSpanAttributes,
+  recordLlmUsageSpan,
   setSpanAttributes,
   startTraceSpan,
   totalPromptTokens,
@@ -203,9 +203,7 @@ export async function compileViaClaudeCli(
 ): Promise<CompileAgentResult> {
   return await traced(
     'compile.claude_cli_agent',
-    // This is the aggregate model invocation reported by the Claude CLI. The
-    // OpenInference LLM kind lets Phoenix price its emitted token usage.
-    'LLM',
+    'AGENT',
     {
       'imprint.site': opts.session.site,
       'imprint.tool_dir': opts.absoluteToolDir,
@@ -214,6 +212,7 @@ export async function compileViaClaudeCli(
     },
     async (span) => {
       const result = await compileViaClaudeCliImpl(opts);
+      const model = opts.model ?? preferredAgentModel('claude-cli');
       setSpanAttributes(span, {
         'imprint.compile.outcome': result.outcome,
         'imprint.compile.turns': result.turns,
@@ -222,9 +221,12 @@ export async function compileViaClaudeCli(
         'imprint.compile.output_tokens': result.outputTokens,
         'imprint.compile.cache_read_input_tokens': result.cacheReadInputTokens,
         'imprint.compile.cache_creation_input_tokens': result.cacheCreationInputTokens,
-        ...llmSpanAttributes({
+      });
+      recordLlmUsageSpan(
+        'compile.claude_cli_usage',
+        {
           provider: 'claude-cli',
-          model: opts.model ?? preferredAgentModel('claude-cli'),
+          model,
           // TOTAL prompt (uncached + cache); the cache split is passed separately
           // for cost. `result.inputTokens` alone is the uncached delta (often a
           // few hundred), which would mislabel `llm.token_count.prompt`.
@@ -236,8 +238,9 @@ export async function compileViaClaudeCli(
           outputTokens: result.outputTokens,
           cacheReadTokens: result.cacheReadInputTokens,
           cacheWriteTokens: result.cacheCreationInputTokens,
-        }),
-      });
+        },
+        { 'imprint.compile.turns': result.turns },
+      );
       return result;
     },
   );

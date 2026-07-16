@@ -6,7 +6,7 @@ Imprint emits [OpenTelemetry](https://opentelemetry.io/) spans in [OpenInference
 
 ```bash
 # Terminal 1 — start Phoenix
-pip install arize-phoenix && phoenix serve
+pip install "arize-phoenix>=11.4" && phoenix serve
 
 # Terminal 2 — run imprint with tracing
 IMPRINT_TRACE=1 imprint teach southwest --url https://www.southwest.com
@@ -45,6 +45,10 @@ When tracing is enabled, `IMPRINT_TRACE_LLM_IO` and `IMPRINT_TRACE_TOOL_IO` defa
 
 Imprint emits OpenInference model, provider, total-token, and cache-token attributes. Phoenix calculates span, trace, and project costs from those attributes using its model pricing configuration. Update pricing in Phoenix under Settings → Models when a model is new or has custom rates; Imprint does not maintain a duplicate pricing table.
 
+`scripts/analyze-phoenix.ts` requires Phoenix 11.4 or newer, where the GraphQL `costSummary` field was introduced. When Phoenix has no price for a model, the analyzer reports that model as **unpriced**; a trace containing both priced and unpriced models is explicitly labeled **partial** rather than presenting the priced subset as a complete total.
+
+Previous releases accepted `IMPRINT_TRACE_*_USD_PER_1M` and `IMPRINT_TRACE_COST_*` variables for local pricing. They are no longer applied. Imprint prints a migration warning when one is present; move those rates to Phoenix Settings → Models.
+
 ## Trace hierarchy
 
 ### `imprint teach`
@@ -64,11 +68,13 @@ cli.teach (AGENT)                          ← Phoenix rolls up child costs for 
 ├─ teach.plan_tool (AGENT)                 ← per-tool implementation plan
 │   └─ llm.analyze (LLM)
 ├─ compile.generate (AGENT)
-│   ├─ agent.turn.1 (CHAIN)               ← per-turn tokens
-│   │   ├─ llm.message_with_tools (LLM)   ← model, tokens, stop reason
-│   │   ├─ agent.tool.read_session_summary (TOOL)
-│   │   └─ agent.tool.write_file (TOOL)
-│   └─ ...
+│   ├─ API-provider path
+│   │   └─ llm.message_with_tools (LLM)   ← one instrumented model call
+│   └─ CLI-provider path
+│       └─ compile.{codex,claude}_cli_agent (AGENT)
+│           ├─ agent.turn.1 (CHAIN)
+│           ├─ agent.tool.read_session_summary (TOOL)
+│           └─ compile.{codex,claude}_cli_usage (LLM) ← aggregate usage carrier
 └─ compile.playbook (CHAIN)
     ├─ compile.triage_requests (RETRIEVER)
     └─ llm.analyze (LLM)
@@ -78,15 +84,17 @@ cli.teach (AGENT)                          ← Phoenix rolls up child costs for 
 
 ```
 cli.audit (AGENT)                          ← Phoenix rolls up child costs for the trace
-└─ audit.session (LLM)                     ← aggregate CLI model usage priced by Phoenix
-    └─ (headless claude drives the site's real MCP tools)
+└─ audit.session (AGENT)                   ← discovery, tool-driving, grading, persistence
+    └─ audit.llm_usage (LLM)               ← aggregate CLI usage carrier, when usage exists
 ```
 
 ## Token and cost tracking
 
 Each LLM span carries `llm.model_name`, `llm.provider`, `llm.token_count.prompt`, `llm.token_count.completion`, and `llm.token_count.total`. When available, cache usage is emitted as `llm.token_count.prompt_details.cache_read` and `.cache_write`. `llm.token_count.prompt` is the total prompt (uncached + cache read + cache write), normalized by `totalPromptTokens()` for providers that report the parts separately.
 
-Phoenix applies its configured rates and exposes `costSummary` for individual spans and entire traces. The `audit.session` span can additionally carry `imprint.audit.cost_usd` when the CLI provider reports a cost directly.
+Codex already includes cached input in its reported `input_tokens`, so Imprint passes that total through and emits `cached_input_tokens` only as a subset. Anthropic reports uncached input separately, so Imprint adds its cache-read and cache-write buckets to form the OpenInference prompt total.
+
+External CLI agent sessions expose only aggregate usage rather than one event per underlying model request. Their surrounding workflow remains an `AGENT` span; Imprint emits a zero-duration child `LLM` span marked `imprint.llm.usage_aggregate=true` solely to carry the model and token attributes Phoenix needs for pricing. This prevents tool-driving latency from being mislabeled as LLM latency. The `audit.session` span can additionally carry `imprint.audit.cost_usd` when the CLI provider reports a cost directly.
 
 ## Stage attributes
 
@@ -117,7 +125,7 @@ bun run scripts/analyze-phoenix.ts --trace-id <id>
 bun run scripts/analyze-phoenix.ts --kind audit --last 5
 ```
 
-The script does not recompute pricing. Its trace total comes from Phoenix's trace-level cost summary, so it follows Phoenix's built-in or user-configured model rates.
+The script does not recompute pricing. Its trace total comes from Phoenix's trace-level cost summary, so it follows Phoenix's built-in or user-configured model rates. It also checks every token-bearing LLM span for a nullable cost and reports `unpriced`, `partial`, or `unknown` instead of converting missing pricing to `$0`.
 
 ## Tips
 
