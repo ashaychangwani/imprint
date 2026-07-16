@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type SpanNode,
-  classifyUnresolvedCostsAsUnpriced,
+  classifyUnresolvedCostsAsUnknown,
   collectSpanPages,
   formatPhoenixCost,
   phoenixGraphqlErrorMessage,
@@ -43,6 +43,7 @@ describe('Phoenix cost availability', () => {
       cost: null,
       unpricedModels: ['gpt-new'],
       pendingModels: [],
+      unknownModels: [],
     });
     expect(formatPhoenixCost(summary)).toBe('unpriced (gpt-new)');
   });
@@ -74,22 +75,22 @@ describe('Phoenix cost availability', () => {
     expect(formatPhoenixCost(summary)).toBe('unknown (cost pending: gpt-priced)');
   });
 
-  it('reports an unmatched legacy-Phoenix model as unpriced after polling is exhausted', () => {
+  it('reports a legacy null summary as unknown after polling is exhausted', () => {
     const unresolved = { ...llmSpan('gpt-new', null), costSummary: null };
-    const [settled] = classifyUnresolvedCostsAsUnpriced([unresolved]);
+    const [settled] = classifyUnresolvedCostsAsUnknown([unresolved]);
     const summary = summarizePhoenixCost(settled ? [settled] : [], null);
 
-    expect(summary.status).toBe('unpriced');
-    expect(formatPhoenixCost(summary)).toBe('unpriced (gpt-new)');
+    expect(summary.status).toBe('unknown');
+    expect(formatPhoenixCost(summary)).toBe('unknown (unpriced or cost pending: gpt-new)');
   });
 
   it('preserves the priced subtotal when a legacy null summary is unresolved', () => {
     const unresolved = { ...llmSpan('gpt-new', null), costSummary: null };
-    const settled = classifyUnresolvedCostsAsUnpriced([llmSpan('priced-model', 1.25), unresolved]);
+    const settled = classifyUnresolvedCostsAsUnknown([llmSpan('priced-model', 1.25), unresolved]);
     const summary = summarizePhoenixCost(settled, 1.25);
 
     expect(summary.status).toBe('partial');
-    expect(formatPhoenixCost(summary)).toBe('$1.25 (partial; unpriced: gpt-new)');
+    expect(formatPhoenixCost(summary)).toBe('$1.25 (partial; unpriced or cost pending: gpt-new)');
   });
 
   it('includes an unpriced LLM usage span from a later Phoenix page', async () => {

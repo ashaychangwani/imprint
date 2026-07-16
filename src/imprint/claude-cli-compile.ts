@@ -89,6 +89,7 @@ const USAGE_POLICY_REFUSAL =
 const MAX_USAGE_POLICY_ATTEMPTS = 3;
 
 interface CompileUsageTotals {
+  turns: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadInputTokens: number;
@@ -101,6 +102,7 @@ export function addCompileUsageTotals(
   attempt: CompileUsageTotals,
 ): CompileUsageTotals {
   return {
+    turns: totals.turns + attempt.turns,
     inputTokens: totals.inputTokens + attempt.inputTokens,
     outputTokens: totals.outputTokens + attempt.outputTokens,
     cacheReadInputTokens: totals.cacheReadInputTokens + attempt.cacheReadInputTokens,
@@ -277,6 +279,7 @@ async function compileViaClaudeCliImpl(
 ): Promise<CompileAgentResult> {
   let lastResult: CompileAgentResult | undefined;
   let usageTotals: CompileUsageTotals = {
+    turns: 0,
     inputTokens: 0,
     outputTokens: 0,
     cacheReadInputTokens: 0,

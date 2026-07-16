@@ -56,6 +56,8 @@ export interface SpanNode {
   attributes: string;
   numChildSpans: number;
   costSummary: CostSummary | null;
+  /** Local analyzer state after a bounded wait; never returned by Phoenix. */
+  costResolution?: 'unknown';
 }
 
 export interface CostSummary {
@@ -206,10 +208,11 @@ function spanCostTotal(span: SpanNode): number | null {
 }
 
 export interface PhoenixCostAvailability {
-  status: 'priced' | 'partial' | 'unpriced' | 'pending' | 'no-usage';
+  status: 'priced' | 'partial' | 'unpriced' | 'pending' | 'unknown' | 'no-usage';
   cost: number | null;
   unpricedModels: string[];
   pendingModels: string[];
+  unknownModels: string[];
 }
 
 function isLlmUsageSpan(span: SpanNode): boolean {
@@ -231,9 +234,18 @@ export function summarizePhoenixCost(
 ): PhoenixCostAvailability {
   const usageSpans = spans.filter(isLlmUsageSpan);
   if (usageSpans.length === 0) {
-    return { status: 'no-usage', cost: null, unpricedModels: [], pendingModels: [] };
+    return {
+      status: 'no-usage',
+      cost: null,
+      unpricedModels: [],
+      pendingModels: [],
+      unknownModels: [],
+    };
   }
-  const pending = usageSpans.filter((span) => span.costSummary == null);
+  const pending = usageSpans.filter(
+    (span) => span.costSummary == null && span.costResolution !== 'unknown',
+  );
+  const unknown = usageSpans.filter((span) => span.costResolution === 'unknown');
   const unpriced = usageSpans.filter(
     (span) => span.costSummary != null && spanCostTotal(span) == null,
   );
@@ -241,18 +253,29 @@ export function summarizePhoenixCost(
   const pricedCost = priced.reduce((sum, span) => sum + (spanCostTotal(span) ?? 0), 0);
   const unpricedModels = [...new Set(unpriced.map(spanModel))].sort();
   const pendingModels = [...new Set(pending.map(spanModel))].sort();
+  const unknownModels = [...new Set(unknown.map(spanModel))].sort();
   if (pending.length > 0) {
-    return { status: 'pending', cost: null, unpricedModels, pendingModels };
+    return { status: 'pending', cost: null, unpricedModels, pendingModels, unknownModels };
+  }
+  if (unknown.length > 0 && priced.length === 0) {
+    return { status: 'unknown', cost: null, unpricedModels, pendingModels: [], unknownModels };
   }
   if (unpriced.length === usageSpans.length) {
-    return { status: 'unpriced', cost: null, unpricedModels, pendingModels: [] };
+    return {
+      status: 'unpriced',
+      cost: null,
+      unpricedModels,
+      pendingModels: [],
+      unknownModels: [],
+    };
   }
-  if (unpriced.length > 0) {
+  if (unpriced.length > 0 || unknown.length > 0) {
     return {
       status: 'partial',
       cost: traceCost ?? pricedCost,
       unpricedModels,
       pendingModels: [],
+      unknownModels,
     };
   }
   return {
@@ -260,6 +283,7 @@ export function summarizePhoenixCost(
     cost: traceCost ?? pricedCost,
     unpricedModels: [],
     pendingModels: [],
+    unknownModels: [],
   };
 }
 
@@ -270,8 +294,25 @@ export function formatPhoenixCost(summary: PhoenixCostAvailability): string {
   if (summary.status === 'unpriced') {
     return `unpriced (${summary.unpricedModels.join(', ')})`;
   }
+  if (summary.status === 'unknown') {
+    const details = [
+      ...(summary.unpricedModels.length > 0
+        ? [`unpriced: ${summary.unpricedModels.join(', ')}`]
+        : []),
+      `unpriced or cost pending: ${summary.unknownModels.join(', ')}`,
+    ];
+    return `unknown (${details.join('; ')})`;
+  }
   if (summary.status === 'partial') {
-    return `${formatCost(summary.cost ?? 0)} (partial; unpriced: ${summary.unpricedModels.join(', ')})`;
+    const details = [
+      ...(summary.unpricedModels.length > 0
+        ? [`unpriced: ${summary.unpricedModels.join(', ')}`]
+        : []),
+      ...(summary.unknownModels.length > 0
+        ? [`unpriced or cost pending: ${summary.unknownModels.join(', ')}`]
+        : []),
+    ];
+    return `${formatCost(summary.cost ?? 0)} (partial; ${details.join('; ')})`;
   }
   if (summary.status === 'no-usage') return 'unknown (no LLM usage)';
   return formatCost(summary.cost ?? 0);
@@ -283,21 +324,15 @@ function hasPendingLlmCost(spans: SpanNode[]): boolean {
 
 /**
  * Phoenix 11.4–11.7 leaves costSummary null forever for unmatched models.
- * After the polling budget expires, materialize the same null-cost shape newer
- * Phoenix versions return so the analyzer reports the model as unpriced rather
- * than claiming its calculation is still pending indefinitely.
+ * After the polling budget expires, null remains intrinsically ambiguous: an
+ * older Phoenix may have no row for an unmatched model, or a busy calculator
+ * may still be processing it. Mark that distinction explicitly instead of
+ * coercing it to either unpriced or zero.
  */
-export function classifyUnresolvedCostsAsUnpriced(spans: SpanNode[]): SpanNode[] {
+export function classifyUnresolvedCostsAsUnknown(spans: SpanNode[]): SpanNode[] {
   return spans.map((span) => {
     if (!isLlmUsageSpan(span) || span.costSummary != null) return span;
-    return {
-      ...span,
-      costSummary: {
-        prompt: { cost: null, tokens: span.tokenCountPrompt },
-        completion: { cost: null, tokens: span.tokenCountCompletion },
-        total: { cost: null, tokens: span.tokenCountTotal },
-      },
-    };
+    return { ...span, costResolution: 'unknown' };
   });
 }
 
@@ -306,7 +341,7 @@ async function getTraceSpansAfterCostSettle(traceId: string): Promise<SpanNode[]
   for (let attempt = 1; attempt <= COST_POLL_ATTEMPTS; attempt++) {
     spans = await getTraceSpans(traceId);
     if (!hasPendingLlmCost(spans)) return spans;
-    if (attempt === COST_POLL_ATTEMPTS) return classifyUnresolvedCostsAsUnpriced(spans);
+    if (attempt === COST_POLL_ATTEMPTS) return classifyUnresolvedCostsAsUnknown(spans);
     await new Promise((resolve) => setTimeout(resolve, COST_POLL_INTERVAL_MS));
   }
   return spans;
