@@ -5,13 +5,20 @@
  * `[IMPRINT]` is exact-match — keep stable.
  */
 
-export const INJECTED_LISTENER_SOURCE = `
+export function createInjectedListenerSource(eventToken: string): string {
+  return `
 (function imprintInjector() {
   if (window.__imprint_injected__) return;
   window.__imprint_injected__ = true;
 
   const SENTINEL = '[IMPRINT]';
+  const EVENT_TOKEN = ${JSON.stringify(eventToken)};
+  const emitLog = console.log.bind(console);
+  const stringify = JSON.stringify.bind(JSON);
   const MAX_VAL = 200;
+  let lastIntentTarget = null;
+  let lastIntentAt = 0;
+  let lastIntentKind = null;
 
   function safeStr(v) {
     try {
@@ -53,6 +60,7 @@ export const INJECTED_LISTENER_SOURCE = `
         text: safeStr((el.textContent || '').trim()),
         ariaLabel: el.getAttribute && el.getAttribute('aria-label') || null,
         href: el.tagName === 'A' ? el.getAttribute('href') : null,
+        absoluteHref: el.tagName === 'A' ? el.href : null,
         selector: selectorFor(el),
       };
     } catch (e) { return {}; }
@@ -60,14 +68,30 @@ export const INJECTED_LISTENER_SOURCE = `
 
   function emit(type, payload) {
     try {
-      console.log(SENTINEL, type, JSON.stringify(payload));
+      emitLog(SENTINEL, EVENT_TOKEN, type, stringify(payload));
     } catch (e) { /* ignore */ }
   }
 
   function onClick(ev) {
     try {
-      const tgt = ev.target;
+      onIntent(ev, 'click');
+      const tgt = ev.target && ev.target.closest ? ev.target.closest('a,button,input,form') || ev.target : ev.target;
       emit('click', describe(tgt));
+    } catch (e) { /* ignore */ }
+  }
+
+  function onIntent(ev, intentKind) {
+    try {
+      if (!ev.isTrusted) return;
+      const tgt = ev.target && ev.target.closest ? ev.target.closest('a,button,input,form') : ev.target;
+      if (!tgt) return;
+      const now = Date.now();
+      const activation = intentKind === 'pointerdown' || intentKind === 'click';
+      if (!activation && tgt === lastIntentTarget && intentKind === lastIntentKind && now - lastIntentAt < 250) return;
+      lastIntentTarget = tgt;
+      lastIntentAt = now;
+      lastIntentKind = intentKind;
+      emit('intent', { ...describe(tgt), intentAt: now, intentKind: intentKind });
     } catch (e) { /* ignore */ }
   }
 
@@ -128,10 +152,14 @@ export const INJECTED_LISTENER_SOURCE = `
   // Capture phase = true so we see the event before the site has a chance to
   // stopPropagation it.
   document.addEventListener('click', onClick, true);
+  document.addEventListener('pointerover', (ev) => onIntent(ev, 'pointerover'), true);
+  document.addEventListener('pointerdown', (ev) => onIntent(ev, 'pointerdown'), true);
+  document.addEventListener('focusin', (ev) => onIntent(ev, 'focusin'), true);
   document.addEventListener('input', onInput, true);
   document.addEventListener('change', onChange, true);
   document.addEventListener('submit', onSubmit, true);
 })();
 `;
+}
 
 export const IMPRINT_SENTINEL = '[IMPRINT]';

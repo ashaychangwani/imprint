@@ -691,6 +691,86 @@ describe('missingAuditedParameters', () => {
 });
 
 describe('evaluateAuditReport coverage verdict', () => {
+  it('normalizes a Codex MCP-qualified tool name to the connected workflow name', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'mcp__imprint_audit_example__search',
+          invocations: [{ ok: true, verdict: 'correct' }],
+          parameters: [{ name: 'query', verdict: 'works' }],
+        },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(
+      report,
+      95,
+      [{ name: 'search', parameters: ['query'] }],
+      false,
+      'imprint-audit-example',
+    );
+
+    expect(evaluation.score.verdict).toBe('pass');
+    expect(evaluation.missingTools).toEqual([]);
+    expect(evaluation.missingParameters).toEqual([]);
+    expect(evaluation.normalizedReport.tools.map((tool) => tool.name)).toEqual(['search']);
+  });
+
+  it('does not normalize an ambiguous MCP-qualified suffix', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'mcp__imprint_audit_example__detail__search',
+          invocations: [{ ok: true, verdict: 'correct' }],
+        },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(report, 95, [
+      { name: 'search', parameters: [] },
+      { name: 'detail__search', parameters: [] },
+    ]);
+
+    expect(evaluation.score.verdict).toBe('inconclusive');
+    expect(evaluation.missingTools).toEqual(['search', 'detail__search']);
+  });
+
+  it('does not normalize an arbitrary namespace suffix', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'invented_namespace__search',
+          invocations: [{ ok: true, verdict: 'correct' }],
+        },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(report, 95, [{ name: 'search', parameters: [] }]);
+    expect(evaluation.score.verdict).toBe('inconclusive');
+    expect(evaluation.missingTools).toEqual(['search']);
+  });
+
+  it('does not normalize a valid MCP shape from an unconnected namespace', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'mcp__invented_server__search',
+          invocations: [{ ok: true, verdict: 'correct' }],
+        },
+      ],
+    });
+
+    const evaluation = evaluateAuditReport(
+      report,
+      95,
+      [{ name: 'search', parameters: [] }],
+      false,
+      'imprint-audit-example',
+    );
+    expect(evaluation.score.verdict).toBe('inconclusive');
+    expect(evaluation.missingTools).toEqual(['search']);
+  });
+
   it('downgrades a passing subset when a named tool has no invocation attempt', () => {
     const report = AuditReportSchema.parse({
       tools: [

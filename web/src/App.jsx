@@ -22,7 +22,7 @@ const pipeline = [
   {
     step: '01',
     title: 'Teach once',
-    body: 'Open Chromium, drive a real workflow, and narrate the intent while Imprint captures requests, DOM moves, cookies, storage, and session shape.',
+    body: 'Open Chromium, drive a real workflow, and narrate the intent while Imprint captures requests, DOM moves, cookies, storage, and session shape. A bounded fallback can recover eligible load-bearing Next.js RSC responses when Chromium evicts their normal response body.',
     artifact: '~/.imprint/<site>/sessions/*.json',
   },
   {

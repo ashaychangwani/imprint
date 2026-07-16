@@ -85,6 +85,24 @@ describe('redactJsonBody', () => {
     expect(parsed.note).not.toContain('555-123-4567');
     expect(parsed.nested.safe).toBe('version v1.2.3');
   });
+
+  it('structurally redacts whitespace-prefixed JSON strings at every position', () => {
+    const secret = 'fixture-secret-9472';
+    const encoded = ` \n\t${JSON.stringify({ password: secret })}`;
+    const bodies = [
+      JSON.stringify(encoded),
+      JSON.stringify({ value: encoded }),
+      JSON.stringify([encoded]),
+    ];
+
+    for (const body of bodies) {
+      const result = redactJsonBody(body, undefined, false, undefined, 64, {
+        remaining: 32_768,
+      });
+      expect(result.redacted).not.toContain(secret);
+      expect(result.redactionsCount).toBe(1);
+    }
+  });
 });
 
 describe('redactUrl', () => {
@@ -149,6 +167,138 @@ describe('redactBody (router)', () => {
     const r = redactBody('{"password":"secret"}', 'application/json');
     expect(r.redactionsCount).toBe(1);
     expect(r.redacted).toContain('REDACTED');
+  });
+
+  it('redacts sensitive keys inside React Flight rows without corrupting framing', () => {
+    const body = [
+      '1:I[123,["chunk.js"],"module"]',
+      '0:{"email":"person@example.com","password":"fixture-secret-9472","child":"$1"}',
+      '2:T5,hello3:null',
+      '',
+    ].join('\n');
+    const r = redactBody(body, 'text/x-component', undefined, undefined, false);
+
+    expect(r.redactionsCount).toBe(2);
+    expect(r.redacted).not.toContain('person@example.com');
+    expect(r.redacted).not.toContain('fixture-secret-9472');
+    expect(r.redacted).toContain('1:I[123,["chunk.js"],"module"]\n');
+    expect(r.redacted).toContain('2:T5,hello3:null\n');
+    expect(r.redacted).toContain('"child":"$1"');
+  });
+
+  it('redacts rendered PII in Flight JSON and byte-framed text rows', () => {
+    const pii = 'person@example.com';
+    const body = [
+      `0:{"children":${JSON.stringify(pii)}}`,
+      `1:T${Buffer.byteLength(pii).toString(16)},${pii}2:null`,
+      '',
+    ].join('\n');
+    const r = redactBody(body, 'text/x-component', undefined, undefined, true);
+
+    expect(r.redacted).not.toContain(pii);
+    expect(r.freeformRedactions).toBe(2);
+    const textRow = /1:T([0-9a-f]+),([^\n]+?)2:null/.exec(r.redacted);
+    expect(textRow).not.toBeNull();
+    if (!textRow?.[1] || textRow[2] === undefined) throw new Error('missing redacted T row');
+    expect(Number.parseInt(textRow[1], 16)).toBe(Buffer.byteLength(textRow[2], 'utf8'));
+  });
+
+  it('redacts sensitive JSON encoded as a string inside a Flight array', () => {
+    const secret = 'fixture-secret-9472';
+    const body = `0:${JSON.stringify([`  ${JSON.stringify({ password: secret })}`])}\n`;
+    const result = redactBody(body, 'text/x-component', undefined, undefined, true);
+
+    expect(result.redacted).not.toContain(secret);
+    expect(result.redacted).toContain('REDACTED');
+    expect(result.redactionsCount).toBe(1);
+  });
+
+  it('preserves structured RPC envelopes encoded inside Flight strings', () => {
+    const rpcPayload = JSON.stringify([['wrb.fr', 'rpc', '[\\"person@example.com\\"]']]);
+    const envelopes = [`)]}'\n${rpcPayload}`, `${Buffer.byteLength(rpcPayload)}\n${rpcPayload}`];
+    const body = `0:${JSON.stringify(envelopes)}\n`;
+    const result = redactBody(body, 'text/x-component', undefined, undefined, true);
+
+    expect(JSON.parse(result.redacted.slice(2).trim())).toEqual(envelopes);
+    expect(result.freeformRedactions).toBe(0);
+  });
+
+  it('fails closed for a truncated Flight body', () => {
+    const body = '0:{"children":"person@example.com"}';
+    const r = redactBody(body, 'text/x-component', undefined, undefined, true);
+
+    expect(r.redacted).toMatch(/^\[REDACTED:UNSAFE_FLIGHT_BODY:\d+\]$/);
+    expect(r.redacted).not.toContain('person@example.com');
+    expect(r.redactionsCount).toBe(1);
+  });
+
+  it('redacts Flight resource hints and fails closed on unsupported binary rows', () => {
+    const hintBody = [':HL["mailto:person@example.com","style"]', '0:{"children":"safe"}', ''].join(
+      '\n',
+    );
+    const hint = redactBody(hintBody, 'text/x-component', undefined, undefined, true);
+    expect(hint.redacted).not.toContain('person@example.com');
+    expect(hint.freeformRedactions).toBe(1);
+
+    const binaryBody = ['0:{"children":"safe"}', '1:o12,person@example.com', ''].join('\n');
+    const binary = redactBody(binaryBody, 'text/x-component', undefined, undefined, true);
+    expect(binary.redacted).toMatch(/^\[REDACTED:UNSAFE_FLIGHT_BODY:\d+\]$/);
+    expect(binary.redacted).not.toContain('person@example.com');
+  });
+
+  it('fails closed instead of overflowing on deeply nested Flight JSON', () => {
+    const body = `0:${'['.repeat(500_000)}"person@example.com"${']'.repeat(500_000)}\n`;
+    const startedAt = performance.now();
+    expect(() => redactBody(body, 'text/x-component', undefined, undefined, true)).not.toThrow();
+    expect(redactBody(body, 'text/x-component', undefined, undefined, true).redacted).toMatch(
+      /^\[REDACTED:UNSAFE_FLIGHT_BODY:\d+\]$/,
+    );
+    expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+
+  it('fails closed when tiny Flight rows exceed the shared metadata budget', () => {
+    const rows: string[] = [];
+    for (let index = 0; index < 17_000; index++) rows.push(`${index.toString(16)}:null`);
+    const result = redactBody(
+      `${rows.join('\n')}\n`,
+      'text/x-component',
+      undefined,
+      undefined,
+      true,
+    );
+
+    expect(result.redacted).toMatch(/^\[REDACTED:UNSAFE_FLIGHT_BODY:\d+\]$/);
+  });
+
+  it('fails closed before parsing a single excessively wide Flight JSON row', () => {
+    const body = `0:{"items":[${Array.from({ length: 40_000 }, () => '0').join(',')}]}\n`;
+    const result = redactBody(body, 'text/x-component', undefined, undefined, true);
+    expect(result.redacted).toMatch(/^\[REDACTED:UNSAFE_FLIGHT_BODY:\d+\]$/);
+  });
+
+  it('does not count brackets inside Flight JSON strings toward the nesting limit', () => {
+    const body = `0:${JSON.stringify({ text: `literal ${'['.repeat(1_000)}` })}\n`;
+    expect(redactBody(body, 'text/x-component', undefined, undefined, false).redacted).toBe(body);
+  });
+
+  it('fails closed on deeply nested JSON encoded inside a Flight string', () => {
+    const encoded = `${'['.repeat(20_000)}"person@example.com"${']'.repeat(20_000)}`;
+    const body = `0:${JSON.stringify({ blob: encoded })}\n`;
+    const startedAt = performance.now();
+    const result = redactBody(body, 'text/x-component', undefined, undefined, true);
+
+    expect(result.redacted).toMatch(/^\[REDACTED:UNSAFE_FLIGHT_BODY:\d+\]$/);
+    expect(result.redacted).not.toContain('person@example.com');
+    expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+
+  it('bounds traversal across shallow JSON-in-JSON layers', () => {
+    let encoded = JSON.stringify({ password: 'fixture-secret-9472' });
+    for (let index = 0; index < 10; index++) encoded = JSON.stringify([encoded]);
+
+    expect(() =>
+      redactJsonBody(encoded, undefined, true, undefined, 8, { remaining: 32_768 }),
+    ).toThrow('JSON traversal depth exceeds redaction budget');
   });
 
   it('falls back to form parsing when content-type is missing but body looks form-encoded', () => {
@@ -276,6 +426,27 @@ describe('redactSession', () => {
     ],
     storageSnapshots: [],
   };
+
+  it('redacts token-bearing Flight hints end to end', () => {
+    const original = baseSession.requests[0];
+    if (!original) throw new Error('missing base request');
+    const flightSession: Session = {
+      ...baseSession,
+      requests: [
+        {
+          ...original,
+          response: {
+            status: 200,
+            headers: { 'content-type': 'text/x-component' },
+            mimeType: 'text/x-component',
+            body: ':HL["mailto:person@example.com","style"]\n0:{"children":"safe"}\n',
+          },
+        },
+      ],
+    };
+    const { session } = redactSession(flightSession);
+    expect(session.requests[0]?.response?.body).not.toContain('person@example.com');
+  });
 
   it('scrubs request bodies, headers, and cookies when redactSensitiveHeaders is on', () => {
     const { session, stats } = redactSession(baseSession, { redactSensitiveHeaders: true });
