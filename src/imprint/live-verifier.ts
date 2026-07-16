@@ -32,6 +32,7 @@ import {
   type probeResolvedTool,
   rebindBackendsCacheToWorkflow,
 } from './probe-backends.ts';
+import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import { loadCredentialStore } from './runtime.ts';
 import { isSensitiveKey } from './sensitive-keys.ts';
 import { buildZodValidator } from './tool-loader.ts';
@@ -43,9 +44,18 @@ const SYSTEM_PROMPT_PATH = pathJoin(REPO_ROOT, 'prompts', 'live-verifier-agent.m
 const MCP_SERVER_NAME = 'imprint-live-verifier';
 export const LIVE_VERIFICATION_EVIDENCE_FILE = '.live-verification-evidence.json';
 const LIVE_VERIFIER_LOG_FILE = '.live-verifier-log.jsonl';
-const BACKEND_PREPARATION_BUDGET_MS = 2 * 60_000;
+// Cheap probes normally finish well inside the original two-minute window and
+// skip browser transports. The larger ceiling is for the fallback path: a cold
+// CDP request must finish before fetch-bootstrap gets its own browser attempt.
+// Comprehensive preparation is sequential on purpose: concurrent browser
+// transports can trip shared anti-bot/session defenses. Reserve enough time
+// for the normal fetch/stealth/playbook candidates plus CDP and fetch-bootstrap
+// fallbacks; the former 240s cap could kill CDP after a 150s playbook attempt.
+const BACKEND_PREPARATION_BUDGET_MS = 8 * 60_000;
 const MAX_CREDITED_BACKEND_PREPARATIONS = 2;
 const BACKEND_PROBE_SHUTDOWN_GRACE_MS = 5_000;
+const MAX_PROMPT_EVIDENCE_RECORDS = 48;
+const MAX_PROMPT_EVIDENCE_RECORD_CHARS = 8_000;
 let evidenceTempSequence = 0;
 
 const BaselineSchema = z
@@ -158,6 +168,17 @@ export const LiveVerificationReportSchema = z
 
 type LiveVerificationReport = z.infer<typeof LiveVerificationReportSchema>;
 
+export function isInfrastructureOnlyInconclusiveReport(report: LiveVerificationReport): boolean {
+  return (
+    report.status === 'inconclusive' &&
+    report.baseline.verdict === 'infrastructure' &&
+    report.issues.length === 0 &&
+    report.parameters.every(
+      (parameter) => parameter.verdict === 'works' || parameter.verdict === 'untestable',
+    )
+  );
+}
+
 interface LiveIntegrationSuiteResult {
   exitCode: number;
   timedOut: boolean;
@@ -251,6 +272,11 @@ export async function runLiveIntegrationSuite(opts: {
   reason?: string;
   sessionLabel?: string;
 }): Promise<LiveIntegrationSuiteResult> {
+  // The suite is launched directly from the generated tool directory, bypassing
+  // normal tool discovery. Repair a stale global/worktree runtime link here so
+  // imports such as `imprint/compile-verification` resolve against this running
+  // Imprint installation.
+  ensureImprintRuntimeLink(dirname(dirname(opts.toolDir)));
   const integrationPath = pathJoin(opts.toolDir, 'integration.test.ts');
   if (!existsSync(integrationPath)) throw new Error('integration.test.ts is missing');
   const workflowPath = pathJoin(opts.toolDir, 'workflow.json');
@@ -461,7 +487,11 @@ export function readPersistedLiveVerificationEvidence(
 
 export function hasSuiteReceiptForSession(path: string, sessionLabel: string): boolean {
   return readPersistedLiveVerificationEvidence(path).some(
-    (item) => item.kind === 'suite' && item.verifierSession === sessionLabel,
+    (item) =>
+      item.kind === 'suite' &&
+      item.verifierSession === sessionLabel &&
+      item.status !== 'running' &&
+      typeof item.finishedAt === 'string',
   );
 }
 
@@ -628,6 +658,11 @@ async function runBackendProbeSubprocess(opts: {
   attempt?: number;
   label: string;
 }): Promise<Awaited<ReturnType<typeof probeResolvedTool>>> {
+  const previousCacheContents = existsSync(opts.outPath)
+    ? readFileSync(opts.outPath, 'utf8')
+    : undefined;
+  const tool = resolveWorkflowTool(opts.workflowPath);
+  const assetRoot = pathJoin(tool.dir, '..', '..');
   const child = spawn(
     process.execPath,
     [
@@ -674,6 +709,30 @@ async function runBackendProbeSubprocess(opts: {
     unregisterParentCleanup();
   }
   if (outcome.timedOut) {
+    // probeResolvedTool checkpoints every successful candidate. If a later
+    // optional rung consumed the aggregate deadline, use the new valid cache
+    // instead of discarding an already-proven backend. Do not reuse an unchanged
+    // pre-probe cache: forceReprobe may have been requested because it failed.
+    const currentCacheContents = existsSync(opts.outPath)
+      ? readFileSync(opts.outPath, 'utf8')
+      : undefined;
+    const cacheStatus = loadBackendsCacheStatus(tool.site, assetRoot, tool.dir, {
+      warn: false,
+      toolName: tool.workflow.toolName,
+    });
+    if (
+      currentCacheContents !== undefined &&
+      currentCacheContents !== previousCacheContents &&
+      cacheStatus.status === 'ok'
+    ) {
+      appendLiveVerifierLog(opts.logPath, {
+        type: 'backend.probe.partial-cache-recovered',
+        attempt: opts.attempt,
+        label: opts.label,
+        preferredOrder: cacheStatus.cache.preferredOrder,
+      });
+      return { cache: cacheStatus.cache, outPath: opts.outPath };
+    }
     throw new Error(
       `backend probe exceeded its separate ${Math.round(BACKEND_PREPARATION_BUDGET_MS / 1_000)}s budget and was terminated`,
     );
@@ -684,8 +743,6 @@ async function runBackendProbeSubprocess(opts: {
     );
   }
 
-  const tool = resolveWorkflowTool(opts.workflowPath);
-  const assetRoot = pathJoin(tool.dir, '..', '..');
   const cacheStatus = loadBackendsCacheStatus(tool.site, assetRoot, tool.dir, {
     warn: false,
     toolName: tool.workflow.toolName,
@@ -701,6 +758,10 @@ interface LiveSemanticVerificationResult {
   provider: ProviderName;
   model: string;
   attempts: number;
+  /** True only when an independent verifier returned a schema-valid report.
+   * Provider startup/input failures synthesize an inconclusive report for
+   * compiler feedback but do not consume a semantic-review cycle. */
+  completedReview: boolean;
 }
 
 export async function runLiveSemanticVerification(opts: {
@@ -828,6 +889,7 @@ export async function runLiveSemanticVerification(opts: {
         provider: opts.provider,
         model,
         attempts: attempt,
+        completedReview: true,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -890,7 +952,13 @@ export async function runLiveSemanticVerification(opts: {
     status: 'inconclusive',
     attempts: 2,
   });
-  return { report: inconclusive, provider: opts.provider, model, attempts: 2 };
+  return {
+    report: inconclusive,
+    provider: opts.provider,
+    model,
+    attempts: 2,
+    completedReview: false,
+  };
 }
 
 function mergePersistedRecords(
@@ -955,11 +1023,104 @@ function buildInitialMessage(
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
       artifactContext: buildVerifierArtifactContext(toolDir, workflow.toolName),
-      baselineEvidence: evidence,
+      baselineEvidence: compactVerifierEvidenceContext(evidence),
     },
     null,
     2,
   )}`;
+}
+
+/** Keep the verifier prompt bounded without weakening the durable evidence
+ * artifact. Full, sanitized receipts remain on disk; the model gets recent
+ * records with representative payload previews and navigation metadata. */
+export function compactVerifierEvidenceContext(
+  evidence: Array<LiveIntegrationEvidence | PersistedLiveVerificationRecord>,
+): unknown[] {
+  const omittedRecords = Math.max(0, evidence.length - MAX_PROMPT_EVIDENCE_RECORDS);
+  const selected = evidence.slice(-MAX_PROMPT_EVIDENCE_RECORDS);
+  const compacted = selected.map((record) => compactVerifierEvidenceRecord(record));
+  return omittedRecords > 0
+    ? [
+        {
+          kind: 'prompt-compaction',
+          omittedRecords,
+          note: `Full receipts remain in ${LIVE_VERIFICATION_EVIDENCE_FILE}.`,
+        },
+        ...compacted,
+      ]
+    : compacted;
+}
+
+function compactVerifierEvidenceRecord(
+  record: LiveIntegrationEvidence | PersistedLiveVerificationRecord,
+): unknown {
+  const compacted = compactVerifierValue(record, 0);
+  const serialized = JSON.stringify(compacted);
+  if (serialized.length <= MAX_PROMPT_EVIDENCE_RECORD_CHARS) return compacted;
+
+  const navigationKeys = [
+    'schemaVersion',
+    'kind',
+    'label',
+    'caseName',
+    'toolName',
+    'status',
+    'verifierSession',
+    'startedAt',
+    'finishedAt',
+    'requestedParams',
+    'effectiveParams',
+    'preferredBackend',
+    'usedBackend',
+    'attempts',
+    'durationMs',
+    'exitCode',
+    'timedOut',
+    'passedTests',
+    'failedTests',
+    'completedCallLabels',
+    'reason',
+    'error',
+  ] as const;
+  const source = record as Record<string, unknown>;
+  const navigation: Record<string, unknown> = {};
+  for (const key of navigationKeys) {
+    if (source[key] !== undefined) navigation[key] = compactVerifierValue(source[key], 0);
+  }
+  return {
+    ...navigation,
+    payloadPreview: clipVerifierString(serialized, MAX_PROMPT_EVIDENCE_RECORD_CHARS),
+    promptCompacted: true,
+    note: `Full receipt remains in ${LIVE_VERIFICATION_EVIDENCE_FILE}.`,
+  };
+}
+
+function compactVerifierValue(value: unknown, depth: number): unknown {
+  if (typeof value === 'string') return clipVerifierString(value, 2_000);
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= 6) return clipVerifierString(JSON.stringify(value), 2_000);
+  if (Array.isArray(value)) {
+    if (value.length <= 4) return value.map((item) => compactVerifierValue(item, depth + 1));
+    return [
+      ...value.slice(0, 3).map((item) => compactVerifierValue(item, depth + 1)),
+      { promptCompactedItems: value.length - 4 },
+      compactVerifierValue(value.at(-1), depth + 1),
+    ];
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      compactVerifierValue(item, depth + 1),
+    ]),
+  );
+}
+
+function clipVerifierString(value: string, maxChars: number): string {
+  const redacted = redactFreeformText(value).redacted;
+  if (redacted.length <= maxChars) return redacted;
+  const headChars = Math.ceil(maxChars * 0.6);
+  const tailChars = Math.floor(maxChars * 0.4);
+  return `${redacted.slice(0, headChars)}\n...[prompt preview truncated ${redacted.length - maxChars} chars]...\n${redacted.slice(-tailChars)}`;
 }
 
 function creditBackendPreparation(

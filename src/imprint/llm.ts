@@ -1254,6 +1254,10 @@ export function preferredVerificationModel(provider: ProviderName): string {
   throw new Error(`Provider ${provider} does not support live semantic verification`);
 }
 
+/** The semantic reviewer intentionally uses a provider independent from the
+ * compiler. Claude/Sonnet compilation therefore still receives a Terra review. */
+export const DEFAULT_VERIFICATION_PROVIDER: ProviderName = 'codex-cli';
+
 interface ModelOption {
   model: string;
   isDefault: boolean;

@@ -10,6 +10,29 @@ import type { AgentProgress } from './agent.ts';
 import { type AssignedSharedModule, describeAssignedModules } from './build-plan.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 
+/** Only an independent semantic-verifier result consumes the bounded review
+ * budget. Deterministic preflight failures remain deadline-bounded but do not
+ * spend a compiler↔reviewer iteration. */
+export function advanceSemanticVerificationCycle(
+  current: number,
+  semanticReviewCompleted: boolean,
+): number {
+  return semanticReviewCompleted ? current + 1 : current;
+}
+
+/** Bound verifier infrastructure failures separately from semantic review
+ * cycles. One verifier invocation already includes its own provider retry; a
+ * second failed invocation gives the compiler one chance to react without
+ * allowing a missing provider to extend the compile deadline forever. */
+export function advanceIncompleteSemanticVerificationRuns(
+  current: number,
+  semanticReviewAttempted: boolean,
+  semanticReviewCompleted: boolean,
+): number {
+  if (semanticReviewCompleted) return 0;
+  return semanticReviewAttempted ? current + 1 : current;
+}
+
 /** Render a per-tool implementation plan (param→field mapping, request
  *  construction, response parsing, shared-module imports, edge cases) into an
  *  initial-message section the compile agent must follow. Shared verbatim by the
@@ -47,8 +70,8 @@ Compile only the selected candidate. Do not create tools for other actions in th
 }
 
 export interface CompileAgentProgress extends AgentProgress {
-  /** 1-based verification cycle. Cycle 1 is the initial agent run. Subsequent cycles
-   *  happen when the agent claims done() but external verification fails. */
+  /** 1-based semantic-review cycle. Deterministic preflight retries leave this
+   *  value unchanged. */
   verificationCycle: number;
   /** Verification cap for bounded data-tool compiles; auth is deadline-bounded. */
   maxVerificationCycles?: number;

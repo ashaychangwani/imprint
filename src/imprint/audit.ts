@@ -17,10 +17,15 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { z } from 'zod';
+import {
+  type AuthVerificationReceiptStatus,
+  readAuthVerificationReceiptStatus,
+} from './auth-compile-tools.ts';
 import { type ProviderName, preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
-import { discoverTools } from './tool-loader.ts';
+import { type TeachState, loadTeachState } from './teach-state.ts';
+import { type ResolvedTool, discoverTools } from './tool-loader.ts';
 import { llmSpanAttributes, setSpanAttributes, totalPromptTokens, traced } from './tracing.ts';
 
 const log = createLog('audit');
@@ -108,6 +113,123 @@ interface AuditEvaluation {
   score: AuditScore;
   missingTools: string[];
   missingParameters: MissingAuditedParameter[];
+}
+
+interface SkippedInteractiveAuth {
+  name: string;
+  reason: string;
+  verificationStatus: AuthVerificationReceiptStatus['status'];
+  verificationReason: string;
+  verificationAction?: string;
+  verificationBackend?: string;
+  verificationTimestamp?: number;
+}
+
+interface AuditToolPartition {
+  eligible: ResolvedTool[];
+  nonInteractiveAuthNames: string[];
+  skippedInteractiveAuth: SkippedInteractiveAuth[];
+}
+
+interface DetectedButUnemittedTool {
+  name: string;
+  reason?: string;
+  lastCompletedStep?: string;
+}
+
+/** Report candidates from the latest retained recording that teach detected but
+ * did not emit. They are diagnostic metadata, not part of the audit score: the
+ * audit agent can only call emitted MCP tools. */
+export function detectedButUnemittedTools(
+  state: TeachState,
+  emittedToolNames: readonly string[],
+): DetectedButUnemittedTool[] {
+  const candidates = Object.values(state.workflows).filter((workflow) => workflow.candidate);
+  if (candidates.length === 0) return [];
+
+  const latest = candidates.reduce((current, workflow) =>
+    Date.parse(workflow.updatedAt) > Date.parse(current.updatedAt) ? workflow : current,
+  );
+  const emitted = new Set(emittedToolNames);
+  const byName = new Map<string, DetectedButUnemittedTool>();
+  for (const workflow of candidates) {
+    if (workflow.sessionPath !== latest.sessionPath || !workflow.candidate) continue;
+    const name = workflow.candidate.toolName;
+    // A same-named artifact may belong to an older successful teach. Only
+    // suppress the diagnostic when the latest recording itself reached emit
+    // successfully and the emitted artifact still exists.
+    if (emitted.has(name) && workflow.completedSteps.includes('emit') && !workflow.error) continue;
+    byName.set(name, {
+      name,
+      ...(workflow.error ? { reason: workflow.error.split('\n')[0] } : {}),
+      ...(workflow.completedSteps.at(-1)
+        ? { lastCompletedStep: workflow.completedSteps.at(-1) }
+        : {}),
+    });
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function countDetectedToolNames(
+  emittedToolNames: readonly string[],
+  detectedButUnemitted: readonly DetectedButUnemittedTool[],
+): number {
+  return new Set([...emittedToolNames, ...detectedButUnemitted.map((candidate) => candidate.name)])
+    .size;
+}
+
+/** Partition generated tools for a headless audit. Authentication is eligible
+ * only when every declared action completes directly: any pause means a human
+ * continuation (OTP, CAPTCHA, device approval, email link, etc.) may be needed. */
+export function partitionAuditTools(tools: readonly ResolvedTool[]): AuditToolPartition {
+  const eligible: ResolvedTool[] = [];
+  const nonInteractiveAuthNames: string[] = [];
+  const skippedInteractiveAuth: SkippedInteractiveAuth[] = [];
+
+  for (const tool of tools) {
+    // authConfig is the authoritative capability marker for legacy workflows
+    // where the newer optional toolKind field may be absent.
+    const auth = tool.workflow.authConfig;
+    if (tool.workflow.toolKind === 'authenticate' && !auth) {
+      const receipt = readAuthVerificationReceiptStatus(tool.dir, tool.workflow);
+      skippedInteractiveAuth.push({
+        name: tool.workflow.toolName,
+        reason: 'authentication configuration is missing, so unattended completion is not proven',
+        verificationStatus: receipt.status,
+        verificationReason: receipt.reason,
+        ...(receipt.action ? { verificationAction: receipt.action } : {}),
+        ...(receipt.backend ? { verificationBackend: receipt.backend } : {}),
+        ...(receipt.timestamp ? { verificationTimestamp: receipt.timestamp } : {}),
+      });
+      continue;
+    }
+    const pauses = auth
+      ? Object.entries(auth.actions).filter(([, action]) => action.outcome.type === 'pause')
+      : [];
+    if (pauses.length === 0) {
+      eligible.push(tool);
+      if (auth) nonInteractiveAuthNames.push(tool.workflow.toolName);
+      continue;
+    }
+
+    const receipt = readAuthVerificationReceiptStatus(tool.dir, tool.workflow);
+    const pauseSummary = pauses
+      .map(([name, action]) =>
+        action.outcome.type === 'pause' ? `${name}: ${action.outcome.message}` : name,
+      )
+      .join('; ');
+    skippedInteractiveAuth.push({
+      name: tool.workflow.toolName,
+      reason: `requires human continuation (${pauseSummary})`,
+      verificationStatus: receipt.status,
+      verificationReason: receipt.reason,
+      ...(receipt.action ? { verificationAction: receipt.action } : {}),
+      ...(receipt.backend ? { verificationBackend: receipt.backend } : {}),
+      ...(receipt.timestamp ? { verificationTimestamp: receipt.timestamp } : {}),
+    });
+  }
+
+  return { eligible, nonInteractiveAuthNames, skippedInteractiveAuth };
 }
 
 /**
@@ -405,6 +527,10 @@ export function buildAuditMcpEnvironment(assetRoot = imprintHomeDir()): Record<s
   };
 }
 
+export function buildAuditMcpCommandArgs(site: string, toolNames: readonly string[]): string[] {
+  return ['run', CLI_PATH, 'mcp-server', site, '--include-tools', toolNames.join(',')];
+}
+
 export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
   return await traced(
     'audit.session',
@@ -415,13 +541,27 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
     },
     async (span) => {
       const assetRoot = imprintHomeDir();
-      const tools = await discoverTools(assetRoot, opts.site, '[imprint audit]');
-      const toolCount = tools.length;
+      const discoveredTools = await discoverTools(assetRoot, opts.site, '[imprint audit]');
+      const toolCount = discoveredTools.length;
       if (toolCount === 0) {
         throw new Error(
           `No generated tool found for site "${opts.site}" — run \`imprint teach ${opts.site}\` first, then audit it.`,
         );
       }
+      const {
+        eligible: tools,
+        nonInteractiveAuthNames,
+        skippedInteractiveAuth,
+      } = partitionAuditTools(discoveredTools);
+      const auditedToolCount = tools.length;
+      const detectedButUnemitted = detectedButUnemittedTools(
+        loadTeachState(opts.site),
+        discoveredTools.map((tool) => tool.workflow.toolName),
+      );
+      const detectedToolCount = countDetectedToolNames(
+        discoveredTools.map((tool) => tool.workflow.toolName),
+        detectedButUnemitted,
+      );
 
       const provider = opts.provider ?? 'claude-cli';
       const model = opts.model ?? preferredAgentModel(provider);
@@ -433,18 +573,29 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         );
       }
 
+      const nonInteractiveAuthSet = new Set(nonInteractiveAuthNames);
       const expectedTools = tools.map((tool) => ({
         name: tool.workflow.toolName,
-        parameters: tool.workflow.parameters.map((parameter) => parameter.name),
+        parameters: nonInteractiveAuthSet.has(tool.workflow.toolName)
+          ? []
+          : tool.workflow.parameters.map((parameter) => parameter.name),
       }));
       const toolNames = expectedTools.map((tool) => tool.name);
-      log(`auditing ${toolCount} tool(s) for site "${opts.site}": ${toolNames.join(', ')}`);
+      log(
+        `auditing ${auditedToolCount}/${toolCount} eligible tool(s) for site "${opts.site}": ${toolNames.join(', ') || '(none)'}`,
+      );
+      for (const skipped of skippedInteractiveAuth) {
+        log(
+          `skipping interactive auth ${skipped.name}: ${skipped.reason}; receipt=${skipped.verificationStatus}`,
+        );
+      }
 
       // Parameters that shipped live-unverified at compile time (Fix D). Tell the
       // auditor to probe them especially — these are the most likely to be broken
       // (the compile-time differential could not confirm their effect).
       const unverifiedParams: Array<{ tool: string; params: string[] }> = [];
       for (const t of tools) {
+        if (nonInteractiveAuthSet.has(t.workflow.toolName)) continue;
         const params = (t.workflow.parameters ?? [])
           .filter((p) => p.verified === false)
           .map((p) => p.name);
@@ -468,16 +619,23 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         }
       }
 
-      const drive = await driveAudit({
-        site: opts.site,
-        provider,
-        model,
-        timeoutMs,
-        systemPromptPath,
-        toolNames,
-        unverifiedParams,
-        tokenDeps,
-      });
+      const drive =
+        auditedToolCount === 0
+          ? emptyDriveAuditResult()
+          : await driveAudit({
+              site: opts.site,
+              provider,
+              model,
+              timeoutMs,
+              systemPromptPath,
+              toolNames,
+              nonInteractiveAuthNames,
+              unverifiedParams,
+              tokenDeps,
+            });
+      if (auditedToolCount === 0) {
+        log('all discovered tools require human-interactive authentication; auditor not spawned');
+      }
 
       // Cross-reference compile-time live verification with the audit grade.
       // The downgrade rule's purpose is to surface "flying blind" runs —
@@ -558,6 +716,10 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         'imprint.audit.params_broken': score.paramsBroken,
         'imprint.audit.params_untestable': score.paramsUntestable,
         'imprint.audit.tool_count': toolCount,
+        'imprint.audit.audited_tool_count': auditedToolCount,
+        'imprint.audit.detected_tool_count': detectedToolCount,
+        'imprint.audit.detected_but_unemitted_count': detectedButUnemitted.length,
+        'imprint.audit.skipped_interactive_auth_count': skippedInteractiveAuth.length,
         'imprint.audit.verdict': score.verdict,
         'imprint.audit.unverified_and_ungradeable_count': unverifiedAndUngradeable.length,
         'imprint.audit.missing_tool_count': missingToolNames.length,
@@ -583,6 +745,10 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         report: drive.report,
         site: opts.site,
         toolCount,
+        auditedToolCount,
+        detectedToolCount,
+        detectedButUnemittedTools: detectedButUnemitted,
+        skippedInteractiveAuth,
         ungradeableTools: ungradeableNames,
         /** Connected tools without an invocation record. A partial audit
          *  cannot pass merely because the auditor named an uncalled tool. */
@@ -623,6 +789,10 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
           missingTools: missingToolNames,
           missingParameters,
           report: drive.report,
+          auditedToolCount,
+          skippedInteractiveAuth,
+          detectedToolCount,
+          detectedButUnemittedTools: detectedButUnemitted,
         });
       }
 
@@ -661,6 +831,9 @@ interface DriveAuditOptions {
   timeoutMs: number;
   systemPromptPath: string;
   toolNames: string[];
+  /** Eligible password-only/direct-success auth tools. Interactive auth tools
+   * are filtered before the MCP session is created and never appear here. */
+  nonInteractiveAuthNames?: string[];
   /** Per-tool params that shipped live-unverified at compile time. */
   unverifiedParams: Array<{ tool: string; params: string[] }>;
   /** Producer→consumer token contracts (param.sourcedFrom) so the auditor chains. */
@@ -723,17 +896,18 @@ async function driveAuditWithClaude(opts: DriveAuditOptions): Promise<DriveAudit
   // with zero tools. The `imprint-audit-` prefix keeps the inline server unique.
   const serverName = `imprint-audit-${opts.site}`;
   const bunPath = process.execPath;
+  const mcpEnv = buildAuditMcpEnvironment();
   const mcpConfig = {
     mcpServers: {
       [serverName]: {
         command: bunPath,
-        args: ['run', CLI_PATH, 'mcp-server', opts.site],
+        args: buildAuditMcpCommandArgs(opts.site, opts.toolNames),
         // Pace every audit tool call: the auditor now differentially probes
         // bot-defended idempotent reads (search/calendar) instead of bailing
         // after one call, so a deliberate inter-call delay keeps the probing
         // steady enough that the per-IP anti-bot defense isn't tripped. Only
         // the audit sets this; production mcp-server runs unpaced.
-        env: { IMPRINT_AUDIT_PACING_MS: '5000', IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000' },
+        env: mcpEnv,
       },
     },
   };
@@ -829,7 +1003,7 @@ async function driveAuditWithClaude(opts: DriveAuditOptions): Promise<DriveAudit
 async function driveAuditWithCodex(opts: DriveAuditOptions): Promise<DriveAuditResult> {
   const serverName = `imprint-audit-${opts.site}`;
   const bunPath = process.execPath;
-  const mcpArgs = ['run', CLI_PATH, 'mcp-server', opts.site];
+  const mcpArgs = buildAuditMcpCommandArgs(opts.site, opts.toolNames);
   const mcpEnv = buildAuditMcpEnvironment();
 
   const unverifiedNote = buildUnverifiedParamNote(opts.unverifiedParams);
@@ -937,6 +1111,10 @@ export function buildUnverifiedParamNote(
 }
 
 export function buildAuditInitialPrompt(opts: DriveAuditOptions, unverifiedNote: string): string {
+  const nonInteractiveAuthNames = opts.nonInteractiveAuthNames ?? [];
+  const authNote = nonInteractiveAuthNames.length
+    ? `\n\nThe following authentication tool(s) are eligible because every action completes without a human pause: ${nonInteractiveAuthNames.join(', ')}. Call each exactly once with one safe baseline. Never differentially probe or retry authentication actions. If any DATA tool returns AUTH_EXPIRED, classify that invocation as infra/inconclusive evidence; do not call an authentication tool in response.`
+    : '\n\nNo authentication tool is eligible in this audit. If a DATA tool returns AUTH_EXPIRED, classify that invocation as infra/inconclusive evidence; do not attempt to authenticate.';
   return `Audit every MCP tool connected to you for the site "${opts.site}".
 
 There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set, judge the result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt.
@@ -945,7 +1123,7 @@ Parameter coverage is mandatory for idempotent read tools. A cold cdp-replay/bro
 
 Promo/coupon/voucher/discount-code parameters require a known valid code to prove a visible effect. If neither the schema nor another tool output gives you a valid code, classify that parameter as untestable; do not invent a random code and call an unchanged response no_op.
 
-IMPORTANT: Call tools strictly sequentially — issue exactly one tool call, wait for its result, then issue the next. Never issue tool calls in parallel or batch them in one turn. Many target sites share an anti-bot defense across endpoints, so a parallel burst trips a site-wide rate-limit (HTTP 429) that then poisons every later call. If a call returns a 429 / rate-limit / anti-bot result, classify it \`infra\` and pause before the next call.${unverifiedNote}${buildTokenDepNote(opts.tokenDeps)}
+IMPORTANT: Call tools strictly sequentially — issue exactly one tool call, wait for its result, then issue the next. Never issue tool calls in parallel or batch them in one turn. Many target sites share an anti-bot defense across endpoints, so a parallel burst trips a site-wide rate-limit (HTTP 429) that then poisons every later call. If a call returns a 429 / rate-limit / anti-bot result, classify it \`infra\` and pause before the next call.${authNote}${unverifiedNote}${buildTokenDepNote(opts.tokenDeps)}
 
 When you are done, end your final message with exactly one fenced \`\`\`json block containing the full report and nothing after it.`;
 }
@@ -1391,6 +1569,10 @@ function printSummary(
     missingTools: string[];
     missingParameters: MissingAuditedParameter[];
     report: AuditReport;
+    auditedToolCount: number;
+    skippedInteractiveAuth: SkippedInteractiveAuth[];
+    detectedToolCount: number;
+    detectedButUnemittedTools: DetectedButUnemittedTool[];
   },
 ): void {
   const pct = score.graded === 0 ? 'n/a' : `${score.score.toFixed(1)}%`;
@@ -1404,8 +1586,18 @@ function printSummary(
   const invGraded = score.graded - paramsTested;
   const invTotal = invGraded + score.infra + score.badParams;
   console.log(
-    `[imprint]   graded ${score.graded} unit(s) = ${invGraded}/${invTotal} invocation(s) + ${paramsTested} parameter(s) across ${toolCount} tool(s) — excluded: ${score.infra} infra, ${score.badParams} bad_params, ${score.paramsUntestable} untestable param(s)`,
+    `[imprint]   graded ${score.graded} unit(s) = ${invGraded}/${invTotal} invocation(s) + ${paramsTested} parameter(s) across ${extra.auditedToolCount}/${toolCount} eligible tool(s) — excluded: ${score.infra} infra, ${score.badParams} bad_params, ${score.paramsUntestable} untestable param(s)`,
   );
+  for (const skipped of extra.skippedInteractiveAuth) {
+    console.log(
+      `[imprint]   skipped interactive auth ${skipped.name} — ${skipped.reason}; verification receipt: ${skipped.verificationStatus}`,
+    );
+  }
+  if (extra.detectedButUnemittedTools.length > 0) {
+    console.log(
+      `[imprint]   ${extra.detectedButUnemittedTools.length}/${extra.detectedToolCount} detected tool(s) were not emitted and are excluded from scoring: ${extra.detectedButUnemittedTools.map((tool) => tool.name).join(', ')}`,
+    );
+  }
   if (paramsTested + score.paramsUntestable > 0) {
     console.log(
       `[imprint]   parameters: ${score.paramsWorking}/${paramsTested} working — ${score.paramsNoOp} no-op, ${score.paramsBroken} broken, ${score.paramsUntestable} untestable`,

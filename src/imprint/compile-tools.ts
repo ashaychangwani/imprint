@@ -57,6 +57,7 @@ import {
 } from './types.ts';
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
+const MAX_SHARED_MODULE_SOURCE_CHARS = 50_000;
 
 // Env var read by the agent-written parser.test.ts to locate the redacted
 // session. The test loads it, finds the load-bearing request seq, and feeds
@@ -160,11 +161,11 @@ function buildReadBuildPlanTool(
       ];
       if (emitsTokens.length > 0) {
         tokenNotes.push(
-          `PRODUCER CONTRACT: your parser MUST emit ${emitsTokens
+          `PRODUCER COMPATIBILITY TARGET: emit ${emitsTokens
             .map((e) => `\`${e.field}\``)
             .join(
               ', ',
-            )} in each result item, in the exact shape described (the FULL value a sibling consumer needs — never a bare fragment). Sibling tools mint their input from these fields; the verifier fails this tool if a declared field is missing from the parser output.`,
+            )} in the exact shape described whenever a live result supplies or proves the full value a sibling consumer needs. Never fabricate a missing token. Useful core records may retain a null/absent token when workflow.limitations names the missing output and affected consumers; preserve their supported input classes. A missing downstream token alone is not a reason to discard valid producer records.`,
         );
       }
       for (const tp of tokenParams) {
@@ -175,7 +176,7 @@ function buildReadBuildPlanTool(
           ? ` The producer declares shape: ${producerShape}. If that shape contains requiredKeys=[...], request-transform.ts must decode/unpack the fresh value and reference each required key in the outgoing request.`
           : '';
         tokenNotes.push(
-          `CONSUMER CONTRACT: param \`${tp.param}\` is an opaque token minted by the \`${tp.sourceTool}\` tool's \`${tp.sourceField}\` output.${shapeNote} Write a CHAINED \`param:${tp.param}\` integration test that calls \`runCapturedIntegrationCase\` on \`../${tp.sourceTool}/workflow.json\` directly inside the \`param:${tp.param}\` test block, reads \`${tp.sourceField}\` from the producer's ACTUAL output shape (top-level field, or an item in any returned collection such as flights/items/results), and passes THAT fresh value (not the recorded constant) into this tool — then asserts the response is non-empty. When several params come from the same producer, mint once and choose one producer item containing all sibling fields so the values stay from the same result. On producer bot/infra error, rethrow so the suite waives; if the producer ran but the field is absent, fix the producer parser/output contract instead of waiving. Do not fabricate a fallback value or mutate producer.result.data to make the test pass.`,
+          `CONSUMER CONTRACT: param \`${tp.param}\` is an opaque token minted by the \`${tp.sourceTool}\` tool's \`${tp.sourceField}\` output.${shapeNote} Write a CHAINED \`param:${tp.param}\` integration test that calls \`runCapturedIntegrationCase\` on \`../${tp.sourceTool}/workflow.json\` directly inside the \`param:${tp.param}\` test block, reads \`${tp.sourceField}\` from the producer's ACTUAL output shape (top-level field, or an item in any returned collection such as flights/items/results), and passes THAT fresh value (not the recorded constant) into this tool — then asserts the response is non-empty. When several params come from the same producer, mint once and choose one producer item containing all sibling fields so the values stay from the same result. On producer bot/infra error, rethrow so the suite waives. If useful producer records legitimately lack the field, do not fabricate or mutate output: keep this consumer verified:false, waived-chain, or inconclusive with diagnostics, and require an honest producer limitation.`,
         );
       }
       // Per-source wiring guidance for the general dependency contract. These are
@@ -212,6 +213,7 @@ function buildReadBuildPlanTool(
               kind: m.kind,
               purpose: m.purpose,
               exportSignatures: m.exportSignatures,
+              ...readAssignedSharedModuleSource(buildPlanPath, m.path),
             })),
             parserGuidance: slice.tool.parserGuidance,
             paramChecklist: slice.tool.paramChecklist,
@@ -235,6 +237,30 @@ function buildReadBuildPlanTool(
         ),
       };
     },
+  };
+}
+
+function readAssignedSharedModuleSource(
+  buildPlanPath: string,
+  modulePath: string,
+): { source?: string; sourceTruncated?: boolean; sourceUnavailable?: string } {
+  const siteDir = realpathSync(dirname(buildPlanPath));
+  const candidate = pathJoin(siteDir, modulePath);
+  if (!existsSync(candidate)) {
+    return { sourceUnavailable: 'The verified shared module file is missing.' };
+  }
+
+  const resolved = realpathSync(candidate);
+  const relative = pathRelative(siteDir, resolved);
+  if (relative.startsWith('..') || relative === '') {
+    return { sourceUnavailable: 'The shared module resolved outside the site directory.' };
+  }
+
+  const source = readFileSync(resolved, 'utf8');
+  if (source.length <= MAX_SHARED_MODULE_SOURCE_CHARS) return { source };
+  return {
+    source: source.slice(0, MAX_SHARED_MODULE_SOURCE_CHARS),
+    sourceTruncated: true,
   };
 }
 
@@ -1887,24 +1913,121 @@ interface TestBlock {
   body: string;
 }
 
+function matchingClosingBrace(source: string, openIndex: number): number | null {
+  let depth = 0;
+  let quote: "'" | '"' | '`' | null = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = openIndex; index < source.length; index++) {
+    const char = source[index] ?? '';
+    const next = source[index + 1] ?? '';
+    if (lineComment) {
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        index++;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      lineComment = true;
+      index++;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      index++;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '{') depth++;
+    if (char === '}' && --depth === 0) return index;
+  }
+  return null;
+}
+
 function hasCapturedLiveWorkflowCall(source: string): boolean {
   return /\b(?:runWorkflowWithLadder|runCapturedIntegrationCase)\s*\(/.test(source);
 }
 
-/** Split a test file into `test(...)` / `it(...)` blocks (title + source from
- *  that test's start to the next test's start). Good enough to check whether a
- *  named per-parameter test's body actually calls the workflow. */
+/** Resolve small local function wrappers around a captured workflow call. The
+ * generated suites commonly factor one invocation helper above their tests;
+ * keeping the resolution local prevents a call in an unrelated param test from
+ * laundering a synthetic baseline elsewhere in the file. */
+function capturedWorkflowHelperNames(source: string): Set<string> {
+  const functionRe = /\b(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g;
+  const functions = [...source.matchAll(functionRe)].map((match) => ({
+    name: match[1] ?? '',
+    index: match.index ?? 0,
+  }));
+  const testStarts = [...source.matchAll(/\b(?:test|it)\s*\(/g)].map((match) => match.index ?? 0);
+  const boundaries = [...functions.map((entry) => entry.index), ...testStarts, source.length].sort(
+    (a, b) => a - b,
+  );
+  const bodies = new Map<string, string>();
+  for (const entry of functions) {
+    const end = boundaries.find((boundary) => boundary > entry.index) ?? source.length;
+    bodies.set(entry.name, source.slice(entry.index, end));
+  }
+  const captured = new Set<string>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, body] of bodies) {
+      if (captured.has(name)) continue;
+      const callsCapturedHelper = [...captured].some((helper) =>
+        new RegExp(`\\b${helper.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(body),
+      );
+      if (hasCapturedLiveWorkflowCall(body) || callsCapturedHelper) {
+        captured.add(name);
+        changed = true;
+      }
+    }
+  }
+  return captured;
+}
+
+/** Split a test file into `test(...)` / `it(...)` blocks (title + callback
+ *  source). Good enough to check whether a named per-parameter test's body
+ *  actually calls the workflow. */
 export function extractTestBlocks(src: string): TestBlock[] {
   const re = /\b(?:test|it)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g;
-  const starts: Array<{ index: number; title: string }> = [];
+  const starts: Array<{ index: number; title: string; afterTitle: number }> = [];
   for (const m of src.matchAll(re)) {
-    starts.push({ index: m.index ?? 0, title: m[2] ?? '' });
+    starts.push({
+      index: m.index ?? 0,
+      title: m[2] ?? '',
+      afterTitle: (m.index ?? 0) + m[0].length,
+    });
   }
   const blocks: TestBlock[] = [];
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i];
     if (!start) continue;
-    const end = i + 1 < starts.length ? (starts[i + 1]?.index ?? src.length) : src.length;
+    const fallbackEnd = i + 1 < starts.length ? (starts[i + 1]?.index ?? src.length) : src.length;
+    const callbackOpen = src.indexOf('{', start.afterTitle);
+    const callbackClose =
+      callbackOpen >= 0 && callbackOpen < fallbackEnd
+        ? matchingClosingBrace(src, callbackOpen)
+        : null;
+    const end = callbackClose === null ? fallbackEnd : callbackClose + 1;
     blocks.push({ title: start.title, body: src.slice(start.index, end) });
   }
   return blocks;
@@ -2287,6 +2410,7 @@ export function classifyIntegrationOutcome(input: {
  *  - chained pass → `{ verified: true, sourcedFrom }`
  *  - passed but not chained (the recorded-value tautology) → `unchained` (blocking)
  *  - suite waived (producer anti-bot) → `{ verified: false, reason: 'waived-chain' }`
+ *  - explicitly annotated unavailable producer output → `{ verified: false, reason: 'waived-chain' }`
  *  - else → `unchained` (blocking)
  */
 export function classifyParamCoverage(opts: {
@@ -2321,6 +2445,10 @@ export function classifyParamCoverage(opts: {
     const token = `param:${lp.name}`;
     const passedLive = [...opts.passedTests].some((n) => n.includes(token));
     const block = blocks.find((b) => b.title.includes(token));
+    const annotationRe = new RegExp(
+      `//\\s*exposed-but-not-verified[^\\n]*\\b${lp.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+    );
+    const isAnnotated = annotationRe.test(opts.integrationSrc);
 
     // Producer-sourced token param: requires a chained test that mints a fresh
     // value from the producer's sibling workflow.
@@ -2344,16 +2472,23 @@ export function classifyParamCoverage(opts: {
           reason: 'waived-chain',
           sourcedFrom,
         });
+      } else if (isAnnotated) {
+        // The compile agent may explicitly preserve a limited consumer when
+        // its producer returns useful core records but cannot mint this token.
+        // The durable verified:false+sourcedFrom stamp keeps orchestration
+        // honest; opaque defaults and passing recorded-token tests remain
+        // blocked by the independent guards above and below.
+        paramVerification.push({
+          name: lp.name,
+          verified: false,
+          reason: 'waived-chain',
+          sourcedFrom,
+        });
       } else {
         unchained.push(lp.name);
       }
       continue;
     }
-
-    const annotationRe = new RegExp(
-      `//\\s*exposed-but-not-verified[^\\n]*\\b${lp.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
-    );
-    const isAnnotated = annotationRe.test(opts.integrationSrc);
 
     if (passedLive) {
       // Anti-tautology: a passing per-param test must actually exercise the live
@@ -2388,13 +2523,20 @@ export function hasLiveBaselineWorkflowTest(integrationSrc: string): boolean {
   const throwsOnFailure = /if\s*\(\s*!result\.ok\s*\)\s*\{[\s\S]{0,500}\bthrow\b/;
   const returnsOnFailedResult =
     /if\s*\([^)]*![^)]*\.result\.ok[\s\S]{0,200}\)\s*(?:\{[\s\S]{0,300}\breturn\b|return\b)/;
-  return extractTestBlocks(integrationSrc).some(
-    (block) =>
+  const capturedHelpers = capturedWorkflowHelperNames(integrationSrc);
+  return extractTestBlocks(integrationSrc).some((block) => {
+    const invokesCapturedWorkflow =
+      hasCapturedLiveWorkflowCall(block.body) ||
+      [...capturedHelpers].some((helper) =>
+        new RegExp(`\\b${helper.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(block.body),
+      );
+    return (
       !block.title.includes('param:') &&
-      hasCapturedLiveWorkflowCall(block.body) &&
+      invokesCapturedWorkflow &&
       !returnsOnFailedResult.test(block.body) &&
-      (requiresOk.test(block.body) || throwsOnFailure.test(block.body)),
-  );
+      (requiresOk.test(block.body) || throwsOnFailure.test(block.body))
+    );
+  });
 }
 
 /**
@@ -4149,7 +4291,7 @@ export async function externalVerification(
         })
         .join(', ');
       failures.push(
-        `${coverage.unchained.length} producer-sourced token param(s) lack a CHAINED \`param:<name>\` test that mints a FRESH value from the producer tool: ${details}. Each test must call runWorkflowWithLadder on the named producer's \`workflow.json\`, read the named field from its result, and pass THAT value (not the recorded constant) into this tool — then assert the response is non-empty. If the producer only emits a bare fragment, fix the PRODUCER to emit the full value this tool consumes. See prompts/compile-agent.md "Producer-sourced token parameters".`,
+        `${coverage.unchained.length} producer-sourced token param(s) lack a CHAINED \`param:<name>\` test that mints a FRESH value from the producer tool: ${details}. Each test must call runWorkflowWithLadder on the named producer's \`workflow.json\`, read the named field from its result, and pass THAT value (not the recorded constant) into this tool — then assert the response is non-empty. If live producer results legitimately cannot supply the token, keep the consumer explicitly unverified with an \`// exposed-but-not-verified: <param> ...\` annotation and document the producer/consumer limitation instead of fabricating it. See prompts/compile-agent.md "Producer-sourced token parameters".`,
       );
     }
   }
@@ -4175,9 +4317,9 @@ export async function externalVerification(
           missing.length === 1 ? 'it' : 'them'
         } as an input token, but parser.ts does not emit ${
           missing.length === 1 ? 'that field' : 'those fields'
-        }. Emit ${
+        }. Reference ${
           missing.length === 1 ? 'it' : 'each'
-        } in every result item under the EXACT field name (the full value a consumer needs, never a bare fragment) — see read_build_plan "emitsTokens".`,
+        } under the EXACT field name and emit the full value whenever live evidence supplies it; null/absent values are allowed only for useful records whose missing output and affected consumers are documented in workflow.limitations — see read_build_plan "emitsTokens".`,
       );
     }
 

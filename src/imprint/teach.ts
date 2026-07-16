@@ -150,6 +150,30 @@ export function hasDurableAuthState(
   return stored.cookies.length > 0 || (stored.storage?.length ?? 0) > 0;
 }
 
+export function resolvedArtifactCheckpointPath(
+  site: string,
+  _storedPath: string | undefined,
+  resolvedPath: string,
+): string {
+  // toRelative keeps managed artifacts site-relative and genuine external
+  // artifacts absolute, so both forms remain resolvable on the next resume.
+  return toRelative(site, resolvedPath);
+}
+
+export function selectCompileSessionArtifact(
+  resumedTriagedPath: string | null,
+  redactedPath: string | null,
+): { path: string | null; triaged: boolean } {
+  const derivedTriagedPath = redactedPath?.replace(/\.redacted\.json$/, '.triaged.json') ?? null;
+  const path =
+    (resumedTriagedPath && existsSync(resumedTriagedPath) ? resumedTriagedPath : null) ??
+    (derivedTriagedPath && existsSync(derivedTriagedPath) ? derivedTriagedPath : redactedPath);
+  return {
+    path,
+    triaged: path === resumedTriagedPath || path === derivedTriagedPath,
+  };
+}
+
 function fileSha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
@@ -205,6 +229,8 @@ interface TeachOptions {
   keepTest?: boolean;
   /** Non-interactive: compile every detected candidate instead of primary only. */
   allTools?: boolean;
+  /** Bounded resume: compile exactly one persisted candidate from the retained recording. */
+  tool?: string;
   /** Skip the replay-and-diff stage entirely. */
   skipReplay?: boolean;
   /** Run only specific phases of the teach chain. `fromStep` resumes a PRIOR run
@@ -490,6 +516,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   let workflowKey: string | null = null;
   let sessionPath: string | null = opts.fromSession ?? null;
   let redactedPath: string | null = null;
+  let resumedTriagedPath: string | null = null;
   let usingFromSession = false;
 
   const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
@@ -506,7 +533,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     // Non-interactive phase resume: start at a specific step, reusing a prior
     // run's persisted outputs. resolveStepStartTarget picks the most-recent
     // workflow and THROWS if it didn't reach far enough (the dependency guard).
-    const target = resolveStepStartTarget(site, state, opts.fromStep);
+    const target = resolveStepStartTarget(site, state, opts.fromStep, opts.tool);
     workflowKey = target.workflowKey;
     startFrom = opts.fromStep;
     sessionPath = resolveTeachStatePath(site, target.ws.sessionPath);
@@ -1215,9 +1242,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
     const ws = state.workflows[workflowKey];
     const resolvedTriagedPath = resolveWorkflowTriagedPath(site, ws);
-    if (ws && resolvedTriagedPath && !ws.triagedPath) {
+    resumedTriagedPath = resolvedTriagedPath;
+    if (
+      ws &&
+      resolvedTriagedPath &&
+      resolveTeachStatePath(site, ws.triagedPath) !== resolvedTriagedPath
+    ) {
       updateCheckpoint(site, state, workflowKey, 'triage', {
-        triagedPath: toRelative(site, resolvedTriagedPath),
+        triagedPath: resolvedArtifactCheckpointPath(site, ws.triagedPath, resolvedTriagedPath),
       });
     }
     // A `--from-step` resume into plan-prereqs/generate reconstructs the prior
@@ -1242,6 +1274,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       const selection = selectMultiToolResumePlans(state, workflowKey, startFrom, {
         noInteractive: opts.noInteractive,
         allTools: opts.allTools,
+        toolName: opts.tool,
         plannedToolNames,
       });
       for (const { workflowKey: skippedKey, reason } of selection.skipped) {
@@ -1325,15 +1358,12 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // thousands of irrelevant requests (large auth recordings otherwise may never converge on a
   // playbook because of this). The detect-candidates summary already triages;
   // this aligns the compile session with it.
-  const triagedCandidate = redactedPath?.replace(/\.redacted\.json$/, '.triaged.json');
-  const sessionForCompile =
-    triagedCandidate && existsSync(triagedCandidate) ? triagedCandidate : redactedPath;
-  const useTriaged = sessionForCompile === triagedCandidate;
-  const compileSessionPath = requireSessionFile(sessionForCompile, {
+  const compileSessionArtifact = selectCompileSessionArtifact(resumedTriagedPath, redactedPath);
+  const compileSessionPath = requireSessionFile(compileSessionArtifact.path, {
     site,
     workflowKey: plans[0]?.workflowKey ?? workflowKey,
     startFrom,
-    kind: useTriaged ? 'triaged' : 'redacted',
+    kind: compileSessionArtifact.triaged ? 'triaged' : 'redacted',
   });
 
   // ── Clean up stale tools from previous teach runs ──
@@ -1380,66 +1410,61 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   const authDetected = plans.some((pl) => sharedContextHasAuth(pl.sharedContext));
   let buildPlanPath = '';
   let sharedModulesManifest: SharedModuleManifestEntry[] = [];
-  if ((selectedCandidates.length >= 2 || authDetected) && willGenerate && compileModel) {
-    const sidecar = buildPlanSidecarPath(site);
-    const firstWs = state.workflows[plans[0]?.workflowKey ?? ''];
-    // Reuse the cached plan only when resuming PAST plan-prereqs (e.g. --from-step
-    // generate). When plan-prereqs is the explicit target (`--only plan-prereqs` /
-    // `--from-step plan-prereqs`), the user is asking to rebuild shared modules, so
-    // force a fresh planner run instead of short-circuiting to the cached sidecar.
-    const alreadyPlanned =
-      opts.fromStep !== 'plan-prereqs' &&
-      plans.every((pl) =>
-        state.workflows[pl.workflowKey]?.completedSteps.includes('plan-prereqs'),
-      ) &&
-      existsSync(sidecar);
-    if (alreadyPlanned && firstWs) {
-      // Resume past plan-prereqs — reuse the persisted plan + manifest.
-      buildPlanPath = sidecar;
-      sharedModulesManifest = firstWs.sharedModules ?? [];
-    } else {
-      // Mute raw `[imprint …]` logs from the planning subtree (build-plan,
-      // teach-plan, prereq-builder) while the spinner is live — progress flows
-      // through onProgress → spinner.message instead, matching the replay and
-      // compile phases. The skip/timeout reason is surfaced cleanly below.
-      muteLog();
-      spinner.start('Planning shared modules');
-      try {
-        const prereq = await planAndBuildPrereqs({
-          site,
-          redactedSessionPath: compileSessionPath,
-          candidates: selectedCandidates,
-          sharedContext: plans[0]?.sharedContext,
-          siteClassifications,
-          providerName: compileProviderName,
-          model: compileModel,
-          onProgress: (msg) => spinner.message(msg),
-        });
-        buildPlanPath = prereq.buildPlanPath;
-        sharedModulesManifest = prereq.sharedModules;
-        const verified = sharedModulesManifest.filter((m) => m.verified).length;
-        spinner.stop(
-          buildPlanPath
-            ? `Build plan ready (${verified}/${sharedModulesManifest.length} shared module${sharedModulesManifest.length === 1 ? '' : 's'} verified).`
-            : 'Build plan skipped.',
-        );
-        if (prereq.skippedReason) p.log.warn(prereq.skippedReason);
-      } catch (err) {
-        spinner.stop('Build planning failed — compiling tools independently.');
-        p.log.warn(
-          `Build planning failed: ${err instanceof Error ? err.message : String(err)}\nTools will compile without shared modules.`,
-        );
-        buildPlanPath = '';
-        sharedModulesManifest = [];
-      } finally {
-        unmuteLog();
-      }
-      for (const pl of plans) {
-        updateCheckpoint(site, state, pl.workflowKey, 'plan-prereqs', {
-          buildPlanPath: buildPlanPath ? toRelative(site, buildPlanPath) : undefined,
-          sharedModules: sharedModulesManifest,
-        });
-      }
+  const sidecar = buildPlanSidecarPath(site);
+  const firstWs = state.workflows[plans[0]?.workflowKey ?? ''];
+  // A bounded primary-only resume still belongs to its original multi-tool
+  // build plan. Reuse that durable contract even though this invocation selects
+  // one tool; otherwise its assigned shared modules and producer-token contract
+  // silently disappear from the revision agent's context.
+  const alreadyPlanned =
+    opts.fromStep !== 'plan-prereqs' &&
+    plans.every((pl) => state.workflows[pl.workflowKey]?.completedSteps.includes('plan-prereqs')) &&
+    existsSync(sidecar);
+  if (willGenerate && compileModel && alreadyPlanned && firstWs) {
+    buildPlanPath = sidecar;
+    sharedModulesManifest = firstWs.sharedModules ?? [];
+  } else if ((selectedCandidates.length >= 2 || authDetected) && willGenerate && compileModel) {
+    // Mute raw `[imprint …]` logs from the planning subtree (build-plan,
+    // teach-plan, prereq-builder) while the spinner is live — progress flows
+    // through onProgress → spinner.message instead, matching the replay and
+    // compile phases. The skip/timeout reason is surfaced cleanly below.
+    muteLog();
+    spinner.start('Planning shared modules');
+    try {
+      const prereq = await planAndBuildPrereqs({
+        site,
+        redactedSessionPath: compileSessionPath,
+        candidates: selectedCandidates,
+        sharedContext: plans[0]?.sharedContext,
+        siteClassifications,
+        providerName: compileProviderName,
+        model: compileModel,
+        onProgress: (msg) => spinner.message(msg),
+      });
+      buildPlanPath = prereq.buildPlanPath;
+      sharedModulesManifest = prereq.sharedModules;
+      const verified = sharedModulesManifest.filter((m) => m.verified).length;
+      spinner.stop(
+        buildPlanPath
+          ? `Build plan ready (${verified}/${sharedModulesManifest.length} shared module${sharedModulesManifest.length === 1 ? '' : 's'} verified).`
+          : 'Build plan skipped.',
+      );
+      if (prereq.skippedReason) p.log.warn(prereq.skippedReason);
+    } catch (err) {
+      spinner.stop('Build planning failed — compiling tools independently.');
+      p.log.warn(
+        `Build planning failed: ${err instanceof Error ? err.message : String(err)}\nTools will compile without shared modules.`,
+      );
+      buildPlanPath = '';
+      sharedModulesManifest = [];
+    } finally {
+      unmuteLog();
+    }
+    for (const pl of plans) {
+      updateCheckpoint(site, state, pl.workflowKey, 'plan-prereqs', {
+        buildPlanPath: buildPlanPath ? toRelative(site, buildPlanPath) : undefined,
+        sharedModules: sharedModulesManifest,
+      });
     }
   }
 

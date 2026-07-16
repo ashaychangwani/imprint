@@ -41,6 +41,78 @@ function makeSummaryRequest(seq: number, timestamp: number): Session['requests']
 }
 
 describe('compile tools state hints', () => {
+  it('surfaces the source of verified shared modules assigned to the tool', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-compile-plan-'));
+    try {
+      const toolDir = pathJoin(root, 'search_items');
+      mkdirSync(pathJoin(root, '_shared'), { recursive: true });
+      mkdirSync(toolDir, { recursive: true });
+      writeFileSync(
+        pathJoin(root, '_shared', 'request.ts'),
+        'export function transform(params: unknown) { return params; }\n',
+      );
+      const buildPlanPath = pathJoin(root, '.build-plan.json');
+      writeFileSync(
+        buildPlanPath,
+        JSON.stringify({
+          sharedModules: [
+            {
+              path: '_shared/request.ts',
+              kind: 'request-transform',
+              purpose: 'Build the shared request shape',
+              exportSignatures: ['export function transform(params: unknown): unknown'],
+              spec: 'Reuse the recorded request shape.',
+            },
+          ],
+          perTool: [
+            {
+              toolName: 'search_items',
+              usesSharedModules: ['_shared/request.ts'],
+            },
+          ],
+        }),
+      );
+
+      const session: Session = {
+        site: 'test',
+        startedAt: '2026-05-04T00:00:00.000Z',
+        url: 'https://example.com/start',
+        imprintVersion: '0.1.0',
+        requests: [],
+        events: [],
+        narration: [],
+        cookieSnapshots: [],
+        storageSnapshots: [],
+      };
+      const readPlan = buildCompileTools(session, toolDir, '/tmp/session.json', {
+        buildPlanPath,
+        candidate: {
+          toolName: 'search_items',
+          description: 'Search items',
+          rationale: 'primary intent',
+          confidence: 1,
+          primary: true,
+          requestSeqs: [],
+          representativeSeqs: [],
+          dependencySeqs: [],
+          eventSeqs: [],
+          expectedOutput: 'Matching items',
+          likelyParams: [],
+        },
+        sharedModules: [{ path: '_shared/request.ts', kind: 'request-transform', verified: true }],
+      }).find((tool) => tool.name === 'read_build_plan');
+      if (!readPlan) throw new Error('missing read_build_plan');
+
+      const result = JSON.parse((await readPlan.handler({})).result);
+      expect(result.sharedModulesToImport[0]).toMatchObject({
+        importPath: '../_shared/request.ts',
+        source: 'export function transform(params: unknown) { return params; }\n',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('surfaces existing artifacts and durable feedback for a bounded revision', async () => {
     const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-compile-revision-'));
     try {
@@ -2223,6 +2295,83 @@ test('live API call returns upcoming trips for the authenticated account', () =>
     ).toBe(true);
   });
 
+  it('accepts a fail-closed baseline that factors the captured call into a suite helper', () => {
+    expect(
+      hasLiveBaselineWorkflowTest(`
+        async function invoke(params) {
+          return await runCapturedIntegrationCase({
+            caseName: 'live API call returns data',
+            workflowPath: WORKFLOW_PATH,
+            params,
+          });
+        }
+
+        test('live API call returns data', async () => {
+          const { result } = await invoke({ query: 'tires' });
+          expect(result.ok).toBe(true);
+        });
+      `),
+    ).toBe(true);
+  });
+
+  it('does not let a captured call in a param test launder a synthetic baseline', () => {
+    expect(
+      hasLiveBaselineWorkflowTest(`
+        test('param:query filters results', async () => {
+          const { result } = await runCapturedIntegrationCase({
+            caseName: 'param:query filters results',
+            workflowPath: WORKFLOW_PATH,
+            params: { query: 'tires' },
+          });
+          expect(result.ok).toBe(true);
+        });
+
+        test('baseline', () => {
+          const result = { ok: true };
+          expect(result.ok).toBe(true);
+        });
+      `),
+    ).toBe(false);
+  });
+
+  it('does not let an unused captured-call helper launder a synthetic baseline', () => {
+    expect(
+      hasLiveBaselineWorkflowTest(`
+        async function invoke(params) {
+          return await runCapturedIntegrationCase({
+            caseName: 'unused helper',
+            workflowPath: WORKFLOW_PATH,
+            params,
+          });
+        }
+
+        test('baseline', () => {
+          const result = { ok: true };
+          expect(result.ok).toBe(true);
+        });
+      `),
+    ).toBe(false);
+  });
+
+  it('does not include an unused helper declared after a synthetic baseline', () => {
+    expect(
+      hasLiveBaselineWorkflowTest(`
+        test('baseline', () => {
+          const result = { ok: true };
+          expect(result.ok).toBe(true);
+        });
+
+        async function invoke(params) {
+          return await runCapturedIntegrationCase({
+            caseName: 'unused helper',
+            workflowPath: WORKFLOW_PATH,
+            params,
+          });
+        }
+      `),
+    ).toBe(false);
+  });
+
   it('counts a green captured-wrapper param test as live coverage', () => {
     expect(
       classifyParamCoverage({
@@ -2407,6 +2556,39 @@ test('param:hotel_id selects the hotel', async () => {
       likelyParams: [{ name: 'hotel_id' }],
       integrationSrc: chainedSrc,
       passedTests: new Set(['some other test']),
+      integrationOutcome: 'passed',
+      tokenSources,
+    });
+    expect(unchained).toEqual(['hotel_id']);
+    expect(paramVerification).toEqual([]);
+  });
+
+  it('keeps an explicitly limited consumer unverified when no producer token is available', () => {
+    const limitedSrc = `${chainedSrc}\n// exposed-but-not-verified: hotel_id producer returned useful records without this token\n`;
+    const { unchained, paramVerification } = classifyParamCoverage({
+      likelyParams: [{ name: 'hotel_id' }],
+      integrationSrc: limitedSrc,
+      passedTests: new Set(['baseline']),
+      integrationOutcome: 'passed',
+      tokenSources,
+    });
+    expect(unchained).toEqual([]);
+    expect(paramVerification).toEqual([
+      {
+        name: 'hotel_id',
+        verified: false,
+        reason: 'waived-chain',
+        sourcedFrom: { tool: 'search_hotels', field: 'hotel_id' },
+      },
+    ]);
+  });
+
+  it('still blocks a falsely passing recorded-token test despite an annotation', () => {
+    const annotatedTautology = `${tautologicalChainSrc}\n// exposed-but-not-verified: hotel_id token unavailable\n`;
+    const { unchained, paramVerification } = classifyParamCoverage({
+      likelyParams: [{ name: 'hotel_id' }],
+      integrationSrc: annotatedTautology,
+      passedTests: new Set(['param:hotel_id selects the hotel']),
       integrationOutcome: 'passed',
       tokenSources,
     });

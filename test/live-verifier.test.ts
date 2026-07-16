@@ -6,12 +6,13 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join as pathJoin } from 'node:path';
+import { dirname, join as pathJoin } from 'node:path';
 import {
   LIVE_VERIFICATION_EVIDENCE_FILE,
   LiveVerificationReportSchema,
@@ -19,7 +20,9 @@ import {
   assertReportCoversWorkflowParameters,
   backendPreparationDeadlineCreditMs,
   buildVerifierArtifactContext,
+  compactVerifierEvidenceContext,
   hasSuiteReceiptForSession,
+  isInfrastructureOnlyInconclusiveReport,
   mergeSemanticParamVerification,
   namespaceLiveIntegrationEvidence,
   persistLiveVerificationEvidence,
@@ -83,6 +86,40 @@ describe('verifier artifact context', () => {
       dynamicValueFindings: [{ name: 'csrf' }],
     });
   });
+
+  it('bounds large retained live outputs while preserving durable navigation metadata', () => {
+    const evidence = Array.from({ length: 60 }, (_, index) => ({
+      schemaVersion: 1,
+      kind: 'call',
+      label: `targeted-call-${index + 1}`,
+      caseName: `case-${index + 1}`,
+      toolName: 'search_things',
+      requestedParams: { query: `query-${index + 1}` },
+      effectiveParams: { query: `query-${index + 1}` },
+      result: {
+        ok: true,
+        data: {
+          items: Array.from({ length: 100 }, (_, itemIndex) => ({
+            id: `${index}-${itemIndex}`,
+            description: 'representative live output '.repeat(100),
+          })),
+        },
+      },
+      usedBackend: 'fetch',
+      attempts: [{ backend: 'fetch', outcome: 'ok' }],
+      durationMs: 10,
+    }));
+
+    const context = compactVerifierEvidenceContext(evidence) as Array<Record<string, unknown>>;
+    const serialized = JSON.stringify(context);
+    expect(serialized.length).toBeLessThan(500_000);
+    expect(context[0]).toMatchObject({ kind: 'prompt-compaction', omittedRecords: 12 });
+    expect(context.at(-1)).toMatchObject({
+      label: 'targeted-call-60',
+      requestedParams: { query: 'query-60' },
+    });
+    expect(serialized).toContain(LIVE_VERIFICATION_EVIDENCE_FILE);
+  });
 });
 
 describe('live semantic verification report', () => {
@@ -125,6 +162,16 @@ describe('live semantic verification report', () => {
         baseline: { ...approved.baseline, verdict: 'tool_broken' },
       }),
     ).toThrow('approval requires a semantically_correct baseline');
+  });
+
+  it('does not classify an inconclusive core-tool defect as infrastructure-only', () => {
+    const report = LiveVerificationReportSchema.parse({
+      ...approved,
+      status: 'inconclusive',
+      baseline: { verdict: 'tool_broken', reason: 'The search returned the wrong entity.' },
+      gaps: ['Live behavior is not acceptable.'],
+    });
+    expect(isInfrastructureOnlyInconclusiveReport(report)).toBe(false);
   });
 
   it('appends sanitized verifier events without overwriting an earlier attempt', () => {
@@ -267,10 +314,26 @@ describe('live semantic verification report', () => {
         kind: 'suite',
         status: 'passed',
         verifierSession: 'verifier-session-1',
+        finishedAt: new Date().toISOString(),
       },
     ]);
     expect(hasSuiteReceiptForSession(path, 'verifier-session-1')).toBe(true);
     expect(hasSuiteReceiptForSession(path, 'verifier-session-2')).toBe(false);
+  });
+
+  it('does not treat an interrupted running suite as completed evidence', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-running-suite-'));
+    dirs.push(dir);
+    const path = pathJoin(dir, 'evidence.json');
+    persistLiveVerificationEvidence(path, [
+      {
+        label: 'suite-running',
+        kind: 'suite',
+        status: 'running',
+        verifierSession: 'verifier-session-1',
+      },
+    ]);
+    expect(hasSuiteReceiptForSession(path, 'verifier-session-1')).toBe(false);
   });
 
   it('turns expected-versus-observed review issues into compiler feedback', () => {
@@ -688,6 +751,9 @@ describe('live verifier backend preparation and suite receipts', () => {
     expect(result.evidence).toEqual([]);
     expect(result.receipt.status).toBe('failed');
     expect(existsSync(pathJoin(toolDir, 'second-ran'))).toBe(false);
+    expect(readlinkSync(pathJoin(dirname(dirname(toolDir)), 'node_modules', 'imprint'))).toBe(
+      pathJoin(import.meta.dir, '..'),
+    );
     const records = readPersistedLiveVerificationEvidence(
       pathJoin(toolDir, LIVE_VERIFICATION_EVIDENCE_FILE),
     );

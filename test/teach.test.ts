@@ -15,6 +15,7 @@ import {
   discoverOrphanSession,
   loadTeachState,
   pruneStalePendingTeachWorkflows,
+  toRelativeTeachStatePath,
 } from '../src/imprint/teach-state.ts';
 import {
   assertCandidateToolName,
@@ -29,6 +30,8 @@ import {
   promptForTeachProvider,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
+  resolvedArtifactCheckpointPath,
+  selectCompileSessionArtifact,
   selectCompleteAuthCredentials,
   updateCandidateStageCheckpoints,
 } from '../src/imprint/teach.ts';
@@ -47,6 +50,7 @@ describe('teach verb', () => {
     expect(flags).toContain('--persist-profile');
     expect(flags).toContain('--no-interactive');
     expect(flags).toContain('--all-tools');
+    expect(flags).toContain('--tool <toolName>');
   });
 });
 
@@ -292,6 +296,65 @@ describe('teach session state helpers', () => {
       expect(resolveWorkflowTriagedPath('yelp', state)).toBe(
         pathResolve(home, 'yelp', 'sessions', '2026-06-08T07-22-19-383Z.triaged.json'),
       );
+    });
+  });
+
+  it('recovers the original artifact from a repeated triaged path', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    withImprintHome(home, () => {
+      const sessionsDir = localSessionsDir('remitly');
+      mkdirSync(sessionsDir, { recursive: true });
+      const original = pathResolve(sessionsDir, 'capture.triaged.json');
+      writeFileSync(original, '{}\n');
+
+      const state = workflowState({
+        completedSteps: ['record', 'redact', 'replay-and-diff', 'triage'],
+        triagedPath: 'sessions/capture.triaged.triaged.json',
+      });
+
+      expect(resolveWorkflowTriagedPath('remitly', state)).toBe(original);
+    });
+  });
+
+  it('uses the persisted triaged artifact for bounded compile resumes', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    const persisted = pathResolve(home, 'capture.filtered.json');
+    const redacted = pathResolve(home, 'capture.redacted.json');
+    writeFileSync(persisted, '{}\n');
+    writeFileSync(redacted, '{}\n');
+    writeFileSync(pathResolve(home, 'capture.triaged.json'), '{}\n');
+
+    expect(selectCompileSessionArtifact(persisted, redacted)).toEqual({
+      path: persisted,
+      triaged: true,
+    });
+  });
+
+  it('falls back when a persisted triaged artifact is stale', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
+    const stale = pathResolve(home, 'missing.filtered.json');
+    const redacted = pathResolve(home, 'capture.redacted.json');
+    const derived = pathResolve(home, 'capture.triaged.json');
+    writeFileSync(redacted, '{}\n');
+    writeFileSync(derived, '{}\n');
+
+    expect(selectCompileSessionArtifact(stale, redacted)).toEqual({
+      path: derived,
+      triaged: true,
+    });
+  });
+
+  it('preserves external absolute paths when healing checkpoint state', () => {
+    const external = pathResolve(tmpdir(), 'capture.triaged.json');
+    expect(resolvedArtifactCheckpointPath('remitly', external, external)).toBe(external);
+  });
+
+  it('persists genuine external artifacts as resolvable absolute paths', () => {
+    const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-home-'));
+    const external = pathResolve(tmpdir(), 'external-recordings', 'capture.triaged.json');
+    withImprintHome(home, () => {
+      expect(toRelativeTeachStatePath('remitly', external)).toBe(external);
+      expect(resolvedArtifactCheckpointPath('remitly', undefined, external)).toBe(external);
     });
   });
 

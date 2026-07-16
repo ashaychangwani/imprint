@@ -112,7 +112,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay] [--from-step <step>] [--to-step <step>] [--only <step>]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--tool <toolName>] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay] [--from-step <step>] [--to-step <step>] [--only <step>]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
@@ -130,6 +130,11 @@ export const VERB_HELP: Record<string, VerbHelp> = {
         name: '--all-tools',
         description:
           'With --no-interactive, compile every detected candidate tool instead of only the primary.',
+      },
+      {
+        name: '--tool <toolName>',
+        description:
+          'With --from-step/--only, resume exactly one persisted tool from the retained recording.',
       },
       {
         name: '--provider <name>',
@@ -405,10 +410,14 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   'mcp-server': {
     summary: "Serve one site's generated tools as MCP (stdio default).",
-    usage: ['imprint mcp-server <site> [--http] [--port <num>]'],
+    usage: ['imprint mcp-server <site> [--http] [--port <num>] [--include-tools <names>]'],
     flags: [
       { name: '--http', description: 'Use Streamable HTTP transport instead of stdio.' },
       { name: '--port <num>', description: 'Port for HTTP transport (default 8765).' },
+      {
+        name: '--include-tools <names>',
+        description: 'Expose only these comma-separated generated tool names.',
+      },
     ],
     example: 'imprint mcp-server southwest',
   },
@@ -1117,6 +1126,7 @@ async function main(argv: string[]): Promise<number> {
         options: {
           http: { type: 'boolean' },
           port: { type: 'string' },
+          'include-tools': { type: 'string' },
         },
         allowPositionals: false,
       });
@@ -1125,6 +1135,10 @@ async function main(argv: string[]): Promise<number> {
         site,
         http: values.http,
         port: values.port ? Number(values.port) : undefined,
+        includeToolNames: values['include-tools']
+          ?.split(',')
+          .map((name) => name.trim())
+          .filter(Boolean),
       });
       return 0;
     }
@@ -1409,6 +1423,7 @@ async function main(argv: string[]): Promise<number> {
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
           'all-tools': { type: 'boolean' },
+          tool: { type: 'string' },
           provider: { type: 'string' },
           model: { type: 'string' },
           timeout: { type: 'string' },
@@ -1427,7 +1442,9 @@ async function main(argv: string[]): Promise<number> {
       // mutual exclusion with --from-session, and --to-step ≥ redact when
       // --from-session enters the chain at redact), returning the resolved window
       // or the exact error message to print. Extracted for unit-testing.
-      const { resolveTeachPhaseWindow } = await import('./imprint/teach-state.ts');
+      const { resolveTeachPhaseWindow, validateToolScopedResumeStep } = await import(
+        './imprint/teach-state.ts'
+      );
       const phaseWindow = resolveTeachPhaseWindow(values);
       if ('error' in phaseWindow) {
         console.error(phaseWindow.error);
@@ -1435,6 +1452,22 @@ async function main(argv: string[]): Promise<number> {
       }
       const fromStepArg = phaseWindow.fromStep;
       const toStepArg = phaseWindow.toStep;
+
+      if (values.tool && !fromStepArg) {
+        console.error('error: --tool requires --from-step or --only');
+        return 2;
+      }
+      if (values.tool) {
+        const toolWindowError = validateToolScopedResumeStep(fromStepArg);
+        if (toolWindowError) {
+          console.error(toolWindowError);
+          return 2;
+        }
+      }
+      if (values.tool && values['all-tools']) {
+        console.error('error: --tool cannot be combined with --all-tools');
+        return 2;
+      }
 
       if (!site && values['no-interactive']) {
         console.error(
@@ -1481,6 +1514,7 @@ async function main(argv: string[]): Promise<number> {
             'imprint.model': values.model ?? 'auto',
             'imprint.timeout_ms': teachTimeoutMs ?? 'default',
             'imprint.all_tools': values['all-tools'] ?? false,
+            'imprint.tool': values.tool,
             'imprint.no_interactive': values['no-interactive'] ?? false,
             'imprint.skip_replay': values['skip-replay'] ?? false,
           },
@@ -1497,6 +1531,7 @@ async function main(argv: string[]): Promise<number> {
               maxDurationMs: teachTimeoutMs,
               keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
               allTools: values['all-tools'],
+              tool: values.tool,
               skipReplay: values['skip-replay'],
               fromStep: fromStepArg,
               toStep: toStepArg,

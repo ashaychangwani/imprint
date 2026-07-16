@@ -4,6 +4,7 @@ import {
   buildJsonSchema,
   buildToolDescription,
   runSerializedBySite,
+  selectMcpTools,
 } from '../src/imprint/mcp-server.ts';
 import type { Workflow, WorkflowParameter } from '../src/imprint/types.ts';
 
@@ -92,6 +93,26 @@ describe('buildJsonSchema', () => {
     });
     const props = schema.properties as Record<string, { type?: string } | undefined>;
     expect(props.continuation?.type).toBe('string');
+  });
+});
+
+describe('selectMcpTools', () => {
+  const tools = [
+    { workflow: { toolName: 'search_items' } },
+    { workflow: { toolName: 'authenticate_otp' } },
+  ];
+
+  it('preserves normal MCP exposure when no allowlist is supplied', () => {
+    expect(selectMcpTools(tools).map((tool) => tool.workflow.toolName)).toEqual([
+      'search_items',
+      'authenticate_otp',
+    ]);
+  });
+
+  it('exposes only exact eligible names for a bounded audit session', () => {
+    expect(selectMcpTools(tools, ['search_items']).map((tool) => tool.workflow.toolName)).toEqual([
+      'search_items',
+    ]);
   });
 });
 

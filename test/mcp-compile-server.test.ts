@@ -7,6 +7,7 @@ import {
   canAcceptInconclusiveDecision,
   compileArtifactFingerprint,
   compileDeadlineAfterVerification,
+  inconclusiveDecisionAtSemanticCap,
 } from '../src/imprint/mcp-compile-server.ts';
 
 const tempDirs: string[] = [];
@@ -19,6 +20,10 @@ describe('canAcceptInconclusiveDecision', () => {
   it('accepts an explicit compiler decision for the unchanged artifact', () => {
     expect(
       canAcceptInconclusiveDecision({
+        semanticVerificationCycles: 5,
+        maxVerificationCycles: 5,
+        completedReview: true,
+        infrastructureOnly: true,
         pendingFingerprint: 'same',
         currentFingerprint: 'same',
         acceptInconclusive: true,
@@ -30,6 +35,10 @@ describe('canAcceptInconclusiveDecision', () => {
   it('requires explicit reasoning', () => {
     expect(
       canAcceptInconclusiveDecision({
+        semanticVerificationCycles: 5,
+        maxVerificationCycles: 5,
+        completedReview: true,
+        infrastructureOnly: true,
         pendingFingerprint: 'same',
         currentFingerprint: 'same',
         acceptInconclusive: true,
@@ -41,12 +50,96 @@ describe('canAcceptInconclusiveDecision', () => {
   it('reruns verification after any compile artifact changes', () => {
     expect(
       canAcceptInconclusiveDecision({
+        semanticVerificationCycles: 5,
+        maxVerificationCycles: 5,
+        completedReview: true,
+        infrastructureOnly: true,
         pendingFingerprint: 'before',
         currentFingerprint: 'after',
         acceptInconclusive: true,
         inconclusiveReason: 'The prior failure was infrastructure-only.',
       }),
     ).toBe(false);
+  });
+
+  it('cannot accept before the semantic review cap', () => {
+    expect(
+      canAcceptInconclusiveDecision({
+        semanticVerificationCycles: 1,
+        maxVerificationCycles: 5,
+        completedReview: true,
+        infrastructureOnly: true,
+        pendingFingerprint: 'same',
+        currentFingerprint: 'same',
+        acceptInconclusive: true,
+        inconclusiveReason: 'The first review was infrastructure-only.',
+      }),
+    ).toBe(false);
+  });
+
+  it('cannot accept a synthesized provider failure with no completed review', () => {
+    expect(
+      canAcceptInconclusiveDecision({
+        semanticVerificationCycles: 5,
+        maxVerificationCycles: 5,
+        completedReview: false,
+        infrastructureOnly: true,
+        pendingFingerprint: 'same',
+        currentFingerprint: 'same',
+        acceptInconclusive: true,
+        inconclusiveReason: 'The provider failed to start.',
+      }),
+    ).toBe(false);
+  });
+
+  it('cannot accept a report that labels a core tool defect inconclusive', () => {
+    expect(
+      canAcceptInconclusiveDecision({
+        semanticVerificationCycles: 5,
+        maxVerificationCycles: 5,
+        completedReview: true,
+        infrastructureOnly: false,
+        pendingFingerprint: 'same',
+        currentFingerprint: 'same',
+        acceptInconclusive: true,
+        inconclusiveReason: 'Ship despite the reported tool defect.',
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('inconclusiveDecisionAtSemanticCap', () => {
+  it('holds an unchanged fifth-cycle inconclusive result for the explicit compiler decision', () => {
+    expect(
+      inconclusiveDecisionAtSemanticCap({
+        semanticVerificationCycles: 5,
+        maxVerificationCycles: 5,
+        pendingFingerprint: 'same',
+        currentFingerprint: 'same',
+      }),
+    ).toBe('await-compiler-decision');
+  });
+
+  it('fails closed when artifacts change after the fifth inconclusive review', () => {
+    expect(
+      inconclusiveDecisionAtSemanticCap({
+        semanticVerificationCycles: 5,
+        maxVerificationCycles: 5,
+        pendingFingerprint: 'before',
+        currentFingerprint: 'after',
+      }),
+    ).toBe('fail-artifact-changed');
+  });
+
+  it('allows a changed artifact to receive another review before the cap', () => {
+    expect(
+      inconclusiveDecisionAtSemanticCap({
+        semanticVerificationCycles: 4,
+        maxVerificationCycles: 5,
+        pendingFingerprint: 'before',
+        currentFingerprint: 'after',
+      }),
+    ).toBe('continue-verification');
   });
 });
 

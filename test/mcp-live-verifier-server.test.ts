@@ -190,6 +190,7 @@ describe('live verifier MCP server', () => {
           label: 'suite-1',
           status: 'failed',
           verifierSession: 'verifier-session-1',
+          finishedAt: new Date().toISOString(),
         },
       ]),
     );

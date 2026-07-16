@@ -54,7 +54,9 @@ Judge all of the following:
   shape, rather than an error page, unrelated payload, partial contract, empty
   placeholder, or plausible-looking wrong data?
 - Do important requested inputs appear to affect the result correctly?
-- Are producer/consumer tokens and identifiers usable in real terms?
+- Are producer/consumer tokens and identifiers usable in real terms when they
+  are present, and are absent tokens reported honestly without destroying useful
+  producer results?
 - Would a reasonable caller regard the tool as successful for its declared
   intent?
 - Are time-sensitive inputs valid at the review date supplied in the context?
@@ -64,6 +66,11 @@ Judge all of the following:
   to use rolling future dates.
 - Submit exactly one verdict for every declared workflow parameter. Do not omit,
   duplicate, or invent parameter names.
+- Mark a parameter as working only with differential evidence: hold the other
+  inputs fixed, change that parameter to a materially distinct valid value, and
+  observe the promised request/result effect. A successful response alone does
+  not prove the parameter works; unchanged or non-discriminating output must be
+  reported as `no_op` or untestable with the concrete evidence.
 - Judge the core intent separately from secondary filters or options. A working
   core call with one broken secondary parameter is not `tool_broken`; report the
   parameter-specific failure and the otherwise-working core precisely.
@@ -71,11 +78,12 @@ Judge all of the following:
   parameter description advertises materially different input classes or routes
   (for example identifiers versus free-form names, one-way versus round-trip, or
   local versus remote scope), use a targeted call for the most consequential
-  alternate class when live-call budget permits. A limitation that removes a
-  required downstream branch must also narrow any remaining descriptions and
-  parameters that would still route callers into that branch. Otherwise return
-  `changes_required`: the compiler may implement the branch or ship a smaller,
-  honestly described tool.
+  alternate class when live-call budget permits. Narrow an input class only when
+  that class itself returns unusable or misleading core results. A missing
+  optional token needed by a downstream consumer does not make useful producer
+  records incorrect: require an honest `workflow.limitations` entry naming the
+  missing output and affected consumer, then permit the producer to retain that
+  input class. The dependent consumer may remain unverified or inconclusive.
 - For a secondary parameter that is known broken, use `changes_required` and tell
   the compiler either to repair it from recording/live evidence or remove it from
   the public parameter contract with a durable limitation. Do not approve a known
@@ -88,11 +96,16 @@ Status policy:
   by live evidence.
 - `approved_with_gaps`: the core task is genuinely correct, and any remaining
   declared secondary parameters are grounded but untestable or intentionally
-  unverified. State every gap. Do not use this for a parameter known to be broken,
-  or when an untested input class is material to the declared core scope.
-- `changes_required`: the tool ran, but the result is semantically wrong,
-  incomplete, misleading, or a parameter/producer contract is broken. Give the
-  compile agent concrete expected-versus-observed feedback and a suggested fix.
+  unverified, or useful producer results honestly disclose an unavailable
+  downstream token and affected consumers. State every gap. Do not use this for
+  a parameter known to be broken, or when an untested input class is material to
+  the declared core scope.
+- `changes_required`: the tool ran, but the core result is semantically wrong,
+  incomplete, misleading, a declared parameter is broken, or a producer gap is
+  not yet disclosed honestly. Give the compile agent concrete
+  expected-versus-observed feedback and a suggested fix. Do not use this status
+  merely because a useful producer record lacks an optional downstream token
+  that the workflow already documents as unavailable.
 - `inconclusive`: infrastructure, bot defense, or unavailable evidence prevents
   a real judgment. Never convert uncertainty into approval.
 

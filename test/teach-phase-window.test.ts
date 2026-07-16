@@ -17,6 +17,7 @@ import {
   resolveStepStartTarget,
   resolveTeachPhaseWindow,
   selectMultiToolResumePlans,
+  validateToolScopedResumeStep,
 } from '../src/imprint/teach-state.ts';
 
 function ws(
@@ -89,6 +90,22 @@ describe('assertResumableAt (phase dependency guard)', () => {
   });
 });
 
+describe('validateToolScopedResumeStep', () => {
+  it('accepts only phases in the atomic per-tool compile unit', () => {
+    for (const step of ['generate', 'compile-playbook', 'emit'] as const) {
+      expect(validateToolScopedResumeStep(step)).toBeNull();
+    }
+  });
+
+  it('rejects recording, analysis, planning, and registration phases', () => {
+    for (const step of TEACH_STEPS.filter(
+      (candidate) => !['generate', 'compile-playbook', 'emit'].includes(candidate),
+    )) {
+      expect(validateToolScopedResumeStep(step)).toContain('--tool is only supported');
+    }
+  });
+});
+
 describe('resolveStepStartTarget (workflow selection + guard)', () => {
   it('throws when there is no prior run for the site', () => {
     const state: TeachState = { workflows: {} };
@@ -152,6 +169,24 @@ describe('resolveStepStartTarget (workflow selection + guard)', () => {
     };
     const target = resolveStepStartTarget('s', state, 'generate');
     expect(target.workflowKey).toBe('search-flights');
+  });
+
+  it('selects an explicitly named persisted tool for a bounded resume', () => {
+    const state: TeachState = {
+      workflows: {
+        primary: {
+          ...ws(['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates']),
+          candidate: { toolName: 'search_items', primary: true } as WorkflowState['candidate'],
+        },
+        consumer: {
+          ...ws(['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates']),
+          candidate: { toolName: 'get_details', primary: false } as WorkflowState['candidate'],
+        },
+      },
+    };
+    expect(resolveStepStartTarget('s', state, 'generate', 'get_details').workflowKey).toBe(
+      'consumer',
+    );
   });
 });
 
@@ -240,6 +275,26 @@ describe('selectMultiToolResumePlans (multi-tool --from-step reconstruction)', (
       'tool-primary',
       'tool-secondary',
     ]);
+  });
+
+  it('lets an explicit tool override the primary-only non-interactive default', () => {
+    const state: TeachState = {
+      workflows: {
+        primary: {
+          ...toolWs({ candidate: 'search_items' }),
+          candidate: { toolName: 'search_items', primary: true } as WorkflowState['candidate'],
+        },
+        consumer: {
+          ...toolWs({ candidate: 'get_details' }),
+          candidate: { toolName: 'get_details', primary: false } as WorkflowState['candidate'],
+        },
+      },
+    };
+    const selected = selectMultiToolResumePlans(state, 'consumer', 'generate', {
+      noInteractive: true,
+      toolName: 'get_details',
+    });
+    expect(selected.plans.map((plan) => plan.workflowKey)).toEqual(['consumer']);
   });
 
   it('excludes stale same-recording candidates that are absent from the current build plan', () => {
