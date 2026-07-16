@@ -1,6 +1,6 @@
 {
   "name": "imprint-mcp",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Teach an AI agent how to use any website. Once. Records a real browser session + narration; generates a deterministic MCP tool plus a DOM-replay playbook fallback.",
   "type": "module",
   "exports": {
