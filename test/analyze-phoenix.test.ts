@@ -51,7 +51,7 @@ describe('Phoenix cost availability', () => {
   it('labels a mixed-model total as partial and names every unpriced model', () => {
     const summary = summarizePhoenixCost(
       [llmSpan('priced-model', 1.25), llmSpan('unknown-model', null)],
-      1.25,
+      0,
     );
 
     expect(summary.status).toBe('partial');
@@ -87,7 +87,7 @@ describe('Phoenix cost availability', () => {
   it('preserves the priced subtotal when a legacy null summary is unresolved', () => {
     const unresolved = { ...llmSpan('gpt-new', null), costSummary: null };
     const settled = classifyUnresolvedCostsAsUnknown([llmSpan('priced-model', 1.25), unresolved]);
-    const summary = summarizePhoenixCost(settled, 1.25);
+    const summary = summarizePhoenixCost(settled, 0);
 
     expect(summary.status).toBe('partial');
     expect(formatPhoenixCost(summary)).toBe('$1.25 (partial; unpriced or cost pending: gpt-new)');

@@ -251,6 +251,9 @@ export function summarizePhoenixCost(
   );
   const priced = usageSpans.filter((span) => spanCostTotal(span) != null);
   const pricedCost = priced.reduce((sum, span) => sum + (spanCostTotal(span) ?? 0), 0);
+  // Span costs and the trace rollup settle asynchronously. Never let a stale
+  // zero/partial trace rollup erase cost already materialized on child spans.
+  const availableCost = traceCost == null ? pricedCost : Math.max(traceCost, pricedCost);
   const unpricedModels = [...new Set(unpriced.map(spanModel))].sort();
   const pendingModels = [...new Set(pending.map(spanModel))].sort();
   const unknownModels = [...new Set(unknown.map(spanModel))].sort();
@@ -272,7 +275,7 @@ export function summarizePhoenixCost(
   if (unpriced.length > 0 || unknown.length > 0) {
     return {
       status: 'partial',
-      cost: traceCost ?? pricedCost,
+      cost: availableCost,
       unpricedModels,
       pendingModels: [],
       unknownModels,
@@ -280,7 +283,7 @@ export function summarizePhoenixCost(
   }
   return {
     status: 'priced',
-    cost: traceCost ?? pricedCost,
+    cost: availableCost,
     unpricedModels: [],
     pendingModels: [],
     unknownModels: [],
