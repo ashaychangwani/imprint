@@ -2,13 +2,9 @@
 /**
  * Analyze Phoenix traces for compile/audit agent performance + cost.
  *
- * Cost is read from the `llm.cost.*` attributes the app already emits on its
- * spans (the single source of truth in src/imprint/tracing.ts) — this script
- * does NOT recompute cost from a private rate table, so it can never drift from
- * the app's pricing or miss a newly added model. Root spans (`cli.teach`,
- * `cli.audit`) carry a rolled-up `llm.cost.total` from tracedWithCostRollup;
- * this script reads from non-root spans to avoid double-counting against
- * the leaf LLM/agent spans that feed the rollup.
+ * Cost is read from Phoenix's server-calculated `costSummary`. Imprint emits
+ * OpenInference model/provider/token attributes and Phoenix owns model pricing,
+ * cache discounts, and trace-level rollups.
  *
  * Usage: bun run scripts/analyze-phoenix.ts [--trace-id <id>] [--last <N>] [--kind teach|audit|all]
  */
@@ -49,6 +45,13 @@ interface SpanNode {
   parentId: string | null;
   attributes: string;
   numChildSpans: number;
+  costSummary: CostSummary;
+}
+
+interface CostSummary {
+  prompt: { cost: number | null; tokens: number | null };
+  completion: { cost: number | null; tokens: number | null };
+  total: { cost: number | null; tokens: number | null };
 }
 
 async function getRecentTraces(limit: number, rootNames: string[]) {
@@ -78,6 +81,11 @@ async function getTraceSpans(traceId: string): Promise<SpanNode[]> {
             context { traceId spanId }
             parentId
             tokenCountTotal tokenCountPrompt tokenCountCompletion
+            costSummary {
+              prompt { cost tokens }
+              completion { cost tokens }
+              total { cost tokens }
+            }
             attributes
             numChildSpans
           } }
@@ -86,6 +94,19 @@ async function getTraceSpans(traceId: string): Promise<SpanNode[]> {
     }
   }`)) as { node: { spans: { edges: Array<{ node: SpanNode }> } } };
   return data.node.spans.edges.map((e) => e.node);
+}
+
+async function getTraceCost(traceId: string): Promise<number> {
+  const data = (await gql(`{
+    node(id: "${PROJECT_ID}") {
+      ... on Project {
+        trace(traceId: "${traceId}") {
+          costSummary { total { cost } }
+        }
+      }
+    }
+  }`)) as { node: { trace: { costSummary: CostSummary } | null } };
+  return data.node.trace?.costSummary.total.cost ?? 0;
 }
 
 function formatDuration(ms: number): string {
@@ -128,18 +149,15 @@ function attrStr(parsed: Record<string, unknown>, key: string): string | null {
   return typeof v === 'string' ? v : null;
 }
 
-/** Total emitted cost (USD) for one span, or null if it carries none. */
+/** Phoenix-calculated cost (USD) for one span, or null when unpriced. */
 function spanCostTotal(span: SpanNode): number | null {
-  return attrNum(parseAttrs(span.attributes), 'llm.cost.total');
+  return span.costSummary?.total.cost ?? null;
 }
 
-/** Sum emitted `llm.cost.total` across non-root spans. Root spans now carry a
- *  rolled-up total from tracedWithCostRollup, so they must be excluded to avoid
- *  double-counting against the leaf LLM/agent spans that feed the rollup. */
+/** Sum Phoenix-calculated span costs in a subtree. */
 function sumCostTotal(spans: SpanNode[]): number {
   let total = 0;
   for (const s of spans) {
-    if (!s.parentId) continue;
     const c = spanCostTotal(s);
     if (c != null) total += c;
   }
@@ -319,8 +337,7 @@ function printCompileCriticalPath(compileSpans: SpanNode[]): void {
 async function analyzeTrace(traceId: string) {
   const spans = await getTraceSpans(traceId);
   const root = spans.find((s) => !s.parentId);
-  const rootCost = root ? spanCostTotal(root) : null;
-  const traceCost = rootCost ?? sumCostTotal(spans);
+  const traceCost = await getTraceCost(traceId);
 
   console.log(`\n${'═'.repeat(80)}`);
   console.log(`Trace: ${traceId}`);

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   MimeType,
   type NodeTracerProvider,
@@ -15,26 +14,6 @@ type TraceKind = OpenInferenceSpanKind | `${OpenInferenceSpanKind}`;
 type TraceAttributes = Record<string, unknown>;
 type TraceLlmMessage = { role?: string; content?: string };
 
-// ---------------------------------------------------------------------------
-// Cost accumulator — rolls up LLM costs from child spans to a parent span.
-// ---------------------------------------------------------------------------
-interface CostAccumulator {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  uncachedInputCost: number;
-  cacheReadCost: number;
-  cacheWriteCost: number;
-  completionCost: number;
-}
-
-const costAccumulatorStorage = new AsyncLocalStorage<CostAccumulator>();
-
-function getActiveCostAccumulator(): CostAccumulator | undefined {
-  return costAccumulatorStorage.getStore();
-}
-
 let provider: NodeTracerProvider | null = null;
 let attemptedInit = false;
 let suppressInit = false;
@@ -49,8 +28,6 @@ export function suppressTracingInit(): void {
 }
 const DEFAULT_TRACE_IO_MAX_CHARS = 50_000;
 const DEFAULT_TRACE_ERROR_MAX_CHARS = 2000;
-const CACHE_READ_MULTIPLIER = 0.1;
-const CACHE_WRITE_MULTIPLIER = 1.25;
 
 function isTracingEnabled(): boolean {
   return (
@@ -163,12 +140,9 @@ export function resolveTraceTokenCount(
  *
  * Providers (Anthropic API and the claude CLI alike) report `usage.input_tokens`
  * as the *uncached* portion only — the cached bulk lives in the separate cache
- * counts. `llmCostAttributes` expects `inputTokens` to be the TOTAL (it
- * re-derives uncached by subtracting the cache split), and `llm.token_count.prompt`
- * should likewise reflect the whole prompt. So every capture boundary normalizes
- * here instead of feeding the bare uncached count (which billed the cached bulk
- * at the full input rate, or mislabeled the token count). Returns null when the
- * uncached count itself is unknown.
+ * counts. `llm.token_count.prompt` must reflect the whole prompt so Phoenix can
+ * combine it with the detailed cache token counts and calculate cost server-side.
+ * Returns null when the uncached count itself is unknown.
  */
 export function totalPromptTokens(
   uncachedInputTokens: number | null | undefined,
@@ -177,33 +151,6 @@ export function totalPromptTokens(
 ): number | null {
   if (uncachedInputTokens == null) return null;
   return uncachedInputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0);
-}
-
-const DEFAULT_MODEL_RATES: Record<string, { inputUsdPer1M: number; outputUsdPer1M: number }> = {
-  'claude-opus-4-8': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
-  'claude-opus-4-7': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
-  'claude-opus-4-6': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
-  'claude-opus-4-5': { inputUsdPer1M: 5, outputUsdPer1M: 25 },
-  'claude-opus-4-1': { inputUsdPer1M: 15, outputUsdPer1M: 75 },
-  'claude-sonnet-4-6': { inputUsdPer1M: 3, outputUsdPer1M: 15 },
-  'claude-sonnet-4-5': { inputUsdPer1M: 3, outputUsdPer1M: 15 },
-  'claude-haiku-4-5': { inputUsdPer1M: 1, outputUsdPer1M: 5 },
-};
-
-export function traceLlmCostRates(
-  providerName: string,
-  modelName?: string,
-): { inputUsdPer1M: number; outputUsdPer1M: number } | null {
-  const inputUsdPer1M = envNumber(rateEnvNames(providerName, modelName, 'INPUT'));
-  const outputUsdPer1M = envNumber(rateEnvNames(providerName, modelName, 'OUTPUT'));
-  if (inputUsdPer1M !== null && outputUsdPer1M !== null) {
-    return { inputUsdPer1M, outputUsdPer1M };
-  }
-  if (modelName) {
-    const defaultRate = DEFAULT_MODEL_RATES[modelName];
-    if (defaultRate) return defaultRate;
-  }
-  return null;
 }
 
 export function traceInputOutputAttributes(
@@ -274,59 +221,6 @@ export async function traced<T>(
   );
 }
 
-/**
- * Like `traced`, but accumulates `llm.cost.*` from all descendant LLM spans
- * and sets the rolled-up totals on the parent span when `fn` completes.
- * Use on root spans (`cli.teach`, `cli.audit`) so Phoenix shows the full cost.
- */
-export async function tracedWithCostRollup<T>(
-  name: string,
-  kind: TraceKind,
-  attributes: TraceAttributes | undefined,
-  fn: (span: Span) => Promise<T> | T,
-): Promise<T> {
-  const acc: CostAccumulator = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    uncachedInputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    completionCost: 0,
-  };
-
-  const applyCostRollup = (span: Span): void => {
-    const promptCost = acc.uncachedInputCost + acc.cacheReadCost + acc.cacheWriteCost;
-    const totalCost = promptCost + acc.completionCost;
-    if (totalCost === 0 && acc.inputTokens === 0 && acc.outputTokens === 0) return;
-    setSpanAttributes(span, {
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: acc.inputTokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]: acc.outputTokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]: acc.inputTokens + acc.outputTokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ]: acc.cacheReadTokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE]: acc.cacheWriteTokens,
-      [SemanticConventions.LLM_COST_PROMPT]: promptCost,
-      [SemanticConventions.LLM_COST_COMPLETION]: acc.completionCost,
-      [SemanticConventions.LLM_COST_TOTAL]: totalCost,
-      [SemanticConventions.LLM_COST_PROMPT_DETAILS_CACHE_READ]: acc.cacheReadCost,
-      [SemanticConventions.LLM_COST_PROMPT_DETAILS_CACHE_WRITE]: acc.cacheWriteCost,
-      [SemanticConventions.LLM_COST_INPUT]: acc.uncachedInputCost,
-      'imprint.llm.cost_estimated': true,
-    });
-  };
-
-  return costAccumulatorStorage.run(acc, () =>
-    traced(name, kind, attributes, async (span) => {
-      try {
-        return await fn(span);
-      } finally {
-        applyCostRollup(span);
-      }
-    }),
-  );
-}
-
 export function startTraceSpan(
   name: string,
   kind: TraceKind,
@@ -378,18 +272,8 @@ export function llmSpanAttributes(opts: {
 }): Attributes {
   const prompt = opts.inputTokens ?? undefined;
   const completion = opts.outputTokens ?? undefined;
-  const costRates = traceLlmCostRates(opts.provider, opts.model);
-  const cost =
-    costRates && (prompt !== undefined || completion !== undefined)
-      ? llmCostAttributes({
-          inputTokens: prompt,
-          outputTokens: completion,
-          cacheReadTokens: opts.cacheReadTokens ?? undefined,
-          cacheWriteTokens: opts.cacheWriteTokens ?? undefined,
-          inputUsdPer1M: costRates.inputUsdPer1M,
-          outputUsdPer1M: costRates.outputUsdPer1M,
-        })
-      : {};
+  const cacheRead = opts.cacheReadTokens ?? undefined;
+  const cacheWrite = opts.cacheWriteTokens ?? undefined;
   return {
     ...getLLMAttributes({
       provider: openInferenceProvider(opts.provider),
@@ -416,7 +300,12 @@ export function llmSpanAttributes(opts: {
     ...(opts.outputValue
       ? traceInputOutputAttributes('output', opts.outputValue, opts.outputMimeType ?? MimeType.TEXT)
       : {}),
-    ...cost,
+    ...(cacheRead !== undefined
+      ? { [SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ]: cacheRead }
+      : {}),
+    ...(cacheWrite !== undefined
+      ? { [SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE]: cacheWrite }
+      : {}),
     ...(opts.stopReason ? { [SemanticConventions.LLM_FINISH_REASON]: opts.stopReason } : {}),
     'imprint.llm.provider': opts.provider,
     ...(opts.tokenCountsEstimated !== undefined
@@ -425,12 +314,6 @@ export function llmSpanAttributes(opts: {
     ...(opts.inputTokenSource ? { 'imprint.llm.input_tokens_source': opts.inputTokenSource } : {}),
     ...(opts.outputTokenSource
       ? { 'imprint.llm.output_tokens_source': opts.outputTokenSource }
-      : {}),
-    ...(costRates
-      ? {
-          'imprint.llm.cost.input_usd_per_1m': costRates.inputUsdPer1M,
-          'imprint.llm.cost.output_usd_per_1m': costRates.outputUsdPer1M,
-        }
       : {}),
   };
 }
@@ -537,114 +420,6 @@ function stringifyTraceValue(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function llmCostAttributes(opts: {
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  inputUsdPer1M: number;
-  outputUsdPer1M: number;
-}): Attributes {
-  const cacheRead = opts.cacheReadTokens ?? 0;
-  const cacheWrite = opts.cacheWriteTokens ?? 0;
-  const hasCacheBreakdown = cacheRead > 0 || cacheWrite > 0;
-  const uncachedInput =
-    opts.inputTokens === undefined
-      ? undefined
-      : hasCacheBreakdown
-        ? Math.max(0, opts.inputTokens - cacheRead - cacheWrite)
-        : opts.inputTokens;
-
-  let uncachedInputCost: number | undefined;
-  let cacheReadCost = 0;
-  let cacheWriteCost = 0;
-  if (uncachedInput !== undefined) {
-    if (hasCacheBreakdown) {
-      uncachedInputCost = (uncachedInput / 1_000_000) * opts.inputUsdPer1M;
-      cacheReadCost = (cacheRead / 1_000_000) * opts.inputUsdPer1M * CACHE_READ_MULTIPLIER;
-      cacheWriteCost = (cacheWrite / 1_000_000) * opts.inputUsdPer1M * CACHE_WRITE_MULTIPLIER;
-    } else {
-      uncachedInputCost = (uncachedInput / 1_000_000) * opts.inputUsdPer1M;
-    }
-  }
-
-  const prompt =
-    uncachedInputCost === undefined
-      ? undefined
-      : uncachedInputCost + cacheReadCost + cacheWriteCost;
-  const completion =
-    opts.outputTokens === undefined
-      ? undefined
-      : (opts.outputTokens / 1_000_000) * opts.outputUsdPer1M;
-  const total = (prompt ?? 0) + (completion ?? 0);
-
-  // Roll up into the nearest ancestor tracedWithCostRollup, if any.
-  const acc = getActiveCostAccumulator();
-  if (acc) {
-    acc.inputTokens += opts.inputTokens ?? 0;
-    acc.outputTokens += opts.outputTokens ?? 0;
-    acc.cacheReadTokens += cacheRead;
-    acc.cacheWriteTokens += cacheWrite;
-    acc.uncachedInputCost += uncachedInputCost ?? 0;
-    acc.cacheReadCost += cacheReadCost;
-    acc.cacheWriteCost += cacheWriteCost;
-    acc.completionCost += completion ?? 0;
-  }
-
-  return {
-    ...(prompt !== undefined ? { [SemanticConventions.LLM_COST_PROMPT]: prompt } : {}),
-    ...(completion !== undefined ? { [SemanticConventions.LLM_COST_COMPLETION]: completion } : {}),
-    [SemanticConventions.LLM_COST_TOTAL]: total,
-    ...(hasCacheBreakdown
-      ? {
-          [SemanticConventions.LLM_COST_PROMPT_DETAILS_CACHE_READ]: cacheReadCost,
-          [SemanticConventions.LLM_COST_PROMPT_DETAILS_CACHE_WRITE]: cacheWriteCost,
-          [SemanticConventions.LLM_COST_INPUT]: uncachedInputCost,
-          [SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ]: cacheRead,
-          [SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE]: cacheWrite,
-        }
-      : {}),
-    'imprint.llm.cost_estimated': true,
-  };
-}
-
-function rateEnvNames(
-  providerName: string,
-  modelName: string | undefined,
-  side: 'INPUT' | 'OUTPUT',
-): string[] {
-  const providerKey = envKey(providerName);
-  const modelKey = modelName ? envKey(modelName) : undefined;
-  const aliases = side === 'INPUT' ? ['INPUT', 'PROMPT'] : ['OUTPUT', 'COMPLETION'];
-  const names: string[] = [];
-  for (const alias of aliases) {
-    if (providerKey && modelKey) {
-      names.push(`IMPRINT_TRACE_COST_${providerKey}_${modelKey}_${alias}_USD_PER_1M`);
-    }
-    if (modelKey) names.push(`IMPRINT_TRACE_COST_${modelKey}_${alias}_USD_PER_1M`);
-    if (providerKey) names.push(`IMPRINT_TRACE_COST_${providerKey}_${alias}_USD_PER_1M`);
-    names.push(`IMPRINT_TRACE_${alias}_USD_PER_1M`);
-  }
-  return names;
-}
-
-function envKey(value: string): string {
-  return value
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-}
-
-function envNumber(names: string[]): number | null {
-  for (const name of names) {
-    const raw = process.env[name];
-    if (raw === undefined || raw === '') continue;
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
-  }
-  return null;
 }
 
 function isTruthy(value: string | undefined): boolean {

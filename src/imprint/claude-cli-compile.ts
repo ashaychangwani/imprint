@@ -203,7 +203,9 @@ export async function compileViaClaudeCli(
 ): Promise<CompileAgentResult> {
   return await traced(
     'compile.claude_cli_agent',
-    'AGENT',
+    // This is the aggregate model invocation reported by the Claude CLI. The
+    // OpenInference LLM kind lets Phoenix price its emitted token usage.
+    'LLM',
     {
       'imprint.site': opts.session.site,
       'imprint.tool_dir': opts.absoluteToolDir,

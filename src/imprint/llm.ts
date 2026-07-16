@@ -627,9 +627,9 @@ async function traceAnalyze(
         throw err;
       }
       // Providers report `inputTokens` as the *uncached* input only; the cached
-      // portion lives in the cache fields. `llmCostAttributes` expects the TOTAL
-      // prompt tokens (it derives uncached = total − cacheRead − cacheWrite), so
-      // sum them here. A real total is also large enough to clear the
+      // portion lives in the cache fields. Phoenix expects the TOTAL prompt plus
+      // the cache breakdown so it can calculate cost server-side, so sum them
+      // here. A real total is also large enough to clear the
       // resolveTraceTokenCount sanity check, so cache-hit calls stop falling back
       // to the chars/4 estimate.
       const cacheReadTokens = result.cacheReadInputTokens ?? undefined;

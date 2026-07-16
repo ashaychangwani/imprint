@@ -534,7 +534,9 @@ export function buildAuditMcpCommandArgs(site: string, toolNames: readonly strin
 export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
   return await traced(
     'audit.session',
-    'AGENT',
+    // The external auditor reports one aggregate model-usage record here.
+    // Phoenix prices token attributes only on OpenInference LLM spans.
+    'LLM',
     {
       'imprint.site': opts.site,
       'imprint.audit.min_score': opts.minScore,
@@ -1308,6 +1310,7 @@ async function collectCodexAssistantText(
   let turns = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadInputTokens = 0;
   const t0 = Date.now();
   const elapsedStr = (): string => {
     const s = Math.floor((Date.now() - t0) / 1000);
@@ -1357,6 +1360,7 @@ async function collectCodexAssistantText(
       if (evt.type === 'turn.completed') {
         inputTokens += evt.usage?.input_tokens ?? 0;
         outputTokens += evt.usage?.output_tokens ?? 0;
+        cacheReadInputTokens += evt.usage?.cached_input_tokens ?? 0;
         log(`[${elapsedStr()}] turn ${turns} completed`);
         continue;
       }
@@ -1411,7 +1415,7 @@ async function collectCodexAssistantText(
     turns,
     inputTokens,
     outputTokens,
-    cacheReadInputTokens: 0,
+    cacheReadInputTokens,
     cacheCreationInputTokens: 0,
     totalCostUsd: null,
   };
@@ -1461,6 +1465,8 @@ interface CodexStreamJsonEvent {
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
+    cached_input_tokens?: number;
+    reasoning_output_tokens?: number;
   };
   message?: string;
   error?: { message?: string };

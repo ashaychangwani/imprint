@@ -117,7 +117,10 @@ export async function compileViaCodexCli(
 ): Promise<CompileAgentResult> {
   return await traced(
     'compile.codex_cli_agent',
-    'AGENT',
+    // This span is the aggregate model invocation exposed by codex exec. It
+    // carries OpenInference model + token attributes, so it must be an LLM span
+    // for Phoenix to apply its server-side model pricing and trace rollups.
+    'LLM',
     {
       'imprint.site': opts.session.site,
       'imprint.tool_name': opts.candidate?.toolName,
@@ -367,6 +370,8 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
       model,
       inputTokens: inputTokenCount.tokens,
       outputTokens: outputTokenCount.tokens,
+      cacheReadTokens: result.cacheReadInputTokens,
+      cacheWriteTokens: result.cacheCreationInputTokens,
       tokenCountsEstimated:
         inputTokenCount.source === 'estimated' || outputTokenCount.source === 'estimated',
       inputTokenSource: inputTokenCount.source,
@@ -414,6 +419,7 @@ async function driveJsonl(
   const rawStderrChunks: string[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadInputTokens = 0;
   let turn = 0;
   let lastErrorMessage = '';
   let stderrBuf = '';
@@ -561,12 +567,15 @@ async function driveJsonl(
       if (evt.type === 'turn.completed') {
         const turnInput = evt.usage?.input_tokens ?? 0;
         const turnOutput = evt.usage?.output_tokens ?? 0;
+        const turnCacheRead = evt.usage?.cached_input_tokens ?? 0;
         inputTokens += turnInput;
         outputTokens += turnOutput;
+        cacheReadInputTokens += turnCacheRead;
         if (currentTurnSpan) {
           setSpanAttributes(currentTurnSpan, {
             'imprint.agent.turn_input_tokens': turnInput,
             'imprint.agent.turn_output_tokens': turnOutput,
+            'imprint.agent.turn_cache_read_input_tokens': turnCacheRead,
           });
           endTraceSpan(currentTurnSpan);
           currentTurnSpan = null;
@@ -589,10 +598,12 @@ async function driveJsonl(
 
   const exitCode: number = await new Promise((resolve) => {
     let resolved = false;
+    let sentinelGraceTimer: ReturnType<typeof setTimeout> | undefined;
     let forcedKillTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (code: number): void => {
       if (resolved) return;
       resolved = true;
+      if (sentinelGraceTimer) clearTimeout(sentinelGraceTimer);
       if (forcedKillTimer) clearTimeout(forcedKillTimer);
       clearInterval(sentinelTimer);
       resolve(code);
@@ -616,10 +627,17 @@ async function driveJsonl(
       }, 2000);
       forcedKillTimer.unref?.();
     };
+    const scheduleSentinelTermination = (): void => {
+      if (sentinelGraceTimer) return;
+      // Let Codex finish the current turn and emit its terminal usage event.
+      // The fallback still bounds agents that ignore the done/give_up result.
+      sentinelGraceTimer = setTimeout(terminateForSentinel, 15_000);
+      sentinelGraceTimer.unref?.();
+    };
     const sentinelTimer = setInterval(() => {
       const checkpointReached = opts.authMode && existsSync(checkpointSentinel);
       if (!existsSync(doneSentinel) && !existsSync(giveUpSentinel) && !checkpointReached) return;
-      terminateForSentinel();
+      scheduleSentinelTermination();
     }, 500);
     child.once('close', (code) => {
       finish(code ?? -1);
@@ -687,7 +705,7 @@ async function driveJsonl(
     durationMs: Date.now() - opts.startTime,
     inputTokens,
     outputTokens,
-    cacheReadInputTokens: 0,
+    cacheReadInputTokens,
     cacheCreationInputTokens: 0,
     sessionId: capturedSessionId,
   };
