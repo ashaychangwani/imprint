@@ -281,11 +281,32 @@ function hasPendingLlmCost(spans: SpanNode[]): boolean {
   return spans.some((span) => isLlmUsageSpan(span) && span.costSummary == null);
 }
 
+/**
+ * Phoenix 11.4–11.7 leaves costSummary null forever for unmatched models.
+ * After the polling budget expires, materialize the same null-cost shape newer
+ * Phoenix versions return so the analyzer reports the model as unpriced rather
+ * than claiming its calculation is still pending indefinitely.
+ */
+export function classifyUnresolvedCostsAsUnpriced(spans: SpanNode[]): SpanNode[] {
+  return spans.map((span) => {
+    if (!isLlmUsageSpan(span) || span.costSummary != null) return span;
+    return {
+      ...span,
+      costSummary: {
+        prompt: { cost: null, tokens: span.tokenCountPrompt },
+        completion: { cost: null, tokens: span.tokenCountCompletion },
+        total: { cost: null, tokens: span.tokenCountTotal },
+      },
+    };
+  });
+}
+
 async function getTraceSpansAfterCostSettle(traceId: string): Promise<SpanNode[]> {
   let spans: SpanNode[] = [];
   for (let attempt = 1; attempt <= COST_POLL_ATTEMPTS; attempt++) {
     spans = await getTraceSpans(traceId);
-    if (!hasPendingLlmCost(spans) || attempt === COST_POLL_ATTEMPTS) return spans;
+    if (!hasPendingLlmCost(spans)) return spans;
+    if (attempt === COST_POLL_ATTEMPTS) return classifyUnresolvedCostsAsUnpriced(spans);
     await new Promise((resolve) => setTimeout(resolve, COST_POLL_INTERVAL_MS));
   }
   return spans;
