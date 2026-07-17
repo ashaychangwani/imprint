@@ -59,7 +59,7 @@ A Chromium window opens with the D&G homepage. Drive it normally:
 | Capture | How | Powers |
 |---|---|---|
 | Every network request (method, URL, headers, body) | CDP `Network.requestWillBeSent` | API workflow (`workflow.json` → `index.ts`) |
-| Every response (status, headers, mimeType, body) | CDP `Network.responseReceived` + best-effort `Network.getResponseBody` | API workflow + playbook result extraction |
+| Every response (status, headers, mimeType, body) | CDP `Network.responseReceived` + `Network.getResponseBody`; bounded speculative streaming for qualified Next.js RSC responses | API workflow + playbook result extraction |
 | Page navigations | CDP `Page.frameNavigated` | Playbook (`navigate` steps) |
 | Clicks, inputs, form submits — with element tag, id, text, aria-label, selector, value | Injected JS listener → `Runtime.consoleAPICalled` | Playbook (`click`/`type`/`submit` steps with locator priority) |
 | WebSocket frames (if any) | CDP `Network.webSocketFrameSent/Received` | (v0.2 codegen) |
@@ -67,7 +67,23 @@ A Chromium window opens with the D&G homepage. Drive it normally:
 | localStorage/sessionStorage snapshots | Page evaluation at relevant origins | State captures + durable storage credentials |
 | Your narration | Terminal stdin loop | LLM intent identification (both compilers) |
 
-Password fields are auto-redacted before being captured. Other input values are captured verbatim (truncated to 200 chars per value). Response bodies larger than 256 KB are truncated with a `[…truncated…]` marker — if you're recording a site with very large payloads (e.g., flight search results), the workflow compiler will still generate correct code but the truncated body won't be available for parser verification.
+Password fields are auto-redacted before being captured. Other input values are captured verbatim (truncated to 200 chars per value). Response bodies larger than 2 MiB are truncated with a `[…truncated…]` marker — if you're recording a site with very large payloads (e.g., flight search results), the workflow compiler will still generate code but the truncated body won't be available for complete parser verification.
+
+Chromium can occasionally report `No data found for resource` for a completed
+React Server Component response, especially across App Router navigation or a
+Server Action. Imprint speculatively streams only qualified `text/x-component`
+Fetch responses: GET requests with Next.js router/RSC signals, and POST requests
+with `Next-Action`. A failed labeled prefetch is retained only within a bounded,
+expiring memory pool and persisted only after a matching same-route pointer-down
+or click, including activation that follows a viewport-triggered prefetch. Hover
+or focus alone cannot promote it. Normal `getResponseBody`
+output always wins; streamed bytes are discarded on success. Capture is
+bounded to 2 MiB per response, 8 MiB of retained stream slabs, 16 issued streams, and 4 MiB
+recovered data per recording. Passive streams are limited to just under 6 MiB
+and 12 issued slots, reserving 2 MiB plus one allocation slab and four slots for
+activated navigation and Server Actions. An issued-stream slot remains leased until both
+the CDP command and request settle. Canceled loads must also pass React Flight
+framing, reference, root-shape, 16,384-row, and 32,768-JSON-node budget checks.
 
 **One recording, two artifacts.** The same session.json compiles to both:
 - `imprint generate` → `workflow.json` → `imprint emit` → `index.ts` (API replay path, including named state captures)

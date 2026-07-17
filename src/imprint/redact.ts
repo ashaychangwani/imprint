@@ -15,11 +15,44 @@
 import { splitSetCookieHeader } from './cookie-jar.ts';
 import type { Replacement } from './credential-extract.ts';
 import { hasFreeformRedactionHint, redactFreeformText } from './freeform-redact.ts';
+import {
+  MAX_REACT_FLIGHT_JSON_NODES,
+  MAX_REACT_FLIGHT_ROWS,
+  boundedJsonNodeCount,
+} from './react-flight-limits.ts';
 import { isAlwaysSecretHeader, isSensitiveHeader, isSensitiveKey } from './sensitive-keys.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
 const USER_INTERACTION_TYPES = new Set(['click', 'input', 'change', 'submit']);
 const MULTI_VALUE_HEADERS = new Set(['cookie', 'set-cookie']);
+const MAX_FLIGHT_JSON_NESTING_DEPTH = 256;
+
+/** Cheap, string-aware guard against making JSON.parse plus recursive
+ * redaction traverse an adversarially deep Flight row. JSON.parse remains the
+ * authority for syntax; this only rejects nesting beyond the safe budget. */
+function hasBoundedJsonNesting(value: string, maxDepth = MAX_FLIGHT_JSON_NESTING_DEPTH): boolean {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < value.length; i++) {
+    const char = value.charCodeAt(i);
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === 0x5c) escaped = true;
+      else if (char === 0x22) inString = false;
+      continue;
+    }
+    if (char === 0x22) {
+      inString = true;
+    } else if (char === 0x5b || char === 0x7b) {
+      depth++;
+      if (depth > maxDepth) return false;
+    } else if (char === 0x5d || char === 0x7d) {
+      depth--;
+    }
+  }
+  return true;
+}
 
 /**
  * Well-known XSSI (cross-site script inclusion) guards that sites prepend to
@@ -188,7 +221,15 @@ export function redactJsonBody(
   placeholderByPath?: Map<string, string>,
   freeform = true,
   markerContext?: RedactionMarkerContext,
+  maxNestingDepth?: number,
+  jsonNodeBudget?: { remaining: number },
+  countRoot = true,
 ): BodyRedaction {
+  if (jsonNodeBudget && countRoot) {
+    const nodes = boundedJsonNodeCount(body, jsonNodeBudget.remaining);
+    if (nodes === null) throw new Error('JSON width exceeds redaction budget');
+    jsonNodeBudget.remaining -= nodes;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -199,9 +240,48 @@ export function redactJsonBody(
   let count = 0;
   let placeholders = 0;
   let freeformCount = 0;
-  const visit = (node: unknown, pathSoFar: string[]): unknown => {
+  function visit(node: unknown, pathSoFar: string[], traversalDepth = 0): unknown {
+    if (maxNestingDepth !== undefined && traversalDepth > maxNestingDepth) {
+      throw new Error('JSON traversal depth exceeds redaction budget');
+    }
+    if (typeof node === 'string') {
+      const jsonCandidate = node.trimStart();
+      if (jsonCandidate.length > 1 && (jsonCandidate[0] === '{' || jsonCandidate[0] === '[')) {
+        // JSON-in-JSON may appear at an object property, an array index, or the
+        // root. Apply the same bounded structural redaction in every position.
+        if (
+          maxNestingDepth !== undefined &&
+          !hasBoundedJsonNesting(jsonCandidate, maxNestingDepth)
+        ) {
+          throw new Error('JSON-in-JSON nesting exceeds redaction budget');
+        }
+        if (jsonNodeBudget) {
+          const nodes = boundedJsonNodeCount(jsonCandidate, jsonNodeBudget.remaining);
+          if (nodes === null) throw new Error('JSON-in-JSON width exceeds redaction budget');
+          jsonNodeBudget.remaining -= nodes;
+        }
+        let inner: unknown;
+        try {
+          inner = JSON.parse(jsonCandidate);
+        } catch {
+          const fallback =
+            freeform && !looksLikeRpcEnvelope(node)
+              ? redactFreeformText(node)
+              : { redacted: node, redactionsCount: 0 };
+          freeformCount += fallback.redactionsCount;
+          return fallback.redacted;
+        }
+        return JSON.stringify(visit(inner, pathSoFar, traversalDepth + 1));
+      }
+      if (freeform && !looksLikeRpcEnvelope(node)) {
+        const redacted = redactFreeformText(node);
+        freeformCount += redacted.redactionsCount;
+        return redacted.redacted;
+      }
+      return node;
+    }
     if (Array.isArray(node)) {
-      return node.map((v, i) => visit(v, [...pathSoFar, String(i)]));
+      return node.map((v, i) => visit(v, [...pathSoFar, String(i)], traversalDepth + 1));
     }
     if (node && typeof node === 'object') {
       const out: Record<string, unknown> = {};
@@ -214,40 +294,161 @@ export function redactJsonBody(
         } else if (isSensitiveKey(k) && (typeof v === 'string' || typeof v === 'number')) {
           count++;
           out[k] = markerFor(String(v), markerContext);
-        } else if (typeof v === 'string' && v.length > 1 && (v[0] === '{' || v[0] === '[')) {
-          // JSON-in-JSON: try to parse and redact the nested string.
-          try {
-            const inner = JSON.parse(v);
-            const visited = visit(inner, [...pathSoFar, k]);
-            out[k] = JSON.stringify(visited);
-          } catch {
-            // Nested string that isn't parseable JSON: scan it as free text,
-            // unless it's a structured RPC envelope (flat-scanning corrupts it).
-            const r =
-              freeform && !looksLikeRpcEnvelope(v)
-                ? redactFreeformText(v)
-                : { redacted: v, redactionsCount: 0 };
-            freeformCount += r.redactionsCount;
-            out[k] = r.redacted;
-          }
-        } else if (typeof v === 'string' && freeform) {
-          const r = redactFreeformText(v);
-          freeformCount += r.redactionsCount;
-          out[k] = r.redacted;
         } else {
-          out[k] = visit(v, [...pathSoFar, k]);
+          out[k] = visit(v, [...pathSoFar, k], traversalDepth + 1);
         }
       }
       return out;
     }
     return node;
-  };
+  }
   const redacted = JSON.stringify(visit(parsed, []));
   return {
     redacted,
     redactionsCount: count,
     placeholdersInjected: placeholders,
     freeformRedactions: freeformCount,
+  };
+}
+
+function isAsciiHex(byte: number | undefined): boolean {
+  return (
+    byte !== undefined &&
+    ((byte >= 0x30 && byte <= 0x39) ||
+      (byte >= 0x41 && byte <= 0x46) ||
+      (byte >= 0x61 && byte <= 0x66))
+  );
+}
+
+/** Redact JSON rows inside a React Flight body without changing its framing. */
+function redactFlightBody(
+  body: string,
+  freeform = false,
+  markerContext?: RedactionMarkerContext,
+): BodyRedaction {
+  const failClosed = (): BodyRedaction => ({
+    redacted: `[REDACTED:UNSAFE_FLIGHT_BODY:${Buffer.byteLength(body, 'utf8')}]`,
+    redactionsCount: 1,
+    placeholdersInjected: 0,
+    freeformRedactions: 0,
+  });
+  if (!body.endsWith('\n')) return failClosed();
+
+  const bytes = Buffer.from(body, 'utf8');
+  const output: Buffer[] = [];
+  let offset = 0;
+  let redactionsCount = 0;
+  let freeformRedactions = 0;
+  let rowCount = 0;
+  const jsonNodeBudget = { remaining: MAX_REACT_FLIGHT_JSON_NODES };
+
+  const redactJsonPayload = (json: string): BodyRedaction | null => {
+    try {
+      if (!hasBoundedJsonNesting(json)) return null;
+      const nodes = boundedJsonNodeCount(json, jsonNodeBudget.remaining);
+      if (nodes === null) return null;
+      jsonNodeBudget.remaining -= nodes;
+      JSON.parse(json);
+      return redactJsonBody(
+        json,
+        undefined,
+        freeform,
+        markerContext,
+        MAX_FLIGHT_JSON_NESTING_DEPTH,
+        jsonNodeBudget,
+        false,
+      );
+    } catch {
+      return null;
+    }
+  };
+
+  while (offset < bytes.length) {
+    if (++rowCount > MAX_REACT_FLIGHT_ROWS) return failClosed();
+    const lineEnd = bytes.indexOf(0x0a, offset);
+    if (lineEnd < 0 || lineEnd === offset) return failClosed();
+    if (bytes[offset] === 0x3a) {
+      const hint = bytes.toString('utf8', offset, lineEnd);
+      const match = /^:([A-Z]+)(.+)$/.exec(hint);
+      const redacted = match?.[2] ? redactJsonPayload(match[2]) : null;
+      if (!match?.[1] || !redacted) return failClosed();
+      redactionsCount += redacted.redactionsCount;
+      freeformRedactions += redacted.freeformRedactions;
+      output.push(Buffer.from(`:${match[1]}${redacted.redacted}\n`, 'utf8'));
+      offset = lineEnd + 1;
+      continue;
+    }
+
+    let idStart = offset;
+    if (bytes[idStart] === 0x23) idStart++;
+    let colon = idStart;
+    while (colon < bytes.length && isAsciiHex(bytes[colon])) colon++;
+    if (colon === idStart || bytes[colon] !== 0x3a) return failClosed();
+    const payloadStart = colon + 1;
+    if (payloadStart >= bytes.length) return failClosed();
+
+    if (bytes[payloadStart] === 0x54) {
+      let comma = payloadStart + 1;
+      while (comma < bytes.length && isAsciiHex(bytes[comma])) comma++;
+      if (comma === payloadStart + 1 || bytes[comma] !== 0x2c) return failClosed();
+      const length = Number.parseInt(bytes.toString('ascii', payloadStart + 1, comma), 16);
+      if (!Number.isSafeInteger(length)) return failClosed();
+      const textEnd = comma + 1 + length;
+      if (textEnd > bytes.length) return failClosed();
+      const text = bytes.toString('utf8', comma + 1, textEnd);
+      const redactedText = freeform
+        ? redactFreeformText(text)
+        : { redacted: text, redactionsCount: 0 };
+      freeformRedactions += redactedText.redactionsCount;
+      output.push(bytes.subarray(offset, payloadStart));
+      output.push(
+        Buffer.from(
+          `T${Buffer.byteLength(redactedText.redacted, 'utf8').toString(16)},${redactedText.redacted}`,
+          'utf8',
+        ),
+      );
+      offset = textEnd;
+      continue;
+    }
+
+    const payload = bytes.toString('utf8', payloadStart, lineEnd);
+    if (/^[RrXx]$/.test(payload)) {
+      output.push(bytes.subarray(offset, lineEnd + 1));
+      offset = lineEnd + 1;
+      continue;
+    }
+    if (payload.startsWith('C')) {
+      if (payload === 'C') {
+        output.push(bytes.subarray(offset, lineEnd + 1));
+        offset = lineEnd + 1;
+        continue;
+      }
+      const redacted = redactJsonPayload(payload.slice(1));
+      if (!redacted) return failClosed();
+      redactionsCount += redacted.redactionsCount;
+      freeformRedactions += redacted.freeformRedactions;
+      output.push(bytes.subarray(offset, payloadStart));
+      output.push(Buffer.from(`C${redacted.redacted}\n`, 'utf8'));
+      offset = lineEnd + 1;
+      continue;
+    }
+    const tagged = /^([A-Z]+)(?=[\[{\"\d\-ntf])(.*)$/.exec(payload);
+    const tag = tagged?.[1] ?? '';
+    const json = tagged?.[2] ?? payload;
+    const redacted = redactJsonPayload(json);
+    if (!redacted) return failClosed();
+    redactionsCount += redacted.redactionsCount;
+    freeformRedactions += redacted.freeformRedactions;
+    output.push(bytes.subarray(offset, payloadStart));
+    output.push(Buffer.from(`${tag}${redacted.redacted}\n`, 'utf8'));
+    offset = lineEnd + 1;
+  }
+
+  return {
+    redacted: Buffer.concat(output).toString('utf8'),
+    redactionsCount,
+    placeholdersInjected: 0,
+    freeformRedactions,
   };
 }
 
@@ -263,6 +464,9 @@ export function redactBody(
   const ct = (contentType ?? '').toLowerCase();
   if (ct.includes('urlencoded')) {
     return redactFormBody(body, formPlaceholders, markerContext);
+  }
+  if (ct.includes('text/x-component')) {
+    return redactFlightBody(body, freeform, markerContext);
   }
   // Try JSON first — many APIs send JSON as text/plain or with no content-type.
   const jsonR = redactJsonBody(body, jsonPlaceholders, freeform, markerContext);
@@ -509,16 +713,22 @@ export function redactSession(
       touched += respHeadersR.redactionsCount;
       let respBody = response.body;
       if (respBody) {
+        const responseContentType =
+          response.mimeType ||
+          Object.entries(response.headers).find(
+            ([name]) => name.toLowerCase() === 'content-type',
+          )?.[1];
+        const isFlight =
+          (responseContentType ?? '').toLowerCase().split(';', 1)[0]?.trim() === 'text/x-component';
         const respBodyR = redactBody(
           respBody,
-          response.mimeType,
+          responseContentType,
           undefined,
           undefined,
-          // Responses are key-based only: never value-pattern (freeform) scan a
-          // server body. Keeps redaction focused on real secrets (post-login
-          // cookies + user-entered PII) and avoids corrupting structured RPC
-          // envelopes whose payloads are doubly-encoded JSON.
-          false,
+          // Flight rows have a framing-aware redactor, so rendered free-form
+          // PII can be scrubbed without corrupting JSON or T-row byte lengths.
+          // Other response envelopes remain key-based only.
+          isFlight ? useFreeform : false,
           markerContext,
         );
         respBody = respBodyR.redacted;

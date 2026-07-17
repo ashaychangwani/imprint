@@ -93,6 +93,13 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 > [!TIP]
 > All three steps happen in a single `imprint teach` command. Credentials and PII are redacted automatically before anything reaches the LLM.
 
+The recorder also has a bounded fallback for Next.js React Server Component
+responses that Chromium evicts before `Network.getResponseBody` can read them.
+It streams only narrowly identified GET navigation/prefetch and POST Server
+Action responses, keeps normal body capture authoritative, and writes fallback
+bytes only when the normal read actually fails. The candidate policy and
+resource limits are documented in the [capture protocol](docs/capture-protocol.md).
+
 ---
 
 ## Why Imprint?

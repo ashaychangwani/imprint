@@ -55,10 +55,14 @@ src/imprint/
 │
 │ ── Capture ──
 ├── record.ts            CDP capture + DOM listener + JSONL stream
+├── response-body-stream.ts  Bounded React Flight stream selection, buffering, and recovery
+├── response-body-intent.ts  Trusted user-intent correlation for speculative RSC prefetches
+├── response-body-lifecycle.ts  Request-generation lifetime tracking during body reads
+├── react-flight-limits.ts  Shared Flight row and JSON-node budgets
 ├── session-writer.ts    JSONL writer + Session assembler
 ├── inject-listener.ts   Sentinel-prefixed DOM event capture (injected)
 ├── redact.ts            Credential / PII scrub
-├── freeform-redact.ts   Supplemental free-form PII/secret detection (105 patterns; request-side only, generic catch-alls excluded)
+├── freeform-redact.ts   Supplemental free-form PII/secret detection (requests plus framing-aware Flight responses; generic catch-alls excluded)
 ├── sensitive-keys.ts    Sensitive credential key lists for extraction + redaction
 ├── credential-extract.ts  Automatic login-pair detection + redaction mapping from sessions
 ├── check.ts             Sanity-check captured sessions
