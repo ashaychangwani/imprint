@@ -20,14 +20,7 @@
  *  contains dots, e.g. `[customers.userInformation.accountNumber]`, is matched
  *  verbatim rather than traversed). */
 export function jsonpath(root: unknown, path: string): unknown {
-  const normalizedPath =
-    path === '$'
-      ? ''
-      : path.startsWith('$.')
-        ? path.slice(2)
-        : path.startsWith('$[')
-          ? path.slice(1)
-          : path;
+  const normalizedPath = path === '$' ? '' : path.startsWith('$.') ? path.slice(2) : path;
   const tokens: Array<
     | { kind: 'key'; v: string }
     | { kind: 'index'; v: number }

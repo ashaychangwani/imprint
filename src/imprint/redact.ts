@@ -713,11 +713,16 @@ export function redactSession(
       touched += respHeadersR.redactionsCount;
       let respBody = response.body;
       if (respBody) {
+        const responseContentType =
+          response.mimeType ||
+          Object.entries(response.headers).find(
+            ([name]) => name.toLowerCase() === 'content-type',
+          )?.[1];
         const isFlight =
-          (response.mimeType ?? '').toLowerCase().split(';', 1)[0]?.trim() === 'text/x-component';
+          (responseContentType ?? '').toLowerCase().split(';', 1)[0]?.trim() === 'text/x-component';
         const respBodyR = redactBody(
           respBody,
-          response.mimeType,
+          responseContentType,
           undefined,
           undefined,
           // Flight rows have a framing-aware redactor, so rendered free-form

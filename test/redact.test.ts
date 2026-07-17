@@ -448,6 +448,27 @@ describe('redactSession', () => {
     expect(session.requests[0]?.response?.body).not.toContain('person@example.com');
   });
 
+  it('recognizes Flight from a case-insensitive response content-type header', () => {
+    const original = baseSession.requests[0];
+    if (!original) throw new Error('missing base request');
+    const flightSession: Session = {
+      ...baseSession,
+      requests: [
+        {
+          ...original,
+          response: {
+            status: 200,
+            headers: { 'Content-Type': 'text/x-component; charset=utf-8' },
+            body: ':HL["mailto:header-only@example.com","style"]\n0:{"children":"safe"}\n',
+          },
+        },
+      ],
+    };
+
+    const { session } = redactSession(flightSession);
+    expect(session.requests[0]?.response?.body).not.toContain('header-only@example.com');
+  });
+
   it('scrubs request bodies, headers, and cookies when redactSensitiveHeaders is on', () => {
     const { session, stats } = redactSession(baseSession, { redactSensitiveHeaders: true });
 

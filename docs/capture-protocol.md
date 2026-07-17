@@ -83,8 +83,7 @@ recovered data per recording. Passive streams are limited to just under 6 MiB
 and 12 issued slots, reserving 2 MiB plus one allocation slab and four slots for
 activated navigation and Server Actions. An issued-stream slot remains leased until both
 the CDP command and request settle. Canceled loads must also pass React Flight
-framing, reference, root-shape, 16,384-row, and 32,768-JSON-node budget checks. See
-[RSC response-body recovery](rsc-response-body-recovery.md).
+framing, reference, root-shape, 16,384-row, and 32,768-JSON-node budget checks.
 
 **One recording, two artifacts.** The same session.json compiles to both:
 - `imprint generate` → `workflow.json` → `imprint emit` → `index.ts` (API replay path, including named state captures)

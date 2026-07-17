@@ -13,7 +13,7 @@ export const RSC_USER_INTENT_WINDOW_MS = 10_000;
 
 export const STREAM_TRUNCATION_MARKER = '\n[…truncated…]';
 
-export interface ResponseBodyStreamCandidate {
+interface ResponseBodyStreamCandidate {
   method: string;
   resourceType: string;
   status: number;
@@ -31,7 +31,7 @@ export type ResponseBodyCompletion =
   | { kind: 'finished' }
   | { kind: 'timeout' };
 
-export interface StreamedBodyRecoveryContext {
+interface StreamedBodyRecoveryContext {
   completion: ResponseBodyCompletion;
   method?: string;
   mimeType?: string;
@@ -40,7 +40,7 @@ export interface StreamedBodyRecoveryContext {
   body: string;
 }
 
-export interface ResponseBodyResolution {
+interface ResponseBodyResolution {
   body: string | null;
   source: 'normal' | 'stream' | null;
   normalError?: unknown;
@@ -63,7 +63,7 @@ interface ResponseBodyStreamSlab {
   used: number;
 }
 
-export interface ResponseBodyStreamStats {
+interface ResponseBodyStreamStats {
   attempted: number;
   started: number;
   discarded: number;
@@ -106,11 +106,7 @@ export class ResponseBodyStreamLeaseTracker {
 
   begin(requestId: string, seq: number, priority = false): ResponseBodyStreamLease | null {
     if (this.#leases.size >= this.#limit) return null;
-    if (
-      !priority &&
-      [...this.#leases].filter((lease) => !lease.priority).length >=
-        this.#limit - this.#priorityReserve
-    ) {
+    if (!priority && this.#leases.size >= this.#limit - this.#priorityReserve) {
       return null;
     }
     const lease = { requestId, seq, priority, commandSettled: false, requestCompleted: false };
@@ -196,7 +192,7 @@ function isRscGetRequest(url: string, headers: Record<string, string>): boolean 
   return rsc === '1' || hasRscQuery || accept.includes('text/x-component') || hasRouterState;
 }
 
-export function isRscPrefetchRequest(headers: Record<string, string>): boolean {
+function isRscPrefetchRequest(headers: Record<string, string>): boolean {
   return (
     requestHeader(headers, 'next-router-prefetch')?.trim() === '1' ||
     Boolean(requestHeader(headers, 'next-router-segment-prefetch')?.trim())

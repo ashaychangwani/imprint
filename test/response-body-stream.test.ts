@@ -786,6 +786,16 @@ describe('ResponseBodyStreamLeaseTracker', () => {
     expect(tracker.size).toBe(4);
   });
 
+  it('keeps the priority reserve vacant when priority work is already active', () => {
+    const tracker = new ResponseBodyStreamLeaseTracker(4, 1);
+    expect(tracker.begin('priority-1', 1, true)).not.toBeNull();
+    expect(tracker.begin('passive-1', 2)).not.toBeNull();
+    expect(tracker.begin('passive-2', 3)).not.toBeNull();
+    expect(tracker.begin('passive-3', 4)).toBeNull();
+    expect(tracker.begin('priority-2', 5, true)).not.toBeNull();
+    expect(tracker.size).toBe(4);
+  });
+
   it('holds an issued slot until both the command and request settle', () => {
     const tracker = new ResponseBodyStreamLeaseTracker(1);
     const first = tracker.begin('request-1', 1);

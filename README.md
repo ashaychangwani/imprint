@@ -97,9 +97,8 @@ The recorder also has a bounded fallback for Next.js React Server Component
 responses that Chromium evicts before `Network.getResponseBody` can read them.
 It streams only narrowly identified GET navigation/prefetch and POST Server
 Action responses, keeps normal body capture authoritative, and writes fallback
-bytes only when the normal read actually fails. See the
-[RSC recovery benchmark](docs/rsc-response-body-recovery.md) for the policy,
-limits, and corpus results.
+bytes only when the normal read actually fails. The candidate policy and
+resource limits are documented in the [capture protocol](docs/capture-protocol.md).
 
 ---
 

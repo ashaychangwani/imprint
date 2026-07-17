@@ -113,7 +113,6 @@ interface AuditEvaluation {
   score: AuditScore;
   missingTools: string[];
   missingParameters: MissingAuditedParameter[];
-  normalizedReport: AuditReport;
 }
 
 interface SkippedInteractiveAuth {
@@ -245,35 +244,10 @@ export function partitionAuditTools(tools: readonly ResolvedTool[]): AuditToolPa
 function normalizeAuditReport(
   report: AuditReport,
   expectedTools: readonly ExpectedAuditTool[],
-  expectedServerName?: string,
 ): AuditReport {
-  const expectedNames = new Set(expectedTools.map((tool) => tool.name));
-  const acceptedQualifiedPrefixes = expectedServerName
-    ? new Set([
-        `mcp__${expectedServerName}__`,
-        `mcp__${expectedServerName.replace(/[^A-Za-z0-9]/g, '_')}__`,
-      ])
-    : new Set<string>();
-  const canonicalToolName = (reportedName: string): string | undefined => {
-    if (expectedNames.has(reportedName)) return reportedName;
-    const prefix = [...acceptedQualifiedPrefixes].find((candidate) =>
-      reportedName.startsWith(candidate),
-    );
-    if (!prefix) return undefined;
-
-    // Codex reports MCP calls using their transport-qualified name while the
-    // workflow inventory uses the short tool name. The namespace must be the
-    // server actually connected for this audit; an invented MCP namespace is
-    // not evidence that a connected tool was called.
-    const shortName = reportedName.slice(prefix.length);
-    return expectedNames.has(shortName) ? shortName : undefined;
-  };
   const firstToolByName = new Map<string, AuditReport['tools'][number]>();
   for (const tool of report.tools) {
-    const canonicalName = canonicalToolName(tool.name);
-    if (canonicalName && !firstToolByName.has(canonicalName)) {
-      firstToolByName.set(canonicalName, { ...tool, name: canonicalName });
-    }
+    if (!firstToolByName.has(tool.name)) firstToolByName.set(tool.name, tool);
   }
 
   const normalizedTools: AuditReport['tools'] = [];
@@ -487,9 +461,8 @@ export function evaluateAuditReport(
   minScore: number,
   expectedTools: readonly ExpectedAuditTool[],
   timedOut = false,
-  expectedServerName?: string,
 ): AuditEvaluation {
-  const normalizedReport = normalizeAuditReport(report, expectedTools, expectedServerName);
+  const normalizedReport = normalizeAuditReport(report, expectedTools);
   const rawScore = computeAuditScore(normalizedReport, minScore);
   const missingTools = missingAuditedToolNames(
     normalizedReport,
@@ -513,7 +486,6 @@ export function evaluateAuditReport(
     score: { ...rawScore, verdict },
     missingTools,
     missingParameters,
-    normalizedReport,
   };
 }
 
@@ -730,16 +702,15 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       //       record. Merely naming it in the report or discussing its
       //       parameters is not evidence that its core operation was attempted;
       //       infra and bad_params invocations still count as honest attempts.
+      const ungradeableNames = ungradeableToolNames(drive.report);
       const evaluation = evaluateAuditReport(
         drive.report,
         opts.minScore,
         expectedTools,
         drive.timedOut,
-        `imprint-audit-${opts.site}`,
       );
       const { missingTools: missingToolNames, missingParameters } = evaluation;
-      const ungradeableNames = ungradeableToolNames(evaluation.normalizedReport);
-      const untestableParamList = untestableParams(evaluation.normalizedReport);
+      const untestableParamList = untestableParams(drive.report);
       const unverifiedAndUngradeable = tools
         .filter((t) => t.workflow.liveVerified === false)
         .map((t) => t.workflow.toolName)
@@ -834,7 +805,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
           unverifiedAndUngradeable,
           missingTools: missingToolNames,
           missingParameters,
-          report: evaluation.normalizedReport,
+          report: drive.report,
           auditedToolCount,
           skippedInteractiveAuth,
           detectedToolCount,
