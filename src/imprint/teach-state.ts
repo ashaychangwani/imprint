@@ -33,6 +33,8 @@ import {
   type SharedCompileContext,
   SharedCompileContextSchema,
   type ToolCandidate,
+  ToolCandidateSchema,
+  closeCandidateSelection,
 } from './tool-candidates.ts';
 
 export const TEACH_STEPS = [
@@ -55,6 +57,8 @@ export interface WorkflowState {
   redactedPath?: string;
   triagedPath?: string;
   classificationsPath?: string;
+  /** Hash of the replay classification payload used for candidate/build planning. */
+  classificationsHash?: string;
   completedSteps: TeachStep[];
   error?: string;
   startedAt: string;
@@ -90,6 +94,86 @@ export interface TeachState {
   workflows: Record<string, WorkflowState>;
 }
 
+function candidatePlanningSignature(candidate: ToolCandidate): string {
+  return JSON.stringify({
+    ...candidate,
+    dependsOnTools: candidate.dependsOnTools ?? [],
+  });
+}
+
+/** Whether re-detection changed the candidate set or any planning-relevant
+ * candidate evidence for this recording. A changed graph invalidates prior
+ * plan-prereqs/compile progress even when candidate names stayed the same. */
+export function candidateSelectionChanged(
+  state: TeachState,
+  sessionPath: string,
+  selected: ToolCandidate[],
+  sharedContext?: SharedCompileContext,
+  classificationsHash?: string,
+): boolean {
+  const priorWorkflows = Object.values(state.workflows).filter(
+    (workflow) => workflow.sessionPath === sessionPath && workflow.candidate,
+  );
+  if (priorWorkflows.length === 0) return false;
+  const prior = priorWorkflows.map((workflow) => workflow.candidate as ToolCandidate);
+  const signatures = (candidates: ToolCandidate[]): string[] =>
+    candidates.map(candidatePlanningSignature).sort();
+  if (JSON.stringify(signatures(prior)) !== JSON.stringify(signatures(selected))) return true;
+  const priorContexts = new Set(
+    priorWorkflows.map((workflow) => JSON.stringify(workflow.sharedContext ?? null)),
+  );
+  if (priorContexts.size !== 1 || !priorContexts.has(JSON.stringify(sharedContext ?? null))) {
+    return true;
+  }
+  const priorClassificationHashes = new Set(
+    priorWorkflows.map((workflow) => workflow.classificationsHash ?? null),
+  );
+  return (
+    priorClassificationHashes.size !== 1 ||
+    !priorClassificationHashes.has(classificationsHash ?? null)
+  );
+}
+
+/** Snapshot same-recording candidate state by canonical tool identity before
+ * re-detection prunes legacy alias keys. Canonical keys win over aliases when
+ * both exist. */
+export function candidateWorkflowsByToolName(
+  state: TeachState,
+  sessionPath: string,
+): Map<string, WorkflowState> {
+  const workflows = new Map<string, WorkflowState>();
+  for (const [key, workflow] of Object.entries(state.workflows)) {
+    if (workflow.sessionPath !== sessionPath || !workflow.candidate) continue;
+    const toolName = workflow.candidate.toolName;
+    if (!workflows.has(toolName) || key === toolName) workflows.set(toolName, workflow);
+  }
+  return workflows;
+}
+
+/** Remove obsolete candidate state for one recording after a new selection is
+ * finalized. Selected legacy aliases are also removed because fresh
+ * checkpoints use canonical tool-name keys. Other recordings and pending
+ * placeholders remain untouched. */
+export function pruneUnselectedCandidateWorkflows(
+  state: TeachState,
+  sessionPath: string,
+  selectedToolNames: ReadonlySet<string>,
+): string[] {
+  const removed: string[] = [];
+  for (const [key, workflow] of Object.entries(state.workflows)) {
+    if (
+      workflow.sessionPath !== sessionPath ||
+      !workflow.candidate ||
+      (selectedToolNames.has(workflow.candidate.toolName) && key === workflow.candidate.toolName)
+    ) {
+      continue;
+    }
+    delete state.workflows[key];
+    removed.push(key);
+  }
+  return removed;
+}
+
 export function teachStatePath(site: string): string {
   return pathJoin(localSiteDir(site), '.teach-state.json');
 }
@@ -106,9 +190,14 @@ export function loadTeachState(site: string): TeachState {
   try {
     const state = JSON.parse(readFileSync(loadPath, 'utf8')) as TeachState;
     for (const workflow of Object.values(state.workflows)) {
-      if (!workflow.sharedContext) continue;
-      const parsed = SharedCompileContextSchema.safeParse(workflow.sharedContext);
-      workflow.sharedContext = parsed.success ? parsed.data : undefined;
+      if (workflow.sharedContext) {
+        const parsed = SharedCompileContextSchema.safeParse(workflow.sharedContext);
+        workflow.sharedContext = parsed.success ? parsed.data : undefined;
+      }
+      if (workflow.candidate) {
+        const parsed = ToolCandidateSchema.safeParse(workflow.candidate);
+        workflow.candidate = parsed.success ? parsed.data : undefined;
+      }
     }
     return isLegacy ? normalizeLegacyTeachState(site, state) : state;
   } catch {
@@ -452,6 +541,7 @@ interface MultiToolResumeSelection {
     workflowKey: string;
     reason: 'different-recording' | 'not-resumable' | 'not-in-build-plan';
   }[];
+  cycles: string[][];
 }
 
 export function selectMultiToolResumePlans(
@@ -461,11 +551,18 @@ export function selectMultiToolResumePlans(
   opts?: {
     noInteractive?: boolean;
     allTools?: boolean;
+    primaryTool?: boolean;
     toolName?: string;
     plannedToolNames?: ReadonlySet<string>;
   },
 ): MultiToolResumeSelection {
   const target = state.workflows[targetWorkflowKey];
+  const persistedPrimary = Object.entries(state.workflows).find(
+    ([key, workflow]) =>
+      !key.startsWith('_pending_') &&
+      workflow.candidate?.primary &&
+      (!target || workflow.sessionPath === target.sessionPath),
+  );
   const plans: MultiToolResumeSelection['plans'] = [];
   const skipped: MultiToolResumeSelection['skipped'] = [];
   for (const [key, ws] of Object.entries(state.workflows)) {
@@ -482,25 +579,85 @@ export function selectMultiToolResumePlans(
       skipped.push({ workflowKey: key, reason: 'not-resumable' });
       continue;
     }
-    plans.push({ workflowKey: key, candidate: ws.candidate, sharedContext: ws.sharedContext });
+    const plan = { workflowKey: key, candidate: ws.candidate, sharedContext: ws.sharedContext };
+    const duplicateIndex = plans.findIndex(
+      (existing) => existing.candidate?.toolName === ws.candidate?.toolName,
+    );
+    if (duplicateIndex >= 0) {
+      const existing = plans[duplicateIndex];
+      if (key === ws.candidate.toolName && existing?.workflowKey !== ws.candidate.toolName) {
+        plans[duplicateIndex] = plan;
+      }
+      continue;
+    }
+    plans.push(plan);
   }
+  if (
+    target?.candidate &&
+    !plans.some((plan) => plan.candidate?.toolName === target.candidate?.toolName)
+  ) {
+    const reason = skipped.find((entry) => entry.workflowKey === targetWorkflowKey)?.reason;
+    throw new Error(
+      `Cannot resume tool "${target.candidate.toolName}" from "${fromStep}": the target is ${reason ?? 'unavailable'}. Resume an earlier step or re-run from "detect-candidates".`,
+    );
+  }
+  const closePlans = (rootNames: string[]): Pick<MultiToolResumeSelection, 'plans' | 'cycles'> => {
+    const candidatePlans = plans.filter(
+      (plan): plan is typeof plan & { candidate: ToolCandidate } => !!plan.candidate,
+    );
+    const closure = closeCandidateSelection(
+      candidatePlans.map((plan) => plan.candidate),
+      rootNames,
+    );
+    const selectedNames = new Set(closure.selected.map((candidate) => candidate.toolName));
+    const eligibleNames = new Set(candidatePlans.map((plan) => plan.candidate.toolName));
+    for (const candidate of closure.selected) {
+      for (const dependency of candidate.dependsOnTools ?? []) {
+        if (eligibleNames.has(dependency)) continue;
+        throw new Error(
+          `Cannot resume tool "${candidate.toolName}" from "${fromStep}": required upstream tool "${dependency}" is unavailable. Re-run from "detect-candidates" to rebuild a complete tool set.`,
+        );
+      }
+    }
+    return {
+      plans: plans.filter((plan) => plan.candidate && selectedNames.has(plan.candidate.toolName)),
+      cycles: closure.cycles,
+    };
+  };
+
   if (opts?.toolName) {
     const selected = plans.find(
       (plan) => plan.workflowKey === opts.toolName || plan.candidate?.toolName === opts.toolName,
     );
-    if (!selected) {
+    if (!selected?.candidate) {
       throw new Error(
         `Cannot resume tool "${opts.toolName}": it is not resumable from "${fromStep}" in the selected recording.`,
       );
     }
-    return { plans: [selected], skipped };
+    return { ...closePlans([selected.candidate.toolName]), skipped };
   }
-  if (opts?.noInteractive && !opts.allTools && plans.length > 1) {
-    const primary = plans.find((plan) => plan.candidate?.primary);
+  if (opts?.primaryTool) {
+    const primary = persistedPrimary
+      ? plans.find((plan) => plan.candidate?.toolName === persistedPrimary[1].candidate?.toolName)
+      : undefined;
+    if (persistedPrimary && !primary) {
+      const reason = skipped.find((entry) => entry.workflowKey === persistedPrimary[0])?.reason;
+      throw new Error(
+        `Cannot resume primary tool "${persistedPrimary[1].candidate?.toolName ?? persistedPrimary[0]}" from "${fromStep}": it is ${reason ?? 'unavailable'}. Resume an earlier step or re-run from "detect-candidates".`,
+      );
+    }
     const selected = primary ?? plans.find((plan) => plan.workflowKey === targetWorkflowKey);
-    return { plans: selected ? [selected] : [], skipped };
+    return {
+      ...(selected?.candidate
+        ? closePlans([selected.candidate.toolName])
+        : { plans: [], cycles: [] }),
+      skipped,
+    };
   }
-  return { plans, skipped };
+  return {
+    ...closePlans(plans.flatMap((plan) => (plan.candidate ? [plan.candidate.toolName] : []))),
+    skipped,
+  };
 }
 
 /** True when the `[startIdx, stopIdx]` phase window overlaps the atomic analysis

@@ -93,6 +93,11 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 > [!TIP]
 > All three steps happen in a single `imprint teach` command. Credentials and PII are redacted automatically before anything reaches the LLM.
 
+When one recording yields multiple tools, all candidates are selected by default.
+Imprint automatically includes upstream lookup/producer tools required by any
+selected downstream tool. Use `--primary-tool` to compile only the primary tool
+and its prerequisites; `--all-tools` remains an explicit spelling of the default.
+
 The recorder also has a bounded fallback for Next.js React Server Component
 responses that Chromium evicts before `Network.getResponseBody` can read them.
 It streams only narrowly identified GET navigation/prefetch and POST Server

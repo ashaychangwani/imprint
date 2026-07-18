@@ -2,10 +2,20 @@ import { describe, expect, it } from 'bun:test';
 import { parseDuration } from '../src/cli.ts';
 import {
   type CandidateCompilePlan,
+  assertCompleteSelectedToolSet,
   isProviderUsageLimitedError,
   mapLimitSettled,
   summarizeCompileOutcomes,
 } from '../src/imprint/teach.ts';
+
+describe('assertCompleteSelectedToolSet', () => {
+  it('allows a complete selected set and rejects every partial result', () => {
+    expect(() => assertCompleteSelectedToolSet(0, 3)).not.toThrow();
+    expect(() => assertCompleteSelectedToolSet(1, 3)).toThrow(
+      /Selected tool set is incomplete: 1 of 3 tools failed/,
+    );
+  });
+});
 
 // ─── parseDuration ──────────────────────────────────────────────────────────
 

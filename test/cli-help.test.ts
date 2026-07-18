@@ -12,6 +12,7 @@ import {
   VERB_HELP,
   closestVerb,
   inferPlaybookSiteForSmokeCommand,
+  resolveTeachSelectionMode,
   tryParseParamKV,
 } from '../src/cli.ts';
 
@@ -32,6 +33,28 @@ const dispatcherVerbs = (() => {
   set.add('playbook');
   return set;
 })();
+
+describe('teach selection mode', () => {
+  it('reports the default all-tools modes accurately for telemetry', () => {
+    expect(resolveTeachSelectionMode({ noInteractive: true })).toEqual({ mode: 'all-default' });
+    expect(resolveTeachSelectionMode({ allTools: true })).toEqual({ mode: 'all-explicit' });
+    expect(resolveTeachSelectionMode({})).toEqual({ mode: 'interactive-default-all' });
+  });
+
+  it('reports narrowing modes and rejects conflicting flags', () => {
+    expect(resolveTeachSelectionMode({ primaryTool: true })).toEqual({ mode: 'primary' });
+    expect(resolveTeachSelectionMode({ tool: 'get_details' })).toEqual({ mode: 'tool' });
+    expect(resolveTeachSelectionMode({ tool: 'x', allTools: true }).error).toContain(
+      '--tool cannot be combined with --all-tools',
+    );
+    expect(resolveTeachSelectionMode({ tool: 'x', primaryTool: true }).error).toContain(
+      '--tool cannot be combined with --primary-tool',
+    );
+    expect(resolveTeachSelectionMode({ allTools: true, primaryTool: true }).error).toContain(
+      '--all-tools cannot be combined with --primary-tool',
+    );
+  });
+});
 
 describe('CLI verb / VERB_HELP drift', () => {
   it('every dispatcher verb has a VERB_HELP entry', () => {

@@ -23,6 +23,7 @@ import { authWorkflowHash } from './auth-compile-tools.ts';
 import {
   type SharedModuleManifestEntry,
   buildPlanSidecarPath,
+  deriveTokenContractHints,
   readBuildPlanFile,
   topoLevelsForTools,
 } from './build-plan.ts';
@@ -95,6 +96,8 @@ import {
   type WorkflowState,
   analysisBlockRunsForWindow,
   buildTeachStateFromSession,
+  candidateSelectionChanged,
+  candidateWorkflowsByToolName,
   detectCandidatesCompletedSteps,
   discoverCompletedWorkflows,
   discoverOrphanSession,
@@ -103,6 +106,7 @@ import {
   loadTeachState,
   nextTeachStep as nextStep,
   pruneStalePendingTeachWorkflows,
+  pruneUnselectedCandidateWorkflows,
   resolveStepStartTarget,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
@@ -111,10 +115,14 @@ import {
   toRelativeTeachStatePath as toRelative,
 } from './teach-state.ts';
 import {
+  type NormalizedToolCandidate,
   type SharedCompileContext,
   type ToolCandidate,
   buildSharedCompileContext as buildCandidateSharedCompileContext,
+  closeCandidateSelection,
+  deriveStructuralCandidateDependencies,
   detectToolCandidates,
+  mergeCandidateDependencies,
   primaryToolCandidate,
   sharedContextHasAuth,
 } from './tool-candidates.ts';
@@ -178,6 +186,40 @@ function fileSha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+/** Read replay classifications only when the sidecar belongs to the exact
+ * recording being compiled. Request seq numbers are recording-local, so using
+ * a site-global cache from another recording could fabricate dependency edges. */
+export function loadCachedClassificationsForSession(
+  classPath: string,
+  sessionPath: string,
+): ClassifiedValue[] | undefined {
+  if (!existsSync(classPath) || !existsSync(sessionPath)) return undefined;
+  try {
+    const cached = JSON.parse(readFileSync(classPath, 'utf8')) as {
+      sourceSessionHash?: string;
+      classifications?: ClassifiedValue[];
+    };
+    if (
+      !cached.sourceSessionHash ||
+      cached.sourceSessionHash !== fileSha256(sessionPath) ||
+      !Array.isArray(cached.classifications)
+    ) {
+      return undefined;
+    }
+    return cached.classifications;
+  } catch {
+    return undefined;
+  }
+}
+
+function classificationsPlanningHash(
+  classifications: ClassifiedValue[] | undefined,
+): string | undefined {
+  return classifications
+    ? createHash('sha256').update(JSON.stringify(classifications)).digest('hex')
+    : undefined;
+}
+
 export {
   buildTeachStateFromSession,
   resolveTeachStatePath,
@@ -227,8 +269,10 @@ interface TeachOptions {
   fromSession?: string;
   /** Retain parser.test.ts after successful compile-agent verification. */
   keepTest?: boolean;
-  /** Non-interactive: compile every detected candidate instead of primary only. */
+  /** Backward-compatible explicit spelling of the default all-tools behavior. */
   allTools?: boolean;
+  /** Compile only the primary detected candidate and its upstream dependencies. */
+  primaryTool?: boolean;
   /** Bounded resume: compile exactly one persisted candidate from the retained recording. */
   tool?: string;
   /** Skip the replay-and-diff stage entirely. */
@@ -959,24 +1003,30 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       const replayPromise = (async () => {
         if (!needsReplay) {
           const classPath = pathJoin(localSiteDir(site), '.classifications.json');
-          if (existsSync(classPath)) {
-            try {
-              return JSON.parse(readFileSync(classPath, 'utf8'))
-                .classifications as ClassifiedValue[];
-            } catch {
-              /* proceed without */
-            }
+          const cached = loadCachedClassificationsForSession(classPath, replaySessionPath);
+          if (!cached && existsSync(classPath)) {
+            p.log.warn(
+              'Ignoring cached replay classifications because they were produced from a different or legacy recording.',
+            );
           }
-          return undefined;
+          return cached;
         }
         return siteReplayAndDiff(site, replaySessionPath, mp);
       })();
 
       // Branch B: triage → detect-candidates → user selection (fast, ~30s)
-      type CandidateChainResult = {
-        triageResult?: TriageResult;
-        plans: CandidateCompilePlan[];
-      };
+      type CandidateChainResult =
+        | {
+            triageResult?: TriageResult;
+            plans: CandidateCompilePlan[];
+          }
+        | {
+            triageResult?: TriageResult;
+            detection: Awaited<ReturnType<typeof detectTeachCandidates>>;
+            preliminarySelected: ToolCandidate[];
+            baseState: WorkflowState;
+            pendingKey: string | null;
+          };
       const candidatePromise = (async (): Promise<CandidateChainResult> => {
         if (!needsCandidates) {
           const ws = state.workflows[workflowKey];
@@ -1065,12 +1115,16 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         mp.pause();
         mp.clear();
         spinner.start('Detecting candidate tools');
-        const detection = await detectTeachCandidates({
+        const detected = await detectTeachCandidates({
           sessionPath: compileSessionPath,
           providerName,
           model,
           trustSessionScope: !!localTriagedPath,
         });
+        const detection = {
+          ...detected,
+          candidates: deriveStructuralCandidateDependencies(detected.candidates),
+        };
         spinner.stop(
           `Detected ${detection.candidates.length} candidate tool${detection.candidates.length === 1 ? '' : 's'}.`,
         );
@@ -1078,8 +1132,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         // ── interactive selection — keep mp paused during prompt ──
         const selected = await selectTeachCandidates(detection, opts);
         mp.resume();
-
-        const sharedContext = buildCandidateSharedCompileContext(detection, selected);
 
         // ── Credential prompt (deferred until here so the LLM decides which login succeeded) ──
         const llmLoginSeqs = new Set(detection.sharedContext?.loginRequestSeqs ?? []);
@@ -1147,48 +1199,17 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         if (localTriagedPath) {
           baseState.triagedPath = toRelative(site, localTriagedPath);
         }
-        const candidatePlans = selected.map((candidate) => {
-          checkpoint(site, state, candidate.toolName, {
-            ...baseState,
-            // Preserve prior progress only when re-detecting the SAME recording, so
-            // a re-run of the analysis block (`--from-step`/`--only detect-candidates`,
-            // or interactive redo) doesn't regress a tool that already reached
-            // generate…register (which would break a later `--from-step register`).
-            // A fresh / different recording producing the same toolName must NOT
-            // inherit the old `plan-prereqs` marker, or the alreadyPlanned shortcut
-            // below would skip re-planning and compile against the previous
-            // recording's `_shared/` modules — detectCandidatesCompletedSteps gates
-            // on the recording's sessionPath.
-            completedSteps: detectCandidatesCompletedSteps(
-              state.workflows[candidate.toolName],
-              baseState.sessionPath,
-            ),
-            candidate,
-            sharedContext,
-          });
-          return {
-            workflowKey: candidate.toolName,
-            startFrom: 'generate' as Step,
-            candidate,
-            sharedContext,
-          };
-        });
-
-        if (pendingKey && state.workflows[pendingKey]) {
-          delete state.workflows[pendingKey];
-          saveTeachState(site, state);
-        }
-
         return {
           triageResult: localTriageResult,
-          plans: candidatePlans,
+          detection,
+          preliminarySelected: selected,
+          baseState,
+          pendingKey,
         };
       })();
 
       // Wait for candidate chain (includes user interaction)
       const candidateResult = await candidatePromise;
-      plans = candidateResult.plans;
-
       triageResult = candidateResult.triageResult;
 
       // Wait for replay — may already be done, or show progress while waiting
@@ -1213,6 +1234,74 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
 
       mp.clear();
 
+      if ('plans' in candidateResult) {
+        plans = candidateResult.plans;
+      } else {
+        const finalizedSelection = finalizeTeachCandidateSelection(
+          candidateResult.detection.candidates,
+          candidateResult.preliminarySelected.map((candidate) => candidate.toolName),
+          siteClassifications,
+        );
+        const candidates = finalizedSelection.candidates;
+        const finalDetection = { ...candidateResult.detection, candidates };
+        const notice = formatTeachCandidateAutoAddNotice(finalizedSelection.autoAdded, 'replay');
+        if (notice) p.note(notice.body, notice.title);
+        for (const cycle of finalizedSelection.cycles) {
+          p.log.warn(`Tool dependency cycle detected: ${cycle.join(' → ')}`);
+        }
+
+        const sharedContext = buildCandidateSharedCompileContext(
+          finalDetection,
+          finalizedSelection.selected,
+        );
+        const classificationsHash = classificationsPlanningHash(siteClassifications);
+        const selectedNames = new Set(
+          finalizedSelection.selected.map((candidate) => candidate.toolName),
+        );
+        const priorWorkflowsByToolName = candidateWorkflowsByToolName(
+          state,
+          candidateResult.baseState.sessionPath,
+        );
+        const selectionChanged = candidateSelectionChanged(
+          state,
+          candidateResult.baseState.sessionPath,
+          finalizedSelection.selected,
+          sharedContext,
+          classificationsHash,
+        );
+        pruneUnselectedCandidateWorkflows(
+          state,
+          candidateResult.baseState.sessionPath,
+          selectedNames,
+        );
+        plans = finalizedSelection.selected.map((candidate) => {
+          checkpoint(site, state, candidate.toolName, {
+            ...candidateResult.baseState,
+            // Preserve prior progress only when re-detecting the SAME recording, so
+            // a re-run of the analysis block doesn't regress a tool that already
+            // reached generate…register. A different recording must not inherit the
+            // old plan-prereqs marker or shared-module build.
+            completedSteps: detectCandidatesCompletedSteps(
+              selectionChanged ? undefined : priorWorkflowsByToolName.get(candidate.toolName),
+              candidateResult.baseState.sessionPath,
+            ),
+            candidate,
+            sharedContext,
+            classificationsHash,
+          });
+          return {
+            workflowKey: candidate.toolName,
+            startFrom: 'generate' as Step,
+            candidate,
+            sharedContext,
+          };
+        });
+        if (candidateResult.pendingKey && state.workflows[candidateResult.pendingKey]) {
+          delete state.workflows[candidateResult.pendingKey];
+          saveTeachState(site, state);
+        }
+      }
+
       // Checkpoints — write sequentially after both complete
       updateCandidateStageCheckpoints({
         site,
@@ -1233,12 +1322,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   } else {
     // Resuming from generate or later — load cached data
     const classPath = pathJoin(localSiteDir(site), '.classifications.json');
-    if (existsSync(classPath)) {
-      try {
-        siteClassifications = JSON.parse(readFileSync(classPath, 'utf8')).classifications;
-      } catch {
-        /* proceed without */
-      }
+    if (redactedPath) {
+      siteClassifications = loadCachedClassificationsForSession(classPath, redactedPath);
     }
     const ws = state.workflows[workflowKey];
     const resolvedTriagedPath = resolveWorkflowTriagedPath(site, ws);
@@ -1254,8 +1339,8 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
     // A `--from-step` resume into plan-prereqs/generate reconstructs the prior
     // run's tools from persisted state (shared-module planning may need ≥2 tools).
-    // An explicit --all-tools or interactive resume keeps the full set; documented
-    // non-interactive behavior selects only the persisted primary candidate.
+    // Resume defaults to the full persisted set. --primary-tool narrows to the
+    // primary candidate plus its upstream dependency closure.
     // selectMultiToolResumePlans scopes reconstruction to the same recording as the
     // resume target and to tools that actually reached `startFrom`'s prerequisites,
     // so a sibling from a different run can't be compiled against the wrong session
@@ -1274,6 +1359,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       const selection = selectMultiToolResumePlans(state, workflowKey, startFrom, {
         noInteractive: opts.noInteractive,
         allTools: opts.allTools,
+        primaryTool: opts.primaryTool,
         toolName: opts.tool,
         plannedToolNames,
       });
@@ -1285,6 +1371,9 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
               ? `Skipping tool "${skippedKey}" for --from-step ${startFrom}: it is not in the current build plan.`
               : `Skipping tool "${skippedKey}" for --from-step ${startFrom}: its prior run didn't reach "${startFrom}" — resume an earlier step or re-run it.`,
         );
+      }
+      for (const cycle of selection.cycles) {
+        p.log.warn(`Tool dependency cycle detected: ${cycle.join(' → ')}`);
       }
       for (const sel of selection.plans) {
         allCandidatePlans.push({
@@ -1721,7 +1810,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       sharedTriageResult: triageResult,
       siteClassifications,
       teachCredentials,
-      allTools: opts.allTools,
       buildPlanPath: buildPlanPath || undefined,
       sharedModules: sharedModulesManifest.length > 0 ? sharedModulesManifest : undefined,
       resumeExistingArtifacts: Boolean(opts.fromStep),
@@ -1754,7 +1842,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
   }
 
-  const primaryResult = results[0] as TeachToolResult;
+  const primaryResult = selectPrimaryNamedResult(results, plans) as TeachToolResult;
 
   // ── 6. Platform integration ────────────────────────────────────────
   if (inWindow('register')) {
@@ -1913,47 +2001,133 @@ async function detectTeachCandidates(opts: {
   );
 }
 
-async function selectTeachCandidates(
+export async function selectTeachCandidates(
   detection: Awaited<ReturnType<typeof detectToolCandidates>>,
   opts: TeachOptions,
 ): Promise<ToolCandidate[]> {
   if (detection.candidates.length === 1) return [detection.candidates[0] as ToolCandidate];
 
-  if (opts.noInteractive) {
-    if (opts.allTools) return detection.candidates;
+  if (opts.primaryTool) {
     const primary = primaryToolCandidate(detection);
-    p.log.warn(
-      `Detected ${detection.candidates.length} candidate tools; --no-interactive compiles only primary "${primary.toolName}". Pass --all-tools to compile all.`,
-    );
-    return [primary];
+    const closure = finalizeTeachCandidateSelection(detection.candidates, [primary.toolName]);
+    for (const cycle of closure.cycles) {
+      p.log.warn(`Tool dependency cycle detected: ${cycle.join(' → ')}`);
+    }
+    return closure.selected;
   }
 
+  if (opts.noInteractive) {
+    return detection.candidates;
+  }
+
+  const picker = buildTeachCandidatePicker(detection.candidates);
   const answer = await p.multiselect({
     message:
       'Which tools should Imprint compile from this recording?\n  (press [space] to toggle, [enter] to submit)',
     required: true,
-    initialValues: detection.candidates
-      .filter((candidate) => candidate.primary)
-      .map((c) => c.toolName),
-    options: detection.candidates.map((candidate) => ({
-      value: candidate.toolName,
-      label: `${candidate.toolName}${candidate.primary ? ' (primary)' : ''}`,
-      hint: `${Math.round(candidate.confidence * 100)}% — ${candidate.description}`,
-    })),
+    initialValues: picker.initialValues,
+    options: picker.options,
   });
   if (p.isCancel(answer)) {
     p.outro('Cancelled.');
     process.exit(0);
   }
 
-  const selectedNames = new Set(answer as string[]);
-  const selected = detection.candidates.filter((candidate) =>
-    selectedNames.has(candidate.toolName),
-  );
-  if (selected.length === 0) {
+  const closure = finalizeTeachCandidateSelection(detection.candidates, answer as string[]);
+  if (closure.selected.length === 0) {
     throw new Error('At least one tool candidate must be selected.');
   }
-  return selected;
+  const notice = formatTeachCandidateAutoAddNotice(closure.autoAdded, 'structural');
+  if (notice) p.note(notice.body, notice.title);
+  for (const cycle of closure.cycles) {
+    p.log.warn(`Tool dependency cycle detected: ${cycle.join(' → ')}`);
+  }
+  return closure.selected;
+}
+
+export function buildTeachCandidatePicker(candidates: ToolCandidate[]): {
+  initialValues: string[];
+  options: Array<{ value: string; label: string; hint: string }>;
+} {
+  return {
+    initialValues: candidates.map((candidate) => candidate.toolName),
+    options: candidates.map((candidate) => ({
+      value: candidate.toolName,
+      label: `${candidate.toolName}${candidate.primary ? ' (primary)' : ''}`,
+      hint: [
+        `${Math.round(candidate.confidence * 100)}% — ${candidate.description}`,
+        (candidate.dependsOnTools?.length ?? 0) > 0
+          ? `requires ${candidate.dependsOnTools?.join(', ')}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join(' — '),
+    })),
+  };
+}
+
+/** Merge replay-grounded producer edges using the persisted ClassifiedValue
+ * shape. The token deriver deliberately accepts a value-only projection so raw
+ * recorded values stay out of planner payloads; adapt value1 at this boundary. */
+export function mergeReplayCandidateDependencies(
+  candidates: ToolCandidate[],
+  siteClassifications?: ClassifiedValue[],
+): NormalizedToolCandidate[] {
+  const tokenHints = siteClassifications
+    ? deriveTokenContractHints({
+        selectedTools: candidates,
+        ephemeralValues: siteClassifications.map((classification) => ({
+          classification: classification.classification,
+          originalSeq: classification.originalSeq,
+          location: classification.location,
+          producerSeq: classification.producerSeq,
+          producerPath: classification.producerPath,
+          value: classification.value1,
+        })),
+      })
+    : [];
+  return mergeCandidateDependencies(
+    candidates,
+    tokenHints.map((hint) => ({
+      consumerTool: hint.consumerTool,
+      producerTool: hint.producerTool,
+    })),
+  );
+}
+
+/** Pure boundary between detected candidates, optional replay evidence, and
+ * the exact dependency-closed set handed to checkpointing/build planning. */
+export function finalizeTeachCandidateSelection(
+  candidates: ToolCandidate[],
+  selectedToolNames: Iterable<string>,
+  siteClassifications?: ClassifiedValue[],
+): ReturnType<typeof closeCandidateSelection> & { candidates: NormalizedToolCandidate[] } {
+  const mergedCandidates = mergeReplayCandidateDependencies(candidates, siteClassifications);
+  return {
+    candidates: mergedCandidates,
+    ...closeCandidateSelection(mergedCandidates, selectedToolNames),
+  };
+}
+
+export function formatTeachCandidateAutoAddNotice(
+  autoAdded: ToolCandidate[],
+  source: 'structural' | 'replay',
+): { body: string; title: string } | undefined {
+  if (autoAdded.length === 0) return undefined;
+  return {
+    body: autoAdded.map((candidate) => `  + ${candidate.toolName}`).join('\n'),
+    title: source === 'replay' ? 'Added recorded prerequisites' : 'Added required upstream tools',
+  };
+}
+
+/** Select the compiled result corresponding to the detected primary candidate.
+ * Dependency closure preserves detection order, which need not put primary first. */
+export function selectPrimaryNamedResult<T extends { workflow: { toolName: string } }>(
+  results: readonly T[],
+  plans: ReadonlyArray<{ candidate?: { toolName: string; primary: boolean } }>,
+): T | undefined {
+  const primaryToolName = plans.find((plan) => plan.candidate?.primary)?.candidate?.toolName;
+  return results.find((result) => result.workflow.toolName === primaryToolName) ?? results[0];
 }
 
 async function compileCandidatePlans(opts: {
@@ -1969,10 +2143,6 @@ async function compileCandidatePlans(opts: {
   sharedTriageResult?: TriageResult;
   siteClassifications?: ClassifiedValue[];
   teachCredentials?: { site: string; values: Record<string, string> };
-  /** Mirror of TeachOptions.allTools — when true, partial failures abort
-   *  the run with a non-zero exit so the user notices missing tools instead
-   *  of getting a silent warning. */
-  allTools?: boolean;
   /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). */
   buildPlanPath?: string;
   /** Shared-module build manifest (verified flags) for this site. */
@@ -2142,16 +2312,18 @@ async function compileCandidatePlans(opts: {
     if (first) p.log.warn(`${first.name}: ${first.firstLineError}`);
   }
 
-  // Hard-fail when --all-tools was requested AND any tool failed. Silent
-  // partial compiles ship MCP servers with missing tools; the user only
-  // notices later when an LLM tries to call one that doesn't exist.
-  if (opts.allTools && summary.failures.length > 0) {
-    throw new Error(
-      `--all-tools requested but ${summary.failures.length} of ${opts.plans.length} tools failed to compile. See the summary above; re-run \`imprint teach\` after addressing the failures (or omit --all-tools to ship only what compiled).`,
-    );
-  }
+  assertCompleteSelectedToolSet(summary.failures.length, opts.plans.length);
 
   return summary.successes;
+}
+
+/** Enforce that compilation never ships a partial selected set. A missing
+ * producer can make every otherwise-successful consumer unusable. */
+export function assertCompleteSelectedToolSet(failureCount: number, selectedCount: number): void {
+  if (failureCount === 0) return;
+  throw new Error(
+    `Selected tool set is incomplete: ${failureCount} of ${selectedCount} tools failed to compile. See the summary above and re-run \`imprint teach\` after addressing the failures.`,
+  );
 }
 
 /** Pure summarizer — extracted so unit tests can drive arbitrary outcome
@@ -2488,7 +2660,10 @@ async function siteReplayAndDiff(
     };
 
     const classPath = pathJoin(localSiteDir(site), '.classifications.json');
-    writeFileSync(classPath, JSON.stringify(diffResult, null, 2));
+    writeFileSync(
+      classPath,
+      JSON.stringify({ ...diffResult, sourceSessionHash: fileSha256(sessionPath) }, null, 2),
+    );
 
     mp.clear();
     mp.remove('replay');

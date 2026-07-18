@@ -3,6 +3,9 @@ import {
   SharedCompileContextSchema,
   buildSharedCompileContext,
   buildToolCandidatePayload,
+  closeCandidateSelection,
+  deriveStructuralCandidateDependencies,
+  mergeCandidateDependencies,
   primaryToolCandidate,
   sharedContextHasAuth,
   validateToolCandidateDetection,
@@ -502,6 +505,101 @@ describe('tool candidate validation', () => {
     });
 
     expect(detection.candidates[0]?.likelyParams[0]?.type).toBeUndefined();
+  });
+
+  it('defaults legacy candidate dependency metadata to an empty list', () => {
+    const detection = validateToolCandidateDetection({
+      sharedContext: {},
+      candidates: [
+        {
+          toolName: 'search_items',
+          description: 'Search items',
+          rationale: 'primary intent',
+          confidence: 0.9,
+          primary: true,
+          requestSeqs: [2],
+        },
+      ],
+    });
+    expect(detection.candidates[0]?.dependsOnTools).toEqual([]);
+  });
+});
+
+describe('candidate dependency graph', () => {
+  const candidate = (toolName: string, requestSeqs: number[], dependencySeqs: number[] = []) => {
+    const detection = validateToolCandidateDetection({
+      sharedContext: {},
+      candidates: [
+        {
+          toolName,
+          description: toolName,
+          rationale: toolName,
+          confidence: 0.9,
+          primary: true,
+          requestSeqs,
+          dependencySeqs,
+        },
+      ],
+    });
+    const result = detection.candidates[0];
+    if (!result) throw new Error('candidate fixture was unexpectedly empty');
+    return result;
+  };
+
+  it('derives direct structural edges and ignores unowned, self, and ambiguous seqs', () => {
+    const graph = deriveStructuralCandidateDependencies([
+      candidate('lookup_items', [1]),
+      candidate('search_items', [2], [1, 2, 99]),
+      candidate('shared_a', [4]),
+      candidate('shared_b', [4]),
+      candidate('get_details', [3], [2, 4]),
+    ]);
+    expect(graph.map((item) => [item.toolName, item.dependsOnTools])).toEqual([
+      ['lookup_items', []],
+      ['search_items', ['lookup_items']],
+      ['shared_a', []],
+      ['shared_b', []],
+      ['get_details', ['search_items']],
+    ]);
+  });
+
+  it('merges replay edges, computes transitive closure, and preserves detection order', () => {
+    const structural = deriveStructuralCandidateDependencies([
+      candidate('get_details', [3], [2]),
+      candidate('lookup_items', [1]),
+      candidate('search_items', [2], [1]),
+      candidate('independent_tool', [4]),
+    ]);
+    const merged = mergeCandidateDependencies(structural, [
+      { consumerTool: 'get_details', producerTool: 'search_items' },
+      { consumerTool: 'missing', producerTool: 'lookup_items' },
+      { consumerTool: 'search_items', producerTool: 'search_items' },
+    ]);
+    const closure = closeCandidateSelection(merged, ['get_details']);
+    expect(closure.selected.map((item) => item.toolName)).toEqual([
+      'get_details',
+      'lookup_items',
+      'search_items',
+    ]);
+    expect(closure.autoAdded.map((item) => item.toolName)).toEqual([
+      'lookup_items',
+      'search_items',
+    ]);
+    expect(closure.cycles).toEqual([]);
+  });
+
+  it('terminates deterministically on cycles and includes every member once', () => {
+    const graph = mergeCandidateDependencies(
+      [candidate('tool_a', [1]), candidate('tool_b', [2])],
+      [
+        { consumerTool: 'tool_a', producerTool: 'tool_b' },
+        { consumerTool: 'tool_b', producerTool: 'tool_a' },
+      ],
+    );
+    const closure = closeCandidateSelection(graph, ['tool_a']);
+    expect(closure.selected.map((item) => item.toolName)).toEqual(['tool_a', 'tool_b']);
+    expect(closure.autoAdded.map((item) => item.toolName)).toEqual(['tool_b']);
+    expect(closure.cycles).toEqual([['tool_a', 'tool_b', 'tool_a']]);
   });
 });
 

@@ -48,7 +48,7 @@ Both are auto-discovered by the cron daemon and the MCP server, which dispatch t
 ```
 src/imprint/
 │ ── Orchestration ──
-├── teach.ts             End-to-end pipeline: record → redact → [replay-and-diff ‖ triage → detect → select] → plan-prereqs → (per-tool: plan-tool → generate) → compile-playbook → emit → register
+├── teach.ts             End-to-end pipeline: record → redact → [replay-and-diff ‖ triage → detect → dependency-aware select] → close replay edges → plan-prereqs → (per-tool: plan-tool → generate) → compile-playbook → emit → register
 ├── teach-plan.ts        plan-prereqs step: build plan + level-parallel shared-module build before the per-tool fan-out (multi-tool only)
 ├── tool-plan.ts         plan-tool step: per-tool implementation plan (param→field map, request/parse plan, module imports) injected into the compile agent
 ├── integrations.ts      Platform registration (Claude Code, Codex, Claude Desktop, OpenClaw, Hermes)
@@ -301,7 +301,17 @@ Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts
 
 ## Multi-tool shared modules (plan-prereqs)
 
-When one recording compiles into **two or more** tools, `imprint teach` inserts a `plan-prereqs` step between candidate selection and the per-tool compile fan-out. Single-tool recordings skip it entirely (the path is unchanged). Set `IMPRINT_NO_BUILD_PLAN=1` to disable it and compile every tool independently.
+Candidate selection is graph-aware. `dependencySeqs` whose request has one
+unambiguous candidate owner create early consumer→producer edges for the picker;
+shared, unowned, and self-owned request seqs do not. After replay finishes,
+`deriveTokenContractHints` runs against the full detected candidate set and adds
+grounded producer-token edges before candidate checkpoints are written. Every
+selection is then closed transitively over those dependencies. All candidates
+start selected, including non-interactive runs; `--primary-tool` selects the
+primary candidate plus its prerequisites. Dependency cycles are retained once
+and reported instead of recursing indefinitely.
+
+When the resulting selection contains **two or more** tools, `imprint teach` inserts a `plan-prereqs` step between candidate selection and the per-tool compile fan-out. Single-tool recordings skip it entirely (the path is unchanged). Set `IMPRINT_NO_BUILD_PLAN=1` to disable it and compile every tool independently.
 
 The step does two things, once per teach, before the fan-out:
 

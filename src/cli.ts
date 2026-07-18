@@ -40,6 +40,45 @@ export function parseDuration(dur: string): number | null {
   return num;
 }
 
+export type TeachSelectionMode =
+  | 'tool'
+  | 'primary'
+  | 'all-explicit'
+  | 'all-default'
+  | 'interactive-default-all';
+
+/** Pure CLI selection-mode resolver shared by validation and telemetry. */
+export function resolveTeachSelectionMode(opts: {
+  tool?: string;
+  primaryTool?: boolean;
+  allTools?: boolean;
+  noInteractive?: boolean;
+}): { mode: TeachSelectionMode; error?: string } {
+  if (opts.tool && opts.allTools) {
+    return { mode: 'tool', error: 'error: --tool cannot be combined with --all-tools' };
+  }
+  if (opts.tool && opts.primaryTool) {
+    return { mode: 'tool', error: 'error: --tool cannot be combined with --primary-tool' };
+  }
+  if (opts.allTools && opts.primaryTool) {
+    return {
+      mode: 'primary',
+      error: 'error: --all-tools cannot be combined with --primary-tool',
+    };
+  }
+  return {
+    mode: opts.tool
+      ? 'tool'
+      : opts.primaryTool
+        ? 'primary'
+        : opts.allTools
+          ? 'all-explicit'
+          : opts.noInteractive
+            ? 'all-default'
+            : 'interactive-default-all',
+  };
+}
+
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
 
 USAGE
@@ -112,7 +151,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--all-tools] [--tool <toolName>] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay] [--from-step <step>] [--to-step <step>] [--only <step>]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--primary-tool | --all-tools] [--tool <toolName>] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay] [--from-step <step>] [--to-step <step>] [--only <step>]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
@@ -123,13 +162,15 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
       {
         name: '--no-interactive',
-        description:
-          'Run without prompts; compile the primary detected tool and print integration snippets.',
+        description: 'Run without prompts; compile all detected tools by default.',
       },
       {
         name: '--all-tools',
-        description:
-          'With --no-interactive, compile every detected candidate tool instead of only the primary.',
+        description: 'Explicitly compile all detected tools (the default; retained for scripts).',
+      },
+      {
+        name: '--primary-tool',
+        description: 'Compile only the primary detected tool and its upstream dependencies.',
       },
       {
         name: '--tool <toolName>',
@@ -1423,6 +1464,7 @@ async function main(argv: string[]): Promise<number> {
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
           'all-tools': { type: 'boolean' },
+          'primary-tool': { type: 'boolean' },
           tool: { type: 'string' },
           provider: { type: 'string' },
           model: { type: 'string' },
@@ -1464,8 +1506,14 @@ async function main(argv: string[]): Promise<number> {
           return 2;
         }
       }
-      if (values.tool && values['all-tools']) {
-        console.error('error: --tool cannot be combined with --all-tools');
+      const selection = resolveTeachSelectionMode({
+        tool: values.tool,
+        primaryTool: values['primary-tool'],
+        allTools: values['all-tools'],
+        noInteractive: values['no-interactive'],
+      });
+      if (selection.error) {
+        console.error(selection.error);
         return 2;
       }
 
@@ -1500,6 +1548,7 @@ async function main(argv: string[]): Promise<number> {
       const ctrl = new AbortController();
       const onSigint = (): void => ctrl.abort();
       process.once('SIGINT', onSigint);
+      const teachSelectionMode = selection.mode;
 
       try {
         const { teach } = await import('./imprint/teach.ts');
@@ -1513,7 +1562,10 @@ async function main(argv: string[]): Promise<number> {
             'imprint.provider': values.provider ?? 'auto',
             'imprint.model': values.model ?? 'auto',
             'imprint.timeout_ms': teachTimeoutMs ?? 'default',
-            'imprint.all_tools': values['all-tools'] ?? false,
+            'imprint.all_tools':
+              teachSelectionMode === 'all-explicit' || teachSelectionMode === 'all-default',
+            'imprint.selection_mode': teachSelectionMode,
+            'imprint.primary_tool': values['primary-tool'] ?? false,
             'imprint.tool': values.tool,
             'imprint.no_interactive': values['no-interactive'] ?? false,
             'imprint.skip_replay': values['skip-replay'] ?? false,
@@ -1531,6 +1583,7 @@ async function main(argv: string[]): Promise<number> {
               maxDurationMs: teachTimeoutMs,
               keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
               allTools: values['all-tools'],
+              primaryTool: values['primary-tool'],
               tool: values.tool,
               skipReplay: values['skip-replay'],
               fromStep: fromStepArg,

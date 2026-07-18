@@ -81,6 +81,11 @@ Pick a site you want to automate. Internal admin panels, dashboards, and authed 
 
 Pick a short, descriptive label for `<site>` — it becomes the directory name for generated tools and private recordings under `~/.imprint/` (or `IMPRINT_HOME`). Examples: `google-flights`, `southwest`, `company-dashboard`.
 
+`imprint teach` selects every detected tool by default, including in
+`--no-interactive` mode. If you choose a downstream tool, Imprint also selects
+the upstream tools that produce its required IDs or tokens. Pass
+`--primary-tool` to build only the primary tool and that prerequisite closure.
+
 ```bash
 # 1. Record yourself doing the thing once
 imprint record google-flights --url https://flights.google.com

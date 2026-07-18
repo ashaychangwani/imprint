@@ -11,9 +11,12 @@ import {
   type WorkflowState,
   analysisBlockRunsForWindow,
   assertResumableAt,
+  candidateSelectionChanged,
+  candidateWorkflowsByToolName,
   detectCandidatesCompletedSteps,
   isResumableAt,
   mergeAnalysisCompletedSteps,
+  pruneUnselectedCandidateWorkflows,
   resolveStepStartTarget,
   resolveTeachPhaseWindow,
   selectMultiToolResumePlans,
@@ -242,7 +245,7 @@ describe('selectMultiToolResumePlans (multi-tool --from-step reconstruction)', (
     expect(sel.skipped).toEqual([]);
   });
 
-  it('keeps non-interactive resumes primary-only unless --all-tools is explicit', () => {
+  it('keeps every eligible tool by default and narrows --primary-tool to its closure', () => {
     const state: TeachState = {
       workflows: {
         'tool-secondary': {
@@ -250,43 +253,73 @@ describe('selectMultiToolResumePlans (multi-tool --from-step reconstruction)', (
           candidate: {
             toolName: 'tool-secondary',
             primary: false,
-          } as WorkflowState['candidate'],
+            dependsOnTools: [],
+          } as unknown as WorkflowState['candidate'],
         },
         'tool-primary': {
           ...toolWs({ candidate: 'tool-primary' }),
           candidate: {
             toolName: 'tool-primary',
             primary: true,
-          } as WorkflowState['candidate'],
+            dependsOnTools: ['tool-upstream'],
+          } as unknown as WorkflowState['candidate'],
+        },
+        'tool-upstream': {
+          ...toolWs({ candidate: 'tool-upstream' }),
+          candidate: {
+            toolName: 'tool-upstream',
+            primary: false,
+            dependsOnTools: [],
+          } as unknown as WorkflowState['candidate'],
         },
       },
     };
 
-    const primaryOnly = selectMultiToolResumePlans(state, 'tool-secondary', 'generate', {
-      noInteractive: true,
-    });
-    expect(primaryOnly.plans.map((plan) => plan.workflowKey)).toEqual(['tool-primary']);
-
     const all = selectMultiToolResumePlans(state, 'tool-secondary', 'generate', {
       noInteractive: true,
-      allTools: true,
     });
     expect(all.plans.map((plan) => plan.workflowKey).sort()).toEqual([
       'tool-primary',
       'tool-secondary',
+      'tool-upstream',
+    ]);
+
+    const primaryOnly = selectMultiToolResumePlans(state, 'tool-secondary', 'generate', {
+      noInteractive: true,
+      primaryTool: true,
+    });
+    expect(primaryOnly.plans.map((plan) => plan.workflowKey).sort()).toEqual([
+      'tool-primary',
+      'tool-upstream',
     ]);
   });
 
-  it('lets an explicit tool override the primary-only non-interactive default', () => {
+  it('closes an explicit resumed downstream tool over its prerequisites', () => {
     const state: TeachState = {
       workflows: {
         primary: {
           ...toolWs({ candidate: 'search_items' }),
-          candidate: { toolName: 'search_items', primary: true } as WorkflowState['candidate'],
+          candidate: {
+            toolName: 'search_items',
+            primary: true,
+            dependsOnTools: ['lookup_items'],
+          } as unknown as WorkflowState['candidate'],
         },
         consumer: {
           ...toolWs({ candidate: 'get_details' }),
-          candidate: { toolName: 'get_details', primary: false } as WorkflowState['candidate'],
+          candidate: {
+            toolName: 'get_details',
+            primary: false,
+            dependsOnTools: ['search_items'],
+          } as unknown as WorkflowState['candidate'],
+        },
+        lookup: {
+          ...toolWs({ candidate: 'lookup_items' }),
+          candidate: {
+            toolName: 'lookup_items',
+            primary: false,
+            dependsOnTools: [],
+          } as unknown as WorkflowState['candidate'],
         },
       },
     };
@@ -294,7 +327,139 @@ describe('selectMultiToolResumePlans (multi-tool --from-step reconstruction)', (
       noInteractive: true,
       toolName: 'get_details',
     });
-    expect(selected.plans.map((plan) => plan.workflowKey)).toEqual(['consumer']);
+    expect(selected.plans.map((plan) => plan.workflowKey).sort()).toEqual([
+      'consumer',
+      'lookup',
+      'primary',
+    ]);
+  });
+
+  it('fails when a selected tool has an unavailable prerequisite', () => {
+    const state: TeachState = {
+      workflows: {
+        consumer: {
+          ...toolWs({ candidate: 'get_details' }),
+          candidate: {
+            toolName: 'get_details',
+            primary: true,
+            dependsOnTools: ['search_items'],
+          } as unknown as WorkflowState['candidate'],
+        },
+      },
+    };
+    expect(() =>
+      selectMultiToolResumePlans(state, 'consumer', 'generate', {
+        toolName: 'get_details',
+      }),
+    ).toThrow(/required upstream tool "search_items" is unavailable.*detect-candidates/);
+  });
+
+  it('fails default and single-eligible primary resumes when a prerequisite was filtered out', () => {
+    const state: TeachState = {
+      workflows: {
+        consumer: {
+          ...toolWs({ candidate: 'get_details' }),
+          candidate: {
+            toolName: 'get_details',
+            primary: true,
+            dependsOnTools: ['search_items'],
+          } as unknown as WorkflowState['candidate'],
+        },
+        producer: {
+          ...toolWs({ candidate: 'search_items', steps: ['record', 'redact'] }),
+          candidate: {
+            toolName: 'search_items',
+            primary: false,
+            dependsOnTools: [],
+          } as unknown as WorkflowState['candidate'],
+        },
+      },
+    };
+
+    expect(() => selectMultiToolResumePlans(state, 'consumer', 'generate')).toThrow(
+      /required upstream tool "search_items" is unavailable/,
+    );
+    expect(() =>
+      selectMultiToolResumePlans(state, 'consumer', 'generate', { primaryTool: true }),
+    ).toThrow(/required upstream tool "search_items" is unavailable/);
+  });
+
+  it('returns dependency-cycle diagnostics for resumed selections', () => {
+    const state: TeachState = {
+      workflows: {
+        events: {
+          ...toolWs({ candidate: 'list_events' }),
+          candidate: {
+            toolName: 'list_events',
+            primary: true,
+            dependsOnTools: ['get_place'],
+          } as WorkflowState['candidate'],
+        },
+        place: {
+          ...toolWs({ candidate: 'get_place' }),
+          candidate: {
+            toolName: 'get_place',
+            primary: false,
+            dependsOnTools: ['list_events'],
+          } as unknown as WorkflowState['candidate'],
+        },
+      },
+    };
+
+    const selection = selectMultiToolResumePlans(state, 'events', 'generate', {
+      primaryTool: true,
+    });
+    expect(selection.cycles).toEqual([['list_events', 'get_place', 'list_events']]);
+  });
+
+  it('fails --primary-tool when the persisted primary is not resumable', () => {
+    const state: TeachState = {
+      workflows: {
+        primary: {
+          ...toolWs({ candidate: 'search_items', steps: [...SHARED] }),
+          candidate: {
+            toolName: 'search_items',
+            primary: true,
+            dependsOnTools: [],
+          } as unknown as WorkflowState['candidate'],
+        },
+        secondary: {
+          ...toolWs({ candidate: 'get_details', steps: [...SHARED, 'generate'] }),
+          candidate: {
+            toolName: 'get_details',
+            primary: false,
+            dependsOnTools: [],
+          } as unknown as WorkflowState['candidate'],
+        },
+      },
+    };
+
+    expect(() =>
+      selectMultiToolResumePlans(state, 'secondary', 'compile-playbook', {
+        primaryTool: true,
+      }),
+    ).toThrow(/Cannot resume primary tool "search_items".*not-resumable/);
+  });
+
+  it('does not fall back to a target excluded from the persisted build plan', () => {
+    const state: TeachState = {
+      workflows: {
+        consumer: {
+          ...toolWs({ candidate: 'get_details' }),
+          candidate: {
+            toolName: 'get_details',
+            primary: true,
+            dependsOnTools: [],
+          } as unknown as WorkflowState['candidate'],
+        },
+      },
+    };
+
+    expect(() =>
+      selectMultiToolResumePlans(state, 'consumer', 'generate', {
+        plannedToolNames: new Set(['different_tool']),
+      }),
+    ).toThrow(/target is not-in-build-plan/);
   });
 
   it('excludes stale same-recording candidates that are absent from the current build plan', () => {
@@ -352,6 +517,171 @@ describe('selectMultiToolResumePlans (multi-tool --from-step reconstruction)', (
     const sel = selectMultiToolResumePlans(state, 'tool-a', 'generate');
     expect(sel.plans.map((p) => p.workflowKey)).toEqual(['tool-a']);
     expect(sel.skipped).toEqual([]);
+  });
+});
+
+describe('candidate re-detection state reconciliation', () => {
+  const candidate = (
+    toolName: string,
+    dependsOnTools: string[] = [],
+  ): NonNullable<WorkflowState['candidate']> =>
+    ({
+      toolName,
+      primary: toolName === 'search_items',
+      requestSeqs: toolName === 'search_items' ? [1] : [2],
+      dependencySeqs: [],
+      dependsOnTools,
+      likelyParams: [],
+      expectedOutput: '',
+    }) as unknown as NonNullable<WorkflowState['candidate']>;
+
+  it('removes only unselected candidates from the same recording', () => {
+    const state: TeachState = {
+      workflows: {
+        search_items: {
+          ...ws(ANALYSIS_COMPLETED_STEPS),
+          candidate: candidate('search_items'),
+        },
+        get_details: {
+          ...ws(ANALYSIS_COMPLETED_STEPS),
+          candidate: candidate('get_details'),
+        },
+        other_recording: {
+          ...ws(ANALYSIS_COMPLETED_STEPS),
+          sessionPath: 'sessions/other.json',
+          candidate: candidate('other_tool'),
+        },
+      },
+    };
+
+    expect(
+      pruneUnselectedCandidateWorkflows(state, 'sessions/rec.json', new Set(['search_items'])),
+    ).toEqual(['get_details']);
+    expect(Object.keys(state.workflows).sort()).toEqual(['other_recording', 'search_items']);
+  });
+
+  it('removes selected legacy aliases before canonical checkpointing and deduplicates resume', () => {
+    const state: TeachState = {
+      workflows: {
+        legacy_alias: {
+          ...ws(ANALYSIS_COMPLETED_STEPS),
+          candidate: candidate('search_items'),
+        },
+      },
+    };
+
+    expect(
+      pruneUnselectedCandidateWorkflows(state, 'sessions/rec.json', new Set(['search_items'])),
+    ).toEqual(['legacy_alias']);
+    state.workflows.search_items = {
+      ...ws(ANALYSIS_COMPLETED_STEPS),
+      candidate: candidate('search_items'),
+    };
+    // Defensively retain a duplicate alias to verify resume cannot fan out the
+    // same candidate twice even if externally migrated state contains one.
+    state.workflows.legacy_alias = {
+      ...ws(ANALYSIS_COMPLETED_STEPS),
+      candidate: candidate('search_items'),
+    };
+
+    const selection = selectMultiToolResumePlans(state, 'legacy_alias', 'generate');
+    expect(selection.plans.map((plan) => plan.workflowKey)).toEqual(['search_items']);
+  });
+
+  it('preserves unchanged progress from a legacy alias while canonicalizing its key', () => {
+    const completedSteps = [
+      ...ANALYSIS_COMPLETED_STEPS,
+      'generate',
+      'compile-playbook',
+    ] as WorkflowState['completedSteps'];
+    const state: TeachState = {
+      workflows: {
+        legacy_alias: {
+          ...ws(completedSteps),
+          candidate: candidate('search_items'),
+        },
+      },
+    };
+    const prior = candidateWorkflowsByToolName(state, 'sessions/rec.json');
+
+    pruneUnselectedCandidateWorkflows(state, 'sessions/rec.json', new Set(['search_items']));
+    const canonicalSteps = detectCandidatesCompletedSteps(
+      prior.get('search_items'),
+      'sessions/rec.json',
+    );
+    state.workflows.search_items = {
+      ...ws(canonicalSteps),
+      candidate: candidate('search_items'),
+    };
+
+    expect(canonicalSteps).toEqual(completedSteps);
+    expect(Object.keys(state.workflows)).toEqual(['search_items']);
+  });
+
+  it('invalidates prior planning progress when the selected set or dependency graph changes', () => {
+    const state: TeachState = {
+      workflows: {
+        search_items: {
+          ...ws(ANALYSIS_COMPLETED_STEPS),
+          candidate: candidate('search_items'),
+        },
+        get_details: {
+          ...ws(ANALYSIS_COMPLETED_STEPS),
+          candidate: candidate('get_details'),
+        },
+      },
+    };
+
+    expect(
+      candidateSelectionChanged(state, 'sessions/rec.json', [
+        candidate('search_items'),
+        candidate('get_details'),
+      ]),
+    ).toBe(false);
+    expect(candidateSelectionChanged(state, 'sessions/rec.json', [candidate('search_items')])).toBe(
+      true,
+    );
+    expect(
+      candidateSelectionChanged(state, 'sessions/rec.json', [
+        candidate('search_items'),
+        candidate('get_details', ['search_items']),
+      ]),
+    ).toBe(true);
+    expect(
+      candidateSelectionChanged(state, 'sessions/rec.json', [
+        candidate('search_items'),
+        {
+          ...candidate('get_details'),
+          representativeSeqs: [99],
+          eventSeqs: [100],
+          description: 'changed planning evidence',
+        },
+      ]),
+    ).toBe(true);
+    expect(
+      candidateSelectionChanged(
+        state,
+        'sessions/rec.json',
+        [candidate('search_items'), candidate('get_details')],
+        {
+          loginRequestSeqs: [7],
+          credentialNames: [],
+          tokenExtractionNotes: '',
+          sharedHelperNotes: '',
+          authRequestSeqs: [],
+          authNotes: '',
+        },
+      ),
+    ).toBe(true);
+    expect(
+      candidateSelectionChanged(
+        state,
+        'sessions/rec.json',
+        [candidate('search_items'), candidate('get_details')],
+        undefined,
+        'new-classification-hash',
+      ),
+    ).toBe(true);
   });
 });
 
