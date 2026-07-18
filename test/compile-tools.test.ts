@@ -95,6 +95,7 @@ describe('compile tools state hints', () => {
           requestSeqs: [],
           representativeSeqs: [],
           dependencySeqs: [],
+          dependsOnTools: [],
           eventSeqs: [],
           expectedOutput: 'Matching items',
           likelyParams: [],
@@ -258,6 +259,7 @@ describe('compile tools request compaction', () => {
         expectedOutput: 'items',
         likelyParams: [],
         dependencySeqs: [],
+        dependsOnTools: [],
       },
       sharedContext: {
         loginRequestSeqs: [4],
@@ -323,6 +325,7 @@ describe('compile tools request compaction', () => {
         expectedOutput: 'items',
         likelyParams: [],
         dependencySeqs: [1],
+        dependsOnTools: [],
       },
     }).find((tool) => tool.name === 'read_session_summary');
     if (!readSummary) throw new Error('read_session_summary tool missing');
@@ -396,6 +399,7 @@ describe('compile tools representativeSeqs', () => {
         expectedOutput: 'suggestions',
         likelyParams: [],
         dependencySeqs: [1],
+        dependsOnTools: [],
       },
     }).find((tool) => tool.name === 'read_session_summary');
     if (!readSummary) throw new Error('read_session_summary tool missing');
@@ -463,6 +467,7 @@ describe('compile tools representativeSeqs', () => {
         expectedOutput: 'confirmation',
         likelyParams: [],
         dependencySeqs: [],
+        dependsOnTools: [],
       },
     }).find((tool) => tool.name === 'read_session_summary');
     if (!readSummary) throw new Error('read_session_summary tool missing');
@@ -520,6 +525,7 @@ describe('compile tools representativeSeqs', () => {
         expectedOutput: 'data',
         likelyParams: [],
         dependencySeqs: [],
+        dependsOnTools: [],
       },
     }).find((tool) => tool.name === 'read_session_summary');
     if (!readSummary) throw new Error('read_session_summary tool missing');
@@ -2735,6 +2741,7 @@ describe('buildInlineData form-encoded decoding', () => {
         expectedOutput: 'test',
         likelyParams: [],
         dependencySeqs: [],
+        dependsOnTools: [],
       },
     });
 
@@ -2794,6 +2801,7 @@ describe('buildInlineData form-encoded decoding', () => {
         expectedOutput: 'test',
         likelyParams: [],
         dependencySeqs: [],
+        dependsOnTools: [],
       },
     });
 

@@ -215,6 +215,7 @@ describe('detectedButUnemittedTools', () => {
             expectedOutput: 'items',
             likelyParams: [],
             dependencySeqs: [],
+            dependsOnTools: [],
           },
         },
         failed: {
@@ -242,6 +243,7 @@ describe('detectedButUnemittedTools', () => {
             expectedOutput: 'details',
             likelyParams: [],
             dependencySeqs: [],
+            dependsOnTools: [],
           },
         },
         stale: {
@@ -261,6 +263,7 @@ describe('detectedButUnemittedTools', () => {
             expectedOutput: 'old',
             likelyParams: [],
             dependencySeqs: [],
+            dependsOnTools: [],
           },
         },
       },
@@ -299,6 +302,7 @@ describe('detectedButUnemittedTools', () => {
             expectedOutput: 'items',
             likelyParams: [],
             dependencySeqs: [],
+            dependsOnTools: [],
           },
         },
       },

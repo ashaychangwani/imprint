@@ -133,6 +133,9 @@ export const ToolCandidateSchema = z.object({
   expectedOutput: z.string().default(''),
   likelyParams: z.array(CandidateParamSchema).default([]),
   dependencySeqs: z.array(z.number().int().nonnegative()).default([]),
+  /** Direct user-visible tool prerequisites. A consumer may only be selected
+   *  together with the transitive closure of these producer tools. */
+  dependsOnTools: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/)).default([]),
 });
 export type ToolCandidate = z.infer<typeof ToolCandidateSchema>;
 
@@ -326,6 +329,124 @@ export function primaryToolCandidate(detection: ToolCandidateDetection): ToolCan
     throw new Error('candidate detection has no primary candidate');
   }
   return primary;
+}
+
+/** Add deterministic candidate-level dependencies from request evidence.
+ * A dependency request creates an edge only when exactly one candidate owns
+ * that request seq. Shared/ambiguous ownership, unowned auth/bootstrap seqs,
+ * and self-owned seqs deliberately create no edge. */
+export function deriveStructuralCandidateDependencies(
+  candidates: ToolCandidate[],
+): ToolCandidate[] {
+  const ownersBySeq = new Map<number, Set<string>>();
+  for (const candidate of candidates) {
+    for (const seq of candidate.requestSeqs) {
+      const owners = ownersBySeq.get(seq) ?? new Set<string>();
+      owners.add(candidate.toolName);
+      ownersBySeq.set(seq, owners);
+    }
+  }
+
+  const edges: Array<{ consumerTool: string; producerTool: string }> = [];
+  for (const candidate of candidates) {
+    for (const seq of candidate.dependencySeqs) {
+      const owners = ownersBySeq.get(seq);
+      if (!owners || owners.size !== 1) continue;
+      const producerTool = owners.values().next().value as string | undefined;
+      if (!producerTool || producerTool === candidate.toolName) continue;
+      edges.push({ consumerTool: candidate.toolName, producerTool });
+    }
+  }
+  return mergeCandidateDependencies(candidates, edges);
+}
+
+/** Merge grounded producer edges into candidate metadata. Unknown tools and
+ * self-edges are ignored; dependency names are de-duplicated and normalized to
+ * candidate detection order for stable persistence and display. */
+export function mergeCandidateDependencies(
+  candidates: ToolCandidate[],
+  edges: ReadonlyArray<{ consumerTool: string; producerTool: string }>,
+): ToolCandidate[] {
+  const names = new Set(candidates.map((candidate) => candidate.toolName));
+  const dependencySets = new Map<string, Set<string>>();
+  for (const candidate of candidates) {
+    dependencySets.set(
+      candidate.toolName,
+      new Set(
+        candidate.dependsOnTools.filter((name) => names.has(name) && name !== candidate.toolName),
+      ),
+    );
+  }
+  for (const edge of edges) {
+    if (
+      edge.consumerTool === edge.producerTool ||
+      !names.has(edge.consumerTool) ||
+      !names.has(edge.producerTool)
+    ) {
+      continue;
+    }
+    dependencySets.get(edge.consumerTool)?.add(edge.producerTool);
+  }
+
+  const order = new Map(candidates.map((candidate, index) => [candidate.toolName, index]));
+  return candidates.map((candidate) => ({
+    ...candidate,
+    dependsOnTools: [...(dependencySets.get(candidate.toolName) ?? [])].sort(
+      (a, b) =>
+        (order.get(a) ?? Number.MAX_SAFE_INTEGER) - (order.get(b) ?? Number.MAX_SAFE_INTEGER),
+    ),
+  }));
+}
+
+interface CandidateSelectionClosure {
+  selected: ToolCandidate[];
+  autoAdded: ToolCandidate[];
+  /** Cycles encountered while walking selected dependencies. Each path repeats
+   *  its first name at the end, e.g. ["a", "b", "a"]. */
+  cycles: string[][];
+}
+
+/** Return the transitive dependency closure in original detection order.
+ * Cycles are included exactly once and reported, never treated as recursion
+ * errors. Unknown selected/dependency names are ignored. */
+export function closeCandidateSelection(
+  candidates: ToolCandidate[],
+  selectedToolNames: Iterable<string>,
+): CandidateSelectionClosure {
+  const byName = new Map(candidates.map((candidate) => [candidate.toolName, candidate]));
+  const initiallySelected = new Set([...selectedToolNames].filter((name) => byName.has(name)));
+  const included = new Set<string>();
+  const visiting: string[] = [];
+  const cycles: string[][] = [];
+  const cycleKeys = new Set<string>();
+
+  const include = (name: string): void => {
+    if (included.has(name)) return;
+    const candidate = byName.get(name);
+    if (!candidate) return;
+    const cycleStart = visiting.indexOf(name);
+    if (cycleStart >= 0) {
+      const cycle = [...visiting.slice(cycleStart), name];
+      const key = [...new Set(cycle.slice(0, -1))].sort().join('\u0000');
+      if (!cycleKeys.has(key)) {
+        cycleKeys.add(key);
+        cycles.push(cycle);
+      }
+      return;
+    }
+    visiting.push(name);
+    for (const dependency of candidate.dependsOnTools) include(dependency);
+    visiting.pop();
+    included.add(name);
+  };
+
+  for (const name of initiallySelected) include(name);
+  const selected = candidates.filter((candidate) => included.has(candidate.toolName));
+  return {
+    selected,
+    autoAdded: selected.filter((candidate) => !initiallySelected.has(candidate.toolName)),
+    cycles,
+  };
 }
 
 export function buildSharedCompileContext(

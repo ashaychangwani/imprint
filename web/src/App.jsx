@@ -28,7 +28,7 @@ const pipeline = [
   {
     step: '02',
     title: 'Compile state',
-    body: 'Generate a state-aware API workflow plus a DOM playbook fallback in one tool directory. When a recording yields several tools, shared signing and parsing modules are built and verified once, then reused; each tool is planned before it is compiled so the generated code follows a vetted plan.',
+    body: 'Generate a state-aware API workflow plus a DOM playbook fallback in one tool directory. When a recording yields several tools, all are selected by default and required upstream producers are kept with their consumers; shared signing and parsing modules are then built and verified once, reused, and followed by each tool’s compile plan.',
     artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
   },
   {

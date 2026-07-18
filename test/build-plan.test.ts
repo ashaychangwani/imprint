@@ -422,6 +422,7 @@ describe('buildBuildPlanPayload', () => {
       expectedOutput: 'results',
       likelyParams: [],
       dependencySeqs: [],
+      dependsOnTools: [],
     };
   }
 
@@ -1870,6 +1871,7 @@ describe('buildBuildPlanPayload requiredInputHints (end-to-end)', () => {
       expectedOutput: 'r',
       likelyParams: [],
       dependencySeqs: [],
+      dependsOnTools: [],
     };
   }
 

@@ -2,10 +2,20 @@ import { describe, expect, it } from 'bun:test';
 import { parseDuration } from '../src/cli.ts';
 import {
   type CandidateCompilePlan,
+  assertCompleteSelectedToolSet,
   isProviderUsageLimitedError,
   mapLimitSettled,
   summarizeCompileOutcomes,
 } from '../src/imprint/teach.ts';
+
+describe('assertCompleteSelectedToolSet', () => {
+  it('allows a complete selected set and rejects every partial result', () => {
+    expect(() => assertCompleteSelectedToolSet(0, 3)).not.toThrow();
+    expect(() => assertCompleteSelectedToolSet(1, 3)).toThrow(
+      /Selected tool set is incomplete: 1 of 3 tools failed/,
+    );
+  });
+});
 
 // ─── parseDuration ──────────────────────────────────────────────────────────
 
@@ -173,9 +183,8 @@ describe('isProviderUsageLimitedError', () => {
 describe('summarizeCompileOutcomes', () => {
   // The summarizer is the pure core of the multi-tool failure-surface
   // hardening: given parallel compile outcomes + their plans, derive what
-  // gets printed and whether --all-tools should abort. Keeping it pure
-  // means we can drive arbitrary shapes here without spinning up real
-  // compile pipelines.
+  // gets printed before an incomplete selected set aborts. Keeping it pure
+  // lets tests drive arbitrary shapes without spinning up compile pipelines.
   function plan(name: string): CandidateCompilePlan {
     return {
       workflowKey: name,
@@ -192,6 +201,7 @@ describe('summarizeCompileOutcomes', () => {
         expectedOutput: '',
         likelyParams: [],
         dependencySeqs: [],
+        dependsOnTools: [],
       },
     };
   }

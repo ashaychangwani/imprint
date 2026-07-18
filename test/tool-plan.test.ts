@@ -144,6 +144,7 @@ describe('buildToolPlanPayload', () => {
       expectedOutput: 'list of flights',
       likelyParams: [{ name: 'origin', type: 'string', description: 'origin airport' }],
       dependencySeqs: [11],
+      dependsOnTools: [],
     };
   }
 

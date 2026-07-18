@@ -33,6 +33,7 @@ import {
   type SharedCompileContext,
   SharedCompileContextSchema,
   type ToolCandidate,
+  closeCandidateSelection,
 } from './tool-candidates.ts';
 
 export const TEACH_STEPS = [
@@ -55,6 +56,8 @@ export interface WorkflowState {
   redactedPath?: string;
   triagedPath?: string;
   classificationsPath?: string;
+  /** Hash of the replay classification payload used for candidate/build planning. */
+  classificationsHash?: string;
   completedSteps: TeachStep[];
   error?: string;
   startedAt: string;
@@ -90,6 +93,94 @@ export interface TeachState {
   workflows: Record<string, WorkflowState>;
 }
 
+/** Candidate-backed resumes must reconstruct the persisted tool set so a
+ * downstream tool is never resumed without its upstream dependencies. */
+export function isCandidateBackedResume(
+  ws: WorkflowState | undefined,
+): ws is WorkflowState & { candidate: ToolCandidate } {
+  return ws?.candidate !== undefined;
+}
+
+/** Only a fresh detection run supersedes existing tools. A resume may
+ * intentionally exclude tools from another recording or an earlier phase. */
+export function staleCompletedToolsForRun(
+  completedToolNames: readonly string[],
+  incomingToolNames: ReadonlySet<string>,
+  cleanupStaleTools: boolean,
+): string[] {
+  return cleanupStaleTools ? completedToolNames.filter((name) => !incomingToolNames.has(name)) : [];
+}
+
+/** Resolve behavior from the actual run chosen by the CLI/TUI, rather than from
+ * the presence of a CLI flag. Interactive Continue/Redo must follow the same
+ * resume semantics as an explicit `--from-step`. */
+export function resolvedTeachRunPolicy(startFrom: TeachStep, resumesExistingRun: boolean) {
+  return {
+    cleanupStaleTools: !resumesExistingRun,
+    reuseExistingBuildPlan: startFrom !== 'plan-prereqs',
+    reviseExistingArtifacts: resumesExistingRun,
+  };
+}
+
+function candidatePlanningSignature(candidate: ToolCandidate): string {
+  return JSON.stringify(candidate);
+}
+
+/** Whether re-detection changed the candidate set or any planning-relevant
+ * candidate evidence for this recording. A changed graph invalidates prior
+ * plan-prereqs/compile progress even when candidate names stayed the same. */
+export function candidateSelectionChanged(
+  state: TeachState,
+  sessionPath: string,
+  selected: ToolCandidate[],
+  sharedContext?: SharedCompileContext,
+  classificationsHash?: string,
+): boolean {
+  const priorWorkflows = Object.values(state.workflows).filter(
+    (workflow) => workflow.sessionPath === sessionPath && workflow.candidate,
+  );
+  if (priorWorkflows.length === 0) return false;
+  const prior = priorWorkflows.map((workflow) => workflow.candidate as ToolCandidate);
+  const signatures = (candidates: ToolCandidate[]): string[] =>
+    candidates.map(candidatePlanningSignature).sort();
+  if (JSON.stringify(signatures(prior)) !== JSON.stringify(signatures(selected))) return true;
+  const priorContexts = new Set(
+    priorWorkflows.map((workflow) => JSON.stringify(workflow.sharedContext ?? null)),
+  );
+  if (priorContexts.size !== 1 || !priorContexts.has(JSON.stringify(sharedContext ?? null))) {
+    return true;
+  }
+  const priorClassificationHashes = new Set(
+    priorWorkflows.map((workflow) => workflow.classificationsHash ?? null),
+  );
+  return (
+    priorClassificationHashes.size !== 1 ||
+    !priorClassificationHashes.has(classificationsHash ?? null)
+  );
+}
+
+/** Remove obsolete candidate state for one recording after a new selection is
+ * finalized. Other recordings and pending placeholders remain untouched. */
+export function pruneUnselectedCandidateWorkflows(
+  state: TeachState,
+  sessionPath: string,
+  selectedToolNames: ReadonlySet<string>,
+): string[] {
+  const removed: string[] = [];
+  for (const [key, workflow] of Object.entries(state.workflows)) {
+    if (
+      workflow.sessionPath !== sessionPath ||
+      !workflow.candidate ||
+      selectedToolNames.has(workflow.candidate.toolName)
+    ) {
+      continue;
+    }
+    delete state.workflows[key];
+    removed.push(key);
+  }
+  return removed;
+}
+
 export function teachStatePath(site: string): string {
   return pathJoin(localSiteDir(site), '.teach-state.json');
 }
@@ -106,9 +197,10 @@ export function loadTeachState(site: string): TeachState {
   try {
     const state = JSON.parse(readFileSync(loadPath, 'utf8')) as TeachState;
     for (const workflow of Object.values(state.workflows)) {
-      if (!workflow.sharedContext) continue;
-      const parsed = SharedCompileContextSchema.safeParse(workflow.sharedContext);
-      workflow.sharedContext = parsed.success ? parsed.data : undefined;
+      if (workflow.sharedContext) {
+        const parsed = SharedCompileContextSchema.safeParse(workflow.sharedContext);
+        workflow.sharedContext = parsed.success ? parsed.data : undefined;
+      }
     }
     return isLegacy ? normalizeLegacyTeachState(site, state) : state;
   } catch {
@@ -434,8 +526,8 @@ export function resolveStepStartTarget(
   return { workflowKey, ws };
 }
 
-/** A multi-tool `--from-step` resume reconstructs the prior run's tools from
- *  persisted state. Scope it to (a) tools from the SAME recording as the resume
+/** A candidate-backed resume reconstructs the prior run's tools from persisted
+ *  state. Scope it to (a) tools from the SAME recording as the resume
  *  target — cross-recording tools have a different session and would otherwise be
  *  compiled against the wrong one — and (b) tools whose prior run actually reached
  *  `fromStep`'s prerequisites — a tool that failed earlier has no
@@ -445,13 +537,14 @@ export function resolveStepStartTarget(
 interface MultiToolResumeSelection {
   plans: {
     workflowKey: string;
-    candidate: WorkflowState['candidate'];
+    candidate: ToolCandidate;
     sharedContext: WorkflowState['sharedContext'];
   }[];
   skipped: {
     workflowKey: string;
     reason: 'different-recording' | 'not-resumable' | 'not-in-build-plan';
   }[];
+  cycles: string[][];
 }
 
 export function selectMultiToolResumePlans(
@@ -459,13 +552,18 @@ export function selectMultiToolResumePlans(
   targetWorkflowKey: string,
   fromStep: TeachStep,
   opts?: {
-    noInteractive?: boolean;
-    allTools?: boolean;
+    primaryTool?: boolean;
     toolName?: string;
     plannedToolNames?: ReadonlySet<string>;
   },
 ): MultiToolResumeSelection {
   const target = state.workflows[targetWorkflowKey];
+  const persistedPrimary = Object.entries(state.workflows).find(
+    ([key, workflow]) =>
+      !key.startsWith('_pending_') &&
+      workflow.candidate?.primary &&
+      (!target || workflow.sessionPath === target.sessionPath),
+  );
   const plans: MultiToolResumeSelection['plans'] = [];
   const skipped: MultiToolResumeSelection['skipped'] = [];
   for (const [key, ws] of Object.entries(state.workflows)) {
@@ -484,6 +582,34 @@ export function selectMultiToolResumePlans(
     }
     plans.push({ workflowKey: key, candidate: ws.candidate, sharedContext: ws.sharedContext });
   }
+  if (target?.candidate && !plans.some((plan) => plan.workflowKey === targetWorkflowKey)) {
+    const reason = skipped.find((entry) => entry.workflowKey === targetWorkflowKey)?.reason;
+    throw new Error(
+      `Cannot resume tool "${target.candidate.toolName}" from "${fromStep}": the target is ${reason ?? 'unavailable'}. Resume an earlier step or re-run from "detect-candidates".`,
+    );
+  }
+  const closePlans = (rootNames: string[]): Pick<MultiToolResumeSelection, 'plans' | 'cycles'> => {
+    const candidatePlans = plans;
+    const closure = closeCandidateSelection(
+      candidatePlans.map((plan) => plan.candidate),
+      rootNames,
+    );
+    const selectedNames = new Set(closure.selected.map((candidate) => candidate.toolName));
+    const eligibleNames = new Set(candidatePlans.map((plan) => plan.candidate.toolName));
+    for (const candidate of closure.selected) {
+      for (const dependency of candidate.dependsOnTools) {
+        if (eligibleNames.has(dependency)) continue;
+        throw new Error(
+          `Cannot resume tool "${candidate.toolName}" from "${fromStep}": required upstream tool "${dependency}" is unavailable. Re-run from "detect-candidates" to rebuild a complete tool set.`,
+        );
+      }
+    }
+    return {
+      plans: plans.filter((plan) => selectedNames.has(plan.candidate.toolName)),
+      cycles: closure.cycles,
+    };
+  };
+
   if (opts?.toolName) {
     const selected = plans.find(
       (plan) => plan.workflowKey === opts.toolName || plan.candidate?.toolName === opts.toolName,
@@ -493,14 +619,30 @@ export function selectMultiToolResumePlans(
         `Cannot resume tool "${opts.toolName}": it is not resumable from "${fromStep}" in the selected recording.`,
       );
     }
-    return { plans: [selected], skipped };
+    return { ...closePlans([selected.candidate.toolName]), skipped };
   }
-  if (opts?.noInteractive && !opts.allTools && plans.length > 1) {
-    const primary = plans.find((plan) => plan.candidate?.primary);
-    const selected = primary ?? plans.find((plan) => plan.workflowKey === targetWorkflowKey);
-    return { plans: selected ? [selected] : [], skipped };
+  if (opts?.primaryTool) {
+    if (!persistedPrimary) {
+      throw new Error(
+        `Cannot resume from "${fromStep}" with --primary-tool: the selected recording has no primary candidate. Re-run from "detect-candidates".`,
+      );
+    }
+    const primary = plans.find((plan) => plan.workflowKey === persistedPrimary[0]);
+    if (!primary) {
+      const reason = skipped.find((entry) => entry.workflowKey === persistedPrimary[0])?.reason;
+      throw new Error(
+        `Cannot resume primary tool "${persistedPrimary[1].candidate?.toolName ?? persistedPrimary[0]}" from "${fromStep}": it is ${reason ?? 'unavailable'}. Resume an earlier step or re-run from "detect-candidates".`,
+      );
+    }
+    return {
+      ...closePlans([primary.candidate.toolName]),
+      skipped,
+    };
   }
-  return { plans, skipped };
+  return {
+    ...closePlans(plans.map((plan) => plan.candidate.toolName)),
+    skipped,
+  };
 }
 
 /** True when the `[startIdx, stopIdx]` phase window overlaps the atomic analysis

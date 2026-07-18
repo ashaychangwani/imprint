@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve as pathResolve } from 'node:path';
@@ -22,19 +23,30 @@ import {
   assertSuccessfulAuthCompile,
   authCompileLlmConfig,
   authCompletionMatches,
+  buildTeachCandidatePicker,
   buildTeachProviderPickerOptions,
   buildTeachStateFromSession,
+  finalizeTeachCandidateSelection,
   formatAuthProgress,
+  formatTeachCandidateAutoAddNotice,
   hasDurableAuthState,
+  loadCachedClassificationsForSession,
   mapLimit,
+  mergeReplayCandidateDependencies,
   promptForTeachProvider,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
   resolvedArtifactCheckpointPath,
   selectCompileSessionArtifact,
   selectCompleteAuthCredentials,
+  selectPrimaryNamedResult,
+  selectTeachCandidates,
   updateCandidateStageCheckpoints,
 } from '../src/imprint/teach.ts';
+import {
+  deriveStructuralCandidateDependencies,
+  validateToolCandidateDetection,
+} from '../src/imprint/tool-candidates.ts';
 import { WorkflowSchema } from '../src/imprint/types.ts';
 
 describe('teach verb', () => {
@@ -50,7 +62,15 @@ describe('teach verb', () => {
     expect(flags).toContain('--persist-profile');
     expect(flags).toContain('--no-interactive');
     expect(flags).toContain('--all-tools');
+    expect(flags).toContain('--primary-tool');
     expect(flags).toContain('--tool <toolName>');
+  });
+
+  it('documents all-tools as the default and --primary-tool as the narrowing flag', () => {
+    const flags = new Map(VERB_HELP.teach?.flags?.map((flag) => [flag.name, flag.description]));
+    expect(flags.get('--no-interactive')).toContain('all detected tools');
+    expect(flags.get('--all-tools')).toContain('default');
+    expect(flags.get('--primary-tool')).toContain('upstream dependencies');
   });
 });
 
@@ -571,6 +591,7 @@ describe('teach candidate artifact validation', () => {
     expectedOutput: 'domain results',
     likelyParams: [],
     dependencySeqs: [],
+    dependsOnTools: [],
   };
 
   it('accepts matching artifact tool names', () => {
@@ -583,6 +604,207 @@ describe('teach candidate artifact validation', () => {
     expect(() =>
       assertCandidateToolName('Compiled playbook', 'add_domain_to_cart', candidate),
     ).toThrow(/does not match selected candidate/);
+  });
+});
+
+describe('teach candidate selection defaults', () => {
+  const detection = (() => {
+    const validated = validateToolCandidateDetection({
+      sharedContext: {},
+      candidates: [
+        {
+          toolName: 'search_items',
+          description: 'Search items',
+          rationale: 'primary intent',
+          confidence: 0.9,
+          primary: true,
+          requestSeqs: [2],
+          dependencySeqs: [1],
+        },
+        {
+          toolName: 'lookup_items',
+          description: 'Look up items',
+          rationale: 'search prerequisite',
+          confidence: 0.8,
+          primary: false,
+          requestSeqs: [1],
+        },
+        {
+          toolName: 'get_details',
+          description: 'Get details',
+          rationale: 'downstream consumer',
+          confidence: 0.8,
+          primary: false,
+          requestSeqs: [3],
+          dependencySeqs: [2],
+        },
+      ],
+    });
+    return {
+      ...validated,
+      candidates: deriveStructuralCandidateDependencies(validated.candidates),
+      inputTokens: null,
+      outputTokens: null,
+      durationMs: 1,
+    };
+  })();
+
+  it('selects every detected tool in non-interactive mode by default', async () => {
+    const selected = await selectTeachCandidates(detection, { noInteractive: true });
+    expect(selected.map((candidate) => candidate.toolName)).toEqual([
+      'search_items',
+      'lookup_items',
+      'get_details',
+    ]);
+  });
+
+  it('initially checks every interactive option and labels direct prerequisites', () => {
+    const picker = buildTeachCandidatePicker(detection.candidates);
+    expect(picker.initialValues).toEqual(['search_items', 'lookup_items', 'get_details']);
+    expect(picker.options.find((option) => option.value === 'search_items')?.hint).toContain(
+      'requires lookup_items',
+    );
+    expect(picker.options.find((option) => option.value === 'lookup_items')?.hint).not.toContain(
+      'requires',
+    );
+  });
+
+  it('selects only the primary tool and its transitive prerequisites with --primary-tool', async () => {
+    const selected = await selectTeachCandidates(detection, {
+      noInteractive: true,
+      primaryTool: true,
+    });
+    expect(selected.map((candidate) => candidate.toolName)).toEqual([
+      'search_items',
+      'lookup_items',
+    ]);
+  });
+
+  it('closes a submitted downstream-only choice without adding independent tools', () => {
+    const downstream = finalizeTeachCandidateSelection(detection.candidates, ['get_details']);
+    expect(downstream.selected.map((candidate) => candidate.toolName)).toEqual([
+      'search_items',
+      'lookup_items',
+      'get_details',
+    ]);
+    expect(downstream.autoAdded.map((candidate) => candidate.toolName)).toEqual([
+      'search_items',
+      'lookup_items',
+    ]);
+
+    const independent = finalizeTeachCandidateSelection(detection.candidates, ['lookup_items']);
+    expect(independent.selected.map((candidate) => candidate.toolName)).toEqual(['lookup_items']);
+  });
+
+  it('formats structural and replay auto-add notices distinctly', () => {
+    const autoAdded = finalizeTeachCandidateSelection(detection.candidates, [
+      'get_details',
+    ]).autoAdded;
+    expect(formatTeachCandidateAutoAddNotice(autoAdded, 'structural')).toEqual({
+      body: '  + search_items\n  + lookup_items',
+      title: 'Added required upstream tools',
+    });
+    expect(formatTeachCandidateAutoAddNotice(autoAdded, 'replay')?.title).toBe(
+      'Added recorded prerequisites',
+    );
+    expect(formatTeachCandidateAutoAddNotice([], 'structural')).toBeUndefined();
+  });
+
+  it('adapts persisted value1 classifications before merging replay token edges', () => {
+    const merged = mergeReplayCandidateDependencies(detection.candidates, [
+      {
+        classification: 'server_derived',
+        originalSeq: 3,
+        location: 'url_param:item_token',
+        producerSeq: 1,
+        producerPath: '$.results[0].itemToken',
+        value1: 'ChcI78-luoXdhoaIARoKL20vMDJ2cGdnMRAB',
+        value2: 'ChcI78-luoXdhoaIARoKL20vMDJ2cGdnMRAC',
+      },
+    ]);
+
+    expect(
+      merged.find((candidate) => candidate.toolName === 'get_details')?.dependsOnTools,
+    ).toEqual(['search_items', 'lookup_items']);
+  });
+
+  it('hands the dependency-closed detected set to build planning after replay edges', () => {
+    const replayOnlyCandidates = detection.candidates.map((candidate) =>
+      candidate.toolName === 'get_details'
+        ? { ...candidate, dependencySeqs: [], dependsOnTools: [] }
+        : candidate,
+    );
+    const finalized = finalizeTeachCandidateSelection(
+      replayOnlyCandidates,
+      ['get_details'],
+      [
+        {
+          classification: 'server_derived',
+          originalSeq: 3,
+          location: 'url_param:item_token',
+          producerSeq: 2,
+          producerPath: '$.results[0].itemToken',
+          value1: 'ChcI78-luoXdhoaIARoKL20vMDJ2cGdnMRAB',
+          value2: 'ChcI78-luoXdhoaIARoKL20vMDJ2cGdnMRAC',
+        },
+      ],
+    );
+
+    expect(
+      finalized.candidates.find((candidate) => candidate.toolName === 'get_details')
+        ?.dependsOnTools,
+    ).toEqual(['search_items']);
+    expect(finalized.selected.map((candidate) => candidate.toolName)).toEqual([
+      'search_items',
+      'lookup_items',
+      'get_details',
+    ]);
+  });
+
+  it('selects the primary compiled result even when an upstream dependency was detected first', () => {
+    const lookup = { workflow: { toolName: 'lookup_items' } };
+    const search = { workflow: { toolName: 'search_items' } };
+    expect(
+      selectPrimaryNamedResult(
+        [lookup, search],
+        [
+          { candidate: { toolName: 'lookup_items', primary: false } },
+          { candidate: { toolName: 'search_items', primary: true } },
+        ],
+      ),
+    ).toBe(search);
+  });
+});
+
+describe('cached replay classification identity', () => {
+  it('loads only a sidecar produced from the exact current recording', () => {
+    const dir = mkdtempSync(pathResolve(tmpdir(), 'imprint-classifications-'));
+    const sessionPath = pathResolve(dir, 'recording.redacted.json');
+    const classPath = pathResolve(dir, '.classifications.json');
+    const sessionContents = '{"site":"fixture"}\n';
+    writeFileSync(sessionPath, sessionContents);
+    const classification = {
+      classification: 'server_derived' as const,
+      originalSeq: 2,
+      location: 'url_param:item_token',
+      value1: 'opaque-token-0001',
+      value2: 'opaque-token-0002',
+    };
+    writeFileSync(
+      classPath,
+      JSON.stringify({
+        sourceSessionHash: createHash('sha256').update(sessionContents).digest('hex'),
+        classifications: [classification],
+      }),
+    );
+
+    expect(loadCachedClassificationsForSession(classPath, sessionPath)).toEqual([classification]);
+
+    writeFileSync(sessionPath, '{"site":"different-recording"}\n');
+    expect(loadCachedClassificationsForSession(classPath, sessionPath)).toBeUndefined();
+
+    writeFileSync(classPath, JSON.stringify({ classifications: [classification] }));
+    expect(loadCachedClassificationsForSession(classPath, sessionPath)).toBeUndefined();
   });
 });
 
