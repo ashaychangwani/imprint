@@ -507,7 +507,7 @@ describe('tool candidate validation', () => {
     expect(detection.candidates[0]?.likelyParams[0]?.type).toBeUndefined();
   });
 
-  it('defaults legacy candidate dependency metadata to an empty list', () => {
+  it('normalizes omitted detector dependency metadata to an empty list', () => {
     const detection = validateToolCandidateDetection({
       sharedContext: {},
       candidates: [

@@ -33,7 +33,6 @@ import {
   type SharedCompileContext,
   SharedCompileContextSchema,
   type ToolCandidate,
-  ToolCandidateSchema,
   closeCandidateSelection,
 } from './tool-candidates.ts';
 
@@ -94,11 +93,37 @@ export interface TeachState {
   workflows: Record<string, WorkflowState>;
 }
 
+/** Candidate-backed resumes must reconstruct the persisted tool set so a
+ * downstream tool is never resumed without its upstream dependencies. */
+export function isCandidateBackedResume(
+  ws: WorkflowState | undefined,
+): ws is WorkflowState & { candidate: ToolCandidate } {
+  return ws?.candidate !== undefined;
+}
+
+/** Only a fresh detection run supersedes existing tools. A resume may
+ * intentionally exclude tools from another recording or an earlier phase. */
+export function staleCompletedToolsForRun(
+  completedToolNames: readonly string[],
+  incomingToolNames: ReadonlySet<string>,
+  cleanupStaleTools: boolean,
+): string[] {
+  return cleanupStaleTools ? completedToolNames.filter((name) => !incomingToolNames.has(name)) : [];
+}
+
+/** Resolve behavior from the actual run chosen by the CLI/TUI, rather than from
+ * the presence of a CLI flag. Interactive Continue/Redo must follow the same
+ * resume semantics as an explicit `--from-step`. */
+export function resolvedTeachRunPolicy(startFrom: TeachStep, resumesExistingRun: boolean) {
+  return {
+    cleanupStaleTools: !resumesExistingRun,
+    reuseExistingBuildPlan: startFrom !== 'plan-prereqs',
+    reviseExistingArtifacts: resumesExistingRun,
+  };
+}
+
 function candidatePlanningSignature(candidate: ToolCandidate): string {
-  return JSON.stringify({
-    ...candidate,
-    dependsOnTools: candidate.dependsOnTools ?? [],
-  });
+  return JSON.stringify(candidate);
 }
 
 /** Whether re-detection changed the candidate set or any planning-relevant
@@ -134,26 +159,8 @@ export function candidateSelectionChanged(
   );
 }
 
-/** Snapshot same-recording candidate state by canonical tool identity before
- * re-detection prunes legacy alias keys. Canonical keys win over aliases when
- * both exist. */
-export function candidateWorkflowsByToolName(
-  state: TeachState,
-  sessionPath: string,
-): Map<string, WorkflowState> {
-  const workflows = new Map<string, WorkflowState>();
-  for (const [key, workflow] of Object.entries(state.workflows)) {
-    if (workflow.sessionPath !== sessionPath || !workflow.candidate) continue;
-    const toolName = workflow.candidate.toolName;
-    if (!workflows.has(toolName) || key === toolName) workflows.set(toolName, workflow);
-  }
-  return workflows;
-}
-
 /** Remove obsolete candidate state for one recording after a new selection is
- * finalized. Selected legacy aliases are also removed because fresh
- * checkpoints use canonical tool-name keys. Other recordings and pending
- * placeholders remain untouched. */
+ * finalized. Other recordings and pending placeholders remain untouched. */
 export function pruneUnselectedCandidateWorkflows(
   state: TeachState,
   sessionPath: string,
@@ -164,7 +171,7 @@ export function pruneUnselectedCandidateWorkflows(
     if (
       workflow.sessionPath !== sessionPath ||
       !workflow.candidate ||
-      (selectedToolNames.has(workflow.candidate.toolName) && key === workflow.candidate.toolName)
+      selectedToolNames.has(workflow.candidate.toolName)
     ) {
       continue;
     }
@@ -193,10 +200,6 @@ export function loadTeachState(site: string): TeachState {
       if (workflow.sharedContext) {
         const parsed = SharedCompileContextSchema.safeParse(workflow.sharedContext);
         workflow.sharedContext = parsed.success ? parsed.data : undefined;
-      }
-      if (workflow.candidate) {
-        const parsed = ToolCandidateSchema.safeParse(workflow.candidate);
-        workflow.candidate = parsed.success ? parsed.data : undefined;
       }
     }
     return isLegacy ? normalizeLegacyTeachState(site, state) : state;
@@ -523,8 +526,8 @@ export function resolveStepStartTarget(
   return { workflowKey, ws };
 }
 
-/** A multi-tool `--from-step` resume reconstructs the prior run's tools from
- *  persisted state. Scope it to (a) tools from the SAME recording as the resume
+/** A candidate-backed resume reconstructs the prior run's tools from persisted
+ *  state. Scope it to (a) tools from the SAME recording as the resume
  *  target — cross-recording tools have a different session and would otherwise be
  *  compiled against the wrong one — and (b) tools whose prior run actually reached
  *  `fromStep`'s prerequisites — a tool that failed earlier has no
@@ -534,7 +537,7 @@ export function resolveStepStartTarget(
 interface MultiToolResumeSelection {
   plans: {
     workflowKey: string;
-    candidate: WorkflowState['candidate'];
+    candidate: ToolCandidate;
     sharedContext: WorkflowState['sharedContext'];
   }[];
   skipped: {
@@ -549,8 +552,6 @@ export function selectMultiToolResumePlans(
   targetWorkflowKey: string,
   fromStep: TeachStep,
   opts?: {
-    noInteractive?: boolean;
-    allTools?: boolean;
     primaryTool?: boolean;
     toolName?: string;
     plannedToolNames?: ReadonlySet<string>;
@@ -579,32 +580,16 @@ export function selectMultiToolResumePlans(
       skipped.push({ workflowKey: key, reason: 'not-resumable' });
       continue;
     }
-    const plan = { workflowKey: key, candidate: ws.candidate, sharedContext: ws.sharedContext };
-    const duplicateIndex = plans.findIndex(
-      (existing) => existing.candidate?.toolName === ws.candidate?.toolName,
-    );
-    if (duplicateIndex >= 0) {
-      const existing = plans[duplicateIndex];
-      if (key === ws.candidate.toolName && existing?.workflowKey !== ws.candidate.toolName) {
-        plans[duplicateIndex] = plan;
-      }
-      continue;
-    }
-    plans.push(plan);
+    plans.push({ workflowKey: key, candidate: ws.candidate, sharedContext: ws.sharedContext });
   }
-  if (
-    target?.candidate &&
-    !plans.some((plan) => plan.candidate?.toolName === target.candidate?.toolName)
-  ) {
+  if (target?.candidate && !plans.some((plan) => plan.workflowKey === targetWorkflowKey)) {
     const reason = skipped.find((entry) => entry.workflowKey === targetWorkflowKey)?.reason;
     throw new Error(
       `Cannot resume tool "${target.candidate.toolName}" from "${fromStep}": the target is ${reason ?? 'unavailable'}. Resume an earlier step or re-run from "detect-candidates".`,
     );
   }
   const closePlans = (rootNames: string[]): Pick<MultiToolResumeSelection, 'plans' | 'cycles'> => {
-    const candidatePlans = plans.filter(
-      (plan): plan is typeof plan & { candidate: ToolCandidate } => !!plan.candidate,
-    );
+    const candidatePlans = plans;
     const closure = closeCandidateSelection(
       candidatePlans.map((plan) => plan.candidate),
       rootNames,
@@ -612,7 +597,7 @@ export function selectMultiToolResumePlans(
     const selectedNames = new Set(closure.selected.map((candidate) => candidate.toolName));
     const eligibleNames = new Set(candidatePlans.map((plan) => plan.candidate.toolName));
     for (const candidate of closure.selected) {
-      for (const dependency of candidate.dependsOnTools ?? []) {
+      for (const dependency of candidate.dependsOnTools) {
         if (eligibleNames.has(dependency)) continue;
         throw new Error(
           `Cannot resume tool "${candidate.toolName}" from "${fromStep}": required upstream tool "${dependency}" is unavailable. Re-run from "detect-candidates" to rebuild a complete tool set.`,
@@ -620,7 +605,7 @@ export function selectMultiToolResumePlans(
       }
     }
     return {
-      plans: plans.filter((plan) => plan.candidate && selectedNames.has(plan.candidate.toolName)),
+      plans: plans.filter((plan) => selectedNames.has(plan.candidate.toolName)),
       cycles: closure.cycles,
     };
   };
@@ -629,7 +614,7 @@ export function selectMultiToolResumePlans(
     const selected = plans.find(
       (plan) => plan.workflowKey === opts.toolName || plan.candidate?.toolName === opts.toolName,
     );
-    if (!selected?.candidate) {
+    if (!selected) {
       throw new Error(
         `Cannot resume tool "${opts.toolName}": it is not resumable from "${fromStep}" in the selected recording.`,
       );
@@ -637,25 +622,25 @@ export function selectMultiToolResumePlans(
     return { ...closePlans([selected.candidate.toolName]), skipped };
   }
   if (opts?.primaryTool) {
-    const primary = persistedPrimary
-      ? plans.find((plan) => plan.candidate?.toolName === persistedPrimary[1].candidate?.toolName)
-      : undefined;
-    if (persistedPrimary && !primary) {
+    if (!persistedPrimary) {
+      throw new Error(
+        `Cannot resume from "${fromStep}" with --primary-tool: the selected recording has no primary candidate. Re-run from "detect-candidates".`,
+      );
+    }
+    const primary = plans.find((plan) => plan.workflowKey === persistedPrimary[0]);
+    if (!primary) {
       const reason = skipped.find((entry) => entry.workflowKey === persistedPrimary[0])?.reason;
       throw new Error(
         `Cannot resume primary tool "${persistedPrimary[1].candidate?.toolName ?? persistedPrimary[0]}" from "${fromStep}": it is ${reason ?? 'unavailable'}. Resume an earlier step or re-run from "detect-candidates".`,
       );
     }
-    const selected = primary ?? plans.find((plan) => plan.workflowKey === targetWorkflowKey);
     return {
-      ...(selected?.candidate
-        ? closePlans([selected.candidate.toolName])
-        : { plans: [], cycles: [] }),
+      ...closePlans([primary.candidate.toolName]),
       skipped,
     };
   }
   return {
-    ...closePlans(plans.flatMap((plan) => (plan.candidate ? [plan.candidate.toolName] : []))),
+    ...closePlans(plans.map((plan) => plan.candidate.toolName)),
     skipped,
   };
 }

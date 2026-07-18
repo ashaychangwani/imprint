@@ -97,11 +97,11 @@ import {
   analysisBlockRunsForWindow,
   buildTeachStateFromSession,
   candidateSelectionChanged,
-  candidateWorkflowsByToolName,
   detectCandidatesCompletedSteps,
   discoverCompletedWorkflows,
   discoverOrphanSession,
   friendlySessionTimestamp,
+  isCandidateBackedResume,
   isExistingTeachFile as isExistingFile,
   loadTeachState,
   nextTeachStep as nextStep,
@@ -110,12 +110,13 @@ import {
   resolveStepStartTarget,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
+  resolvedTeachRunPolicy,
   saveTeachState,
   selectMultiToolResumePlans,
+  staleCompletedToolsForRun,
   toRelativeTeachStatePath as toRelative,
 } from './teach-state.ts';
 import {
-  type NormalizedToolCandidate,
   type SharedCompileContext,
   type ToolCandidate,
   buildSharedCompileContext as buildCandidateSharedCompileContext,
@@ -269,8 +270,6 @@ interface TeachOptions {
   fromSession?: string;
   /** Retain parser.test.ts after successful compile-agent verification. */
   keepTest?: boolean;
-  /** Backward-compatible explicit spelling of the default all-tools behavior. */
-  allTools?: boolean;
   /** Compile only the primary detected candidate and its upstream dependencies. */
   primaryTool?: boolean;
   /** Bounded resume: compile exactly one persisted candidate from the retained recording. */
@@ -562,6 +561,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   let redactedPath: string | null = null;
   let resumedTriagedPath: string | null = null;
   let usingFromSession = false;
+  let resumesExistingRun = false;
 
   const hasExisting = completedWorkflows.length > 0 || incompleteWorkflows.length > 0;
 
@@ -578,6 +578,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     // run's persisted outputs. resolveStepStartTarget picks the most-recent
     // workflow and THROWS if it didn't reach far enough (the dependency guard).
     const target = resolveStepStartTarget(site, state, opts.fromStep, opts.tool);
+    resumesExistingRun = true;
     workflowKey = target.workflowKey;
     startFrom = opts.fromStep;
     sessionPath = resolveTeachStatePath(site, target.ws.sessionPath);
@@ -615,6 +616,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     if (choice.action === 'new') {
       startFrom = 'record';
     } else if (choice.action === 'continue') {
+      resumesExistingRun = true;
       workflowKey = choice.workflowKey;
       const ws = state.workflows[workflowKey];
       if (!ws) {
@@ -628,6 +630,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     } else if (choice.action === 'redo') {
       workflowKey = choice.workflowKey;
       startFrom = choice.fromStep;
+      resumesExistingRun = startFrom !== 'record';
       const ws = state.workflows[workflowKey];
       if (ws) {
         sessionPath = resolveTeachStatePath(site, ws.sessionPath);
@@ -658,6 +661,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   const startIdx = STEPS.indexOf(startFrom);
+  const runPolicy = resolvedTeachRunPolicy(startFrom, resumesExistingRun);
   // Upper bound of the phase window: `--to-step`/`--only` stop the chain after a
   // given step (default = the last step, i.e. run to the end). A phase runs only
   // when it falls within [startFrom, toStep].
@@ -956,6 +960,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   if (stopIdx < STEPS.indexOf('replay-and-diff')) await finishEarly();
 
   let plans: CandidateCompilePlan[];
+  let candidateBackedResume = false;
 
   // The replay→triage→detect-candidates analysis is one atomic block (the sub-
   // steps share a parallel run + the triaged session), so the window can START
@@ -1006,7 +1011,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           const cached = loadCachedClassificationsForSession(classPath, replaySessionPath);
           if (!cached && existsSync(classPath)) {
             p.log.warn(
-              'Ignoring cached replay classifications because they were produced from a different or legacy recording.',
+              'Ignoring cached replay classifications because they are untagged or belong to a different recording.',
             );
           }
           return cached;
@@ -1258,10 +1263,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         const selectedNames = new Set(
           finalizedSelection.selected.map((candidate) => candidate.toolName),
         );
-        const priorWorkflowsByToolName = candidateWorkflowsByToolName(
-          state,
-          candidateResult.baseState.sessionPath,
-        );
         const selectionChanged = candidateSelectionChanged(
           state,
           candidateResult.baseState.sessionPath,
@@ -1282,7 +1283,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
             // reached generate…register. A different recording must not inherit the
             // old plan-prereqs marker or shared-module build.
             completedSteps: detectCandidatesCompletedSteps(
-              selectionChanged ? undefined : priorWorkflowsByToolName.get(candidate.toolName),
+              selectionChanged ? undefined : state.workflows[candidate.toolName],
               candidateResult.baseState.sessionPath,
             ),
             candidate,
@@ -1337,17 +1338,18 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         triagedPath: resolvedArtifactCheckpointPath(site, ws.triagedPath, resolvedTriagedPath),
       });
     }
-    // A `--from-step` resume into plan-prereqs/generate reconstructs the prior
-    // run's tools from persisted state (shared-module planning may need ≥2 tools).
+    // A candidate-backed resume reconstructs the prior run's tools from persisted
+    // state (shared-module planning may need ≥2 tools). This applies both to an
+    // explicit `--from-step` and to the interactive Continue/Redo paths.
     // Resume defaults to the full persisted set. --primary-tool narrows to the
     // primary candidate plus its upstream dependency closure.
     // selectMultiToolResumePlans scopes reconstruction to the same recording as the
     // resume target and to tools that actually reached `startFrom`'s prerequisites,
     // so a sibling from a different run can't be compiled against the wrong session
-    // and one that failed earlier can't crash loading a missing artifact. Confined
-    // to --from-step so interactive resume keeps its single-tool behavior.
+    // and one that failed earlier can't crash loading a missing artifact.
+    candidateBackedResume = isCandidateBackedResume(ws);
     const allCandidatePlans: CandidateCompilePlan[] = [];
-    if (opts.fromStep) {
+    if (candidateBackedResume) {
       let plannedToolNames: Set<string> | undefined;
       const persistedBuildPlanPath = resolveTeachStatePath(site, ws?.buildPlanPath);
       if (persistedBuildPlanPath && existsSync(persistedBuildPlanPath)) {
@@ -1357,8 +1359,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         }
       }
       const selection = selectMultiToolResumePlans(state, workflowKey, startFrom, {
-        noInteractive: opts.noInteractive,
-        allTools: opts.allTools,
         primaryTool: opts.primaryTool,
         toolName: opts.tool,
         plannedToolNames,
@@ -1366,10 +1366,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       for (const { workflowKey: skippedKey, reason } of selection.skipped) {
         p.log.warn(
           reason === 'different-recording'
-            ? `Skipping tool "${skippedKey}" for --from-step ${startFrom}: it belongs to a different recording than the resume target.`
+            ? `Skipping tool "${skippedKey}" while resuming from ${startFrom}: it belongs to a different recording than the resume target.`
             : reason === 'not-in-build-plan'
-              ? `Skipping tool "${skippedKey}" for --from-step ${startFrom}: it is not in the current build plan.`
-              : `Skipping tool "${skippedKey}" for --from-step ${startFrom}: its prior run didn't reach "${startFrom}" — resume an earlier step or re-run it.`,
+              ? `Skipping tool "${skippedKey}" while resuming from ${startFrom}: it is not in the current build plan.`
+              : `Skipping tool "${skippedKey}" while resuming from ${startFrom}: its prior run didn't reach "${startFrom}" — resume an earlier step or re-run it.`,
         );
       }
       for (const cycle of selection.cycles) {
@@ -1384,10 +1384,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         });
       }
     }
-    plans =
-      allCandidatePlans.length > 0
-        ? allCandidatePlans
-        : [{ workflowKey, startFrom, candidate: ws?.candidate, sharedContext: ws?.sharedContext }];
+    if (candidateBackedResume && allCandidatePlans.length === 0) {
+      throw new Error(
+        `Cannot resume from "${startFrom}": the selected recording has no resumable candidates. Re-run from "detect-candidates".`,
+      );
+    }
+    plans = candidateBackedResume
+      ? allCandidatePlans
+      : [{ workflowKey, startFrom, candidate: ws?.candidate, sharedContext: ws?.sharedContext }];
   }
 
   // Early stop: `--to-step replay-and-diff|triage|detect-candidates` finishes
@@ -1456,16 +1460,18 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   });
 
   // ── Clean up stale tools from previous teach runs ──
-  // Skipped entirely on a `--from-step` resume: a resume is scoped to a subset of
+  // Skipped on every resume, including interactive Continue/Redo: a resume is scoped to a subset of
   // the site's tools (selectMultiToolResumePlans intentionally leaves other
   // recordings' tools — and same-recording tools that didn't reach the step —
   // alone), so "not in the resume set" does NOT mean "stale". Treating it as stale
   // here would silently rmSync a tool the resume just promised to preserve. Cleanup
   // only applies to a fresh run that produces a superseding tool set.
   const incomingToolNames = new Set(plans.map((pl) => pl.candidate?.toolName ?? pl.workflowKey));
-  const staleTools = opts.fromStep
-    ? []
-    : discoverCompletedWorkflows(site).filter((name) => !incomingToolNames.has(name));
+  const staleTools = staleCompletedToolsForRun(
+    discoverCompletedWorkflows(site),
+    incomingToolNames,
+    runPolicy.cleanupStaleTools,
+  );
   if (staleTools.length > 0) {
     let shouldReplace = true;
     if (!opts.noInteractive) {
@@ -1506,7 +1512,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   // one tool; otherwise its assigned shared modules and producer-token contract
   // silently disappear from the revision agent's context.
   const alreadyPlanned =
-    opts.fromStep !== 'plan-prereqs' &&
+    runPolicy.reuseExistingBuildPlan &&
     plans.every((pl) => state.workflows[pl.workflowKey]?.completedSteps.includes('plan-prereqs')) &&
     existsSync(sidecar);
   if (willGenerate && compileModel && alreadyPlanned && firstWs) {
@@ -1812,7 +1818,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       teachCredentials,
       buildPlanPath: buildPlanPath || undefined,
       sharedModules: sharedModulesManifest.length > 0 ? sharedModulesManifest : undefined,
-      resumeExistingArtifacts: Boolean(opts.fromStep),
+      resumeExistingArtifacts: runPolicy.reviseExistingArtifacts,
     });
   } finally {
     unmuteLog();
@@ -2056,8 +2062,8 @@ export function buildTeachCandidatePicker(candidates: ToolCandidate[]): {
       label: `${candidate.toolName}${candidate.primary ? ' (primary)' : ''}`,
       hint: [
         `${Math.round(candidate.confidence * 100)}% — ${candidate.description}`,
-        (candidate.dependsOnTools?.length ?? 0) > 0
-          ? `requires ${candidate.dependsOnTools?.join(', ')}`
+        candidate.dependsOnTools.length > 0
+          ? `requires ${candidate.dependsOnTools.join(', ')}`
           : undefined,
       ]
         .filter(Boolean)
@@ -2072,7 +2078,7 @@ export function buildTeachCandidatePicker(candidates: ToolCandidate[]): {
 export function mergeReplayCandidateDependencies(
   candidates: ToolCandidate[],
   siteClassifications?: ClassifiedValue[],
-): NormalizedToolCandidate[] {
+): ToolCandidate[] {
   const tokenHints = siteClassifications
     ? deriveTokenContractHints({
         selectedTools: candidates,
@@ -2101,7 +2107,7 @@ export function finalizeTeachCandidateSelection(
   candidates: ToolCandidate[],
   selectedToolNames: Iterable<string>,
   siteClassifications?: ClassifiedValue[],
-): ReturnType<typeof closeCandidateSelection> & { candidates: NormalizedToolCandidate[] } {
+): ReturnType<typeof closeCandidateSelection> & { candidates: ToolCandidate[] } {
   const mergedCandidates = mergeReplayCandidateDependencies(candidates, siteClassifications);
   return {
     candidates: mergedCandidates,

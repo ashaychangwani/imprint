@@ -183,9 +183,8 @@ describe('isProviderUsageLimitedError', () => {
 describe('summarizeCompileOutcomes', () => {
   // The summarizer is the pure core of the multi-tool failure-surface
   // hardening: given parallel compile outcomes + their plans, derive what
-  // gets printed and whether --all-tools should abort. Keeping it pure
-  // means we can drive arbitrary shapes here without spinning up real
-  // compile pipelines.
+  // gets printed before an incomplete selected set aborts. Keeping it pure
+  // lets tests drive arbitrary shapes without spinning up compile pipelines.
   function plan(name: string): CandidateCompilePlan {
     return {
       workflowKey: name,
@@ -202,6 +201,7 @@ describe('summarizeCompileOutcomes', () => {
         expectedOutput: '',
         likelyParams: [],
         dependencySeqs: [],
+        dependsOnTools: [],
       },
     };
   }

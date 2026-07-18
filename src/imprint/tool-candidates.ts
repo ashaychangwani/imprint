@@ -137,13 +137,7 @@ export const ToolCandidateSchema = z.object({
    *  together with the transitive closure of these producer tools. */
   dependsOnTools: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/)).default([]),
 });
-type ParsedToolCandidate = z.infer<typeof ToolCandidateSchema>;
-export type NormalizedToolCandidate = ParsedToolCandidate;
-/** Candidate values parsed from fresh detection always carry dependsOnTools;
- * callers constructing legacy/persisted candidates may omit it. */
-export type ToolCandidate = Omit<ParsedToolCandidate, 'dependsOnTools'> & {
-  dependsOnTools?: string[];
-};
+export type ToolCandidate = z.infer<typeof ToolCandidateSchema>;
 
 const ToolCandidateDetectionSchema = z
   .object({
@@ -343,7 +337,7 @@ export function primaryToolCandidate(detection: ToolCandidateDetection): ToolCan
  * and self-owned seqs deliberately create no edge. */
 export function deriveStructuralCandidateDependencies(
   candidates: ToolCandidate[],
-): NormalizedToolCandidate[] {
+): ToolCandidate[] {
   const ownersBySeq = new Map<number, Set<string>>();
   for (const candidate of candidates) {
     for (const seq of candidate.requestSeqs) {
@@ -372,16 +366,14 @@ export function deriveStructuralCandidateDependencies(
 export function mergeCandidateDependencies(
   candidates: ToolCandidate[],
   edges: ReadonlyArray<{ consumerTool: string; producerTool: string }>,
-): NormalizedToolCandidate[] {
+): ToolCandidate[] {
   const names = new Set(candidates.map((candidate) => candidate.toolName));
   const dependencySets = new Map<string, Set<string>>();
   for (const candidate of candidates) {
     dependencySets.set(
       candidate.toolName,
       new Set(
-        (candidate.dependsOnTools ?? []).filter(
-          (name) => names.has(name) && name !== candidate.toolName,
-        ),
+        candidate.dependsOnTools.filter((name) => names.has(name) && name !== candidate.toolName),
       ),
     );
   }
@@ -443,7 +435,7 @@ export function closeCandidateSelection(
       return;
     }
     visiting.push(name);
-    for (const dependency of candidate.dependsOnTools ?? []) include(dependency);
+    for (const dependency of candidate.dependsOnTools) include(dependency);
     visiting.pop();
     included.add(name);
   };

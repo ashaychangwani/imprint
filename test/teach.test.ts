@@ -591,6 +591,7 @@ describe('teach candidate artifact validation', () => {
     expectedOutput: 'domain results',
     likelyParams: [],
     dependencySeqs: [],
+    dependsOnTools: [],
   };
 
   it('accepts matching artifact tool names', () => {
@@ -665,16 +666,6 @@ describe('teach candidate selection defaults', () => {
     );
     expect(picker.options.find((option) => option.value === 'lookup_items')?.hint).not.toContain(
       'requires',
-    );
-  });
-
-  it('keeps --all-tools equivalent to the non-interactive default', async () => {
-    const selected = await selectTeachCandidates(detection, {
-      noInteractive: true,
-      allTools: true,
-    });
-    expect(selected.map((candidate) => candidate.toolName)).toEqual(
-      detection.candidates.map((candidate) => candidate.toolName),
     );
   });
 

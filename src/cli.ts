@@ -166,7 +166,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       },
       {
         name: '--all-tools',
-        description: 'Explicitly compile all detected tools (the default; retained for scripts).',
+        description: 'Explicitly compile all detected tools (the default).',
       },
       {
         name: '--primary-tool',
@@ -1582,7 +1582,6 @@ async function main(argv: string[]): Promise<number> {
               model: values.model,
               maxDurationMs: teachTimeoutMs,
               keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
-              allTools: values['all-tools'],
               primaryTool: values['primary-tool'],
               tool: values.tool,
               skipReplay: values['skip-replay'],

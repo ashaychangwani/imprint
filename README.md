@@ -96,7 +96,7 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 When one recording yields multiple tools, all candidates are selected by default.
 Imprint automatically includes upstream lookup/producer tools required by any
 selected downstream tool. Use `--primary-tool` to compile only the primary tool
-and its prerequisites; `--all-tools` remains an explicit spelling of the default.
+and its prerequisites; `--all-tools` makes the default full-set selection explicit.
 
 The recorder also has a bounded fallback for Next.js React Server Component
 responses that Chromium evicts before `Network.getResponseBody` can read them.
