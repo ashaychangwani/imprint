@@ -194,17 +194,17 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--keep-test',
         description:
-          'Retain the agent-generated parser.test.ts after compile (debug). Default deletes it; the test reads the gitignored redacted session via $IMPRINT_SESSION_PATH and is not portable. Also settable via IMPRINT_KEEP_TEST=1.',
+          'Retain the agent-generated parser.test.ts and request.test.ts after compile (debug). Default deletes them; parser tests read the gitignored redacted session via $IMPRINT_SESSION_PATH and are not portable. Also settable via IMPRINT_KEEP_TEST=1.',
       },
       {
         name: '--skip-replay',
         description:
-          "Skip the replay-and-diff stage. Faster, but the compile agent won't be able to distinguish browser-minted values from constants, which may reduce workflow accuracy.",
+          "Skip the replay-and-diff stage. Faster, but the compile agent won't be able to distinguish browser-minted values from constants, which may reduce workflow accuracy. By default, the preceding effect-aware triage suppresses replay entirely when the recording contains an irreversible request.",
       },
       {
         name: '--from-step <step>',
         description:
-          'Resume a prior run starting at <step> (record, redact, replay-and-diff, triage, detect-candidates, plan-prereqs, generate, compile-playbook, emit, register). Only allowed if a prior run reached/crossed that point — earlier phase outputs are reused. Not combinable with --from-session.',
+          'Resume a prior run starting at <step> (record, redact, triage, replay-and-diff, detect-candidates, plan-prereqs, generate, compile-playbook, emit, register). Only allowed if a prior run reached/crossed that point — earlier phase outputs are reused. Not combinable with --from-session.',
       },
       {
         name: '--to-step <step>',
@@ -265,7 +265,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--keep-test',
         description:
-          'Retain the agent-generated parser.test.ts after compile (debug). Default deletes it; the test reads the gitignored redacted session via $IMPRINT_SESSION_PATH and is not portable. Also settable via IMPRINT_KEEP_TEST=1.',
+          'Retain the agent-generated parser.test.ts and request.test.ts after compile (debug). Default deletes them; parser tests read the gitignored redacted session via $IMPRINT_SESSION_PATH and are not portable. Also settable via IMPRINT_KEEP_TEST=1.',
       },
     ],
     example: 'imprint generate ~/.imprint/acmecorp/sessions/<ts>.redacted.json',
@@ -1622,6 +1622,7 @@ async function main(argv: string[]): Promise<number> {
           'revision-mode': { type: 'boolean' },
           provider: { type: 'string' },
           site: { type: 'string' },
+          'shared-triage-json': { type: 'string' },
         },
         allowPositionals: false,
       });
@@ -1639,6 +1640,7 @@ async function main(argv: string[]): Promise<number> {
       const { SharedModuleManifestSchema, AuthToolPlanSchema } = await import(
         './imprint/build-plan.ts'
       );
+      const { SharedTriageSelectionSchema } = await import('./imprint/triage-selection.ts');
       const candidate = values['candidate-json']
         ? ToolCandidateSchema.parse(JSON.parse(values['candidate-json']))
         : undefined;
@@ -1650,6 +1652,9 @@ async function main(argv: string[]): Promise<number> {
         : undefined;
       const authToolPlan = values['auth-plan-json']
         ? AuthToolPlanSchema.parse(JSON.parse(values['auth-plan-json']))
+        : undefined;
+      const sharedTriageSelection = values['shared-triage-json']
+        ? SharedTriageSelectionSchema.parse(JSON.parse(values['shared-triage-json']))
         : undefined;
       await runCompileMcpServer({
         sessionPath: values['session-path'],
@@ -1667,6 +1672,7 @@ async function main(argv: string[]): Promise<number> {
           | 'cursor-cli'
           | undefined,
         site: values.site,
+        sharedTriageSelection,
       });
       return 0;
     }

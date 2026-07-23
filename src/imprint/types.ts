@@ -28,6 +28,8 @@ const CapturedRequestSchema = z.object({
       mimeType: z.string().optional(),
     })
     .optional(),
+  /** Agent-classified effect on a derived triaged session. */
+  effect: z.literal('irreversible').optional(),
 });
 export type CapturedRequest = z.infer<typeof CapturedRequestSchema>;
 
@@ -100,6 +102,19 @@ export const SessionSchema = z.object({
   requests: z.array(CapturedRequestSchema),
   events: z.array(CapturedEventSchema),
   narration: z.array(NarrationSchema),
+  /** Present only on derived triaged artifacts. Version 2 proves every request
+   * in the source recording was shown to the effect-aware triage pass. The
+   * arrays retain safety coverage for requests omitted from this relevance-
+   * filtered artifact. */
+  triage: z
+    .object({
+      effectSchemaVersion: z.literal(2),
+      coveredSeqs: z.array(z.number().int().nonnegative()),
+      irreversibleSeqs: z.array(z.number().int().nonnegative()),
+      coveredOutboundEventSeqs: z.array(z.number().int().nonnegative()).default([]),
+      irreversibleEventSeqs: z.array(z.number().int().nonnegative()).default([]),
+    })
+    .optional(),
   cookieSnapshots: z.array(CookieSnapshotSchema).default([]),
   storageSnapshots: z.array(StorageSnapshotSchema).default([]),
 });
@@ -244,6 +259,13 @@ const WorkflowRequestSchema = z.object({
   url: z.string(),
   headers: z.record(z.string()),
   body: z.string().optional(),
+  /** Agent-declared escaping for values substituted into `body` placeholders.
+   *
+   * Omitted is accepted only for backward compatibility with previously
+   * generated workflows. New compile runs require an explicit value whenever
+   * a body contains runtime placeholders, so payload syntax is decided and
+   * tested at compile time instead of inferred from Content-Type at runtime. */
+  bodyPlaceholderEncoding: z.enum(['raw', 'json-string', 'form-urlencoded']).optional(),
   /** Execute this GET or URL-encoded POST as a top-level browser navigation instead of fetch().
    *  This lets the recorded page run its own JavaScript and mint coupled browser
    *  state, and lets form POSTs retain document-navigation semantics, without
@@ -291,7 +313,8 @@ const WorkflowRequestSchema = z.object({
   /** Names → jsonpath expressions; later requests reference via ${response[N].name}. */
   extract: z.record(z.string()).optional(),
   captures: z.array(RequestCaptureSchema).optional(),
-  effect: z.enum(['safe', 'idempotent', 'unsafe']).optional(),
+  /** Agent-classified outward effect. Runtime does not infer business intent. */
+  effect: z.enum(['safe', 'idempotent', 'unsafe', 'irreversible']).optional(),
   /** When true, a non-2xx response from this request is logged and SKIPPED
    *  instead of aborting the flow. For best-effort, non-load-bearing steps whose
    *  failure must not block completion — e.g. a "remember this device" /
@@ -349,8 +372,11 @@ const AuthConfigSchema = z
         })
         .strict(),
     ),
-    /** Captured state names to store as durable credentials after success. */
+    /** Durable credential interface names to store after success. */
     persist: z.array(z.string().min(1)).optional().default([]),
+    /** Optional interface-name → compiled capture-name bindings. This lets the
+     * auth agent rename an internal capture without changing data-tool inputs. */
+    persistBindings: z.record(z.string().min(1), z.string().min(1)).optional(),
     /** Opt-in: when the recorded login carries its session through a CROSS-ORIGIN
      *  `Set-Cookie` (e.g. a `functions.*`/`global.*` host sets a cookie that a
      *  later leg depends on), set this so cdp-replay writes those cross-origin
@@ -362,6 +388,13 @@ const AuthConfigSchema = z
   .strict()
   .optional();
 export type AuthConfig = z.infer<typeof AuthConfigSchema>;
+
+export function persistedCaptureName(
+  config: NonNullable<AuthConfig>,
+  credentialName: string,
+): string {
+  return config.persistBindings?.[credentialName] ?? credentialName;
+}
 
 export const WorkflowSchema = z.object({
   toolName: z.string(),
@@ -433,7 +466,7 @@ export const WorkflowSchema = z.object({
    *  `liveVerified === false`. */
   liveVerifiedWaiver: z
     .object({
-      kind: z.enum(['waived-bot', 'waived-infra']),
+      kind: z.enum(['waived-bot', 'waived-infra', 'waived-safety']),
       firstError: z.string(),
       exhaustedBackends: z.array(z.string()),
     })

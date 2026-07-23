@@ -106,6 +106,16 @@ describe('partitionAuditTools', () => {
         toolKind: 'authenticate',
         authConfig: undefined,
       });
+      const irreversible = resolvedAuditTool(dir, 'place_order', {
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://fixture.example/orders',
+            headers: {},
+            effect: 'irreversible',
+          },
+        ],
+      });
       writeFileSync(
         pathJoin(dir, AUTH_VERIFICATION_ATTEMPT_SENTINEL),
         JSON.stringify({
@@ -123,12 +133,14 @@ describe('partitionAuditTools', () => {
         interactive,
         legacyInteractive,
         malformedAuth,
+        irreversible,
       ]);
       expect(partition.eligible.map((tool) => tool.workflow.toolName)).toEqual([
         'search_items',
         'authenticate_password',
       ]);
       expect(partition.nonInteractiveAuthNames).toEqual(['authenticate_password']);
+      expect(partition.skippedIrreversible).toEqual(['place_order']);
       expect(partition.skippedInteractiveAuth).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

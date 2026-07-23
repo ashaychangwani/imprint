@@ -28,12 +28,14 @@ import {
 } from './compile-agent-types.ts';
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
 import {
+  applyIrreversibleVerificationWaiver,
   applyLiveVerification,
   applyParamVerification,
   buildCompileTools,
   externalVerification,
 } from './compile-tools.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
+import { workflowHasIrreversibleEffect } from './effects.ts';
 import {
   isInfrastructureOnlyInconclusiveReport,
   mergeSemanticParamVerification,
@@ -61,7 +63,12 @@ import { rebindExistingBackendsCacheToWorkflow } from './probe-backends.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import type { ClassifiedValue } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
-import { type Session, SessionSchema } from './types.ts';
+import {
+  type SharedTriageSelection,
+  applySharedTriageSelection,
+  minimalSharedTriageSelection,
+} from './triage-selection.ts';
+import { type Session, SessionSchema, WorkflowSchema } from './types.ts';
 
 export type { CompileAgentProgress } from './compile-agent-types.ts';
 
@@ -126,8 +133,8 @@ interface CompileAgentOptions {
   llmProvider?: ToolUseProvider;
   /** Progress callback with verification cycle information. */
   onProgress?: (p: CompileAgentProgress) => void;
-  /** Retain parser.test.ts after successful verification. By default it's
-   *  deleted (the test reads the gitignored redacted session at
+  /** Retain generated tests after successful verification. By default they are
+   *  deleted (parser tests read the gitignored redacted session at
    *  $IMPRINT_SESSION_PATH, so it's not reproducible elsewhere — keeping it
    *  on disk just confuses `bun test`). Pass true with `--keep-test` to
    *  inspect the agent's test output locally. */
@@ -161,6 +168,8 @@ interface CompileAgentOptions {
   /** Revise an existing generated artifact, using durable verification feedback
    *  as the starting point instead of rebuilding it from raw capture. */
   revisionMode?: boolean;
+  /** Shared triage decision propagated into all compile transports. */
+  preTriagedSession?: SharedTriageSelection;
 }
 
 function formatRevisionMode(enabled: boolean | undefined): string {
@@ -219,6 +228,12 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
         `redacted ${r.stats.totalRedactions} value(s)${freeformNote} and injected ${r.stats.placeholdersInjected} credential placeholder(s) before sending to LLM`,
       );
     }
+  }
+  if (opts.preTriagedSession) {
+    session = applySharedTriageSelection(session, opts.preTriagedSession, {
+      candidate: opts.candidate,
+      sharedContext: opts.sharedContext,
+    });
   }
 
   // 3. Determine the generated tool directory.
@@ -321,6 +336,9 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         toolPlan: opts.toolPlan,
         revisionMode: opts.revisionMode,
         model: opts.llmConfig?.model,
+        sharedTriageSelection: opts.preTriagedSession
+          ? minimalSharedTriageSelection(opts.preTriagedSession)
+          : undefined,
       });
     }
     if (resolvedProvider.name === 'codex-cli') {
@@ -340,6 +358,9 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         toolPlan: opts.toolPlan,
         revisionMode: opts.revisionMode,
         model: opts.llmConfig?.model,
+        sharedTriageSelection: opts.preTriagedSession
+          ? minimalSharedTriageSelection(opts.preTriagedSession)
+          : undefined,
       });
     }
     if (!isToolUseProvider(resolvedProvider)) {
@@ -426,10 +447,11 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         expectedToolName: opts.candidate?.toolName,
         likelyParams: opts.candidate?.likelyParams,
         candidateRequestSeqs: opts.candidate?.requestSeqs,
-        // Widen Fix B's variation pool to the dependency requests (e.g. a
-        // bootstrap GET) so a session token that varies only across dependency
-        // seqs and is then frozen as a literal in the tool's request is caught.
-        dependencyRequestSeqs: opts.candidate?.dependencySeqs,
+        // Widen checks to requests this tool depends on (bootstrap/login/etc.).
+        dependencyRequestSeqs: [
+          ...(opts.candidate?.dependencySeqs ?? []),
+          ...(opts.sharedContext?.loginRequestSeqs ?? []),
+        ],
         assignedSharedModules,
         tokenParams,
         tokenParamShapes,
@@ -443,6 +465,25 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
 
     if (warnings.length > 0) {
       log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
+    }
+
+    let workflow: ReturnType<typeof WorkflowSchema.parse> | undefined;
+    if (failures.length === 0) {
+      workflow = WorkflowSchema.parse(
+        JSON.parse(readFileSync(pathJoin(absoluteToolDir, 'workflow.json'), 'utf8')),
+      );
+    }
+    if (workflow && workflowHasIrreversibleEffect(workflow)) {
+      warnings.push(...applyIrreversibleVerificationWaiver(absoluteToolDir, workflow));
+      message = result.doneSummary ?? 'Task completed';
+      message += `\n\nWarnings:\n${warnings.join('\n')}`;
+      if (!opts.keepTest) {
+        for (const file of ['parser.test.ts', 'request.test.ts', 'integration.test.ts']) {
+          const testPath = pathJoin(absoluteToolDir, file);
+          if (existsSync(testPath)) unlinkSync(testPath);
+        }
+      }
+      break;
     }
 
     let semanticReviewCompleted = false;
@@ -488,7 +529,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         message = result.doneSummary ?? 'Task completed';
         message += `\n\nWarnings:\n${warnings.join('\n')}`;
         if (!opts.keepTest) {
-          for (const f of ['parser.test.ts', 'integration.test.ts']) {
+          for (const f of ['parser.test.ts', 'request.test.ts', 'integration.test.ts']) {
             const testPath = pathJoin(absoluteToolDir, f);
             if (existsSync(testPath)) unlinkSync(testPath);
           }
@@ -561,7 +602,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
             message += `\n\nWarnings:\n${allWarnings.join('\n')}`;
           }
           if (!opts.keepTest) {
-            for (const f of ['parser.test.ts', 'integration.test.ts']) {
+            for (const f of ['parser.test.ts', 'request.test.ts', 'integration.test.ts']) {
               const testPath = pathJoin(absoluteToolDir, f);
               if (existsSync(testPath)) unlinkSync(testPath);
             }

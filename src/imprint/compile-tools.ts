@@ -35,6 +35,7 @@ import {
   readLiveIntegrationEvidence,
 } from './compile-verification.ts';
 import { splitSetCookieHeader } from './cookie-jar.ts';
+import { isIrreversibleRequest, workflowHasIrreversibleEffect } from './effects.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import {
   endpointsForSeqs,
@@ -44,6 +45,7 @@ import {
 } from './param-grounding.ts';
 import { detectPageMintedHeaders } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
+import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import { isSensitiveHeader } from './sensitive-keys.ts';
 import { type ClassifiedValue, looksLikeToken } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
@@ -53,11 +55,39 @@ import {
   type RequestCapture,
   type Session,
   SessionSchema,
+  type Workflow,
   WorkflowSchema,
 } from './types.ts';
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const MAX_SHARED_MODULE_SOURCE_CHARS = 50_000;
+const RUNTIME_BODY_PLACEHOLDER = /\$\{(?:param|credential|state|response|generated|cookie|env)\./;
+
+export function requestsNeedingBodyEncodingDecision(workflow: Workflow): number[] {
+  return workflow.requests.flatMap((request, index) =>
+    request.body && RUNTIME_BODY_PLACEHOLDER.test(request.body) ? [index] : [],
+  );
+}
+
+/** Compile-time contract only; legacy workflows retain runtime inference. */
+export function bodyEncodingContractFailures(workflow: Workflow): string[] {
+  return requestsNeedingBodyEncodingDecision(workflow)
+    .filter((index) => workflow.requests[index]?.bodyPlaceholderEncoding === undefined)
+    .map(
+      (index) =>
+        `request ${index} has runtime placeholders in its body but no bodyPlaceholderEncoding. Inspect the recorded wire format, choose raw, json-string, or form-urlencoded, then prove the choice with an agent-authored offline request.test.ts.`,
+    );
+}
+
+export function requestEncodingTestContractFailures(
+  workflow: Workflow,
+  source: string | undefined,
+): string[] {
+  if (requestsNeedingBodyEncodingDecision(workflow).length === 0) return [];
+  return source === undefined
+    ? ['request.test.ts is required for a placeholder-bearing request body']
+    : [];
+}
 
 // Env var read by the agent-written parser.test.ts to locate the redacted
 // session. The test loads it, finds the load-bearing request seq, and feeds
@@ -87,6 +117,17 @@ export function buildCompileTools(
   const credEnv = context.teachCredentials
     ? { IMPRINT_TEACH_CREDENTIALS: JSON.stringify(context.teachCredentials) }
     : undefined;
+  const candidateSeqs = context.candidate
+    ? new Set([
+        ...context.candidate.requestSeqs,
+        ...context.candidate.dependencySeqs,
+        ...(context.sharedContext?.loginRequestSeqs ?? []),
+      ])
+    : undefined;
+  const hasIrreversibleCandidateRequest = session.requests.some(
+    (request) =>
+      isIrreversibleRequest(request) && (!candidateSeqs || candidateSeqs.has(request.seq)),
+  );
   const tools = [
     buildReadSessionSummaryTool(session, context, toolDir),
     buildReadRequestTool(session),
@@ -97,9 +138,15 @@ export function buildCompileTools(
     buildSearchResponseBodyTool(session),
     buildWriteFileTool(toolDir),
     buildReadFileTool(toolDir),
-    buildRunBashTool(toolDir, credEnv),
-    buildRunTestsTool(toolDir, sessionPath, credEnv),
   ];
+  tools.push(
+    buildRunTestsTool(toolDir, sessionPath, credEnv, {
+      networkDisabled: hasIrreversibleCandidateRequest,
+    }),
+  );
+  if (!hasIrreversibleCandidateRequest) {
+    tools.push(buildRunBashTool(toolDir, credEnv));
+  }
   if (context.buildPlanPath && context.candidate?.toolName) {
     tools.push(
       buildReadBuildPlanTool(
@@ -346,6 +393,7 @@ export function buildReadSessionSummaryTool(
           mimeType: r.response?.mimeType,
           bodySize: r.response?.body?.length,
           responseBodyDigest: requestContextDigest(r.response?.body),
+          ...(isIrreversibleRequest(r) ? { irreversible: true } : {}),
           ...(preserveSeqs.has(r.seq) ? { inlineData: buildInlineData(r) } : {}),
         })),
         compileSummaryRequestGroupKey,
@@ -370,6 +418,7 @@ export function buildReadSessionSummaryTool(
                   ? context.candidate.representativeSeqs
                   : context.candidate.requestSeqs,
               dependencySeqs: context.candidate.dependencySeqs,
+              dependsOnTools: context.candidate.dependsOnTools,
               eventSeqs: context.candidate.eventSeqs,
               likelyParams: context.candidate.likelyParams,
             }
@@ -406,6 +455,7 @@ export function buildReadSessionSummaryTool(
 const REVISION_ARTIFACT_NAMES = [
   'workflow.json',
   'parser.ts',
+  'request.test.ts',
   'request-transform.ts',
   'integration.test.ts',
   'playbook.yaml',
@@ -905,6 +955,7 @@ interface CompileSummaryRequestContext {
   mimeType?: string;
   bodySize?: number;
   responseBodyDigest?: string;
+  irreversible?: boolean;
   repeatCount?: number;
   repeatedSeqs?: number[];
   lastTimestamp?: number;
@@ -918,6 +969,7 @@ function compileSummaryRequestGroupKey(request: CompileSummaryRequestContext): u
     request.mimeType,
     request.bodySize,
     request.responseBodyDigest,
+    request.irreversible,
   ];
 }
 
@@ -1306,6 +1358,7 @@ export function buildWriteFileTool(toolDir: string, extraAllowed: string[] = [])
     'workflow.json',
     'parser.ts',
     'parser.test.ts',
+    'request.test.ts',
     'request-transform.ts',
     'integration.test.ts',
     ...extraAllowed,
@@ -1412,7 +1465,7 @@ export function buildReadFileTool(toolDir: string): AgentTool {
 
 // ─── Tool: run_bash ──────────────────────────────────────────────────────────
 
-export function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): AgentTool {
+function buildRunBashTool(toolDir: string, credEnv?: Record<string, string>): AgentTool {
   return {
     name: 'run_bash',
     description: 'Run a shell command in the generated tool directory with a timeout.',
@@ -1435,7 +1488,6 @@ export function buildRunBashTool(toolDir: string, credEnv?: Record<string, strin
       }
 
       const cappedTimeout = Math.min(timeoutSec, 300) * 1000;
-
       return await runCommand(command, toolDir, cappedTimeout, credEnv);
     },
   };
@@ -1554,6 +1606,13 @@ export async function typecheckArtifacts(
         extends: extendsPath,
         include: includes,
         exclude: ['*.test.ts'],
+        compilerOptions: {
+          // Generated tools normally live under ~/.imprint, outside the repo's
+          // node_modules ancestry. Extending the repo tsconfig does not change
+          // where TypeScript searches for named `types`, so point that lookup
+          // at the dependencies of the runtime being compiled.
+          typeRoots: [pathJoin(REPO_ROOT, 'node_modules', '@types')],
+        },
       },
       null,
       2,
@@ -1589,30 +1648,60 @@ function normalizeTsconfigPath(value: string): string {
 
 // ─── Tool: run_tests ─────────────────────────────────────────────────────────
 
-function buildRunTestsTool(
+export function buildRunTestsTool(
   toolDir: string,
   sessionPath: string,
   credEnv?: Record<string, string>,
+  opts: { networkDisabled?: boolean } = {},
 ): AgentTool {
   return {
     name: 'run_tests',
     description:
-      'Run bun test parser.test.ts plus strict TypeScript checks for generated parser/request-transform artifacts, then parse pass/fail counts.',
+      'Run the agent-written parser.test.ts and/or request.test.ts plus strict TypeScript checks for generated parser/request-transform artifacts, then report pass/fail counts.',
     input_schema: {
       type: 'object',
       properties: {},
       required: [],
     },
     handler: async () => {
-      const testPath = pathJoin(toolDir, 'parser.test.ts');
-      if (!existsSync(testPath)) {
+      const testNames = ['parser.test.ts', 'request.test.ts'].filter((name) =>
+        existsSync(pathJoin(toolDir, name)),
+      );
+      if (testNames.length === 0) {
         return {
-          result: 'parser.test.ts does not exist — write it first',
+          result: 'no generated tests exist — write parser.test.ts and/or request.test.ts first',
           isError: true,
         };
       }
 
-      const cmdResult = await runCommand('bun test parser.test.ts', toolDir, 120000, {
+      // Agent tests execute from ~/.imprint/<site>/<tool>. Ensure their
+      // `imprint/*` imports resolve to the runtime currently doing the compile,
+      // rather than a stale global install or vanished worktree.
+      const imprintHome = pathJoin(toolDir, '..', '..');
+      ensureImprintRuntimeLink(dirname(imprintHome) !== imprintHome ? imprintHome : toolDir);
+
+      let workflowRequiresIsolation = false;
+      try {
+        workflowRequiresIsolation = workflowHasIrreversibleEffect(
+          WorkflowSchema.parse(
+            JSON.parse(readFileSync(pathJoin(toolDir, 'workflow.json'), 'utf8')),
+          ),
+        );
+      } catch {
+        // Workflow/schema failures are reported by the compile verifier.
+      }
+      const testCommand = networkIsolatedCommand(
+        `bun test ${testNames.join(' ')}`,
+        opts.networkDisabled === true || workflowRequiresIsolation,
+      );
+      if (!testCommand) {
+        return {
+          result:
+            'offline tests require a supported network-isolation runner for an irreversible workflow',
+          isError: true,
+        };
+      }
+      const cmdResult = await runCommand(testCommand, toolDir, 120000, {
         [SESSION_PATH_ENV]: sessionPath,
         ...credEnv,
       });
@@ -1624,13 +1713,20 @@ function buildRunTestsTool(
         timedOut: boolean;
       };
 
-      const passMatch = output.stdout.match(/(\d+)\s+pass/);
-      const failMatch = output.stdout.match(/(\d+)\s+fail/);
+      const testOutput = `${output.stdout}\n${output.stderr}`;
+      const passMatch = testOutput.match(/(\d+)\s+pass/);
+      const failMatch = testOutput.match(/(\d+)\s+fail/);
 
       const passed = passMatch?.[1] ? Number.parseInt(passMatch[1], 10) : 0;
       const failed = failMatch?.[1] ? Number.parseInt(failMatch[1], 10) : 0;
       const total = passed + failed;
-      const typecheck = await typecheckArtifacts(toolDir, ['parser.ts', 'request-transform.ts']);
+      const typecheckIncludes = ['parser.ts', 'request-transform.ts'].filter((name) =>
+        existsSync(pathJoin(toolDir, name)),
+      );
+      const typecheck =
+        typecheckIncludes.length > 0
+          ? await typecheckArtifacts(toolDir, typecheckIncludes)
+          : { stdout: '', stderr: '', exitCode: 0, timedOut: false };
       const typecheckFailed = typecheck.exitCode !== 0 || typecheck.timedOut;
 
       return {
@@ -1653,6 +1749,20 @@ function buildRunTestsTool(
       };
     },
   };
+}
+
+function networkIsolatedCommand(command: string, disabled: boolean): string | null {
+  if (!disabled) return command;
+  if (process.platform === 'darwin' && existsSync('/usr/bin/sandbox-exec')) {
+    return `/usr/bin/sandbox-exec -p '(version 1) (allow default) (deny network*)' ${command}`;
+  }
+  if (process.platform === 'linux' && existsSync('/usr/bin/bwrap')) {
+    return `/usr/bin/bwrap --ro-bind / / --dev /dev --proc /proc --unshare-net -- ${command}`;
+  }
+  if (process.platform === 'linux' && existsSync('/usr/bin/unshare')) {
+    return `/usr/bin/unshare --user --map-root-user --net -- ${command}`;
+  }
+  return null;
 }
 
 // ─── Test-quality helpers (shared with prereq-builder verification) ─────────
@@ -1833,7 +1943,13 @@ export interface ParamVerification {
    *  - `waived-chain`: the param is a producer-sourced token but the producer
    *    tool could not be run at compile time (anti-bot / not compiled), so the
    *    chain could not be verified. */
-  reason?: 'waived-bot' | 'waived-infra' | 'annotated' | 'waived-chain' | 'semantic-gap';
+  reason?:
+    | 'waived-bot'
+    | 'waived-infra'
+    | 'waived-safety'
+    | 'annotated'
+    | 'waived-chain'
+    | 'semantic-gap';
   /** For a producer-sourced token param, the sibling tool + output field its
    *  value comes from. Stamped into workflow.json (`param.sourcedFrom`) so the
    *  MCP description tells the orchestrating LLM where to mint it and the audit
@@ -1865,6 +1981,7 @@ export async function runBunTestWithResults(
   opts: {
     bail?: boolean;
     onOutput?: (stream: 'stdout' | 'stderr', chunk: string) => void;
+    networkDisabled?: boolean;
   } = {},
 ): Promise<BunTestRun> {
   const junitPath = pathJoin(toolDir, `.imprint-junit-${basename(testPath)}.xml`);
@@ -1873,13 +1990,21 @@ export async function runBunTestWithResults(
   } catch {
     // best-effort
   }
-  const result = await runCommand(
+  const command = networkIsolatedCommand(
     `bun test ${testPath} --reporter=junit --reporter-outfile=${junitPath}${opts.bail ? ' --bail=1' : ''}`,
-    toolDir,
-    timeoutMs,
-    env,
-    opts.onOutput,
+    opts.networkDisabled === true,
   );
+  if (!command) {
+    return {
+      stdout: '',
+      stderr: 'network-isolated test runner unavailable',
+      exitCode: 1,
+      timedOut: false,
+      passed: new Set(),
+      failed: new Set(),
+    };
+  }
+  const result = await runCommand(command, toolDir, timeoutMs, env, opts.onOutput);
   const output = JSON.parse(result.result) as {
     stdout: string;
     stderr: string;
@@ -2609,7 +2734,11 @@ export function applyParamVerification(
 export function applyLiveVerification(
   toolDir: string,
   liveVerification:
-    | { kind: 'waived-bot' | 'waived-infra'; firstError: string; exhaustedBackends: string[] }
+    | {
+        kind: 'waived-bot' | 'waived-infra' | 'waived-safety';
+        firstError: string;
+        exhaustedBackends: string[];
+      }
     | undefined,
 ): void {
   const workflowPath = pathJoin(toolDir, 'workflow.json');
@@ -2632,6 +2761,29 @@ export function applyLiveVerification(
   } catch {
     // best-effort — non-fatal
   }
+}
+
+/** Apply the common compile outcome for workflows that must never be exercised
+ * live. Provider frontends own their transport-specific completion messages,
+ * while this helper owns the shared workflow metadata. */
+export function applyIrreversibleVerificationWaiver(toolDir: string, workflow: Workflow): string[] {
+  applyLiveVerification(toolDir, {
+    kind: 'waived-safety',
+    firstError: 'live verification is disabled for irreversible workflows',
+    exhaustedBackends: [],
+  });
+  return [
+    'live verification skipped: workflow declares an irreversible request',
+    ...applyParamVerification(
+      toolDir,
+      workflow.parameters.map((parameter) => ({
+        name: parameter.name,
+        verified: false,
+        reason: 'waived-safety' as const,
+        ...(parameter.sourcedFrom ? { sourcedFrom: parameter.sourcedFrom } : {}),
+      })),
+    ),
+  ];
 }
 
 /** Strip `${...}` placeholders and query string from a workflow URL so it can
@@ -2668,6 +2820,55 @@ function findRecordedMatches(
     if (!rNorm) return false;
     return rNorm.origin === norm.origin && rNorm.path === norm.path;
   });
+}
+
+export function irreversibleProvenanceFailures(
+  session: Session,
+  workflow: ReturnType<typeof WorkflowSchema.parse>,
+  scope: { candidateRequestSeqs?: number[]; dependencyRequestSeqs?: number[] } = {},
+): string[] {
+  const scopedSeqs = new Set([
+    ...(scope.candidateRequestSeqs ?? []),
+    ...(scope.dependencyRequestSeqs ?? []),
+  ]);
+  const hasScope = scopedSeqs.size > 0;
+  const failures: string[] = [];
+
+  for (const recorded of session.requests.filter(isIrreversibleRequest)) {
+    if (hasScope && !scopedSeqs.has(recorded.seq)) continue;
+    const generated = workflow.requests
+      .map((request, index) => ({ request, index }))
+      .filter(({ request }) => request.recordingRequestSeq === recorded.seq);
+    if (generated.length === 0) {
+      failures.push(
+        `triage classified recorded request seq ${recorded.seq} as irreversible, but workflow.json has no request with recordingRequestSeq: ${recorded.seq}`,
+      );
+    }
+  }
+
+  for (const [index, request] of workflow.requests.entries()) {
+    const recorded =
+      request.recordingRequestSeq === undefined
+        ? undefined
+        : session.requests.find((candidate) => candidate.seq === request.recordingRequestSeq);
+    if (recorded && isIrreversibleRequest(recorded) && !isIrreversibleRequest(request)) {
+      failures.push(
+        `workflow request index ${index} grounded by recordingRequestSeq ${recorded.seq} must declare effect: "irreversible"`,
+      );
+    }
+    if (!isIrreversibleRequest(request)) continue;
+    if (request.recordingRequestSeq === undefined) {
+      failures.push(
+        `irreversible workflow request index ${index} must include recordingRequestSeq provenance`,
+      );
+    } else if (!session.requests.some((recorded) => recorded.seq === request.recordingRequestSeq)) {
+      failures.push(
+        `irreversible workflow request index ${index} references unknown recordingRequestSeq ${request.recordingRequestSeq}`,
+      );
+    }
+  }
+
+  return failures;
 }
 
 /** Case-insensitive header lookup against a `Record<string, string>` (which
@@ -3695,10 +3896,13 @@ export async function externalVerification(
   // firing it is pure waste that also burns the per-IP anti-bot rate budget.
   // Skip the live test in that case and make the agent fix the capture first.
   let referencedStateBroken = false;
+  let irreversibleProvenanceMissing = false;
+  let hasIrreversibleWorkflow = false;
 
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   const parserPath = pathJoin(toolDir, 'parser.ts');
   const parserTestPath = pathJoin(toolDir, 'parser.test.ts');
+  const requestTestPath = pathJoin(toolDir, 'request.test.ts');
   const requestTransformPath = pathJoin(toolDir, 'request-transform.ts');
 
   // Contracted-input injection + emit-time secret guard + the contracted-input
@@ -3763,6 +3967,8 @@ export async function externalVerification(
     try {
       const raw = JSON.parse(readFileSync(workflowPath, 'utf8'));
       const workflow = WorkflowSchema.parse(raw);
+      failures.push(...bodyEncodingContractFailures(workflow));
+      hasIrreversibleWorkflow = workflowHasIrreversibleEffect(workflow);
       if (opts.expectedToolName && workflow.toolName !== opts.expectedToolName) {
         failures.push(
           `workflow.toolName "${workflow.toolName}" does not match selected candidate "${opts.expectedToolName}"`,
@@ -3991,8 +4197,34 @@ export async function externalVerification(
     failures.push(...assertSharedModuleImports(toolDir, workflowPath, opts.assignedSharedModules));
   }
 
+  // Irreversible-effect provenance: semantic classification belongs to triage
+  // and compile agents. This deterministic gate only proves that their declared
+  // effect stays attached to the exact recording request sequence.
+  if (existsSync(workflowPath)) {
+    try {
+      const wf = WorkflowSchema.parse(JSON.parse(readFileSync(workflowPath, 'utf8')));
+      const irreversibleFailures = irreversibleProvenanceFailures(session, wf, {
+        candidateRequestSeqs: opts.candidateRequestSeqs,
+        dependencyRequestSeqs: opts.dependencyRequestSeqs,
+      });
+      if (irreversibleFailures.length > 0) {
+        irreversibleProvenanceMissing = true;
+        failures.push(...irreversibleFailures);
+      }
+    } catch {
+      /* workflow parse already checked above */
+    }
+  }
+
+  const safetyBlocked = hasIrreversibleWorkflow || irreversibleProvenanceMissing;
+
   if (!existsSync(parserPath)) {
     failures.push('parser.ts was not written');
+  } else if (safetyBlocked) {
+    const parserSource = readFileSync(parserPath, 'utf8');
+    if (!/\bexport\s+(?:async\s+)?function\s+extract\b/.test(parserSource)) {
+      failures.push('parser.ts must export `extract` function');
+    }
   } else {
     try {
       const cacheBust = `?t=${Date.now()}`;
@@ -4029,9 +4261,17 @@ export async function externalVerification(
   }
 
   if (existsSync(parserTestPath)) {
-    const run = await runBunTestWithResults(parserTestPath, toolDir, 120000, {
-      [SESSION_PATH_ENV]: sessionPath,
-    });
+    const run = await runBunTestWithResults(
+      parserTestPath,
+      toolDir,
+      120000,
+      {
+        [SESSION_PATH_ENV]: sessionPath,
+      },
+      {
+        networkDisabled: safetyBlocked,
+      },
+    );
     if (run.exitCode !== 0) {
       failures.push(
         `bun test parser.test.ts exited ${run.exitCode}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
@@ -4049,6 +4289,38 @@ export async function externalVerification(
     }
   }
 
+  let workflowForRequestTests: ReturnType<typeof WorkflowSchema.parse> | undefined;
+  try {
+    workflowForRequestTests = WorkflowSchema.parse(JSON.parse(readFileSync(workflowPath, 'utf8')));
+  } catch {
+    // The workflow schema failure above is the actionable error.
+  }
+  if (
+    workflowForRequestTests &&
+    requestsNeedingBodyEncodingDecision(workflowForRequestTests).length > 0
+  ) {
+    const src = existsSync(requestTestPath) ? readFileSync(requestTestPath, 'utf8') : undefined;
+    failures.push(...requestEncodingTestContractFailures(workflowForRequestTests, src));
+    if (src !== undefined) {
+      const run = await runBunTestWithResults(
+        requestTestPath,
+        toolDir,
+        120000,
+        {
+          [SESSION_PATH_ENV]: sessionPath,
+        },
+        {
+          networkDisabled: safetyBlocked,
+        },
+      );
+      if (run.exitCode !== 0) {
+        failures.push(
+          `bun test request.test.ts exited ${run.exitCode}\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+        );
+      }
+    }
+  }
+
   // Run the live integration suite and classify the outcome. The per-param
   // coverage check below trusts the test *runner* (which named tests actually
   // ran green) rather than a static source scan, so a suite that was waived by
@@ -4056,7 +4328,11 @@ export async function externalVerification(
   const integrationTestPath = pathJoin(toolDir, 'integration.test.ts');
   let integrationOutcome: 'passed' | 'waived-bot' | 'waived-infra' | 'failed' | 'absent' = 'absent';
   let integrationPassedTests = new Set<string>();
-  if (!existsSync(integrationTestPath)) {
+  if (safetyBlocked) {
+    warnings.push(
+      'live integration suite omitted because the workflow declares an irreversible request',
+    );
+  } else if (!existsSync(integrationTestPath)) {
     failures.push(
       'integration.test.ts was not written — the tool must include a live API test that calls the workflow and verifies it returns real data',
     );
@@ -4069,6 +4345,11 @@ export async function externalVerification(
     integrationOutcome = 'failed';
     warnings.push(
       'skipped the live integration test: a request references a ${state.X} capture (e.g. csrf/csp-nonce) whose pattern does not match the recorded page, so the live call is guaranteed to fail with STATE_MISSING. Fix the capture pattern/source (see the failure above) — the next verification cycle will run the live test once it can succeed. This avoids burning a doomed anti-bot .act call.',
+    );
+  } else if (irreversibleProvenanceMissing) {
+    integrationOutcome = 'failed';
+    warnings.push(
+      'skipped the live integration test until workflow.json preserves irreversible request provenance.',
     );
   } else {
     const integrationSrc = readFileSync(integrationTestPath, 'utf8');
@@ -4199,6 +4480,7 @@ export async function externalVerification(
   // each is recorded in `paramVerification` as verified or not (with a reason),
   // and only a genuinely-uncovered param on a suite that DID run blocks compile.
   if (
+    !safetyBlocked &&
     !referencedStateBroken &&
     existsSync(integrationTestPath) &&
     opts.likelyParams &&
@@ -4377,7 +4659,7 @@ export async function externalVerification(
   }
 
   const loadBearing = identifyLoadBearingRequests(session);
-  if (loadBearing.length > 0 && existsSync(parserPath)) {
+  if (!safetyBlocked && loadBearing.length > 0 && existsSync(parserPath)) {
     const firstReq = loadBearing[0];
     if (firstReq?.response?.body) {
       try {

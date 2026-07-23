@@ -15,9 +15,12 @@ import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
   buildTriageEventContexts,
+  chunkTriageItems,
   defaultCompilePlaybookPath,
+  expandCompactedTriageSeqs,
   findAuthAdjacentSeqs,
   findCredentialBearingSeqs,
+  parseTriageSelectionResponse,
   playbookWorkflowContractFailures,
   rescueActionAlignedRepeatedSeqs,
   resolveDefaultCompilePlaybookPath,
@@ -186,7 +189,7 @@ describe('shrinkSession', () => {
 });
 
 describe('buildTriageEventContexts', () => {
-  it('keeps only browser action/navigation events for the triage prompt', () => {
+  it('keeps browser context and outbound WebSocket events for effect triage', () => {
     const session = makeSession({
       events: [
         { seq: 1, timestamp: 100, type: 'navigation', detail: 'https://example.com/start' },
@@ -215,7 +218,22 @@ describe('buildTriageEventContexts', () => {
       ],
     });
 
-    expect(buildTriageEventContexts(session).map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
+    expect(buildTriageEventContexts(session).map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+});
+
+describe('chunkTriageItems', () => {
+  it('bounds full-inventory effect batches without dropping or reordering items', () => {
+    const items = Array.from({ length: 20 }, (_, index) => ({
+      seq: index,
+      body: 'x'.repeat(80),
+    }));
+    const batches = chunkTriageItems(items, 500);
+    expect(batches.length).toBeGreaterThan(1);
+    expect(batches.flat().map((item) => item.seq)).toEqual(items.map((item) => item.seq));
+    expect(
+      batches.every((batch) => batch.length === 1 || JSON.stringify(batch).length <= 500),
+    ).toBe(true);
   });
 });
 
@@ -401,6 +419,64 @@ describe('rescueActionAlignedRepeatedSeqs', () => {
     );
 
     expect(rescued).toEqual([534]);
+  });
+});
+
+describe('parseTriageSelectionResponse', () => {
+  it('parses strict object triage with irreversible seqs', () => {
+    expect(parseTriageSelectionResponse('{"keep":[1,2],"irreversible":[2]}')).toEqual({
+      keepSeqs: [1, 2],
+      irreversibleSeqs: [2],
+      irreversibleEventSeqs: [],
+    });
+  });
+
+  it('rejects legacy array triage because effects are unclassified', () => {
+    expect(() => parseTriageSelectionResponse('[1,2]')).toThrow(/effect-aware/);
+  });
+
+  it('rejects wrong-typed irreversible seqs instead of dropping them', () => {
+    expect(() => parseTriageSelectionResponse('{"keep":[42],"irreversible":["42"]}')).toThrow(
+      /irreversible/,
+    );
+  });
+
+  it('classifies irrelevant irreversible requests independently from keep', () => {
+    expect(parseTriageSelectionResponse('{"keep":[1],"irreversible":[2]}')).toEqual({
+      keepSeqs: [1],
+      irreversibleSeqs: [2],
+      irreversibleEventSeqs: [],
+    });
+  });
+
+  it('keeps outbound WebSocket effect classifications separate from request seqs', () => {
+    expect(
+      parseTriageSelectionResponse('{"keep":[],"irreversible":[],"irreversibleEvents":[17]}'),
+    ).toEqual({
+      keepSeqs: [],
+      irreversibleSeqs: [],
+      irreversibleEventSeqs: [17],
+    });
+  });
+});
+
+describe('expandCompactedTriageSeqs', () => {
+  it('applies an irreversible representative classification to every repeated seq', () => {
+    expect(
+      expandCompactedTriageSeqs(
+        [12],
+        [
+          { seq: 12, repeatedSeqs: [12, 29, 44] },
+          { seq: 90, repeatedSeqs: [90, 91] },
+        ],
+      ),
+    ).toEqual([12, 29, 44]);
+  });
+
+  it('expands when the model names a non-representative repeated seq', () => {
+    expect(expandCompactedTriageSeqs([29], [{ seq: 12, repeatedSeqs: [12, 29, 44] }])).toEqual([
+      12, 29, 44,
+    ]);
   });
 });
 

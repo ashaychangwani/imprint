@@ -50,6 +50,7 @@ import {
   readSiteManifest,
   upsertManifestEntry,
 } from './credential-store.ts';
+import { workflowHasIrreversibleEffect } from './effects.ts';
 import { emit } from './emit.ts';
 import {
   type Platform,
@@ -121,7 +122,6 @@ import {
   type ToolCandidate,
   buildSharedCompileContext as buildCandidateSharedCompileContext,
   closeCandidateSelection,
-  deriveStructuralCandidateDependencies,
   detectToolCandidates,
   mergeCandidateDependencies,
   primaryToolCandidate,
@@ -193,16 +193,19 @@ function fileSha256(path: string): string {
 export function loadCachedClassificationsForSession(
   classPath: string,
   sessionPath: string,
+  replaySafetyHash: string,
 ): ClassifiedValue[] | undefined {
   if (!existsSync(classPath) || !existsSync(sessionPath)) return undefined;
   try {
     const cached = JSON.parse(readFileSync(classPath, 'utf8')) as {
       sourceSessionHash?: string;
+      replaySafetyHash?: string;
       classifications?: ClassifiedValue[];
     };
     if (
       !cached.sourceSessionHash ||
       cached.sourceSessionHash !== fileSha256(sessionPath) ||
+      cached.replaySafetyHash !== replaySafetyHash ||
       !Array.isArray(cached.classifications)
     ) {
       return undefined;
@@ -211,6 +214,64 @@ export function loadCachedClassificationsForSession(
   } catch {
     return undefined;
   }
+}
+
+const REPLAY_SAFETY_POLICY_VERSION = 1;
+
+/** Stable cache identity for the triage decision that authorizes replay.
+ * Runtime counters are intentionally excluded; only policy-relevant seq sets
+ * affect whether classifications may be reused. */
+export function replaySafetyIdentity(
+  triage: Pick<TriageResult, 'selectedSeqs' | 'replaySafeSeqs' | 'irreversibleSeqs'> & {
+    coveredOutboundEventSeqs?: number[];
+    irreversibleEventSeqs?: number[];
+  },
+): string {
+  const sorted = (seqs: readonly number[]): number[] => [...new Set(seqs)].sort((a, b) => a - b);
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        policyVersion: REPLAY_SAFETY_POLICY_VERSION,
+        selectedSeqs: sorted(triage.selectedSeqs),
+        replaySafeSeqs: sorted(triage.replaySafeSeqs),
+        irreversibleSeqs: sorted(triage.irreversibleSeqs),
+        coveredOutboundEventSeqs: sorted(triage.coveredOutboundEventSeqs ?? []),
+        irreversibleEventSeqs: sorted(triage.irreversibleEventSeqs ?? []),
+      }),
+    )
+    .digest('hex');
+}
+
+export function triageAllowsReplay(
+  triage: Pick<TriageResult, 'irreversibleSeqs'> & { irreversibleEventSeqs?: number[] },
+): boolean {
+  return triage.irreversibleSeqs.length === 0 && (triage.irreversibleEventSeqs?.length ?? 0) === 0;
+}
+
+export function triageCoversSession(
+  session: Pick<Session, 'requests' | 'events'>,
+  triage: Pick<TriageResult, 'replaySafeSeqs' | 'irreversibleSeqs'> & {
+    coveredOutboundEventSeqs?: number[];
+  },
+): boolean {
+  const source = [...new Set(session.requests.map((request) => request.seq))].sort((a, b) => a - b);
+  const covered = [...new Set([...triage.replaySafeSeqs, ...triage.irreversibleSeqs])].sort(
+    (a, b) => a - b,
+  );
+  const sourceOutboundEvents = [
+    ...new Set(
+      session.events.filter((event) => event.type === 'ws-sent').map((event) => event.seq),
+    ),
+  ].sort((a, b) => a - b);
+  const coveredOutboundEvents = [...new Set(triage.coveredOutboundEventSeqs ?? [])].sort(
+    (a, b) => a - b,
+  );
+  return (
+    source.length === covered.length &&
+    source.every((seq, index) => seq === covered[index]) &&
+    sourceOutboundEvents.length === coveredOutboundEvents.length &&
+    sourceOutboundEvents.every((seq, index) => seq === coveredOutboundEvents[index])
+  );
 }
 
 function classificationsPlanningHash(
@@ -268,7 +329,7 @@ interface TeachOptions {
   /** Per-tool compile timeout in ms. Default 20 minutes. */
   maxDurationMs?: number;
   fromSession?: string;
-  /** Retain parser.test.ts after successful compile-agent verification. */
+  /** Retain agent-generated tests after successful compile verification. */
   keepTest?: boolean;
   /** Compile only the primary detected candidate and its upstream dependencies. */
   primaryTool?: boolean;
@@ -338,6 +399,47 @@ function requireSessionFile(
       `→ rerun with: imprint teach ${opts.site} --from-session <session.json>`,
       `→ or choose "Redo" from ${redoStep} to rebuild it.`,
     ].join('\n'),
+  );
+}
+
+export function triageResultFromTriagedSession(session: Session): TriageResult {
+  if (session.triage?.effectSchemaVersion !== 2) {
+    throw new Error(
+      [
+        'Triaged session predates full-inventory replay safety classification.',
+        `Run \`imprint teach ${session.site}\` interactively, choose “Redo … from a specific step”, then choose “triage”.`,
+        'That supported Redo path reuses the original recording and rebuilds the triaged artifact with current safety metadata.',
+      ].join('\n'),
+    );
+  }
+  const selectedSeqs = session.requests.map((request) => request.seq);
+  const irreversibleSeqs = session.triage.irreversibleSeqs;
+  const irreversibleSet = new Set(irreversibleSeqs);
+  return {
+    session,
+    selectedSeqs,
+    replaySafeSeqs: session.triage.coveredSeqs.filter((seq) => !irreversibleSet.has(seq)),
+    irreversibleSeqs,
+    coveredOutboundEventSeqs: session.triage.coveredOutboundEventSeqs,
+    irreversibleEventSeqs: session.triage.irreversibleEventSeqs,
+    consideredCount: selectedSeqs.length,
+    inputTokens: null,
+    outputTokens: null,
+    durationMs: 0,
+  };
+}
+
+function loadTriageResultFromTriagedPath(triagedPath: string): TriageResult {
+  return triageResultFromTriagedSession(
+    loadJsonFile(
+      triagedPath,
+      SessionSchema,
+      {
+        notFound: 'Triaged session file not found while resuming teach.',
+        badSchema: 'Triaged session file is malformed while resuming teach.',
+      },
+      'session',
+    ),
   );
 }
 
@@ -936,11 +1038,11 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   }
 
   // Only require the redacted session once a phase that consumes it is in the
-  // window. A `--to-step record|redact` window stops before replay-and-diff (the
+  // window. A `--to-step record|redact` window stops before triage (the
   // first consumer), so `.redacted.json` may not exist yet — the finishEarly()
   // just below handles the clean stop. Without the stopIdx guard, `--to-step
   // record` throws on the missing file before ever reaching that early-exit.
-  if (startIdx <= STEPS.indexOf('generate') && stopIdx >= STEPS.indexOf('replay-and-diff')) {
+  if (startIdx <= STEPS.indexOf('generate') && stopIdx >= STEPS.indexOf('triage')) {
     redactedPath = requireSessionFile(redactedPath, {
       site,
       workflowKey,
@@ -949,27 +1051,25 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     });
   }
 
-  // ── 2b+3. Replay || (Triage → Detect → Select) — deep parallelism ──
+  // ── 2b+3. Triage → (Replay || Detect → Select) — deep parallelism ──
   //
-  // replay-and-diff is slow (~2 min) and only needed at compile time.
-  // triage→detect→select is fast (~30s) and independent of replay.
-  // Run them in parallel so the user can select tools while replay runs.
+  // Triage is the safety boundary: its durable artifact and checkpoint must
+  // exist before replay can launch a browser. Once that boundary is complete,
+  // replay-and-diff (~2 min) and detect→select (~30s) can run in parallel.
   let siteClassifications: ClassifiedValue[] | undefined;
   let triageResult: TriageResult | undefined;
   // Early stop: `--to-step record|redact` finishes before the analysis block.
-  if (stopIdx < STEPS.indexOf('replay-and-diff')) await finishEarly();
+  if (stopIdx < STEPS.indexOf('triage')) await finishEarly();
 
   let plans: CandidateCompilePlan[];
   let candidateBackedResume = false;
 
-  // The replay→triage→detect-candidates analysis is one atomic block (the sub-
-  // steps share a parallel run + the triaged session), so the window can START
-  // within it but always completes through detect-candidates. It runs when the
-  // [startFrom, toStep] window overlaps [replay-and-diff, detect-candidates].
+  // The triage→replay→detect-candidates stages share orchestration and the
+  // triaged session, while the requested phase window still bounds which stages
+  // run. The block is entered whenever [startFrom, toStep] overlaps that range.
   const runsAnalysis = analysisBlockRunsForWindow(startIdx, stopIdx);
-  let needsReplay =
-    runsAnalysis && startIdx <= STEPS.indexOf('replay-and-diff') && !opts.skipReplay;
-  const needsCandidates = runsAnalysis;
+  let needsReplay = runsAnalysis && inWindow('replay-and-diff') && !opts.skipReplay;
+  const needsCandidates = runsAnalysis && inWindow('detect-candidates');
 
   if (needsReplay && !opts.noInteractive) {
     const runReplay = await p.confirm({
@@ -982,14 +1082,13 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     }
   }
 
-  if (!needsReplay && startIdx <= STEPS.indexOf('replay-and-diff')) {
+  if (!needsReplay && inWindow('replay-and-diff')) {
     p.log.warn(
       "Skipping replay-and-diff stage. The compile agent won't be able to distinguish browser-minted values (timestamps, CSRF tokens) from constants — this may reduce workflow accuracy for sites with ephemeral request parameters.",
     );
-    updateCheckpoint(site, state, workflowKey, 'replay-and-diff', {});
   }
 
-  if (needsReplay || needsCandidates) {
+  if (runsAnalysis) {
     const replaySessionPath = requireSessionFile(redactedPath, {
       site,
       workflowKey,
@@ -998,28 +1097,122 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
     });
 
     // Resolve provider eagerly so triage/detect don't block on prompt mid-parallel
-    if (needsCandidates) await getProviderName();
+    if (inWindow('triage') || needsCandidates) await getProviderName();
 
     muteLog();
     try {
       const mp = new MultiProgress();
 
+      // ── triage safety boundary ──
+      // Complete and persist triage before either downstream branch starts.
+      // Replay consumes the full redacted recording plus this decision; candidate
+      // detection consumes the narrower triaged artifact.
+      let localTriageResult: TriageResult | undefined;
+      let localTriagedPath: string | null = null;
+      if (inWindow('triage')) {
+        const triageSession = loadJsonFile(
+          replaySessionPath,
+          SessionSchema,
+          {
+            notFound: 'Redacted session file not found before triage.',
+            badSchema: 'Redacted session file is malformed.',
+          },
+          'session',
+        );
+        const providerName = await getProviderName();
+        const model = await getModel();
+        mp.pause();
+        mp.clear();
+        const credentialSeqs = findCredentialBearingSeqs(triageSession);
+        const authAdjacentSeqs = findAuthAdjacentSeqs(triageSession, credentialSeqs);
+        const allLoginSeqs = [...new Set([...credentialSeqs, ...authAdjacentSeqs])];
+        spinner.start('Triaging requests');
+        localTriageResult = await triageRequests(
+          triageSession,
+          {
+            provider: providerName,
+            model,
+          },
+          allLoginSeqs.length > 0
+            ? {
+                sharedContext: {
+                  loginRequestSeqs: credentialSeqs,
+                  credentialNames: [],
+                  tokenExtractionNotes: '',
+                  sharedHelperNotes: '',
+                  authRequestSeqs: allLoginSeqs,
+                  authNotes: '',
+                },
+              }
+            : {},
+        );
+        spinner.stop(
+          `Triaged to ${localTriageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`,
+        );
+        mp.resume();
+
+        localTriagedPath = replaySessionPath.replace(/\.redacted\.json$/, '.triaged.json');
+        writeFileSync(
+          localTriagedPath,
+          `${JSON.stringify(localTriageResult.session, null, 2)}\n`,
+          'utf8',
+        );
+        // Candidate detection and browser replay are separate failure boundaries.
+        // Persist now so Continue/Redo can reuse the safety decision even if either
+        // downstream branch fails.
+        updateCheckpoint(site, state, workflowKey, 'triage', {
+          triagedPath: toRelative(site, localTriagedPath),
+        });
+      } else {
+        const ws = state.workflows[workflowKey];
+        localTriagedPath = resolveWorkflowTriagedPath(site, ws);
+        if (ws && localTriagedPath && !ws.triagedPath) {
+          updateCheckpoint(site, state, workflowKey, 'triage', {
+            triagedPath: toRelative(site, localTriagedPath),
+          });
+        }
+        if (localTriagedPath) {
+          localTriageResult = loadTriageResultFromTriagedPath(localTriagedPath);
+        }
+      }
+
+      if (!localTriageResult || !localTriagedPath) {
+        throw new Error(
+          'A current triage artifact is required before replay or candidate detection. Re-run from "triage".',
+        );
+      }
+
+      // A triage-only window ends at the durable safety boundary. Do not start
+      // either downstream promise after the requested stop point.
+      if (stopIdx < STEPS.indexOf('replay-and-diff')) {
+        mp.clear();
+        await finishEarly();
+      }
+
+      if (!needsReplay && inWindow('replay-and-diff')) {
+        updateCheckpoint(site, state, workflowKey, 'replay-and-diff', {});
+      }
+
       // Branch A: replay-and-diff (slow, ~2 min)
       const replayPromise = (async () => {
         if (!needsReplay) {
           const classPath = pathJoin(localSiteDir(site), '.classifications.json');
-          const cached = loadCachedClassificationsForSession(classPath, replaySessionPath);
+          const cached = loadCachedClassificationsForSession(
+            classPath,
+            replaySessionPath,
+            replaySafetyIdentity(localTriageResult),
+          );
           if (!cached && existsSync(classPath)) {
             p.log.warn(
-              'Ignoring cached replay classifications because they are untagged or belong to a different recording.',
+              'Ignoring cached replay classifications because they belong to a different recording or triage safety decision.',
             );
           }
           return cached;
         }
-        return siteReplayAndDiff(site, replaySessionPath, mp);
+        return siteReplayAndDiff(site, replaySessionPath, localTriagedPath, localTriageResult, mp);
       })();
 
-      // Branch B: triage → detect-candidates → user selection (fast, ~30s)
+      // Branch B: detect-candidates → user selection (fast, ~30s)
       type CandidateChainResult =
         | {
             triageResult?: TriageResult;
@@ -1036,6 +1229,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
         if (!needsCandidates) {
           const ws = state.workflows[workflowKey];
           return {
+            triageResult: localTriageResult,
             plans: [
               {
                 workflowKey,
@@ -1045,67 +1239,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
               },
             ],
           };
-        }
-
-        // ── triage ──
-        let localTriageResult: TriageResult | undefined;
-        let localTriagedPath: string | null = null;
-        if (startIdx <= STEPS.indexOf('triage')) {
-          const triageSession = loadJsonFile(
-            replaySessionPath,
-            SessionSchema,
-            {
-              notFound: 'Redacted session file not found before triage.',
-              badSchema: 'Redacted session file is malformed.',
-            },
-            'session',
-          );
-          const providerName = await getProviderName();
-          const model = await getModel();
-          mp.pause();
-          mp.clear();
-          const credentialSeqs = findCredentialBearingSeqs(triageSession);
-          const authAdjacentSeqs = findAuthAdjacentSeqs(triageSession, credentialSeqs);
-          const allLoginSeqs = [...new Set([...credentialSeqs, ...authAdjacentSeqs])];
-          spinner.start('Triaging requests');
-          localTriageResult = await triageRequests(
-            triageSession,
-            {
-              provider: providerName,
-              model,
-            },
-            allLoginSeqs.length > 0
-              ? {
-                  sharedContext: {
-                    loginRequestSeqs: credentialSeqs,
-                    credentialNames: [],
-                    tokenExtractionNotes: '',
-                    sharedHelperNotes: '',
-                    authRequestSeqs: allLoginSeqs,
-                    authNotes: '',
-                  },
-                }
-              : {},
-          );
-          spinner.stop(
-            `Triaged to ${localTriageResult.selectedSeqs.length} requests (from ${triageSession.requests.length}).`,
-          );
-          mp.resume();
-
-          localTriagedPath = replaySessionPath.replace(/\.redacted\.json$/, '.triaged.json');
-          writeFileSync(
-            localTriagedPath,
-            `${JSON.stringify(localTriageResult.session, null, 2)}\n`,
-            'utf8',
-          );
-        } else {
-          const ws = state.workflows[workflowKey];
-          localTriagedPath = resolveWorkflowTriagedPath(site, ws);
-          if (ws && localTriagedPath && !ws.triagedPath) {
-            updateCheckpoint(site, state, workflowKey, 'triage', {
-              triagedPath: toRelative(site, localTriagedPath),
-            });
-          }
         }
 
         // ── detect candidates ──
@@ -1126,10 +1259,7 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
           model,
           trustSessionScope: !!localTriagedPath,
         });
-        const detection = {
-          ...detected,
-          candidates: deriveStructuralCandidateDependencies(detected.candidates),
-        };
+        const detection = detected;
         spinner.stop(
           `Detected ${detection.candidates.length} candidate tool${detection.candidates.length === 1 ? '' : 's'}.`,
         );
@@ -1323,9 +1453,6 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
   } else {
     // Resuming from generate or later — load cached data
     const classPath = pathJoin(localSiteDir(site), '.classifications.json');
-    if (redactedPath) {
-      siteClassifications = loadCachedClassificationsForSession(classPath, redactedPath);
-    }
     const ws = state.workflows[workflowKey];
     const resolvedTriagedPath = resolveWorkflowTriagedPath(site, ws);
     resumedTriagedPath = resolvedTriagedPath;
@@ -1337,6 +1464,14 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       updateCheckpoint(site, state, workflowKey, 'triage', {
         triagedPath: resolvedArtifactCheckpointPath(site, ws.triagedPath, resolvedTriagedPath),
       });
+    }
+    if (resolvedTriagedPath) triageResult = loadTriageResultFromTriagedPath(resolvedTriagedPath);
+    if (redactedPath && triageResult) {
+      siteClassifications = loadCachedClassificationsForSession(
+        classPath,
+        redactedPath,
+        replaySafetyIdentity(triageResult),
+      );
     }
     // A candidate-backed resume reconstructs the prior run's tools from persisted
     // state (shared-module planning may need ≥2 tools). This applies both to an
@@ -1394,11 +1529,10 @@ export async function teach(opts: TeachOptions): Promise<TeachResult> {
       : [{ workflowKey, startFrom, candidate: ws?.candidate, sharedContext: ws?.sharedContext }];
   }
 
-  // Early stop: `--to-step replay-and-diff|triage|detect-candidates` finishes
-  // after the analysis block, before shared-module planning / compile. The block is
-  // atomic and always runs through detect-candidates, so report that as the last
-  // step (mirrors the compile exit reporting 'emit').
-  if (stopIdx < STEPS.indexOf('plan-prereqs')) await finishEarly('detect-candidates');
+  // Early stop: `--to-step triage|replay-and-diff|detect-candidates` finishes
+  // after the requested analysis phase, before shared-module planning / compile
+  // (the compile unit below remains atomic).
+  if (stopIdx < STEPS.indexOf('plan-prereqs')) await finishEarly();
 
   const needsCompileProvider = plans.some(
     (plan) => STEPS.indexOf(plan.startFrom) <= STEPS.indexOf('compile-playbook'),
@@ -2477,6 +2611,7 @@ async function compileSelectedCandidate(opts: {
       sharedModules: opts.sharedModules,
       toolPlan,
       revisionMode,
+      preTriagedSession: opts.sharedTriageResult,
     });
 
     assertCandidateToolName('Compiled workflow', result.workflow.toolName, plan.candidate);
@@ -2572,6 +2707,8 @@ async function compileSelectedCandidate(opts: {
 async function siteReplayAndDiff(
   site: string,
   sessionPath: string,
+  triagedPath: string,
+  triageResult: TriageResult,
   mp: MultiProgress,
 ): Promise<ClassifiedValue[] | undefined> {
   try {
@@ -2586,6 +2723,34 @@ async function siteReplayAndDiff(
       { notFound: 'Session not found for replay.' },
       'session',
     );
+    // Re-read the durable artifact before opening a browser. Besides catching a
+    // missing/corrupt checkpoint, this guarantees replay never depends only on
+    // an in-memory triage result that was not persisted successfully.
+    const persistedTriageResult = triageResultFromTriagedSession(
+      loadJsonFile(
+        triagedPath,
+        SessionSchema,
+        { notFound: 'Triaged session not found before replay.' },
+        'session',
+      ),
+    );
+    if (replaySafetyIdentity(persistedTriageResult) !== replaySafetyIdentity(triageResult)) {
+      throw new Error('Persisted triage safety decision changed before replay could start.');
+    }
+    if (!triageCoversSession(session, persistedTriageResult)) {
+      throw new Error(
+        'Persisted triage safety decision does not cover the complete source recording. Re-run from "triage".',
+      );
+    }
+    if (!triageAllowsReplay(triageResult)) {
+      mp.clear();
+      mp.remove('replay');
+      p.log.warn(
+        `Skipping replay because triage identified ${triageResult.irreversibleSeqs.length} irreversible request(s) and ${triageResult.irreversibleEventSeqs.length} irreversible outbound WebSocket event(s). Compilation will use the original recording without opening a replay browser.`,
+      );
+      mp.render();
+      return undefined;
+    }
 
     mp.update('replay', 'Replaying session in fresh browser...');
     const replayResult = await replayRawSession({
@@ -2596,35 +2761,26 @@ async function siteReplayAndDiff(
       },
     });
 
-    let replayRequests = replayResult.requests;
+    const replayRequests = replayResult.requests;
 
     if (!replayResult.ok) {
       mp.clear();
       mp.remove('replay');
       p.log.warn(`Automated replay failed: ${replayResult.error}`);
-      p.log.info(
-        'Recording the same flow again in a fresh browser for dual-pass analysis.\n' +
-          'No narration needed — just repeat the same actions, then close the browser.',
+      p.log.warn(
+        'Continuing with partial automated replay traffic and existing sibling recordings only; a manual re-record cannot inherit the original recording’s safety decision.',
       );
       mp.render();
-
-      const recordResult = await record({ site, url: session.url });
-      const secondSession = loadJsonFile(
-        recordResult.sessionPath,
-        SessionSchema,
-        { notFound: 'Second recording session not found.' },
-        'session',
-      );
-
-      replayRequests = secondSession.requests;
     }
 
     mp.update('replay', 'Diffing replay against original...');
 
+    const diffOriginalSession = triageResult.session;
+
     // Pass 1: original recording vs the automated browser replay.
-    const triaged2Seqs = triageByAlignment(session.requests, replayRequests);
+    const triaged2Seqs = triageByAlignment(diffOriginalSession.requests, replayRequests);
     const triaged2Requests = replayRequests.filter((r) => triaged2Seqs.includes(r.seq));
-    const replayDiff = diffTriagedSessions(session, { requests: triaged2Requests });
+    const replayDiff = diffTriagedSessions(diffOriginalSession, { requests: triaged2Requests });
     const diffPasses: ClassifiedValue[][] = [replayDiff.classifications];
 
     // Additional passes: original recording vs every OTHER real recording of
@@ -2634,7 +2790,7 @@ async function siteReplayAndDiff(
     // identical across time-separated recordings is static infrastructure
     // (GraphQL safelisting signatures, persisted-query hashes, app keys) and
     // must be kept even when the replay never observed it — see
-    // mergeClassifications. All passes share `session` as the original, so
+    // mergeClassifications. All passes share `diffOriginalSession` as the original, so
     // originalSeq aligns them.
     let crossRecordingCount = 0;
     try {
@@ -2648,9 +2804,11 @@ async function siteReplayAndDiff(
             { notFound: 'Other recording not found.' },
             'session',
           );
-          const seqs = triageByAlignment(session.requests, other.requests);
+          const seqs = triageByAlignment(diffOriginalSession.requests, other.requests);
           const reqs = other.requests.filter((r) => seqs.includes(r.seq));
-          diffPasses.push(diffTriagedSessions(session, { requests: reqs }).classifications);
+          diffPasses.push(
+            diffTriagedSessions(diffOriginalSession, { requests: reqs }).classifications,
+          );
           crossRecordingCount++;
         } catch {
           // Skip a malformed sibling recording; the other passes still stand.
@@ -2668,7 +2826,15 @@ async function siteReplayAndDiff(
     const classPath = pathJoin(localSiteDir(site), '.classifications.json');
     writeFileSync(
       classPath,
-      JSON.stringify({ ...diffResult, sourceSessionHash: fileSha256(sessionPath) }, null, 2),
+      JSON.stringify(
+        {
+          ...diffResult,
+          sourceSessionHash: fileSha256(sessionPath),
+          replaySafetyHash: replaySafetyIdentity(triageResult),
+        },
+        null,
+        2,
+      ),
     );
 
     mp.clear();
@@ -3412,6 +3578,7 @@ export function formatAuthProgress(progress: CompileAgentProgress): string {
  * This avoids the ~16s wasted on failing backends when the MCP tool is called.
  */
 async function writeQuickBackendsCache(workflowDir: string, workflow: Workflow): Promise<void> {
+  if (workflowHasIrreversibleEffect(workflow)) return;
   const backendsPath = pathJoin(workflowDir, 'backends.json');
   if (existsSync(backendsPath)) return;
   const { createHash } = await import('node:crypto');

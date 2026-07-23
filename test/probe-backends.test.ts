@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
@@ -20,6 +20,7 @@ import {
   persistRuntimeBackendsCache,
   probeAllBackends,
   probeCandidateBackendsForWorkflow,
+  probeResolvedTool,
   rankSuccessfulBackends,
   rebindExistingBackendsCacheToWorkflow,
   workflowCapabilityHash,
@@ -820,6 +821,40 @@ describe('backendInvariantProbeFailure', () => {
 });
 
 describe('probeAllBackends', () => {
+  it('rejects irreversible workflows before invoking the generated tool or writing a cache', async () => {
+    const dir = pathResolve(root, 'orders', 'place_order');
+    mkdirSync(dir, { recursive: true });
+    let calls = 0;
+    const tool: ResolvedTool = {
+      site: 'orders',
+      dir,
+      workflow: WorkflowSchema.parse({
+        toolName: 'place_order',
+        intent: { description: 'Place an order' },
+        parameters: [],
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://orders.example/submit',
+            headers: {},
+            effect: 'irreversible',
+          },
+        ],
+        site: 'orders',
+      }),
+      toolFn: async () => {
+        calls++;
+        return { ok: true, data: {} };
+      },
+    };
+
+    await expect(probeResolvedTool({ site: 'orders' }, root, tool)).rejects.toThrow(
+      /disabled for irreversible workflow/i,
+    );
+    expect(calls).toBe(0);
+    expect(existsSync(pathResolve(dir, 'backends.json'))).toBe(false);
+  });
+
   it('writes a cache for every generated tool in a site', async () => {
     const site = pathResolve(root, 'multi');
     for (const toolName of ['first_tool', 'second_tool']) {

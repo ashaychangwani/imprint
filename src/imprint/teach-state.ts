@@ -39,8 +39,8 @@ import {
 export const TEACH_STEPS = [
   'record',
   'redact',
-  'replay-and-diff',
   'triage',
+  'replay-and-diff',
   'detect-candidates',
   'plan-prereqs',
   'generate',
@@ -645,25 +645,24 @@ export function selectMultiToolResumePlans(
   };
 }
 
-/** True when the `[startIdx, stopIdx]` phase window overlaps the atomic analysis
- *  block (replay-and-diff → triage → detect-candidates), i.e. that block must run.
+/** True when the `[startIdx, stopIdx]` phase window overlaps the analysis
+ *  block (triage → replay-and-diff → detect-candidates), i.e. that block must run.
  *  Indices are positions in TEACH_STEPS (stopIdx defaults to the last step when no
  *  `--to-step` is given). Classic interval-overlap check, extracted so it can be
  *  unit-tested independently of teach()'s runtime flow. */
 export function analysisBlockRunsForWindow(startIdx: number, stopIdx: number): boolean {
   return (
-    startIdx <= TEACH_STEPS.indexOf('detect-candidates') &&
-    stopIdx >= TEACH_STEPS.indexOf('replay-and-diff')
+    startIdx <= TEACH_STEPS.indexOf('detect-candidates') && stopIdx >= TEACH_STEPS.indexOf('triage')
   );
 }
 
 /** The shared-pipeline steps recorded when the analysis block
- *  (replay-and-diff → triage → detect-candidates) completes. */
+ *  (triage → replay-and-diff → detect-candidates) completes. */
 export const ANALYSIS_COMPLETED_STEPS: TeachStep[] = [
   'record',
   'redact',
-  'replay-and-diff',
   'triage',
+  'replay-and-diff',
   'detect-candidates',
 ];
 

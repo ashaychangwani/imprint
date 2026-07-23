@@ -119,4 +119,37 @@ describe('compile live evidence', () => {
       }),
     ).rejects.toThrow('call prepare_live_backend');
   });
+
+  it('rejects irreversible workflows at the live execution boundary', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-irreversible-live-'));
+    dirs.push(root);
+    const toolDir = pathJoin(root, 'fixture-site', 'place_fixture_order');
+    mkdirSync(toolDir, { recursive: true });
+    const workflowPath = pathJoin(toolDir, 'workflow.json');
+    writeFileSync(
+      workflowPath,
+      JSON.stringify({
+        toolName: 'place_fixture_order',
+        intent: { description: 'Place a fixture order.' },
+        parameters: [],
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://example.com/order',
+            headers: {},
+            effect: 'irreversible',
+          },
+        ],
+        site: 'fixture-site',
+      }),
+    );
+
+    await expect(
+      runCapturedIntegrationCase({
+        caseName: 'must-not-run',
+        workflowPath,
+        params: {},
+      }),
+    ).rejects.toThrow('disabled for irreversible workflow');
+  });
 });
