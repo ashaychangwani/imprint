@@ -28,6 +28,7 @@ import type {
   Workflow,
   WorkflowRequest,
 } from './types.ts';
+import { persistedCaptureName } from './types.ts';
 
 export { splitSetCookieHeader } from './cookie-jar.ts';
 
@@ -154,6 +155,10 @@ interface ExecuteOptions {
   workflowPath?: string;
   /** Initial ${state.X} values harvested by fetch-bootstrap. */
   initialState?: Record<string, unknown>;
+  /** Caller cancellation for bounded verification work. */
+  signal?: AbortSignal;
+  /** Disable auth cookie/secret writes during offline request rendering. */
+  persistAuthState?: boolean;
 }
 
 interface ResponseSlot {
@@ -555,6 +560,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     });
 
   const persistCookies = async (): Promise<RuntimeErrorResult | undefined> => {
+    if (opts.persistAuthState === false) return undefined;
     try {
       await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
       return undefined;
@@ -566,6 +572,16 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   const executeRequest = async (
     requestIndex: number,
   ): Promise<RuntimeResult<ResponseContext | undefined>> => {
+    if (opts.signal?.aborted) {
+      return {
+        ok: false,
+        result: fail({
+          ok: false,
+          error: 'NETWORK',
+          message: `Auth action ${JSON.stringify(actionName)} was cancelled.`,
+        }),
+      };
+    }
     const req = opts.workflow.requests[requestIndex];
     if (!req) {
       return {
@@ -662,6 +678,8 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       }
     } else {
       const controller = new AbortController();
+      const cancel = (): void => controller.abort();
+      opts.signal?.addEventListener('abort', cancel, { once: true });
       responseAbortTimer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         response = await fetchFn(request.url, {
@@ -683,6 +701,8 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
             }`,
           },
         };
+      } finally {
+        opts.signal?.removeEventListener('abort', cancel);
       }
     }
 
@@ -759,7 +779,14 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     let matched = !step.repeat;
 
     for (let attempt = 0; attempt < (step.repeat?.maxAttempts ?? 1); attempt++) {
-      if (attempt > 0 && step.repeat) await sleep(step.repeat.intervalMs);
+      if (attempt > 0 && step.repeat) await sleep(step.repeat.intervalMs, opts.signal);
+      if (opts.signal?.aborted) {
+        return fail({
+          ok: false,
+          error: 'NETWORK',
+          message: `Auth action ${JSON.stringify(actionName)} was cancelled.`,
+        });
+      }
       const executed = await executeRequest(step.request);
       if (!executed.ok) {
         if (step.onError === 'continue') {
@@ -828,7 +855,9 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     };
   }
 
-  const missingPersisted = authConfig.persist.filter((name) => !Object.hasOwn(state, name));
+  const missingPersisted = authConfig.persist.filter(
+    (name) => !Object.hasOwn(state, persistedCaptureName(authConfig, name)),
+  );
   if (missingPersisted.length > 0) {
     return fail({
       ok: false,
@@ -838,21 +867,33 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   }
   const persistedSecrets: Record<string, string> = {};
   for (const name of authConfig.persist) {
-    const value = state[name];
+    const value = state[persistedCaptureName(authConfig, name)];
     if (value !== undefined && value !== null && String(value) !== '') {
       persistedSecrets[name] = String(value);
     }
   }
-  try {
-    await commitSiteAuthState(opts.workflow.site, cookieJar.toJSON(), persistedSecrets);
-  } catch (err) {
-    return persistenceFailure('authenticated session state', err);
+  if (opts.persistAuthState !== false) {
+    try {
+      await commitSiteAuthState(opts.workflow.site, cookieJar.toJSON(), persistedSecrets);
+    } catch (err) {
+      return persistenceFailure('authenticated session state', err);
+    }
   }
   return { ok: true, data: { authenticated: true } };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    const abort = (): void => done();
+    function done(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 interface SubstitutedRequest {
@@ -890,12 +931,7 @@ function substituteRequest(
     subbed.headers[k] = headerResult.value;
   }
   if (req.body !== undefined) {
-    const ct = (req.headers['content-type'] ?? req.headers['Content-Type'] ?? '').toLowerCase();
-    const ctx: SubstitutionContext = ct.includes('json')
-      ? 'json-body'
-      : ct.includes('urlencoded') || req.body.includes('=')
-        ? 'form-body'
-        : 'opaque-body';
+    const ctx = bodySubstitutionContext(req);
     const bodyResult = substituteStringInternal(req.body, requestRuntime, ctx);
     if (!bodyResult.ok) return bodyResult;
     subbed.body = bodyResult.value;
@@ -907,7 +943,33 @@ const PLACEHOLDER_RE = /\$\{([^}]+)\}/g;
 
 /** What kind of context the template represents; controls how substituted
  *  values are escaped. */
-type SubstitutionContext = 'url' | 'form-body' | 'json-body' | 'opaque-body' | 'header';
+type SubstitutionContext =
+  | 'url'
+  | 'legacy-form-body'
+  | 'legacy-json-body'
+  | 'form-urlencoded-body'
+  | 'json-string-body'
+  | 'opaque-body'
+  | 'header';
+
+/**
+ * New workflows declare body placeholder encoding explicitly. The fallback is
+ * intentionally frozen to the pre-contract behavior so already-emitted sites
+ * keep working until they are re-taught; compile verification does not allow
+ * newly generated placeholder-bearing bodies to rely on it.
+ */
+function bodySubstitutionContext(req: WorkflowRequest): SubstitutionContext {
+  if (req.bodyPlaceholderEncoding === 'raw') return 'opaque-body';
+  if (req.bodyPlaceholderEncoding === 'json-string') return 'json-string-body';
+  if (req.bodyPlaceholderEncoding === 'form-urlencoded') return 'form-urlencoded-body';
+
+  const ct = (req.headers['content-type'] ?? req.headers['Content-Type'] ?? '').toLowerCase();
+  if (ct.includes('json')) return 'legacy-json-body';
+  if (ct.includes('urlencoded') || (req.body?.includes('=') ?? false)) {
+    return 'legacy-form-body';
+  }
+  return 'opaque-body';
+}
 
 export function substituteString(
   template: string,
@@ -1153,7 +1215,9 @@ function preflightStateDependencies(
       return producer === undefined || producer >= i;
     });
     if (missingBeforeRequest.length === 0) continue;
-    const hasPriorUnsafe = workflow.requests.slice(0, i).some((r) => requestEffect(r) === 'unsafe');
+    const hasPriorUnsafe = workflow.requests
+      .slice(0, i)
+      .some((request) => ['unsafe', 'irreversible'].includes(requestEffect(request)));
     if (!hasPriorUnsafe) continue;
 
     const name = missingBeforeRequest[0];
@@ -1177,7 +1241,7 @@ function workflowHasStateFeatures(workflow: Workflow): boolean {
   );
 }
 
-function requestEffect(req: WorkflowRequest): 'safe' | 'idempotent' | 'unsafe' {
+function requestEffect(req: WorkflowRequest): 'safe' | 'idempotent' | 'unsafe' | 'irreversible' {
   if (req.effect) return req.effect;
   const method = req.method.toUpperCase();
   return method === 'GET' || method === 'HEAD' ? 'safe' : 'unsafe';
@@ -1337,12 +1401,18 @@ function encodePart(
 ): string {
   const s = value === undefined || value === null ? '' : String(value);
 
-  if (context === 'form-body') {
+  if (context === 'legacy-form-body') {
     // Each substituted value sits between `&` and `=` separators; URL-encode
     // so a value containing `@` / `&` / `=` doesn't corrupt the body shape.
     return encodeURIComponent(s);
   }
-  if (context === 'json-body') {
+  if (context === 'form-urlencoded-body') {
+    // WHATWG form-component encoding (not encodeURIComponent): spaces become
+    // `+` and the form encode set is applied exactly. The compile agent owns
+    // the choice and proves round-trip behavior in request.test.ts.
+    return new URLSearchParams([['value', s]]).toString().slice('value='.length);
+  }
+  if (context === 'legacy-json-body') {
     // We're substituting INTO a string that will be parsed as JSON. The
     // template treats `${credential.X}` as a literal string token, so
     // escape characters that would terminate the surrounding JSON string.
@@ -1351,6 +1421,11 @@ function encodePart(
       .replace(/"/g, '\\"')
       .replace(/\n/g, '\\n')
       .replace(/\r/g, '\\r');
+  }
+  if (context === 'json-string-body') {
+    // JSON.stringify is the complete JSON string escaping algorithm. Remove
+    // only its surrounding quotes because the workflow template owns them.
+    return JSON.stringify(s).slice(1, -1);
   }
   if (context === 'header' || context === 'opaque-body') {
     return s;

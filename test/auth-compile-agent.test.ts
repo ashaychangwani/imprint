@@ -7,6 +7,7 @@ import {
   AUTH_COMPILE_TOOL_NAMES,
   AUTH_VERIFICATION_ATTEMPT_SENTINEL,
   authExternalVerification,
+  authLivePreflightFailures,
   authWorkflowHash,
   authWorkflowPreflightFailures,
   buildAuthCompileTools,
@@ -14,12 +15,44 @@ import {
 } from '../src/imprint/auth-compile-tools.ts';
 import { __setAuthVerifierLadderForTest } from '../src/imprint/auth-verifier.ts';
 import type { AuthToolPlan } from '../src/imprint/build-plan.ts';
+import { recordedRequestMatchesWorkflow } from '../src/imprint/recording-request.ts';
 import { type Session, type Workflow, WorkflowSchema } from '../src/imprint/types.ts';
 
 const originalPath = process.env.PATH;
 const originalHome = process.env.IMPRINT_HOME;
 type VerifierRunner = NonNullable<Parameters<typeof __setAuthVerifierLadderForTest>[0]>;
 type VerifierRunnerArgs = Parameters<VerifierRunner>[0];
+
+describe('recorded auth request grounding', () => {
+  it('treats only a zero-length redaction marker as the recorded empty value', () => {
+    const workflowRequest = {
+      method: 'POST',
+      url: 'https://example.test/login',
+      headers: {},
+      body: '{"optional_marker":""}',
+    };
+    expect(
+      recordedRequestMatchesWorkflow(
+        {
+          method: 'POST',
+          url: workflowRequest.url,
+          body: '{"optional_marker":"[REDACTED:v3:id=2:len=0]"}',
+        },
+        workflowRequest,
+      ),
+    ).toBe(true);
+    expect(
+      recordedRequestMatchesWorkflow(
+        {
+          method: 'POST',
+          url: workflowRequest.url,
+          body: '{"optional_marker":"[REDACTED:v3:id=2:len=44]"}',
+        },
+        workflowRequest,
+      ),
+    ).toBe(false);
+  });
+});
 
 function session(): Session {
   return {
@@ -68,6 +101,7 @@ function validWorkflow(): Workflow {
         url: 'https://fixture.test/begin',
         headers: {},
         body: 'username=${credential.username}&password=${credential.password}',
+        bodyPlaceholderEncoding: 'form-urlencoded',
         captures: [{ source: 'json', name: 'ticket', path: 'ticket' }],
       },
       {
@@ -103,8 +137,32 @@ function validWorkflow(): Workflow {
   });
 }
 
+const VALID_REQUEST_TEST = `import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { renderWorkflowRequests } from 'imprint/backend-ladder';
+import { WorkflowSchema } from 'imprint/types';
+
+test('round trips adversarial form values', async () => {
+  const value = '@&="\\\\\\n\\t 雪';
+  const workflow = WorkflowSchema.parse(JSON.parse(readFileSync('workflow.json', 'utf8')));
+  const { requests } = await renderWorkflowRequests({
+    workflow,
+    params: { action: 'begin' },
+    credentials: {
+      site: 'fixture-site',
+      cookies: [],
+      values: { username: value, password: value },
+    },
+  });
+  const body = new URLSearchParams(requests[0]?.body ?? '');
+  expect(body.get('username')).toBe(value);
+  expect(body.get('password')).toBe(value);
+});
+`;
+
 function writeWorkflow(dir: string, workflow: Workflow = validWorkflow()): void {
   writeFileSync(pathJoin(dir, 'workflow.json'), JSON.stringify(workflow), 'utf8');
+  writeFileSync(pathJoin(dir, 'request.test.ts'), VALID_REQUEST_TEST, 'utf8');
 }
 
 afterEach(() => {
@@ -124,6 +182,7 @@ afterEach(() => {
 describe('auth compile tools', () => {
   it('gives every provider the optional verification-page inspection tool', () => {
     expect(AUTH_COMPILE_TOOL_NAMES).toContain('inspect_verification_page');
+    expect(AUTH_COMPILE_TOOL_NAMES).toContain('run_tests');
   });
 
   it('does not allow auth agents to write playbook.yaml', async () => {
@@ -139,6 +198,106 @@ describe('auth compile tools', () => {
         content: 'steps: []',
       });
       expect(result?.isError).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires a substantive agent-authored request test before live auth', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-request-test-'));
+    try {
+      const tools = buildAuthCompileTools(session(), dir, '/tmp/session.json', {
+        site: 'fixture-site',
+        values: {},
+      });
+      const write = tools.find((tool) => tool.name === 'write_file');
+      expect(write).toBeDefined();
+      await write?.handler({
+        relativePath: 'workflow.json',
+        content: JSON.stringify(validWorkflow()),
+      });
+      await write?.handler({
+        relativePath: 'request.test.ts',
+        content: VALID_REQUEST_TEST,
+      });
+      expect(await authLivePreflightFailures(dir, session())).toEqual([]);
+
+      await write?.handler({
+        relativePath: 'request.test.ts',
+        content: `import { expect, test } from 'bun:test';
+test('agent-chosen encoding check', () => expect(1).toBe(2));`,
+      });
+      expect((await authLivePreflightFailures(dir, session())).join('\n')).toContain(
+        'agent-authored request tests failed',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks live auth when triage provenance loses its irreversible effect', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-irreversible-'));
+    try {
+      const workflow = validWorkflow();
+      const request = workflow.requests[0];
+      if (!request) throw new Error('bad fixture');
+      request.recordingRequestSeq = 42;
+      writeWorkflow(dir, workflow);
+      const recorded = session();
+      recorded.requests = [
+        {
+          seq: 42,
+          timestamp: 1,
+          method: request.method,
+          url: request.url,
+          headers: {},
+          body: request.body,
+          resourceType: 'Fetch',
+          effect: 'irreversible',
+        },
+      ];
+
+      expect((await authLivePreflightFailures(dir, recorded, [], [42])).join('\n')).toContain(
+        'must declare effect: "irreversible"',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores irreversible data requests outside the auth plan', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-scoped-provenance-'));
+    try {
+      const workflow = validWorkflow();
+      const request = workflow.requests[0];
+      if (!request) throw new Error('bad fixture');
+      request.recordingRequestSeq = 1;
+      writeWorkflow(dir, workflow);
+      writeFileSync(pathJoin(dir, 'request.test.ts'), VALID_REQUEST_TEST);
+      const recorded = session();
+      recorded.requests = [
+        {
+          seq: 1,
+          timestamp: 1,
+          method: request.method,
+          url: request.url,
+          headers: {},
+          body: request.body,
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 42,
+          timestamp: 2,
+          method: 'POST',
+          url: 'https://fixture.test/place-order',
+          headers: {},
+          body: '{"item":"lunch"}',
+          resourceType: 'Fetch',
+          effect: 'irreversible',
+        },
+      ];
+
+      expect(await authLivePreflightFailures(dir, recorded, [], [1])).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -345,15 +504,41 @@ describe('auth compile tools', () => {
     }
   });
 
-  it('requires downstream header credentials in authConfig.persist', () => {
+  it('requires downstream credentials in authConfig.persist regardless of transport', () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-persist-'));
     try {
       writeWorkflow(dir);
       expect(
         authExternalVerification(dir, [
-          { name: 'accessToken', usedAs: 'header:authorization' },
+          { name: 'opaque_alpha', usedAs: 'header:authorization' },
+          { name: 'opaque_beta', usedAs: 'body.session_token' },
         ]).join('\n'),
       ).toContain('authConfig.persist');
+      expect(
+        authExternalVerification(dir, [
+          { name: 'opaque_alpha', usedAs: 'header:authorization' },
+          { name: 'opaque_beta', usedAs: 'body.session_token' },
+        ]).join('\n'),
+      ).toContain('opaque_alpha, opaque_beta');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows the auth agent to bind a durable interface to a renamed capture', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-persist-binding-'));
+    try {
+      const workflow = validWorkflow();
+      const authConfig = workflow.authConfig;
+      const request = workflow.requests[0];
+      if (!authConfig || !request) throw new Error('bad fixture');
+      authConfig.persist = ['opaque_alpha'];
+      authConfig.persistBindings = { opaque_alpha: 'ticket' };
+      request.recordingRequestSeq = 7;
+      writeWorkflow(dir, workflow);
+      expect(
+        authExternalVerification(dir, [{ name: 'opaque_alpha', usedAs: 'header:authorization' }]),
+      ).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -518,6 +703,7 @@ if (process.env.FAKE_CODEX_ARGS_LOG) {
 }
 const toolDir = process.env.FAKE_CODEX_TOOL_DIR;
 if (!toolDir) throw new Error('missing fake tool dir');
+writeFileSync(join(toolDir, 'request.test.ts'), ${JSON.stringify(VALID_REQUEST_TEST)});
 const resumed = process.argv.includes('resume');
 const recoveryMarker = join(toolDir, '.fake-recovered');
 const inspectionMarker = join(toolDir, '.fake-inspected');
@@ -569,6 +755,7 @@ if (process.env.FAKE_CLAUDE_ARGS_LOG) {
 }
 const toolDir = process.env.FAKE_CLAUDE_TOOL_DIR;
 if (!toolDir) throw new Error('missing fake tool dir');
+writeFileSync(join(toolDir, 'request.test.ts'), ${JSON.stringify(VALID_REQUEST_TEST)});
 if (process.argv.includes('--resume')) {
   writeFileSync(join(toolDir, '.compile-done.json'), JSON.stringify({ verification: 'passed', summary: 'resumed' }));
 } else {

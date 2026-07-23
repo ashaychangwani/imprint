@@ -12,8 +12,9 @@ The runtime only executes the program you write.
 1. Call `read_session_summary`.
 2. Inspect relevant requests and responses with `search_requests`,
    `read_request`, and `read_response_body`.
-3. Write `workflow.json` and any recording-grounded
-   `request-transform.ts` needed by the requests.
+3. Write `workflow.json`, an offline `request.test.ts`, and any
+   recording-grounded `request-transform.ts` needed by the requests. Call
+   `run_tests` and fix request construction before live verification.
 4. Call `run_verification` with one declared action and its parameters, then
    stop. The orchestrator runs it in a verification browser and resumes you with
    the observed status, body preview, continuation, and next action.
@@ -110,8 +111,11 @@ semantics.
   and the caller-facing message. Carry every prior capture referenced as
   `${state.X}` by the next action unless that action produces it before use.
 - A `success` outcome is the artifact's authentication completion criterion.
-- `persist` names captured non-cookie values that data tools consume later as
-  `${credential.NAME}`. Cookies persist automatically.
+- `persist` names durable credential interfaces that data tools consume later as
+  `${credential.NAME}`. Cookies persist automatically. These interface names do
+  not constrain your internal capture names. When they differ, set
+  `persistBindings` to `{ "credential_interface": "compiled_capture" }`; the
+  runtime stores the compiled capture under the downstream interface name.
 - Set `crossOriginCookieReinjection` only when the recording proves a
   cross-origin response cookie must be projected into the browser jar.
 
@@ -136,6 +140,29 @@ request.
 Use runtime templates exactly as supported:
 `${credential.X}`, `${param.X}`, `${state.X}`,
 `${response[N].path}`, and `${generated.uuid|nonce|epoch_s|epoch_ms|iso8601}`.
+
+Every request body containing one of those runtime templates MUST declare
+`bodyPlaceholderEncoding`. Choose it from the recorded wire format, not merely
+the Content-Type:
+
+- `"json-string"` when placeholders sit inside JSON string literals.
+- `"form-urlencoded"` when each placeholder is a form field value.
+- `"raw"` for multipart, opaque, or transform-owned payload bytes.
+
+If the body mixes encoding layers, build it in `request-transform.ts` and keep
+the workflow declaration `"raw"`; do not ask the runtime to infer a site-specific
+codec.
+
+Write `request.test.ts` to render the actual workflow offline with adversarial
+synthetic credentials, decode the body according to its wire format, and assert
+exact round-trip equality. Choose the cases and test structure from the recorded
+request. Never place real credentials in the test or contact the site.
+
+Independently classify every auth request's outward effect. If the session
+summary marks a request `irreversible: true`, preserve `effect: "irreversible"`
+and its exact `recordingRequestSeq`; do not request live verification for that
+workflow. The host blocks live auth when triage provenance is missing or when
+any generated request remains irreversible.
 
 Ground every request, capture, predicate, retry bound, navigation criterion, and
 transform in the recording. Preserve functional headers and request encoding.

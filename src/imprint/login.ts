@@ -18,6 +18,7 @@ import {
   SessionSchema,
   type WorkflowRequest,
   WorkflowSchema,
+  persistedCaptureName,
 } from './types.ts';
 
 interface LoginOptions {
@@ -120,6 +121,7 @@ function collectStorage(session: Session): StorageRecord[] {
 
 /** Gather the request captures named by each auth program's `persist` list. */
 interface SessionCaptureBinding {
+  credentialName: string;
   capture: RequestCapture;
   recordingRequestSeq?: number;
   method: string;
@@ -137,22 +139,27 @@ function collectSessionCaptures(site: string): SessionCaptureBinding[] {
   }
   const captures: SessionCaptureBinding[] = [];
   const byName = new Map<string, SessionCaptureBinding>();
-  const addCapture = (capture: RequestCapture, request: WorkflowRequest): void => {
+  const addCapture = (
+    credentialName: string,
+    capture: RequestCapture,
+    request: WorkflowRequest,
+  ): void => {
     const binding = {
+      credentialName,
       capture,
       recordingRequestSeq: request.recordingRequestSeq,
       method: request.method,
       url: request.url,
       body: request.body,
     };
-    const existing = byName.get(capture.name);
+    const existing = byName.get(credentialName);
     if (existing && JSON.stringify(existing) !== JSON.stringify(binding)) {
       throw new Error(
-        `Persisted capture ${JSON.stringify(capture.name)} has conflicting producing requests. Regenerate the auth workflow with unique capture names.`,
+        `Persisted credential ${JSON.stringify(credentialName)} has conflicting producing requests. Regenerate the auth workflow with unique bindings.`,
       );
     }
     if (!existing) {
-      byName.set(capture.name, binding);
+      byName.set(credentialName, binding);
       captures.push(binding);
     }
   };
@@ -165,19 +172,30 @@ function collectSessionCaptures(site: string): SessionCaptureBinding[] {
     } catch {
       continue; // not a tool dir, unreadable, or not a valid workflow
     }
-    const persisted = new Set(workflow.authConfig?.persist ?? []);
+    const config = workflow.authConfig;
+    if (!config) continue;
+    const persistedByCapture = new Map<string, string[]>();
+    for (const credentialName of config.persist) {
+      const captureName = persistedCaptureName(config, credentialName);
+      const names = persistedByCapture.get(captureName) ?? [];
+      names.push(credentialName);
+      persistedByCapture.set(captureName, names);
+    }
     for (const request of workflow.requests) {
       for (const capture of request.captures ?? []) {
-        if (!persisted.has(capture.name)) continue;
-        addCapture(capture, request);
+        for (const credentialName of persistedByCapture.get(capture.name) ?? []) {
+          addCapture(credentialName, capture, request);
+        }
       }
     }
     for (const action of Object.values(workflow.authConfig?.actions ?? {})) {
       for (const step of action.steps) {
         const capture = step.repeat?.until;
         const request = workflow.requests[step.request];
-        if (capture && request && persisted.has(capture.name)) {
-          addCapture(capture, request);
+        if (capture && request) {
+          for (const credentialName of persistedByCapture.get(capture.name) ?? []) {
+            addCapture(credentialName, capture, request);
+          }
         }
       }
     }
@@ -250,7 +268,7 @@ export function extractCredentials(site: string, session: Session): Record<strin
   const values: Record<string, string> = {};
   for (const binding of collectSessionCaptures(site)) {
     const value = resolveCapture(session, binding);
-    if (value !== undefined) values[binding.capture.name] = value;
+    if (value !== undefined) values[binding.credentialName] = value;
   }
   return values;
 }

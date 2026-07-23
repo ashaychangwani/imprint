@@ -628,6 +628,98 @@ describe('executeWorkflow', () => {
 
     expect(seen.body).toBe('username=alice&password=p%40ss%20%26%20word%3D1');
   });
+
+  it('uses the agent-declared JSON-string encoding for text/plain payloads', async () => {
+    const workflow: Workflow = {
+      toolName: 'text_login_test',
+      intent: { description: 'login' },
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://example.com/api/login',
+          headers: { 'Content-Type': 'text/plain' },
+          body: '{"password":"${credential.password}","url":"https://example.com/?store=1"}',
+          bodyPlaceholderEncoding: 'json-string',
+        },
+      ],
+      site: 'test',
+    };
+    let observedBody = '';
+    await executeWorkflow({
+      workflow,
+      params: {},
+      credentials: {
+        site: 'test',
+        cookies: [],
+        values: { password: 'p@ss & = "quoted" \\ line\n\t雪' },
+      },
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        observedBody = String(init?.body ?? '');
+        return new Response('{}', { status: 200 });
+      }) as unknown as typeof fetch,
+    });
+
+    expect(JSON.parse(observedBody)).toEqual({
+      password: 'p@ss & = "quoted" \\ line\n\t雪',
+      url: 'https://example.com/?store=1',
+    });
+  });
+
+  it('uses declared WHATWG form encoding rather than the legacy URI-component codec', async () => {
+    const workflow: Workflow = {
+      ...baseWorkflow,
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'password=${credential.password}',
+          bodyPlaceholderEncoding: 'form-urlencoded',
+        },
+      ],
+    };
+    let observedBody = '';
+    await executeWorkflow({
+      workflow,
+      params: { q: 'unused' },
+      credentials: { site: 'test', cookies: [], values: { password: 'a b&c=d~雪' } },
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        observedBody = String(init?.body ?? '');
+        return new Response('{}');
+      }) as unknown as typeof fetch,
+    });
+
+    expect(observedBody).toBe('password=a+b%26c%3Dd%7E%E9%9B%AA');
+    expect(new URLSearchParams(observedBody).get('password')).toBe('a b&c=d~雪');
+  });
+
+  it('splices declared raw body placeholders without interpreting delimiters', async () => {
+    const workflow: Workflow = {
+      ...baseWorkflow,
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://example.com/opaque',
+          headers: { 'Content-Type': 'application/custom' },
+          body: 'prefix:${param.q}:suffix',
+          bodyPlaceholderEncoding: 'raw',
+        },
+      ],
+    };
+    let observedBody = '';
+    await executeWorkflow({
+      workflow,
+      params: { q: '@&="\\\n雪' },
+      credentials: STORE,
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        observedBody = String(init?.body ?? '');
+        return new Response('{}');
+      }) as unknown as typeof fetch,
+    });
+
+    expect(observedBody).toBe('prefix:@&="\\\n雪:suffix');
+  });
 });
 
 describe('requestTransformModule', () => {
