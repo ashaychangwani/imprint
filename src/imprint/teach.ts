@@ -28,6 +28,7 @@ import {
   topoLevelsForTools,
 } from './build-plan.ts';
 import type { CompileAgentResult } from './compile-agent-types.ts';
+import { irreversibleProvenanceFailures } from './compile-tools.ts';
 import {
   type CompileAgentProgress,
   type TriageResult,
@@ -246,6 +247,31 @@ export function triageAllowsReplay(
   triage: Pick<TriageResult, 'irreversibleSeqs'> & { irreversibleEventSeqs?: number[] },
 ): boolean {
   return triage.irreversibleSeqs.length === 0 && (triage.irreversibleEventSeqs?.length ?? 0) === 0;
+}
+
+/** DOM fallbacks are compiled from recorded browser events, so a recording
+ * containing any irreversible request or outbound frame cannot safely supply
+ * one even when the selected API workflow itself is read-only. */
+export function triageAllowsPlaybookFallback(
+  triage: Pick<TriageResult, 'irreversibleSeqs'> & { irreversibleEventSeqs?: number[] },
+): boolean {
+  return triageAllowsReplay(triage);
+}
+
+export function assertWorkflowMatchesTriageSafety(
+  workflow: Workflow,
+  triage: TriageResult,
+  candidate?: Pick<ToolCandidate, 'requestSeqs' | 'dependencySeqs'>,
+): void {
+  const failures = irreversibleProvenanceFailures(triage.session, workflow, {
+    candidateRequestSeqs: candidate?.requestSeqs,
+    dependencyRequestSeqs: candidate?.dependencySeqs,
+  });
+  if (failures.length > 0) {
+    throw new Error(
+      `Generated workflow no longer matches the current triage safety decision:\n- ${failures.join('\n- ')}\nRe-run from "generate".`,
+    );
+  }
 }
 
 export function triageCoversSession(
@@ -2643,13 +2669,43 @@ async function compileSelectedCandidate(opts: {
     { notFound: `workflow.json not found at ${genResult.workflowPath}` },
     'workflow.json',
   );
+  if (opts.sharedTriageResult) {
+    assertWorkflowMatchesTriageSafety(genResult.workflow, opts.sharedTriageResult, plan.candidate);
+  }
 
   // ── Step 2: compile-playbook (after generate — runtime artifact, not needed for dual-pass) ──
   let pbResult: { playbook: Playbook; playbookPath: string };
-  if (startIdx <= STEPS.indexOf('compile-playbook')) {
+  const playbookPath = pathJoin(workflowDir, 'playbook.yaml');
+  const playbookAllowed =
+    !opts.sharedTriageResult || triageAllowsPlaybookFallback(opts.sharedTriageResult);
+  if (!playbookAllowed) {
+    // A stale fallback from an earlier teach is unsafe too. Keep an inert
+    // in-memory value for existing teach result/export interfaces, but leave no
+    // executable playbook artifact for runtime discovery.
+    rmSync(playbookPath, { force: true });
+    pbResult = {
+      playbook: {
+        toolName: genResult.workflow.toolName,
+        summary: 'DOM fallback disabled because the recording contains an irreversible effect.',
+        parameters: genResult.workflow.parameters,
+        steps: [{ action: 'wait', wait_for: { sleep_ms: 1 } }],
+        result: {
+          source: 'dom',
+          locators: [{ by: 'css', value: '#__imprint_safety_disabled__' }],
+          extract: 'text',
+          return_as: 'result',
+        },
+        notes: 'This value is not persisted. Runtime DOM fallback is disabled for this recording.',
+      },
+      playbookPath,
+    };
+    if (startIdx <= STEPS.indexOf('compile-playbook')) {
+      updateCheckpoint(site, state, plan.workflowKey, 'compile-playbook');
+    }
+  } else if (startIdx <= STEPS.indexOf('compile-playbook')) {
     const result = await compilePlaybook({
       sessionPath: opts.sessionPath,
-      outPath: pathJoin(workflowDir, 'playbook.yaml'),
+      outPath: playbookPath,
       llmConfig: { provider: opts.providerName },
       candidate: plan.candidate,
       workflow: genResult.workflow,
@@ -2660,7 +2716,6 @@ async function compileSelectedCandidate(opts: {
     pbResult = { playbook: result.playbook, playbookPath: result.playbookPath };
     updateCheckpoint(site, state, plan.workflowKey, 'compile-playbook');
   } else {
-    const playbookPath = pathJoin(workflowDir, 'playbook.yaml');
     const { parsePlaybook } = await import('./playbook-parser.ts');
     const playbook = parsePlaybook(readFileSync(playbookPath, 'utf8'));
     assertCandidateToolName('Stored playbook', playbook.toolName, plan.candidate);

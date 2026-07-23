@@ -424,7 +424,9 @@ describe('rescueActionAlignedRepeatedSeqs', () => {
 
 describe('parseTriageSelectionResponse', () => {
   it('parses strict object triage with irreversible seqs', () => {
-    expect(parseTriageSelectionResponse('{"keep":[1,2],"irreversible":[2]}')).toEqual({
+    expect(
+      parseTriageSelectionResponse('{"keep":[1,2],"irreversible":[2],"irreversibleEvents":[]}'),
+    ).toEqual({
       keepSeqs: [1, 2],
       irreversibleSeqs: [2],
       irreversibleEventSeqs: [],
@@ -436,13 +438,22 @@ describe('parseTriageSelectionResponse', () => {
   });
 
   it('rejects wrong-typed irreversible seqs instead of dropping them', () => {
-    expect(() => parseTriageSelectionResponse('{"keep":[42],"irreversible":["42"]}')).toThrow(
-      /irreversible/,
+    expect(() =>
+      parseTriageSelectionResponse('{"keep":[42],"irreversible":["42"],"irreversibleEvents":[]}'),
+    ).toThrow(/irreversible/);
+  });
+
+  it('rejects missing effect fields instead of treating unclassified items as safe', () => {
+    expect(() => parseTriageSelectionResponse('{"keep":[42]}')).toThrow(/irreversible/);
+    expect(() => parseTriageSelectionResponse('{"keep":[42],"irreversible":[]}')).toThrow(
+      /irreversibleEvents/,
     );
   });
 
   it('classifies irrelevant irreversible requests independently from keep', () => {
-    expect(parseTriageSelectionResponse('{"keep":[1],"irreversible":[2]}')).toEqual({
+    expect(
+      parseTriageSelectionResponse('{"keep":[1],"irreversible":[2],"irreversibleEvents":[]}'),
+    ).toEqual({
       keepSeqs: [1],
       irreversibleSeqs: [2],
       irreversibleEventSeqs: [],

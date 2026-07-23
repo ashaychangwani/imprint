@@ -23,6 +23,7 @@ import {
 import {
   assertCandidateToolName,
   assertSuccessfulAuthCompile,
+  assertWorkflowMatchesTriageSafety,
   authCompileLlmConfig,
   authCompletionMatches,
   buildTeachCandidatePicker,
@@ -44,6 +45,7 @@ import {
   selectCompleteAuthCredentials,
   selectPrimaryNamedResult,
   selectTeachCandidates,
+  triageAllowsPlaybookFallback,
   triageAllowsReplay,
   triageCoversSession,
   triageResultFromTriagedSession,
@@ -82,6 +84,65 @@ describe('replay safety boundary', () => {
     expect(triageAllowsReplay({ irreversibleSeqs: [] })).toBe(true);
     expect(triageAllowsReplay({ irreversibleSeqs: [42] })).toBe(false);
     expect(triageAllowsReplay({ irreversibleSeqs: [], irreversibleEventSeqs: [43] })).toBe(false);
+  });
+
+  it('withholds DOM fallback when any recorded request or outbound frame is irreversible', () => {
+    expect(triageAllowsPlaybookFallback({ irreversibleSeqs: [] })).toBe(true);
+    expect(triageAllowsPlaybookFallback({ irreversibleSeqs: [42] })).toBe(false);
+    expect(
+      triageAllowsPlaybookFallback({ irreversibleSeqs: [], irreversibleEventSeqs: [43] }),
+    ).toBe(false);
+  });
+
+  it('rejects a resumed workflow that lost current irreversible provenance', () => {
+    const irreversibleRequest = {
+      seq: 42,
+      timestamp: 1,
+      method: 'POST',
+      url: 'https://example.com/order',
+      headers: {},
+      resourceType: 'Fetch',
+      effect: 'irreversible',
+    } as const;
+    const session: Session = {
+      site: 'fixture',
+      startedAt: '2026-07-23T00:00:00.000Z',
+      url: 'https://example.com',
+      imprintVersion: '0.1.0',
+      requests: [irreversibleRequest],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    const workflow = WorkflowSchema.parse({
+      toolName: 'place_order',
+      site: 'fixture',
+      intent: { description: 'Place order' },
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          url: irreversibleRequest.url,
+          headers: {},
+          recordingRequestSeq: irreversibleRequest.seq,
+        },
+      ],
+    });
+    expect(() =>
+      assertWorkflowMatchesTriageSafety(workflow, {
+        session,
+        selectedSeqs: [42],
+        replaySafeSeqs: [],
+        irreversibleSeqs: [42],
+        coveredOutboundEventSeqs: [],
+        irreversibleEventSeqs: [],
+        consideredCount: 1,
+        inputTokens: 1,
+        outputTokens: 1,
+        durationMs: 1,
+      }),
+    ).toThrow(/Re-run from "generate"/);
   });
 
   it('requires the safety decision to cover the exact source request inventory', () => {

@@ -444,23 +444,23 @@ export function parseTriageSelectionResponse(text: string): {
     };
     if (!isNumArray(record.keep)) {
       throw new Error(
-        `Triage response field "keep" must be an array of numbers.\nParsed: ${JSON.stringify(record.keep).slice(0, 500)}`,
+        `Triage response field "keep" must be an array of numbers.\nParsed: ${(JSON.stringify(record.keep) ?? String(record.keep)).slice(0, 500)}`,
       );
     }
-    if (record.irreversible !== undefined && !isNumArray(record.irreversible)) {
+    if (!isNumArray(record.irreversible)) {
       throw new Error(
-        `Triage response field "irreversible" must be an array of numbers.\nParsed: ${JSON.stringify(record.irreversible).slice(0, 500)}`,
+        `Triage response field "irreversible" must be an array of numbers.\nParsed: ${(JSON.stringify(record.irreversible) ?? String(record.irreversible)).slice(0, 500)}`,
       );
     }
-    if (record.irreversibleEvents !== undefined && !isNumArray(record.irreversibleEvents)) {
+    if (!isNumArray(record.irreversibleEvents)) {
       throw new Error(
-        `Triage response field "irreversibleEvents" must be an array of numbers.\nParsed: ${JSON.stringify(record.irreversibleEvents).slice(0, 500)}`,
+        `Triage response field "irreversibleEvents" must be an array of numbers.\nParsed: ${(JSON.stringify(record.irreversibleEvents) ?? String(record.irreversibleEvents)).slice(0, 500)}`,
       );
     }
     return {
       keepSeqs: record.keep,
-      irreversibleSeqs: record.irreversible ?? [],
-      irreversibleEventSeqs: record.irreversibleEvents ?? [],
+      irreversibleSeqs: record.irreversible,
+      irreversibleEventSeqs: record.irreversibleEvents,
     };
   }
 
