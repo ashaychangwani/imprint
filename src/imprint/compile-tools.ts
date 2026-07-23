@@ -61,7 +61,8 @@ import {
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const MAX_SHARED_MODULE_SOURCE_CHARS = 50_000;
-const RUNTIME_BODY_PLACEHOLDER = /\$\{(?:param|credential|state|response|generated|cookie|env)\./;
+const RUNTIME_BODY_PLACEHOLDER =
+  /\$\{(?:(?:param|credential|response|generated|env)\.|(?:state|cookie)(?:\.|\["))/;
 
 export function requestsNeedingBodyEncodingDecision(workflow: Workflow): number[] {
   return workflow.requests.flatMap((request, index) =>

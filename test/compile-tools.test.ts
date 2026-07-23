@@ -62,6 +62,16 @@ describe('body encoding compile contract', () => {
       expect(requestEncodingTestContractFailures(workflow(encoding), source)).toEqual([]);
     }
   });
+
+  it('also requires an encoding decision for supported bracketed state placeholders', () => {
+    const bracketed = workflow();
+    const request = bracketed.requests[0];
+    if (!request) throw new Error('bad fixture');
+    request.body = '{"token":"${state["anti.csrf"]}"}';
+
+    expect(requestsNeedingBodyEncodingDecision(bracketed)).toEqual([0]);
+    expect(bodyEncodingContractFailures(bracketed)).not.toEqual([]);
+  });
 });
 
 describe('irreversible provenance', () => {
