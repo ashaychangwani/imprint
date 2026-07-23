@@ -10,16 +10,20 @@ import {
 import { dirname, join as pathJoin } from 'node:path';
 import { z } from 'zod';
 import { type AgentTool, doneTool, runAgentLoop } from './agent.ts';
+import { AuthVerifier } from './auth-verifier.ts';
 import { loadBackendsCacheStatus } from './backend-cache.ts';
 import { resolveWorkflowTool } from './backend-ladder.ts';
+import { readBuildPlanFile } from './build-plan.ts';
 import { type ParamVerification, runBunTestWithResults } from './compile-tools.ts';
 import {
   LIVE_EVIDENCE_PATH_ENV,
   LIVE_PREFERRED_BACKEND_ONLY_ENV,
   type LiveIntegrationEvidence,
+  acquireSiteLiveLock,
   readLiveIntegrationEvidence,
   runCapturedIntegrationCase,
 } from './compile-verification.ts';
+import { workflowHasIrreversibleEffect } from './effects.ts';
 import { redactFreeformText } from './freeform-redact.ts';
 import {
   type ProviderName,
@@ -36,7 +40,12 @@ import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import { loadCredentialStore } from './runtime.ts';
 import { isSensitiveKey } from './sensitive-keys.ts';
 import { buildZodValidator } from './tool-loader.ts';
-import { type BackendsCache, type ConcreteBackend, WorkflowSchema } from './types.ts';
+import {
+  type BackendsCache,
+  type ConcreteBackend,
+  type Workflow,
+  WorkflowSchema,
+} from './types.ts';
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
@@ -281,6 +290,11 @@ export async function runLiveIntegrationSuite(opts: {
   if (!existsSync(integrationPath)) throw new Error('integration.test.ts is missing');
   const workflowPath = pathJoin(opts.toolDir, 'workflow.json');
   const workflow = WorkflowSchema.parse(JSON.parse(readFileSync(workflowPath, 'utf8')));
+  if (workflowHasIrreversibleEffect(workflow)) {
+    throw new Error(
+      `Live semantic verification is disabled for irreversible workflow ${JSON.stringify(workflow.toolName)}.`,
+    );
+  }
   const durableEvidencePath = pathJoin(opts.toolDir, LIVE_VERIFICATION_EVIDENCE_FILE);
   const label = nextRecordLabel(durableEvidencePath, 'suite');
   const startedAt = new Date().toISOString();
@@ -523,6 +537,379 @@ export function appendLiveVerifierLog(
     encoding: 'utf8',
     mode: 0o600,
   });
+}
+
+interface LiveAuthActionObservation {
+  authToolName: string;
+  action: string;
+  ok: boolean;
+  error?: string;
+  message?: string;
+  nextAction?: string;
+  requiredParameters?: string[];
+  usedBackend: string;
+  status?: number;
+  durationMs: number;
+}
+
+export function credentialsForAuthRefresh(
+  site: string,
+  stored: Awaited<ReturnType<typeof loadCredentialStore>>,
+  persistedNames: readonly string[],
+  cleanSession: boolean,
+): NonNullable<Awaited<ReturnType<typeof loadCredentialStore>>> {
+  const credentials = stored ?? { site, cookies: [], values: {}, storage: [] };
+  if (!cleanSession) return credentials;
+  const persisted = new Set(persistedNames);
+  return {
+    ...credentials,
+    cookies: [],
+    storage: [],
+    values: Object.fromEntries(
+      Object.entries(credentials.values).filter(([name]) => !persisted.has(name)),
+    ),
+  };
+}
+
+function authRefreshStartedForSession(logPath: string | undefined, sessionLabel: string): boolean {
+  if (!logPath || !existsSync(logPath)) return false;
+  for (const line of readFileSync(logPath, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line) as Record<string, unknown>;
+      if (event.type === 'auth.refresh.started' && event.session === sessionLabel) {
+        return true;
+      }
+    } catch {
+      // The append-only log can end in a partial line while another process writes.
+    }
+  }
+  return false;
+}
+
+export function authRefreshAwaitingContinuation(
+  logPath: string | undefined,
+  sessionLabel: string,
+): boolean {
+  if (!logPath || !existsSync(logPath)) return false;
+  let awaiting = false;
+  for (const line of readFileSync(logPath, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line) as Record<string, unknown>;
+      if (event.session !== sessionLabel) continue;
+      if (event.type === 'auth.refresh.action-required') awaiting = true;
+      if (event.type === 'auth.refresh.completed' || event.type === 'auth.refresh.failed') {
+        awaiting = false;
+      }
+    } catch {
+      // The append-only log can end in a partial line while another process writes.
+    }
+  }
+  return awaiting;
+}
+
+function parseAuthActionParameters(
+  value: unknown,
+): Record<string, string | number | boolean> | string {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return 'parameters must be an object of string, number, or boolean values';
+  }
+  const parameters = value as Record<string, unknown>;
+  for (const [name, parameter] of Object.entries(parameters)) {
+    if (
+      typeof parameter !== 'string' &&
+      typeof parameter !== 'number' &&
+      typeof parameter !== 'boolean'
+    ) {
+      return `authentication parameter ${JSON.stringify(name)} must be a string, number, or boolean`;
+    }
+  }
+  return parameters as Record<string, string | number | boolean>;
+}
+
+export const LIVE_AUTH_REFRESH_TOOL_DESCRIPTION =
+  "Run one action from the site's generated authentication workflow after live evidence shows that stored auth is expired or invalid. Omit action on the first call. If the result requests a nextAction, inspect it and call again with that action and any declared parameters. The verifier agent—not the runtime—decides whether to continue.";
+
+export const LIVE_AUTH_REFRESH_INPUT_SCHEMA = {
+  type: 'object' as const,
+  properties: {
+    reason: { type: 'string' },
+    action: { type: 'string' },
+    parameters: { type: 'object', additionalProperties: true },
+    cleanSession: { type: 'boolean' },
+  },
+  required: ['reason'],
+  additionalProperties: false,
+};
+
+interface LiveVerificationAuthSessionOptions {
+  workflowPath: string;
+  reason: string;
+  cleanSession?: boolean;
+  logPath?: string;
+  attempt?: number;
+  sessionLabel: string;
+  deadlineMs?: number;
+}
+
+export async function runLiveAuthRefreshToolCall(
+  existing: LiveVerificationAuthSession | undefined,
+  raw: unknown,
+  context: Omit<LiveVerificationAuthSessionOptions, 'reason' | 'cleanSession'>,
+): Promise<{
+  session: LiveVerificationAuthSession | undefined;
+  observation?: LiveAuthActionObservation;
+  error?: string;
+}> {
+  const input = (raw ?? {}) as {
+    reason?: unknown;
+    action?: unknown;
+    parameters?: unknown;
+    cleanSession?: unknown;
+  };
+  if (typeof input.reason !== 'string' || !input.reason.trim()) {
+    return { session: existing, error: 'reason must explain the observed authentication failure' };
+  }
+  if (input.action !== undefined && typeof input.action !== 'string') {
+    return { session: existing, error: 'action must be a string' };
+  }
+  const parameters = parseAuthActionParameters(input.parameters);
+  if (typeof parameters === 'string') return { session: existing, error: parameters };
+  const session =
+    existing ??
+    new LiveVerificationAuthSession({
+      ...context,
+      reason: input.reason,
+      cleanSession: input.cleanSession === true,
+    });
+  try {
+    return {
+      session,
+      observation: await session.run({ action: input.action, parameters }),
+    };
+  } catch (error) {
+    return {
+      session,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Stateful adapter around the auth program authored by the compile agent.
+ * It executes only the action requested by the verifier agent, while retaining
+ * browser and continuation state between ACTION_REQUIRED observations. */
+export class LiveVerificationAuthSession {
+  private workflow: Workflow | undefined;
+  private verifier: AuthVerifier | undefined;
+  private release: (() => void) | undefined;
+  private expectedAction: string | undefined;
+  private startedAt = 0;
+  private started = false;
+  private closed = false;
+
+  constructor(private readonly opts: LiveVerificationAuthSessionOptions) {}
+
+  async run(
+    input: {
+      action?: string;
+      parameters?: Record<string, string | number | boolean>;
+    } = {},
+  ): Promise<LiveAuthActionObservation> {
+    if (this.closed) throw new Error('authentication refresh session is already closed');
+    await this.initialize();
+    const workflow = this.workflow;
+    const verifier = this.verifier;
+    const expectedAction = this.expectedAction;
+    if (!workflow?.authConfig || !verifier || !expectedAction) {
+      throw new Error('authentication refresh session was not initialized');
+    }
+    if (Date.now() >= (this.opts.deadlineMs ?? Number.POSITIVE_INFINITY)) {
+      await this.close();
+      throw new Error('authentication refresh exceeded the live verification deadline');
+    }
+
+    const action = input.action ?? expectedAction;
+    if (action !== expectedAction) {
+      throw new Error(
+        `authentication expects action ${JSON.stringify(expectedAction)}, not ${JSON.stringify(action)}`,
+      );
+    }
+    const actionPlan = workflow.authConfig.actions[action];
+    if (!actionPlan) {
+      await this.close();
+      throw new Error(`authentication requested unknown action ${JSON.stringify(action)}`);
+    }
+    const parameters = input.parameters ?? {};
+    const declared = new Set(actionPlan.parameters);
+    const unexpected = Object.keys(parameters).filter((name) => !declared.has(name));
+    const missing = actionPlan.parameters.filter((name) => parameters[name] === undefined);
+    if (unexpected.length > 0 || missing.length > 0) {
+      const details = [
+        missing.length > 0 ? `missing ${missing.join(', ')}` : '',
+        unexpected.length > 0 ? `undeclared ${unexpected.join(', ')}` : '',
+      ].filter(Boolean);
+      throw new Error(
+        `invalid parameters for auth action ${JSON.stringify(action)}: ${details.join('; ')}`,
+      );
+    }
+
+    const remainingMs = (this.opts.deadlineMs ?? Number.POSITIVE_INFINITY) - Date.now();
+    let deadlineReached = false;
+    const actionController = new AbortController();
+    const deadlineTimer = Number.isFinite(remainingMs)
+      ? setTimeout(
+          () => {
+            deadlineReached = true;
+            actionController.abort();
+            // Abort browser-backed work without releasing the site lock. The lock
+            // is released only after runAction settles and the session closes.
+            void verifier.drain();
+          },
+          Math.max(1, remainingMs),
+        )
+      : undefined;
+    try {
+      const result = await verifier.runAction(action, parameters, {
+        freshSession: !this.started,
+        signal: actionController.signal,
+      });
+      if (deadlineReached || Date.now() >= (this.opts.deadlineMs ?? Number.POSITIVE_INFINITY)) {
+        throw new Error('authentication refresh exceeded the live verification deadline');
+      }
+      this.started = true;
+      const observation: LiveAuthActionObservation = {
+        authToolName: workflow.toolName,
+        action: result.action,
+        ok: result.ok,
+        error: result.error,
+        message: result.message,
+        nextAction: result.nextAction,
+        usedBackend: result.usedBackend,
+        status: result.status,
+        durationMs: result.durationMs,
+      };
+
+      if (result.ok) {
+        appendLiveVerifierLog(this.opts.logPath, {
+          type: 'auth.refresh.completed',
+          session: this.opts.sessionLabel,
+          attempt: this.opts.attempt,
+          ...observation,
+          totalDurationMs: Date.now() - this.startedAt,
+        });
+        await this.close();
+        return observation;
+      }
+      if (
+        result.error === 'ACTION_REQUIRED' &&
+        result.nextAction &&
+        workflow.authConfig.actions[result.nextAction]
+      ) {
+        this.expectedAction = result.nextAction;
+        observation.requiredParameters =
+          workflow.authConfig.actions[result.nextAction]?.parameters ?? [];
+        appendLiveVerifierLog(this.opts.logPath, {
+          type: 'auth.refresh.action-required',
+          session: this.opts.sessionLabel,
+          attempt: this.opts.attempt,
+          ...observation,
+        });
+        return observation;
+      }
+
+      appendLiveVerifierLog(this.opts.logPath, {
+        type: 'auth.refresh.failed',
+        session: this.opts.sessionLabel,
+        attempt: this.opts.attempt,
+        ...observation,
+      });
+      await this.close();
+      return observation;
+    } catch (error) {
+      appendLiveVerifierLog(this.opts.logPath, {
+        type: 'auth.refresh.failed',
+        session: this.opts.sessionLabel,
+        attempt: this.opts.attempt,
+        authToolName: workflow.toolName,
+        action,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await this.close();
+      throw error;
+    } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      await this.verifier?.drain();
+    } finally {
+      this.release?.();
+      this.release = undefined;
+    }
+  }
+
+  private async initialize(): Promise<void> {
+    if (this.workflow) return;
+    if (authRefreshStartedForSession(this.opts.logPath, this.opts.sessionLabel)) {
+      throw new Error('authentication refresh is limited to once per verifier session');
+    }
+    const dataWorkflow = WorkflowSchema.parse(
+      JSON.parse(readFileSync(this.opts.workflowPath, 'utf8')),
+    );
+    const siteDir = dirname(dirname(this.opts.workflowPath));
+    const authToolName = readBuildPlanFile(pathJoin(siteDir, '.build-plan.json'))?.authTool
+      ?.toolName;
+    if (!authToolName) {
+      throw new Error(`no generated authentication workflow exists for ${dataWorkflow.site}`);
+    }
+    const authPath = pathJoin(siteDir, authToolName, 'workflow.json');
+    const authWorkflow = WorkflowSchema.parse(JSON.parse(readFileSync(authPath, 'utf8')));
+    if (authWorkflow.toolKind !== 'authenticate' || authWorkflow.site !== dataWorkflow.site) {
+      throw new Error(
+        `${authToolName} is not the authentication workflow for ${dataWorkflow.site}`,
+      );
+    }
+
+    this.release = await acquireSiteLiveLock(this.opts.workflowPath, this.opts.deadlineMs);
+    try {
+      // Another verifier can pass the optimistic check above while this process
+      // waits for the site lock. Re-check under the lock before starting auth.
+      if (authRefreshStartedForSession(this.opts.logPath, this.opts.sessionLabel)) {
+        throw new Error('authentication refresh is limited to once per verifier session');
+      }
+      const stored = await loadCredentialStore(dataWorkflow.site);
+      const cleanSession = this.opts.cleanSession === true;
+      this.verifier = new AuthVerifier(
+        authPath,
+        credentialsForAuthRefresh(
+          dataWorkflow.site,
+          stored,
+          authWorkflow.authConfig?.persist ?? [],
+          cleanSession,
+        ),
+      );
+      this.workflow = authWorkflow;
+      this.expectedAction = authWorkflow.authConfig?.entry;
+      this.startedAt = Date.now();
+      appendLiveVerifierLog(this.opts.logPath, {
+        type: 'auth.refresh.started',
+        session: this.opts.sessionLabel,
+        attempt: this.opts.attempt,
+        authToolName,
+        reason: this.opts.reason,
+        cleanSession,
+      });
+    } catch (error) {
+      await this.close();
+      throw error;
+    }
+  }
 }
 
 export async function prepareLiveVerificationBackend(opts: {
@@ -795,6 +1182,7 @@ export async function runLiveSemanticVerification(opts: {
       ...invocationEvidence,
     ]);
   const attemptErrors: string[] = [];
+  let attemptsUsed = 0;
   // Verification gets its own reasoning window. Backend preparation is added
   // separately below and both attempts share this one absolute deadline.
   const verifierDeadlineMs = opts.deadlineMs ?? Date.now() + 10 * 60_000;
@@ -808,6 +1196,7 @@ export async function runLiveSemanticVerification(opts: {
   });
 
   for (let attempt = 1; attempt <= 2; attempt++) {
+    attemptsUsed = attempt;
     try {
       if (existsSync(reportPath)) unlinkSync(reportPath);
     } catch {
@@ -903,6 +1292,10 @@ export async function runLiveSemanticVerification(opts: {
         attempt,
         error: message,
       });
+      // An ACTION_REQUIRED result owns live browser/continuation state inside
+      // the attempt that observed it. A fresh CLI/agent attempt cannot resume
+      // that state, so fail closed instead of pretending a restart is a retry.
+      if (authRefreshAwaitingContinuation(logPath, verifierSessionLabel)) break;
     }
   }
 
@@ -915,7 +1308,7 @@ export async function runLiveSemanticVerification(opts: {
     ...verifierSession,
     status: 'inconclusive',
     finishedAt: new Date().toISOString(),
-    attempts: 2,
+    attempts: attemptsUsed,
   };
   accumulated = mergePersistedRecords(accumulated, [infrastructureEvidence, verifierSession]);
   persistLiveVerificationEvidence(evidencePath, accumulated);
@@ -950,13 +1343,13 @@ export async function runLiveSemanticVerification(opts: {
     type: 'verifier.session.completed',
     session: verifierSessionLabel,
     status: 'inconclusive',
-    attempts: 2,
+    attempts: attemptsUsed,
   });
   return {
     report: inconclusive,
     provider: opts.provider,
     model,
-    attempts: 2,
+    attempts: attemptsUsed,
     completedReview: false,
   };
 }
@@ -1151,13 +1544,31 @@ async function runAnthropicVerifier(opts: {
   if (!isToolUseProvider(provider)) throw new Error('Anthropic provider lacks tool use');
   const workflow = WorkflowSchema.parse(JSON.parse(readFileSync(opts.workflowPath, 'utf8')));
   const validator = buildZodValidator(workflow.parameters);
-  const credentials = (await loadCredentialStore(workflow.site)) ?? undefined;
+  let authSession: LiveVerificationAuthSession | undefined;
   let submitted: LiveVerificationReport | undefined;
   let loggedConversationEntries = 0;
   const evidencePath = pathJoin(dirname(opts.reportPath), LIVE_VERIFICATION_EVIDENCE_FILE);
   const hasSuiteReceipt = (): boolean => hasSuiteReceiptForSession(evidencePath, opts.sessionLabel);
 
   const tools: AgentTool[] = [
+    {
+      name: 'refresh_auth_session',
+      description: LIVE_AUTH_REFRESH_TOOL_DESCRIPTION,
+      input_schema: LIVE_AUTH_REFRESH_INPUT_SCHEMA,
+      handler: async (raw) => {
+        const result = await runLiveAuthRefreshToolCall(authSession, raw, {
+          workflowPath: opts.workflowPath,
+          logPath: opts.logPath,
+          attempt: opts.attempt,
+          sessionLabel: opts.sessionLabel,
+          deadlineMs: opts.deadlineMs,
+        });
+        authSession = result.session;
+        return result.error
+          ? { result: result.error, isError: true }
+          : { result: JSON.stringify(result.observation) };
+      },
+    },
     {
       name: 'prepare_live_backend',
       description:
@@ -1267,7 +1678,6 @@ async function runAnthropicVerifier(opts: {
             caseName: label,
             workflowPath: opts.workflowPath,
             params: parsed.data as Record<string, string | number | boolean>,
-            credentials,
             preferredOnlyBackend: true,
           });
         } catch (error) {
@@ -1357,32 +1767,36 @@ async function runAnthropicVerifier(opts: {
     },
     doneTool(),
   ];
-  const result = await runAgentLoop({
-    systemPrompt: readFileSync(SYSTEM_PROMPT_PATH, 'utf8'),
-    initialUserMessage: opts.initialMessage,
-    tools,
-    deadlineMs: opts.deadlineMs ?? Date.now() + 10 * 60_000,
-    softTurnCap: 12,
-    llm: provider,
-    onDeadlineReached: async () => {
-      const extensionMs = opts.preparationBudget.creditMs - opts.preparationBudget.grantedMs;
-      if (extensionMs <= 0) return null;
-      opts.preparationBudget.grantedMs += extensionMs;
-      return extensionMs;
-    },
-    onConversationUpdate: (conversation) => {
-      for (const entry of conversation.slice(loggedConversationEntries)) {
-        appendLiveVerifierLog(opts.logPath, {
-          type: 'agent.conversation-entry',
-          attempt: opts.attempt,
-          entry,
-        });
-      }
-      loggedConversationEntries = conversation.length;
-    },
-  });
-  if (!submitted) throw new Error(`semantic verifier ended without a report (${result.outcome})`);
-  return submitted;
+  try {
+    const result = await runAgentLoop({
+      systemPrompt: readFileSync(SYSTEM_PROMPT_PATH, 'utf8'),
+      initialUserMessage: opts.initialMessage,
+      tools,
+      deadlineMs: opts.deadlineMs ?? Date.now() + 10 * 60_000,
+      softTurnCap: 12,
+      llm: provider,
+      onDeadlineReached: async () => {
+        const extensionMs = opts.preparationBudget.creditMs - opts.preparationBudget.grantedMs;
+        if (extensionMs <= 0) return null;
+        opts.preparationBudget.grantedMs += extensionMs;
+        return extensionMs;
+      },
+      onConversationUpdate: (conversation) => {
+        for (const entry of conversation.slice(loggedConversationEntries)) {
+          appendLiveVerifierLog(opts.logPath, {
+            type: 'agent.conversation-entry',
+            attempt: opts.attempt,
+            entry,
+          });
+        }
+        loggedConversationEntries = conversation.length;
+      },
+    });
+    if (!submitted) throw new Error(`semantic verifier ended without a report (${result.outcome})`);
+    return submitted;
+  } finally {
+    await authSession?.close();
+  }
 }
 
 async function runCliVerifier(opts: {
@@ -1447,7 +1861,7 @@ async function runCliVerifier(opts: {
 }
 
 function spawnCodexVerifier(
-  opts: { initialMessage: string; model: string },
+  opts: { initialMessage: string; model: string; deadlineMs?: number },
   mcpArgs: string[],
 ): ChildProcess {
   const args = [
@@ -1484,6 +1898,10 @@ function spawnCodexVerifier(
   const child = spawn('codex', args, {
     cwd: REPO_ROOT,
     detached: true,
+    env: {
+      ...process.env,
+      IMPRINT_LIVE_VERIFIER_DEADLINE_MS: String(opts.deadlineMs ?? Date.now() + 10 * 60_000),
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   child.stdin?.end(
@@ -1493,7 +1911,7 @@ function spawnCodexVerifier(
 }
 
 function spawnClaudeVerifier(
-  opts: { initialMessage: string; model: string },
+  opts: { initialMessage: string; model: string; deadlineMs?: number },
   mcpArgs: string[],
 ): ChildProcess {
   const mcpConfig = {
@@ -1518,6 +1936,8 @@ function spawnClaudeVerifier(
     '--tools',
     '',
     '--allowedTools',
+    `mcp__${MCP_SERVER_NAME}__refresh_auth_session`,
+    '--allowedTools',
     `mcp__${MCP_SERVER_NAME}__prepare_live_backend`,
     '--allowedTools',
     `mcp__${MCP_SERVER_NAME}__run_live_integration_suite`,
@@ -1540,6 +1960,7 @@ function spawnClaudeVerifier(
     detached: true,
     env: {
       ...process.env,
+      IMPRINT_LIVE_VERIFIER_DEADLINE_MS: String(opts.deadlineMs ?? Date.now() + 10 * 60_000),
       MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '600000',
     },
     stdio: ['ignore', 'pipe', 'pipe'],

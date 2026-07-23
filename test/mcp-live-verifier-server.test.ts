@@ -108,6 +108,7 @@ describe('live verifier MCP server', () => {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
         'prepare_live_backend',
+        'refresh_auth_session',
         'run_live_integration_suite',
         'run_live_integration_test',
         'submit_verification_report',
@@ -115,11 +116,24 @@ describe('live verifier MCP server', () => {
       expect(
         listed.tools.find((tool) => tool.name === 'run_live_integration_test')?.description,
       ).toContain('Repeated parameters are allowed');
+      const authSchema = JSON.stringify(
+        listed.tools.find((tool) => tool.name === 'refresh_auth_session')?.inputSchema,
+      );
+      expect(authSchema).toContain('action');
+      expect(authSchema).toContain('parameters');
       const submitSchema = JSON.stringify(
         listed.tools.find((tool) => tool.name === 'submit_verification_report')?.inputSchema,
       );
       expect(submitSchema).toContain('untestable');
       expect(submitSchema).toContain('suggestedFix');
+      const firstRefresh = await client.callTool({
+        name: 'refresh_auth_session',
+        arguments: { reason: 'fixture auth failure' },
+      });
+      expect(firstRefresh.isError).toBe(true);
+      expect(JSON.stringify(firstRefresh.content)).toContain(
+        'no generated authentication workflow',
+      );
       const premature = await client.callTool({
         name: 'submit_verification_report',
         arguments: {

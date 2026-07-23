@@ -12,8 +12,12 @@ import {
   type LiveIntegrationEvidence,
   runCapturedIntegrationCase,
 } from './compile-verification.ts';
+import { workflowHasIrreversibleEffect } from './effects.ts';
 import {
+  LIVE_AUTH_REFRESH_INPUT_SCHEMA,
+  LIVE_AUTH_REFRESH_TOOL_DESCRIPTION,
   LIVE_VERIFICATION_EVIDENCE_FILE,
+  type LiveVerificationAuthSession,
   LiveVerificationReportSchema,
   appendLiveVerifierLog,
   assertReportCoversWorkflowParameters,
@@ -22,9 +26,9 @@ import {
   persistLiveVerificationEvidence,
   prepareLiveVerificationBackend,
   readPersistedLiveVerificationEvidence,
+  runLiveAuthRefreshToolCall,
   runLiveIntegrationSuite,
 } from './live-verifier.ts';
-import { loadCredentialStore } from './runtime.ts';
 import { buildZodValidator } from './tool-loader.ts';
 import { WorkflowSchema } from './types.ts';
 
@@ -77,6 +81,12 @@ const PREPARE_BACKEND_TOOL: Tool = {
     },
     required: ['params', 'reason'],
   },
+};
+
+const REFRESH_AUTH_TOOL: Tool = {
+  name: 'refresh_auth_session',
+  description: LIVE_AUTH_REFRESH_TOOL_DESCRIPTION,
+  inputSchema: LIVE_AUTH_REFRESH_INPUT_SCHEMA,
 };
 
 const RUN_SUITE_TOOL: Tool = {
@@ -156,8 +166,15 @@ export async function runLiveVerifierMcpServer(opts: {
   attempt?: number;
 }): Promise<void> {
   const workflow = WorkflowSchema.parse(JSON.parse(readFileSync(opts.workflowPath, 'utf8')));
+  if (workflowHasIrreversibleEffect(workflow)) {
+    throw new Error(
+      `Live verification is disabled for irreversible workflow ${JSON.stringify(workflow.toolName)}.`,
+    );
+  }
   const validator = buildZodValidator(workflow.parameters);
-  const credentials = (await loadCredentialStore(workflow.site)) ?? undefined;
+  const configuredDeadline = Number(process.env.IMPRINT_LIVE_VERIFIER_DEADLINE_MS);
+  const deadlineMs = Number.isFinite(configuredDeadline) ? configuredDeadline : undefined;
+  let authSession: LiveVerificationAuthSession | undefined;
   let submitted = false;
   const backendPreparation: {
     current?: {
@@ -180,9 +197,22 @@ export async function runLiveVerifierMcpServer(opts: {
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [PREPARE_BACKEND_TOOL, RUN_SUITE_TOOL, RUN_TOOL, SUBMIT_TOOL],
+    tools: [REFRESH_AUTH_TOOL, PREPARE_BACKEND_TOOL, RUN_SUITE_TOOL, RUN_TOOL, SUBMIT_TOOL],
   }));
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+    if (request.params.name === 'refresh_auth_session') {
+      const result = await runLiveAuthRefreshToolCall(authSession, request.params.arguments, {
+        workflowPath: opts.workflowPath,
+        logPath: opts.logPath,
+        attempt: opts.attempt,
+        sessionLabel: opts.sessionLabel,
+        deadlineMs,
+      });
+      authSession = result.session;
+      return result.error
+        ? errorResult(result.error)
+        : { content: [{ type: 'text', text: JSON.stringify(result.observation) }] };
+    }
     if (request.params.name === 'prepare_live_backend') {
       const input = request.params.arguments as {
         params?: unknown;
@@ -259,7 +289,6 @@ export async function runLiveVerifierMcpServer(opts: {
           caseName: label,
           workflowPath: opts.workflowPath,
           params: parsed.data as Record<string, string | number | boolean>,
-          credentials,
           preferredOnlyBackend: true,
         });
       } catch (error) {
@@ -346,12 +375,16 @@ export async function runLiveVerifierMcpServer(opts: {
   // process lifetime. Keep stdio alive until the verifier disconnects, just
   // like the compile MCP server does, or Codex can lose the server during its
   // initialize handshake.
-  await new Promise<void>((resolve) => {
-    const close = (): void => resolve();
-    transport.onclose = close;
-    process.once('SIGINT', close);
-    process.once('SIGTERM', close);
-  });
+  try {
+    await new Promise<void>((resolve) => {
+      const close = (): void => resolve();
+      transport.onclose = close;
+      process.once('SIGINT', close);
+      process.once('SIGTERM', close);
+    });
+  } finally {
+    await authSession?.close();
+  }
 }
 
 function errorResult(message: string): CallToolResult {
