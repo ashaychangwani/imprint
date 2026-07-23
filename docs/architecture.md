@@ -4,7 +4,7 @@
 
 Imprint records a real browser session, then compiles it into TWO deterministic artifacts:
 
-1. **`workflow.json`** — the captured API call chain, replayable via native `fetch()`. Fast (~200ms), with named captures for cookies, headers, body values, and browser-minted state.
+1. **`workflow.json`** — the captured API call chain, replayable via native `fetch()`. Fast (~200ms), with named captures for cookies, headers, body values, browser-minted state, and agent-declared body-placeholder encoding.
 2. **`playbook.yaml`** — the captured DOM script, replayable via Playwright. Slow (~9s), works everywhere a real browser does.
 
 Both are auto-discovered by the cron daemon and the MCP server, which dispatch through a **backend ladder** that escalates through cheaper-to-costlier replay strategies on `FORBIDDEN` and satisfiable `STATE_MISSING` errors.
@@ -48,7 +48,7 @@ Both are auto-discovered by the cron daemon and the MCP server, which dispatch t
 ```
 src/imprint/
 │ ── Orchestration ──
-├── teach.ts             End-to-end pipeline: record → redact → [replay-and-diff ‖ triage → detect → dependency-aware select] → close replay edges → plan-prereqs → (per-tool: plan-tool → generate) → compile-playbook → emit → register
+├── teach.ts             End-to-end pipeline: record → redact → effect-aware triage → [safe-recording replay-and-diff ‖ detect → dependency-aware select] → close replay edges → plan-prereqs → (per-tool: plan-tool → generate) → compile-playbook → emit → register
 ├── teach-plan.ts        plan-prereqs step: build plan + level-parallel shared-module build before the per-tool fan-out (multi-tool only)
 ├── tool-plan.ts         plan-tool step: per-tool implementation plan (param→field map, request/parse plan, module imports) injected into the compile agent
 ├── integrations.ts      Platform registration (Claude Code, Codex, Claude Desktop, OpenClaw, Hermes)
@@ -151,6 +151,8 @@ The **`cdp-replay`** rung is the record-faithful trusted-browser transport for t
 **Auth is an agent-compiled action program.** Candidate detection supplies neutral credential-request and related-auth-request evidence. The auth compile agent reads the recording and defines `authConfig.entry` plus arbitrary named actions. Each action lists its scalar parameters and ordered request steps. A step can declare error handling and a recording-grounded `repeat.until` capture with its own interval and attempt bound. Outcomes may declare required capture evidence and are either `pause` (with the next action, exact carried state names, and a caller message) or `success`. `persist` names non-cookie captures that become durable credentials; cookies persist automatically. There are no runtime push/OTP types, phase boundaries, implicit delivery checks, cookie-based completion guesses, or site-shaped auth heuristics.
 
 **Compile and verification are separate stages.** Claude and Codex use the same recording tools and checkpoint protocol. The compile agent writes artifacts but cannot log in directly. For data tools, a separate semantic verifier prepares the live backend with the existing comprehensive probe, then owns execution of the compiler-written `integration.test.ts`. A valid backend preference is reused across compiler revisions; only a missing/invalid preference or a later transport, network, or browser-infrastructure failure invokes the probe. Semantic failures never trigger backend exploration. Final suite and targeted calls pin that preference rather than silently exploring the runtime ladder. The verifier can run discriminating follow-up calls, and its `changes_required` or `inconclusive` report returns to the compiler revision loop. For auth tools, `run_verification` sends one agent-selected action and its parameters to `AuthVerifier`, which reuses its browser and generic continuation by default and returns observed backend/status/body/next-action facts. When those facts show that the prior session is unusable, the agent can request a fresh verification session without changing runtime policy. The orchestrator resumes the same CLI session after each checkpoint. The agent decides from those facts whether to revise the program, prompt the user, wait, reset verification state, run another action, finish, or give up. `done` is accepted only after a live success action, and the verification receipt is bound to the canonical workflow hash so later edits invalidate it.
+
+**Body encoding is an agent-owned compile decision.** A newly compiled request body containing runtime placeholders must declare `bodyPlaceholderEncoding` as `raw`, `json-string`, or `form-urlencoded`. `Content-Type` is evidence for the compiler, not a runtime classifier. The compiler also writes `request.test.ts`, renders the actual workflow without network access, chooses synthetic edge cases appropriate to the recorded format, and proves round-trip equality. Mixed or nested encodings belong in an agent-authored `request-transform.ts`. The runtime retains its former inference only as a compatibility path for workflows emitted before this contract; re-teaching migrates them to explicit declarations.
 
 `executeAuthWorkflow` is a small interpreter for that artifact: substitute ordinary workflow templates, execute or navigate the referenced request, collect declared captures, repeat only when the step says to, check declared evidence by key existence, project only declared carry names, and persist declared session values after success.
 
@@ -295,15 +297,17 @@ Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts
 **Ephemeral artifacts** the compile-agent writes during a run but does not persist:
 
 - `parser.test.ts` — `bun:test` suite that exercises `parser.extract()` against the load-bearing response body. Reads the redacted session via `process.env.IMPRINT_SESSION_PATH` set by the harness. Must include a `synthetic:empty-result` test — `extract()` must return a clean empty collection for a no-match/empty response, never a single all-null placeholder record; the verifier requires that test to be present and to pass. Deleted after verification passes; pass `--keep-test` to `teach` / `generate` (or set `IMPRINT_KEEP_TEST=1`) to retain it for local debugging.
+- `request.test.ts` — agent-authored offline request-construction suite required when a body contains runtime placeholders. It renders `workflow.json` with adversarial synthetic values, decodes the declared wire format, and asserts exact round-trip equality. The agent chooses the test structure and names; the harness executes it before live verification. It must not contact the site; irreversible workflows run it inside a network-isolated process.
 - `integration.test.ts` — live API test whose final execution belongs to the independent semantic verifier. A **baseline** test verifies the workflow produces real data (catches expired hardcoded tokens, missing URL signing), and one **`param:<name>`** test per exposed parameter overrides it with a discriminating value and asserts the response is actually constrained. Before launching Bun, the verifier checks or creates `backends.json` with the existing probe; the suite then runs fail-fast against only the preferred backend, so probe latency is outside the test timeout and a failed backend becomes explicit reprobe feedback. The verifier identifies coverage by which `param:<name>` tests *ran green* (parsed from a JUnit report), not a static source scan. A grounded parameter whose effect remains untestable can carry `// exposed-but-not-verified` and ship as `verified:false`. A secondary candidate input with no grounded encoding, or one proven broken without a recording-grounded repair, is instead removed from the public parameter list and recorded in `workflow.limitations`; those agent-authored reasons are surfaced in MCP descriptions and teach output. Limitations cannot excuse a broken core intent. A parameter that is an **opaque token minted by a sibling tool** must mint a fresh value from the producer tool in its `param:<name>` test; reusing the recorded token is rejected as `unchained`. During `imprint teach`, the harness sets `IMPRINT_TEACH_CREDENTIALS` in the test subprocess so credentials extracted during redaction are available without requiring a separate `imprint credential set`. Also deleted after verification unless `--keep-test` or `IMPRINT_KEEP_TEST=1`.
 - `.compile-log.json`, `.compile-done.json`, `.compile-give-up.json` — compile-agent transcript + sentinels (gitignored).
 - `.live-verifier-log.jsonl`, `.live-verification-evidence.json`, `.live-verification.json` — crash-safe verifier events, sanitized backend/suite/call receipts, and the final semantic report. A suite receipt is created before Bun starts and survives failure, timeout, or abort even when no individual call completes. Labels are diagnostic only; semantic reports do not cite evidence IDs.
 
 ## Multi-tool shared modules (plan-prereqs)
 
-Candidate selection is graph-aware. `dependencySeqs` whose request has one
-unambiguous candidate owner create early consumer→producer edges for the picker;
-shared, unowned, and self-owned request seqs do not. After replay finishes,
+Candidate selection is graph-aware. The candidate agent declares direct
+callable prerequisites as `dependsOnTools`; unambiguous `dependencySeqs` add
+recording-grounded structural edges without inventing dependencies for shared,
+unowned, or self-owned request seqs. After replay finishes,
 `deriveTokenContractHints` runs against the full detected candidate set and adds
 grounded producer-token edges before candidate checkpoints are written. Every
 selection is then closed transitively over those dependencies. All candidates
@@ -350,7 +354,7 @@ This replaced an earlier per-tool **contract-test feedback loop** (compile → r
 
 `imprint audit <site>` exercises every generated tool against the site's **real** MCP server and scores it, so a from-scratch teach can be held to a hard accuracy bar (≥95% by default). `audit.ts`:
 
-1. Discovers the site's tools + schemas (the same `discoverTools` the MCP server uses) and points a **headless `claude` session** at `imprint mcp-server <site>` over stdio, with only that site's tools allowed.
+1. Discovers the site's tools + schemas (the same `discoverTools` the MCP server uses), excludes workflows declared `effect: "irreversible"`, and points a **headless `claude` session** at `imprint mcp-server <site>` over stdio, with only the remaining tools allowed. Irreversible workflows are reported as safety-skipped rather than invoked or scored.
 2. The auditor (system prompt `prompts/audit-agent.md`, fully site-agnostic) reads each tool's description + schema, invokes it with a realistic param set plus 1–2 edge cases (all derived only from the schema/description), judges each result, and classifies each invocation `correct` | `tool_broken` | `infra` | `bad_params`. It calls tools **strictly sequentially** — a parallel burst trips a site-wide anti-bot 429 that poisons the rest of the session — and is told which parameters shipped `verified:false` so it probes them especially.
 3. It returns a single structured JSON report (zod-validated). **It never reports a score** — imprint recomputes the score deterministically (`computeAuditScore`) so a generous auditor can't talk the gate up.
 

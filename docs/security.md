@@ -45,6 +45,8 @@ This is a best-effort tool — we deliberately undersell it. It will NOT catch:
 - **Contextual or site-specific secrets** that do not match either the structured key list or the supplemental free-form patterns.
 - **Free-form PII echoed inside ordinary response bodies** — outside the framing-aware React Flight exception, responses are scrubbed by field name only, so a secret a server returns under an unrecognized key (or inside an RPC envelope) is not value-scanned. Audit manually if a site returns sensitive data in responses.
 - **Non-standard encodings** (compressed bodies, encrypted blobs, unusual base64 packing, or values split across fields).
+
+Placeholder encoding is not inferred for newly compiled bodies. The compile agent must select a generic `raw`, `json-string`, or `form-urlencoded` primitive from the recorded bytes and prove it with an agent-authored offline round-trip test using adversarial values. This prevents delimiter characters from silently changing the request structure. Nested encodings and proprietary framing remain agent-authored request transforms rather than accumulating site-shaped runtime branches. Previously emitted workflows retain the old inference path for compatibility until re-taught.
 - **WebSocket frame content beyond the captured preview**.
 
 If you're using Imprint on a site with unusual auth, **audit the redacted session manually** before generating against it.
@@ -80,6 +82,8 @@ Stored credentials can include named secrets, cookies, and declared durable stor
 **Continuation state is explicit and short-lived.** A paused action returns only the capture names listed in that outcome's `carry` array. The MCP server keeps that object in memory and gives callers a one-use opaque continuation token for the declared next action; callers cannot inject or inspect captured state. It is not written as a durable credential. Cookies stay in the verifier's browser and credential backend; non-cookie values become durable only when the artifact lists their capture names in `authConfig.persist`.
 
 **Retry and completion policy is recording-grounded.** Imprint does not classify authentication channels or impose hidden push/OTP behavior. Every repeated request has an agent-declared interval, bound, and terminal capture in `workflow.json`; any declared outcome evidence must resolve before that outcome is accepted. Live actions happen only at visible `run_verification` checkpoints, and `done` requires a successful live action whose receipt matches the current workflow hash and whose artifact outcome is `success`.
+
+**Irreversible effects are classified by agents and excluded from automated execution.** Request triage and the compiler independently decide whether a captured operation has an irreversible real-world effect, then preserve that decision as `effect: "irreversible"` with its exact `recordingRequestSeq`. Teach verification, backend probing, and audit do not invoke those workflows. They compile from recorded/offline evidence and ship with `verified:false` / `waived-safety` instead. The runtime does not guess safety from HTTP verbs, URL names, or payload strings.
 
 ## LLM data flow
 

@@ -17,7 +17,7 @@ Persisted as checkpoints in `~/.imprint/<site>/.teach-state.json`
 (`WorkflowState.completedSteps`):
 
 ```
-record → redact → replay-and-diff → triage → detect-candidates → plan-prereqs → generate → compile-playbook → emit → register
+record → redact → triage → replay-and-diff → detect-candidates → plan-prereqs → generate → compile-playbook → emit → register
 ```
 
 Architecture note — this is not a flat linear chain:
@@ -68,9 +68,11 @@ restart. `record` is always allowed (it produces everything fresh).
 
 ## Granularity (honest constraints, documented)
 
-- The **`replay-and-diff → triage → detect-candidates`** analysis runs as one
-  atomic block (its sub-steps share a parallel run + the triaged session), so
-  stopping at any of them completes through `detect-candidates`.
+- Triage is checkpointed first as the replay safety boundary. In a full run,
+  replay for recordings classified as non-irreversible and candidate detection
+  then run in parallel. Bounded analysis
+  windows remain phase-accurate: `--only triage`, `--only replay-and-diff`, and
+  `--only detect-candidates` each run only the named phase and reuse prerequisites.
 - The **per-tool `generate → compile-playbook → emit`** compile is atomic per
   tool. A `--to-step` (or `--only`) landing inside it runs the **whole** compile
   unit and stops before `register` rather than mid-tool — stopping mid-compile
