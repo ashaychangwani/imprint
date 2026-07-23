@@ -1144,7 +1144,7 @@ export function buildUnverifiedParamNote(
 export function buildAuditInitialPrompt(opts: DriveAuditOptions, unverifiedNote: string): string {
   const nonInteractiveAuthNames = opts.nonInteractiveAuthNames ?? [];
   const authNote = nonInteractiveAuthNames.length
-    ? `\n\nThe following authentication tool(s) are eligible because every action completes without a human pause: ${nonInteractiveAuthNames.join(', ')}. Call each exactly once with one safe baseline. Never differentially probe or retry authentication actions. If any DATA tool returns AUTH_EXPIRED, classify that invocation as infra/inconclusive evidence; do not call an authentication tool in response.`
+    ? `\n\nEligible unattended authentication tool(s): ${nonInteractiveAuthNames.join(', ')}. Apply the unattended authentication rules only to these tools, with at most one recovery authentication call total across this audit.`
     : '\n\nNo authentication tool is eligible in this audit. If a DATA tool returns AUTH_EXPIRED, classify that invocation as infra/inconclusive evidence; do not attempt to authenticate.';
   return `Audit every MCP tool connected to you for the site "${opts.site}".
 
