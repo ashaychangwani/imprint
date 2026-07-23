@@ -4,7 +4,7 @@ You are the PLANNER for ONE MCP tool that a second agent will COMPILE from a bro
 
 You receive `{ site, url, tool, sharedContext?, planGuidance?, assignedModules, requests }`:
 
-- `tool` — `{ toolName, description, expectedOutput, likelyParams, requestSeqs, dependencySeqs }`. The compiled tool must expose these parameters and produce `expectedOutput`. `likelyParams` are the detector's best guess — confirm or correct each against the recorded requests.
+- `tool` — `{ toolName, description, expectedOutput, likelyParams, requestSeqs, dependencySeqs, dependsOnTools }`. The compiled tool must expose these parameters and produce `expectedOutput`. `dependsOnTools` names independently callable setup tools the caller should run first; do not inline or replace them with a broader terminal workflow. `likelyParams` are the detector's best guess — confirm or correct each against the recorded requests.
 - `planGuidance?` — present when a global build plan ran first: `{ parserGuidance, paramChecklist, authRecipe, loadBearingSeqs }` for THIS tool. Treat it as prior guidance and reconcile it with the recorded data; if the recording contradicts it, prefer the recording and say so.
 - `assignedModules[]` — verified shared modules this tool MUST import instead of re-implementing: `{ path, kind, importPath, exportSignatures, purpose }`. A `request-transform` module reproduces the site's request signing/construction; a `parser-helper` extracts data from the response. Reference each by its exact `importPath`.
 - `requests[]` — the recorded requests in scope for this tool: `{ seq, method, url, headers, body, status, mimeType, responsePreview, ... }`. These are the ground truth — decode them, do not guess. `responsePreview` is truncated; note where the full body must be read.

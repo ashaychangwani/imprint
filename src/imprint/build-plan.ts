@@ -183,6 +183,8 @@ type DynamicValueFinding = z.infer<typeof DynamicValueFindingSchema>;
 
 const PerToolPlanSchema = z.object({
   toolName: z.string().regex(/^[a-z][a-z0-9_]*$/),
+  /** Callable prerequisite tools chosen by candidate detection. */
+  dependsOnTools: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/)).default([]),
   usesSharedModules: z.array(z.string()).default([]),
   loadBearingSeqs: z.array(z.number().int().nonnegative()).default([]),
   parserGuidance: z.string().default(''),
@@ -692,6 +694,8 @@ export function topoLevelsForTools<T extends { toolName: string }>(
     (t) => {
       if (!plan) return [];
       const deps = new Set<string>();
+      const toolPlan = plan.perTool.find((candidate) => candidate.toolName === t.toolName);
+      for (const dependency of toolPlan?.dependsOnTools ?? []) deps.add(dependency);
       for (const tp of resolveTokenParams(plan, t.toolName)) deps.add(tp.sourceTool);
       // General contract edges: a producer_tool input depends on its producer; any
       // auth input depends on the authenticate tool (filtered out by kahnLevels
@@ -862,6 +866,20 @@ export function validateBuildPlan(
   const plan = BuildPlanSchema.parse(normalizeRawPlan(input));
   if (selected && selected.length > 0) {
     const names = new Set(selected.map((t) => (typeof t === 'string' ? t : t.toolName)));
+    const dependenciesByName = new Map(
+      selected.flatMap((candidate) =>
+        typeof candidate === 'string'
+          ? []
+          : [
+              [
+                candidate.toolName,
+                candidate.dependsOnTools.filter(
+                  (dependency) => names.has(dependency) && dependency !== candidate.toolName,
+                ),
+              ] as const,
+            ],
+      ),
+    );
     plan.perTool = plan.perTool.filter((t) => names.has(t.toolName));
     for (const name of names) {
       if (!plan.perTool.some((t) => t.toolName === name)) {
@@ -872,6 +890,9 @@ export function validateBuildPlan(
     }
     if (plan.perTool.length === 0) {
       throw new Error('Build plan has no perTool entries for the selected tools.');
+    }
+    for (const tool of plan.perTool) {
+      tool.dependsOnTools = dependenciesByName.get(tool.toolName) ?? [];
     }
   }
   // Deterministic requiredInputs ordering for stable sidecar JSON.

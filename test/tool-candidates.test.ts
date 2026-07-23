@@ -523,6 +523,25 @@ describe('tool candidate validation', () => {
     });
     expect(detection.candidates[0]?.dependsOnTools).toEqual([]);
   });
+
+  it('rejects self and unknown callable dependencies instead of silently dropping them', () => {
+    expect(() =>
+      validateToolCandidateDetection({
+        sharedContext: {},
+        candidates: [
+          {
+            toolName: 'get_details',
+            description: 'Get details',
+            rationale: 'primary intent',
+            confidence: 0.9,
+            primary: true,
+            requestSeqs: [2],
+            dependsOnTools: ['get_details', 'missing_tool'],
+          },
+        ],
+      }),
+    ).toThrow(/cannot depend on itself|unknown dependency/);
+  });
 });
 
 describe('candidate dependency graph', () => {
