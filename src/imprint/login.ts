@@ -11,7 +11,7 @@ import {
 } from './credential-store.ts';
 import { localSiteDir } from './paths.ts';
 import { recordedRequestMatchesWorkflow } from './recording-request.ts';
-import { captureHeader, captureValueMatches, jsonpath } from './request-capture.ts';
+import { captureHeader, captureValueMatches, resolveJsonCapture } from './request-capture.ts';
 import {
   type RequestCapture,
   type Session,
@@ -238,7 +238,7 @@ function resolveCapture(session: Session, binding: SessionCaptureBinding): strin
         } catch {
           continue; // this response isn't JSON; try the next one
         }
-        value = jsonpath(parsed, capture.path);
+        value = resolveJsonCapture(parsed, capture.path, capture.decodeJsonPath);
         break;
       }
       case 'response_header':

@@ -507,6 +507,49 @@ describe('auth action runtime', () => {
     expect(await backend.getSecret('fixture-auth', 'durable_interface')).toBe('resolved-value');
   });
 
+  it('persists a JSON-string capture after decoding its nested path once', async () => {
+    const wf = workflow({
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://fixture.test/finish',
+          headers: {},
+          captures: [
+            {
+              source: 'json',
+              name: 'nested_token',
+              path: '$.payload',
+              decodeJsonPath: '$.session.token',
+            },
+          ],
+        },
+      ],
+      authConfig: {
+        entry: 'finish',
+        actions: {
+          finish: {
+            steps: [{ request: 0 }],
+            outcome: { type: 'success', evidence: ['nested_token'] },
+          },
+        },
+        persist: ['nested_token'],
+      },
+    });
+    const token = 'fixture/segment+token=';
+    const encodedEnvelope = `{"session":{"token":"fixture\\/segment+token="}}`;
+
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ payload: encodedEnvelope }))) as unknown as typeof fetch,
+    });
+
+    expect(result).toEqual({ ok: true, data: { authenticated: true } });
+    expect(await backend.getSecret('fixture-auth', 'nested_token')).toBe(token);
+  });
+
   it('rolls back cookies and earlier secrets when a later secret write fails', async () => {
     const failingBackend = memoryBackend();
     await failingBackend.setCookies('fixture-auth', [

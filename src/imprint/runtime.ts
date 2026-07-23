@@ -19,7 +19,12 @@ import {
   readSiteManifest,
   saveSiteCookies,
 } from './credential-store.ts';
-import { captureHeader, captureValueMatches, jsonpath } from './request-capture.ts';
+import {
+  captureHeader,
+  captureValueMatches,
+  jsonpath,
+  resolveJsonCapture,
+} from './request-capture.ts';
 import type {
   RequestCapture,
   StateCapability,
@@ -1276,7 +1281,7 @@ function evaluateRequestCaptures(
     let value: unknown;
     switch (capture.source) {
       case 'json':
-        value = jsonpath(ctx.parsed, capture.path);
+        value = resolveJsonCapture(ctx.parsed, capture.path, capture.decodeJsonPath);
         break;
       case 'response_header':
         value = captureHeader(ctx.headers, capture.header, capture.mode);

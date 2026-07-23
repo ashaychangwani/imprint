@@ -160,6 +160,32 @@ test('round trips adversarial form values', async () => {
 });
 `;
 
+const NESTED_CAPTURE_CONTRACT_TEST = `
+test('persisted-capture:nested_token matches the exact structured producer field', () => {
+  const sessionPath = process.env.IMPRINT_SESSION_PATH;
+  if (!sessionPath) throw new Error('IMPRINT_SESSION_PATH is not set');
+  const recorded = JSON.parse(readFileSync(sessionPath, 'utf8'));
+  const request = recorded.requests.find((item: { seq: number }) => item.seq === 7);
+  const body = request?.response?.body;
+  if (typeof body !== 'string') throw new Error('recorded producer response is missing');
+  const response = JSON.parse(body);
+  const expected = JSON.parse(response.payload).session.token;
+
+  const workflow = WorkflowSchema.parse(JSON.parse(readFileSync('workflow.json', 'utf8')));
+  const capture = workflow.requests[0]?.captures?.[0];
+  if (!capture) throw new Error('compiled capture is missing');
+  const actual =
+    capture.source === 'json'
+      ? capture.path === '$.payload' && capture.decodeJsonPath === '$.session.token'
+        ? JSON.parse(response.payload).session.token
+        : undefined
+      : capture.source === 'text_regex'
+        ? new RegExp(capture.pattern).exec(body)?.[capture.group ?? 1]
+        : undefined;
+  expect(actual).toBe(expected);
+});
+`;
+
 function writeWorkflow(dir: string, workflow: Workflow = validWorkflow()): void {
   writeFileSync(pathJoin(dir, 'workflow.json'), JSON.stringify(workflow), 'utf8');
   writeFileSync(pathJoin(dir, 'request.test.ts'), VALID_REQUEST_TEST, 'utf8');
@@ -198,6 +224,36 @@ describe('auth compile tools', () => {
         content: 'steps: []',
       });
       expect(result?.isError).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not expose real teach credentials to agent-authored offline tests', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-test-credentials-'));
+    try {
+      const secret = 'must-not-reach-agent-tests';
+      const tools = buildAuthCompileTools(session(), dir, '/tmp/session.json', {
+        site: 'fixture-site',
+        values: { username: 'fixture-user', password: secret },
+      });
+      const write = tools.find((tool) => tool.name === 'write_file');
+      const runTests = tools.find((tool) => tool.name === 'run_tests');
+      await write?.handler({
+        relativePath: 'workflow.json',
+        content: JSON.stringify(validWorkflow()),
+      });
+      await write?.handler({
+        relativePath: 'request.test.ts',
+        content: `${VALID_REQUEST_TEST}
+test('offline auth tests receive no real teach payload', () => {
+  expect(process.env.IMPRINT_TEACH_CREDENTIALS).toBe('');
+});`,
+      });
+
+      const result = await runTests?.handler({});
+      expect(result?.isError).not.toBe(true);
+      expect(result?.result).not.toContain(secret);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -536,6 +592,15 @@ test('agent-chosen encoding check', () => expect(1).toBe(2));`,
       authConfig.persistBindings = { opaque_alpha: 'ticket' };
       request.recordingRequestSeq = 7;
       writeWorkflow(dir, workflow);
+      writeFileSync(
+        pathJoin(dir, 'request.test.ts'),
+        `${VALID_REQUEST_TEST}
+test('persisted-capture:opaque_alpha preserves the planned binding', () => {
+  const workflow = WorkflowSchema.parse(JSON.parse(readFileSync('workflow.json', 'utf8')));
+  expect(workflow.authConfig?.persistBindings?.opaque_alpha).toBe('ticket');
+});`,
+        'utf8',
+      );
       expect(
         authExternalVerification(dir, [{ name: 'opaque_alpha', usedAs: 'header:authorization' }]),
       ).toEqual([]);
@@ -585,6 +650,101 @@ test('agent-chosen encoding check', () => expect(1).toBe(2));`,
       );
       recordedRequest.method = 'POST';
       recordedRequest.response.body = '{}';
+      expect(authWorkflowPreflightFailures(dir, recorded).join('\n')).toContain('is not produced');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires exact agent-authored proof for a persisted nested JSON capture', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-nested-json-capture-'));
+    try {
+      const workflow = validWorkflow();
+      const authConfig = workflow.authConfig;
+      const request = workflow.requests[0];
+      if (!authConfig || !request) throw new Error('bad fixture');
+      const token = 'synthetic/persisted+=value';
+      request.recordingRequestSeq = 7;
+      request.captures = [
+        {
+          source: 'json',
+          name: 'nested_token',
+          path: '$.payload',
+          decodeJsonPath: '$.session.token',
+          required: true,
+          capability: 'ordinary_http',
+        },
+      ];
+      authConfig.persist = ['nested_token'];
+      const begin = authConfig.actions.begin;
+      if (!begin || begin.outcome.type !== 'pause') throw new Error('bad fixture');
+      begin.outcome.evidence = ['nested_token'];
+      begin.outcome.carry = ['nested_token'];
+      writeWorkflow(dir, workflow);
+
+      const recorded = session();
+      recorded.requests = [
+        {
+          seq: 7,
+          timestamp: 1,
+          method: 'POST',
+          url: 'https://fixture.test/begin',
+          headers: {},
+          body: 'username=fixture&password=fixture',
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: {},
+            body: JSON.stringify({
+              unrelated: 'wrong-but-nonempty',
+              payload: JSON.stringify({ session: { token } }).replaceAll('/', '\\/'),
+            }),
+            mimeType: 'application/json',
+          },
+        },
+      ];
+      expect(authWorkflowPreflightFailures(dir, recorded)).toEqual([]);
+      const sessionPath = pathJoin(dir, 'session.json');
+      writeFileSync(sessionPath, JSON.stringify(recorded), 'utf8');
+
+      expect(
+        (await authLivePreflightFailures(dir, recorded, [], [], sessionPath)).join('\n'),
+      ).toContain('persisted-capture:nested_token');
+
+      writeFileSync(
+        pathJoin(dir, 'request.test.ts'),
+        `${VALID_REQUEST_TEST}${NESTED_CAPTURE_CONTRACT_TEST}`,
+        'utf8',
+      );
+      expect(await authLivePreflightFailures(dir, recorded, [], [], sessionPath)).toEqual([]);
+
+      request.captures = [
+        {
+          source: 'text_regex',
+          name: 'nested_token',
+          pattern: '"unrelated":"([^"]+)"',
+          group: 1,
+          required: true,
+          capability: 'ordinary_http',
+        },
+      ];
+      writeFileSync(pathJoin(dir, 'workflow.json'), JSON.stringify(workflow), 'utf8');
+      expect(authWorkflowPreflightFailures(dir, recorded)).toEqual([]);
+      expect(
+        (await authLivePreflightFailures(dir, recorded, [], [], sessionPath)).join('\n'),
+      ).toContain('agent-authored request tests failed');
+
+      request.captures = [
+        {
+          source: 'json',
+          name: 'nested_token',
+          path: '$.payload',
+          decodeJsonPath: '$.session.missing',
+          required: true,
+          capability: 'ordinary_http',
+        },
+      ];
+      writeFileSync(pathJoin(dir, 'workflow.json'), JSON.stringify(workflow), 'utf8');
       expect(authWorkflowPreflightFailures(dir, recorded).join('\n')).toContain('is not produced');
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -594,10 +594,15 @@ StateCapability = 'ordinary_http' | 'browser_bootstrap' | 'stealth_bootstrap' | 
 
 // Request-level captures (extract values from responses for chaining)
 RequestCapture =
-  | { source: 'json'; name: string; path: string; required?: boolean; capability?: StateCapability }
+  | { source: 'json'; name: string; path: string; decodeJsonPath?: string; required?: boolean; capability?: StateCapability }
   | { source: 'response_header'; name: string; header: string; mode?: 'first' | 'last' | 'all'; required?: boolean; capability?: StateCapability }
   | { source: 'text_regex'; name: string; pattern: string; group?: number; required?: boolean; capability?: StateCapability }
   | { source: 'cookie'; name: string; cookie: string; url?: string; domain?: string; path?: string; sameSite?: string; allowHttpOnlyProjection?: boolean; required?: boolean; capability?: StateCapability };
+
+When a JSON field contains another JSON document as a string, select the outer
+field with `path` and the value inside it with `decodeJsonPath`. Do not use a
+regular expression for structured nested JSON; wire escaping can change or
+truncate the captured value.
 
 // Bootstrap captures (from page load, for browser-minted state)
 BootstrapCapture =

@@ -159,6 +159,31 @@ describe('extractCredentials (generic persisted-capture resolver)', () => {
     });
   });
 
+  it('extracts a persisted value from a JSON-string response envelope', () => {
+    writeWorkflow(
+      'fixture',
+      'authenticate_fixture',
+      [
+        {
+          name: 'nested_token',
+          source: 'json',
+          path: '$.payload',
+          decodeJsonPath: '$.session.token',
+        },
+      ],
+      ['nested_token'],
+      2,
+    );
+    const token = 'fixture/segment+token=';
+    const encodedEnvelope = `{"session":{"token":"fixture\\/segment+token="}}`;
+    const session = sessionWithLoginResponse(JSON.stringify({ payload: encodedEnvelope }));
+    const request = session.requests[1];
+    if (!request) throw new Error('bad fixture');
+    request.seq = 2;
+
+    expect(extractCredentials('fixture', session)).toEqual({ nested_token: token });
+  });
+
   it('resolves Discover & Go nested-key shape into the exact credential slots', () => {
     writeWorkflow('discoverandgo', 'book_pass', [
       { name: 'patron_id', source: 'json', path: 'patronID' },

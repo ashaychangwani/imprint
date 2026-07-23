@@ -190,6 +190,9 @@ export const RequestCaptureSchema = z.discriminatedUnion('source', [
   RequestCaptureCommonSchema.extend({
     source: z.literal('json'),
     path: z.string(),
+    /** When set, parse the value selected by `path` as JSON once and resolve
+     *  this second path against the decoded value. */
+    decodeJsonPath: z.string().min(1).optional(),
   }),
   RequestCaptureCommonSchema.extend({
     source: z.literal('response_header'),

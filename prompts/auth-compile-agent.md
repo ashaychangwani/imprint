@@ -129,6 +129,21 @@ the request. It is required on requests whose captures appear in
 `authConfig.persist`, so `imprint login` extracts each value only from its
 producing recorded response.
 
+For a response field that contains another JSON document as a string, use a
+JSON capture with `path` for the outer field and `decodeJsonPath` for the value
+inside the decoded document. Do not capture structured nested JSON credentials
+with a regular expression; response escaping can change or truncate the value.
+
+For every durable interface in `authConfig.persist`, add a
+`request.test.ts` test whose title contains
+`persisted-capture:<credential-interface-name>`. Load the redacted recording
+through `process.env.IMPRINT_SESSION_PATH`, locate the declared
+`recordingRequestSeq`, independently decode the intended response field, and
+assert that evaluating the compiled capture produces that exact value. A
+nonempty assertion or comparison of the locator to itself is insufficient:
+the test must catch a broad regex or wrong nested path that resolves to a
+different field. Keep captured values in memory; never inline or print them.
+
 `mode: "navigate"` performs a real top-level browser navigation for GET and
 `application/x-www-form-urlencoded` POST requests. Use it when the recording
 shows a document form submission whose redirects or browser-owned state must be

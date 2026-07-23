@@ -23,7 +23,7 @@ import {
 } from './compile-tools.ts';
 import { isIrreversibleRequest, workflowHasIrreversibleEffect } from './effects.ts';
 import { recordedRequestMatchesWorkflow } from './recording-request.ts';
-import { captureHeader, captureValueMatches, jsonpath } from './request-capture.ts';
+import { captureHeader, captureValueMatches, resolveJsonCapture } from './request-capture.ts';
 import { type Session, type Workflow, WorkflowSchema, persistedCaptureName } from './types.ts';
 
 type TeachCredentials = { site: string; values: Record<string, string> };
@@ -69,7 +69,10 @@ export function buildAuthCompileTools(
       toolDir,
       sessionPath,
       {
-        IMPRINT_TEACH_CREDENTIALS: JSON.stringify(teachCredentials),
+        // Auth request/capture tests are offline and use synthetic credentials.
+        // Explicitly mask any inherited teach payload so agent-authored test
+        // output cannot expose real credentials to the compile model.
+        IMPRINT_TEACH_CREDENTIALS: '',
       },
       {
         networkDisabled: session.requests.some(isIrreversibleRequest),
@@ -107,6 +110,10 @@ export async function authLivePreflightFailures(
   failures.push(
     ...bodyEncodingContractFailures(parsed.workflow),
     ...requestEncodingTestContractFailures(
+      parsed.workflow,
+      existsSync(requestTestPath) ? readFileSync(requestTestPath, 'utf8') : undefined,
+    ),
+    ...persistedCaptureTestContractFailures(
       parsed.workflow,
       existsSync(requestTestPath) ? readFileSync(requestTestPath, 'utf8') : undefined,
     ),
@@ -152,6 +159,12 @@ export function authExternalVerification(
         ? readFileSync(pathJoin(toolDir, 'request.test.ts'), 'utf8')
         : undefined,
     ),
+    ...persistedCaptureTestContractFailures(
+      workflow,
+      existsSync(pathJoin(toolDir, 'request.test.ts'))
+        ? readFileSync(pathJoin(toolDir, 'request.test.ts'), 'utf8')
+        : undefined,
+    ),
   );
   const persisted = new Set(workflow.authConfig?.persist ?? []);
 
@@ -176,6 +189,25 @@ export function authExternalVerification(
     failures.push(...liveAttemptFailures(toolDir, workflow));
   }
   return failures;
+}
+
+function persistedCaptureTestContractFailures(
+  workflow: Workflow,
+  source: string | undefined,
+): string[] {
+  const persisted = workflow.authConfig?.persist ?? [];
+  if (persisted.length === 0) return [];
+  if (source === undefined) {
+    return [
+      'request.test.ts is required to prove persisted auth captures against their exact recorded response fields',
+    ];
+  }
+  return persisted
+    .filter((name) => !source.includes(`persisted-capture:${name}`))
+    .map(
+      (name) =>
+        `request.test.ts must include a passing "persisted-capture:${name}" test that independently decodes the recorded producer response and asserts the compiled capture equals that exact structured value`,
+    );
 }
 
 function parseWorkflow(
@@ -400,7 +432,7 @@ function recordedResponseProducesCapture(
   let value: unknown;
   if (capture.source === 'json') {
     try {
-      value = jsonpath(JSON.parse(body), capture.path);
+      value = resolveJsonCapture(JSON.parse(body), capture.path, capture.decodeJsonPath);
     } catch {
       return false;
     }
