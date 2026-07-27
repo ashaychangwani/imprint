@@ -51,7 +51,7 @@ When `HERMES_HOME` is set, Imprint writes Hermes MCP entries to `$HERMES_HOME/co
 
 ## See It in Action
 
-**Teach once.** `imprint teach google-flights` records real browser flows and compiles a **6-tool** MCP server — the compile agent reverse-engineers Google's `batchexecute` wire format itself and wires the staged search→booking token chain, with no hand-written request code. Here is the actual run behind the example snapshot:
+**Teach once.** `imprint teach google-flights` records real browser flows and compiles an MCP server — the compile agent reverse-engineers Google's `batchexecute` wire format and wires producer-consumer flows. This historical run illustrates the workflow; the checked snapshot below has since been refreshed to five tools:
 
 ![imprint teach google-flights — a real run compiled into live-verified MCP tools](web/public/imprint-teach.gif)
 
@@ -65,8 +65,8 @@ $ claude "cheapest nonstop SJC→SAN the first week of July, with a carry-on"
   Delta      DL2901   SJC→SAN   7:10a→8:44a   nonstop   $169
 ```
 
-The current example snapshot includes six live-verified tools, including staged
-multi-city search and booking. *(The terminal above is a faithful replay —
+The current example snapshot includes five audited tools for location discovery,
+one-way search and booking, and round-trip calendar pricing. *(The terminal above is a faithful replay —
 regenerate/record it with `bun scripts/demo-teach.ts`.)*
 
 ---
@@ -220,20 +220,39 @@ Each site registers as its own MCP server (`imprint-southwest`, `imprint-google-
 
 ## Examples
 
-Every example below was **one-shot compiled from a single real browser-session recording** (`imprint teach`) — the generated artifacts are committed verbatim as a **proof of concept** of what the compiler produces, not as maintained integrations. Recording-derived defaults (dates, geo) age out; pass explicit values.
+The flagship examples below were compiled from fresh replays of browser-session
+recordings with `imprint teach`, then differentially audited. They include
+narrow repairs to generated parsers, transforms, and schemas where the audit
+found gaps; they do not carry site-specific runtime or compiler changes.
+Recording-derived defaults (dates and geography) age out, so pass explicit values.
 
-**★ Star examples** — multi-tool suites, each compiled from one recording and scored by the headless differential audit:
+**★ Star examples** — multi-tool suites with generation-audit evidence:
 
-| Example | Tools | Audit | What it shows |
+| Example | Tools | Generation audit | What it shows |
 |:--|:--|:--|:--|
-| [**google-flights**](examples/google-flights) | 6 | live-verified | `batchexecute` wire-format decode + staged multi-city search→booking token chain, live `cdp-replay` |
-| [**google-hotels**](examples/google-hotels) | 4 | 91.7% | autocomplete → search → reviews/booking producer-token chaining |
+| [**google-flights**](examples/google-flights) | 5 | 46/46 gradeable units | location discovery → one-way search / round-trip calendar → booking, with shared `batchexecute` decoding |
+| [**google-hotels**](examples/google-hotels) | 4 | 25/25 gradeable units | destination suggestions → dated search → consolidated details / booking producer-consumer flow |
+| [**southwest**](examples/southwest) | 5 | 35/35 gradeable public-tool units | public search / calendar / status plus two session-assisted authenticated read-only tools |
+
+These scores describe each refreshed, narrower emitted contract and are not
+same-scope comparisons with older snapshots. The refresh renamed
+`lookup_flight_locations` to `search_flight_locations`, renamed
+`list_hotel_booking_options` to `get_hotel_booking_options`, consolidated hotel
+photos/reviews/links into `get_hotel_details`, removed the unverified
+`validate_flight_itinerary` and `get_travel_area_boundaries` candidates, and
+removed controls that live calls could not distinguish. Flights search now
+advertises only complete one-way itineraries; round-trip price discovery stays
+in the calendar tool, while later-leg round-trip/multi-city selection is
+user-assisted. Southwest account/trip tools were
+infrastructure-blocked during the audit and require a user-supplied authenticated
+cookie session; they are not included in the 35-unit denominator. PR hardening
+after the generation audit added malformed-response escalation, dynamic
+API-key capture, exact calendar postconditions, and encoding regression tests.
 
 Other examples:
 
 | Example | Description |
 |:--|:--|
-| [**southwest**](examples/southwest) | Live fare search — defeats Akamai bot detection |
 | [**discoverandgo**](examples/discoverandgo) | Authenticated booking via per-site credential store |
 | [**echo**](examples/echo) | MCP smoke-test fixture |
 

@@ -3,7 +3,7 @@
  *
  * Tool: list_upcoming_trips
  * Site: southwest
- * Intent: List upcoming Southwest trips for the logged-in account.
+ * Intent: List upcoming Southwest reservations for the signed-in member.
  *
  * To regenerate: imprint emit ~/.imprint/southwest/list_upcoming_trips/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,7 +20,7 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "list_upcoming_trips",
   "intent": {
-    "description": "List upcoming Southwest trips for the logged-in account.",
+    "description": "List upcoming Southwest reservations for the signed-in member.",
     "userSaid": "logged into southwest; went to My Trips page"
   },
   "parameters": [],
@@ -33,45 +34,11 @@ const WORKFLOW: Workflow = {
       "captures": [
         {
           "name": "southwest_api_key",
-          "required": true,
-          "capability": "ordinary_http",
           "source": "text_regex",
           "pattern": "\"swa-bootstrap-landing-home-page-v2/api-keys\":\\[function\\(require,module,exports\\)\\{\\s*module\\.exports = \\{[^}]*\"prod\":\"([^\"]+)\"",
-          "group": 1
-        }
-      ],
-      "effect": "safe"
-    },
-    {
-      "method": "POST",
-      "url": "https://www.southwest.com/api/security/v4/security/token",
-      "headers": {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": "https://www.southwest.com/",
-        "x-app-id": "landing-home-page-v2",
-        "x-app-version": "27.0.0",
-        "x-channel-id": "southwest",
-        "x-diagnostic": "{\"spa\":\"27.0.0\"}",
-        "x-user-experience-id": "${generated.uuid}",
-        "x-api-key": "${state.southwest_api_key}",
-        "Origin": "https://www.southwest.com"
-      },
-      "body": "username=${credential.username}&password=${credential.password}&scope=openid&response_type=id_token+swa_token&client_id=6b6199ac-6726-4642-b5bd-86eb07062161",
-      "captures": [
-        {
-          "name": "access_token",
+          "group": 1,
           "required": true,
-          "capability": "ordinary_http",
-          "source": "json",
-          "path": "$.access_token"
-        },
-        {
-          "name": "id_token",
-          "required": true,
-          "capability": "ordinary_http",
-          "source": "json",
-          "path": "$.id_token"
+          "capability": "ordinary_http"
         }
       ],
       "effect": "safe"
@@ -82,19 +49,17 @@ const WORKFLOW: Workflow = {
       "headers": {
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://www.southwest.com/",
-        "x-app-id": "landing-home-page-v2",
-        "x-app-version": "27.0.0",
         "x-channel-id": "southwest",
+        "x-app-version": "27.0.0",
         "x-diagnostic": "{\"spa\":\"27.0.0\"}",
-        "x-user-experience-id": "${generated.uuid}",
-        "x-api-key": "${state.southwest_api_key}"
+        "x-api-key": "${state.southwest_api_key}",
+        "x-app-id": "landing-home-page-v2"
       },
       "effect": "safe"
     }
   ],
   "site": "southwest",
-  "parserModule": "./parser.ts",
-  "liveVerified": true
+  "parserModule": "./parser.ts"
 };
 
 export interface ListUpcomingTripsInput {
@@ -103,7 +68,7 @@ export interface ListUpcomingTripsInput {
 
 export async function listUpcomingTrips(
   _input: ListUpcomingTripsInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
@@ -115,6 +80,7 @@ export async function listUpcomingTrips(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });

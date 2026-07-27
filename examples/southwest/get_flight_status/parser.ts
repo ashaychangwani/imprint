@@ -1,138 +1,90 @@
-type FlightStatusResponse = {
-  data?: {
-    searchResults?: Array<{
-      summary?: FlightSummary;
-      details?: FlightDetail[];
-      flightNumbers?: string[];
-    }>;
-  };
-  success?: boolean;
-  notifications?: unknown;
+type Context = {
+  params: Record<string, string | number | boolean>;
+  responses: unknown[];
 };
 
-type FlightSummary = {
-  originationAirportCode?: string;
-  destinationAirportCode?: string;
-  flightNumbers?: string[];
-  departureTime?: string;
-  departureStatus?: string;
-  arrivalTime?: string;
-  arrivalStatus?: string;
-  totalDuration?: number;
-  numberOfStops?: number;
-  stopsDetails?: StopDetail[];
-  nextDay?: boolean;
-};
+function decode(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
 
-type FlightDetail = {
-  originationAirportCode?: string;
-  destinationAirportCode?: string;
-  departureScheduledTime?: string;
-  departureActualTime?: string;
-  departureStatus?: string;
-  departureGate?: string;
-  arrivalScheduledTime?: string;
-  arrivalActualTime?: string;
-  arrivalStatus?: string;
-  arrivalGate?: string;
-  flightNumber?: string;
-  flightStatusStopDetail?: StopDetail;
-};
+function matches(html: string, pattern: RegExp): string[] {
+  return [...html.matchAll(pattern)].map((match) => decode(match[1] ?? '').trim());
+}
 
-type StopDetail = {
-  originationAirportCode?: string;
-  destinationAirportCode?: string;
-  flightNumber?: string;
-  legDuration?: number;
-  stopDuration?: number;
-  changePlanes?: boolean | null;
-  departureTime?: string;
-  departureDate?: string;
-  operatingCarrierCode?: string;
-  aircraftEquipmentType?: string;
-  stopLocationCodes?: string[] | null;
-  features?: unknown[];
-  overnight?: boolean;
-};
+function airportCodes(html: string): string[] {
+  return matches(
+    html,
+    /href=["']\/airport-information\/["'][^>]*>[\s\S]*?<div[^>]*>\s*([A-Z]{3})\s*<\/div>/gi,
+  );
+}
 
-function asObject(rawResponse: unknown): FlightStatusResponse {
-  if (typeof rawResponse === 'string') {
-    try {
-      return JSON.parse(rawResponse) as FlightStatusResponse;
-    } catch {
-      return {};
-    }
+export function extract(rawResponse: unknown, context?: Context): unknown {
+  const html = typeof rawResponse === 'string' ? rawResponse : '';
+  const serviceError = matches(
+    html,
+    /data-test=["']serviceErrorMessageBody["'][^>]*>([\s\S]*?)<\/[^>]+>/gi,
+  )
+    .map((message) => message.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())
+    .find(Boolean);
+  if (serviceError) {
+    throw new Error(`SOUTHWEST_FLIGHT_STATUS_ERROR: ${serviceError}`);
   }
-  if (rawResponse && typeof rawResponse === 'object') {
-    return rawResponse as FlightStatusResponse;
+  const params = context?.params ?? {};
+  const requestedOrigin = String(params.origination_airport_code ?? '').toUpperCase();
+  const requestedDestination = String(params.destination_airport_code ?? '').toUpperCase();
+  const requestedFlightNumber = String(params.flight_number ?? '');
+  const departureDate = String(params.departure_date ?? '');
+
+  const airports = airportCodes(html);
+  if (airports.length < 2) {
+    throw new Error(
+      'SOUTHWEST_FLIGHT_STATUS_UNPARSED: expected a rendered flight-status route or explicit service error',
+    );
   }
-  return {};
-}
+  const flightNumbers = matches(html, /aria-label=["']flight number\s*([^"']+)["']/gi)
+    .map((value) => value.replace(/\D/g, ''))
+    .filter(Boolean);
+  if (flightNumbers.length === 0) {
+    throw new Error(
+      'SOUTHWEST_FLIGHT_STATUS_UNPARSED: rendered route did not include a provider flight number',
+    );
+  }
+  const statuses = matches(html, /aria-label=["']Flight Status:\s*([^"']+)["']/gi);
+  const departureTimes = matches(html, /aria-label=["']departs\s+([^"']+)["']/gi);
+  const arrivalTimes = matches(html, /aria-label=["']arrives\s+([^"']+)["']/gi);
+  const gates = matches(html, />\s*Gate:\s*([^<]+)</gi);
+  const durations = matches(html, /aria-label=["']([^"']*hours?[^"']*minutes?)["']/gi);
+  const aircraft = matches(html, /aria-label=["']Plane Type[^"']*["'][^>]*>([^<]+)</gi);
 
-function nonEmpty(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
-}
+  const results = [];
+  for (let index = 0; index + 1 < airports.length; index += 2) {
+    const originationAirportCode = airports[index];
+    const destinationAirportCode = airports[index + 1];
+    if (requestedOrigin && originationAirportCode !== requestedOrigin) continue;
+    if (requestedDestination && destinationAirportCode !== requestedDestination) continue;
+    if (requestedFlightNumber && !flightNumbers.includes(requestedFlightNumber)) continue;
+    const routeIndex = index / 2;
+    results.push({
+      originationAirportCode,
+      destinationAirportCode,
+      flightNumbers,
+      departureDate,
+      departureStatus: statuses[routeIndex * 2] ?? null,
+      arrivalStatus: statuses[routeIndex * 2 + 1] ?? null,
+      departureTimes: departureTimes[routeIndex] ? [departureTimes[routeIndex]] : [],
+      arrivalTimes: arrivalTimes[routeIndex] ? [arrivalTimes[routeIndex]] : [],
+      departureGate: gates[routeIndex * 2] ?? null,
+      arrivalGate: gates[routeIndex * 2 + 1] ?? null,
+      duration: durations[routeIndex] ?? null,
+      aircraft: aircraft[routeIndex] ?? null,
+    });
+  }
 
-function mapStop(stop: StopDetail) {
-  return {
-    origin: stop.originationAirportCode ?? null,
-    destination: stop.destinationAirportCode ?? null,
-    flight_number: stop.flightNumber ?? null,
-    leg_duration_minutes: stop.legDuration ?? null,
-    stop_duration_minutes: stop.stopDuration ?? null,
-    change_planes: stop.changePlanes ?? null,
-    departure_time: stop.departureTime ?? null,
-    departure_date: stop.departureDate ?? null,
-    operating_carrier: stop.operatingCarrierCode ?? null,
-    aircraft_equipment_type: stop.aircraftEquipmentType ?? null,
-    stop_location_codes: stop.stopLocationCodes ?? null,
-    overnight: stop.overnight ?? null,
-  };
-}
-
-export function extract(rawResponse: unknown): unknown {
-  const data = asObject(rawResponse);
-  const results = Array.isArray(data.data?.searchResults) ? data.data.searchResults : [];
-
-  const flights = results
-    .map((result) => {
-      const summary = result.summary ?? {};
-      const stops = Array.isArray(summary.stopsDetails) ? summary.stopsDetails : [];
-      const firstStop = stops[0] ?? {};
-      const details = Array.isArray(result.details) ? result.details : [];
-      const firstDetail = details[0] ?? {};
-      const flightNumber = summary.flightNumbers?.[0] ?? result.flightNumbers?.[0] ?? firstStop.flightNumber ?? firstDetail.flightNumber ?? null;
-
-      return {
-        origin: summary.originationAirportCode ?? firstStop.originationAirportCode ?? null,
-        destination: summary.destinationAirportCode ?? firstStop.destinationAirportCode ?? null,
-        flight_number: flightNumber,
-        departure_time: summary.departureTime ?? firstDetail.departureScheduledTime ?? null,
-        departure_status: summary.departureStatus ?? firstDetail.departureStatus ?? null,
-        arrival_time: summary.arrivalTime ?? firstDetail.arrivalScheduledTime ?? null,
-        arrival_status: summary.arrivalStatus ?? firstDetail.arrivalStatus ?? null,
-        duration_minutes: summary.totalDuration ?? firstStop.legDuration ?? null,
-        stops: summary.numberOfStops ?? null,
-        date: firstStop.departureDate ?? firstDetail.flightStatusStopDetail?.departureDate ?? null,
-        operating_carrier: firstStop.operatingCarrierCode ?? firstDetail.flightStatusStopDetail?.operatingCarrierCode ?? null,
-        next_day_arrival: summary.nextDay ?? null,
-        details: {
-          departure_scheduled_time: firstDetail.departureScheduledTime ?? null,
-          departure_actual_time: firstDetail.departureActualTime ?? null,
-          departure_gate: firstDetail.departureGate ?? null,
-          arrival_scheduled_time: firstDetail.arrivalScheduledTime ?? null,
-          arrival_actual_time: firstDetail.arrivalActualTime ?? null,
-          arrival_gate: firstDetail.arrivalGate ?? null,
-        },
-        segments: stops.map(mapStop),
-      };
-    })
-    .filter((flight) => nonEmpty(flight.origin) || nonEmpty(flight.destination) || nonEmpty(flight.flight_number));
-
-  return {
-    success: data.success === true,
-    count: flights.length,
-    flights,
-    notifications: data.notifications ?? null,
-  };
+  return { results, count: results.length };
 }
