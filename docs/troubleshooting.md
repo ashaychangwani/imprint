@@ -131,6 +131,8 @@ Every suite gets a `suite-N` receipt before Bun launches. The receipt ends as `p
 
 If a live search returns an unexpected empty collection, inspect the exact final response before changing backend policy. Document requests often record an HTML/JavaScript shell while the useful content appears only after client-side rendering in later DOM events. In that case the compiler should use the existing request `mode: "navigate"` and train the parser against the rendered response—not selectors borrowed from a sibling detail endpoint. A request transform returning `{ url }` does not erase an existing request body or headers; only fields explicitly returned by the transform override the workflow request.
 
+If compilation reports that a placeholder-bearing body has no `bodyPlaceholderEncoding`, inspect the recorded request rather than changing its MIME type. Use `json-string` for placeholders inside JSON string literals, `form-urlencoded` for form field values, and `raw` only when delimiters are truly payload bytes. For JSON nested inside a form field, multipart variants, compressed bodies, or proprietary framing, have the compile agent build the body in `request-transform.ts`. The generated `request.test.ts` should render the workflow offline with adversarial characters and decode it back to the original value before any live verification.
+
 The verifier evaluates the core intent separately from secondary parameters. A known-broken secondary input returns `changes_required`; the compiler then repairs it from evidence or removes it from the public contract and records the reason in `workflow.limitations`. A grounded but genuinely untestable input can remain exposed as `verified:false`. Neither mechanism permits a failing core tool to ship.
 
 ## Auth compile: an expected user action never arrives
@@ -276,7 +278,7 @@ If Phoenix is open at `http://localhost:6006` but empty, check that `PHOENIX_COL
 A teach run is a chain of phases, persisted as checkpoints in `~/.imprint/<site>/.teach-state.json`:
 
 ```
-record → redact → replay-and-diff → triage → detect-candidates → plan-prereqs → generate → compile-playbook → emit → register
+record → redact → triage → replay-and-diff → detect-candidates → plan-prereqs → generate → compile-playbook → emit → register
 ```
 
 To iterate on one phase without re-running the whole chain, use the phase-window flags:
@@ -305,7 +307,7 @@ unusable consumer when a persisted prerequisite is missing; rerun from
 
 Guard: `--from-step <step>` is **only allowed if a prior run reached or crossed that point** — every earlier phase must already be complete in `.teach-state.json`, otherwise the run errors with the furthest step it actually reached (starting mid-chain without the earlier outputs would be missing dependencies like the redacted/triaged session, classifications, or build plan). It's not combinable with `--from-session` (a separate fresh-input entry mode); use `--to-step` (which must be `redact` or later, since `--from-session` enters the chain at `redact`) with `--from-session` to cap phases on a fresh recording.
 
-Notes: the `replay-and-diff → triage → detect-candidates` analysis runs as one atomic block (its sub-steps share a parallel run), so stopping at any of them completes through detect-candidates. Because that block is atomic, `--only replay-and-diff` (and `--only triage` / `--only detect-candidates`) always run through detect-candidates. Pairing one with `--skip-replay` reuses `.classifications.json` only when the cache is tagged for the exact same recording; untagged or mismatched caches are ignored, so run replay once to create an identity-bound cache. The per-tool compile (`generate → compile-playbook → emit`) likewise runs as one atomic unit per tool: a `--to-step`/`--only` landing inside it runs the **whole** compile (its summary reports `→ emit`) and stops before `register` (platform integration) rather than mid-tool. `--from-step` *can* still resume mid-compile — each phase loads the prior phase's artifact from disk, so `--from-step compile-playbook` is valid.
+Notes: triage is the first analysis phase and is checkpointed before a browser may launch. In a full run, recordings with no irreversible request may replay while candidate detection runs in parallel; recordings with any irreversible request skip replay entirely. There is no unguarded manual re-record fallback. Analysis phase windows are bounded honestly: `--only triage`, `--only replay-and-diff`, and `--only detect-candidates` run only their named phase, reusing required earlier artifacts. Pairing a replay window with `--skip-replay` reuses `.classifications.json` only when the cache is tagged for the exact recording and triage safety decision; untagged or mismatched caches are ignored. The per-tool compile (`generate → compile-playbook → emit`) is still one atomic unit per tool: a `--to-step`/`--only` landing inside it runs the **whole** compile (its summary reports `→ emit`) and stops before `register` (platform integration) rather than mid-tool. `--from-step` *can* still resume mid-compile — each phase loads the prior phase's artifact from disk, so `--from-step compile-playbook` is valid.
 
 ## "Build plan skipped" — the shared-module planner timed out
 
@@ -354,6 +356,8 @@ imprint audit <site> --json          # full machine-readable report to stdout
 ```
 
 It prints `PASS` / `FAIL` / `INCONCLUSIVE` / `TIMEOUT` and writes the full report (score + the raw auditor verdicts, plus token/cost usage) to `~/.imprint/<site>/.audit-report.json`. **Exit codes distinguish the cases:** `0` pass, `1` fail (genuine logic bugs), `2` inconclusive, `3` timeout. The summary also reports the auditor's approximate cost.
+
+Workflows declared `effect: "irreversible"` are listed under `skippedIrreversible` and are never connected to the audit agent. This is a safety exclusion, not a passing live result; these tools retain `verified:false` with `verifyNote: "waived-safety"` because compilation uses recording and offline evidence only.
 
 **The audit tests functionality, not just "did it return."** For every tool it makes a baseline call (graded `correct`/`tool_broken`), then **differentially tests every advertised parameter**: it re-runs the baseline with only that one parameter changed to a value that should alter the result, and classifies it `works` / `no_op` / `broken` / `untestable`. `works` counts toward the score; **`no_op` (the parameter is accepted but changes nothing) and `broken` (it corrupts/empties the result) count against it** — an inert parameter is a defect, not a free pass. `untestable` (an opaque enum with no constructible value, or a state-changing/bot-defended tool that can't be safely probed) is surfaced but not scored. The summary prints a per-tool `params: X/Y working` line and lists every non-working parameter with the auditor's evidence; the full per-parameter verdicts and an `untestableParams` list are persisted in `.audit-report.json`. Read-type tools get the full differential pass; state-changing/bot-defended tools get the single baseline call and their parameters are marked `untestable`.
 

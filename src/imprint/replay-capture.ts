@@ -52,6 +52,23 @@ interface RawReplayOptions {
   onProgress?: (current: number, total: number, captured: number) => void;
 }
 
+const CREDENTIAL_PLACEHOLDER = /^\$\{credential\.([A-Za-z0-9_.-]+)\}$/;
+
+/** Resolve only a complete credential placeholder. Embedded or missing
+ * placeholders are rejected so replay never types placeholder text or a partial
+ * secret interpolation into the page. */
+export function resolveReplayEventValue(
+  value: string,
+  credentials: Record<string, string>,
+): string | null {
+  const match = CREDENTIAL_PLACEHOLDER.exec(value);
+  if (match) {
+    const name = match[1];
+    return name && Object.hasOwn(credentials, name) ? (credentials[name] ?? null) : null;
+  }
+  return value.includes('${credential.') ? null : value;
+}
+
 /**
  * Replay the raw DOM events from an original recording in a fresh browser,
  * capturing all network requests. This is the site-level dual-pass strategy:
@@ -82,16 +99,17 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
   const captured: CapturedReplayRequest[] = [];
   let seq = 0;
   const startTime = Date.now();
-
   try {
     context = await browser.newContext();
     const page = await context.newPage();
     replayLog('browser context + page created');
 
     // Inject credentials if available
+    let credentialValues: Record<string, string> = {};
     try {
       const { loadSiteCredentials } = await import('./credential-store.ts');
       const view = await loadSiteCredentials(opts.site);
+      credentialValues = view.values;
       const playwrightCookies = view.cookies
         .map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path }))
         .filter((c) => c.name && c.value);
@@ -197,13 +215,9 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
       }
       prevTimestamp = event.timestamp;
 
-      const detail = typeof event.detail === 'string' ? event.detail : JSON.stringify(event.detail);
-      const detailPreview = detail.length > 200 ? `${detail.slice(0, 200)}...` : detail;
-      replayLog(
-        `event ${i + 1}/${replayableEvents.length}: type=${event.type} seq=${event.seq} detail=${detailPreview}`,
-      );
+      replayLog(`event ${i + 1}/${replayableEvents.length}: type=${event.type} seq=${event.seq}`);
 
-      await replayEvent(page, event);
+      await replayEvent(page, event, credentialValues);
       replayLog(`  event ${i + 1} done (captured ${captured.length} requests so far)`);
       opts.onProgress?.(i + 1, replayableEvents.length, captured.length);
     }
@@ -227,7 +241,7 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
     log(`captured ${captured.length} requests during raw session replay`);
     return { ok: true, requests: captured };
   } catch (err) {
-    replayLog(`replay threw: ${errMsg(err)}`);
+    replayLog('replay stopped after a browser operation failed');
     return { ok: false, requests: captured, error: errMsg(err) };
   } finally {
     await context?.close().catch(() => {});
@@ -235,14 +249,18 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
   }
 }
 
-async function replayEvent(page: Page, event: CapturedEvent): Promise<void> {
+async function replayEvent(
+  page: Page,
+  event: CapturedEvent,
+  credentials: Record<string, string>,
+): Promise<void> {
   if (event.type === 'navigation') {
     const url = typeof event.detail === 'string' ? event.detail : String(event.detail);
     if (!url.startsWith('http')) {
-      replayLog(`  skip non-http navigation: ${url.slice(0, 80)}`);
+      replayLog('  skip non-http navigation');
       return;
     }
-    replayLog(`  navigating to ${url.slice(0, 120)}`);
+    replayLog('  navigating');
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     replayLog('  navigation complete');
     return;
@@ -257,12 +275,10 @@ async function replayEvent(page: Page, event: CapturedEvent): Promise<void> {
   if (event.type === 'click') {
     const loc = buildLocatorFromEvent(page, d);
     if (!loc) {
-      replayLog(
-        `  skip click: no locator for id=${d.id} name=${d.name} text=${(d.text ?? '').slice(0, 40)} selector=${(d.selector ?? '').slice(0, 60)}`,
-      );
+      replayLog('  skip click: no locator');
       return;
     }
-    replayLog(`  clicking: id=${d.id} name=${d.name} text=${(d.text ?? '').slice(0, 40)}`);
+    replayLog('  clicking');
     try {
       // Fast visibility check — don't wait 10s for elements that aren't there
       const visible = await loc.isVisible().catch(() => false);
@@ -272,13 +288,13 @@ async function replayEvent(page: Page, event: CapturedEvent): Promise<void> {
       }
       await loc.click({ timeout: 3_000, force: false });
       replayLog('  click succeeded');
-    } catch (e1) {
-      replayLog(`  click failed (${errMsg(e1).split('\n')[0]}), retrying with force`);
+    } catch {
+      replayLog('  click failed, retrying with force');
       try {
         await loc.click({ timeout: 2_000, force: true });
         replayLog('  force-click succeeded');
-      } catch (e2) {
-        replayLog(`  force-click also failed: ${errMsg(e2).split('\n')[0]}`);
+      } catch {
+        replayLog('  force-click also failed');
       }
     }
     return;
@@ -290,11 +306,14 @@ async function replayEvent(page: Page, event: CapturedEvent): Promise<void> {
       replayLog(`  skip ${event.type}: no locator or no value`);
       return;
     }
+    const resolvedValue = resolveReplayEventValue(d.value, credentials);
+    if (resolvedValue === null) {
+      replayLog(`  skip ${event.type}: credential placeholder could not be resolved safely`);
+      return;
+    }
     const tag = (d.tag ?? '').toLowerCase();
     const type = (d.type ?? '').toLowerCase();
-    replayLog(
-      `  ${event.type}: tag=${tag} type=${type} name=${d.name} value=${(d.value ?? '').slice(0, 40)}`,
-    );
+    replayLog(`  ${event.type}: tag=${tag} type=${type}`);
     try {
       const visible = await loc.isVisible().catch(() => false);
       if (!visible) {
@@ -302,19 +321,19 @@ async function replayEvent(page: Page, event: CapturedEvent): Promise<void> {
         return;
       }
       if (tag === 'select' || type === 'select-one') {
-        await loc.selectOption(d.value, { timeout: 3_000 });
+        await loc.selectOption(resolvedValue, { timeout: 3_000 });
       } else {
-        await loc.fill(d.value, { timeout: 3_000 });
+        await loc.fill(resolvedValue, { timeout: 3_000 });
       }
       replayLog(`  ${event.type} succeeded`);
-    } catch (err) {
-      replayLog(`  ${event.type} failed: ${errMsg(err).split('\n')[0]}`);
+    } catch {
+      replayLog(`  ${event.type} failed`);
     }
     return;
   }
 
   if (event.type === 'submit') {
-    replayLog(`  submit: selector=${(d.selector ?? '').slice(0, 60)}`);
+    replayLog('  submit');
     const loc = d.selector ? page.locator(d.selector) : null;
     if (loc) {
       try {
@@ -325,8 +344,8 @@ async function replayEvent(page: Page, event: CapturedEvent): Promise<void> {
         }
         await loc.press('Enter', { timeout: 3_000 });
         replayLog('  submit succeeded');
-      } catch (err) {
-        replayLog(`  submit failed: ${errMsg(err).split('\n')[0]}`);
+      } catch {
+        replayLog('  submit failed');
       }
     }
     return;

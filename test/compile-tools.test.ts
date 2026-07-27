@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import type { RequiredInput } from '../src/imprint/build-plan.ts';
 import {
   assertNoRawSecrets,
+  bodyEncodingContractFailures,
   buildCompileTools,
   classifyIntegrationOutcome,
   classifyParamCoverage,
@@ -16,12 +17,108 @@ import {
   extractTestBlocks,
   hasLiveBaselineWorkflowTest,
   injectContractedInputs,
+  irreversibleProvenanceFailures,
   isBotDefenseFailure,
   parseJUnitResults,
   repairRequiredInputStaticLiterals,
+  requestEncodingTestContractFailures,
+  requestsNeedingBodyEncodingDecision,
   typecheckArtifacts,
 } from '../src/imprint/compile-tools.ts';
 import { type Session, WorkflowSchema } from '../src/imprint/types.ts';
+
+describe('body encoding compile contract', () => {
+  const workflow = (encoding?: 'raw' | 'json-string' | 'form-urlencoded') =>
+    WorkflowSchema.parse({
+      toolName: 'encoding_contract',
+      intent: { description: 'test encoding contract' },
+      site: 'fixture',
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://fixture.test/login',
+          headers: { 'content-type': 'text/plain' },
+          body: '{"password":"${credential.password}"}',
+          bodyPlaceholderEncoding: encoding,
+        },
+      ],
+    });
+
+  it('requires an agent encoding decision and an agent-authored test', () => {
+    expect(requestsNeedingBodyEncodingDecision(workflow())).toEqual([0]);
+    expect(bodyEncodingContractFailures(workflow()).join('\n')).toContain(
+      'no bodyPlaceholderEncoding',
+    );
+    expect(requestEncodingTestContractFailures(workflow('json-string'), undefined)).toEqual([
+      'request.test.ts is required for a placeholder-bearing request body',
+    ]);
+  });
+
+  it('accepts an authored test file for each explicit encoding primitive', () => {
+    const source = `test('round trips request values', () => expect(true).toBe(true));`;
+    for (const encoding of ['raw', 'json-string', 'form-urlencoded'] as const) {
+      expect(bodyEncodingContractFailures(workflow(encoding))).toEqual([]);
+      expect(requestEncodingTestContractFailures(workflow(encoding), source)).toEqual([]);
+    }
+  });
+
+  it('also requires an encoding decision for supported bracketed state placeholders', () => {
+    const bracketed = workflow();
+    const request = bracketed.requests[0];
+    if (!request) throw new Error('bad fixture');
+    request.body = '{"token":"${state["anti.csrf"]}"}';
+
+    expect(requestsNeedingBodyEncodingDecision(bracketed)).toEqual([0]);
+    expect(bodyEncodingContractFailures(bracketed)).not.toEqual([]);
+  });
+});
+
+describe('irreversible provenance', () => {
+  it('preserves an irreversible source even when the generated request is outside candidate scope', () => {
+    const recorded: Session = {
+      site: 'fixture',
+      startedAt: '2026-07-23T00:00:00.000Z',
+      url: 'https://fixture.test',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 42,
+          timestamp: 1,
+          method: 'POST',
+          url: 'https://fixture.test/order',
+          headers: {},
+          resourceType: 'Fetch',
+          effect: 'irreversible',
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    const generated = WorkflowSchema.parse({
+      toolName: 'place_fixture_order',
+      intent: { description: 'Place fixture order.' },
+      site: 'fixture',
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://fixture.test/order',
+          headers: {},
+          recordingRequestSeq: 42,
+        },
+      ],
+    });
+
+    expect(
+      irreversibleProvenanceFailures(recorded, generated, { candidateRequestSeqs: [7] }),
+    ).toContain(
+      'workflow request index 0 grounded by recordingRequestSeq 42 must declare effect: "irreversible"',
+    );
+  });
+});
 
 function makeSummaryRequest(seq: number, timestamp: number): Session['requests'][number] {
   return {
@@ -39,6 +136,84 @@ function makeSummaryRequest(seq: number, timestamp: number): Session['requests']
     },
   };
 }
+
+it('withholds shell execution but keeps network-isolated tests for an irreversible candidate', () => {
+  const request = makeSummaryRequest(42, 100);
+  const session: Session = {
+    site: 'test',
+    startedAt: '2026-05-04T00:00:00.000Z',
+    url: 'https://example.com/start',
+    imprintVersion: '0.1.0',
+    requests: [{ ...request, effect: 'irreversible' }],
+    events: [],
+    narration: [],
+    cookieSnapshots: [],
+    storageSnapshots: [],
+    triage: {
+      effectSchemaVersion: 2,
+      coveredSeqs: [42],
+      irreversibleSeqs: [42],
+      coveredOutboundEventSeqs: [],
+      irreversibleEventSeqs: [],
+    },
+  };
+
+  const toolNames = buildCompileTools(session, '/tmp/test-tool', '/tmp/session.json', {
+    candidate: {
+      toolName: 'place_order',
+      description: 'Place an order',
+      rationale: 'primary intent',
+      confidence: 1,
+      primary: true,
+      requestSeqs: [42],
+      representativeSeqs: [42],
+      dependencySeqs: [],
+      dependsOnTools: [],
+      eventSeqs: [],
+      expectedOutput: 'Order confirmation',
+      likelyParams: [],
+    },
+  }).map((tool) => tool.name);
+
+  expect(toolNames).not.toContain('run_bash');
+  expect(toolNames).toContain('run_tests');
+});
+
+it('does not withhold compiler tools from a safe sibling candidate', () => {
+  const safe = makeSummaryRequest(7, 50);
+  const irreversible = { ...makeSummaryRequest(42, 100), effect: 'irreversible' as const };
+  const session: Session = {
+    site: 'test',
+    startedAt: '2026-05-04T00:00:00.000Z',
+    url: 'https://example.com/start',
+    imprintVersion: '0.1.0',
+    requests: [safe, irreversible],
+    events: [],
+    narration: [],
+    cookieSnapshots: [],
+    storageSnapshots: [],
+  };
+  const candidate = {
+    toolName: 'read_menu',
+    description: 'Read the menu',
+    rationale: 'primary intent',
+    confidence: 1,
+    primary: true,
+    requestSeqs: [7],
+    representativeSeqs: [7],
+    dependencySeqs: [],
+    dependsOnTools: [],
+    eventSeqs: [],
+    expectedOutput: 'Menu',
+    likelyParams: [],
+  };
+
+  const toolNames = buildCompileTools(session, '/tmp/test-tool', '/tmp/session.json', {
+    candidate,
+  }).map((tool) => tool.name);
+  expect(toolNames).toContain('run_bash');
+  expect(toolNames).toContain('run_tests');
+});
 
 describe('compile tools state hints', () => {
   it('surfaces the source of verified shared modules assigned to the tool', async () => {
@@ -539,14 +714,84 @@ describe('compile tools representativeSeqs', () => {
 });
 
 describe('externalVerification', () => {
+  it('never imports generated parser code for irreversible workflows', async () => {
+    const exampleDir = mkdtempSync(pathJoin(tmpdir(), 'imprint-irreversible-parser-'));
+    const sessionPath = pathJoin(exampleDir, 'session.json');
+    const markerPath = pathJoin(exampleDir, 'parser-imported');
+    const session: Session = {
+      site: 'irreversible-fixture',
+      startedAt: '2026-05-04T00:00:00.000Z',
+      url: 'https://example.com/order',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/order',
+          headers: {},
+          body: '{}',
+          resourceType: 'Fetch',
+          effect: 'irreversible',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: '{"orderId":"1"}',
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    try {
+      writeFileSync(sessionPath, JSON.stringify(session), 'utf8');
+      writeFileSync(
+        pathJoin(exampleDir, 'workflow.json'),
+        JSON.stringify({
+          toolName: 'place_order',
+          intent: { description: 'Place an order' },
+          site: session.site,
+          parameters: [],
+          requests: [
+            {
+              method: 'POST',
+              url: 'https://example.com/api/order',
+              headers: {},
+              body: '{}',
+              effect: 'irreversible',
+              recordingRequestSeq: 1,
+            },
+          ],
+        }),
+        'utf8',
+      );
+      writeFileSync(
+        pathJoin(exampleDir, 'parser.ts'),
+        `import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(markerPath)}, 'imported');
+export function extract(input: unknown) { return input; }
+`,
+        'utf8',
+      );
+
+      await externalVerification(exampleDir, session, sessionPath, {
+        candidateRequestSeqs: [1],
+      });
+
+      expect(existsSync(markerPath)).toBe(false);
+    } finally {
+      rmSync(exampleDir, { recursive: true, force: true });
+    }
+  });
+
   it('typechecks generated artifacts from os tmpdir paths', async () => {
     const exampleDir = mkdtempSync(pathJoin(tmpdir(), 'imprint-typecheck-tmp-'));
 
     try {
-      symlinkSync(
-        pathJoin(import.meta.dir, '..', 'node_modules'),
-        pathJoin(exampleDir, 'node_modules'),
-      );
       writeFileSync(
         pathJoin(exampleDir, 'parser.ts'),
         `export function extract(input: { ok: boolean }) {

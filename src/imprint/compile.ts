@@ -23,7 +23,7 @@ import type { SharedModuleManifestEntry } from './build-plan.ts';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactUrlForLlm } from './llm-url.ts';
-import { type LLMOptions, extractJsonArray, resolveProvider } from './llm.ts';
+import { type LLMOptions, extractJsonArray, extractJsonObject, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir, localSiteDir, localToolDir } from './paths.ts';
@@ -35,6 +35,7 @@ import type { ClassifiedValue } from './session-diff.ts';
 import { isTelemetryRequest } from './telemetry.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
+import { applySharedTriageSelection } from './triage-selection.ts';
 import {
   type Playbook,
   type Session,
@@ -81,7 +82,7 @@ interface GenerateOptions extends CompileOptions {
   onProgress?: (p: CompileAgentProgress) => void;
   /** Called when wall-clock deadline is reached; return ms to extend or null to time out. */
   onDeadlineReached?: OnDeadlineReached;
-  /** Retain parser.test.ts after successful verification. */
+  /** Retain agent-generated tests after successful verification. */
   keepTest?: boolean;
   /** Directory where workflow.json/parser.ts/parser.test.ts are written. */
   outDir?: string;
@@ -143,6 +144,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         sharedModules: opts.sharedModules,
         toolPlan: opts.toolPlan,
         revisionMode: opts.revisionMode,
+        preTriagedSession: opts.preTriagedSession,
       });
 
       setSpanAttributes(span, {
@@ -343,6 +345,9 @@ const HEADER_TRUNCATE_LIMIT = 200;
 // data-bearing POSTs (search/booking) from telemetry; full bodies on a busy
 // site can total >1MB and blow the 200K-token cap on `claude-opus-4-8`.
 const TRIAGE_BODY_LIMIT = 500;
+const EFFECT_TRIAGE_BODY_LIMIT = 800;
+// Leave headroom for narration and browser-action context in every effect pass.
+const EFFECT_TRIAGE_BATCH_CHARS = 300_000;
 const TRIAGE_ACTION_ALIGNMENT_BEFORE_MS = 1000;
 const TRIAGE_ACTION_ALIGNMENT_AFTER_MS = 5000;
 const TRIAGE_CONTEXT_EVENT_TYPES = new Set<Session['events'][number]['type']>([
@@ -351,6 +356,7 @@ const TRIAGE_CONTEXT_EVENT_TYPES = new Set<Session['events'][number]['type']>([
   'input',
   'change',
   'submit',
+  'ws-sent',
 ]);
 const TRIAGE_ACTION_EVENT_TYPES = new Set<Session['events'][number]['type']>([
   'input',
@@ -361,6 +367,18 @@ const TRIAGE_ACTION_EVENT_TYPES = new Set<Session['events'][number]['type']>([
 export interface TriageResult {
   session: Session;
   selectedSeqs: number[];
+  /** Every full-inventory request covered by v2 triage except those classified
+   * irreversible. Independent of compile relevance. */
+  replaySafeSeqs: number[];
+  /** Full-inventory requests that are irreversible if
+   *  re-issued (place order, charge, send, delete). Used to block them during
+   *  replay and to flag the compiled tool so compile-verify + audit don't
+   *  trigger the real action. */
+  irreversibleSeqs: number[];
+  /** Outbound WebSocket events shown to the effect classifier. */
+  coveredOutboundEventSeqs: number[];
+  /** Outbound WebSocket events whose replay can cause an irreversible effect. */
+  irreversibleEventSeqs: number[];
   consideredCount: number;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -377,10 +395,12 @@ interface TriageRequestContext {
   mimeType?: string;
   headers: string;
   body?: string;
+  urlDigest?: string;
   bodyDigest?: string;
   bodyLength?: number;
   responseBodyDigest?: string;
   responseBodyLength?: number;
+  responsePreview?: string;
   repeatCount?: number;
   repeatedSeqs?: number[];
   lastTimestamp?: number;
@@ -391,6 +411,67 @@ interface TriageEventContext {
   timestamp: number;
   type: Session['events'][number]['type'];
   detail: string;
+}
+
+export function parseTriageSelectionResponse(text: string): {
+  keepSeqs: number[];
+  irreversibleSeqs: number[];
+  irreversibleEventSeqs: number[];
+} {
+  const isNumArray = (v: unknown): v is number[] =>
+    Array.isArray(v) && v.every((s) => typeof s === 'number');
+
+  const objText = extractJsonObject(text);
+  if (objText) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(objText);
+    } catch (err) {
+      throw new Error(
+        `Triage response object was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${objText.slice(0, 500)}`,
+      );
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(
+        `Triage response object is not an object.\nParsed: ${JSON.stringify(parsed)}`,
+      );
+    }
+
+    const record = parsed as {
+      keep?: unknown;
+      irreversible?: unknown;
+      irreversibleEvents?: unknown;
+    };
+    if (!isNumArray(record.keep)) {
+      throw new Error(
+        `Triage response field "keep" must be an array of numbers.\nParsed: ${(JSON.stringify(record.keep) ?? String(record.keep)).slice(0, 500)}`,
+      );
+    }
+    if (!isNumArray(record.irreversible)) {
+      throw new Error(
+        `Triage response field "irreversible" must be an array of numbers.\nParsed: ${(JSON.stringify(record.irreversible) ?? String(record.irreversible)).slice(0, 500)}`,
+      );
+    }
+    if (!isNumArray(record.irreversibleEvents)) {
+      throw new Error(
+        `Triage response field "irreversibleEvents" must be an array of numbers.\nParsed: ${(JSON.stringify(record.irreversibleEvents) ?? String(record.irreversibleEvents)).slice(0, 500)}`,
+      );
+    }
+    return {
+      keepSeqs: record.keep,
+      irreversibleSeqs: record.irreversible,
+      irreversibleEventSeqs: record.irreversibleEvents,
+    };
+  }
+
+  if (!extractJsonArray(text)) {
+    throw new Error(
+      `Triage LLM did not return the required effect-aware object {"keep": [...], "irreversible": [...]}.\nRaw response:\n${text.slice(0, 1000)}`,
+    );
+  }
+  throw new Error(
+    `Triage LLM must return the effect-aware object {"keep": [...], "irreversible": [...]}; legacy arrays are unsafe because they cannot prove irreversible classification.\nRaw response:\n${text.slice(0, 1000)}`,
+  );
 }
 
 export async function triageRequests(
@@ -404,6 +485,7 @@ export async function triageRequests(
     ...(context.sharedContext?.loginRequestSeqs ?? []),
   ]);
   const candidates = selectTriageCandidateRequests(session, preserveSeqs);
+  const keepEligibleSeqs = new Set(candidates.map((request) => request.seq));
 
   return await traced(
     'compile.triage_requests',
@@ -415,38 +497,56 @@ export async function triageRequests(
       'imprint.provider': llmConfig?.provider ?? 'auto',
     },
     async (span) => {
+      const requestContext = (
+        r: Session['requests'][number],
+        bodyLimit: number,
+        includeResponse = true,
+      ): TriageRequestContext => ({
+        seq: r.seq,
+        timestamp: r.timestamp,
+        method: r.method,
+        url: compactUrlForLlm(r.url),
+        resourceType: r.resourceType,
+        status: r.response?.status,
+        mimeType: r.response?.mimeType,
+        headers: truncateHeaders(r.headers),
+        body: triageBodySnippet(r.body, bodyLimit),
+        urlDigest: requestContextDigest(r.url),
+        bodyDigest: requestContextDigest(r.body),
+        bodyLength: r.body?.length,
+        ...(includeResponse
+          ? {
+              responseBodyDigest: requestContextDigest(r.response?.body),
+              responseBodyLength: r.response?.body?.length,
+              responsePreview: triageBodySnippet(r.response?.body, bodyLimit),
+            }
+          : {}),
+      });
       const compacted = compactRequestContexts(
-        candidates.map((r) => ({
-          seq: r.seq,
-          timestamp: r.timestamp,
-          method: r.method,
-          url: compactUrlForLlm(r.url),
-          resourceType: r.resourceType,
-          status: r.response?.status,
-          mimeType: r.response?.mimeType,
-          headers: truncateHeaders(r.headers),
-          body: triageBodySnippet(r.body),
-          bodyDigest: requestContextDigest(r.body),
-          bodyLength: r.body?.length,
-          responseBodyDigest: requestContextDigest(r.response?.body),
-          responseBodyLength: r.response?.body?.length,
-        })),
+        session.requests.map((request) => requestContext(request, EFFECT_TRIAGE_BODY_LIMIT)),
         triageRequestGroupKey,
         { preserveSeqs },
       );
-      // Strip digest/length fields the LLM doesn't use — they served compaction only
-      const metadata = compacted.map(
-        ({ bodyDigest, responseBodyDigest, bodyLength, responseBodyLength, ...rest }) => rest,
-      );
-
-      const triagePayload = {
-        site: session.site,
-        url: compactUrlForLlm(session.url),
-        narration: session.narration,
-        events: buildTriageEventContexts(session),
-        requests: metadata,
+      const requestMetadata = (
+        request: TriageRequestContext,
+      ): Omit<TriageRequestContext, 'urlDigest' | 'bodyDigest' | 'responseBodyDigest'> & {
+        keepEligible: boolean;
+      } => {
+        const { urlDigest, bodyDigest, responseBodyDigest, ...rest } = request;
+        return {
+          ...rest,
+          keepEligible: compactedRequestSeqs(rest).some((seq) => keepEligibleSeqs.has(seq)),
+        };
       };
-      const triagePayloadChars = JSON.stringify(triagePayload).length;
+      const metadata = compacted.map(requestMetadata);
+      const coveredSeqs = expandCompactedTriageSeqs(
+        compacted.map((request) => request.seq),
+        compacted,
+      );
+      const outboundEvents = buildTriageEventContexts(session).filter(
+        (event) => event.type === 'ws-sent',
+      );
+      const coveredOutboundEventSeqs = outboundEvents.map((event) => event.seq);
 
       const promptPath = pathJoin(PROMPTS_DIR, 'request-triage.md');
       if (!existsSync(promptPath)) {
@@ -455,60 +555,147 @@ export async function triageRequests(
         );
       }
       const systemPrompt = readFileSync(promptPath, 'utf8');
-
-      log(
-        `triaging ${metadata.length} compacted requests (from ${candidates.length} candidates / ${session.requests.length} total); ${Math.round(triagePayloadChars / 1024)} KB payload…`,
-      );
       const llm = resolveProvider(llmConfig ?? {});
-      const result = await llm.analyze(systemPrompt, triagePayload);
-
-      const arrayText = extractJsonArray(result.text);
-      if (!arrayText) {
+      const contextEvents = buildTriageEventContexts(session).filter(
+        (event) => event.type !== 'ws-sent',
+      );
+      const relevanceCompacted = compactRequestContexts(
+        candidates.map((request) => requestContext(request, TRIAGE_BODY_LIMIT, false)),
+        triageRequestGroupKey,
+        { preserveSeqs },
+      );
+      const relevancePayload = {
+        mode: 'relevance',
+        site: session.site,
+        url: compactUrlForLlm(session.url),
+        narration: session.narration,
+        events: contextEvents,
+        requests: relevanceCompacted.map(requestMetadata),
+        outboundWebSockets: [],
+      };
+      log(
+        `triaging ${relevanceCompacted.length} relevance candidates; ${Math.round(JSON.stringify(relevancePayload).length / 1024)} KB payload…`,
+      );
+      const relevanceResult = await llm.analyze(systemPrompt, relevancePayload);
+      const { keepSeqs } = parseTriageSelectionResponse(relevanceResult.text);
+      const candidateSet = new Set(
+        expandCompactedTriageSeqs(
+          relevanceCompacted.map((request) => request.seq),
+          relevanceCompacted,
+        ),
+      );
+      const unknownKeepSeqs = keepSeqs.filter((seq) => !candidateSet.has(seq));
+      if (unknownKeepSeqs.length > 0) {
         throw new Error(
-          `Triage LLM did not return a JSON array.\nRaw response:\n${result.text.slice(0, 1000)}`,
+          `Triage response referenced request seq(s) absent from its relevance inventory: ${[...new Set(unknownKeepSeqs)].join(', ')}.`,
         );
       }
 
-      let seqs: unknown;
-      try {
-        seqs = JSON.parse(arrayText);
-      } catch (err) {
+      const safetyItems = [
+        ...metadata.map((request) => ({ kind: 'request' as const, value: request })),
+        ...outboundEvents.map((event) => ({ kind: 'websocket' as const, value: event })),
+      ];
+      const safetyBatches = chunkTriageItems(safetyItems, EFFECT_TRIAGE_BATCH_CHARS);
+      const irreversibleSeqs: number[] = [];
+      const irreversibleEventSeqs: number[] = [];
+      let inputTokens = relevanceResult.inputTokens;
+      let outputTokens = relevanceResult.outputTokens;
+      let durationMs = relevanceResult.durationMs;
+      let safetyPayloadChars = 0;
+      for (const [batchIndex, batch] of safetyBatches.entries()) {
+        const batchRequests = batch
+          .filter((item) => item.kind === 'request')
+          .map((item) => item.value);
+        const batchWebSockets = batch
+          .filter((item) => item.kind === 'websocket')
+          .map((item) => item.value);
+        const safetyPayload = {
+          mode: 'effect',
+          batch: { index: batchIndex + 1, total: safetyBatches.length },
+          site: session.site,
+          url: compactUrlForLlm(session.url),
+          narration: session.narration,
+          events: contextEvents,
+          requests: batchRequests,
+          outboundWebSockets: batchWebSockets,
+        };
+        safetyPayloadChars += JSON.stringify(safetyPayload).length;
+        const result = await llm.analyze(systemPrompt, safetyPayload);
+        const parsed = parseTriageSelectionResponse(result.text);
+        const batchRequestSeqs = new Set(
+          batchRequests.flatMap((request) => compactedRequestSeqs(request)),
+        );
+        const batchEventSeqs = new Set(batchWebSockets.map((event) => event.seq));
+        const unknownRequests = parsed.irreversibleSeqs.filter((seq) => !batchRequestSeqs.has(seq));
+        const unknownEvents = parsed.irreversibleEventSeqs.filter(
+          (seq) => !batchEventSeqs.has(seq),
+        );
+        if (unknownRequests.length > 0 || unknownEvents.length > 0) {
+          throw new Error(
+            `Effect triage batch ${batchIndex + 1} referenced item(s) absent from its inventory: ${[...new Set([...unknownRequests, ...unknownEvents])].join(', ')}.`,
+          );
+        }
+        irreversibleSeqs.push(...parsed.irreversibleSeqs);
+        irreversibleEventSeqs.push(...parsed.irreversibleEventSeqs);
+        inputTokens = sumOptionalTokens(inputTokens, result.inputTokens);
+        outputTokens = sumOptionalTokens(outputTokens, result.outputTokens);
+        durationMs += result.durationMs;
+      }
+
+      const coveredSet = new Set(coveredSeqs);
+      const unknownOutputSeqs = irreversibleSeqs.filter((seq) => !coveredSet.has(seq));
+      if (unknownOutputSeqs.length > 0) {
         throw new Error(
-          `Triage response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${arrayText.slice(0, 500)}`,
+          `Triage response referenced request seq(s) absent from its complete inventory: ${[...new Set(unknownOutputSeqs)].join(', ')}.`,
         );
       }
 
-      if (!Array.isArray(seqs) || !seqs.every((s) => typeof s === 'number')) {
-        throw new Error(
-          `Triage response is not an array of numbers.\nParsed: ${JSON.stringify(seqs).slice(0, 500)}`,
-        );
-      }
-
-      const rescuedSeqs = rescueActionAlignedRepeatedSeqs(session, seqs as number[], compacted);
-      const selectedSet = new Set([...(seqs as number[]), ...rescuedSeqs, ...preserveSeqs]);
+      const rescuedSeqs = rescueActionAlignedRepeatedSeqs(session, keepSeqs as number[], compacted);
+      const selectedSet = new Set([...keepSeqs, ...rescuedSeqs, ...preserveSeqs]);
+      const irreversibleSet = new Set(expandCompactedTriageSeqs(irreversibleSeqs, compacted));
+      const irreversibleEventSet = new Set(irreversibleEventSeqs);
+      const replaySafeSeqs = coveredSeqs.filter((seq) => !irreversibleSet.has(seq));
       const triaged: Session = {
         ...session,
-        requests: session.requests.filter((r) => selectedSet.has(r.seq)),
+        triage: {
+          effectSchemaVersion: 2,
+          coveredSeqs,
+          irreversibleSeqs: [...irreversibleSet].sort((a, b) => a - b),
+          coveredOutboundEventSeqs,
+          irreversibleEventSeqs: [...irreversibleEventSet].sort((a, b) => a - b),
+        },
+        requests: session.requests
+          .filter((r) => selectedSet.has(r.seq))
+          .map((r) => (irreversibleSet.has(r.seq) ? { ...r, effect: 'irreversible' as const } : r)),
       };
 
-      log(`triage selected ${selectedSet.size} requests out of ${candidates.length} candidates`);
+      log(
+        `triage selected ${selectedSet.size} requests out of ${candidates.length} relevance candidates (${irreversibleSet.size} irreversible requests and ${irreversibleEventSet.size} irreversible outbound WebSocket events across ${safetyBatches.length} bounded safety batch(es))`,
+      );
 
       setSpanAttributes(span, {
         'imprint.requests_compacted': metadata.length,
         'imprint.requests_selected': selectedSet.size,
-        'imprint.triage.payload_chars': triagePayloadChars,
-        'imprint.triage.duration_ms': result.durationMs,
-        'imprint.triage.input_tokens': result.inputTokens,
-        'imprint.triage.output_tokens': result.outputTokens,
+        'imprint.triage.payload_chars':
+          JSON.stringify(relevancePayload).length + safetyPayloadChars,
+        'imprint.requests_irreversible': irreversibleSet.size,
+        'imprint.events_irreversible': irreversibleEventSet.size,
+        'imprint.triage.duration_ms': durationMs,
+        'imprint.triage.input_tokens': inputTokens,
+        'imprint.triage.output_tokens': outputTokens,
       });
 
       return {
         session: triaged,
         selectedSeqs: [...selectedSet],
+        replaySafeSeqs,
+        irreversibleSeqs: [...irreversibleSet],
+        coveredOutboundEventSeqs,
+        irreversibleEventSeqs: [...irreversibleEventSet],
         consideredCount: candidates.length,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
-        durationMs: result.durationMs,
+        inputTokens,
+        outputTokens,
+        durationMs,
       };
     },
   );
@@ -525,6 +712,28 @@ export function buildTriageEventContexts(session: Session): TriageEventContext[]
     }));
 }
 
+export function chunkTriageItems<T>(items: T[], maxChars: number): T[][] {
+  const batches: T[][] = [];
+  let current: T[] = [];
+  let currentChars = 2;
+  for (const item of items) {
+    const itemChars = JSON.stringify(item).length + 1;
+    if (current.length > 0 && currentChars + itemChars > maxChars) {
+      batches.push(current);
+      current = [];
+      currentChars = 2;
+    }
+    current.push(item);
+    currentChars += itemChars;
+  }
+  if (current.length > 0 || batches.length === 0) batches.push(current);
+  return batches;
+}
+
+function sumOptionalTokens(left: number | null, right: number | null): number | null {
+  return left === null && right === null ? null : (left ?? 0) + (right ?? 0);
+}
+
 export function selectTriageCandidateRequests(
   session: Session,
   preserveSeqs: Iterable<number> = [],
@@ -535,6 +744,29 @@ export function selectTriageCandidateRequests(
     if (!TRIAGE_RESOURCE_TYPES.has(request.resourceType)) return false;
     return !isTelemetryRequest(request);
   });
+}
+
+function compactedRequestSeqs(
+  request: Pick<TriageRequestContext, 'seq' | 'repeatedSeqs'>,
+): number[] {
+  return [...new Set([request.seq, ...(request.repeatedSeqs ?? [])])];
+}
+
+/** Expand a classification on any representative/member of a compacted row to
+ * every original request represented by that row. Effect decisions must apply
+ * uniformly because the LLM saw only one compacted request description. */
+export function expandCompactedTriageSeqs(
+  seqs: Iterable<number>,
+  compactedRequests: Pick<TriageRequestContext, 'seq' | 'repeatedSeqs'>[],
+): number[] {
+  const requested = new Set(seqs);
+  const expanded = new Set(requested);
+  for (const request of compactedRequests) {
+    const group = compactedRequestSeqs(request);
+    if (!group.some((seq) => requested.has(seq))) continue;
+    for (const seq of group) expanded.add(seq);
+  }
+  return [...expanded].sort((a, b) => a - b);
 }
 
 export function rescueActionAlignedRepeatedSeqs(
@@ -609,6 +841,7 @@ function triageRequestGroupKey(request: TriageRequestContext): unknown[] {
     request.resourceType,
     request.status,
     request.mimeType,
+    request.urlDigest,
     request.bodyDigest,
   ];
 }
@@ -619,9 +852,12 @@ function truncateHeaders(headers: Record<string, string>): string {
   return `${serialized.slice(0, HEADER_TRUNCATE_LIMIT)}…`;
 }
 
-export function triageBodySnippet(body: string | undefined): string | undefined {
+export function triageBodySnippet(
+  body: string | undefined,
+  maxChars = TRIAGE_BODY_LIMIT,
+): string | undefined {
   if (body === undefined) return undefined;
-  if (isLikelyText(body)) return truncate(body, TRIAGE_BODY_LIMIT);
+  if (isLikelyText(body)) return truncate(body, maxChars);
   return `[non-text request body omitted; original length ${body.length}]`;
 }
 
@@ -752,17 +988,10 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
     durationMs: 0,
   };
   if (opts.preTriagedSession && !opts.noShrink) {
-    // Shared triage path: merge pre-computed seqs with candidate-specific preserveSeqs
-    const preserveSeqs = new Set([
-      ...(opts.candidate?.requestSeqs ?? []),
-      ...(opts.candidate?.dependencySeqs ?? []),
-      ...(opts.sharedContext?.loginRequestSeqs ?? []),
-    ]);
-    const finalSeqs = new Set([...opts.preTriagedSession.selectedSeqs, ...preserveSeqs]);
-    session = {
-      ...session,
-      requests: session.requests.filter((r) => finalSeqs.has(r.seq)),
-    };
+    session = applySharedTriageSelection(session, opts.preTriagedSession, {
+      candidate: opts.candidate,
+      sharedContext: opts.sharedContext,
+    });
     log('using shared triage result (skipping per-tool triage LLM call)');
     triageTokens = {
       input: opts.preTriagedSession.inputTokens,

@@ -340,6 +340,8 @@ export async function runWithLadder(
     initialState?: Record<string, unknown>;
     /** Optional credential override used by auth verification. */
     credentials?: CredentialStore;
+    /** Caller cancellation for bounded verification work. */
+    signal?: AbortSignal;
   },
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
@@ -437,6 +439,7 @@ export async function runWithLadder(
             options?.cdpPool,
             options?.initialState,
             options?.credentials,
+            options?.signal,
           );
           break;
         case 'stealth-fetch': {
@@ -1036,6 +1039,7 @@ async function runCdpReplay(
   cdpPool?: Map<string, CdpBrowserFetch>,
   callerState?: Record<string, unknown>,
   credentialOverride?: CredentialStore,
+  signal?: AbortSignal,
 ): Promise<ToolResult> {
   let baseUrl: string;
   try {
@@ -1105,6 +1109,9 @@ async function runCdpReplay(
       // declares it — never a blanket default. See AuthConfig.crossOriginCookieReinjection.
       reinjectCrossOriginCookies: tool.workflow.authConfig?.crossOriginCookieReinjection ?? false,
     });
+    // Register immediately so caller cancellation can close a browser that is
+    // still launching or minting its first jar.
+    if (cdpPool) cdpPool.set(poolKey, cf);
   }
 
   try {
@@ -1148,6 +1155,7 @@ async function runCdpReplay(
               snapshotCookies: cf.snapshotCookies.bind(cf),
             }
           : undefined,
+      signal,
     });
 
     if (result.ok) {
@@ -1597,6 +1605,8 @@ export async function runWorkflowWithLadder(opts: {
   /** Pin execution to a single rung, bypassing the parallel probe AND the winner
    *  memo. AuthVerifier pins `cdp-replay` so all actions share one browser. */
   forceBackend?: ConcreteBackend;
+  /** Caller cancellation for bounded verification work. */
+  signal?: AbortSignal;
 }): Promise<LadderResult> {
   if (!existsSync(opts.workflowPath)) {
     throw new Error(`runWorkflowWithLadder: workflow.json not found at ${opts.workflowPath}`);
@@ -1674,6 +1684,7 @@ export async function runWorkflowWithLadder(opts: {
         cdpPool,
         initialState: opts.initialState,
         credentials: opts.credentials,
+        signal: opts.signal,
       });
     }
 
@@ -1731,6 +1742,7 @@ export async function runWorkflowWithLadder(opts: {
             cdpPool,
             initialState: opts.initialState,
             credentials: opts.credentials,
+            signal: opts.signal,
           });
           const r = await settleProbeWithDeadline(inner, PROBE_TIMEOUT_MS, {
             result: { ok: false, error: 'NETWORK', message: 'probe deadline exceeded' },
@@ -1781,6 +1793,7 @@ export async function runWorkflowWithLadder(opts: {
         cdpPool,
         initialState: opts.initialState,
         credentials: opts.credentials,
+        signal: opts.signal,
       });
       if (probeReachable(seqResult.result)) {
         compileWinningBackend.set(memoKey, seqResult.usedBackend);
@@ -1804,6 +1817,7 @@ export async function runWorkflowWithLadder(opts: {
       cdpPool,
       initialState: opts.initialState,
       credentials: opts.credentials,
+      signal: opts.signal,
     });
     if (isProbeReachable(result.result)) {
       compileWinningBackend.set(memoKey, result.usedBackend);
@@ -1849,6 +1863,7 @@ export function resolveWorkflowTool(
             browser?: BrowserNavigationTransport;
             initialState?: Record<string, unknown>;
             credentials?: CredentialStore;
+            signal?: AbortSignal;
           }
         | undefined;
       return executeWorkflow({
@@ -1859,6 +1874,7 @@ export function resolveWorkflowTool(
         fetchImpl: o?.fetchImpl,
         browser: o?.browser,
         initialState: o?.initialState,
+        signal: o?.signal,
       });
     },
   };
@@ -1896,6 +1912,8 @@ export async function renderWorkflowRequests(opts: {
   params: Record<string, string | number | boolean>;
   workflowPath?: string;
   credentials?: CredentialStore;
+  /** Synthetic captured state for offline request tests. */
+  initialState?: Record<string, unknown>;
   recordedResponseFor?: (
     method: string,
     url: string,
@@ -1930,7 +1948,9 @@ export async function renderWorkflowRequests(opts: {
     params: opts.params,
     credentials: opts.credentials,
     workflowPath: opts.workflowPath,
+    initialState: opts.initialState,
     fetchImpl,
+    persistAuthState: false,
   });
   return { requests: captured, result };
 }

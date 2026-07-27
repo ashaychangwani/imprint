@@ -106,6 +106,16 @@ describe('partitionAuditTools', () => {
         toolKind: 'authenticate',
         authConfig: undefined,
       });
+      const irreversible = resolvedAuditTool(dir, 'place_order', {
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://fixture.example/orders',
+            headers: {},
+            effect: 'irreversible',
+          },
+        ],
+      });
       writeFileSync(
         pathJoin(dir, AUTH_VERIFICATION_ATTEMPT_SENTINEL),
         JSON.stringify({
@@ -123,12 +133,14 @@ describe('partitionAuditTools', () => {
         interactive,
         legacyInteractive,
         malformedAuth,
+        irreversible,
       ]);
       expect(partition.eligible.map((tool) => tool.workflow.toolName)).toEqual([
         'search_items',
         'authenticate_password',
       ]);
       expect(partition.nonInteractiveAuthNames).toEqual(['authenticate_password']);
+      expect(partition.skippedIrreversible).toEqual(['place_order']);
       expect(partition.skippedInteractiveAuth).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -966,7 +978,7 @@ describe('buildTokenDepNote', () => {
 });
 
 describe('audit prompt construction', () => {
-  it('limits direct-success authentication to one baseline and never recovers AUTH_EXPIRED', () => {
+  it('lets proven direct-success authentication recover AUTH_EXPIRED without probing it', () => {
     const prompt = buildAuditInitialPrompt(
       {
         site: 'example',
@@ -983,10 +995,8 @@ describe('audit prompt construction', () => {
     );
 
     expect(prompt).toContain('authenticate_password');
-    expect(prompt).toContain('Call each exactly once with one safe baseline');
-    expect(prompt).toContain('Never differentially probe or retry authentication actions');
-    expect(prompt).toContain('DATA tool returns AUTH_EXPIRED');
-    expect(prompt).toContain('do not call an authentication tool in response');
+    expect(prompt).toContain('Eligible unattended authentication tool(s)');
+    expect(prompt).toContain('at most one recovery authentication call');
   });
 
   it('does not tell the auditor to skip bot-defended read parameter probes', () => {
@@ -1039,6 +1049,8 @@ describe('audit prompt construction', () => {
     expect(prompt).toContain('A single unchanged comparison is not enough for conditional inputs');
     expect(prompt).toContain('An empty result is not automatically broken');
     expect(prompt).toContain('Preserve that ambiguity for the compiler or human reviewer');
+    expect(prompt).toContain('at most one recovery authentication call');
+    expect(prompt).toContain('classify any later `AUTH_EXPIRED` result as `infra`');
   });
 
   it('prioritizes unverified params without exempting bot-defended idempotent reads', () => {

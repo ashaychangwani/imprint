@@ -1,6 +1,7 @@
 import type { CapturedRequest, WorkflowRequest } from './types.ts';
 
 const TEMPLATE_PLACEHOLDER = /\$\{[^}]+\}/g;
+const EMPTY_REDACTION = /\[REDACTED:v3:id=\d+:len=0\]/g;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -9,7 +10,11 @@ function escapeRegExp(value: string): string {
 /** Match a concrete recorded value against a workflow template without
  * interpreting or substituting the dynamic values themselves. */
 function templateMatchesRecorded(template: string, recorded: string): boolean {
-  if (template === recorded) return true;
+  // Structured redaction preserves the original length. A sensitive field
+  // whose recorded value was empty is therefore still represented by a
+  // marker, even though the executable workflow must send the empty string.
+  const groundedRecorded = recorded.replace(EMPTY_REDACTION, '');
+  if (template === groundedRecorded) return true;
   let cursor = 0;
   let pattern = '^';
   for (const match of template.matchAll(TEMPLATE_PLACEHOLDER)) {
@@ -19,7 +24,7 @@ function templateMatchesRecorded(template: string, recorded: string): boolean {
   }
   if (cursor === 0) return false;
   pattern += `${escapeRegExp(template.slice(cursor))}$`;
-  return new RegExp(pattern).test(recorded);
+  return new RegExp(pattern).test(groundedRecorded);
 }
 
 export function recordedRequestMatchesWorkflow(

@@ -34,6 +34,7 @@ import {
   traceToolIoEnabled,
   traced,
 } from './tracing.ts';
+import type { SharedTriageSelection } from './triage-selection.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-codex-cli');
@@ -143,6 +144,8 @@ interface CompileViaCodexCliOptions {
   toolPlan?: string;
   /** Revise existing generated artifacts from durable verification feedback. */
   revisionMode?: boolean;
+  /** Shared triage result for irreversible-effect propagation in the MCP server. */
+  sharedTriageSelection?: SharedTriageSelection;
   /** Present → drive an auth compile rather than a data compile. */
   authMode?: AuthCliCompileMode;
   /** Auth segments only: resume the same non-interactive Codex session. */
@@ -302,6 +305,9 @@ async function compileViaCodexCliImpl(
       ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
       ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
       ...(opts.revisionMode ? ['--revision-mode'] : []),
+      ...(opts.sharedTriageSelection
+        ? ['--shared-triage-json', JSON.stringify(opts.sharedTriageSelection)]
+        : []),
     ];
     const { assignedSharedModules } = resolvePlanSliceFromFile(
       opts.buildPlanPath,

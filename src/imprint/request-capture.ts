@@ -66,6 +66,20 @@ export function jsonpath(root: unknown, path: string): unknown {
   return cur;
 }
 
+/** Resolve a JSON response capture, optionally decoding one JSON-string
+ * envelope before applying a second path. Invalid or non-string envelopes are
+ * treated like any other missing capture. */
+export function resolveJsonCapture(root: unknown, path: string, decodeJsonPath?: string): unknown {
+  const value = jsonpath(root, path);
+  if (decodeJsonPath === undefined) return value;
+  if (typeof value !== 'string') return undefined;
+  try {
+    return jsonpath(JSON.parse(value), decodeJsonPath);
+  } catch {
+    return undefined;
+  }
+}
+
 export function captureValueMatches(
   value: unknown,
   equals?: string | number | boolean | null,

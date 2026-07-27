@@ -13,14 +13,19 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join as pathJoin } from 'node:path';
+import { __setAuthVerifierLadderForTest } from '../src/imprint/auth-verifier.ts';
+import { type CredentialBackend, setBackendOverride } from '../src/imprint/credential-store.ts';
 import {
   LIVE_VERIFICATION_EVIDENCE_FILE,
+  LiveVerificationAuthSession,
   LiveVerificationReportSchema,
   appendLiveVerifierLog,
   assertReportCoversWorkflowParameters,
+  authRefreshAwaitingContinuation,
   backendPreparationDeadlineCreditMs,
   buildVerifierArtifactContext,
   compactVerifierEvidenceContext,
+  credentialsForAuthRefresh,
   hasSuiteReceiptForSession,
   isInfrastructureOnlyInconclusiveReport,
   mergeSemanticParamVerification,
@@ -37,7 +42,288 @@ import type { BackendsCache } from '../src/imprint/types.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
+  __setAuthVerifierLadderForTest(null);
+  setBackendOverride(null);
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe('live verifier auth refresh', () => {
+  it('supports first-time authentication without a pre-existing credential store', () => {
+    expect(credentialsForAuthRefresh('fixture-site', null, ['session_token'], true)).toEqual({
+      site: 'fixture-site',
+      cookies: [],
+      values: {},
+      storage: [],
+    });
+  });
+
+  it('loads the planned auth workflow and withholds only stale auth-produced state', async () => {
+    const secrets = new Map([
+      ['username', 'fixture-user'],
+      ['password', 'fixture-password'],
+      ['session_token', 'expired-session'],
+    ]);
+    const backend: CredentialBackend = {
+      id: 'keyring',
+      getSecret: async (_site, name) => secrets.get(name) ?? null,
+      setSecret: async (_site, name, value) => {
+        secrets.set(name, value);
+      },
+      deleteSecret: async (_site, name) => {
+        secrets.delete(name);
+      },
+      listSecrets: async () => [...secrets.keys()],
+      getCookies: async () => [
+        { name: 'session', value: 'expired-cookie', domain: 'fixture.test', path: '/' },
+      ],
+      setCookies: async () => {},
+      getStorage: async () => [
+        {
+          origin: 'https://fixture.test',
+          kind: 'localStorage',
+          key: 'session',
+          value: 'expired-storage',
+        },
+      ],
+      setStorage: async () => {},
+      listSites: async () => ['fixture-site'],
+    };
+    setBackendOverride(backend);
+
+    const siteDir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-refresh-'));
+    dirs.push(siteDir);
+    const dataDir = pathJoin(siteDir, 'read_fixture');
+    const authDir = pathJoin(siteDir, 'authenticate_fixture');
+    mkdirSync(dataDir);
+    mkdirSync(authDir);
+    const dataWorkflowPath = pathJoin(dataDir, 'workflow.json');
+    writeFileSync(
+      dataWorkflowPath,
+      JSON.stringify({
+        toolName: 'read_fixture',
+        toolKind: 'data',
+        intent: { description: 'Read fixture data.' },
+        parameters: [],
+        requests: [{ method: 'GET', url: 'https://fixture.test/data', headers: {} }],
+        site: 'fixture-site',
+      }),
+    );
+    writeFileSync(
+      pathJoin(authDir, 'workflow.json'),
+      JSON.stringify({
+        toolName: 'authenticate_fixture',
+        toolKind: 'authenticate',
+        intent: { description: 'Authenticate to the fixture.' },
+        parameters: [
+          { name: 'action', type: 'string', description: 'Auth action.', default: 'begin' },
+          { name: 'otp', type: 'string', description: 'Second-factor code.', required: false },
+        ],
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://fixture.test/login',
+            headers: {},
+            recordingRequestSeq: 1,
+            captures: [{ source: 'json', name: 'session_token', path: '$.token' }],
+          },
+        ],
+        authConfig: {
+          entry: 'begin',
+          actions: {
+            begin: {
+              parameters: [],
+              steps: [{ request: 0, onError: 'fail' }],
+              outcome: {
+                type: 'pause',
+                next: 'finish',
+                evidence: ['challenge'],
+                carry: ['challenge'],
+                message: 'Supply the current one-time code.',
+              },
+            },
+            finish: {
+              parameters: ['otp'],
+              steps: [{ request: 0, onError: 'fail' }],
+              outcome: { type: 'success', evidence: ['session_token'] },
+            },
+          },
+          persist: ['session_token'],
+        },
+        site: 'fixture-site',
+      }),
+    );
+    writeFileSync(
+      pathJoin(siteDir, '.build-plan.json'),
+      JSON.stringify({
+        perTool: [{ toolName: 'read_fixture' }],
+        authTool: { toolName: 'authenticate_fixture' },
+      }),
+    );
+
+    let receivedCredentials: Parameters<
+      NonNullable<Parameters<typeof __setAuthVerifierLadderForTest>[0]>
+    >[0]['credentials'];
+    const calls: Array<Record<string, unknown>> = [];
+    __setAuthVerifierLadderForTest((async (args) => {
+      calls.push({ params: args.params, initialState: args.initialState });
+      receivedCredentials = args.credentials;
+      if (args.params.action === 'begin') {
+        return {
+          result: {
+            ok: false,
+            error: 'ACTION_REQUIRED',
+            message: 'Supply the current one-time code.',
+            nextAction: 'finish',
+            continuation: { challenge: 'must-not-leak' },
+          },
+          usedBackend: 'cdp-replay',
+          attempts: [],
+        };
+      }
+      return {
+        result: { ok: true, data: { authenticated: true } },
+        usedBackend: 'cdp-replay',
+        attempts: [],
+      };
+    }) as NonNullable<Parameters<typeof __setAuthVerifierLadderForTest>[0]>);
+
+    const session = new LiveVerificationAuthSession({
+      workflowPath: dataWorkflowPath,
+      reason: 'fixture session was rejected',
+      cleanSession: true,
+      sessionLabel: 'verifier-session-1',
+    });
+    const first = await session.run();
+    expect(first).toMatchObject({
+      authToolName: 'authenticate_fixture',
+      action: 'begin',
+      ok: false,
+      error: 'ACTION_REQUIRED',
+      nextAction: 'finish',
+      requiredParameters: ['otp'],
+    });
+    expect(JSON.stringify(first)).not.toContain('must-not-leak');
+    const second = await session.run({ action: 'finish', parameters: { otp: '123456' } });
+    expect(second).toMatchObject({
+      authToolName: 'authenticate_fixture',
+      action: 'finish',
+      ok: true,
+    });
+    expect(receivedCredentials).toEqual({
+      site: 'fixture-site',
+      cookies: [],
+      values: { username: 'fixture-user', password: 'fixture-password' },
+      storage: [],
+    });
+    expect(calls).toEqual([
+      { params: { action: 'begin' }, initialState: undefined },
+      {
+        params: { otp: '123456', action: 'finish' },
+        initialState: { challenge: 'must-not-leak' },
+      },
+    ]);
+    expect(existsSync(pathJoin(siteDir, '.imprint-live-verification.lock'))).toBe(false);
+
+    __setAuthVerifierLadderForTest((async (args) => {
+      return await new Promise((resolve) => {
+        const finish = () =>
+          resolve({
+            result: { ok: false, error: 'NETWORK', message: 'cancelled by deadline' },
+            usedBackend: 'cdp-replay',
+            attempts: [],
+          });
+        if (args.signal?.aborted) finish();
+        else args.signal?.addEventListener('abort', finish, { once: true });
+      });
+    }) as NonNullable<Parameters<typeof __setAuthVerifierLadderForTest>[0]>);
+    const deadlineSession = new LiveVerificationAuthSession({
+      workflowPath: dataWorkflowPath,
+      reason: 'fixture action stalled',
+      sessionLabel: 'verifier-session-2',
+      deadlineMs: Date.now() + 20,
+    });
+    await expect(deadlineSession.run()).rejects.toThrow(
+      'authentication refresh exceeded the live verification deadline',
+    );
+    expect(existsSync(pathJoin(siteDir, '.imprint-live-verification.lock'))).toBe(false);
+  });
+
+  it('tracks whether a verifier session still owns an auth continuation', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-refresh-log-'));
+    dirs.push(dir);
+    const logPath = pathJoin(dir, 'events.jsonl');
+    appendLiveVerifierLog(logPath, {
+      type: 'auth.refresh.action-required',
+      session: 'verifier-session-1',
+    });
+    expect(authRefreshAwaitingContinuation(logPath, 'verifier-session-1')).toBe(true);
+    appendLiveVerifierLog(logPath, {
+      type: 'auth.refresh.completed',
+      session: 'verifier-session-1',
+    });
+    expect(authRefreshAwaitingContinuation(logPath, 'verifier-session-1')).toBe(false);
+  });
+
+  it('rejects an invented action or missing action parameters without closing the session', async () => {
+    const siteDir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-refresh-'));
+    dirs.push(siteDir);
+    const dataDir = pathJoin(siteDir, 'read_fixture');
+    const authDir = pathJoin(siteDir, 'authenticate_fixture');
+    mkdirSync(dataDir);
+    mkdirSync(authDir);
+    const dataWorkflowPath = pathJoin(dataDir, 'workflow.json');
+    writeFileSync(
+      dataWorkflowPath,
+      JSON.stringify({
+        toolName: 'read_fixture',
+        toolKind: 'data',
+        intent: { description: 'Read fixture data.' },
+        parameters: [],
+        requests: [{ method: 'GET', url: 'https://fixture.test/data', headers: {} }],
+        site: 'fixture-site',
+      }),
+    );
+    writeFileSync(
+      pathJoin(authDir, 'workflow.json'),
+      JSON.stringify({
+        toolName: 'authenticate_fixture',
+        toolKind: 'authenticate',
+        intent: { description: 'Authenticate to the fixture.' },
+        parameters: [],
+        requests: [{ method: 'POST', url: 'https://fixture.test/login', headers: {} }],
+        authConfig: {
+          entry: 'finish',
+          actions: {
+            finish: {
+              parameters: ['otp'],
+              steps: [{ request: 0 }],
+              outcome: { type: 'success' },
+            },
+          },
+        },
+        site: 'fixture-site',
+      }),
+    );
+    writeFileSync(
+      pathJoin(siteDir, '.build-plan.json'),
+      JSON.stringify({
+        perTool: [{ toolName: 'read_fixture' }],
+        authTool: { toolName: 'authenticate_fixture' },
+      }),
+    );
+    const session = new LiveVerificationAuthSession({
+      workflowPath: dataWorkflowPath,
+      reason: 'fixture session expired',
+      sessionLabel: 'verifier-session-1',
+    });
+    try {
+      await expect(session.run({ action: 'invented' })).rejects.toThrow('expects action "finish"');
+      await expect(session.run()).rejects.toThrow('missing otp');
+    } finally {
+      await session.close();
+    }
+    expect(existsSync(pathJoin(siteDir, '.imprint-live-verification.lock'))).toBe(false);
+  });
 });
 
 describe('verifier artifact context', () => {

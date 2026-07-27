@@ -12,6 +12,7 @@ import {
 import { dirname, join as pathJoin } from 'node:path';
 import { loadBackendsCacheStatus } from './backend-cache.ts';
 import { runWorkflowWithLadder } from './backend-ladder.ts';
+import { workflowHasIrreversibleEffect } from './effects.ts';
 import type { CredentialStore } from './runtime.ts';
 import { WorkflowSchema } from './types.ts';
 
@@ -55,10 +56,13 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-async function acquireSiteLiveLock(workflowPath: string): Promise<() => void> {
+export async function acquireSiteLiveLock(
+  workflowPath: string,
+  deadlineMs = Date.now() + 10 * 60_000,
+): Promise<() => void> {
   const siteDir = dirname(dirname(workflowPath));
   const lockPath = pathJoin(siteDir, '.imprint-live-verification.lock');
-  const deadline = Date.now() + 10 * 60_000;
+  const deadline = Math.min(deadlineMs, Date.now() + 10 * 60_000);
 
   while (Date.now() < deadline) {
     try {
@@ -122,6 +126,11 @@ export async function runCapturedIntegrationCase(opts: {
   preferredOnlyBackend?: boolean;
 }): Promise<LadderRun> {
   const workflow = WorkflowSchema.parse(JSON.parse(readFileSync(opts.workflowPath, 'utf8')));
+  if (workflowHasIrreversibleEffect(workflow)) {
+    throw new Error(
+      `Live integration is disabled for irreversible workflow ${JSON.stringify(workflow.toolName)}.`,
+    );
+  }
   const release = await acquireSiteLiveLock(opts.workflowPath);
   const startedAt = Date.now();
   let run: LadderRun;

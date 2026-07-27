@@ -40,11 +40,13 @@ import {
   advanceSemanticVerificationCycle,
 } from './compile-agent-types.ts';
 import {
+  applyIrreversibleVerificationWaiver,
   applyLiveVerification,
   applyParamVerification,
   buildCompileTools,
   externalVerification,
 } from './compile-tools.ts';
+import { workflowHasIrreversibleEffect } from './effects.ts';
 import {
   isInfrastructureOnlyInconclusiveReport,
   mergeSemanticParamVerification,
@@ -59,7 +61,8 @@ import { rebindExistingBackendsCacheToWorkflow } from './probe-backends.ts';
 import { redactSession } from './redact.ts';
 import { loadCredentialStore } from './runtime.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
-import { type Session, SessionSchema } from './types.ts';
+import { type SharedTriageSelection, applySharedTriageSelection } from './triage-selection.ts';
+import { type Session, SessionSchema, WorkflowSchema } from './types.ts';
 
 const log = createLog('mcp-compile');
 
@@ -88,6 +91,9 @@ interface RunCompileMcpServerOptions {
   provider?: ProviderName;
   /** Bounded resume of an already-generated data tool. */
   revisionMode?: boolean;
+  /** Shared triage result from teach. Applied before compile tools and done()
+   *  verification so CLI-backed compilers see irreversible effects. */
+  sharedTriageSelection?: SharedTriageSelection;
 }
 
 const DONE_SENTINEL = '.compile-done.json';
@@ -107,6 +113,7 @@ const COMPILE_ARTIFACT_FILES = [
   'workflow.json',
   'parser.ts',
   'parser.test.ts',
+  'request.test.ts',
   'integration.test.ts',
   'request-transform.ts',
   'playbook.yaml',
@@ -270,6 +277,12 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
   const looksRedacted = JSON.stringify(session).includes('[REDACTED:');
   if (!looksRedacted) {
     session = redactSession(session).session;
+  }
+  if (opts.sharedTriageSelection) {
+    session = applySharedTriageSelection(session, opts.sharedTriageSelection, {
+      candidate: opts.candidate,
+      sharedContext: opts.sharedContext,
+    });
   }
 
   // Build the toolset. Auth mode swaps the data tools (parser/test-oriented)
@@ -543,10 +556,11 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
             expectedToolName: opts.candidate?.toolName,
             likelyParams: opts.candidate?.likelyParams,
             candidateRequestSeqs: opts.candidate?.requestSeqs,
-            // Widen Fix B's variation pool to dependency requests so a token that
-            // varies only across them and is frozen as a literal in the tool's
-            // request is caught (the cross-request session-token leak case).
-            dependencyRequestSeqs: opts.candidate?.dependencySeqs,
+            // Include bootstrap and shared login dependencies in provenance checks.
+            dependencyRequestSeqs: [
+              ...(opts.candidate?.dependencySeqs ?? []),
+              ...(opts.sharedContext?.loginRequestSeqs ?? []),
+            ],
             assignedSharedModules,
             tokenParams,
             tokenParamShapes,
@@ -558,6 +572,43 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
           });
         if (warnings.length > 0) {
           log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
+        }
+        let workflow: ReturnType<typeof WorkflowSchema.parse> | undefined;
+        if (failures.length === 0) {
+          workflow = WorkflowSchema.parse(
+            JSON.parse(readFileSync(pathJoin(opts.toolDir, 'workflow.json'), 'utf8')),
+          );
+        }
+        if (workflow && workflowHasIrreversibleEffect(workflow)) {
+          const allWarnings = [
+            ...warnings,
+            ...applyIrreversibleVerificationWaiver(opts.toolDir, workflow),
+          ];
+          const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
+          writeFileSync(
+            sentinel,
+            JSON.stringify(
+              {
+                summary,
+                verification: 'passed',
+                liveVerified: false,
+                safetyWaiver: 'irreversible',
+                warnings: allWarnings,
+                timestamp: Date.now(),
+              },
+              null,
+              2,
+            ),
+            'utf8',
+          );
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'DONE_UNVERIFIED — deterministic verification passed; live verification was skipped because the workflow is irreversible.',
+              },
+            ],
+          };
         }
         if (failures.length === 0) {
           if (!opts.provider) {

@@ -51,6 +51,7 @@ import {
   traceLlmIoEnabled,
   traced,
 } from './tracing.ts';
+import type { SharedTriageSelection } from './triage-selection.ts';
 import type { Session } from './types.ts';
 
 const log = createLog('compile-claude-cli');
@@ -127,7 +128,7 @@ interface CompileViaClaudeCliOptions {
   onProgress?: (p: CompileAgentProgress) => void;
   /** Called when wall-clock deadline is reached; return ms to extend or null to time out. */
   onDeadlineReached?: OnDeadlineReached;
-  /** Retain parser.test.ts after successful verification. Mirrors the
+  /** Retain agent-generated tests after successful verification. Mirrors the
    *  in-process loop's `keepTest`. */
   keepTest?: boolean;
   candidate?: ToolCandidate;
@@ -140,6 +141,8 @@ interface CompileViaClaudeCliOptions {
   toolPlan?: string;
   /** Revise existing generated artifacts from durable verification feedback. */
   revisionMode?: boolean;
+  /** Shared triage result for irreversible-effect propagation in the MCP server. */
+  sharedTriageSelection?: SharedTriageSelection;
   /** Present → drive an auth compile rather than a data compile. */
   authMode?: AuthCliCompileMode;
   /** Auth segments only: resume a prior segment's claude session with a new user
@@ -377,6 +380,9 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
       ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
       ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
       ...(opts.revisionMode ? ['--revision-mode'] : []),
+      ...(opts.sharedTriageSelection
+        ? ['--shared-triage-json', JSON.stringify(opts.sharedTriageSelection)]
+        : []),
     ];
     allowedToolNames = [
       'read_session_summary',

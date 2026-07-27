@@ -28,7 +28,8 @@ Schema:
       "likelyParams": [
         { "name": "snake_case_param", "type": "string", "description": "short description" }
       ],
-      "dependencySeqs": [number]
+      "dependencySeqs": [number],
+      "dependsOnTools": ["snake_case_producer_tool"]
     }
   ]
 }
@@ -122,3 +123,8 @@ Rules:
     If every seq in requestSeqs is a distinct API call (different endpoints
     or fundamentally different operations), set representativeSeqs equal to
     requestSeqs or omit it.
+21. Put independently callable prerequisite candidates in `dependsOnTools`.
+    Dependencies are callable prerequisites, not workflows that merely contain
+    the consumer's requests. When several candidates establish the required
+    state, choose the smallest producer. Keep unexposed setup requests in
+    `dependencySeqs`.

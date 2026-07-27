@@ -165,6 +165,23 @@ const ToolCandidateDetectionSchema = z
       }
       names.add(candidate.toolName);
     }
+    for (const [i, candidate] of value.candidates.entries()) {
+      for (const [j, dependency] of candidate.dependsOnTools.entries()) {
+        if (dependency === candidate.toolName) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['candidates', i, 'dependsOnTools', j],
+            message: `tool "${candidate.toolName}" cannot depend on itself`,
+          });
+        } else if (!names.has(dependency)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['candidates', i, 'dependsOnTools', j],
+            message: `tool "${candidate.toolName}" references unknown dependency "${dependency}"`,
+          });
+        }
+      }
+    }
   });
 type ToolCandidateDetection = z.infer<typeof ToolCandidateDetectionSchema>;
 

@@ -81,6 +81,7 @@ interface ToolPlanPayload {
     likelyParams: ToolCandidate['likelyParams'];
     requestSeqs: number[];
     dependencySeqs: number[];
+    dependsOnTools: string[];
   };
   sharedContext?: SharedCompileContext;
   /** Slice of the global build plan for this tool (when a build plan exists). */
@@ -173,6 +174,7 @@ export function buildToolPlanPayload(opts: {
       likelyParams: candidate.likelyParams,
       requestSeqs: candidate.requestSeqs,
       dependencySeqs: candidate.dependencySeqs,
+      dependsOnTools: candidate.dependsOnTools,
     },
     sharedContext,
     planGuidance,

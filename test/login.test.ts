@@ -72,6 +72,7 @@ function writeWorkflow(
   requestUrl = 'https://example.test/login',
   requestBody?: string,
   repeatCapture?: unknown,
+  persistBindings: Record<string, string> = {},
 ): void {
   const dir = join(home, site, tool);
   mkdirSync(dir, { recursive: true });
@@ -110,6 +111,7 @@ function writeWorkflow(
           },
         },
         persist,
+        persistBindings,
         crossOriginCookieReinjection: false,
       },
       site,
@@ -138,6 +140,50 @@ function sessionWithLoginResponse(body: string): Session {
 }
 
 describe('extractCredentials (generic persisted-capture resolver)', () => {
+  it('stores a renamed capture under its declared durable interface', () => {
+    writeWorkflow(
+      'fixture',
+      'authenticate_fixture',
+      [{ name: 'compiled_capture', source: 'json', path: 'value' }],
+      ['durable_interface'],
+      undefined,
+      'https://example.test/login',
+      undefined,
+      undefined,
+      { durable_interface: 'compiled_capture' },
+    );
+    const session = sessionWithLoginResponse(JSON.stringify({ value: 'resolved-value' }));
+
+    expect(extractCredentials('fixture', session)).toEqual({
+      durable_interface: 'resolved-value',
+    });
+  });
+
+  it('extracts a persisted value from a JSON-string response envelope', () => {
+    writeWorkflow(
+      'fixture',
+      'authenticate_fixture',
+      [
+        {
+          name: 'nested_token',
+          source: 'json',
+          path: '$.payload',
+          decodeJsonPath: '$.session.token',
+        },
+      ],
+      ['nested_token'],
+      2,
+    );
+    const token = 'fixture/segment+token=';
+    const encodedEnvelope = `{"session":{"token":"fixture\\/segment+token="}}`;
+    const session = sessionWithLoginResponse(JSON.stringify({ payload: encodedEnvelope }));
+    const request = session.requests[1];
+    if (!request) throw new Error('bad fixture');
+    request.seq = 2;
+
+    expect(extractCredentials('fixture', session)).toEqual({ nested_token: token });
+  });
+
   it('resolves Discover & Go nested-key shape into the exact credential slots', () => {
     writeWorkflow('discoverandgo', 'book_pass', [
       { name: 'patron_id', source: 'json', path: 'patronID' },

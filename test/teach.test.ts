@@ -4,12 +4,14 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve as pathResolve } from 'node:path';
 import { VERB_HELP } from '../src/cli.ts';
+import { topoLevelsForTools, validateBuildPlan } from '../src/imprint/build-plan.ts';
 import type {
   CompileAgentProgress,
   CompileAgentResult,
 } from '../src/imprint/compile-agent-types.ts';
 import type { ProviderStatus } from '../src/imprint/llm.ts';
 import { localSessionsDir, localSiteDir } from '../src/imprint/paths.ts';
+import { resolveReplayEventValue } from '../src/imprint/replay-capture.ts';
 import {
   type TeachState,
   type WorkflowState,
@@ -21,6 +23,7 @@ import {
 import {
   assertCandidateToolName,
   assertSuccessfulAuthCompile,
+  assertWorkflowMatchesTriageSafety,
   authCompileLlmConfig,
   authCompletionMatches,
   buildTeachCandidatePicker,
@@ -34,6 +37,7 @@ import {
   mapLimit,
   mergeReplayCandidateDependencies,
   promptForTeachProvider,
+  replaySafetyIdentity,
   resolveTeachStatePath,
   resolveWorkflowTriagedPath,
   resolvedArtifactCheckpointPath,
@@ -41,13 +45,14 @@ import {
   selectCompleteAuthCredentials,
   selectPrimaryNamedResult,
   selectTeachCandidates,
+  triageAllowsPlaybookFallback,
+  triageAllowsReplay,
+  triageCoversSession,
+  triageResultFromTriagedSession,
   updateCandidateStageCheckpoints,
 } from '../src/imprint/teach.ts';
-import {
-  deriveStructuralCandidateDependencies,
-  validateToolCandidateDetection,
-} from '../src/imprint/tool-candidates.ts';
-import { WorkflowSchema } from '../src/imprint/types.ts';
+import { validateToolCandidateDetection } from '../src/imprint/tool-candidates.ts';
+import { type Session, WorkflowSchema } from '../src/imprint/types.ts';
 
 describe('teach verb', () => {
   it('has a VERB_HELP entry', () => {
@@ -71,6 +76,125 @@ describe('teach verb', () => {
     expect(flags.get('--no-interactive')).toContain('all detected tools');
     expect(flags.get('--all-tools')).toContain('default');
     expect(flags.get('--primary-tool')).toContain('upstream dependencies');
+  });
+});
+
+describe('replay safety boundary', () => {
+  it('never opens replay for a recording with an agent-classified irreversible request', () => {
+    expect(triageAllowsReplay({ irreversibleSeqs: [] })).toBe(true);
+    expect(triageAllowsReplay({ irreversibleSeqs: [42] })).toBe(false);
+    expect(triageAllowsReplay({ irreversibleSeqs: [], irreversibleEventSeqs: [43] })).toBe(false);
+  });
+
+  it('withholds DOM fallback when any recorded request or outbound frame is irreversible', () => {
+    expect(triageAllowsPlaybookFallback({ irreversibleSeqs: [] })).toBe(true);
+    expect(triageAllowsPlaybookFallback({ irreversibleSeqs: [42] })).toBe(false);
+    expect(
+      triageAllowsPlaybookFallback({ irreversibleSeqs: [], irreversibleEventSeqs: [43] }),
+    ).toBe(false);
+  });
+
+  it('rejects a resumed workflow that lost current irreversible provenance', () => {
+    const irreversibleRequest = {
+      seq: 42,
+      timestamp: 1,
+      method: 'POST',
+      url: 'https://example.com/order',
+      headers: {},
+      resourceType: 'Fetch',
+      effect: 'irreversible',
+    } as const;
+    const session: Session = {
+      site: 'fixture',
+      startedAt: '2026-07-23T00:00:00.000Z',
+      url: 'https://example.com',
+      imprintVersion: '0.1.0',
+      requests: [irreversibleRequest],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    const workflow = WorkflowSchema.parse({
+      toolName: 'place_order',
+      site: 'fixture',
+      intent: { description: 'Place order' },
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          url: irreversibleRequest.url,
+          headers: {},
+          recordingRequestSeq: irreversibleRequest.seq,
+        },
+      ],
+    });
+    expect(() =>
+      assertWorkflowMatchesTriageSafety(workflow, {
+        session,
+        selectedSeqs: [42],
+        replaySafeSeqs: [],
+        irreversibleSeqs: [42],
+        coveredOutboundEventSeqs: [],
+        irreversibleEventSeqs: [],
+        consideredCount: 1,
+        inputTokens: 1,
+        outputTokens: 1,
+        durationMs: 1,
+      }),
+    ).toThrow(/Re-run from "generate"/);
+  });
+
+  it('requires the safety decision to cover the exact source request inventory', () => {
+    const requests = [{ seq: 1 }, { seq: 2 }, { seq: 3 }] as Session['requests'];
+    expect(
+      triageCoversSession(
+        { requests, events: [] },
+        { replaySafeSeqs: [3, 1], irreversibleSeqs: [2] },
+      ),
+    ).toBe(true);
+    expect(
+      triageCoversSession(
+        { requests, events: [] },
+        { replaySafeSeqs: [1, 3], irreversibleSeqs: [] },
+      ),
+    ).toBe(false);
+    const outboundEvent = {
+      seq: 4,
+      timestamp: 4,
+      type: 'ws-sent',
+      detail: '{"operation":"effect"}',
+    } as Session['events'][number];
+    expect(
+      triageCoversSession(
+        { requests, events: [outboundEvent] },
+        {
+          replaySafeSeqs: [1, 3],
+          irreversibleSeqs: [2],
+          coveredOutboundEventSeqs: [],
+        },
+      ),
+    ).toBe(false);
+    expect(
+      triageCoversSession(
+        { requests, events: [outboundEvent] },
+        {
+          replaySafeSeqs: [1, 3],
+          irreversibleSeqs: [2],
+          coveredOutboundEventSeqs: [4],
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it('resolves only complete credential placeholders in safe-only replay events', () => {
+    expect(resolveReplayEventValue('${credential.password}', { password: 'fixture-secret' })).toBe(
+      'fixture-secret',
+    );
+    expect(resolveReplayEventValue('prefix-${credential.password}', { password: 'secret' })).toBe(
+      null,
+    );
+    expect(resolveReplayEventValue('${credential.missing}', {})).toBeNull();
   });
 });
 
@@ -266,6 +390,59 @@ describe('teach session state helpers', () => {
     expect(resolveTeachStatePath('google-flights', undefined)).toBeNull();
   });
 
+  it('directs stale triage artifacts through the supported interactive redo path', () => {
+    const staleTriagedSession: Session = {
+      site: 'demo',
+      startedAt: '2026-06-08T07:52:26.823Z',
+      url: 'https://example.com',
+      imprintVersion: '0.1.0',
+      requests: [],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    expect(() => triageResultFromTriagedSession(staleTriagedSession)).toThrow(
+      'Run `imprint teach demo` interactively, choose “Redo … from a specific step”, then choose “triage”.',
+    );
+  });
+
+  it('restores full-inventory replay safety separately from selected requests', () => {
+    const currentTriagedSession: Session = {
+      site: 'demo',
+      startedAt: '2026-06-08T07:52:26.823Z',
+      url: 'https://example.com',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 2,
+          timestamp: 20,
+          method: 'GET',
+          url: 'https://example.com/search',
+          headers: {},
+          resourceType: 'Fetch',
+        },
+      ],
+      events: [],
+      narration: [],
+      triage: {
+        effectSchemaVersion: 2,
+        coveredSeqs: [1, 2, 3],
+        irreversibleSeqs: [3],
+        coveredOutboundEventSeqs: [],
+        irreversibleEventSeqs: [],
+      },
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    const result = triageResultFromTriagedSession(currentTriagedSession);
+    expect(result.selectedSeqs).toEqual([2]);
+    expect(result.replaySafeSeqs).toEqual([1, 2]);
+    expect(result.irreversibleSeqs).toEqual([3]);
+  });
+
   it('normalizes shared context saved before neutral auth fields existed', () => {
     const home = mkdtempSync(pathResolve(tmpdir(), 'imprint-teach-'));
     withImprintHome(home, () => {
@@ -328,7 +505,7 @@ describe('teach session state helpers', () => {
       writeFileSync(original, '{}\n');
 
       const state = workflowState({
-        completedSteps: ['record', 'redact', 'replay-and-diff', 'triage'],
+        completedSteps: ['record', 'redact', 'triage', 'replay-and-diff'],
         triagedPath: 'sessions/capture.triaged.triaged.json',
       });
 
@@ -387,7 +564,7 @@ describe('teach session state helpers', () => {
       writeFileSync(triagedPath, '{}\n');
 
       const state = workflowState({
-        completedSteps: ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+        completedSteps: ['record', 'redact', 'triage', 'replay-and-diff', 'detect-candidates'],
         redactedPath: 'sessions/2026-06-08T07-22-19-383Z.redacted.json',
       });
 
@@ -401,7 +578,7 @@ describe('teach session state helpers', () => {
       const sessionsDir = localSessionsDir('yelp');
       mkdirSync(sessionsDir, { recursive: true });
       const state = workflowState({
-        completedSteps: ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+        completedSteps: ['record', 'redact', 'triage', 'replay-and-diff', 'detect-candidates'],
         redactedPath: 'sessions/2026-06-08T07-22-19-383Z.redacted.json',
       });
 
@@ -490,7 +667,7 @@ describe('teach session state helpers', () => {
           },
           _pending_stale: {
             sessionPath: '',
-            completedSteps: ['replay-and-diff', 'triage'],
+            completedSteps: ['triage', 'replay-and-diff'],
             startedAt: '2026-06-08T07:52:26.835Z',
             updatedAt: '2026-06-08T07:52:26.836Z',
             classificationsPath: '.classifications.json',
@@ -620,6 +797,7 @@ describe('teach candidate selection defaults', () => {
           primary: true,
           requestSeqs: [2],
           dependencySeqs: [1],
+          dependsOnTools: ['lookup_items'],
         },
         {
           toolName: 'lookup_items',
@@ -637,16 +815,11 @@ describe('teach candidate selection defaults', () => {
           primary: false,
           requestSeqs: [3],
           dependencySeqs: [2],
+          dependsOnTools: ['search_items'],
         },
       ],
     });
-    return {
-      ...validated,
-      candidates: deriveStructuralCandidateDependencies(validated.candidates),
-      inputTokens: null,
-      outputTokens: null,
-      durationMs: 1,
-    };
+    return { ...validated, inputTokens: null, outputTokens: null, durationMs: 1 };
   })();
 
   it('selects every detected tool in non-interactive mode by default', async () => {
@@ -678,6 +851,24 @@ describe('teach candidate selection defaults', () => {
       'search_items',
       'lookup_items',
     ]);
+  });
+
+  it('threads agent-selected callable dependencies into planning and compile order', () => {
+    const plan = validateBuildPlan(
+      {
+        perTool: detection.candidates.map((candidate) => ({ toolName: candidate.toolName })),
+      },
+      detection.candidates,
+    );
+    expect(plan.perTool.find((tool) => tool.toolName === 'get_details')?.dependsOnTools).toEqual([
+      'search_items',
+    ]);
+    expect(
+      topoLevelsForTools(
+        detection.candidates.map((candidate) => ({ toolName: candidate.toolName })),
+        plan,
+      ).map((level) => level.map((tool) => tool.toolName)),
+    ).toEqual([['lookup_items'], ['search_items'], ['get_details']]);
   });
 
   it('closes a submitted downstream-only choice without adding independent tools', () => {
@@ -777,7 +968,7 @@ describe('teach candidate selection defaults', () => {
 });
 
 describe('cached replay classification identity', () => {
-  it('loads only a sidecar produced from the exact current recording', () => {
+  it('loads only a sidecar produced from the exact recording and triage policy', () => {
     const dir = mkdtempSync(pathResolve(tmpdir(), 'imprint-classifications-'));
     const sessionPath = pathResolve(dir, 'recording.redacted.json');
     const classPath = pathResolve(dir, '.classifications.json');
@@ -790,21 +981,40 @@ describe('cached replay classification identity', () => {
       value1: 'opaque-token-0001',
       value2: 'opaque-token-0002',
     };
+    const safetyHash = replaySafetyIdentity({
+      selectedSeqs: [2],
+      replaySafeSeqs: [2],
+      irreversibleSeqs: [],
+    });
     writeFileSync(
       classPath,
       JSON.stringify({
         sourceSessionHash: createHash('sha256').update(sessionContents).digest('hex'),
+        replaySafetyHash: safetyHash,
         classifications: [classification],
       }),
     );
 
-    expect(loadCachedClassificationsForSession(classPath, sessionPath)).toEqual([classification]);
+    expect(loadCachedClassificationsForSession(classPath, sessionPath, safetyHash)).toEqual([
+      classification,
+    ]);
+    expect(
+      loadCachedClassificationsForSession(
+        classPath,
+        sessionPath,
+        replaySafetyIdentity({
+          selectedSeqs: [2],
+          replaySafeSeqs: [],
+          irreversibleSeqs: [2],
+        }),
+      ),
+    ).toBeUndefined();
 
     writeFileSync(sessionPath, '{"site":"different-recording"}\n');
-    expect(loadCachedClassificationsForSession(classPath, sessionPath)).toBeUndefined();
+    expect(loadCachedClassificationsForSession(classPath, sessionPath, safetyHash)).toBeUndefined();
 
     writeFileSync(classPath, JSON.stringify({ classifications: [classification] }));
-    expect(loadCachedClassificationsForSession(classPath, sessionPath)).toBeUndefined();
+    expect(loadCachedClassificationsForSession(classPath, sessionPath, safetyHash)).toBeUndefined();
   });
 });
 

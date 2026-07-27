@@ -38,26 +38,39 @@ function ws(
 }
 
 describe('assertResumableAt (phase dependency guard)', () => {
+  it('orders triage before replay and candidate detection', () => {
+    expect(TEACH_STEPS.slice(0, 5)).toEqual([
+      'record',
+      'redact',
+      'triage',
+      'replay-and-diff',
+      'detect-candidates',
+    ]);
+    expect(() => assertResumableAt('s', 'k', ws(['record', 'redact']), 'replay-and-diff')).toThrow(
+      /missing required earlier step\(s\) \[triage\]/,
+    );
+  });
+
   it('always allows starting at record (produces everything fresh)', () => {
     expect(() => assertResumableAt('s', 'k', ws([]), 'record')).not.toThrow();
   });
 
   it('allows a step when every earlier step is complete', () => {
-    const w = ws(['record', 'redact', 'replay-and-diff', 'triage']);
+    const w = ws(['record', 'redact', 'triage', 'replay-and-diff']);
     expect(() => assertResumableAt('s', 'k', w, 'detect-candidates')).not.toThrow();
   });
 
   it('throws when an earlier step is missing', () => {
-    const w = ws(['record', 'redact']); // missing replay-and-diff + triage
+    const w = ws(['record', 'redact']); // missing triage + replay-and-diff
     expect(() => assertResumableAt('s', 'k', w, 'detect-candidates')).toThrow(
-      /missing required earlier step\(s\) \[replay-and-diff, triage\]/,
+      /missing required earlier step\(s\) \[triage, replay-and-diff\]/,
     );
   });
 
   it('reports the furthest completed step in the error', () => {
-    const w = ws(['record', 'redact', 'replay-and-diff']);
+    const w = ws(['record', 'redact', 'triage']);
     expect(() => assertResumableAt('s', 'k', w, 'generate')).toThrow(
-      /Latest completed step: replay-and-diff/,
+      /Latest completed step: triage/,
     );
   });
 
@@ -77,7 +90,7 @@ describe('assertResumableAt (phase dependency guard)', () => {
     // earlier steps are still required and reported when missing.
     const w = ws(['record', 'redact']);
     expect(() => assertResumableAt('s', 'k', w, 'generate')).toThrow(
-      /missing required earlier step\(s\) \[replay-and-diff, triage, detect-candidates\]/,
+      /missing required earlier step\(s\) \[triage, replay-and-diff, detect-candidates\]/,
     );
   });
 
@@ -122,9 +135,9 @@ describe('resolveStepStartTarget (workflow selection + guard)', () => {
   it('picks the most-recently-updated resumable workflow', () => {
     const state: TeachState = {
       workflows: {
-        old: ws(['record', 'redact', 'replay-and-diff', 'triage'], '2026-01-01T00:00:00Z'),
+        old: ws(['record', 'redact', 'triage', 'replay-and-diff'], '2026-01-01T00:00:00Z'),
         recent: ws(
-          ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+          ['record', 'redact', 'triage', 'replay-and-diff', 'detect-candidates'],
           '2026-06-01T00:00:00Z',
         ),
       },
@@ -137,7 +150,7 @@ describe('resolveStepStartTarget (workflow selection + guard)', () => {
     const state: TeachState = {
       workflows: {
         valid: ws(
-          ['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates'],
+          ['record', 'redact', 'triage', 'replay-and-diff', 'detect-candidates'],
           '2026-01-01T00:00:00Z',
         ),
         orphan: ws(['record', 'redact'], '2026-06-01T00:00:00Z'),
@@ -180,11 +193,11 @@ describe('resolveStepStartTarget (workflow selection + guard)', () => {
     const state: TeachState = {
       workflows: {
         primary: {
-          ...ws(['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates']),
+          ...ws(['record', 'redact', 'triage', 'replay-and-diff', 'detect-candidates']),
           candidate: { toolName: 'search_items', primary: true } as WorkflowState['candidate'],
         },
         consumer: {
-          ...ws(['record', 'redact', 'replay-and-diff', 'triage', 'detect-candidates']),
+          ...ws(['record', 'redact', 'triage', 'replay-and-diff', 'detect-candidates']),
           candidate: { toolName: 'get_details', primary: false } as WorkflowState['candidate'],
         },
       },
@@ -215,8 +228,8 @@ describe('candidate resume reconstruction', () => {
   const SHARED: WorkflowState['completedSteps'] = [
     'record',
     'redact',
-    'replay-and-diff',
     'triage',
+    'replay-and-diff',
     'detect-candidates',
   ];
   function toolWs(opts: {
@@ -689,12 +702,12 @@ describe('analysisBlockRunsForWindow', () => {
   const idx = (s: WorkflowState['completedSteps'][number]) => TEACH_STEPS.indexOf(s);
   const LAST = TEACH_STEPS.length - 1;
 
-  it('runs when the window overlaps replay-and-diff → detect-candidates', () => {
+  it('runs when the window overlaps triage → detect-candidates', () => {
     expect(analysisBlockRunsForWindow(idx('record'), LAST)).toBe(true); // full run
     expect(analysisBlockRunsForWindow(idx('detect-candidates'), idx('detect-candidates'))).toBe(
       true,
     ); // --only detect-candidates
-    expect(analysisBlockRunsForWindow(idx('replay-and-diff'), idx('triage'))).toBe(true);
+    expect(analysisBlockRunsForWindow(idx('triage'), idx('replay-and-diff'))).toBe(true);
   });
 
   it('does not run when the window is entirely before or after the block', () => {

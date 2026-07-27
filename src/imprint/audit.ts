@@ -21,6 +21,7 @@ import {
   type AuthVerificationReceiptStatus,
   readAuthVerificationReceiptStatus,
 } from './auth-compile-tools.ts';
+import { workflowHasIrreversibleEffect } from './effects.ts';
 import { type ProviderName, preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
@@ -129,6 +130,7 @@ interface AuditToolPartition {
   eligible: ResolvedTool[];
   nonInteractiveAuthNames: string[];
   skippedInteractiveAuth: SkippedInteractiveAuth[];
+  skippedIrreversible: string[];
 }
 
 interface DetectedButUnemittedTool {
@@ -185,8 +187,13 @@ export function partitionAuditTools(tools: readonly ResolvedTool[]): AuditToolPa
   const eligible: ResolvedTool[] = [];
   const nonInteractiveAuthNames: string[] = [];
   const skippedInteractiveAuth: SkippedInteractiveAuth[] = [];
+  const skippedIrreversible: string[] = [];
 
   for (const tool of tools) {
+    if (workflowHasIrreversibleEffect(tool.workflow)) {
+      skippedIrreversible.push(tool.workflow.toolName);
+      continue;
+    }
     // authConfig is the authoritative capability marker for legacy workflows
     // where the newer optional toolKind field may be absent.
     const auth = tool.workflow.authConfig;
@@ -229,7 +236,7 @@ export function partitionAuditTools(tools: readonly ResolvedTool[]): AuditToolPa
     });
   }
 
-  return { eligible, nonInteractiveAuthNames, skippedInteractiveAuth };
+  return { eligible, nonInteractiveAuthNames, skippedInteractiveAuth, skippedIrreversible };
 }
 
 /**
@@ -566,6 +573,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         eligible: tools,
         nonInteractiveAuthNames,
         skippedInteractiveAuth,
+        skippedIrreversible,
       } = partitionAuditTools(discoveredTools);
       const auditedToolCount = tools.length;
       const detectedButUnemitted = detectedButUnemittedTools(
@@ -602,6 +610,9 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         log(
           `skipping interactive auth ${skipped.name}: ${skipped.reason}; receipt=${skipped.verificationStatus}`,
         );
+      }
+      for (const name of skippedIrreversible) {
+        log(`skipping irreversible workflow ${name}: live audit is intentionally disabled`);
       }
 
       // Parameters that shipped live-unverified at compile time (Fix D). Tell the
@@ -648,7 +659,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
               tokenDeps,
             });
       if (auditedToolCount === 0) {
-        log('all discovered tools require human-interactive authentication; auditor not spawned');
+        log('all discovered tools are excluded from live audit; auditor not spawned');
       }
       recordLlmUsageSpan(
         'audit.llm_usage',
@@ -747,6 +758,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         'imprint.audit.detected_tool_count': detectedToolCount,
         'imprint.audit.detected_but_unemitted_count': detectedButUnemitted.length,
         'imprint.audit.skipped_interactive_auth_count': skippedInteractiveAuth.length,
+        'imprint.audit.skipped_irreversible_count': skippedIrreversible.length,
         'imprint.audit.verdict': score.verdict,
         'imprint.audit.unverified_and_ungradeable_count': unverifiedAndUngradeable.length,
         'imprint.audit.missing_tool_count': missingToolNames.length,
@@ -766,6 +778,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         detectedToolCount,
         detectedButUnemittedTools: detectedButUnemitted,
         skippedInteractiveAuth,
+        skippedIrreversible,
         ungradeableTools: ungradeableNames,
         /** Connected tools without an invocation record. A partial audit
          *  cannot pass merely because the auditor named an uncalled tool. */
@@ -808,6 +821,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
           report: drive.report,
           auditedToolCount,
           skippedInteractiveAuth,
+          skippedIrreversible,
           detectedToolCount,
           detectedButUnemittedTools: detectedButUnemitted,
         });
@@ -1124,19 +1138,19 @@ export function buildUnverifiedParamNote(
     .map((u) => `${u.tool}(${u.params.join(', ')})`)
     .join(
       '; ',
-    )}. Give each one a \`parameters\` verdict (works / no_op / broken / untestable) like any other — do not let an unverified parameter pass without a differential test. Only skip probing when the tool is genuinely state-changing / irreversible, or when repeated paced attempts for that parameter stay blocked by infrastructure. A bot-defended idempotent read is still testable after the warm browser session is established.`;
+    )}. Give each one a \`parameters\` verdict (works / no_op / broken / untestable) like any other — do not let an unverified parameter pass without a differential test. Only skip probing when the connected tool is state-changing, or when repeated paced attempts for that parameter stay blocked by infrastructure. Irreversible tools are excluded before this prompt is built. A bot-defended idempotent read is still testable after the warm browser session is established.`;
 }
 
 export function buildAuditInitialPrompt(opts: DriveAuditOptions, unverifiedNote: string): string {
   const nonInteractiveAuthNames = opts.nonInteractiveAuthNames ?? [];
   const authNote = nonInteractiveAuthNames.length
-    ? `\n\nThe following authentication tool(s) are eligible because every action completes without a human pause: ${nonInteractiveAuthNames.join(', ')}. Call each exactly once with one safe baseline. Never differentially probe or retry authentication actions. If any DATA tool returns AUTH_EXPIRED, classify that invocation as infra/inconclusive evidence; do not call an authentication tool in response.`
+    ? `\n\nEligible unattended authentication tool(s): ${nonInteractiveAuthNames.join(', ')}. Apply the unattended authentication rules only to these tools, with at most one recovery authentication call total across this audit.`
     : '\n\nNo authentication tool is eligible in this audit. If a DATA tool returns AUTH_EXPIRED, classify that invocation as infra/inconclusive evidence; do not attempt to authenticate.';
   return `Audit every MCP tool connected to you for the site "${opts.site}".
 
 There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set, judge the result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt.
 
-Parameter coverage is mandatory for idempotent read tools. A cold cdp-replay/browser-backed first call may be slow because it launches or warms a trusted browser session, but later calls usually reuse that warm session and are much cheaper. Do NOT use the first call's cold-start latency as a reason to skip parameter probes. For search/list/calendar/lookup/quote/read tools, keep making paced sequential differential calls until each advertised parameter has a verdict, unless the same parameter remains blocked by infrastructure after repeated paced retries. For genuinely state-changing or irreversible tools (book/pay/send/cancel/delete/order), make only the safe baseline call and mark parameters untestable with that state-changing reason.
+Parameter coverage is mandatory for idempotent read tools. A cold cdp-replay/browser-backed first call may be slow because it launches or warms a trusted browser session, but later calls usually reuse that warm session and are much cheaper. Do NOT use the first call's cold-start latency as a reason to skip parameter probes. For search/list/calendar/lookup/quote/read tools, keep making paced sequential differential calls until each advertised parameter has a verdict, unless the same parameter remains blocked by infrastructure after repeated paced retries. For connected state-changing but reversible tools, make only one safe baseline call and mark parameters untestable with that state-changing reason. Irreversible workflows are never connected to this audit.
 
 Promo/coupon/voucher/discount-code parameters require a known valid code to prove a visible effect. If neither the schema nor another tool output gives you a valid code, classify that parameter as untestable; do not invent a random code and call an unchanged response no_op.
 
@@ -1592,6 +1606,7 @@ function printSummary(
     report: AuditReport;
     auditedToolCount: number;
     skippedInteractiveAuth: SkippedInteractiveAuth[];
+    skippedIrreversible: string[];
     detectedToolCount: number;
     detectedButUnemittedTools: DetectedButUnemittedTool[];
   },
@@ -1613,6 +1628,9 @@ function printSummary(
     console.log(
       `[imprint]   skipped interactive auth ${skipped.name} — ${skipped.reason}; verification receipt: ${skipped.verificationStatus}`,
     );
+  }
+  for (const name of extra.skippedIrreversible) {
+    console.log(`[imprint]   skipped irreversible workflow ${name} — live audit disabled`);
   }
   if (extra.detectedButUnemittedTools.length > 0) {
     console.log(

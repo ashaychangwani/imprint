@@ -15,6 +15,7 @@ import {
 } from './backend-cache.ts';
 import { prefersCdpReplayFirst, runWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
+import { workflowHasIrreversibleEffect } from './effects.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
 import { availableSitesHint } from './sites.ts';
@@ -114,6 +115,11 @@ export async function probeResolvedTool(
   tool: ResolvedTool,
   explicitOutPath?: string,
 ): Promise<ProbeBackendsResult> {
+  if (workflowHasIrreversibleEffect(tool.workflow)) {
+    throw new Error(
+      `Backend probing is disabled for irreversible workflow "${tool.workflow.toolName}". Invoke it only through an intentional production tool call.`,
+    );
+  }
   const outPath = explicitOutPath ?? pathResolve(tool.dir, 'backends.json');
 
   const params = resolveParams(tool, opts.paramOverrides);

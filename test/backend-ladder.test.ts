@@ -1247,6 +1247,35 @@ describe('renderWorkflowRequests — offline param verification', () => {
     expect(act?.body).toContain('q=hello');
   });
 
+  it('seeds captured state for an isolated downstream request test', async () => {
+    const wf: Workflow = {
+      toolName: 'state_seed_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"session_token":"${state.session_token}"}',
+          bodyPlaceholderEncoding: 'json-string',
+        },
+      ],
+    };
+
+    const { requests, result } = await renderWorkflowRequests({
+      workflow: wf,
+      params: {},
+      initialState: { session_token: 'code-@&="\\\n\t雪' },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(requests[0]?.body ?? '{}')).toEqual({
+      session_token: 'code-@&="\\\n\t雪',
+    });
+  });
+
   it('honors requestTransformModule skip results while rendering offline', async () => {
     const toolDir = pathJoin(root, 'skip-render');
     mkdirSync(toolDir, { recursive: true });

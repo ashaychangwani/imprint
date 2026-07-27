@@ -27,6 +27,7 @@ import {
   AUTH_COMPILE_TOOL_NAMES,
   AUTH_VERIFICATION_ATTEMPT_SENTINEL,
   authExternalVerification,
+  authLivePreflightFailures,
   authWorkflowHash,
   authWorkflowPreflightFailures,
   buildAuthCompileTools,
@@ -85,20 +86,21 @@ function buildAuthInitialMessage(opts: {
   authToolPlan: NonNullable<AuthToolPlan>;
 }): string {
   const { site, toolName, toolDir, authToolPlan } = opts;
-  const headerCaptures = (authToolPlan.captures ?? []).filter((c) => {
+  const durableCaptures = (authToolPlan.captures ?? []).filter((c) => {
     const u = (c.usedAs ?? '').toLowerCase();
-    // Cookies persist automatically — only surface NON-cookie header contracts.
-    return u.startsWith('header:') && u !== 'header:cookie' && u !== 'header:set-cookie';
+    // Cookies persist automatically. Every other downstream transport needs a
+    // durable credential contract, including JSON/form body fields.
+    return u.length > 0 && u !== 'header:cookie' && u !== 'header:set-cookie';
   });
   const durableCaptureNote =
-    headerCaptures.length > 0
-      ? `\n- durable credential contracts (data tools consume these as \${credential.<name>}): ${headerCaptures
+    durableCaptures.length > 0
+      ? `\n- durable credential contracts (data tools consume these as \${credential.<name>}): ${durableCaptures
           .map(
             (c) => `${c.name} (used as ${c.usedAs}; seed source ${c.source}, locator ${c.locator})`,
           )
           .join(
             '; ',
-          )}\n  → Capture each value on the recording-grounded producing request and include its name in authConfig.persist. The seed source/locator is only a hint.`
+          )}\n  → These names are downstream credential interface names, not required internal capture names. Capture each value on the recording-grounded producing request and include the interface name in authConfig.persist. If you choose a different capture name, declare authConfig.persistBindings[interfaceName] = captureName. The seed source/locator is only a hint.`
       : '';
   return `A new auth compile task is starting.
 
@@ -456,10 +458,12 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
       const checkpointStartedAt = Date.now();
       try {
         if (cp.kind === 'run_verification') {
-          const preflightFailures = authWorkflowPreflightFailures(
+          const preflightFailures = await authLivePreflightFailures(
             opts.toolDir,
             opts.session,
             opts.authToolPlan.credentialNames,
+            [...opts.authToolPlan.credentialRequestSeqs, ...opts.authToolPlan.authRequestSeqs],
+            opts.sessionPath,
           );
           if (Date.now() >= activeDeadlineMs) {
             resultMsg =

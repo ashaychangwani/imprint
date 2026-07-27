@@ -10,17 +10,21 @@ import { join as pathJoin } from 'node:path';
 import type { AgentTool } from './agent.ts';
 import {
   type CompileToolContext,
+  bodyEncodingContractFailures,
   buildReadFileTool,
   buildReadRequestTool,
   buildReadResponseBodyTool,
   buildReadSessionSummaryTool,
-  buildRunBashTool,
+  buildRunTestsTool,
   buildSearchRequestsTool,
   buildWriteFileTool,
+  irreversibleProvenanceFailures,
+  requestEncodingTestContractFailures,
 } from './compile-tools.ts';
+import { isIrreversibleRequest, workflowHasIrreversibleEffect } from './effects.ts';
 import { recordedRequestMatchesWorkflow } from './recording-request.ts';
-import { captureHeader, captureValueMatches, jsonpath } from './request-capture.ts';
-import { type Session, type Workflow, WorkflowSchema } from './types.ts';
+import { captureHeader, captureValueMatches, resolveJsonCapture } from './request-capture.ts';
+import { type Session, type Workflow, WorkflowSchema, persistedCaptureName } from './types.ts';
 
 type TeachCredentials = { site: string; values: Record<string, string> };
 
@@ -40,7 +44,7 @@ export const AUTH_COMPILE_TOOL_NAMES = [
   'read_response_body',
   'write_file',
   'read_file',
-  'run_bash',
+  'run_tests',
   'run_verification',
   'inspect_verification_page',
   'prompt_user',
@@ -50,7 +54,7 @@ export const AUTH_COMPILE_TOOL_NAMES = [
 export function buildAuthCompileTools(
   session: Session,
   toolDir: string,
-  _sessionPath: string,
+  sessionPath: string,
   teachCredentials: TeachCredentials,
 ): AgentTool[] {
   const context: CompileToolContext = { teachCredentials };
@@ -61,7 +65,19 @@ export function buildAuthCompileTools(
     buildReadResponseBodyTool(session),
     buildWriteFileTool(toolDir),
     buildReadFileTool(toolDir),
-    buildRunBashTool(toolDir),
+    buildRunTestsTool(
+      toolDir,
+      sessionPath,
+      {
+        // Auth request/capture tests are offline and use synthetic credentials.
+        // Explicitly mask any inherited teach payload so agent-authored test
+        // output cannot expose real credentials to the compile model.
+        IMPRINT_TEACH_CREDENTIALS: '',
+      },
+      {
+        networkDisabled: session.requests.some(isIrreversibleRequest),
+      },
+    ),
   ];
 }
 
@@ -75,9 +91,57 @@ export function authWorkflowPreflightFailures(
   return parseWorkflow(workflowPath, requiredCredentialNames, session).failures;
 }
 
+export async function authLivePreflightFailures(
+  toolDir: string,
+  session?: Session,
+  requiredCredentialNames: readonly string[] = [],
+  authRequestSeqs: readonly number[] = [],
+  sessionPath = '',
+): Promise<string[]> {
+  const failures = authWorkflowPreflightFailures(toolDir, session, requiredCredentialNames);
+  if (failures.length > 0) return failures;
+  const parsed = parseWorkflow(
+    pathJoin(toolDir, 'workflow.json'),
+    requiredCredentialNames,
+    session,
+  );
+  if (!parsed.workflow) return parsed.failures;
+  const requestTestPath = pathJoin(toolDir, 'request.test.ts');
+  failures.push(
+    ...bodyEncodingContractFailures(parsed.workflow),
+    ...requestEncodingTestContractFailures(
+      parsed.workflow,
+      existsSync(requestTestPath) ? readFileSync(requestTestPath, 'utf8') : undefined,
+    ),
+    ...persistedCaptureTestContractFailures(
+      parsed.workflow,
+      existsSync(requestTestPath) ? readFileSync(requestTestPath, 'utf8') : undefined,
+    ),
+  );
+  if (session) {
+    failures.push(
+      ...irreversibleProvenanceFailures(session, parsed.workflow, {
+        candidateRequestSeqs: [...authRequestSeqs],
+      }),
+    );
+  }
+  if (workflowHasIrreversibleEffect(parsed.workflow)) {
+    failures.push('auth live verification is disabled for workflows with irreversible requests');
+  }
+  if (failures.length === 0 && existsSync(requestTestPath)) {
+    const testResult = await buildRunTestsTool(toolDir, sessionPath, undefined, {
+      networkDisabled: workflowHasIrreversibleEffect(parsed.workflow),
+    }).handler({});
+    if (testResult.isError) {
+      failures.push(`agent-authored request tests failed: ${testResult.result}`);
+    }
+  }
+  return failures;
+}
+
 export function authExternalVerification(
   toolDir: string,
-  requiredSessionCaptures: Array<{ name: string; usedAs?: string }> = [],
+  requiredDurableCredentials: Array<{ name: string; usedAs?: string }> = [],
   options: { requireLiveAttempt?: boolean; requiredCredentialNames?: readonly string[] } = {},
 ): string[] {
   const workflowPath = pathJoin(toolDir, 'workflow.json');
@@ -87,12 +151,27 @@ export function authExternalVerification(
   if (!parsed.workflow) return parsed.failures;
   const failures = [...parsed.failures];
   const workflow = parsed.workflow;
+  failures.push(...bodyEncodingContractFailures(workflow));
+  failures.push(
+    ...requestEncodingTestContractFailures(
+      workflow,
+      existsSync(pathJoin(toolDir, 'request.test.ts'))
+        ? readFileSync(pathJoin(toolDir, 'request.test.ts'), 'utf8')
+        : undefined,
+    ),
+    ...persistedCaptureTestContractFailures(
+      workflow,
+      existsSync(pathJoin(toolDir, 'request.test.ts'))
+        ? readFileSync(pathJoin(toolDir, 'request.test.ts'), 'utf8')
+        : undefined,
+    ),
+  );
   const persisted = new Set(workflow.authConfig?.persist ?? []);
 
-  const missingContracts = requiredSessionCaptures.filter((capture) => {
+  const missingContracts = requiredDurableCredentials.filter((capture) => {
     const target = (capture.usedAs ?? '').toLowerCase();
     return (
-      target.startsWith('header:') &&
+      target.length > 0 &&
       target !== 'header:cookie' &&
       target !== 'header:set-cookie' &&
       !persisted.has(capture.name)
@@ -100,7 +179,7 @@ export function authExternalVerification(
   });
   if (missingContracts.length > 0) {
     failures.push(
-      `authConfig.persist must include downstream credential capture(s): ${missingContracts
+      `authConfig.persist must include downstream credential interface(s): ${missingContracts
         .map((capture) => capture.name)
         .join(', ')}`,
     );
@@ -110,6 +189,25 @@ export function authExternalVerification(
     failures.push(...liveAttemptFailures(toolDir, workflow));
   }
   return failures;
+}
+
+function persistedCaptureTestContractFailures(
+  workflow: Workflow,
+  source: string | undefined,
+): string[] {
+  const persisted = workflow.authConfig?.persist ?? [];
+  if (persisted.length === 0) return [];
+  if (source === undefined) {
+    return [
+      'request.test.ts is required to prove persisted auth captures against their exact recorded response fields',
+    ];
+  }
+  return persisted
+    .filter((name) => !source.includes(`persisted-capture:${name}`))
+    .map(
+      (name) =>
+        `request.test.ts must include a passing "persisted-capture:${name}" test that independently decodes the recorded producer response and asserts the compiled capture equals that exact structured value`,
+    );
 }
 
 function parseWorkflow(
@@ -274,17 +372,28 @@ function authProgramFailures(
   }
 
   if (!hasSuccess) failures.push('authConfig.actions has no success outcome');
+  const persistedCredentials = new Set(config.persist);
+  for (const credentialName of Object.keys(config.persistBindings ?? {})) {
+    if (!persistedCredentials.has(credentialName)) {
+      failures.push(
+        `authConfig.persistBindings declares unused credential ${JSON.stringify(credentialName)}`,
+      );
+    }
+  }
   for (const name of config.persist) {
-    if (!captures.has(name)) {
-      failures.push(`authConfig.persist references unknown capture ${JSON.stringify(name)}`);
+    const captureName = persistedCaptureName(config, name);
+    if (!captures.has(captureName)) {
+      failures.push(
+        `authConfig.persist credential ${JSON.stringify(name)} references unknown capture ${JSON.stringify(captureName)}`,
+      );
       continue;
     }
-    const owner = captureOwners.get(name);
+    const owner = captureOwners.get(captureName);
     if (!owner) continue;
     const { request, capture } = owner;
     if (request.recordingRequestSeq === undefined) {
       failures.push(
-        `persisted capture ${JSON.stringify(name)} must declare recordingRequestSeq on its producing request`,
+        `persisted capture ${JSON.stringify(captureName)} must declare recordingRequestSeq on its producing request`,
       );
     } else if (session) {
       const recorded = session.requests.find(
@@ -292,16 +401,16 @@ function authProgramFailures(
       );
       if (!recorded) {
         failures.push(
-          `persisted capture ${JSON.stringify(name)} references missing recorded request seq ${request.recordingRequestSeq}`,
+          `persisted capture ${JSON.stringify(captureName)} references missing recorded request seq ${request.recordingRequestSeq}`,
         );
       } else if (!recordedRequestMatchesWorkflow(recorded, request)) {
         failures.push(
-          `persisted capture ${JSON.stringify(name)} recordingRequestSeq ${request.recordingRequestSeq} does not match its workflow request`,
+          `persisted capture ${JSON.stringify(captureName)} recordingRequestSeq ${request.recordingRequestSeq} does not match its workflow request`,
         );
       } else {
         if (!recordedResponseProducesCapture(recorded, capture)) {
           failures.push(
-            `persisted capture ${JSON.stringify(name)} is not produced by recorded request seq ${request.recordingRequestSeq}`,
+            `persisted capture ${JSON.stringify(captureName)} is not produced by recorded request seq ${request.recordingRequestSeq}`,
           );
         }
       }
@@ -323,7 +432,7 @@ function recordedResponseProducesCapture(
   let value: unknown;
   if (capture.source === 'json') {
     try {
-      value = jsonpath(JSON.parse(body), capture.path);
+      value = resolveJsonCapture(JSON.parse(body), capture.path, capture.decodeJsonPath);
     } catch {
       return false;
     }

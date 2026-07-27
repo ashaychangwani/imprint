@@ -165,6 +165,7 @@ describe('buildToolPlanPayload', () => {
       perTool: [
         {
           toolName: 'search_flights',
+          dependsOnTools: [],
           usesSharedModules: ['_shared/sign.ts'],
           loadBearingSeqs: [10],
           parserGuidance: 'extract flights from response.flights[]',

@@ -59,7 +59,7 @@ export class AuthVerifier {
   async runAction(
     action: string,
     parameters: Record<string, string | number | boolean> = {},
-    options: { freshSession?: boolean; cleanSession?: boolean } = {},
+    options: { freshSession?: boolean; cleanSession?: boolean; signal?: AbortSignal } = {},
   ): Promise<AuthActionResult> {
     if (options.freshSession || options.cleanSession) await this.reset();
     this.rememberSensitiveValues(parameters);
@@ -74,6 +74,7 @@ export class AuthVerifier {
       cdpPool: this.cdpPool,
       forceBackend: 'cdp-replay',
       initialState: this.continuation,
+      signal: options.signal,
     });
     const durationMs = Date.now() - startedAt;
     const result = ladder.result;
