@@ -1,103 +1,66 @@
-import { extractWrbRecords, parseNestedPayload } from '../_shared/google_batchexecute_parser.ts';
-import type { FlightLocation } from '../_shared/google_flights_types.ts';
+import { getWrbPayload, parseBatchExecuteEnvelope } from '../_shared/batchexecute-envelope.ts';
 
-type Output = {
-  locations: FlightLocation[];
-  location?: FlightLocation;
+type LocationResult = {
+  found: boolean;
+  location: {
+    id: string;
+    location_type: number;
+    airport_code: string | null;
+    display_name: string;
+    associated_city: { id: string | null; name: string | null };
+    coordinates: { latitude: number; longitude: number } | null;
+    images: string[];
+    highlights: string | null;
+    description: string | null;
+    country_code: string | null;
+    country_name: string | null;
+  } | null;
 };
 
-function asArray(value: unknown): unknown[] | undefined {
-  return Array.isArray(value) ? value : undefined;
+function stringsIn(value: unknown): string[] {
+  if (typeof value === 'string') return value.startsWith('http') ? [value] : [];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(stringsIn);
 }
 
-function asString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function apiTypeToName(type: unknown): string {
-  if (type === 0) return 'airport_code';
-  if (type === 4) return 'city';
-  if (type === 5) return 'google_place_id';
-  return typeof type === 'number' ? `google_flights_type_${type}` : 'unknown';
-}
-
-function imageUrls(details: unknown[]): string[] {
-  const images = asArray(details[2]) ?? [];
-  const urls: string[] = [];
-  for (const image of images) {
-    const nested = asArray(image);
-    const url = nested ? asString(nested[0]) : asString(image);
-    if (url) urls.push(url);
+export function extract(rawResponse: unknown): LocationResult {
+  if (typeof rawResponse !== 'string' || rawResponse.trim() === '') {
+    throw new Error('Empty Google Flights location-details response');
   }
-  return urls;
-}
 
-function parseLocation(record: unknown): FlightLocation | undefined {
-  const item = asArray(record);
-  if (!item) return undefined;
+  const payload = getWrbPayload(parseBatchExecuteEnvelope(rawResponse), 'tDoGIe');
 
-  const idPair = asArray(item[0]) ?? [];
-  const id = asString(idPair[0]);
-  const apiType = idPair[1];
-  const displayName = asString(item[1]);
-  const details = asArray(item[2]) ?? [];
-  const coordinatesRaw = asArray(item[3]) ?? [];
-  const lat = asNumber(coordinatesRaw[0]);
-  const lng = asNumber(coordinatesRaw[1]);
-
-  if (!id && !displayName) return undefined;
-
-  const detailId = asString(details[0]);
-  const detailName = asString(details[1]);
-  const airportCode = apiType === 0 ? id : asString(details[5]);
-  const placeId = id?.startsWith('/m/') ? id : detailId?.startsWith('/m/') ? detailId : undefined;
-
-  const location: FlightLocation = {
-    id: id ?? detailId ?? displayName ?? '',
-    type: apiTypeToName(apiType),
-    displayName: displayName ?? detailName ?? id ?? '',
-  };
-
-  if (detailName && detailName !== location.displayName) location.city = detailName;
-  if (asString(item[6])) location.region = asString(item[6]);
-  if (asString(details[3])) location.description = asString(details[3]);
-  if (airportCode) location.airportCode = airportCode;
-  if (placeId) location.placeId = placeId;
-  if (lat !== undefined && lng !== undefined) location.coordinates = { lat, lng };
-
-  const urls = imageUrls(details);
-  if (urls.length > 0) location.imageUrls = urls;
-
-  return location;
-}
-
-function payloadFromRaw(rawResponse: unknown): unknown {
-  if (typeof rawResponse === 'string') {
-    const records = extractWrbRecords(rawResponse).filter((record) => record.rpcid === 'tDoGIe');
-    return parseNestedPayload(records[0]?.payload);
+  if (!Array.isArray(payload) || !Array.isArray(payload[1]) || !Array.isArray(payload[1][0])) {
+    return { found: false, location: null };
   }
-  return parseNestedPayload(rawResponse);
-}
-
-export function extract(rawResponse: unknown): Output {
-  const payload = payloadFromRaw(rawResponse);
-  const root = asArray(payload) ?? [];
-  const locationsRaw = asArray(root[1]) ?? [];
-  const locations = locationsRaw
-    .map(parseLocation)
-    .filter((location): location is FlightLocation => Boolean(location && location.id && location.displayName));
-
-  if (locations.length > 1) {
-    const [primary, ...rest] = locations;
-    if (primary) primary.nestedAirports = rest;
-  }
+  const record = payload[1][0] as unknown[];
+  const identity = Array.isArray(record[0]) ? record[0] : [];
+  const associated = Array.isArray(record[2]) ? record[2] : [];
+  const coordinates = Array.isArray(record[3]) ? record[3] : [];
+  const id = typeof identity[0] === 'string' ? identity[0] : '';
+  const locationType = typeof identity[1] === 'number' ? identity[1] : -1;
+  const displayName = typeof record[1] === 'string' ? record[1] : '';
+  if (!id || !displayName) return { found: false, location: null };
 
   return {
-    locations,
-    location: locations[0],
+    found: true,
+    location: {
+      id,
+      location_type: locationType,
+      airport_code: locationType === 0 ? id : null,
+      display_name: displayName,
+      associated_city: {
+        id: typeof associated[0] === 'string' ? associated[0] : null,
+        name: typeof associated[1] === 'string' ? associated[1] : null,
+      },
+      coordinates: typeof coordinates[0] === 'number' && typeof coordinates[1] === 'number'
+        ? { latitude: coordinates[0], longitude: coordinates[1] }
+        : null,
+      images: stringsIn(associated[2]),
+      highlights: typeof associated[3] === 'string' ? associated[3] : null,
+      description: typeof associated[4] === 'string' ? associated[4] : null,
+      country_code: typeof record[4] === 'string' ? record[4] : null,
+      country_name: typeof record[6] === 'string' ? record[6] : null,
+    },
   };
 }

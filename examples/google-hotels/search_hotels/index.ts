@@ -3,7 +3,7 @@
  *
  * Tool: search_hotels
  * Site: google-hotels
- * Intent: Search Google Hotels for lodging options by destination, stay dates, travelers, pricing filters, amenities, hotel class, brands, sort order, and property type.
+ * Intent: Search Google Travel lodging properties by destination and stay dates.
  *
  * To regenerate: imprint emit ~/.imprint/google-hotels/search_hotels/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,109 +20,142 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "search_hotels",
   "intent": {
-    "description": "Search Google Hotels for lodging options by destination, stay dates, travelers, pricing filters, amenities, hotel class, brands, sort order, and property type.",
-    "userSaid": "searched for hotels at chicago loop from july 3-6; changed number of adults; filtered min and max price; added all 19 filters for amenities; added filters for 2 star, 4 star and 5 star; added all the brand filters; sorted by lowest price, then highest ratings, most reviewed and then back to relevance; change property type to vacation rentals instead of hotels; changed location to tahoe city; searched for hotels in denver downtown"
+    "description": "Search Google Travel lodging properties by destination and stay dates.",
+    "userSaid": "Searched Chicago Loop and Tahoe/Denver destinations, changed dates and guests, filtered price/rating/star classes, switched to vacation rentals, and changed sorting."
   },
   "parameters": [
     {
-      "name": "destination",
+      "name": "location",
       "type": "string",
-      "description": "Destination query or place name such as Chicago Loop, Tahoe City, or Denver Downtown.",
-      "default": "chicago loop",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Destination or free-text hotel query.",
+      "verified": true
     },
     {
       "name": "check_in_date",
       "type": "string",
       "description": "Check-in date in YYYY-MM-DD format.",
-      "default": "2026-07-03",
-      "verified": false,
-      "verifyNote": "annotated"
+      "verified": true
     },
     {
       "name": "check_out_date",
       "type": "string",
       "description": "Check-out date in YYYY-MM-DD format.",
-      "default": "2026-07-06",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "min_price",
-      "type": "number",
-      "description": "Minimum nightly price filter. Use 0 for no minimum.",
-      "default": 0,
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "hotel_classes",
-      "type": "string",
-      "description": "Comma-separated star classes to include, such as 2,4,5.",
-      "default": "",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "property_type",
-      "type": "string",
-      "description": "Property type: hotels or vacation_rentals.",
-      "default": "hotels",
-      "verified": false,
-      "verifyNote": "annotated"
+      "verified": true
     }
   ],
   "requests": [
     {
       "method": "POST",
-      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=AtySUc&source-path=%2Ftravel%2Fsearch&f.sid=-7129101702754032847&bl=boq_travel-frontend-ui_20260603.00_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=3543921&rt=c",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=AtySUc&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
       "headers": {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         "X-Same-Domain": "1",
-        "Accept-Language": "en-US,en;q=0.9",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
-        "Referer": "https://www.google.com/travel/search?q=${param.destination}&ap=MAA",
-        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"DTQmiQ==\"]",
         "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
       },
-      "body": "f.req=${param.destination}|${param.check_in_date}|${param.check_out_date}|USD|${param.min_price}|${param.hotel_classes}|${param.property_type}&",
-      "effect": "safe"
+      "body": "discover:${param.location}",
+      "captures": [
+        {
+          "name": "destination_id",
+          "required": true,
+          "capability": "ordinary_http",
+          "source": "text_regex",
+          "pattern": "\\\\\\\"((?:0x[0-9a-f]+:0x[0-9a-f]+|/[mg]/[A-Za-z0-9_-]+))\\\\\\\"(?:,null){0,6},\\\\\\\"((?!0x)[^\\\"\\\\]+)\\\\\\\"",
+          "group": 1
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=AtySUc&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "refine:${state.destination_id}:${param.location}|${param.check_in_date}|${param.check_out_date}"
     }
   ],
   "site": "google-hotels",
+  "bootstrap": {
+    "url": "https://www.google.com/travel/search?qs=OAA",
+    "waitUntil": "domcontentloaded",
+    "captures": [
+      {
+        "name": "bl",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "html_regex",
+        "pattern": "\"cfb2h\":\"([^\"]+)\"",
+        "group": 1
+      },
+      {
+        "name": "f_sid",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "html_regex",
+        "pattern": "\"FdrFJe\":\"(-?[0-9]+)\"",
+        "group": 1
+      }
+    ]
+  },
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
-  "liveVerified": true
+  "limitations": [
+    {
+      "feature": "Amenity filters",
+      "reason": "The recording proves numeric amenity IDs but does not provide a durable name-to-ID catalog, so accepting names would require guessing.",
+      "omittedParameters": [
+        "amenities"
+      ]
+    },
+    {
+      "feature": "Brand filters",
+      "reason": "The recording contains selected numeric brand IDs without a stable public mapping from caller brand names.",
+      "omittedParameters": [
+        "brands"
+      ]
+    },
+    {
+      "feature": "Destination entity selection",
+      "reason": "The workflow does not select an arbitrary /m/ token. It first performs the recorded free-text search, captures only the destination context identifier structurally paired with its display name, then uses that minted identifier for the dated refinement request."
+    },
+    {
+      "feature": "Property-type, guest, currency, filter, display, and sort controls",
+      "reason": "Live differential verification showed Google replay can return apartment inventory in both recorded property modes, while the recording does not provide enough stable positional semantics to prove the remaining options constrain current live results. They are omitted rather than advertised as potentially inert inputs.",
+      "omittedParameters": [
+        "adults",
+        "children",
+        "currency",
+        "property_type",
+        "min_rating",
+        "min_price",
+        "max_price",
+        "price_display",
+        "star_classes",
+        "sort_by"
+      ]
+    }
+  ]
 };
 
 export interface SearchHotelsInput {
-  /** Destination query or place name such as Chicago Loop, Tahoe City, or Denver Downtown. */
-  destination?: string;
+  /** Destination or free-text hotel query. */
+  location: string;
   /** Check-in date in YYYY-MM-DD format. */
-  check_in_date?: string;
+  check_in_date: string;
   /** Check-out date in YYYY-MM-DD format. */
-  check_out_date?: string;
-  /** Minimum nightly price filter. Use 0 for no minimum. */
-  min_price?: number;
-  /** Comma-separated star classes to include, such as 2,4,5. */
-  hotel_classes?: string;
-  /** Property type: hotels or vacation_rentals. */
-  property_type?: string;
+  check_out_date: string;
 }
 
 export async function searchHotels(
   input: SearchHotelsInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
-    destination: input.destination ?? "chicago loop",
-    check_in_date: input.check_in_date ?? "2026-07-03",
-    check_out_date: input.check_out_date ?? "2026-07-06",
-    min_price: input.min_price ?? 0,
-    hotel_classes: input.hotel_classes ?? "",
-    property_type: input.property_type ?? "hotels",
+    location: input.location,
+    check_in_date: input.check_in_date,
+    check_out_date: input.check_out_date,
 
   };
   return executeWorkflow({
@@ -129,6 +163,7 @@ export async function searchHotels(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });

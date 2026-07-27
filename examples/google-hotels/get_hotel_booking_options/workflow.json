@@ -1,0 +1,98 @@
+{
+  "toolName": "get_hotel_booking_options",
+  "intent": {
+    "description": "Get prices and booking-provider offers for a selected Google Travel hotel.",
+    "userSaid": "clicked one of the offerings, saw booking options; looked at more booking options"
+  },
+  "parameters": [
+    {
+      "name": "hotel_id",
+      "type": "string",
+      "description": "Opaque Google Travel property identifier returned by search_hotels.",
+      "sourcedFrom": {
+        "tool": "search_hotels",
+        "field": "hotel_id"
+      }
+    },
+    {
+      "name": "check_in_date",
+      "type": "string",
+      "description": "Check-in date in YYYY-MM-DD format."
+    },
+    {
+      "name": "check_out_date",
+      "type": "string",
+      "description": "Check-out date in YYYY-MM-DD format."
+    },
+    {
+      "name": "adults",
+      "type": "number",
+      "description": "Number of adult travelers."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "description": "Three-letter currency code.",
+      "default": "USD"
+    }
+  ],
+  "site": "google-hotels",
+  "bootstrap": {
+    "url": "https://www.google.com/travel/search?q=chicago%20loop&qs=CAEgACgAMiRDaGNJNzgtbHVvWGRob2FJQVJvS0wyMHZNREoyY0dkbk1SQUI4DUgA&ved=0CAAQ5JsGahcKEwjg5tj6uN-UAxUAAAAAHQAAAAAQWg&ts=CAESCgoCCAMKAggDEAAaOwodEhkKCS9tLzBnejQ2OToMQ2hpY2FnbyBMb29wGgASGhIUCgcI6g8QBxgDEgcI6g8QBxgGGAMyAggBKgkKBToDVVNEGgA&ap=MAA",
+    "waitUntil": "domcontentloaded",
+    "captures": [
+      {
+        "source": "html_regex",
+        "name": "f_sid",
+        "pattern": "FdrFJe[^0-9]{0,80}([0-9]{10,})",
+        "group": 1,
+        "required": true,
+        "capability": "browser_bootstrap"
+      },
+      {
+        "source": "html_regex",
+        "name": "bl",
+        "pattern": "cfb2h[^A-Za-z0-9]{0,80}(boq_travel-frontend-ui_[A-Za-z0-9_.-]+)",
+        "group": 1,
+        "required": true,
+        "capability": "browser_bootstrap"
+      }
+    ]
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=M0CRd&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"x6c25Q==\"]",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "initial:${param.hotel_id}:${param.check_in_date}:${param.check_out_date}:${param.adults}:${param.currency}",
+      "effect": "safe"
+    }
+  ],
+  "parserModule": "./parser.ts",
+  "requestTransformModule": "./request-transform.ts",
+  "limitations": [
+    {
+      "feature": "Child occupancy",
+      "reason": "No request variation or unambiguous recorded field establishes a child-count mapping.",
+      "omittedParameters": [
+        "children"
+      ]
+    },
+    {
+      "feature": "Price presentation mode",
+      "reason": "The recorded payload variation represents initial versus expanded-offer state, not nightly versus stay-total presentation.",
+      "omittedParameters": [
+        "price_display"
+      ]
+    },
+    {
+      "feature": "Expanded offer pagination",
+      "reason": "The initial M0CRd response returns booking offers, while the expansion token is absent from some otherwise-valid live responses; automatic expansion is therefore omitted instead of making the stable initial result contingent on optional state."
+    }
+  ]
+}

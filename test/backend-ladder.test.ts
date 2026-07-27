@@ -1894,14 +1894,14 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
   const googleJar: MintedJar = {
     cookies: [],
     ua: 'Chrome/148',
-    html: '<script>{"FdrFJe":"123456","cfb2h":"fixture-bl"}</script>',
+    html: '<script>{"FdrFJe":"-1234567890123","cfb2h":"boq_travel-frontend-flights-ui_20260718.00_p0"}</script>',
     bootstrapEpoch: 1_700_000_000_000,
     abckFlag: '?',
     validated: true,
   };
 
   function batchExecuteFrame(payload: unknown): string {
-    const frame = JSON.stringify([['wrb.fr', 'GetShoppingResults', JSON.stringify(payload)]]);
+    const frame = JSON.stringify([['wrb.fr', null, JSON.stringify(payload)]]);
     return `)]}'\n${frame.length}\n${frame}`;
   }
 
@@ -1988,30 +1988,24 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
     const tool = googleFlightsTool();
     const cdpPool = new Map();
     const firstSearch = {
-      origin: 'SJC',
-      destination: 'SAN',
-      departure_date: '2026-09-09',
-      return_date: '2026-09-16',
-      trip_type: 'round_trip',
-      stops: 'nonstop_only',
+      legs: 'SJC,SAN,2026-09-09',
+      trip_type: 'one_way',
+      max_stops: 0,
       airlines: 'AS',
       max_price: 300,
-      outbound_time_range: '6-12',
+      outbound_time_range: '6,12,0,23',
       max_duration_minutes: 360,
-      bags: 1,
+      carry_on_bags: 0,
     };
     const secondSearch = {
-      origin: 'SEA',
-      destination: 'LGA',
-      departure_date: '2026-10-22',
-      return_date: '',
+      legs: 'SEA,LGA,2026-10-22',
       trip_type: 'one_way',
-      stops: 'one_stop_or_fewer',
+      max_stops: 1,
       airlines: 'DL',
       max_price: 500,
-      outbound_time_range: '5-18',
+      outbound_time_range: '5,18,0,23',
       max_duration_minutes: 540,
-      bags: 0,
+      carry_on_bags: 0,
     };
 
     const r1 = await runWithLadder(['cdp-replay'], tool, firstSearch, root, new Map(), {

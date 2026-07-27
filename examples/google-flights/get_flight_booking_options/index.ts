@@ -3,7 +3,7 @@
  *
  * Tool: get_flight_booking_options
  * Site: google-flights
- * Intent: Get booking and fare details for a selected Google Flights itinerary.
+ * Intent: Get fare details and booking providers for a selected flight itinerary.
  *
  * To regenerate: imprint emit ~/.imprint/google-flights/get_flight_booking_options/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,72 +20,71 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "get_flight_booking_options",
   "intent": {
-    "description": "Get booking and fare details for a selected Google Flights itinerary.",
-    "userSaid": "clicked one of the one-way fares to find more details and booking details; saw the options for another flight; chose round trip fares; kept exploring round trip fare details; clicked the option for the first leg; clicked the option for the second leg and came to the booking options page"
+    "description": "Get fare details and booking providers for a selected flight itinerary.",
+    "userSaid": "Clicked selected one-way, round-trip, and multi-city fares to view fare and booking details."
   },
   "parameters": [
     {
+      "name": "trip_type",
+      "type": "string",
+      "description": "Trip type: one_way, round_trip, or multi_city.",
+      "default": "one_way"
+    },
+    {
       "name": "selected_flights",
       "type": "string",
-      "description": "JSON array of selected segment tuples [origin, departureDate, destination, null, carrierCode, flightNumber]. For round-trip and multi-city booking, pass the complete ordered array of selected legs; a single first-leg value is treated as a one-way booking.",
-      "verified": true,
+      "description": "Fresh selection_data JSON emitted by search_flights.",
       "sourcedFrom": {
         "tool": "search_flights",
-        "field": "selected_flights"
+        "field": "selection_data"
       }
+    },
+    {
+      "name": "adults",
+      "type": "number",
+      "description": "Number of adult passengers.",
+      "default": 1
+    },
+    {
+      "name": "children",
+      "type": "number",
+      "description": "Number of child passengers.",
+      "default": 0
+    },
+    {
+      "name": "cabin_class",
+      "type": "string",
+      "description": "Only economy is supported by the recording.",
+      "default": "economy"
     }
   ],
   "requests": [
     {
       "method": "POST",
-      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
-      "headers": {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "X-Same-Domain": "1",
-        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
-        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
-      },
-      "body": "{\"selected_flights\":\"${param.selected_flights}\"}",
-      "effect": "safe"
-    },
-    {
-      "method": "POST",
-      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
-      "headers": {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "X-Same-Domain": "1",
-        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
-        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
-      },
-      "body": "{\"selected_flights\":\"${param.selected_flights}\"}",
-      "effect": "safe"
-    },
-    {
-      "method": "POST",
       "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetBookingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
       "headers": {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "Referer": "https://www.google.com/travel/flights",
         "X-Same-Domain": "1",
         "sec-ch-ua-full-version": "\"148.0.7778.96\"",
         "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
       },
-      "body": "{\"selected_flights\":\"${param.selected_flights}\"}",
+      "body": "f.req=${param.selected_flights}&trip_type=${param.trip_type}&adults=${param.adults}&children=${param.children}&cabin_class=${param.cabin_class}",
       "effect": "safe"
     }
   ],
   "site": "google-flights",
   "bootstrap": {
-    "url": "https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA2LTA4agcIARIDU0pDcgcIARIDU0FOGh4SCjIwMjYtMDYtMTFqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ",
+    "url": "https://www.google.com/travel/flights",
     "waitUntil": "domcontentloaded",
-    "waitMs": 500,
-    "timeoutMs": 30000,
+    "waitMs": 1500,
     "captures": [
       {
         "name": "f_sid",
         "required": true,
         "capability": "browser_bootstrap",
         "source": "html_regex",
-        "pattern": "(?:FdrFJe|f\\.sid)[^0-9-]{0,80}(-?[0-9]{10,})",
+        "pattern": "FdrFJe[^0-9-]{1,40}(-?[0-9]{10,})",
         "group": 1
       },
       {
@@ -92,35 +92,53 @@ const WORKFLOW: Workflow = {
         "required": true,
         "capability": "browser_bootstrap",
         "source": "html_regex",
-        "pattern": "\"cfb2h\":\"([^\"]+)\"",
+        "pattern": "(boq_travel-frontend-flights-ui_[A-Za-z0-9_.-]+)",
         "group": 1
       }
     ]
   },
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
-  "liveVerified": true
+  "limitations": [
+    {
+      "feature": "Non-economy booking cabins",
+      "reason": "The recordings and producer-consumer live chain ground economy only.",
+      "omittedParameters": []
+    }
+  ]
 };
 
 export interface GetFlightBookingOptionsInput {
-  /** JSON array of selected segment tuples [origin, departureDate, destination, null, carrierCode, flightNumber]. For round-trip and multi-city booking, pass the complete ordered array of selected legs; a single first-leg value is treated as a one-way booking. */
+  /** Trip type: one_way, round_trip, or multi_city. */
+  trip_type?: string;
+  /** Fresh selection_data JSON emitted by search_flights. */
   selected_flights: string;
+  /** Number of adult passengers. */
+  adults?: number;
+  /** Number of child passengers. */
+  children?: number;
+  /** Only economy is supported by the recording. */
+  cabin_class?: string;
 }
 
 export async function getFlightBookingOptions(
   input: GetFlightBookingOptionsInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
+    trip_type: input.trip_type ?? "one_way",
+    adults: input.adults ?? 1,
+    children: input.children ?? 0,
+    cabin_class: input.cabin_class ?? "economy",
     selected_flights: input.selected_flights,
-
   };
   return executeWorkflow({
     workflow: WORKFLOW,
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });
