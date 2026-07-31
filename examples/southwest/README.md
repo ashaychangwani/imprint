@@ -7,7 +7,7 @@
 
 | Tool | What it does | Backend |
 | --- | --- | --- |
-| `search_flights` | Searches one-way or round-trip Southwest flight options and fares. Supports `USD` and `POINTS` fare types. | `stealth-fetch` |
+| `search_flights` | Searches one-way or round-trip Southwest flight options and fares, including low-fare-calendar continuation inputs. Supports `USD` and `POINTS` fare types. | `cdp-replay` |
 | `get_low_fare_calendar` | Retrieves low-fare calendar prices for a route and month anchor date. | `stealth-fetch` |
 | `get_flight_status` | Retrieves Southwest flight status for a date, route, and flight number. | `stealth-fetch` |
 | `get_account_details` | Reads Rapid Rewards account profile/details for the authenticated account. | `cdp-replay` |
@@ -15,6 +15,12 @@
 
 All checked-in tools are read-only. State-changing workflows are intentionally
 excluded from this example snapshot.
+
+The July 31, 2026 selective refresh replaces only `search_flights` and
+`get_low_fare_calendar`. They pass 12 deterministic tests and two live checks
+against real SJC-to-SAN itinerary and calendar results. The existing account,
+trip, and flight-status tools remain because their fresh generations did not
+meet the same live reliability and compatibility bar.
 
 ## Install
 
@@ -38,6 +44,7 @@ imprint credential set southwest password
   backend that passed the latest probe instead of re-walking known bad rungs.
 - Local recordings, audit logs, token jars, generated integration tests, and lock
   files are not part of this example snapshot.
-- Generated but unexposed reservation-detail and seat-map workflows are not
-  included because they do not have callable `index.ts` wrappers in the latest
-  dump.
+- Newly detected reservation, seat-map, and check-in workflows are not included
+  because the fresh authenticated tool chain did not reliably carry its login
+  state into those calls. The checked-in account and trip tools keep their
+  proven self-contained login flow.

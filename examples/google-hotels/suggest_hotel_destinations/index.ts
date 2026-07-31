@@ -3,7 +3,7 @@
  *
  * Tool: suggest_hotel_destinations
  * Site: google-hotels
- * Intent: Get Google Hotels destination and hotel autocomplete suggestions for a typed query.
+ * Intent: Suggest ordered Google Hotels destinations and properties from a partial query.
  *
  * To regenerate: imprint emit ~/.imprint/google-hotels/suggest_hotel_destinations/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,63 +20,106 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "suggest_hotel_destinations",
   "intent": {
-    "description": "Get Google Hotels destination and hotel autocomplete suggestions for a typed query.",
-    "userSaid": "searched for hotels at chicago loop from july 3-6; changed location to tahoe city; searched for hotels in tahoe; searched for hotels in denver downtown"
+    "description": "Suggest ordered Google Hotels destinations and properties from a partial query.",
+    "userSaid": "Searched for hotels in Chicago Loop, Tahoe City, and Denver downtown."
   },
   "parameters": [
     {
       "name": "query",
       "type": "string",
-      "description": "Partial or full destination or hotel search text.",
+      "description": "Partial destination, neighborhood, hotel, or lodging query.",
       "default": "denver downtown",
+      "verified": true
+    },
+    {
+      "name": "max_results",
+      "type": "number",
+      "description": "Maximum number of suggestions to request and return.",
+      "default": 0,
       "verified": true
     },
     {
       "name": "limit",
       "type": "number",
-      "description": "Maximum number of suggestions requested.",
-      "default": 15,
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Backward-compatible alias for max_results. Zero uses the default of 15.",
+      "default": 0,
+      "verified": true
     }
   ],
   "requests": [
     {
       "method": "POST",
-      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=mejVKc&source-path=%2Ftravel%2Fsearch&f.sid=-7129101702754032847&bl=boq_travel-frontend-ui_20260603.00_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=3443921&rt=c",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=mejVKc&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
       "headers": {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         "X-Same-Domain": "1",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/travel/search?qs=OAA&ved=0CAAQ5JsGahcKEwiI69GMpe6UAxUAAAAAHQAAAAAQCA",
-        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"DTQmiQ==\"]",
+        "Referer": "https://www.google.com/travel/search?qs=OAA&ved=0CAAQ5JsGahcKEwjg5tj6uN-UAxUAAAAAHQAAAAAQCA",
         "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
       },
-      "body": "f.req=%5B%5B%5B%22mejVKc%22%2C%22%5B%5C%22${param.query}%5C%22%2C%5C%22%5C%22%2C1%2C0%2Cnull%2C30%2C${param.limit}%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&",
+      "body": "query=${param.query}&max_results=${param.max_results}&limit=${param.limit}",
+      "bodyPlaceholderEncoding": "raw",
       "effect": "safe"
     }
   ],
   "site": "google-hotels",
+  "bootstrap": {
+    "url": "https://www.google.com/travel/search?qs=OAA&ved=0CAAQ5JsGahcKEwjg5tj6uN-UAxUAAAAAHQAAAAAQCA",
+    "waitUntil": "domcontentloaded",
+    "captures": [
+      {
+        "name": "f_sid",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "html_regex",
+        "pattern": "\\\"FdrFJe\\\":\\\"(-?[0-9]+)\\\"",
+        "group": 1
+      },
+      {
+        "name": "bl",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "html_regex",
+        "pattern": "\\\"cfb2h\\\":\\\"([^\\\"]+)\\\"",
+        "group": 1
+      }
+    ]
+  },
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
+  "limitations": [
+    {
+      "feature": "Prior-search contextualization",
+      "reason": "Live differential verification produced the exact same ordered suggestions for distinct recorded context strings, so this no-op input is not exposed.",
+      "omittedParameters": [
+        "context_query"
+      ]
+    },
+    {
+      "feature": "Autocomplete mode variants",
+      "reason": "The recording showed internal RPC mode values 1 and 3 without a user-facing control; the dominant recorded autocomplete mode 1 is used."
+    }
+  ],
   "liveVerified": true
 };
 
 export interface SuggestHotelDestinationsInput {
-  /** Partial or full destination or hotel search text. */
+  /** Partial destination, neighborhood, hotel, or lodging query. */
   query?: string;
-  /** Maximum number of suggestions requested. */
+  /** Maximum number of suggestions to request and return. */
+  max_results?: number;
+  /** Backward-compatible alias for max_results. Zero uses the default of 15. */
   limit?: number;
 }
 
 export async function suggestHotelDestinations(
   input: SuggestHotelDestinationsInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
     query: input.query ?? "denver downtown",
-    limit: input.limit ?? 15,
+    max_results: input.max_results ?? 0,
+    limit: input.limit ?? 0,
 
   };
   return executeWorkflow({
@@ -83,6 +127,7 @@ export async function suggestHotelDestinations(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });

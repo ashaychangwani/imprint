@@ -3,7 +3,7 @@
  *
  * Tool: get_low_fare_calendar
  * Site: southwest
- * Intent: Get Southwest low-fare calendar prices for a route and month.
+ * Intent: Find Southwest's lowest fares by date for a route and month.
  *
  * To regenerate: imprint emit ~/.imprint/southwest/get_low_fare_calendar/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,41 +20,84 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "get_low_fare_calendar",
   "intent": {
-    "description": "Get Southwest low-fare calendar prices for a route and month.",
-    "userSaid": "i just specified the departure and arrival airports (SJC and SAN) i set teh depart date now i changed to one way trip only now i clicked search now i clicked hte low fare calendar"
+    "description": "Find Southwest's lowest fares by date for a route and month.",
+    "userSaid": "Specified SJC to SAN, set the departure date, chose a one-way trip, searched, and opened the low fare calendar."
   },
   "parameters": [
     {
       "name": "origination_airport_code",
       "type": "string",
-      "description": "Origin airport code, such as SJC.",
+      "description": "Three-letter departure airport code.",
       "default": "SJC",
-      "verified": false,
-      "verifyNote": "waived-bot"
+      "verified": true
     },
     {
       "name": "destination_airport_code",
       "type": "string",
-      "description": "Destination airport code, such as SAN.",
+      "description": "Three-letter arrival airport code.",
       "default": "SAN",
-      "verified": false,
-      "verifyNote": "waived-bot"
+      "verified": true
     },
     {
       "name": "departure_date",
       "type": "string",
-      "description": "Calendar month anchor date in YYYY-MM-DD format.",
+      "description": "Date or month anchor in YYYY-MM-DD format.",
       "default": "2026-09-01",
+      "verified": true
+    },
+    {
+      "name": "return_date",
+      "type": "string",
+      "description": "Optional return-date anchor for round trips.",
+      "default": "",
+      "verified": true
+    },
+    {
+      "name": "trip_type",
+      "type": "string",
+      "description": "Trip type, such as oneway or roundtrip.",
+      "default": "oneway",
+      "verified": true
+    },
+    {
+      "name": "adults_count",
+      "type": "number",
+      "description": "Number of adult passengers.",
+      "default": 1,
       "verified": false,
-      "verifyNote": "waived-bot"
+      "verifyNote": "semantic-gap"
+    },
+    {
+      "name": "lap_infant_passengers_count",
+      "type": "number",
+      "description": "Number of lap-infant passengers.",
+      "default": 0,
+      "verified": false,
+      "verifyNote": "semantic-gap"
     },
     {
       "name": "currency_code",
       "type": "string",
-      "description": "Currency code, such as USD or POINTS.",
+      "description": "Currency code for displayed fares, such as USD.",
       "default": "USD",
       "verified": false,
-      "verifyNote": "manual-exposed"
+      "verifyNote": "semantic-gap"
+    },
+    {
+      "name": "promo_code",
+      "type": "string",
+      "description": "Optional promotional code.",
+      "default": "",
+      "verified": false,
+      "verifyNote": "semantic-gap"
+    },
+    {
+      "name": "include_nearby_airports",
+      "type": "boolean",
+      "description": "Whether nearby airports should be considered.",
+      "default": false,
+      "verified": false,
+      "verifyNote": "semantic-gap"
     }
   ],
   "requests": [
@@ -81,15 +125,17 @@ const WORKFLOW: Workflow = {
       "headers": {
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json",
+        "Origin": "https://www.southwest.com",
+        "Referer": "https://www.southwest.com/air/low-fare-calendar/select-dates",
         "x-api-key": "${state.southwest_api_key}",
         "x-app-id": "air-low-fare-calendar-v2",
         "x-app-version": "9.0.1",
         "x-channel-id": "southwest",
         "x-user-experience-id": "${generated.uuid}",
-        "x-diagnostic": "{\"spa\":\"9.0.1\"}",
-        "Referer": "https://www.southwest.com/air/low-fare-calendar/select-dates?adultPassengersCount=1&adultsCount=1&currencyCode=${param.currency_code}&departureDate=${param.departure_date}&destinationAirportCode=${param.destination_airport_code}&hasNearByAirport=false&lapInfantPassengersCount=0&originationAirportCode=${param.origination_airport_code}&passengerType=ADULT&promoCode=&returnAirportCode=&returnDate=&selectedFlight1=${param.departure_date}&selectedFlight2=&tripType=oneway&clk=6403032&cbid=6403032"
+        "x-diagnostic": "{\"spa\":\"9.0.1\"}"
       },
-      "body": "{\"adultPassengersCount\":\"1\",\"adultsCount\":\"1\",\"currencyCode\":\"${param.currency_code}\",\"departureDate\":\"${param.departure_date}\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"hasNearByAirport\":\"false\",\"lapInfantPassengersCount\":\"0\",\"originationAirportCode\":\"${param.origination_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"\",\"returnAirportCode\":\"\",\"returnDate\":\"\",\"selectedFlight1\":\"${param.departure_date}\",\"selectedFlight2\":\"\",\"tripType\":\"oneway\",\"clk\":\"6403032\",\"cbid\":\"6403032\"}",
+      "body": "{\"adultPassengersCount\":\"${param.adults_count}\",\"adultsCount\":\"${param.adults_count}\",\"currencyCode\":\"${param.currency_code}\",\"departureDate\":\"${param.departure_date}\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"hasNearByAirport\":\"${param.include_nearby_airports}\",\"lapInfantPassengersCount\":\"${param.lap_infant_passengers_count}\",\"originationAirportCode\":\"${param.origination_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"${param.promo_code}\",\"returnAirportCode\":\"\",\"returnDate\":\"${param.return_date}\",\"selectedFlight1\":\"${param.departure_date}\",\"selectedFlight2\":\"${param.return_date}\",\"tripType\":\"${param.trip_type}\",\"clk\":\"6403032\",\"cbid\":\"6403032\"}",
+      "bodyPlaceholderEncoding": "json-string",
       "effect": "safe"
     }
   ],
@@ -99,26 +145,44 @@ const WORKFLOW: Workflow = {
 };
 
 export interface GetLowFareCalendarInput {
-  /** Origin airport code, such as SJC. */
+  /** Three-letter departure airport code. */
   origination_airport_code?: string;
-  /** Destination airport code, such as SAN. */
+  /** Three-letter arrival airport code. */
   destination_airport_code?: string;
-  /** Calendar month anchor date in YYYY-MM-DD format. */
+  /** Date or month anchor in YYYY-MM-DD format. */
   departure_date?: string;
-  /** Currency code, such as USD or POINTS. */
+  /** Optional return-date anchor for round trips. */
+  return_date?: string;
+  /** Trip type, such as oneway or roundtrip. */
+  trip_type?: string;
+  /** Number of adult passengers. */
+  adults_count?: number;
+  /** Number of lap-infant passengers. */
+  lap_infant_passengers_count?: number;
+  /** Currency code for displayed fares, such as USD. */
   currency_code?: string;
+  /** Optional promotional code. */
+  promo_code?: string;
+  /** Whether nearby airports should be considered. */
+  include_nearby_airports?: boolean;
 }
 
 export async function getLowFareCalendar(
   input: GetLowFareCalendarInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
     origination_airport_code: input.origination_airport_code ?? "SJC",
     destination_airport_code: input.destination_airport_code ?? "SAN",
     departure_date: input.departure_date ?? "2026-09-01",
+    return_date: input.return_date ?? "",
+    trip_type: input.trip_type ?? "oneway",
+    adults_count: input.adults_count ?? 1,
+    lap_infant_passengers_count: input.lap_infant_passengers_count ?? 0,
     currency_code: input.currency_code ?? "USD",
+    promo_code: input.promo_code ?? "",
+    include_nearby_airports: input.include_nearby_airports ?? false,
 
   };
   return executeWorkflow({
@@ -126,6 +190,7 @@ export async function getLowFareCalendar(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });

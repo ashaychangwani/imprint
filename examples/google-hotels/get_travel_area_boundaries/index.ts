@@ -3,7 +3,7 @@
  *
  * Tool: get_travel_area_boundaries
  * Site: google-hotels
- * Intent: Fetch map boundary or area geometry data for a Google Hotels destination.
+ * Intent: Get geographic boundary shapes and the canonical center for a resolved Google hotel destination.
  *
  * To regenerate: imprint emit ~/.imprint/google-hotels/get_travel_area_boundaries/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,76 +20,122 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "get_travel_area_boundaries",
   "intent": {
-    "description": "Fetch map boundary or area geometry data for a Google Hotels destination.",
-    "userSaid": "searched for hotels at chicago loop from july 3-6; changed location to tahoe city; searched for hotels in denver downtown"
+    "description": "Get geographic boundary shapes and the canonical center for a resolved Google hotel destination.",
+    "userSaid": "searched for hotels at chicago loop; changed location to tahoe city; searched for hotels in denver downtown"
   },
   "parameters": [
     {
+      "name": "destination_id",
+      "type": "string",
+      "description": "Resolved Google place or destination identifier.",
+      "default": "",
+      "verified": true
+    },
+    {
       "name": "place_id",
       "type": "string",
-      "description": "Google place or knowledge graph ID for the destination.",
+      "description": "Backward-compatible alias for destination_id.",
       "default": "/m/0525427",
-      "verified": false,
-      "verifyNote": "annotated"
+      "verified": true
     },
     {
       "name": "latitude",
       "type": "number",
-      "description": "Latitude for the destination center.",
+      "description": "Backward-compatible ignored center hint; Google resolves the canonical center from the destination ID.",
       "default": 39.746510799999996,
-      "verified": false,
-      "verifyNote": "annotated"
+      "verified": true
     },
     {
       "name": "longitude",
       "type": "number",
-      "description": "Longitude for the destination center.",
+      "description": "Backward-compatible ignored center hint; Google resolves the canonical center from the destination ID.",
       "default": -104.99250459999999,
-      "verified": false,
-      "verifyNote": "annotated"
+      "verified": true
+    },
+    {
+      "name": "detail_level",
+      "type": "string",
+      "description": "Boundary scale preset: all, local, detailed, or regional.",
+      "default": "all",
+      "verified": true
     }
   ],
   "requests": [
     {
       "method": "POST",
-      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=FCE32b&source-path=%2Ftravel%2Fsearch&f.sid=-7129101702754032847&bl=boq_travel-frontend-ui_20260603.00_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=3643921&rt=c",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=FCE32b&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
       "headers": {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         "X-Same-Domain": "1",
-        "Referer": "https://www.google.com/travel/search?q=denver%20downtown&qs=CAAgACgA&ved=0CAAQ8IAIahcKEwiI69GMpe6UAxUAAAAAHQAAAAAQMA&ts=CAESCgoCCAMKAggDEAAqBwoFOgNVU0Q&ap=MAA",
-        "Accept-Language": "en-US,en;q=0.9",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
-        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"DTQmiQ==\"]",
+        "Referer": "https://www.google.com/travel/search",
         "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
       },
-      "body": "f.req=[[[\"FCE32b\",\"[null,[[1,15],[1,30],[2,15],[2,30],[2,60],[2,120]],null,[[[\\\"${param.place_id}\\\"],[${param.latitude},${param.longitude}]]]]\",null,\"generic\"]]]&",
-      "effect": "safe"
+      "body": "transform-input=${param.destination_id}|${param.place_id}|${param.latitude}|${param.longitude}|${param.detail_level}",
+      "bodyPlaceholderEncoding": "raw"
     }
   ],
   "site": "google-hotels",
+  "bootstrap": {
+    "url": "https://www.google.com/travel/search?q=chicago%20loop&qs=CAAgACgA&ved=0CAAQ8IAIahcKEwjg5tj6uN-UAxUAAAAAHQAAAAAQHQ&ts=CAEqBwoFOgNVU0Q&ap=MAA",
+    "waitUntil": "domcontentloaded",
+    "captures": [
+      {
+        "name": "f_sid",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "html_regex",
+        "pattern": "FdrFJe[^0-9-]{1,20}(-?[0-9]{10,})",
+        "group": 1
+      },
+      {
+        "name": "bl",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "html_regex",
+        "pattern": "cfb2h[^A-Za-z0-9_]{1,20}(boq_travel-frontend-ui_[A-Za-z0-9._-]+)",
+        "group": 1
+      }
+    ]
+  },
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
+  "limitations": [
+    {
+      "feature": "caller-supplied destination center",
+      "reason": "Live differential verification changed latitude and longitude independently by one degree, but FCE32b returned identical Tahoe canonical center and boundary geometry; the endpoint resolves its center from destination_id.",
+      "omittedParameters": [
+        "latitude",
+        "longitude"
+      ]
+    }
+  ],
   "liveVerified": true
 };
 
 export interface GetTravelAreaBoundariesInput {
-  /** Google place or knowledge graph ID for the destination. */
+  /** Resolved Google place or destination identifier. */
+  destination_id?: string;
+  /** Backward-compatible alias for destination_id. */
   place_id?: string;
-  /** Latitude for the destination center. */
+  /** Backward-compatible ignored center hint; Google resolves the canonical center from the destination ID. */
   latitude?: number;
-  /** Longitude for the destination center. */
+  /** Backward-compatible ignored center hint; Google resolves the canonical center from the destination ID. */
   longitude?: number;
+  /** Boundary scale preset: all, local, detailed, or regional. */
+  detail_level?: string;
 }
 
 export async function getTravelAreaBoundaries(
   input: GetTravelAreaBoundariesInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
+    destination_id: input.destination_id ?? "",
     place_id: input.place_id ?? "/m/0525427",
     latitude: input.latitude ?? 39.746510799999996,
     longitude: input.longitude ?? -104.99250459999999,
+    detail_level: input.detail_level ?? "all",
 
   };
   return executeWorkflow({
@@ -96,6 +143,7 @@ export async function getTravelAreaBoundaries(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });

@@ -1,16 +1,42 @@
 {
-  "probedAt": "2026-07-09T02:59:03.607Z",
-  "imprintVersion": "0.5.1",
+  "probedAt": "2026-07-31T10:20:27.476Z",
+  "imprintVersion": "0.6.6",
   "schemaVersion": 2,
-  "workflowHash": "9833b342cf58f41e4ce8d074be3b0183d92d70c09944fc1a07cae2d55e4cea51",
-  "capabilityHash": "d0891f676244406c38af43944a1d24d32c068a9d1a75986d260a63bffd29e1b2",
+  "workflowHash": "99c85f4e289915c4f84d844fd43c2b874aeb3345e7a7b53c298bd12b2002fba8",
+  "capabilityHash": "be97697b7c416a05b96e4d663a606108a042c712e51e1b272ce4a4191375fd77",
   "preferredOrder": [
-    "fetch"
+    "cdp-replay",
+    "stealth-fetch"
   ],
   "results": {
     "fetch": {
+      "outcome": "failed",
+      "durationMs": 223,
+      "error": "STATE_MISSING",
+      "detail": "Workflow placeholder ${state.bl} but state \"bl\" has not been captured yet"
+    },
+    "cdp-replay": {
       "outcome": "ok",
-      "durationMs": 156
+      "durationMs": 32927,
+      "coldDurationMs": 32927,
+      "warmDurationMs": 1074,
+      "rankingDurationMs": 1074,
+      "detail": "warm cdp-replay succeeded in 1074ms"
+    },
+    "fetch-bootstrap": {
+      "outcome": "forbidden",
+      "durationMs": 32765,
+      "detail": "fetch-bootstrap: cdp-minted jar did not validate; cdp-replay (in-page) required."
+    },
+    "stealth-fetch": {
+      "outcome": "ok",
+      "durationMs": 7242
+    },
+    "playbook": {
+      "outcome": "failed",
+      "durationMs": 10479,
+      "error": "NETWORK",
+      "detail": "Playbook failed at step 2: fill: Target page, context or browser has been closed\nCall log:\n\u001b[2m  - waiting for getByLabel('Search for places, hotels and more', { exact: true }).filter({ visible: true "
     }
   }
 }

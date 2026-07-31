@@ -7,15 +7,12 @@
 An 8-tool MCP server for Google Hotels search, selected-hotel details,
 booking options, reviews, photos, area boundaries, and related web links.
 
-Fresh live verification on July 9, 2026:
-
-```bash
-bun test ~/.imprint/google-hotels/*/integration.test.ts --timeout 180000
-```
-
-Result: `14 pass`, `0 fail`, `66 expect() calls` across `8` generated
-workflow integration suites. All generated `backends.json` files prefer
-`fetch`, with browser-backed rungs available as fallbacks.
+Selective re-teach and live verification on July 31, 2026 refreshed the
+suggestion and boundary workflows. They passed five live behavior checks and
+16 deterministic tests with 69 assertions, including their shared
+`batchexecute` decoder. The other six tools remain at their previously verified
+versions because their fresh generations were narrower, incorrect, or did not
+meet the same reliability bar.
 
 ## Tools
 
@@ -27,7 +24,7 @@ workflow integration suites. All generated `backends.json` files prefer
 | `get_hotel_reviews` | Fetch review data for a selected hotel. | Consumes a `hotel_token`, typically from `search_hotels`. |
 | `get_hotel_photos` | Fetch photo thumbnail URLs for a selected hotel. | Consumes a `hotel_token`, typically from `search_hotels`. |
 | `get_hotel_details` | Fetch detailed information for a selected hotel or vacation rental. | Consumes a `hotel_token`. |
-| `get_travel_area_boundaries` | Fetch map boundary or area geometry data for a destination. | Uses place id and coordinates. |
+| `get_travel_area_boundaries` | Fetch map boundary or area geometry data for a destination. | Accepts a destination id or the legacy place-id input. |
 | `search_hotel_web_links` | Search web links for a selected hotel name. | Useful for official site and related links. |
 
 ## How It Was Compiled
@@ -36,12 +33,12 @@ workflow integration suites. All generated `backends.json` files prefer
   Each tool includes its generated request transform and parser.
 - **Producer to consumer flow**: `search_hotels` emits selected-result tokens
   that booking, reviews, photos, and detail tools can consume.
-- **Backend reliability**: checked-in `backends.json` files record `fetch` as
-  the working preferred backend for every tool. Runtime can still fall back to
-  browser-backed rungs when needed.
+- **Backend reliability**: each checked-in `backends.json` records the
+  successfully probed order for that workflow. The refreshed batchexecute
+  tools currently prefer browser-backed replay with stealth fetch as fallback.
 - **Artifacts per tool**: `workflow.json` (API replay), `index.ts` (MCP tool),
-  `parser.ts`, optional `request-transform.ts`, `playbook.yaml` (DOM fallback),
-  `package.json`, and `backends.json`.
+  `parser.ts`, optional `request-transform.ts`, optional `playbook.yaml` (DOM
+  fallback), `package.json`, and `backends.json`.
 
 ## Install
 

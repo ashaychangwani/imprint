@@ -164,6 +164,12 @@ export function extract(rawResponse: unknown, context?: ParserContext): unknown 
       fareFamily: summary.fareFamily,
       currency: summary.minimumFare?.currencyCode,
       minimumFare: moneyValue(summary.minimumFare),
+      minimumFareMoney: summary.minimumFare?.value == null
+        ? undefined
+        : {
+            value: String(summary.minimumFare.value),
+            currencyCode: summary.minimumFare.currencyCode ?? null,
+          },
     }))
     .filter((summary) => summary.fareFamily || summary.minimumFare !== null);
 
@@ -179,17 +185,27 @@ export function extract(rawResponse: unknown, context?: ParserContext): unknown 
       return compactRecord({
         originationAirportCode: detail.originationAirportCode ?? product.originationAirportCode,
         destinationAirportCode: detail.destinationAirportCode ?? product.destinationAirportCode,
+        origin: detail.originationAirportCode ?? product.originationAirportCode,
+        destination: detail.destinationAirportCode ?? product.destinationAirportCode,
         departureDateTime: detail.departureDateTime,
         arrivalDateTime: detail.arrivalDateTime,
         departureTime: detail.departureTime,
         arrivalTime: detail.arrivalTime,
         flightNumbers: detail.flightNumbers ?? segments.map((segment) => String(segment.flightNumber)).filter(Boolean),
         durationMinutes: detail.totalDuration,
+        totalDurationMinutes: detail.totalDuration,
         duration: segments.length === 1 ? segments[0]?.duration : undefined,
         stopCount,
+        stops: stopCount + segments.reduce(
+          (sum, segment) => sum + (
+            typeof segment.numberOfStops === 'number' ? segment.numberOfStops : 0
+          ),
+          0,
+        ),
         nonstop: stopCount === 0,
         nextDay: detail.nextDay,
         filterTags: detail.filterTags ?? [],
+        availability: detail.filterTags ?? [],
         passengerCount: adultsCount,
         lowestFare,
         fares,
@@ -208,6 +224,7 @@ export function extract(rawResponse: unknown, context?: ParserContext): unknown 
     requestedAdultsCount: adultsCount,
     fareSummary,
     flights,
+    itineraries: flights,
     count: flights.length,
     promoToken: searchResults?.promoToken ?? '',
   };

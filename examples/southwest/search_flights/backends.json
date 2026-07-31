@@ -1,21 +1,39 @@
 {
-  "probedAt": "2026-07-09T19:34:12.905Z",
-  "imprintVersion": "0.5.1",
+  "probedAt": "2026-07-31T10:49:51.303Z",
+  "imprintVersion": "0.6.6",
   "schemaVersion": 2,
-  "workflowHash": "56de2626446fc4793ce6731d78f852cf2764b5d6953af74286627ef3254cfb6f",
-  "capabilityHash": "83f63e7b9936b39f2199bda96b08d8027330e6dcfc033545a1087c3b983b9d89",
+  "workflowHash": "30c352a08fac96586a8cc4092a082abca9e913d4bb49258513f38bee16c42bd2",
+  "capabilityHash": "13bef33be47f5beed170132ec2dd135259b66502fe5565a4135b3e33b08a4544",
   "preferredOrder": [
-    "stealth-fetch"
+    "cdp-replay"
   ],
   "results": {
     "fetch": {
       "outcome": "forbidden",
-      "durationMs": 609,
-      "detail": "Plain fetch returned Southwest 403 during manual unblock."
+      "durationMs": 604,
+      "detail": "Request 1 returned 403: {\n  \"code\": 403050700\n}"
     },
     "stealth-fetch": {
+      "outcome": "forbidden",
+      "durationMs": 16900,
+      "detail": "Request 1 returned 403: {\n  \"code\": 403050700\n}"
+    },
+    "playbook": {
+      "outcome": "unavailable",
+      "detail": "no playbook.yaml"
+    },
+    "cdp-replay": {
       "outcome": "ok",
-      "durationMs": 45793
+      "durationMs": 33033,
+      "coldDurationMs": 33033,
+      "warmDurationMs": 1715,
+      "rankingDurationMs": 1715,
+      "detail": "warm cdp-replay succeeded in 1715ms"
+    },
+    "fetch-bootstrap": {
+      "outcome": "forbidden",
+      "durationMs": 74459,
+      "detail": "fetch-bootstrap: cdp-minted jar did not validate; cdp-replay (in-page) required."
     }
   }
 }
