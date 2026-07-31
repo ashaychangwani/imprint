@@ -1,101 +1,106 @@
-type Money = {
-  currencyCode?: string;
-  value?: string | number;
-};
+import { parseMoney, type Money } from '../_shared/fare-parser.ts';
 
-type Fare = {
-  baseFare?: Money;
-  totalFare?: Money;
-  totalTaxesAndFees?: Money;
-};
+interface FareOutput {
+  baseFare: Money | null;
+  totalFare: Money | null;
+  totalTaxesAndFees: Money | null;
+}
 
-type CalendarDay = {
-  date?: string;
-  fares?: Record<string, Fare>;
-};
+interface DayOutput {
+  date: string;
+  fares: Record<string, FareOutput>;
+}
 
-type SearchResult = {
-  destinationAirportCode?: string;
-  originationAirportCode?: string;
-  international?: boolean;
-  currencyCode?: string;
-  lowFareCalendarDays?: CalendarDay[];
-};
-
-type SouthwestResponse = {
-  success?: boolean;
-  data?: {
-    searchResults?: SearchResult[];
-  };
-};
-
-type Context = {
+interface Context {
   params: Record<string, string | number | boolean>;
   responses: unknown[];
-};
-
-function toNumber(value: string | number | undefined): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value !== 'string' || value.trim() === '') return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
-function normalizeMoney(money: Money | undefined): { currencyCode: string | null; value: number | null } {
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function legacyMoney(money: Money | null): { currencyCode: string | null; value: number | null } {
+  const value = money === null ? null : Number(money.value);
   return {
     currencyCode: money?.currencyCode ?? null,
-    value: toNumber(money?.value),
+    value: Number.isFinite(value) ? value : null,
   };
-}
-
-function normalizeFares(fares: Record<string, Fare> | undefined): Record<string, unknown> {
-  const normalized: Record<string, unknown> = {};
-  if (!fares || typeof fares !== 'object') return normalized;
-
-  for (const [family, fare] of Object.entries(fares)) {
-    if (!family || !fare || typeof fare !== 'object') continue;
-    normalized[family] = {
-      baseFare: normalizeMoney(fare.baseFare),
-      totalFare: normalizeMoney(fare.totalFare),
-      totalTaxesAndFees: normalizeMoney(fare.totalTaxesAndFees),
-    };
-  }
-
-  return normalized;
 }
 
 export function extract(rawResponse: unknown, context?: Context): unknown {
-  const response = rawResponse as SouthwestResponse;
-  const searchResults = Array.isArray(response?.data?.searchResults) ? response.data.searchResults : [];
-  const calendars = searchResults
-    .filter((result) => result && typeof result === 'object')
-    .map((result) => {
-      const days = Array.isArray(result.lowFareCalendarDays) ? result.lowFareCalendarDays : [];
-      const calendarDays = days
-        .filter((day) => day?.date)
-        .map((day) => ({
-          date: day.date,
-          fares: normalizeFares(day.fares),
-        }))
-        .filter((day) => Object.keys(day.fares).length > 0);
+  const root = asRecord(rawResponse);
+  const data = asRecord(root?.data);
+  const rawResults = Array.isArray(data?.searchResults) ? data.searchResults : [];
 
-      return {
-        originationAirportCode: result.originationAirportCode ?? null,
-        destinationAirportCode: result.destinationAirportCode ?? null,
-        international: result.international ?? null,
-        currencyCode: result.currencyCode ?? null,
-        selectedFlight1: context?.params?.departure_date ?? null,
-        selectedFlight2: null,
-        calendarDays,
-      };
-    })
-    .filter((calendar) => calendar.originationAirportCode || calendar.destinationAirportCode || calendar.calendarDays.length > 0);
+  const searchResults = rawResults.flatMap((rawResult) => {
+    const result = asRecord(rawResult);
+    if (!result) return [];
+
+    const origin = typeof result.originationAirportCode === 'string' ? result.originationAirportCode : '';
+    const destination = typeof result.destinationAirportCode === 'string' ? result.destinationAirportCode : '';
+    const rawDays = Array.isArray(result.lowFareCalendarDays) ? result.lowFareCalendarDays : [];
+
+    const days: DayOutput[] = rawDays.flatMap((rawDay) => {
+      const day = asRecord(rawDay);
+      if (!day || typeof day.date !== 'string' || day.date.length === 0) return [];
+      const rawFares = asRecord(day.fares);
+      const fares: Record<string, FareOutput> = {};
+      if (rawFares) {
+        for (const [family, rawFare] of Object.entries(rawFares)) {
+          const fare = asRecord(rawFare);
+          if (!fare) continue;
+          fares[family] = {
+            baseFare: parseMoney(fare.baseFare),
+            totalFare: parseMoney(fare.totalFare),
+            totalTaxesAndFees: parseMoney(fare.totalTaxesAndFees),
+          };
+        }
+      }
+      return [{ date: day.date, fares }];
+    });
+
+    if (!origin && !destination && days.length === 0) return [];
+    return [{
+      originationAirportCode: origin,
+      destinationAirportCode: destination,
+      international: typeof result.international === 'boolean' ? result.international : null,
+      currencyCode: typeof result.currencyCode === 'string' ? result.currencyCode : null,
+      days,
+    }];
+  });
+
+  const calendars = searchResults.map((result) => ({
+    originationAirportCode: result.originationAirportCode || null,
+    destinationAirportCode: result.destinationAirportCode || null,
+    international: result.international,
+    currencyCode: result.currencyCode,
+    selectedFlight1: context?.params?.departure_date ?? null,
+    selectedFlight2: context?.params?.return_date ?? null,
+    calendarDays: result.days.map((day) => ({
+      date: day.date,
+      fares: Object.fromEntries(
+        Object.entries(day.fares).map(([family, fare]) => [
+          family,
+          {
+            baseFare: legacyMoney(fare.baseFare),
+            totalFare: legacyMoney(fare.totalFare),
+            totalTaxesAndFees: legacyMoney(fare.totalTaxesAndFees),
+          },
+        ]),
+      ),
+    })),
+  }));
 
   return {
-    success: response?.success === true,
+    success: root?.success === true,
     query: {
-      originationAirportCode: context?.params?.origination_airport_code ?? calendars[0]?.originationAirportCode ?? null,
-      destinationAirportCode: context?.params?.destination_airport_code ?? calendars[0]?.destinationAirportCode ?? null,
+      originationAirportCode:
+        context?.params?.origination_airport_code ?? calendars[0]?.originationAirportCode ?? null,
+      destinationAirportCode:
+        context?.params?.destination_airport_code ?? calendars[0]?.destinationAirportCode ?? null,
       departureDate: context?.params?.departure_date ?? null,
       tripType: context?.params?.trip_type ?? null,
       adultsCount: context?.params?.adults_count ?? null,
@@ -103,5 +108,6 @@ export function extract(rawResponse: unknown, context?: Context): unknown {
       promoCode: context?.params?.promo_code ?? '',
     },
     calendars,
+    searchResults,
   };
 }

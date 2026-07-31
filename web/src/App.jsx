@@ -28,8 +28,8 @@ const pipeline = [
   {
     step: '02',
     title: 'Compile state',
-    body: 'Generate a state-aware API workflow plus a DOM playbook fallback in one tool directory. When a recording yields several tools, all are selected by default and required upstream producers are kept with their consumers; shared signing and parsing modules are then built and verified once, reused, and followed by each tool’s compile plan.',
-    artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
+    body: 'Generate a state-aware API workflow plus a DOM playbook fallback when the recorded DOM flow can be verified. When a recording yields several tools, all are selected by default and required upstream producers are kept with their consumers; shared signing and parsing modules are then built and verified once, reused, and followed by each tool’s compile plan.',
+    artifact: '~/.imprint/<site>/<toolName>/workflow.json',
   },
   {
     step: '03',
@@ -49,8 +49,8 @@ const comparisons = [
 ];
 
 const examples = [
-  { name: 'google-flights ★', use: '4-tool suite', detail: 'One-shot compiled from a single recording: batchexecute wire-format decode + search→booking token chain. Audited 92.6%, every tool live-verified.' },
-  { name: 'google-hotels ★', use: '4-tool suite', detail: 'One-shot compiled from a single recording: autocomplete → search → reviews/booking producer-token chaining. Audited 91.7%.' },
+  { name: 'google-flights ★', use: '6-tool suite', detail: 'Generated batchexecute wire-format decode + search→booking token chain. Every checked-in tool is live-verified.' },
+  { name: 'google-hotels ★', use: '8-tool suite', detail: 'Generated autocomplete → search → reviews/booking producer-token chaining, selectively refreshed against live evidence.' },
   { name: 'southwest', use: 'Live fare watcher', detail: 'Akamai-resistant flight search with price-drop notifications.' },
   { name: 'discoverandgo', use: 'Authed booking', detail: 'Museum-pass flow using the per-site credential store and replay state.' },
 ];
@@ -77,7 +77,7 @@ function TerminalCard() {
         <span />
         <strong>imprint</strong>
       </div>
-      <img className="terminal-gif" src="/imprint-teach.gif" alt="A real `imprint teach google-flights` run — six recordings compiled into four live-verified MCP tools" loading="lazy" />
+      <img className="terminal-gif" src="/imprint-teach.gif" alt="A real `imprint teach google-flights` run compiling generated MCP tools" loading="lazy" />
       <div className="terminal-footer">
         <span>MIT license · Bun ≥ 1.3 · Chrome required</span>
         <span>v0.1 shipped</span>
@@ -368,7 +368,7 @@ export default function App() {
             <div className="hero-copy">
               <span className="eyebrow"><span className="pulse" aria-hidden="true" /> Postman for AI agents · open source CLI</span>
               <h1 id="hero-title">Don’t do anything twice.</h1>
-              <p className="lead">Teach Imprint one real browser session and it turns that recording into a deterministic MCP tool: a state-aware API workflow, a DOM playbook fallback, and an agent-callable TypeScript module.</p>
+              <p className="lead">Teach Imprint one real browser session and it turns that recording into a deterministic MCP tool: a state-aware API workflow, an optional verified DOM playbook fallback, and an agent-callable TypeScript module.</p>
               <div className="hero-actions">
                 <a className="btn btn-primary" href="#install">Start with Bun</a>
                 <a className="btn btn-secondary" href={product.githubUrl}>View source on GitHub</a>
@@ -415,11 +415,11 @@ export default function App() {
             <div className="proof-copy">
               <span className="kicker">Product proof</span>
               <h2 id="proof-title">Two replays are better than one brittle script.</h2>
-              <p>Every taught workflow compiles into both a network-level workflow and a DOM-level playbook under the generated tool directory. When HTTP can mint cookies or CSRF state, Imprint stays on fetch. When Chromium is needed only to initialize state, fetch-bootstrap harvests it and returns to API replay.</p>
+              <p>Every taught tool includes a verified network-level workflow and may also include a DOM-level playbook when that recorded UI flow compiles reliably. When HTTP can mint cookies or CSRF state, Imprint stays on fetch. When Chromium is needed only to initialize state, fetch-bootstrap harvests it and returns to API replay.</p>
             </div>
             <div className="artifact-stack" aria-label="Generated artifacts">
               <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay with named state captures for low-latency tasks and cron jobs.</p></article>
-              <article className="artifact"><small>Fallback path</small><h3>playbook.yaml</h3><p>DOM-level steps for sites that move logic into the browser.</p></article>
+              <article className="artifact"><small>Optional fallback</small><h3>playbook.yaml</h3><p>Verified DOM-level steps for sites that move logic into the browser.</p></article>
               <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and an installable MCP server for local tools or checked-in examples.</p></article>
               <article className="artifact"><small>Optional</small><h3>request-transform.ts</h3><p>URL signing or request mutation when the API requires per-call tokens (HMAC, CRC32, OAuth).</p></article>
             </div>

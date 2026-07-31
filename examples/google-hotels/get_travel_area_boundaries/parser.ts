@@ -1,127 +1,94 @@
-type GeometryGroup = {
-  zoom: number | null;
-  radius: number | null;
-  coordinates: unknown;
-  coordinateCount: number;
-};
-type BoundaryRecord = {
-  place_id: string;
-  center: { latitude: number | null; longitude: number | null };
-  geometry_groups: GeometryGroup[];
-};
+import { decodeBatchExecuteResponse, findBatchPayload } from '../_shared/google_travel_batchexecute.ts';
 
-type ExtractContext = {
-  params: Record<string, string | number | boolean>;
-  responses: unknown[];
+type Coordinate = { latitude: number; longitude: number };
+
+const EMPTY_RESULT = {
+  destinations: [],
+  place_boundaries: {},
+  places: [],
+  count: 0,
 };
 
-function firstJsonArrayText(text: string): string {
-  const start = text.indexOf('[');
-  if (start < 0) return text;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-    } else if (char === '[') {
-      depth += 1;
-    } else if (char === ']') {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, index + 1);
-    }
+function isCoordinatePair(value: unknown): value is [number, number] {
+  return Array.isArray(value) && value.length === 2 &&
+    typeof value[0] === 'number' && Number.isFinite(value[0]) &&
+    typeof value[1] === 'number' && Number.isFinite(value[1]) &&
+    value[0] >= -90 && value[0] <= 90 && value[1] >= -180 && value[1] <= 180;
+}
+
+function collectSequences(value: unknown, out: Coordinate[][]): void {
+  if (!Array.isArray(value)) return;
+  if (value.length >= 3 && value.every(isCoordinatePair)) {
+    out.push(value.map(([latitude, longitude]) => ({ latitude, longitude })));
+    return;
   }
-  return text.slice(start);
+  for (const child of value) collectSequences(child, out);
 }
 
-function parseFrameBody(rawResponse: unknown): unknown {
-  if (Array.isArray(rawResponse)) return rawResponse;
-  if (typeof rawResponse !== 'string') return rawResponse;
+export function extract(rawResponse: unknown): unknown {
+  const body = typeof rawResponse === 'string' ? rawResponse : '';
+  if (!body.trim()) return EMPTY_RESULT;
 
-  let text = rawResponse.trimStart();
-  if (text.startsWith(")]}'")) {
-    const firstNewline = text.indexOf('\n');
-    text = firstNewline >= 0 ? text.slice(firstNewline + 1).trimStart() : '';
+  let payload: unknown;
+  try {
+    payload = findBatchPayload(decodeBatchExecuteResponse(body), 'FCE32b');
+  } catch {
+    return EMPTY_RESULT;
   }
-  const frames = JSON.parse(firstJsonArrayText(text)) as unknown[];
-  const frame = frames.find((candidate) => {
-    return Array.isArray(candidate) && candidate[0] === 'wrb.fr' && candidate[1] === 'FCE32b';
-  }) as unknown[] | undefined;
-  if (!frame || typeof frame[2] !== 'string') return [];
-  return JSON.parse(frame[2]);
-}
 
-function countCoordinates(value: unknown): number {
-  if (!Array.isArray(value)) return 0;
-  if (
-    value.length === 2 &&
-    typeof value[0] === 'number' &&
-    typeof value[1] === 'number' &&
-    Number.isFinite(value[0]) &&
-    Number.isFinite(value[1])
-  ) {
-    return 1;
-  }
-  return value.reduce((sum, child) => sum + countCoordinates(child), 0);
-}
+  const root = Array.isArray(payload) ? payload : [];
+  const destinationRows = Array.isArray(root[0]) ? root[0] : [];
+  const destinations = destinationRows.flatMap((row): unknown[] => {
+    if (!Array.isArray(row) || typeof row[0] !== 'string' || !Array.isArray(row[1])) return [];
+    const destinationId = row[0];
+    const boundaries = row[1].flatMap((entry): unknown[] => {
+      if (!Array.isArray(entry) || !Array.isArray(entry[0]) || entry[0].length < 2) return [];
+      const [mode, radius] = entry[0];
+      if (typeof mode !== 'number' || typeof radius !== 'number') return [];
+      const sequences: Coordinate[][] = [];
+      collectSequences(entry[1], sequences);
+      const centerPair = isCoordinatePair(entry[3]) ? entry[3] : undefined;
+      if (sequences.length === 0) return [];
+      return [{
+        scale: { mode, radius },
+        center: centerPair ? { latitude: centerPair[0], longitude: centerPair[1] } : null,
+        geometry: sequences,
+      }];
+    });
+    if (boundaries.length === 0) return [];
+    return [{ destination_id: destinationId, boundaries }];
+  });
 
-function asNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function parseGeometryGroup(group: unknown): GeometryGroup | null {
-  if (!Array.isArray(group)) return null;
-  const key = Array.isArray(group[0]) ? group[0] : [];
-  const coordinates = group[1] ?? [];
-  const coordinateCount = countCoordinates(coordinates);
-  if (coordinateCount === 0) return null;
-  return {
-    zoom: asNumber(key[0]),
-    radius: asNumber(key[1]),
-    coordinates,
-    coordinateCount,
-  };
-}
-
-export function extract(rawResponse: unknown, context?: ExtractContext): unknown {
-  const payload = parseFrameBody(rawResponse);
-  const records = Array.isArray(payload) && Array.isArray(payload[0]) ? payload[0] : [];
-  const center = {
-    latitude: asNumber(context?.params?.latitude),
-    longitude: asNumber(context?.params?.longitude),
-  };
-
-  const placeBoundaries: Record<string, BoundaryRecord> = {};
-  for (const record of records) {
-    if (!Array.isArray(record)) continue;
-    const placeId = typeof record[0] === 'string' ? record[0] : '';
-    if (!placeId) continue;
-    const groups = Array.isArray(record[1]) ? record[1] : [];
-    const geometryGroups = groups
-      .map(parseGeometryGroup)
-      .filter((group): group is GeometryGroup => group !== null);
-    if (geometryGroups.length === 0) continue;
-    placeBoundaries[placeId] = {
-      place_id: placeId,
-      center,
-      geometry_groups: geometryGroups,
+  const places = destinations.map((destination) => {
+    const typed = destination as {
+      destination_id: string;
+      boundaries: Array<{
+        scale: { mode: number; radius: number };
+        center: Coordinate | null;
+        geometry: Coordinate[][];
+      }>;
     };
-  }
-
+    const firstCenter = typed.boundaries.find((boundary) => boundary.center)?.center ?? {
+      latitude: null,
+      longitude: null,
+    };
+    return {
+      place_id: typed.destination_id,
+      center: firstCenter,
+      geometry_groups: typed.boundaries.map((boundary) => ({
+        zoom: boundary.scale.mode,
+        radius: boundary.scale.radius,
+        coordinates: boundary.geometry.map((sequence) => (
+          sequence.map((coordinate) => [coordinate.latitude, coordinate.longitude])
+        )),
+        coordinateCount: boundary.geometry.reduce((sum, sequence) => sum + sequence.length, 0),
+      })),
+    };
+  });
   return {
-    place_boundaries: placeBoundaries,
-    places: Object.values(placeBoundaries),
-    count: Object.keys(placeBoundaries).length,
+    destinations,
+    place_boundaries: Object.fromEntries(places.map((place) => [place.place_id, place])),
+    places,
+    count: places.length,
   };
 }

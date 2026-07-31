@@ -1,10 +1,20 @@
 # Imprint — agent context
 
-Imprint is a CLI tool: record a real browser session once, get back two deterministic replay artifacts (an API workflow + a DOM playbook) plus a generated MCP tool an AI agent can call. "Postman for AI agents."
+Imprint is a CLI tool: record a real browser session once, get back a
+deterministic API workflow, an optional verified DOM playbook, and a generated
+MCP tool an AI agent can call. "Postman for AI agents."
 
 ## Status
 
-v0.1 shipped. Star demos: `examples/google-flights` (4 tools, audit 92.6%) and `examples/google-hotels` (4 tools, audit 91.7%) — each one-shot compiled from a single real browser-session recording via `imprint teach`, decoding Google's `batchexecute` nested-array wire format with producer→consumer token chaining (search → booking/reviews). Other working demos: `examples/southwest` (live, defeats Akamai via stealth-fetch) and `examples/discoverandgo` (authed museum-pass booking). `examples/echo` is the MCP smoke-test fixture. Deferred work lives in [TODOS.md](TODOS.md).
+v0.1 shipped. Star demos: `examples/google-flights` (6 tools) and
+`examples/google-hotels` (8 tools), generated from real browser-session
+recordings via `imprint teach` and selectively refreshed only when candidates
+preserve or improve the checked-in contracts. They decode Google's
+`batchexecute` nested-array wire format with producer→consumer token chaining
+(search → booking/reviews). Other working demos: `examples/southwest` (live,
+defeats Akamai via browser-backed replay and stealth fetch) and
+`examples/discoverandgo` (authed museum-pass booking). `examples/echo` is the
+MCP smoke-test fixture. Deferred work lives in [TODOS.md](TODOS.md).
 
 ## Where to look
 
@@ -27,7 +37,7 @@ src/
 ├── cli.ts                  # 19 verbs (run `imprint --help`)
 ├── imprint/                # core modules — see docs/architecture.md for the map
 examples/
-├── <site>/<toolName>/{workflow.json, playbook.yaml, index.ts, cron.json, backends.json}
+├── <site>/<toolName>/{workflow.json, index.ts, backends.json, optional playbook.yaml}
 prompts/
 ├── compile-agent.md        # generate (workflow.json/parser.ts) system prompt
 ├── request-triage.md       # compile-playbook request filtering prompt
@@ -49,13 +59,74 @@ Whenever you change user-facing implementation behavior, update every matching u
 
 After website changes, run `bun install` only from `web/` if dependencies are missing, then run `bun run build` from `web/` and visually inspect the page at mobile and desktop widths. Keep root package installs separate from `web/`.
 
-## Teach and compile-agent guidance
+## Runtime-change doctrine for teach
 
-When improving `imprint teach`, prefer giving the planner and compile agents better evidence over adding broad deterministic classifiers. For new ambiguity, first ask what a thinking compile agent could decide at compile time with the right context, then expose that context through the build plan, prompts, diffs, browser-minted state, and targeted tests. Ambiguous dynamic values should be handled by LLM reasoning backed by concrete artifacts: session diffs, producer/consumer traces, recorded requests and responses, browser-minted state, and targeted tests the compile agent can run.
+Treat every change that alters Imprint's decisions or generated behavior as a
+runtime change. This includes the compiler, planner, verifier, audit policy, CLI
+defaults, orchestration, and agent prompts—not only `src/imprint/runtime.ts`.
 
-Use deterministic code for narrow, contract-level invariants only, such as "a producer-sourced token parameter must not default to one recorded opaque value" or "a declared browser_state capture must reproduce the value sent by the recorded request." Do not encode site-specific conclusions as universal rules. If the right choice depends on whether a token is static app metadata, browser/CDP-supplied state, generated per call, auth, or a producer-tool output, expose the evidence in the build plan and let the planner/compile agent decide and verify it.
+Imprint's runtime should remain small, deterministic, and site-agnostic. The
+thinking agents should own interpretation and other non-deterministic work:
+discovering tool scope, understanding endpoint semantics, mapping fields,
+classifying dynamic values, choosing an implementation, writing request and
+parser code, and evaluating live results. Site-specific knowledge belongs in
+the generated workflow, parser, request transform, playbook, tests, or local
+verification notes.
 
-For browser-minted tokens, make the compile path cheaper to reason about: surface where the value appeared, what changed across the diff, whether a response/header/body/cookie producer exists, and what small probe would prove the classification. Avoid trying to pre-classify every possible web edge case in runtime code. If repeated re-teaches reveal tiny edge cases, update the evidence contract or compile-agent test harness instead of stacking site-shaped runtime rules.
+The runtime should own only general mechanics and invariants: orchestration,
+artifact schemas, safety boundaries, exact state propagation, credential and
+session persistence, deterministic validation, and executing the artifacts the
+agent wrote. A defect exposed by one site may justify a runtime fix when the
+broken mechanism is genuinely general; reproducing it on a second site is not
+required. For example, if a login response produces values that recorded
+follow-up requests consume as cookies, Imprint must be able to preserve that
+recorded response-to-cookie dataflow for any site. The fix must model that
+relationship generically; it must not contain a
+hostname, provider name, endpoint, field name, payload index, or retry policy
+specific to the site that exposed it.
+
+Before making any runtime change during a reteach, apply this admission test:
+
+1. Reproduce and describe the failure in site-neutral terms.
+2. First try solving it in the generated site artifact or by giving the agent
+   better recorded evidence and a targeted verification probe.
+3. Identify the general contract that is broken and the class of unrelated
+   sites that could encounter the same defect.
+4. Use deterministic code only when an agent-written artifact cannot reliably
+   enforce that contract itself.
+5. Add neutral fixtures and tests that contain no real site names, endpoints,
+   operation names, or payload constants.
+6. Confirm that unaffected sites do not acquire new required state, retries,
+   branches, prompts, or complexity.
+7. In the PR, document the observed failure, why an artifact-level repair was
+   insufficient, the general invariant being added, and the evidence that the
+   change fixes the issue.
+
+Runtime, compiler, and prompt improvements that pass this admission test may
+ship in the same PR as the reteach and example refresh; they do not require a
+separate framework PR.
+
+If any item is missing, do not change the runtime during the reteach. Repair
+the generated artifact and record the potential framework improvement
+separately. The intended operating model is that Imprint and its agents perform
+roughly 95% of the work with high generality, while a user may repair the
+remaining site-specific edge cases in generated artifacts. The percentage is
+an ethos, not a release metric and not a reason to move site logic into shared
+code.
+
+When improving `imprint teach`, prefer giving the planner and compile agents
+better evidence over adding deterministic classifiers. For new ambiguity,
+first ask what a thinking agent could decide with the right context, then
+expose that context through session diffs, producer/consumer traces, recorded
+requests and responses, browser-minted state, and targeted tests.
+
+Use deterministic code for narrow, contract-level invariants only, such as "a
+producer-sourced token parameter must not default to one recorded opaque value"
+or "a declared browser-state capture must reproduce the value sent by the
+recorded request." If the right choice depends on whether a token is static app
+metadata, browser-supplied state, generated per call, authentication state, or
+a producer-tool output, expose the evidence and let the planner or compile
+agent decide and verify it.
 
 ## CI/CD & releases
 

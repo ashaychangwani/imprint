@@ -53,7 +53,7 @@ When `HERMES_HOME` is set, Imprint writes Hermes MCP entries to `$HERMES_HOME/co
 
 **Teach once.** `imprint teach google-flights` records real browser flows and compiles a **6-tool** MCP server — the compile agent reverse-engineers Google's `batchexecute` wire format itself and wires the staged search→booking token chain, with no hand-written request code. Here is the actual run behind the example snapshot:
 
-![imprint teach google-flights — a real run compiled into live-verified MCP tools](web/public/imprint-teach.gif)
+![imprint teach google-flights — a real run compiled into MCP tools](web/public/imprint-teach.gif)
 
 **Then your agent calls those tools** like any other — real-time results through a live trusted-Chrome (`cdp-replay`) backend:
 
@@ -81,7 +81,7 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 </td>
 <td align="center" width="33%">
 <h3>2. Compile</h3>
-<p>Generates two replay artifacts:<br><br><code>workflow.json</code> — API-level replay<br><code>playbook.yaml</code> — DOM-level fallback<br><br>Credentials are redacted automatically.</p>
+<p>Generates a verified API workflow and, when the recorded DOM flow is suitable, a DOM playbook fallback:<br><br><code>workflow.json</code> — API-level replay<br><code>playbook.yaml</code> — optional DOM-level fallback<br><br>Credentials are redacted automatically.</p>
 </td>
 <td align="center" width="34%">
 <h3>3. Use</h3>
@@ -198,7 +198,9 @@ For bot-protected sites, `imprint probe-backends <site> --tool <toolName>` write
 
 During `imprint teach`, the independent final verifier uses the same probe before it runs the compiler-written integration suite. Probe time is separate from the suite timeout, and verification pins the selected backend. Compiler revisions reuse that proven preference without probing; only a transport/network/browser failure can prompt a reprobe. Semantic failures return directly to the compiler. Live verifier progress and retained suite receipts are written beside the generated tool as `.live-verifier-log.jsonl` and `.live-verification-evidence.json`.
 
-Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder always has a DOM fallback.
+Teach retains each replay artifact only when it can compile and verify it.
+Generated tools always include `workflow.json`; `playbook.yaml` is present when
+the recorded DOM flow provides a reliable fallback.
 
 ---
 
@@ -220,14 +222,18 @@ Each site registers as its own MCP server (`imprint-southwest`, `imprint-google-
 
 ## Examples
 
-Every example below was **one-shot compiled from a single real browser-session recording** (`imprint teach`) — the generated artifacts are committed verbatim as a **proof of concept** of what the compiler produces, not as maintained integrations. Recording-derived defaults (dates, geo) age out; pass explicit values.
+Every example below was generated from real browser-session recordings with
+`imprint teach`. Release snapshots may selectively refresh only the generated
+tools that preserve or improve their established contracts; narrower or
+unreliable candidates are rejected. Recording-derived defaults (dates, geo)
+age out, so pass explicit values.
 
 **★ Star examples** — multi-tool suites, each compiled from one recording and scored by the headless differential audit:
 
 | Example | Tools | Audit | What it shows |
 |:--|:--|:--|:--|
 | [**google-flights**](examples/google-flights) | 6 | live-verified | `batchexecute` wire-format decode + staged multi-city search→booking token chain, live `cdp-replay` |
-| [**google-hotels**](examples/google-hotels) | 4 | 91.7% | autocomplete → search → reviews/booking producer-token chaining |
+| [**google-hotels**](examples/google-hotels) | 8 | live-verified | autocomplete → search → reviews/booking producer-token chaining |
 
 Other examples:
 

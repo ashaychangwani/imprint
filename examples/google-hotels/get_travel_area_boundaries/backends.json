@@ -1,16 +1,40 @@
 {
-  "probedAt": "2026-07-09T01:34:48.810Z",
-  "imprintVersion": "0.5.1",
+  "probedAt": "2026-07-31T10:23:39.202Z",
+  "imprintVersion": "0.6.6",
   "schemaVersion": 2,
-  "workflowHash": "57139ee7bc64edaa9f8c23c189896f16ec76a0cbec83724e7860502b5a954197",
-  "capabilityHash": "d0891f676244406c38af43944a1d24d32c068a9d1a75986d260a63bffd29e1b2",
+  "workflowHash": "b3572f1e4f1a72fa2cca492ae5c736260e997062909cb990740123a1a12db945",
+  "capabilityHash": "be97697b7c416a05b96e4d663a606108a042c712e51e1b272ce4a4191375fd77",
   "preferredOrder": [
-    "fetch"
+    "cdp-replay",
+    "stealth-fetch"
   ],
   "results": {
     "fetch": {
+      "outcome": "failed",
+      "durationMs": 212,
+      "error": "STATE_MISSING",
+      "detail": "Workflow placeholder ${state.bl} but state \"bl\" has not been captured yet"
+    },
+    "cdp-replay": {
       "outcome": "ok",
-      "durationMs": 238
+      "durationMs": 33483,
+      "coldDurationMs": 33483,
+      "warmDurationMs": 743,
+      "rankingDurationMs": 743,
+      "detail": "warm cdp-replay succeeded in 743ms"
+    },
+    "fetch-bootstrap": {
+      "outcome": "forbidden",
+      "durationMs": 33741,
+      "detail": "fetch-bootstrap: cdp-minted jar did not validate; cdp-replay (in-page) required."
+    },
+    "stealth-fetch": {
+      "outcome": "ok",
+      "durationMs": 7529
+    },
+    "playbook": {
+      "outcome": "unavailable",
+      "detail": "no playbook.yaml"
     }
   }
 }
