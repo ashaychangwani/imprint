@@ -1,24 +1,28 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  type ChainEdge,
   type ContentAddressedRef,
   type DesiredTeachingPlan,
+  DesiredTeachingPlanSchema,
   type EditableTeachingPlan,
   type EditableTeachingTool,
   type TeachingPlanDecision,
+  type TeachingToolCandidate,
   canonicalTeachingPlanJson,
   createEditableTeachingPlan,
+  normalizeDetectorCandidateForMaster,
   reviseEditableTeachingPlan,
   teachingPlanContentSha256,
   teachingToolCompileInputsSha256,
   validateEditableTeachingPlan,
 } from '../src/imprint/master-teach-plan.ts';
-import type { ToolCandidate } from '../src/imprint/tool-candidates.ts';
 
 const RECORDING = teachingPlanContentSha256('recording');
 const validation = {
   site: 'fixture-site',
   recordingSha256: RECORDING,
-  recordingSeqs: new Set([1, 2, 3, 4, 5, 6, 7, 8]),
+  requestSeqs: new Set([1, 2, 3, 4, 5, 6, 7, 8]),
+  eventSeqs: new Set([1, 2, 3, 4, 5, 6, 7, 8]),
 };
 
 const EMPTY_CONTEXT = {
@@ -40,9 +44,9 @@ function candidate(
     primary?: boolean;
     seq?: number;
     dependencies?: string[];
-    params?: ToolCandidate['likelyParams'];
+    params?: TeachingToolCandidate['likelyParams'];
   } = {},
-): ToolCandidate {
+): TeachingToolCandidate {
   const seq = options.seq ?? 1;
   return {
     toolName,
@@ -54,7 +58,9 @@ function candidate(
     representativeSeqs: [seq],
     eventSeqs: [],
     expectedOutput: `Results for ${toolName}`,
-    likelyParams: options.params ?? [{ name: 'query', type: 'string' }],
+    likelyParams: options.params ?? [
+      { name: 'query', type: 'string', description: 'Public query text.' },
+    ],
     dependencySeqs: [],
     dependsOnTools: options.dependencies ?? [],
   };
@@ -80,17 +86,19 @@ function tool(
   };
 }
 
-function desired(tools: EditableTeachingTool[]): DesiredTeachingPlan {
+function desired(tools: EditableTeachingTool[], chainEdges: ChainEdge[] = []): DesiredTeachingPlan {
   const plan: DesiredTeachingPlan = {
     site: 'fixture-site',
     recordingSha256: RECORDING,
-    sharedContext: structuredClone(EMPTY_CONTEXT),
     tools,
+    chainEdges,
   };
   for (const plannedTool of plan.tools) {
     if (plannedTool.implementationPlan) {
-      plannedTool.implementationPlan.basedOnCompileInputsSha256 =
-        teachingToolCompileInputsSha256(plannedTool);
+      plannedTool.implementationPlan.basedOnCompileInputsSha256 = teachingToolCompileInputsSha256(
+        plannedTool,
+        chainEdges,
+      );
     }
   }
   return plan;
@@ -99,6 +107,12 @@ function desired(tools: EditableTeachingTool[]): DesiredTeachingPlan {
 function firstTool(plan: DesiredTeachingPlan): EditableTeachingTool {
   const value = plan.tools[0];
   if (!value) throw new Error('test plan has no tools');
+  return value;
+}
+
+function firstEdge(plan: DesiredTeachingPlan): ChainEdge {
+  const value = plan.chainEdges[0];
+  if (!value) throw new Error('test plan has no chain edge');
   return value;
 }
 
@@ -126,15 +140,33 @@ function create(plan: DesiredTeachingPlan): EditableTeachingPlan {
 }
 
 function chain(): DesiredTeachingPlan {
-  return desired([
-    tool('producer-id', 'produce_token', { primary: true, seq: 1 }),
-    tool('consumer-id', 'consume_token', {
-      seq: 2,
-      dependencies: ['produce_token'],
-    }),
-    tool('leaf-id', 'show_details', { seq: 3, dependencies: ['consume_token'] }),
-    tool('other-id', 'unrelated_search', { seq: 4 }),
-  ]);
+  return desired(
+    [
+      tool('producer-id', 'produce_token', { primary: true, seq: 1 }),
+      tool('consumer-id', 'consume_token', {
+        seq: 2,
+        dependencies: ['produce_token'],
+      }),
+      tool('leaf-id', 'show_details', { seq: 3, dependencies: ['consume_token'] }),
+      tool('other-id', 'unrelated_search', { seq: 4 }),
+    ],
+    [
+      {
+        id: 'producer-consumer',
+        producerToolId: 'producer-id',
+        producerResultPath: 'results[0].token',
+        consumerToolId: 'consumer-id',
+        consumerParameter: 'query',
+      },
+      {
+        id: 'consumer-leaf',
+        producerToolId: 'consumer-id',
+        producerResultPath: 'results[0].token',
+        consumerToolId: 'leaf-id',
+        consumerParameter: 'query',
+      },
+    ],
+  );
 }
 
 describe('editable master teaching plan', () => {
@@ -152,7 +184,7 @@ describe('editable master teaching plan', () => {
     ).toThrow('first plan decision');
   });
 
-  it('rejects unknown fields in plan, tool, candidate, refs, and shared context', () => {
+  it('rejects unknown fields in plan, tool, candidate, refs, and compile context', () => {
     const base = desired([tool('search-id', 'search', { primary: true })]);
     const baseTool = firstTool(base);
     for (const invalid of [
@@ -171,18 +203,96 @@ describe('editable master teaching plan', () => {
           },
         ],
       },
-      { ...base, sharedContext: { ...base.sharedContext, surprise: true } },
+      {
+        ...base,
+        tools: [{ ...baseTool, compileContext: { ...baseTool.compileContext, surprise: true } }],
+      },
+      { ...base, sharedContext: structuredClone(EMPTY_CONTEXT) },
     ]) {
       expect(() => create(invalid as DesiredTeachingPlan)).toThrow();
     }
   });
 
+  it('uses strict required semantic wire fields without coercion or defaults', () => {
+    const base = desired([tool('search-id', 'search', { primary: true })]);
+    const missingArrays = structuredClone(base) as unknown as Record<string, unknown>;
+    const candidateValue = (missingArrays.tools as Array<Record<string, unknown>>)[0]
+      ?.candidate as Record<string, unknown>;
+    candidateValue.requestSeqs = undefined;
+    expect(DesiredTeachingPlanSchema.safeParse(missingArrays).success).toBe(false);
+
+    const missingParamField = structuredClone(base);
+    const parameter = firstTool(missingParamField).candidate.likelyParams[0] as unknown as Record<
+      string,
+      unknown
+    >;
+    parameter.description = undefined;
+    expect(DesiredTeachingPlanSchema.safeParse(missingParamField).success).toBe(false);
+
+    const coerced = structuredClone(base);
+    (firstTool(coerced).candidate.likelyParams[0] as unknown as Record<string, unknown>).type =
+      'String';
+    expect(DesiredTeachingPlanSchema.safeParse(coerced).success).toBe(false);
+
+    const missingContextField = structuredClone(base);
+    (
+      firstTool(missingContextField).compileContext as unknown as Record<string, unknown>
+    ).authNotes = undefined;
+    expect(DesiredTeachingPlanSchema.safeParse(missingContextField).success).toBe(false);
+  });
+
+  it('maps shipped unknown detector metadata to null and removes only its timestamp', () => {
+    const value = candidate('search');
+    const detectorValue = structuredClone(value);
+    const detectorParameter = detectorValue.likelyParams[0] as unknown as Record<string, unknown>;
+    detectorParameter.type = undefined;
+    detectorParameter.description = undefined;
+    expect(
+      normalizeDetectorCandidateForMaster({
+        ...detectorValue,
+        eventTimeRange: { startTimestamp: 1, endTimestamp: 2 },
+      }),
+    ).toEqual({
+      ...value,
+      likelyParams: [{ name: 'query', type: null, description: null }],
+    });
+    expect(() => normalizeDetectorCandidateForMaster({ ...value, injected: true })).toThrow();
+  });
+
+  it('preserves explicit unknown metadata and permits an honest empty output description', () => {
+    const plan = desired([tool('search-id', 'search')]);
+    const candidateValue = firstTool(plan).candidate;
+    candidateValue.expectedOutput = '';
+    candidateValue.likelyParams = [{ name: 'query', type: null, description: null }];
+    expect(create(plan).tools[0]?.candidate).toEqual(candidateValue);
+  });
+
+  it('represents an honest empty plan without inventing a tool', () => {
+    expect(create(desired([])).tools).toEqual([]);
+  });
+
   it('rejects absolute and escaping content-reference paths', () => {
-    for (const path of ['/tmp/evidence.json', '../evidence.json', 'evidence/../secret', 'C:/x']) {
+    for (const path of [
+      '/tmp/evidence.json',
+      '../evidence.json',
+      'evidence/../secret',
+      'C:/x',
+      ' evidence/request.json',
+      'evidence/request.json ',
+    ]) {
       const plan = desired([tool('search-id', 'search', { primary: true })]);
       firstEvidence(firstTool(plan)).path = path;
-      expect(() => create(plan)).toThrow('workspace-relative path');
+      expect(() => create(plan)).toThrow();
     }
+  });
+
+  it('rejects noncanonical whitespace instead of silently trimming semantic fields', () => {
+    const plan = desired([tool('search-id', 'search')]);
+    firstTool(plan).candidate.description = ' padded description ';
+    expect(() => create(plan)).toThrow('whitespace is not canonical');
+    const site = desired([]);
+    site.site = ' fixture-site';
+    expect(() => create(site)).toThrow('whitespace is not canonical');
   });
 
   it('requires unique stable ids and names without making primary a runtime decision', () => {
@@ -201,6 +311,44 @@ describe('editable master teaching plan', () => {
         ]),
       ).tools.map((value) => value.candidate.primary),
     ).toEqual([true, true]);
+  });
+
+  it('bounds stable ids, tool names, and dependency names to snapshot-safe lengths', () => {
+    const longest = 'a'.repeat(128);
+    expect(create(desired([tool(longest, longest)])).tools[0]?.id).toBe(longest);
+
+    const tooLong = 'a'.repeat(129);
+    expect(() => create(desired([tool(tooLong, 'search')]))).toThrow('invalid stable tool id');
+    expect(() => create(desired([tool('search-id', tooLong)]))).toThrow();
+    expect(() =>
+      create(desired([tool('search-id', 'search', { dependencies: [tooLong] })])),
+    ).toThrow();
+  });
+
+  it('rejects duplicate sequence numbers in candidates and focused compile context', () => {
+    for (const field of [
+      'requestSeqs',
+      'representativeSeqs',
+      'eventSeqs',
+      'dependencySeqs',
+    ] as const) {
+      const plan = desired([tool('search-id', 'search')]);
+      firstTool(plan).candidate[field] = [1, 1];
+      expect(() => create(plan)).toThrow('sequence list must be unique');
+    }
+    for (const field of ['loginRequestSeqs', 'authRequestSeqs'] as const) {
+      const plan = desired([tool('search-id', 'search')]);
+      firstTool(plan).compileContext[field] = [1, 1];
+      expect(() => create(plan)).toThrow('sequence list must be unique');
+    }
+  });
+
+  it('requires every representative sequence to belong to its candidate requests', () => {
+    const plan = desired([tool('search-id', 'search')]);
+    firstTool(plan).candidate.representativeSeqs = [2];
+    expect(() => create(plan)).toThrow(
+      "representative seq 2 is absent from this candidate's requestSeqs",
+    );
   });
 
   it('rejects missing recording seqs, missing dependencies, and cycles', () => {
@@ -223,6 +371,22 @@ describe('editable master teaching plan', () => {
         ]),
       ),
     ).toThrow('dependency cycle');
+  });
+
+  it('persists and validates explicit producer-consumer chain edges', () => {
+    const plan = chain();
+    expect(create(plan).chainEdges).toEqual(plan.chainEdges);
+    const badParameter = structuredClone(plan);
+    firstEdge(badParameter).consumerParameter = 'missing';
+    expect(() => create(badParameter)).toThrow('unknown consumer parameter');
+    const badTool = structuredClone(plan);
+    firstEdge(badTool).producerToolId = 'missing-id';
+    expect(() => create(badTool)).toThrow('references unknown tool');
+    const badDependency = structuredClone(plan);
+    const consumer = badDependency.tools[1];
+    if (!consumer) throw new Error('test plan has no consumer');
+    consumer.candidate.dependsOnTools = [];
+    expect(() => create(badDependency)).toThrow('absent from the explicit tool dependency');
   });
 
   it('treats candidate metadata-only changes as no compile work', () => {
@@ -321,18 +485,38 @@ describe('editable master teaching plan', () => {
     expect(result.recompileToolIds).toEqual(['search-id']);
   });
 
+  it('compares the complete implementation-plan ref', () => {
+    const original = desired([tool('search-id', 'search', { plan: 'same plan' })]);
+    const changed = structuredClone(original);
+    const implementation = firstTool(changed).implementationPlan;
+    if (!implementation) throw new Error('test tool has no implementation plan');
+    implementation.path = 'moved/search-plan.json';
+    const result = reviseEditableTeachingPlan(
+      create(original),
+      changed,
+      { expectedRevision: 1, decision: decision('revised') },
+      validation,
+    );
+    expect(result.recompileToolIds).toEqual(['search-id']);
+  });
+
   it('recompiles for parameter, request, evidence, and implementation-plan content changes', () => {
     const cases: Array<{ replan: boolean; mutate: (plan: DesiredTeachingPlan) => void }> = [
       {
         replan: true,
         mutate: (plan) => {
-          firstTool(plan).candidate.likelyParams.push({ name: 'date', type: 'string' });
+          firstTool(plan).candidate.likelyParams.push({
+            name: 'date',
+            type: 'string',
+            description: 'Requested date.',
+          });
         },
       },
       {
         replan: true,
         mutate: (plan) => {
           firstTool(plan).candidate.requestSeqs = [2];
+          firstTool(plan).candidate.representativeSeqs = [2];
         },
       },
       {
@@ -375,7 +559,11 @@ describe('editable master teaching plan', () => {
   it('rejects an implementation plan after its compile inputs change', () => {
     const original = desired([tool('search-id', 'search', { primary: true, plan: 'old plan' })]);
     const changed = structuredClone(original);
-    firstTool(changed).candidate.likelyParams.push({ name: 'date', type: 'string' });
+    firstTool(changed).candidate.likelyParams.push({
+      name: 'date',
+      type: 'string',
+      description: 'Requested date.',
+    });
     expect(() =>
       reviseEditableTeachingPlan(
         create(original),
@@ -397,9 +585,6 @@ describe('editable master teaching plan', () => {
     const changedTool = firstTool(changed);
     changedTool.evidenceRefs.reverse();
     firstEvidence(changedTool).path = 'moved/evidence.json';
-    if (changedTool.implementationPlan) {
-      changedTool.implementationPlan.path = 'moved/plan.md';
-    }
     const result = reviseEditableTeachingPlan(
       create(original),
       changed,
@@ -424,24 +609,25 @@ describe('editable master teaching plan', () => {
     expect(result.reverifyToolIds).toEqual(['consumer-id', 'leaf-id', 'producer-id']);
   });
 
-  it('does not invalidate tools for global context notes not passed to their compiler', () => {
+  it('targets a chain-edge edit at its consumer and downstream tools', () => {
     const original = chain();
     const changed = structuredClone(original);
-    changed.sharedContext.sharedHelperNotes = 'Master-only observation.';
+    firstEdge(changed).producerResultPath = 'results[0].replacement_token';
     const result = reviseEditableTeachingPlan(
       create(original),
       changed,
       { expectedRevision: 1, decision: decision('revised') },
       validation,
     );
-    expect(result.replanToolIds).toEqual([]);
-    expect(result.recompileToolIds).toEqual([]);
+    expect(result.recompileToolIds).toEqual(['consumer-id']);
+    expect(result.reverifyToolIds).toEqual(['consumer-id', 'leaf-id']);
   });
 
   it('recompiles a changed producer and only reverifies its transitive consumers', () => {
     const original = chain();
     const changed = structuredClone(original);
     firstTool(changed).candidate.requestSeqs = [5];
+    firstTool(changed).candidate.representativeSeqs = [5];
     const result = reviseEditableTeachingPlan(
       create(original),
       changed,
@@ -500,7 +686,7 @@ describe('editable master teaching plan', () => {
       validation,
     );
     expect(result.removedToolIds).toEqual(['producer-id']);
-    expect(result.recompileToolIds).toEqual(['consumer-id']);
+    expect(result.recompileToolIds).toEqual(['consumer-id', 'leaf-id']);
     expect(result.reverifyToolIds).toEqual(['consumer-id', 'leaf-id']);
   });
 

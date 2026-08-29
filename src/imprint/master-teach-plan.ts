@@ -7,29 +7,182 @@
 
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { SharedCompileContextSchema, ToolCandidateSchema } from './tool-candidates.ts';
 
 export const MASTER_TEACH_PLAN_VERSION = 1 as const;
 
 const Sha256Schema = z
   .string()
   .regex(/^sha256:[a-f0-9]{64}$/, 'expected sha256:<64 lowercase hex characters>');
-const ToolIdSchema = z.string().regex(/^[a-z][a-z0-9_-]*$/, 'invalid stable tool id');
-const RelativeRefPathSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(1_024)
-  .refine(
-    (value) =>
-      !value.startsWith('/') &&
-      !value.includes('\\') &&
-      !/^[a-zA-Z]:/.test(value) &&
-      value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..'),
-    'expected a normalized workspace-relative path',
-  );
-const StrictToolCandidateSchema = ToolCandidateSchema.strict();
-const StrictSharedCompileContextSchema = SharedCompileContextSchema.strict();
+const ToolIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,127}$/, 'invalid stable tool id');
+const canonicalText = (minimum: number, maximum: number) =>
+  z
+    .string()
+    .min(minimum)
+    .max(maximum)
+    .refine((value) => value === value.trim(), 'leading or trailing whitespace is not canonical');
+const RelativeRefPathSchema = canonicalText(1, 1_024).refine(
+  (value) =>
+    !value.startsWith('/') &&
+    !value.includes('\\') &&
+    !/^[a-zA-Z]:/.test(value) &&
+    value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..'),
+  'expected a normalized workspace-relative path',
+);
+const SeqListSchema = z
+  .array(z.number().int().nonnegative())
+  .max(50_000)
+  .refine((seqs) => new Set(seqs).size === seqs.length, 'sequence list must be unique');
+const ToolNameSchema = z.string().regex(/^[a-z][a-z0-9_]{0,127}$/);
+
+/** Exact semantic wire shapes. They deliberately do not default, coerce, or strip. */
+export const TeachingParameterSchema = z
+  .object({
+    name: canonicalText(1, 128),
+    type: z.enum(['string', 'number', 'boolean']).nullable(),
+    description: canonicalText(1, 600).nullable(),
+  })
+  .strict();
+export type TeachingParameter = z.infer<typeof TeachingParameterSchema>;
+
+export const TeachingToolCandidateSchema = z
+  .object({
+    toolName: ToolNameSchema,
+    description: canonicalText(1, 2_000),
+    rationale: canonicalText(1, 4_000),
+    confidence: z.number().min(0).max(1),
+    primary: z.boolean(),
+    requestSeqs: SeqListSchema,
+    representativeSeqs: SeqListSchema,
+    eventSeqs: SeqListSchema,
+    expectedOutput: canonicalText(0, 2_000),
+    likelyParams: z.array(TeachingParameterSchema).max(64),
+    dependencySeqs: SeqListSchema,
+    dependsOnTools: z.array(ToolNameSchema).max(64),
+  })
+  .strict();
+export type TeachingToolCandidate = z.infer<typeof TeachingToolCandidateSchema>;
+export type TeachingCandidateEvidence = Omit<TeachingToolCandidate, 'likelyParams'> & {
+  likelyParams?: readonly TeachingParameter[];
+};
+export interface TeachingCandidateIssue {
+  path: Array<string | number>;
+  message: string;
+}
+
+/** Shared contextual validation for detector evidence, boundary advice, and plans. */
+export function teachingCandidateIssues(
+  candidates: readonly TeachingCandidateEvidence[],
+  requestSeqs: ReadonlySet<number>,
+  eventSeqs: ReadonlySet<number>,
+): TeachingCandidateIssue[] {
+  const issues: TeachingCandidateIssue[] = [];
+  const byName = new Map<string, TeachingCandidateEvidence>();
+  candidates.forEach((candidate, candidateIndex) => {
+    if (byName.has(candidate.toolName))
+      issues.push({ path: [candidateIndex, 'toolName'], message: 'duplicate tool name' });
+    if (new Set(candidate.dependsOnTools).size !== candidate.dependsOnTools.length)
+      issues.push({ path: [candidateIndex, 'dependsOnTools'], message: 'duplicate dependency' });
+    for (const field of ['requestSeqs', 'representativeSeqs', 'dependencySeqs'] as const)
+      candidate[field].forEach((seq, index) => {
+        if (!requestSeqs.has(seq))
+          issues.push({
+            path: [candidateIndex, field, index],
+            message: `unknown recording seq ${seq}`,
+          });
+      });
+    const ownedRequestSeqs = new Set(candidate.requestSeqs);
+    candidate.representativeSeqs.forEach((seq, index) => {
+      if (!ownedRequestSeqs.has(seq))
+        issues.push({
+          path: [candidateIndex, 'representativeSeqs', index],
+          message: `representative seq ${seq} is absent from this candidate's requestSeqs`,
+        });
+    });
+    candidate.eventSeqs.forEach((seq, index) => {
+      if (!eventSeqs.has(seq))
+        issues.push({
+          path: [candidateIndex, 'eventSeqs', index],
+          message: `unknown recording seq ${seq}`,
+        });
+    });
+    const params = candidate.likelyParams?.map(({ name }) => name) ?? [];
+    if (new Set(params).size !== params.length)
+      issues.push({ path: [candidateIndex, 'likelyParams'], message: 'duplicate parameter' });
+    byName.set(candidate.toolName, candidate);
+  });
+  candidates.forEach((candidate, candidateIndex) => {
+    candidate.dependsOnTools.forEach((name, dependencyIndex) => {
+      if (name === candidate.toolName || !byName.has(name))
+        issues.push({
+          path: [candidateIndex, 'dependsOnTools', dependencyIndex],
+          message:
+            name === candidate.toolName
+              ? `tool "${candidate.toolName}" cannot depend on itself`
+              : `tool "${candidate.toolName}" depends on missing tool "${name}"`,
+        });
+    });
+  });
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (name: string) => {
+    if (visited.has(name)) return;
+    if (visiting.has(name)) {
+      issues.push({ path: [], message: 'tool dependency cycle' });
+      return;
+    }
+    visiting.add(name);
+    for (const dependency of byName.get(name)?.dependsOnTools ?? []) visit(dependency);
+    visiting.delete(name);
+    visited.add(name);
+  };
+  for (const name of byName.keys()) visit(name);
+  return issues;
+}
+
+export const TeachingCompileContextSchema = z
+  .object({
+    loginRequestSeqs: SeqListSchema,
+    credentialNames: z.array(canonicalText(1, 128)).max(64),
+    tokenExtractionNotes: z.string().max(4_000),
+    sharedHelperNotes: z.string().max(4_000),
+    authRequestSeqs: SeqListSchema,
+    authNotes: z.string().max(4_000),
+  })
+  .strict();
+export type TeachingCompileContext = z.infer<typeof TeachingCompileContextSchema>;
+
+const DetectorParameterSchema = TeachingParameterSchema.extend({
+  type: z.enum(['string', 'number', 'boolean']).nullable().optional(),
+  description: canonicalText(1, 600).nullable().optional(),
+}).strict();
+const DetectorCandidateSchema = TeachingToolCandidateSchema.extend({
+  likelyParams: z.array(DetectorParameterSchema).max(64),
+  eventTimeRange: z
+    .object({ startTimestamp: z.number(), endTimestamp: z.number() })
+    .strict()
+    .optional(),
+}).strict();
+
+/** Host ingress accepts shipped optional metadata and one timestamp field, never other junk. */
+export function normalizeDetectorCandidateForMaster(value: unknown): TeachingToolCandidate {
+  const {
+    eventTimeRange: _eventTimeRange,
+    likelyParams,
+    ...candidate
+  } = DetectorCandidateSchema.parse(value);
+  return TeachingToolCandidateSchema.parse({
+    ...candidate,
+    likelyParams: likelyParams.map((parameter) => ({
+      name: parameter.name,
+      type: parameter.type ?? null,
+      description: parameter.description ?? null,
+    })),
+  });
+}
+
+export function normalizeDetectorCompileContextForMaster(value: unknown): TeachingCompileContext {
+  return TeachingCompileContextSchema.parse(value);
+}
 
 export const ContentAddressedRefSchema = z
   .object({
@@ -42,7 +195,7 @@ export type ContentAddressedRef = z.infer<typeof ContentAddressedRefSchema>;
 export const TeachingToolStrategySchema = z
   .object({
     kind: z.enum(['api', 'playbook_fallback']),
-    reason: z.string().trim().min(1),
+    reason: canonicalText(1, 4_000),
   })
   .strict();
 export type TeachingToolStrategy = z.infer<typeof TeachingToolStrategySchema>;
@@ -52,11 +205,25 @@ export const ImplementationPlanRefSchema = ContentAddressedRefSchema.extend({
 }).strict();
 export type ImplementationPlanRef = z.infer<typeof ImplementationPlanRefSchema>;
 
+export const ChainEdgeSchema = z
+  .object({
+    id: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/),
+    producerToolId: ToolIdSchema,
+    producerResultPath: canonicalText(1, 512),
+    consumerToolId: ToolIdSchema,
+    consumerParameter: canonicalText(1, 128),
+  })
+  .strict()
+  .refine((edge) => edge.producerToolId !== edge.consumerToolId, {
+    message: 'chain edge cannot be self-referential',
+  });
+export type ChainEdge = z.infer<typeof ChainEdgeSchema>;
+
 export const TeachingPlanDecisionSchema = z
   .object({
     timestamp: z.string().datetime(),
     outcome: z.enum(['initial', 'accepted', 'rejected', 'revised']),
-    reason: z.string().trim().min(1),
+    reason: canonicalText(1, 4_000),
     advisorRefs: z.array(ContentAddressedRefSchema).default([]),
     evidenceRefs: z.array(ContentAddressedRefSchema).default([]),
   })
@@ -66,8 +233,8 @@ export type TeachingPlanDecision = z.infer<typeof TeachingPlanDecisionSchema>;
 export const EditableTeachingToolSchema = z
   .object({
     id: ToolIdSchema,
-    candidate: StrictToolCandidateSchema,
-    compileContext: StrictSharedCompileContextSchema,
+    candidate: TeachingToolCandidateSchema,
+    compileContext: TeachingCompileContextSchema,
     evidenceRefs: z.array(ContentAddressedRefSchema).min(1),
     strategy: TeachingToolStrategySchema.optional(),
     implementationPlan: ImplementationPlanRefSchema.optional(),
@@ -77,10 +244,10 @@ export type EditableTeachingTool = z.infer<typeof EditableTeachingToolSchema>;
 
 export const DesiredTeachingPlanSchema = z
   .object({
-    site: z.string().trim().min(1),
+    site: canonicalText(1, 255),
     recordingSha256: Sha256Schema,
-    sharedContext: StrictSharedCompileContextSchema,
-    tools: z.array(EditableTeachingToolSchema).min(1),
+    tools: z.array(EditableTeachingToolSchema).max(32),
+    chainEdges: z.array(ChainEdgeSchema).max(64),
   })
   .strict();
 export type DesiredTeachingPlan = z.infer<typeof DesiredTeachingPlanSchema>;
@@ -95,7 +262,8 @@ export type EditableTeachingPlan = z.infer<typeof EditableTeachingPlanSchema>;
 export interface TeachingPlanValidation {
   site: string;
   recordingSha256: string;
-  recordingSeqs: ReadonlySet<number>;
+  requestSeqs: ReadonlySet<number>;
+  eventSeqs: ReadonlySet<number>;
 }
 
 export interface TeachingPlanRevisionResult {
@@ -138,10 +306,10 @@ export function teachingPlanContentSha256(value: unknown): string {
 function assertKnownSeqs(
   label: string,
   seqs: readonly number[],
-  recordingSeqs: ReadonlySet<number>,
+  knownSeqs: ReadonlySet<number>,
 ): void {
   for (const seq of seqs) {
-    if (!recordingSeqs.has(seq)) {
+    if (!knownSeqs.has(seq)) {
       throw new TeachingPlanValidationError(`${label} references unknown recording seq ${seq}`);
     }
   }
@@ -152,39 +320,46 @@ function dependencyIds(plan: DesiredTeachingPlan): Map<string, string[]> {
   return new Map(
     plan.tools.map((tool) => [
       tool.id,
-      tool.candidate.dependsOnTools.map((name) => {
-        const id = idByName.get(name);
-        if (!id) {
-          throw new TeachingPlanValidationError(
-            `tool "${tool.candidate.toolName}" depends on missing tool "${name}"`,
-          );
-        }
-        return id;
-      }),
+      tool.candidate.dependsOnTools.flatMap((name) => idByName.get(name) ?? []),
     ]),
   );
 }
 
-function assertAcyclic(plan: DesiredTeachingPlan, dependencies: Map<string, string[]>): void {
-  const state = new Map<string, 'visiting' | 'visited'>();
-  const nameById = new Map(plan.tools.map((tool) => [tool.id, tool.candidate.toolName]));
-
-  function visit(id: string, trail: string[]): void {
-    if (state.get(id) === 'visited') return;
-    if (state.get(id) === 'visiting') {
-      const cycleStart = trail.indexOf(id);
-      const cycle = [...trail.slice(cycleStart), id].map((item) => nameById.get(item) ?? item);
-      throw new TeachingPlanValidationError(`tool dependency cycle: ${cycle.join(' -> ')}`);
+function validateChainEdges(plan: DesiredTeachingPlan): void {
+  const tools = new Map(plan.tools.map((tool) => [tool.id, tool]));
+  const ids = new Set<string>();
+  const tuples = new Set<string>();
+  for (const edge of plan.chainEdges) {
+    const tuple = canonicalTeachingPlanJson([
+      edge.producerToolId,
+      edge.producerResultPath,
+      edge.consumerToolId,
+      edge.consumerParameter,
+    ]);
+    if (ids.has(edge.id) || tuples.has(tuple)) {
+      throw new TeachingPlanValidationError(`duplicate chain edge "${edge.id}"`);
     }
-    state.set(id, 'visiting');
-    for (const dependency of dependencies.get(id) ?? []) visit(dependency, [...trail, id]);
-    state.set(id, 'visited');
+    const producer = tools.get(edge.producerToolId);
+    const consumer = tools.get(edge.consumerToolId);
+    if (!producer || !consumer) {
+      throw new TeachingPlanValidationError(`chain edge "${edge.id}" references unknown tool`);
+    }
+    if (!consumer.candidate.likelyParams.some(({ name }) => name === edge.consumerParameter)) {
+      throw new TeachingPlanValidationError(
+        `chain edge "${edge.id}" references unknown consumer parameter`,
+      );
+    }
+    if (!consumer.candidate.dependsOnTools.includes(producer.candidate.toolName)) {
+      throw new TeachingPlanValidationError(
+        `chain edge "${edge.id}" is absent from the explicit tool dependency`,
+      );
+    }
+    ids.add(edge.id);
+    tuples.add(tuple);
   }
-
-  for (const tool of plan.tools) visit(tool.id, []);
 }
 
-function validateDesiredTeachingPlan(
+export function validateDesiredTeachingPlan(
   value: unknown,
   validation: TeachingPlanValidation,
 ): DesiredTeachingPlan {
@@ -198,34 +373,22 @@ function validateDesiredTeachingPlan(
     throw new TeachingPlanValidationError('plan recording hash does not match the run recording');
   }
   const ids = new Set<string>();
-  const names = new Set<string>();
-  assertKnownSeqs(
-    'shared context',
-    [...plan.sharedContext.loginRequestSeqs, ...plan.sharedContext.authRequestSeqs],
-    validation.recordingSeqs,
-  );
+  const requests = validation.requestSeqs;
+  const events = validation.eventSeqs;
+  const candidateIssue = teachingCandidateIssues(
+    plan.tools.map(({ candidate }) => candidate),
+    requests,
+    events,
+  )[0];
+  if (candidateIssue) throw new TeachingPlanValidationError(candidateIssue.message);
 
   for (const tool of plan.tools) {
     if (ids.has(tool.id)) throw new TeachingPlanValidationError(`duplicate tool id "${tool.id}"`);
-    if (names.has(tool.candidate.toolName)) {
-      throw new TeachingPlanValidationError(`duplicate tool name "${tool.candidate.toolName}"`);
-    }
     ids.add(tool.id);
-    names.add(tool.candidate.toolName);
     assertKnownSeqs(
       `tool "${tool.candidate.toolName}" compile context`,
       [...tool.compileContext.loginRequestSeqs, ...tool.compileContext.authRequestSeqs],
-      validation.recordingSeqs,
-    );
-    assertKnownSeqs(
-      `tool "${tool.candidate.toolName}"`,
-      [
-        ...tool.candidate.requestSeqs,
-        ...tool.candidate.representativeSeqs,
-        ...tool.candidate.eventSeqs,
-        ...tool.candidate.dependencySeqs,
-      ],
-      validation.recordingSeqs,
+      requests,
     );
     if (tool.implementationPlan) {
       if (!tool.strategy) {
@@ -233,7 +396,7 @@ function validateDesiredTeachingPlan(
           `tool "${tool.candidate.toolName}" needs a strategy before accepting an implementation plan`,
         );
       }
-      const compileInputsSha256 = teachingToolCompileInputsSha256(tool);
+      const compileInputsSha256 = teachingToolCompileInputsSha256(tool, plan.chainEdges);
       if (tool.implementationPlan.basedOnCompileInputsSha256 !== compileInputsSha256) {
         throw new TeachingPlanValidationError(
           `tool "${tool.candidate.toolName}" implementation plan is based on stale compile inputs`,
@@ -242,8 +405,7 @@ function validateDesiredTeachingPlan(
     }
   }
 
-  const dependencies = dependencyIds(plan);
-  assertAcyclic(plan, dependencies);
+  validateChainEdges(plan);
   return plan;
 }
 
@@ -256,8 +418,8 @@ export function validateEditableTeachingPlan(
     {
       site: plan.site,
       recordingSha256: plan.recordingSha256,
-      sharedContext: plan.sharedContext,
       tools: plan.tools,
+      chainEdges: plan.chainEdges,
     },
     validation,
   );
@@ -282,7 +444,10 @@ export function createEditableTeachingPlan(
   });
 }
 
-export function teachingToolCompileInputsSha256(tool: EditableTeachingTool): string {
+export function teachingToolCompileInputsSha256(
+  tool: EditableTeachingTool,
+  chainEdges: readonly ChainEdge[] = [],
+): string {
   const candidate = tool.candidate;
   return teachingPlanContentSha256({
     compileContext: tool.compileContext,
@@ -293,11 +458,13 @@ export function teachingToolCompileInputsSha256(tool: EditableTeachingTool): str
     requestSeqs: candidate.requestSeqs,
     representativeSeqs: candidate.representativeSeqs,
     eventSeqs: candidate.eventSeqs,
-    eventTimeRange: candidate.eventTimeRange,
     expectedOutput: candidate.expectedOutput,
     likelyParams: candidate.likelyParams,
     dependencySeqs: candidate.dependencySeqs,
     dependsOnTools: candidate.dependsOnTools,
+    chainEdges: chainEdges
+      .filter(({ consumerToolId }) => consumerToolId === tool.id)
+      .sort((left, right) => left.id.localeCompare(right.id)),
   });
 }
 
@@ -366,7 +533,10 @@ export function reviseEditableTeachingPlan(
     .filter((tool) => {
       const oldTool = oldById.get(tool.id);
       if (!oldTool) return true;
-      return teachingToolCompileInputsSha256(oldTool) !== teachingToolCompileInputsSha256(tool);
+      return (
+        teachingToolCompileInputsSha256(oldTool, current.chainEdges) !==
+        teachingToolCompileInputsSha256(tool, desired.chainEdges)
+      );
     })
     .map((tool) => tool.id)
     .sort();
@@ -375,8 +545,10 @@ export function reviseEditableTeachingPlan(
       const oldTool = oldById.get(tool.id);
       if (!oldTool) return true;
       return (
-        teachingToolCompileInputsSha256(oldTool) !== teachingToolCompileInputsSha256(tool) ||
-        oldTool.implementationPlan?.sha256 !== tool.implementationPlan?.sha256
+        teachingToolCompileInputsSha256(oldTool, current.chainEdges) !==
+          teachingToolCompileInputsSha256(tool, desired.chainEdges) ||
+        canonicalTeachingPlanJson(oldTool.implementationPlan) !==
+          canonicalTeachingPlanJson(tool.implementationPlan)
       );
     })
     .map((tool) => tool.id)

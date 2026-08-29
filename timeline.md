@@ -367,3 +367,76 @@ tool set.
 
 None. The new foreground master controller is not connected yet, so a teach
 would still exercise the shipped controller rather than this plan.
+
+## 2026-08-29 — Recovery checkpoint 7: small agents with exact facts
+
+### What changed
+
+- Added four narrow agent roles around the editable plan: one advisor reviews
+  tool boundaries, the master makes the editable decision, one advisor reviews
+  a verified tool's public parameters, and a fresh reviewer checks the proposed
+  final outcome.
+- The tool advisor receives request and event boundaries but not authentication
+  notes or parameter guesses. The parameter advisor receives only its target
+  tool, the checks for that tool, and any producers feeding it. Unrelated tools
+  are left out of these prompts.
+- Agent replies use strict, current examples and reject missing, extra, stale,
+  or invented fields. Unknown detector parameter details remain explicitly
+  unknown instead of being guessed.
+- The master can keep, remove, merge, split, or revise tools and parameters. A
+  recording with no honest candidate can remain an empty plan and be reviewed
+  as blocked instead of forcing a fake tool.
+- The master prompt now says every API rung outranks the playbook fallback. It
+  may choose the fallback only when the supplied evidence makes it certain that
+  no API rung is compatible; the runtime does not make that choice.
+- Current checks bind to the exact recording, compiled files, implementation
+  plan, dependencies, and ordered replay requests. API replay reports every
+  target, including the unchecked remainder after a failure. Browser replay is
+  recorded as not applicable and cannot contain fake request comparisons.
+- A host failure after one or more successful request comparisons preserves
+  those successful facts. The runtime no longer rewrites the whole replay as
+  if nothing had been checked.
+- Receipt identifiers and file references are unique across all current tools
+  and cannot reappear in older history. This prevents an old receipt from being
+  mistaken for a current one.
+- Agent calls now share the teach run's absolute deadline. Output parsing and a
+  one-time schema repair remain inside that same deadline, and an already
+  expired run makes no provider call.
+- The final reviewer sees the exact current checks plus a bounded view of the
+  immutable older check history. Completion still requires current contract,
+  replay where applicable, live, and producer-consumer checks. A blocked result
+  requires evidence for every blocker claim.
+
+### Why
+
+The master needs semantic freedom, while the host needs to know that every fact
+belongs to the current recording and current files. These contracts enforce
+identity, file hashes, ordering, deadlines, and check truth without deciding
+what a website means or how many tools it should have.
+
+Two review rounds found and removed subtle false assumptions before this
+checkpoint: replay originally erased successful work before a later host error,
+representative requests could point outside their tool, receipt identifiers
+could be reused, and parsing could finish after the run deadline. The focused
+prompt views also keep the small advisors from inheriting the master's entire
+context.
+
+### Checks run
+
+- Eighty-one focused plan and agent tests passed with 265 assertions.
+- The semantic files passed TypeScript checking, formatting, linting, and the
+  whitespace check.
+- Canonical examples embedded in all four prompts parse with their real output
+  schemas.
+
+### Important boundary
+
+This checkpoint defines the agent roles and factual contracts only. The new
+on-disk store and foreground controller are not connected yet, so production
+teaching still does not call these roles. That integration is the next stage;
+this checkpoint is intentionally recoverable on its own.
+
+### Teach attempts
+
+None. Running a teach now would still use the shipped controller and would not
+validate this new path.
