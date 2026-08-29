@@ -9,6 +9,10 @@
 
 import type { Anthropic } from '@anthropic-ai/sdk';
 import type { ToolUseProvider } from './llm.ts';
+import {
+  isTransientProviderCapacityError,
+  retryTransientProviderFailure,
+} from './provider-retry.ts';
 import { setSpanAttributes, traceToolIoEnabled, traced } from './tracing.ts';
 
 export interface AgentTool {
@@ -86,6 +90,8 @@ interface AgentLoopOptions {
   onConversationUpdate?: (log: ConversationLogEntry[]) => void;
   /** called when the wall-clock deadline is reached; return ms to extend or null to time out */
   onDeadlineReached?: OnDeadlineReached;
+  /** Optional cancellation for provider backoff waits. */
+  signal?: AbortSignal;
 }
 
 /** Helper: creates the standard 'done' tool */
@@ -243,12 +249,44 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
         // Call LLM with tools — llm.message_with_tools span nests as child
         let response: Anthropic.Message;
         try {
-          response = await opts.llm.messageWithTools({
-            system: opts.systemPrompt,
-            messages,
-            tools: anthropicTools,
-          });
+          response = await retryTransientProviderFailure(
+            async () =>
+              await opts.llm.messageWithTools({
+                system: opts.systemPrompt,
+                messages,
+                tools: anthropicTools,
+              }),
+            {
+              deadlineMs,
+              signal: opts.signal,
+              onDeadlineReached: async () => {
+                const extensionMs = await opts.onDeadlineReached?.();
+                if (extensionMs != null && extensionMs > 0) {
+                  // The retry helper advances its private copy by the returned
+                  // delta. Advance the agent loop's deadline by that same delta
+                  // once so later turns see the identical deadline; these are
+                  // two synchronized clocks, not two additions to one clock.
+                  deadlineMs += extensionMs;
+                  budgetMs += extensionMs;
+                }
+                return extensionMs;
+              },
+            },
+          );
         } catch (err) {
+          if (isTransientProviderCapacityError(err) && Date.now() >= deadlineMs) {
+            return {
+              action: 'return',
+              result: {
+                outcome: 'timeout',
+                turns: turn,
+                durationMs: Date.now() - startTime,
+                inputTokens,
+                outputTokens,
+                conversationLog,
+              },
+            };
+          }
           return {
             action: 'return',
             result: {

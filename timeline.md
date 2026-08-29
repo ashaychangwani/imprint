@@ -151,3 +151,50 @@ The master controller will call it when the single teaching path is wired.
 ### Teach attempts
 
 None. The public command still uses the shipped entrypoint at this checkpoint.
+
+## 2026-08-29 — Recovery checkpoint 4: provider interruptions do not become artifact failures
+
+### What changed
+
+- Added one shared retry policy for temporary provider capacity, overload, and
+  rate-limit failures.
+- Retries use exponential backoff with jitter and never wait more than 30
+  seconds between calls.
+- The same logical LLM call stays alive until the provider recovers, the user
+  cancels, or the caller's existing deadline ends. A caller-approved deadline
+  extension updates both the retry clock and the agent's clock once.
+- Schema errors, bad requests, authentication failures, authorization failures,
+  and billing or quota problems return immediately instead of looping.
+- Ordinary focused LLM calls and the in-process tool-using agent loop now share
+  this behavior.
+- Added the rule to `CLAUDE.md`; `AGENTS.md` already includes that file.
+
+### Important boundary
+
+The external Codex and Claude compiler subprocesses are not wrapped yet. A first
+attempt restarted their entire compile after a capacity error, which would have
+created a new agent over partial artifacts. That was removed before this
+checkpoint. Those compilers may only gain this behavior through a real
+same-session continuation. We will not label a fresh compiler as a retry.
+
+The new master must also pass its cancellation signal and run deadline into
+ordinary LLM calls. The shared layer supports both, but the legacy public teach
+path does not thread them through every call.
+
+### Why
+
+Temporary provider unavailability says nothing about whether a generated tool is
+correct. Turning it into a red tool or restarting compilation encourages agents
+to repair good artifacts for the wrong reason. Backoff belongs in execution
+mechanics, while artifact failures remain reserved for factual artifact checks.
+
+### Checks run
+
+- Sixty-two provider, LLM, and agent-loop tests passed.
+- Thirty Codex, Claude, and teach compile regression tests passed.
+- The changed files passed the formatter and linter.
+- The full TypeScript type check passed during this slice.
+
+### Teach attempts
+
+None. The single master controller is not wired yet.

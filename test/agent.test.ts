@@ -401,6 +401,71 @@ describe('runAgentLoop — termination', () => {
     expect(llm.callCount).toBe(1);
   });
 
+  it('keeps a capacity-interrupted tool-use turn alive across one deadline extension', async () => {
+    const deadlineMs = Date.now() + 15;
+    let calls = 0;
+    let extensionCalls = 0;
+    const llm: ToolUseProvider = {
+      name: 'anthropic-api',
+      analyze: async () => {
+        throw new Error('not used');
+      },
+      messageWithTools: async () => {
+        calls++;
+        if (calls === 1) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          throw new Error('provider overloaded; try again later');
+        }
+        return assistantToolUse([{ name: 'done', input: { summary: 'recovered' } }]);
+      },
+    };
+
+    const result = await runAgentLoop({
+      systemPrompt: 'test',
+      initialUserMessage: 'start',
+      tools: [doneTool(), giveUpTool()],
+      deadlineMs,
+      llm,
+      onDeadlineReached: async () => {
+        extensionCalls++;
+        return 1_000;
+      },
+    });
+
+    expect(result.outcome).toBe('done');
+    expect(calls).toBe(2);
+    expect(extensionCalls).toBe(1);
+  });
+
+  it('cancels a capacity backoff through the agent-loop signal', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const llm: ToolUseProvider = {
+      name: 'anthropic-api',
+      analyze: async () => {
+        throw new Error('not used');
+      },
+      messageWithTools: async () => {
+        calls++;
+        throw new Error('429 too many requests');
+      },
+    };
+    setTimeout(() => controller.abort(new Error('cancelled by user')), 5);
+
+    const result = await runAgentLoop({
+      systemPrompt: 'test',
+      initialUserMessage: 'start',
+      tools: [doneTool(), giveUpTool()],
+      deadlineMs: Date.now() + 60_000,
+      llm,
+      signal: controller.signal,
+    });
+
+    expect(result.outcome).toBe('error');
+    expect(result.errorMessage).toContain('cancelled by user');
+    expect(calls).toBe(1);
+  });
+
   it('times out when onDeadlineReached returns null', async () => {
     const llm = new MockProvider([
       assistantToolUse([{ name: 'done', input: { summary: 'should not reach' } }]),

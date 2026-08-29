@@ -57,6 +57,10 @@ Use deterministic code for narrow, contract-level invariants only, such as "a pr
 
 For browser-minted tokens, make the compile path cheaper to reason about: surface where the value appeared, what changed across the diff, whether a response/header/body/cookie producer exists, and what small probe would prove the classification. Avoid trying to pre-classify every possible web edge case in runtime code. If repeated re-teaches reveal tiny edge cases, update the evidence contract or compile-agent test harness instead of stacking site-shaped runtime rules.
 
+### Transient provider failures
+
+During `imprint teach`, treat provider capacity, overload, and temporary rate-limit failures as interruptions to the same compile—not as artifact failures. Retry with capped exponential backoff and jitter until the provider recovers, the user cancels, or the existing run deadline ends. Do not retry deterministic schema, authentication, authorization, or invalid-request failures. After a code or prompt change, start a fresh teach instead of resuming the failed pre-change run.
+
 ## CI/CD & releases
 
 Three GitHub Actions workflows:

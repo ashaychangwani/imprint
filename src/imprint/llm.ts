@@ -3,6 +3,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { withTimeoutCleanup } from './concurrency.ts';
+import { type ProviderRetryEvent, retryTransientProviderFailure } from './provider-retry.ts';
 import {
   llmSpanAttributes,
   resolveTraceTokenCount,
@@ -56,7 +57,9 @@ const CLI_PID_POLL_INTERVAL_MS = 250;
 interface AnalyzeInvocationOptions {
   timeoutMs?: number;
   timeoutLabel?: string;
+  signal?: AbortSignal;
   onEvent?: (event: AnalyzeInvocationEvent) => void;
+  onProviderRetry?: (event: ProviderRetryEvent) => void;
 }
 
 export type AnalyzeInvocationEvent = {
@@ -1209,7 +1212,56 @@ function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider 
 
 export function resolveProvider(opts: LLMOptions = {}): LLMProvider {
   const name = opts.provider ?? detectProvider();
-  return createProvider(name, opts);
+  return withTransientProviderRetry(createProvider(name, opts));
+}
+
+/** Apply one provider-neutral capacity retry policy to every ordinary LLM call. */
+function withTransientProviderRetry(provider: LLMProvider): LLMProvider {
+  const analyze = async (
+    systemPrompt: string,
+    userPayload: unknown,
+    opts: AnalyzeInvocationOptions = {},
+  ): Promise<AnalyzeResult> => {
+    const retryDeadlineMs =
+      opts.timeoutMs !== undefined && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
+    return await retryTransientProviderFailure(
+      async () => {
+        const remainingTimeoutMs =
+          retryDeadlineMs === undefined
+            ? opts.timeoutMs
+            : Math.max(1, retryDeadlineMs - Date.now());
+        return await provider.analyze(systemPrompt, userPayload, {
+          ...opts,
+          timeoutMs: remainingTimeoutMs,
+        });
+      },
+      {
+        deadlineMs: retryDeadlineMs,
+        signal: opts.signal,
+        onRetry: (event) => {
+          opts.onProviderRetry?.(event);
+          opts.onEvent?.({
+            type: 'provider.retry_scheduled',
+            timestamp: new Date().toISOString(),
+            provider: provider.name,
+            attempt: event.attempt,
+            delayMs: event.delayMs,
+            reason: event.reason,
+          });
+        },
+      },
+    );
+  };
+
+  if (isToolUseProvider(provider)) {
+    const wrapped: ToolUseProvider = {
+      name: provider.name,
+      analyze,
+      messageWithTools: provider.messageWithTools.bind(provider),
+    };
+    return wrapped;
+  }
+  return { name: provider.name, analyze };
 }
 
 /** The model to use for the compile-agent (the agentic, tool-using compile
