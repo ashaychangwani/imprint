@@ -440,3 +440,27 @@ this checkpoint is intentionally recoverable on its own.
 
 None. Running a teach now would still use the shipped controller and would not
 validate this new path.
+
+## 2026-08-29 — Recovery checkpoint 8: write down the responsibility line
+
+### What changed
+
+- Replaced the remaining project guidance that described values using runtime
+  labels such as “browser-minted.”
+- Wrote down the simpler boundary used by this rebuild: agents choose tools,
+  parameters, request groupings, state use, authentication, and API versus
+  browser strategy; the runtime protects files and secrets, executes checks,
+  retries providers, and records exact facts.
+- Kept API-first and playbook-last as advice in the teaching prompt, not as a
+  runtime decision.
+
+### Why
+
+The old wording could encourage a future change to rebuild the same growing
+classification system that made vNext brittle. A path, byte length, match, or
+mismatch is a fact. What that fact means belongs to the teaching agents.
+
+### Teach attempts
+
+None. This is project guidance only; the new foreground controller is still not
+connected.
