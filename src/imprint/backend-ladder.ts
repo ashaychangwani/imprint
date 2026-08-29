@@ -1890,6 +1890,16 @@ export interface RenderedRequest {
   body: string | null;
 }
 
+export interface RenderedRequestLookup {
+  /** Zero-based ordinal among requests that were actually sent. */
+  requestOrdinal: number;
+  /** Accepted artifact/recording identity for this request, when supplied. */
+  provenance?: {
+    artifactRequestIndex: number;
+    recordingRequestSeq: number;
+  };
+}
+
 /**
  * Render a workflow's outgoing requests OFFLINE — no network, no browser. Runs
  * the real `executeWorkflow` (so `${param}`/`${state}` substitution, captures,
@@ -1903,9 +1913,13 @@ export interface RenderedRequest {
  * then needs only ONE baseline call to prove the workflow produces real data; the
  * per-parameter "does X reach field F" check becomes a deterministic offline diff.
  *
- * `recordedResponseFor(method, url)` supplies the recorded response so captures
- * (csrf via text_regex, etc.) resolve and the transform builds the real body;
- * return undefined to fall back to an empty `200`.
+ * `recordedResponseFor(method, url, lookup)` supplies the recorded response so
+ * captures (csrf via text_regex, etc.) resolve and the transform builds the real
+ * body. The lookup includes the outgoing request ordinal and, when provided,
+ * its accepted recording provenance. Callers should prefer that provenance to
+ * method+URL matching because parameters and transforms can change the URL and
+ * repeated requests can share the same method+URL. Return undefined to fall
+ * back to an empty `200`.
  */
 export async function renderWorkflowRequests(opts: {
   workflow: Workflow;
@@ -1914,12 +1928,19 @@ export async function renderWorkflowRequests(opts: {
   credentials?: CredentialStore;
   /** Synthetic captured state for offline request tests. */
   initialState?: Record<string, unknown>;
+  /** Exact accepted request order used to select recorded responses offline. */
+  requestProvenance?: readonly {
+    artifactRequestIndex: number;
+    recordingRequestSeq: number;
+  }[];
   recordedResponseFor?: (
     method: string,
     url: string,
+    lookup: RenderedRequestLookup,
   ) => { status: number; body: string; headers?: Record<string, string> } | undefined;
 }): Promise<{ requests: RenderedRequest[]; result: ToolResult }> {
   const captured: RenderedRequest[] = [];
+  let preparedArtifactRequestIndex: number | undefined;
   const fetchImpl: typeof fetch = (async (
     input: string | URL | Request,
     init?: RequestInit,
@@ -1935,8 +1956,17 @@ export async function renderWorkflowRequests(opts: {
       });
     }
     const body = typeof init?.body === 'string' ? init.body : init?.body ? String(init.body) : null;
+    const requestOrdinal = captured.length;
+    const artifactRequestIndex = preparedArtifactRequestIndex ?? requestOrdinal;
+    preparedArtifactRequestIndex = undefined;
+    const provenance = opts.requestProvenance?.find(
+      (accepted) => accepted.artifactRequestIndex === artifactRequestIndex,
+    );
     captured.push({ method, url, headers, body });
-    const rec = opts.recordedResponseFor?.(method, url);
+    const rec = opts.recordedResponseFor?.(method, url, {
+      requestOrdinal,
+      ...(provenance ? { provenance } : {}),
+    });
     return new Response(rec?.body ?? '{}', {
       status: rec?.status ?? 200,
       headers: new Headers(rec?.headers ?? {}),
@@ -1946,11 +1976,22 @@ export async function renderWorkflowRequests(opts: {
   const result = await executeWorkflow({
     workflow: opts.workflow,
     params: opts.params,
-    credentials: opts.credentials,
+    // Offline rendering must not silently depend on whichever credentials are
+    // currently stored on this machine. Callers may inject an explicit store;
+    // otherwise use a deterministic empty one.
+    credentials: opts.credentials ?? {
+      site: opts.workflow.site,
+      cookies: [],
+      values: {},
+      storage: [],
+    },
     workflowPath: opts.workflowPath,
     initialState: opts.initialState,
     fetchImpl,
     persistAuthState: false,
+    onPreparedRequest: (requestIndex) => {
+      preparedArtifactRequestIndex = requestIndex;
+    },
   });
   return { requests: captured, result };
 }

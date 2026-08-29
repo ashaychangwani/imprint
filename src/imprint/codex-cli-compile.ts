@@ -7,7 +7,7 @@
  * success only after the MCP done() tool writes the verified sentinel.
  */
 
-import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
@@ -19,9 +19,23 @@ import type {
   CompileAgentResult,
 } from './compile-agent-types.ts';
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
+import {
+  type CompileProviderControl,
+  compileProviderInterruptionError,
+  createCompileProviderControl,
+  watchCompileProviderDeadline,
+} from './compile-provider-control.ts';
+import { recordCompilerHostError } from './compiler-log.ts';
+import {
+  collectOwnedProcess,
+  spawnOwnedProcess,
+  terminateCompilerProcessTree,
+} from './compiler-process.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
-import { COMPILE_SENTINELS, compileDeadlineAfterVerification } from './mcp-compile-server.ts';
+import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
+import { type RunDeadlineRef, resolvedRunDeadline } from './provider-retry.ts';
+import { ProviderTerminalAccumulator } from './provider-terminal.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   endTraceSpan,
@@ -131,8 +145,11 @@ interface CompileViaCodexCliOptions {
   sessionPath: string;
   systemPromptPath: string;
   deadlineMs: number;
+  runDeadline?: RunDeadlineRef;
   startTime: number;
   onProgress?: (p: CompileAgentProgress) => void;
+  onDeadlineReached?: () => Promise<number | null | undefined>;
+  signal?: AbortSignal;
   keepTest?: boolean;
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
@@ -148,7 +165,6 @@ interface CompileViaCodexCliOptions {
   sharedTriageSelection?: SharedTriageSelection;
   /** Present → drive an auth compile rather than a data compile. */
   authMode?: AuthCliCompileMode;
-  /** Auth segments only: resume the same non-interactive Codex session. */
   resume?: { sessionId: string; message: string };
   /** Explicit model selected by the caller. Defaults to the provider preference. */
   model?: string;
@@ -182,10 +198,21 @@ interface CodexJsonEvent {
     input_tokens?: number;
     output_tokens?: number;
     cached_input_tokens?: number;
+    cache_write_input_tokens?: number;
     reasoning_output_tokens?: number;
   };
   message?: string;
-  error?: { message?: string };
+  error?: {
+    message?: string;
+    type?: string;
+    code?: string;
+    status?: number;
+    status_code?: number;
+  };
+  status?: number;
+  status_code?: number;
+  error_code?: string;
+  is_error?: boolean;
 }
 
 export async function compileViaCodexCli(
@@ -236,13 +263,15 @@ async function compileViaCodexCliImpl(
   opts: CompileViaCodexCliOptions,
   traceSpan?: Span,
 ): Promise<CompileAgentResult> {
+  const runDeadline = resolvedRunDeadline(opts.runDeadline, opts.deadlineMs);
   mkdirSync(opts.absoluteToolDir, { recursive: true });
-  for (const name of [
+  const staleSentinels = [
     COMPILE_SENTINELS.done,
     COMPILE_SENTINELS.giveUp,
     COMPILE_SENTINELS.checkpoint,
-    COMPILE_SENTINELS.verificationState,
-  ]) {
+    ...(!opts.resume ? [COMPILE_SENTINELS.verificationState] : []),
+  ];
+  for (const name of staleSentinels) {
     const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
       try {
@@ -314,7 +343,9 @@ async function compileViaCodexCliImpl(
       opts.candidate?.toolName,
       opts.sharedModules,
     );
-    initialPrompt = `<system_instructions>
+    initialPrompt = opts.resume
+      ? opts.resume.message
+      : `<system_instructions>
 ${systemPrompt}
 </system_instructions>
 
@@ -343,20 +374,13 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     'imprint.compile.tool_timeout_sec': mcpToolTimeoutSec,
   });
 
-  const execArgs = opts.resume
-    ? ['exec', 'resume']
-    : [
-        'exec',
-        // Data compiles are single-shot. Auth compiles need persisted sessions
-        // because run_verification checkpoints resume through `codex exec resume`.
-        ...(!opts.authMode ? ['--ephemeral'] : []),
-      ];
+  const execArgs = opts.resume ? ['exec', 'resume'] : ['exec'];
 
   const args = [
     '-a',
     'never',
     '-C',
-    REPO_ROOT,
+    opts.absoluteToolDir,
     '-s',
     'workspace-write',
     '-m',
@@ -391,52 +415,74 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
     `spawning codex (mcp-server=${MCP_SERVER_NAME}${opts.resume ? `, resume=${opts.resume.sessionId.slice(0, 8)}` : ''})`,
   );
 
+  const providerControl = createCompileProviderControl(runDeadline ?? opts.deadlineMs);
+  providerControl.updateSession(opts.resume?.sessionId);
+  const childEnv = { ...process.env, ...providerControl.env };
+  // spawnOwnedProcess merges the parent environment, so an explicit undefined
+  // is required to remove this host-only payload from the child.
+  childEnv.IMPRINT_TEACH_CREDENTIALS = undefined;
   let child: ChildProcess;
   try {
-    child = spawn('codex', args, {
-      cwd: REPO_ROOT,
-      env: process.env,
+    child = spawnOwnedProcess('codex', args, {
+      cwd: opts.absoluteToolDir,
+      env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       // The npm `codex` launcher is a Node wrapper around the native binary.
       // Give the wrapper and its descendants a dedicated process group so a
       // watchdog can terminate the whole tree, including descendants that keep
       // the inherited stdout pipe open after the wrapper exits.
-      detached: true,
     });
   } catch (err) {
+    providerControl.dispose();
     return finalErrorResult(opts, `failed to spawn codex-cli: ${errMsg(err)}`);
   }
 
   try {
-    child.stdin?.end(initialPrompt);
+    await sendCompilerPrompt(child, initialPrompt);
   } catch (err) {
-    try {
-      signalCodexProcessTree(child, 'SIGTERM');
-    } catch {
-      // already gone
-    }
+    terminateCompilerProcessTree(child);
+    await collectOwnedProcess(child).catch(() => undefined);
+    providerControl.dispose();
     return finalErrorResult(opts, `failed to send prompt to codex-cli: ${errMsg(err)}`);
   }
 
-  const terminateOnParentExit = (): void => {
-    try {
-      signalCodexProcessTree(child, 'SIGTERM');
-    } catch {
-      // Parent shutdown is best-effort; the OS may already have reaped the child.
-    }
-  };
-  process.once('exit', terminateOnParentExit);
-  let result: CompileAgentResult;
   try {
-    result = await driveJsonl(child, opts, traceSpan);
+    const result = await driveJsonl(child, opts, traceSpan, providerControl);
+    setSpanAttributes(traceSpan, {
+      'imprint.compile.message': result.message,
+      ...(captureLlmIo ? traceInputOutputAttributes('output', result.message) : {}),
+    });
+    return result;
   } finally {
-    process.removeListener('exit', terminateOnParentExit);
+    providerControl.dispose();
   }
-  setSpanAttributes(traceSpan, {
-    'imprint.compile.message': result.message,
-    ...(captureLlmIo ? traceInputOutputAttributes('output', result.message) : {}),
+}
+
+function sendCompilerPrompt(child: ChildProcess, prompt: string): Promise<void> {
+  const input = child.stdin;
+  if (!input) return Promise.reject(new Error('codex-cli stdin is unavailable'));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      child.removeListener('error', fail);
+      input.removeListener('error', fail);
+    };
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    child.once('error', fail);
+    input.once('error', fail);
+    input.end(prompt, finish);
   });
-  return result;
 }
 
 function buildAuthCodexInitialPrompt(systemPrompt: string, initialPrompt: string): string {
@@ -452,14 +498,23 @@ Codex provider framing: use only the imprint-compile MCP tools exposed for this 
 async function driveJsonl(
   child: ChildProcess,
   opts: CompileViaCodexCliOptions,
-  traceSpan?: Span,
+  traceSpan: Span | undefined,
+  providerControl: CompileProviderControl,
 ): Promise<CompileAgentResult> {
   // Bun's child-process event emitters do not preserve AsyncLocalStorage.
   // Restore the compile span context inside stdout callbacks so turn/tool
   // spans remain children of compile.codex_cli_agent in Phoenix.
   const parentCtx = otelContext.active();
-  const conversationLog: unknown[] = [];
   const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
+  const conversationLog: unknown[] = (() => {
+    if (!opts.resume || !existsSync(conversationLogPath)) return [];
+    try {
+      const prior = JSON.parse(readFileSync(conversationLogPath, 'utf8'));
+      return Array.isArray(prior) ? prior : [];
+    } catch {
+      return [];
+    }
+  })();
   const rawStdoutPath = pathJoin(opts.absoluteToolDir, '.codex-stdout.jsonl');
   const rawStderrPath = pathJoin(opts.absoluteToolDir, '.codex-stderr.log');
   const flushLog = (): void => {
@@ -481,17 +536,20 @@ async function driveJsonl(
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadInputTokens = 0;
+  let cacheCreationInputTokens = 0;
   let turn = 0;
-  let lastErrorMessage = '';
+  const terminalParser = new ProviderTerminalAccumulator('codex-cli');
   let stderrBuf = '';
   let agentMessageCount = 0;
-  let capturedSessionId: string | undefined;
+  let processErrorMessage = '';
+  let capturedSessionId: string | undefined = opts.resume?.sessionId;
   const toolSpans = new Map<string, Span>();
   let currentTurnSpan: Span | null = null;
   const turnActivity = createTurnActivityTracker();
   let onTurnCompletedAfterSentinel: (() => void) | undefined;
 
-  const budgetMs = Math.max(0, opts.deadlineMs - Date.now());
+  const runDeadline = providerControl.deadline;
+  const budgetMs = Math.max(0, runDeadline.deadlineMs - Date.now());
   const fireProgress = (phase: 'thinking' | 'tool', toolName?: string): void => {
     opts.onProgress?.({
       turn,
@@ -514,239 +572,178 @@ async function driveJsonl(
   const parserTestPath = pathJoin(opts.absoluteToolDir, 'parser.test.ts');
   const terminateChild = (graceMs: number): void => {
     try {
-      signalCodexProcessTree(child, 'SIGTERM');
+      terminateCompilerProcessTree(child, 'SIGTERM', graceMs);
     } catch {
       // already gone
     }
-    const forceTimer = setTimeout(() => {
-      try {
-        signalCodexProcessTree(child, 'SIGKILL');
-      } catch {
-        // already gone
-      }
-    }, graceMs);
-    forceTimer.unref?.();
   };
-  let childExited = false;
-  const scheduleDeadlineCheck = (): ReturnType<typeof setTimeout> => {
-    const effectiveDeadlineMs = compileDeadlineAfterVerification(
-      opts.absoluteToolDir,
-      opts.deadlineMs,
-    );
-    return setTimeout(
-      () => {
-        if (childExited) return;
-        if (Date.now() < compileDeadlineAfterVerification(opts.absoluteToolDir, opts.deadlineMs)) {
-          deadlineTimer = scheduleDeadlineCheck();
+  const deadlineWatch = watchCompileProviderDeadline(
+    providerControl,
+    opts.onDeadlineReached,
+    () => {
+      log('wall-clock deadline exceeded, terminating codex');
+      terminateChild(5000);
+    },
+  );
+
+  const onStdoutLine = (rawLine: string): void => {
+    otelContext.with(parentCtx, () => {
+      const line = rawLine.trim();
+      if (!line) return;
+
+      let evt: CodexJsonEvent;
+      try {
+        evt = JSON.parse(line) as CodexJsonEvent;
+      } catch (err) {
+        log(`unparseable jsonl line: ${errMsg(err)}`);
+        return;
+      }
+
+      conversationLog.push(evt);
+      terminalParser.ingest(evt as unknown as Record<string, unknown>);
+      scheduleLogFlush();
+
+      if (evt.type === 'thread.started') {
+        log(`thread_id=${evt.thread_id ?? '(none)'}`);
+        setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
+        if (evt.thread_id) {
+          capturedSessionId = evt.thread_id;
+          providerControl.updateSession(evt.thread_id);
+        }
+        return;
+      }
+
+      if (evt.type === 'turn.started') {
+        turnActivity.started();
+        if (currentTurnSpan) endTraceSpan(currentTurnSpan);
+        flushLog();
+        turn++;
+        currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
+          'imprint.agent.turn': turn,
+          'imprint.agent.cumulative_input_tokens': inputTokens,
+          'imprint.agent.cumulative_output_tokens': outputTokens,
+        });
+        fireProgress('thinking');
+        return;
+      }
+
+      const normalizedToolEvt = normalizeCodexToolEvent(evt);
+      if (normalizedToolEvt) {
+        const { eventType, item } = normalizedToolEvt;
+        const toolName = codexToolName(item);
+        if (toolName) {
+          traceCodexToolEvent(toolSpans, eventType, item, toolName);
+          fireProgress(eventType === 'item.started' ? 'tool' : 'thinking', toolName);
+        }
+        return;
+      }
+
+      if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
+        const agentMessage = codexAgentMessageText(evt.item);
+        if (agentMessage && evt.type === 'item.completed') {
+          agentMessageCount++;
+          setSpanAttributes(traceSpan, {
+            'imprint.codex.agent_messages': agentMessageCount,
+            'imprint.codex.last_agent_message_chars': agentMessage.length,
+            ...(traceLlmIoEnabled()
+              ? traceInputOutputAttributes('output', agentMessage, undefined, 'agent_message')
+              : {}),
+          });
           return;
         }
-        log('wall-clock deadline exceeded, terminating codex');
-        terminateChild(5000);
-      },
-      Math.max(0, effectiveDeadlineMs - Date.now()),
-    );
-  };
-  let deadlineTimer = scheduleDeadlineCheck();
+        return;
+      }
 
-  let stdoutBuf = '';
-  child.stdout?.on('data', (chunk: Buffer) => {
-    otelContext.with(parentCtx, () => {
-      const chunkText = chunk.toString('utf8');
-      rawStdoutChunks.push(chunkText);
-      stdoutBuf += chunkText;
-      while (true) {
-        const nl = stdoutBuf.indexOf('\n');
-        if (nl < 0) break;
-        const line = stdoutBuf.slice(0, nl).trim();
-        stdoutBuf = stdoutBuf.slice(nl + 1);
-        if (!line) continue;
-
-        let evt: CodexJsonEvent;
-        try {
-          evt = JSON.parse(line) as CodexJsonEvent;
-        } catch (err) {
-          log(`unparseable jsonl line: ${errMsg(err)}`);
-          continue;
-        }
-
-        conversationLog.push(evt);
-        // Keep the human-readable compile log current during a long agent turn.
-        // Rewriting is throttled so streamed bursts do not cause one full-file
-        // write per JSONL event, while a stalled/crashed turn still leaves the
-        // latest tool activity visible on disk.
-        scheduleLogFlush();
-
-        if (evt.type === 'thread.started') {
-          log(`thread_id=${evt.thread_id ?? '(none)'}`);
-          setSpanAttributes(traceSpan, { 'codex.thread_id': evt.thread_id });
-          if (evt.thread_id) capturedSessionId = evt.thread_id;
-          continue;
-        }
-
-        if (evt.type === 'turn.started') {
-          turnActivity.started();
-          if (currentTurnSpan) endTraceSpan(currentTurnSpan);
-          flushLog();
-          turn++;
-          currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
-            'imprint.agent.turn': turn,
-            'imprint.agent.cumulative_input_tokens': inputTokens,
-            'imprint.agent.cumulative_output_tokens': outputTokens,
+      if (evt.type === 'turn.completed') {
+        const turnInput = evt.usage?.input_tokens ?? 0;
+        const turnOutput = evt.usage?.output_tokens ?? 0;
+        const turnCacheRead = evt.usage?.cached_input_tokens ?? 0;
+        const turnCacheWrite = evt.usage?.cache_write_input_tokens ?? 0;
+        inputTokens += turnInput;
+        outputTokens += turnOutput;
+        cacheReadInputTokens += turnCacheRead;
+        cacheCreationInputTokens += turnCacheWrite;
+        if (currentTurnSpan) {
+          setSpanAttributes(currentTurnSpan, {
+            'imprint.agent.turn_input_tokens': turnInput,
+            'imprint.agent.turn_output_tokens': turnOutput,
+            'imprint.agent.turn_cache_read_input_tokens': turnCacheRead,
+            'imprint.agent.turn_cache_creation_input_tokens': turnCacheWrite,
           });
-          fireProgress('thinking');
-          continue;
+          endTraceSpan(currentTurnSpan);
+          currentTurnSpan = null;
         }
-
-        const normalizedToolEvt = normalizeCodexToolEvent(evt);
-        if (normalizedToolEvt) {
-          const { eventType, item } = normalizedToolEvt;
-          const toolName = codexToolName(item);
-          if (toolName) {
-            traceCodexToolEvent(toolSpans, eventType, item, toolName);
-            fireProgress(eventType === 'item.started' ? 'tool' : 'thinking', toolName);
-          }
-          continue;
-        }
-
-        if ((evt.type === 'item.started' || evt.type === 'item.completed') && evt.item) {
-          const agentMessage = codexAgentMessageText(evt.item);
-          if (agentMessage && evt.type === 'item.completed') {
-            agentMessageCount++;
-            setSpanAttributes(traceSpan, {
-              'imprint.codex.agent_messages': agentMessageCount,
-              'imprint.codex.last_agent_message_chars': agentMessage.length,
-              ...(traceLlmIoEnabled()
-                ? traceInputOutputAttributes('output', agentMessage, undefined, 'agent_message')
-                : {}),
-            });
-            continue;
-          }
-          continue;
-        }
-
-        if (evt.type === 'turn.completed') {
-          const turnInput = evt.usage?.input_tokens ?? 0;
-          const turnOutput = evt.usage?.output_tokens ?? 0;
-          const turnCacheRead = evt.usage?.cached_input_tokens ?? 0;
-          inputTokens += turnInput;
-          outputTokens += turnOutput;
-          cacheReadInputTokens += turnCacheRead;
-          if (currentTurnSpan) {
-            setSpanAttributes(currentTurnSpan, {
-              'imprint.agent.turn_input_tokens': turnInput,
-              'imprint.agent.turn_output_tokens': turnOutput,
-              'imprint.agent.turn_cache_read_input_tokens': turnCacheRead,
-            });
-            endTraceSpan(currentTurnSpan);
-            currentTurnSpan = null;
-          }
-          turnActivity.completed();
-          onTurnCompletedAfterSentinel?.();
-          continue;
-        }
-
-        if (evt.type === 'error' || evt.type === 'turn.failed') {
-          lastErrorMessage = evt.message ?? evt.error?.message ?? JSON.stringify(evt);
-        }
+        turnActivity.completed();
+        onTurnCompletedAfterSentinel?.();
+        return;
       }
     });
-  });
+  };
 
-  child.stderr?.on('data', (chunk: Buffer) => {
-    const s = chunk.toString('utf8');
+  const onStderrChunk = (s: string): void => {
     rawStderrChunks.push(s);
     stderrBuf += s;
     log(`[codex stderr] ${s.trim()}`);
-  });
+  };
 
-  const exitCode: number = await new Promise((resolve) => {
-    let resolved = false;
-    let forcedKillTimer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (code: number): void => {
-      if (resolved) return;
-      resolved = true;
-      sentinelGrace.dispose();
-      onTurnCompletedAfterSentinel = undefined;
-      if (forcedKillTimer) clearTimeout(forcedKillTimer);
-      clearInterval(sentinelTimer);
-      resolve(code);
-    };
-    const terminateForSentinel = (): void => {
-      try {
-        signalCodexProcessTree(child, 'SIGTERM');
-      } catch {
-        // already gone
-      }
-      forcedKillTimer = setTimeout(() => {
-        if (resolved) return;
-        try {
-          signalCodexProcessTree(child, 'SIGKILL');
-        } catch {
-          // already gone
-        }
-        // A checkpoint sentinel is enough to let the auth orchestrator proceed;
-        // don't wait forever for Codex to acknowledge SIGTERM.
-        finish(-1);
-      }, 2000);
-      forcedKillTimer.unref?.();
-    };
-    const sentinelGrace = createSentinelGraceController({
-      // Turn lifecycle is independent of tracing. startTraceSpan() returns null
-      // when tracing is disabled, but terminal usage still must be captured.
-      hasActiveTurn: turnActivity.isActive,
-      terminate: terminateForSentinel,
-    });
-    onTurnCompletedAfterSentinel = sentinelGrace.observeTurnCompleted;
-    const sentinelTimer = setInterval(() => {
-      const checkpointReached = opts.authMode && existsSync(checkpointSentinel);
-      if (!existsSync(doneSentinel) && !existsSync(giveUpSentinel) && !checkpointReached) return;
-      sentinelGrace.observeSentinel();
-    }, 500);
-    child.once('close', (code) => {
-      finish(code ?? -1);
-    });
-    child.once('error', () => {
-      finish(-1);
-    });
+  const sentinelGrace = createSentinelGraceController({
+    hasActiveTurn: turnActivity.isActive,
+    terminate: () => terminateCompilerProcessTree(child, 'SIGTERM', 2_000),
   });
-  childExited = true;
+  onTurnCompletedAfterSentinel = sentinelGrace.observeTurnCompleted;
+  const sentinelTimer = setInterval(() => {
+    const checkpointReached = opts.authMode && existsSync(checkpointSentinel);
+    if (!existsSync(doneSentinel) && !existsSync(giveUpSentinel) && !checkpointReached) return;
+    sentinelGrace.observeSentinel();
+  }, 500);
+  const stopProviderWatch = providerControl.watch(() => terminateChild(2_000));
+
+  let exitCode: number;
+  try {
+    const output = await collectOwnedProcess(child, {
+      signal: opts.signal,
+      onStdoutLine,
+      onStdoutChunk: (chunk) => rawStdoutChunks.push(chunk),
+      onStderrChunk,
+    });
+    exitCode = output.exitCode ?? -1;
+  } catch (error) {
+    if (opts.signal?.aborted) throw error;
+    processErrorMessage = errMsg(error);
+    exitCode = -1;
+  } finally {
+    stopProviderWatch();
+    sentinelGrace.dispose();
+    onTurnCompletedAfterSentinel = undefined;
+    clearInterval(sentinelTimer);
+    deadlineWatch.dispose();
+  }
   turnActivity.completed();
-  clearTimeout(deadlineTimer);
   if (currentTurnSpan) endTraceSpan(currentTurnSpan);
   for (const span of toolSpans.values()) endTraceSpan(span);
   toolSpans.clear();
 
-  if (stdoutBuf.trim()) {
-    log(`unflushed stdout tail (${stdoutBuf.length} bytes) discarded`);
-  }
-
   try {
-    writeFileSync(rawStdoutPath, rawStdoutChunks.join(''), 'utf8');
-    writeFileSync(rawStderrPath, rawStderrChunks.join(''), 'utf8');
+    writeFileSync(rawStdoutPath, rawStdoutChunks.join(''), {
+      encoding: 'utf8',
+      flag: opts.resume ? 'a' : 'w',
+    });
+    writeFileSync(rawStderrPath, rawStderrChunks.join(''), {
+      encoding: 'utf8',
+      flag: opts.resume ? 'a' : 'w',
+    });
   } catch {
     // best effort diagnostics
   }
   if (flushLogTimer) clearTimeout(flushLogTimer);
-  flushLog();
-
-  const verifiedOk =
-    existsSync(doneSentinel) &&
-    (() => {
-      try {
-        const raw = readFileSync(doneSentinel, 'utf8').trim();
-        return raw ? JSON.parse(raw).verification === 'passed' : false;
-      } catch {
-        return false;
-      }
-    })();
-  if (verifiedOk && !opts.keepTest && existsSync(parserTestPath)) {
-    try {
-      unlinkSync(parserTestPath);
-    } catch {
-      // best effort
-    }
+  if (processErrorMessage) {
+    recordCompilerHostError(
+      conversationLogPath,
+      `codex-cli process failed before emitting events: ${processErrorMessage}`,
+    );
+  } else {
+    flushLog();
   }
-
   const baseResult: Pick<
     CompileAgentResult,
     | 'workflowPath'
@@ -770,9 +767,51 @@ async function driveJsonl(
     inputTokens,
     outputTokens,
     cacheReadInputTokens,
-    cacheCreationInputTokens: 0,
+    cacheCreationInputTokens,
     sessionId: capturedSessionId,
   };
+
+  terminalParser.ingestStderr(stderrBuf);
+  const terminal = terminalParser.result();
+  if (terminal.providerError) {
+    return {
+      success: false,
+      outcome: 'error',
+      message: `codex-cli provider turn failed${exitCode === 0 ? '' : ` (exit ${exitCode})`}\n${terminal.providerError.providerMessages.join('\n') || 'unknown provider error'}`,
+      providerInterruption: terminal.interruption,
+      providerError: terminal.providerError,
+      ...baseResult,
+    };
+  }
+
+  const nestedInterruption = providerControl.interruption();
+  if (nestedInterruption) {
+    const providerError = compileProviderInterruptionError(nestedInterruption);
+    return {
+      success: false,
+      outcome: 'error',
+      message: `nested live verifier provider ${nestedInterruption.reason}`,
+      providerInterruption: providerError.interruption,
+      providerError,
+      ...baseResult,
+      sessionId: nestedInterruption.sessionId ?? baseResult.sessionId,
+    };
+  }
+
+  if (deadlineWatch.expired) {
+    const providerError = compileProviderInterruptionError({
+      reason: 'deadline',
+      deadlineMs: runDeadline.deadlineMs,
+    });
+    return {
+      success: false,
+      outcome: 'error',
+      message: 'codex-cli reached the run deadline',
+      providerInterruption: providerError.interruption,
+      providerError,
+      ...baseResult,
+    };
+  }
 
   // Auth segment: the agent paused at a checkpoint for the orchestrator to act.
   // The auth orchestrator resumes the same Codex session with the checkpoint
@@ -810,11 +849,14 @@ async function driveJsonl(
     } catch (err) {
       log(`failed to parse done sentinel: ${errMsg(err)}`);
     }
-    if (payload.verification === 'passed') {
+    if (payload.verification === 'mechanical_passed' || payload.verification === 'not_applicable') {
       return {
         success: true,
         outcome: 'done',
-        message: payload.summary ?? 'Task completed',
+        message:
+          payload.verification === 'not_applicable'
+            ? `${payload.summary ?? 'Task completed'} (live verification: N/A)`
+            : (payload.summary ?? 'Task completed'),
         ...baseResult,
       };
     }
@@ -842,15 +884,6 @@ async function driveJsonl(
     };
   }
 
-  if (Date.now() > compileDeadlineAfterVerification(opts.absoluteToolDir, opts.deadlineMs)) {
-    return {
-      success: false,
-      outcome: 'timeout',
-      message: `codex-cli exceeded the ${Math.round((opts.deadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
-      ...baseResult,
-    };
-  }
-
   if (exitCode === 0) {
     return {
       success: false,
@@ -860,76 +893,13 @@ async function driveJsonl(
     };
   }
 
-  const errorTail = lastErrorMessage || stderrBuf.trim().slice(-500);
+  const errorTail = processErrorMessage || stderrBuf.trim().slice(-500);
   return {
     success: false,
     outcome: 'error',
     message: `codex-cli exited with code ${exitCode}${errorTail ? `\n${errorTail}` : ''}`,
     ...baseResult,
   };
-}
-
-export function collectDescendantPids(
-  rows: Array<{ pid: number; ppid: number }>,
-  rootPid: number,
-): number[] {
-  const childrenByParent = new Map<number, number[]>();
-  for (const row of rows) {
-    const children = childrenByParent.get(row.ppid) ?? [];
-    children.push(row.pid);
-    childrenByParent.set(row.ppid, children);
-  }
-  const descendants: number[] = [];
-  const visit = (pid: number): void => {
-    for (const childPid of childrenByParent.get(pid) ?? []) {
-      visit(childPid);
-      descendants.push(childPid);
-    }
-  };
-  visit(rootPid);
-  return descendants;
-}
-
-function liveDescendantPids(rootPid: number): number[] {
-  const ps = spawnSync('ps', ['-axo', 'pid=,ppid='], { encoding: 'utf8' });
-  if (ps.status !== 0 || typeof ps.stdout !== 'string') return [];
-  const rows = ps.stdout
-    .split('\n')
-    .map((line) => line.trim().split(/\s+/).map(Number))
-    .filter((pair): pair is [number, number] => pair.length === 2 && pair.every(Number.isFinite))
-    .map(([pid, ppid]) => ({ pid, ppid }));
-  return collectDescendantPids(rows, rootPid);
-}
-
-function signalPidOrGroup(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal);
-    return;
-  } catch {
-    // The descendant may not lead its own group. Fall back to the process itself.
-  }
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // already gone
-  }
-}
-
-function signalCodexProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (child.pid !== undefined) {
-    // Codex-launched MCP servers may create their own process groups. Killing only
-    // the detached Codex group leaves those grandchildren running after Ctrl-C,
-    // where they can keep compiling and issuing live calls. Snapshot and terminate
-    // descendants deepest-first while the parent relationship still exists.
-    for (const pid of liveDescendantPids(child.pid)) signalPidOrGroup(pid, signal);
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child when process groups are unavailable.
-    }
-  }
-  child.kill(signal);
 }
 
 function traceCodexToolEvent(
@@ -1112,11 +1082,7 @@ function stringField(record: Record<string, unknown>, key: string): string | und
 function finalErrorResult(opts: CompileViaCodexCliOptions, message: string): CompileAgentResult {
   mkdirSync(opts.absoluteToolDir, { recursive: true });
   const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
-  try {
-    writeFileSync(conversationLogPath, JSON.stringify({ error: message }, null, 2), 'utf8');
-  } catch {
-    // best effort
-  }
+  recordCompilerHostError(conversationLogPath, message);
   return {
     success: false,
     outcome: 'error',

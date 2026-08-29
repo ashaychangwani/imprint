@@ -27,13 +27,9 @@ function templateMatchesRecorded(template: string, recorded: string): boolean {
   return new RegExp(pattern).test(groundedRecorded);
 }
 
-export type RecordedRequestComparisonStatus =
-  | 'matched'
-  | 'mismatched'
-  | 'not_checked'
-  | 'not_applicable';
+type RecordedRequestComparisonStatus = 'matched' | 'mismatched' | 'not_checked' | 'not_applicable';
 
-export interface RecordedRequestComparisonFact {
+interface RecordedRequestComparisonFact {
   status: RecordedRequestComparisonStatus;
   reason?: string;
   field?: string;
@@ -45,7 +41,7 @@ export interface RecordedRequestComparisonFact {
   recordedType?: string;
 }
 
-export interface RecordedRequestComparison {
+interface RecordedRequestComparison {
   requestIndex?: number;
   recordedSeq?: number;
   matches: boolean;
@@ -227,7 +223,7 @@ function compareHeaders(
 export function compareRecordedRequest(
   recorded: Pick<CapturedRequest, 'seq' | 'method' | 'url' | 'headers' | 'body'>,
   workflow: Pick<WorkflowRequest, 'method' | 'url' | 'headers' | 'body'>,
-  opts: { requestIndex?: number; hasRequestTransform?: boolean } = {},
+  opts: { requestIndex?: number } = {},
 ): RecordedRequestComparison {
   const comparisons: RecordedRequestComparison['comparisons'] = {
     headers: compareHeaders(workflow.headers, recorded.headers),
@@ -282,45 +278,34 @@ export function compareRecordedRequest(
     };
   }
 
-  if (opts.hasRequestTransform) {
-    comparisons.url = {
-      status: 'not_applicable',
-      reason: 'the request transform constructs the final URL',
+  comparisons.url = templateMatchesRecorded(workflow.url, recorded.url)
+    ? { status: 'matched' }
+    : mismatchFact(workflow.url, recorded.url);
+  if (comparisons.url.status === 'mismatched') {
+    comparisons.body = skippedAfter('URL/query');
+    return {
+      requestIndex: opts.requestIndex,
+      recordedSeq: recorded.seq,
+      matches: false,
+      comparisons,
     };
-    comparisons.body = {
-      status: 'not_applicable',
-      reason: 'the request transform constructs the final body',
-    };
-  } else {
-    comparisons.url = templateMatchesRecorded(workflow.url, recorded.url)
-      ? { status: 'matched' }
-      : mismatchFact(workflow.url, recorded.url);
-    if (comparisons.url.status === 'mismatched') {
-      comparisons.body = skippedAfter('URL/query');
-      return {
-        requestIndex: opts.requestIndex,
-        recordedSeq: recorded.seq,
-        matches: false,
-        comparisons,
-      };
-    }
+  }
 
-    const workflowBody = workflow.body ?? '';
-    const recordedBody = recorded.body ?? '';
-    if (templateMatchesRecorded(workflowBody, recordedBody)) {
-      comparisons.body = { status: 'matched' };
-    } else {
-      const structural = bodyStructuralMismatch(workflowBody, recordedBody);
-      comparisons.body = mismatchFact(workflowBody, recordedBody, {
-        ...(structural
-          ? {
-              structuralPath: structural.path,
-              workflowType: structural.workflowType,
-              recordedType: structural.recordedType,
-            }
-          : {}),
-      });
-    }
+  const workflowBody = workflow.body ?? '';
+  const recordedBody = recorded.body ?? '';
+  if (templateMatchesRecorded(workflowBody, recordedBody)) {
+    comparisons.body = { status: 'matched' };
+  } else {
+    const structural = bodyStructuralMismatch(workflowBody, recordedBody);
+    comparisons.body = mismatchFact(workflowBody, recordedBody, {
+      ...(structural
+        ? {
+            structuralPath: structural.path,
+            workflowType: structural.workflowType,
+            recordedType: structural.recordedType,
+          }
+        : {}),
+    });
   }
 
   return {

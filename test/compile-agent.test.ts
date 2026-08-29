@@ -17,6 +17,7 @@ import {
   __setCompileAgentCliCompilersForTest,
   compileAgent,
 } from '../src/imprint/compile-agent.ts';
+import { ProviderUnavailableError } from '../src/imprint/provider-retry.ts';
 import type { Session } from '../src/imprint/types.ts';
 
 afterEach(() => __setCompileAgentCliCompilersForTest(null));
@@ -126,8 +127,34 @@ describe('incomplete semantic verifier budget', () => {
 // verification checks below are sufficient to verify the external verification gate.
 
 describe('compileAgent — external verification checks', () => {
-  it('forwards the selected model to Claude and Codex data compilers', async () => {
-    const seen: Array<{ provider: string; model?: string }> = [];
+  it('propagates provider unavailability without reducing it to an artifact result', async () => {
+    const unavailable = new ProviderUnavailableError(new Error('provider overloaded'));
+    __setCompileAgentCliCompilersForTest({
+      codex: async () => {
+        throw unavailable;
+      },
+    });
+    const setup = createTestSession();
+    try {
+      await expect(
+        compileAgent({
+          sessionPath: setup.sessionPath,
+          outDir: setup.toolDir,
+          llmConfig: { provider: 'codex-cli' },
+        }),
+      ).rejects.toBe(unavailable);
+    } finally {
+      cleanup(setup);
+    }
+  });
+
+  it('forwards the selected model and cancellation signal to data compilers', async () => {
+    const seen: Array<{
+      provider: string;
+      model?: string;
+      signal?: AbortSignal;
+    }> = [];
+    const controller = new AbortController();
     const result: CompileAgentResult = {
       success: false,
       outcome: 'give_up',
@@ -142,11 +169,19 @@ describe('compileAgent — external verification checks', () => {
     };
     __setCompileAgentCliCompilersForTest({
       claude: async (opts) => {
-        seen.push({ provider: 'claude-cli', model: opts.model });
+        seen.push({
+          provider: 'claude-cli',
+          model: opts.model,
+          signal: opts.signal,
+        });
         return result;
       },
       codex: async (opts) => {
-        seen.push({ provider: 'codex-cli', model: opts.model });
+        seen.push({
+          provider: 'codex-cli',
+          model: opts.model,
+          signal: opts.signal,
+        });
         return result;
       },
     });
@@ -157,15 +192,25 @@ describe('compileAgent — external verification checks', () => {
         sessionPath: claudeSetup.sessionPath,
         outDir: claudeSetup.toolDir,
         llmConfig: { provider: 'claude-cli', model: 'fixture-claude-data' },
+        signal: controller.signal,
       });
       await compileAgent({
         sessionPath: codexSetup.sessionPath,
         outDir: codexSetup.toolDir,
         llmConfig: { provider: 'codex-cli', model: 'fixture-codex-data' },
+        signal: controller.signal,
       });
       expect(seen).toEqual([
-        { provider: 'claude-cli', model: 'fixture-claude-data' },
-        { provider: 'codex-cli', model: 'fixture-codex-data' },
+        {
+          provider: 'claude-cli',
+          model: 'fixture-claude-data',
+          signal: controller.signal,
+        },
+        {
+          provider: 'codex-cli',
+          model: 'fixture-codex-data',
+          signal: controller.signal,
+        },
       ]);
     } finally {
       cleanup(claudeSetup);
@@ -206,50 +251,6 @@ it('test3', () => { expect(extract({ items: [] }).items).toEqual([]); });`,
     // For now, we'll verify the file structure checks work.
     expect(existsSync(pathJoin(setup.toolDir, 'workflow.json'))).toBe(false);
     expect(existsSync(pathJoin(setup.toolDir, 'parser.ts'))).toBe(true);
-
-    cleanup(setup);
-  });
-
-  it('verification: parser.test.ts must have >= 3 expects', async () => {
-    const setup = createTestSession();
-
-    const { mkdirSync } = await import('node:fs');
-    mkdirSync(setup.toolDir, { recursive: true });
-
-    writeFileSync(
-      pathJoin(setup.toolDir, 'parser.test.ts'),
-      `import { expect, it } from 'bun:test';
-it('trivial', () => {
-  expect(true).toBe(true);
-});`,
-      'utf8',
-    );
-
-    const content = readFileSync(pathJoin(setup.toolDir, 'parser.test.ts'), 'utf8');
-    const expectCount = (content.match(/expect\s*\(/g) || []).length;
-    expect(expectCount).toBe(1); // would fail verification (need >= 3)
-
-    cleanup(setup);
-  });
-
-  it('verification: rejects trivial assertions like expect(true).toBe(true)', async () => {
-    const setup = createTestSession();
-
-    const { mkdirSync } = await import('node:fs');
-    mkdirSync(setup.toolDir, { recursive: true });
-
-    const trivialTest = `import { expect, it } from 'bun:test';
-it('test', () => {
-  expect(true).toBe(true);
-  expect(true).toBe(true);
-  expect(true).toBe(true);
-});`;
-
-    writeFileSync(pathJoin(setup.toolDir, 'parser.test.ts'), trivialTest, 'utf8');
-
-    const content = readFileSync(pathJoin(setup.toolDir, 'parser.test.ts'), 'utf8');
-    const hasTrivial = /expect\s*\(\s*true\s*\)\.toBe\s*\(\s*true\s*\)/.test(content);
-    expect(hasTrivial).toBe(true); // would fail verification
 
     cleanup(setup);
   });

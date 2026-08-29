@@ -1,20 +1,23 @@
-/** Strict wire contracts for four bounded, one-shot semantic roles. */
+/** Strict wire contracts for five bounded, one-shot semantic roles. */
 import { z } from 'zod';
 import {
   ChainEdgeSchema,
+  ConcreteTeachingParameterSchema,
   ContentAddressedRefSchema,
   DesiredTeachingPlanSchema,
   EditableTeachingPlanSchema,
   EditableTeachingToolSchema,
+  ImplementationPlanPayloadSchema,
   ImplementationPlanRefSchema,
   TeachingCompileContextSchema,
   TeachingParameterSchema,
   TeachingToolCandidateSchema,
+  TeachingToolStrategySchema,
   teachingPlanContentSha256 as digest,
+  implementationPlanRequestProvenanceSha256,
 } from './master-teach-plan.ts';
 import {
   CurrentExecutionSnapshotSchema,
-  DiscoveryBindingSchema,
   PromptEvidenceProjectionSchema,
   PromptIdSchema,
   PromptShaSchema,
@@ -27,20 +30,13 @@ import {
   schemaIssue,
   utf8Text,
 } from './master-teach-prompt-projections.ts';
-export const ROLE_OUTPUT_MAX_BYTES = 128 * 1_024;
 const Reason = utf8Text(1, 4_000);
 const Short = utf8Text(1, 1_000);
 export { schemaIssue };
-export function boundBytes(value: unknown, bytes: number, ctx: z.RefinementCtx): void {
-  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > bytes)
-    schemaIssue(ctx, [], `payload exceeds ${bytes} UTF-8 bytes`);
-}
 const strictObject = <Shape extends z.ZodRawShape>(shape: Shape) => z.object(shape).strict();
-const boundedObject = <Shape extends z.ZodRawShape>(shape: Shape, bytes: number) =>
-  strictObject(shape).superRefine((value, ctx) => boundBytes(value, bytes, ctx));
 export const SemanticToolCandidateSchema = TeachingToolCandidateSchema;
 export type SemanticToolCandidate = z.infer<typeof SemanticToolCandidateSchema>;
-export const ToolBoundaryProposalSchema = SemanticToolCandidateSchema.omit({
+const ToolBoundaryProposalSchema = SemanticToolCandidateSchema.omit({
   likelyParams: true,
 }).strict();
 export const CurrentPlanProjectionSchema = contentProjection(EditableTeachingPlanSchema);
@@ -50,52 +46,126 @@ export const CurrentPlanBindingSchema = RunIdentitySchema.extend({
   planSha256: PromptShaSchema,
 }).strict();
 export type CurrentPlanBinding = z.infer<typeof CurrentPlanBindingSchema>;
-export const PlanRoleBindingSchema = CurrentPlanBindingSchema.extend({
-  inputSha256: PromptShaSchema,
-}).strict();
-export const PlannerProposalBindingSchema = strictObject({
-  runId: PromptIdSchema,
-  recordingSha256: PromptShaSchema,
-  discoverySha256: PromptShaSchema,
+const FocusedPlannerBindingSchema = RunIdentitySchema.extend({
   toolId: PromptToolIdSchema,
+}).strict();
+const PlannerProposalBindingSchema = FocusedPlannerBindingSchema.extend({
   compileInputsSha256: PromptShaSchema,
+}).strict();
+const PlannableTeachingToolSchema = EditableTeachingToolSchema.omit({
+  implementationPlan: true,
+}).strict();
+const PlannedTeachingToolSchema = PlannableTeachingToolSchema.extend({
+  candidate: TeachingToolCandidateSchema.extend({
+    likelyParams: z.array(ConcreteTeachingParameterSchema).max(64),
+  }).strict(),
+  strategy: TeachingToolStrategySchema,
+}).strict();
+const AvailableProducerSchema = strictObject({
+  toolId: PromptToolIdSchema,
+  toolName: SemanticToolCandidateSchema.shape.toolName,
+  expectedOutput: SemanticToolCandidateSchema.shape.expectedOutput,
 });
-export const FocusedPlannerProposalPayloadSchema = strictObject({
+export const FocusedPlannerInputSchema = strictObject({
+  run: RunIdentitySchema,
+  recordingIndex: RecordingIndexSchema,
+  tool: PlannableTeachingToolSchema,
+  availableProducers: z.array(AvailableProducerSchema),
+  incomingChainEdges: z.array(ChainEdgeSchema),
+  outgoingChainEdges: z.array(ChainEdgeSchema),
+  evidence: PromptEvidenceProjectionSchema,
+});
+export type FocusedPlannerInput = z.infer<typeof FocusedPlannerInputSchema>;
+export const FocusedPlannerOutputSchema = strictObject({
+  binding: FocusedPlannerBindingSchema,
+  tool: PlannedTeachingToolSchema,
+  chainEdges: z.array(ChainEdgeSchema),
+  implementationPlan: ImplementationPlanPayloadSchema,
+  reason: Reason,
+});
+const HostedImplementationPlanSchema = strictObject({
+  ref: ImplementationPlanRefSchema,
+  payload: ImplementationPlanPayloadSchema,
+}).superRefine((implementation, ctx) => {
+  if (digest(implementation.payload) !== implementation.ref.sha256)
+    schemaIssue(ctx, ['ref', 'sha256'], 'implementation plan payload hash mismatch');
+  if (
+    implementationPlanRequestProvenanceSha256(implementation.payload) !==
+    implementation.ref.requestProvenanceSha256
+  )
+    schemaIssue(ctx, ['ref', 'requestProvenanceSha256'], 'request provenance hash mismatch');
+});
+const FocusedPlannerProposalPayloadSchema = strictObject({
   binding: PlannerProposalBindingSchema,
   tool: EditableTeachingToolSchema,
-  chainEdges: z.array(ChainEdgeSchema).max(32),
+  chainEdges: z.array(ChainEdgeSchema),
+  implementationPlan: HostedImplementationPlanSchema,
   reason: Reason,
+}).superRefine((proposal, ctx) => {
+  if (
+    proposal.binding.toolId !== proposal.tool.id ||
+    proposal.binding.compileInputsSha256 !==
+      proposal.implementationPlan.ref.basedOnCompileInputsSha256
+  )
+    schemaIssue(ctx, ['binding'], 'planner proposal compile binding is stale');
+  if (
+    !proposal.tool.implementationPlan ||
+    digest(proposal.tool.implementationPlan) !== digest(proposal.implementationPlan.ref) ||
+    proposal.implementationPlan.ref.basedOnCompileInputsSha256 !==
+      proposal.binding.compileInputsSha256
+  )
+    schemaIssue(
+      ctx,
+      ['implementationPlan', 'ref'],
+      'hosted implementation plan does not bind the proposed tool',
+    );
+  if (
+    proposal.implementationPlan.payload.toolId !== proposal.tool.id ||
+    proposal.implementationPlan.payload.strategyKind !== proposal.tool.strategy?.kind
+  )
+    schemaIssue(
+      ctx,
+      ['implementationPlan', 'payload'],
+      'implementation plan identity or strategy does not match the proposed tool',
+    );
+  const proposedParameters = proposal.tool.candidate.likelyParams.map(({ name }) => name).sort();
+  const mappedParameters = proposal.implementationPlan.payload.parameterMappings
+    .map(({ parameterName }) => parameterName)
+    .sort();
+  if (digest(proposedParameters) !== digest(mappedParameters))
+    schemaIssue(
+      ctx,
+      ['implementationPlan', 'payload', 'parameterMappings'],
+      'implementation plan parameter mappings do not match the proposed tool',
+    );
+  proposal.chainEdges.forEach((edge, index) => {
+    if (edge.consumerToolId !== proposal.tool.id)
+      schemaIssue(ctx, ['chainEdges', index], 'planner proposal edge belongs to another consumer');
+  });
 });
 export const FocusedPlannerProposalSchema = contentProjection(FocusedPlannerProposalPayloadSchema);
 const DiscoveryInputFields = {
-  run: DiscoveryBindingSchema,
+  run: RunIdentitySchema,
   recordingIndex: RecordingIndexSchema,
   detectorSharedContext: TeachingCompileContextSchema,
-  discoveryCandidates: z.array(SemanticToolCandidateSchema).max(32),
+  discoveryCandidates: z.array(SemanticToolCandidateSchema),
   evidence: PromptEvidenceProjectionSchema,
 };
-export const ToolSelectionAdvisorInputSchema = boundedObject(DiscoveryInputFields, 256 * 1_024);
+export const ToolSelectionAdvisorInputSchema = strictObject(DiscoveryInputFields);
 export type ToolSelectionAdvisorInput = z.infer<typeof ToolSelectionAdvisorInputSchema>;
 /** Narrow analyzer view. The full detector input remains the host validation boundary. */
-export const ToolSelectionAdvisorPromptInputSchema = boundedObject(
-  {
-    run: DiscoveryBindingSchema,
-    recordingIndex: RecordingIndexSchema,
-    discoveryCandidates: z.array(ToolBoundaryProposalSchema).max(32),
-    evidence: PromptEvidenceProjectionSchema,
-  },
-  256 * 1_024,
-);
-export type ToolSelectionAdvisorPromptInput = z.infer<typeof ToolSelectionAdvisorPromptInputSchema>;
-export const ToolSelectionAdvisorOutputSchema = boundedObject(
-  {
-    binding: DiscoveryBindingSchema,
-    boundaries: z.array(ToolBoundaryProposalSchema).max(32),
-    concerns: z.array(Short).max(32),
-    reason: Reason,
-  },
-  ROLE_OUTPUT_MAX_BYTES,
-);
+export const ToolSelectionAdvisorPromptInputSchema = strictObject({
+  run: RunIdentitySchema,
+  recordingIndex: RecordingIndexSchema,
+  discoveryCandidates: z.array(ToolBoundaryProposalSchema),
+  evidence: PromptEvidenceProjectionSchema,
+});
+export const ToolSelectionAdvisorOutputSchema = strictObject({
+  binding: RunIdentitySchema,
+  boundaries: z.array(ToolBoundaryProposalSchema),
+  concerns: z.array(Short).max(32),
+  reason: Reason,
+});
 const MasterCurrentSchema = strictObject({
   run: CurrentPlanBindingSchema,
   plan: CurrentPlanProjectionSchema,
@@ -111,41 +181,31 @@ export const MasterDecisionInputSchema = strictObject({
   discovery: ToolSelectionAdvisorInputSchema,
   current: MasterCurrentSchema.optional(),
   toolSelectionAdvice: ToolSelectionAdvisorOutputSchema.optional(),
-  plannerProposals: z.array(FocusedPlannerProposalSchema).max(32),
-  authorizedRefs: strictObject({
-    evidence: z.array(ContentAddressedRefSchema).max(256),
-    implementationPlans: z.array(ImplementationPlanRefSchema).max(64),
-  }),
-  parameterAdvice: z.array(ParameterAdviceSubmissionSchema).max(32),
+  plannerProposals: z.array(FocusedPlannerProposalSchema),
+  parameterAdvice: z.array(ParameterAdviceSubmissionSchema),
   verificationFindings: PromptEvidenceProjectionSchema.optional(),
 }).superRefine((value, ctx) => {
   if ((value.phase === 'revision') !== Boolean(value.current))
     schemaIssue(ctx, ['current'], 'revision alone requires current-plan state');
   if (value.phase === 'discovery' && value.parameterAdvice.length)
     schemaIssue(ctx, ['parameterAdvice'], 'pre-plan decisions cannot carry parameter advice');
-  boundBytes(value, 512 * 1_024, ctx);
 });
 export type MasterDecisionInput = z.infer<typeof MasterDecisionInputSchema>;
-export const MasterDecisionOutputSchema = boundedObject(
-  {
-    binding: z.union([DiscoveryBindingSchema, PlanRoleBindingSchema]),
-    outcome: z.enum(['accepted', 'rejected', 'revised']),
-    reason: Reason,
-    desiredPlan: DesiredTeachingPlanSchema,
-  },
-  ROLE_OUTPUT_MAX_BYTES,
-);
-export const ParameterSelectionAdvisorInputSchema = boundedObject(
-  {
-    run: CurrentPlanBindingSchema,
-    recordingIndex: RecordingIndexSchema,
-    currentPlan: CurrentPlanProjectionSchema,
-    snapshot: CurrentExecutionSnapshotSchema,
-    toolId: PromptToolIdSchema,
-    evidence: PromptEvidenceProjectionSchema,
-  },
-  384 * 1_024,
-);
+const MasterDecisionBindingSchema = z.union([RunIdentitySchema, CurrentPlanBindingSchema]);
+export const MasterDecisionOutputSchema = strictObject({
+  binding: MasterDecisionBindingSchema,
+  outcome: z.enum(['accepted', 'rejected', 'revised']),
+  reason: Reason,
+  desiredPlan: DesiredTeachingPlanSchema,
+});
+export const ParameterSelectionAdvisorInputSchema = strictObject({
+  run: CurrentPlanBindingSchema,
+  recordingIndex: RecordingIndexSchema,
+  currentPlan: CurrentPlanProjectionSchema,
+  snapshot: CurrentExecutionSnapshotSchema,
+  toolId: PromptToolIdSchema,
+  evidence: PromptEvidenceProjectionSchema,
+});
 export type ParameterSelectionAdvisorInput = z.infer<typeof ParameterSelectionAdvisorInputSchema>;
 const ParameterAdvisorProducerSchema = strictObject({
   toolId: PromptToolIdSchema,
@@ -156,17 +216,14 @@ const ParameterAdvisorProducerSchema = strictObject({
     schemaIssue(ctx, ['proof', 'toolId'], 'producer proof belongs to another tool');
 });
 /** Focused analyzer view issued only after the full parameter input validates. */
-export const ParameterSelectionAdvisorPromptInputSchema = boundedObject(
-  {
-    run: CurrentPlanBindingSchema,
-    targetTool: EditableTeachingToolSchema,
-    targetProof: ToolVerificationPayloadSchema,
-    incomingChainEdges: z.array(ChainEdgeSchema).max(32),
-    producers: z.array(ParameterAdvisorProducerSchema).max(32),
-    evidence: PromptEvidenceProjectionSchema,
-  },
-  384 * 1_024,
-).superRefine((value, ctx) => {
+export const ParameterSelectionAdvisorPromptInputSchema = strictObject({
+  run: CurrentPlanBindingSchema,
+  targetTool: EditableTeachingToolSchema,
+  targetProof: ToolVerificationPayloadSchema,
+  incomingChainEdges: z.array(ChainEdgeSchema),
+  producers: z.array(ParameterAdvisorProducerSchema),
+  evidence: PromptEvidenceProjectionSchema,
+}).superRefine((value, ctx) => {
   if (value.targetProof.toolId !== value.targetTool.id)
     schemaIssue(ctx, ['targetProof', 'toolId'], 'target proof belongs to another tool');
   value.incomingChainEdges.forEach((edge, index) => {
@@ -180,26 +237,18 @@ export const ParameterSelectionAdvisorPromptInputSchema = boundedObject(
   if (digest(expectedProducerIds) !== digest(actualProducerIds))
     schemaIssue(ctx, ['producers'], 'producer proofs do not match incoming chain edges');
 });
-export type ParameterSelectionAdvisorPromptInput = z.infer<
-  typeof ParameterSelectionAdvisorPromptInputSchema
->;
-export const ParameterAdviceBindingSchema = strictObject({
+const ParameterAdviceBindingSchema = strictObject({
   runId: PromptIdSchema,
   recordingSha256: PromptShaSchema,
   toolId: PromptToolIdSchema,
   compileInputsSha256: PromptShaSchema,
-  verificationSha256: PromptShaSchema,
-  evidenceSha256: PromptShaSchema,
 });
-export const ParameterSelectionAdvisorOutputSchema = boundedObject(
-  {
-    binding: ParameterAdviceBindingSchema,
-    likelyParams: z.array(TeachingParameterSchema).max(64),
-    concerns: z.array(Short).max(32),
-    reason: Reason,
-  },
-  ROLE_OUTPUT_MAX_BYTES,
-).superRefine((value, ctx) => {
+export const ParameterSelectionAdvisorOutputSchema = strictObject({
+  binding: ParameterAdviceBindingSchema,
+  likelyParams: z.array(TeachingParameterSchema).max(64),
+  concerns: z.array(Short).max(32),
+  reason: Reason,
+}).superRefine((value, ctx) => {
   const names = value.likelyParams.map(({ name }) => name);
   if (new Set(names).size !== names.length)
     schemaIssue(ctx, ['likelyParams'], 'duplicate parameter');
@@ -211,19 +260,44 @@ const ClaimSchema = strictObject({
   toolId: PromptToolIdSchema.optional(),
   evidenceRefs: z.array(ContentAddressedRefSchema).max(32),
 });
-export const CompletionReviewInputSchema = boundedObject(
-  {
-    terminalIntent: z.enum(['completed', 'blocked']),
-    run: CurrentPlanBindingSchema,
-    recordingIndex: RecordingIndexSchema,
-    currentPlan: CurrentPlanProjectionSchema,
-    snapshot: CurrentExecutionSnapshotSchema,
-    history: ReceiptHistoryProjectionSchema,
-    evidence: PromptEvidenceProjectionSchema,
-    claims: z.array(ClaimSchema).max(64),
-  },
-  768 * 1_024,
+const CompletionActualResultSchema = strictObject({
+  observed: z.boolean(),
+  preview: utf8Text(0, 2_000),
+  shape: utf8Text(1, 512),
+  count: z.number().int().nonnegative().nullable(),
+  truncated: z.boolean(),
+});
+/**
+ * Controller-issued, already-redacted live result evidence. It is deliberately
+ * separate from immutable receipts so receipts can stay value-free while the
+ * independent completion reviewer sees enough bounded semantics to judge the
+ * promised result.
+ */
+const CompletionToolResultEvidencePayloadSchema = strictObject({
+  toolId: PromptToolIdSchema,
+  toolName: SemanticToolCandidateSchema.shape.toolName,
+  implementationPlanRef: ImplementationPlanRefSchema,
+  verificationCaseId: PromptIdSchema,
+  expectedResult: utf8Text(1, 2_000),
+  liveReceiptRef: ContentAddressedRefSchema,
+  actualResult: CompletionActualResultSchema,
+});
+export const CompletionToolResultEvidenceSchema = contentProjection(
+  CompletionToolResultEvidencePayloadSchema,
 );
+export type CompletionToolResultEvidence = z.infer<typeof CompletionToolResultEvidenceSchema>;
+export const CompletionReviewInputSchema = strictObject({
+  terminalIntent: z.enum(['completed', 'blocked']),
+  run: CurrentPlanBindingSchema,
+  recordingIndex: RecordingIndexSchema,
+  currentPlan: CurrentPlanProjectionSchema,
+  snapshot: CurrentExecutionSnapshotSchema,
+  history: ReceiptHistoryProjectionSchema,
+  evidence: PromptEvidenceProjectionSchema,
+  claims: z.array(ClaimSchema),
+  /** Optional until the controller has captured a bounded result projection. */
+  toolResultEvidence: z.array(CompletionToolResultEvidenceSchema).optional(),
+});
 export type CompletionReviewInput = z.infer<typeof CompletionReviewInputSchema>;
 const FindingSchema = strictObject({
   severity: z.enum(['blocking', 'warning']),
@@ -234,34 +308,28 @@ const FindingSchema = strictObject({
   path: ['evidenceRefs'],
   message: 'blocking findings require evidence',
 });
-export const CompletionReviewOutputSchema = boundedObject(
-  {
-    binding: PlanRoleBindingSchema,
-    verdict: z.enum(['passed', 'failed']),
-    summary: Reason,
-    findings: z.array(FindingSchema).max(64),
-    claimDispositions: z
-      .array(
-        strictObject({
-          claimId: PromptIdSchema,
-          status: z.enum(['supported', 'unsupported']),
-          reason: Short,
-          evidenceRefs: z.array(ContentAddressedRefSchema).min(1).max(32),
-        }),
-      )
-      .max(64),
-  },
-  ROLE_OUTPUT_MAX_BYTES,
-).superRefine((value, ctx) => {
+const CompletionToolResultReviewSchema = strictObject({
+  toolId: PromptToolIdSchema,
+  status: z.enum(['credible', 'revision_required']),
+  reason: Short,
+  evidenceRefs: z.array(ContentAddressedRefSchema).min(1).max(32),
+});
+export const CompletionReviewOutputSchema = strictObject({
+  binding: CurrentPlanBindingSchema,
+  verdict: z.enum(['passed', 'failed']),
+  summary: Reason,
+  findings: z.array(FindingSchema),
+  toolResultReviews: z.array(CompletionToolResultReviewSchema),
+  claimDispositions: z.array(
+    strictObject({
+      claimId: PromptIdSchema,
+      status: z.enum(['supported', 'unsupported']),
+      reason: Short,
+      evidenceRefs: z.array(ContentAddressedRefSchema).min(1).max(32),
+    }),
+  ),
+}).superRefine((value, ctx) => {
   const blocking = value.findings.some(({ severity }) => severity === 'blocking');
   if ((value.verdict === 'passed') === blocking)
     schemaIssue(ctx, ['verdict'], 'verdict conflicts with blocking findings');
 });
-export function discoveryContentSha256(input: Omit<ToolSelectionAdvisorInput, 'run'>): string {
-  return digest({
-    recordingIndex: input.recordingIndex,
-    detectorSharedContext: input.detectorSharedContext,
-    discoveryCandidates: input.discoveryCandidates,
-    evidenceRef: input.evidence.ref,
-  });
-}

@@ -28,7 +28,7 @@ const pipeline = [
   {
     step: '02',
     title: 'Compile state',
-    body: 'Generate a state-aware API workflow plus a DOM playbook fallback in one tool directory. When a recording yields several tools, all are selected by default and required upstream producers are kept with their consumers; shared signing and parsing modules are then built and verified once, reused, and followed by each tool’s compile plan.',
+    body: 'Generate state-aware API workflows with DOM playbooks as the final fallback. The master accounts for every credible operation in the recording, chooses dependency-aware build waves, and gives each tool to a focused planner and compiler before independent verification.',
     artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
   },
   {
@@ -404,7 +404,7 @@ export default function App() {
                 <span className="kicker">One command pipeline</span>
                 <h2 id="workflow-title">From browser session to callable tool.</h2>
               </div>
-              <p><code>bun run imprint teach</code> runs the complete path interactively: record, redact, generate, compile, emit, and wire the MCP server into the AI platform you choose. <code>imprint install</code> adds the same emitted server to another platform later, using absolute CLI paths for desktop config clients; <code>imprint uninstall</code> removes it.</p>
+              <p><code>bun run imprint teach</code> runs one fresh foreground path: record, discover every credible tool, plan dependency-aware build waves, compile and verify each tool, then emit and wire the MCP server into the AI platform you choose. <code>imprint install</code> adds the same emitted server to another platform later, using absolute CLI paths for desktop config clients; <code>imprint uninstall</code> removes it.</p>
             </div>
             <div className="pipeline">
               {pipeline.map((item) => <PipelineCard key={item.step} item={item} />)}

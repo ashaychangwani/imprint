@@ -749,3 +749,210 @@ many tools should exist.
 ### Teach attempts
 
 None. The controller is mapped but not yet connected.
+
+## 2026-08-29 — Confirm the rebuild really starts from a clean slate
+
+### What was checked
+
+- The rebuild branch starts at the exact `v0.6.6` commit, which is also the
+  current `main` commit used for this work.
+- Its history contains only the small rebuild checkpoints listed in this file.
+- No vNext commit was merged or copied into this branch.
+- The old vNext worktree remains separate and is used only as historical
+  evidence. Its uncommitted leftovers cannot affect this rebuild.
+
+### Decision made
+
+Continue only in the clean `codex/imprint-master-v066` worktree. Do not merge
+the vNext branch or use its unfinished teach runs as resumable work.
+
+### Teach attempts
+
+None. Every later validation will start a new run on this clean branch.
+
+## 2026-08-29 — Broaden the secret-boundary review before accepting it
+
+### What happened
+
+- A raw credential copied inside a larger URL or form body could pass the final
+  file scan because the first version compared only whole strings.
+- If the operating-system test sandbox was unavailable, the compiler could
+  mistake that host problem for a bad generated file and keep asking the agent
+  to edit the artifact.
+- Multipart login forms exposed a deeper gap: credential extraction found the
+  username and password, but deterministic redaction left them in the focused
+  recording, and the final scan did not understand multipart fields either.
+
+### Decision made
+
+Do not accept or commit this foundation yet. Repair these as general structured
+data problems covering URLs, forms, multipart bodies, JSON, headers, cookies,
+storage, and recorded events. An unavailable host sandbox must stop as a host
+failure, never become advice to change the generated tool.
+
+These changes remain mechanical. They do not infer what a website means and do
+not add rules for Google Hotels or any other site.
+
+### Teach attempts
+
+None. Running a provider on a recording that may still contain a raw multipart
+password would be unsafe and would not be useful validation.
+
+## 2026-08-29 — Simplify the scope and build every discovered tool
+
+### Direction changed
+
+- Stop spending rebuild time on production-grade security machinery. Imprint is
+  a small local development tool. Keep ordinary recording redaction and basic
+  file/schema checks, but do not build a security platform around it.
+- Remove primary-tool, one-tool, and partial-selection behavior from teaching.
+- Candidate discovery supplies the complete proposed tool set. The master must
+  account for every discovered tool instead of choosing a narrow subset.
+- The master chooses build waves. Dependencies must be built first, while
+  independent tools may share a wave and compile in parallel.
+
+### Immediate action
+
+- Stopped the active production-security review and implementation work.
+- Began removing the old `--primary-tool`, `--all-tools`, single-tool resume,
+  phase-resume, and replay-skipping command options.
+- The new editable plan will record the master's waves explicitly, with only
+  simple checks that every planned tool appears once and dependencies appear in
+  earlier waves.
+
+### Teach attempts
+
+None. The public command still needs to be connected to the new all-tools
+master controller before a run would test this direction.
+
+## 2026-08-29 — All-tools controller checkpoint
+
+### What changed
+
+- Removed the old primary-tool, partial-run, and resume behavior from the new
+  teaching path. A fresh run now works from the complete tool plan.
+- The master chooses the build waves. Every planned tool must appear once, and
+  a tool that depends on another tool must come in a later wave.
+- Removed the production-security detour from this rebuild. The remaining work
+  is focused on teaching, compiling, checking, and reporting tools reliably.
+
+### Checks run
+
+- One test built all 41 planned tools and confirmed that dependent tools waited
+  for the earlier wave.
+- Another test attempted all 45 planned tools, including tools after two
+  failures, and returned an honest failed result only after every attempt had
+  finished.
+
+### What the first controller review found
+
+- A failed compile or check currently ends the run before the master can use
+  the failure to revise the tool.
+- A tool marked only for another check may be compiled again unnecessarily.
+- A revised consumer can lose the successful result from an unchanged producer
+  that it needs for a dependency check.
+- A returned result can be marked successful without enough evidence that it
+  matches the promised behavior.
+
+These are real teaching-flow gaps, so this checkpoint is not complete. The
+focused fixes are now in progress.
+
+### Teach attempts
+
+None. A real teach was deliberately not started while the controller could
+still stop before repair or accept a result without enough evidence.
+
+## 2026-08-29 — Remove obsolete run journals and resume the simple path
+
+### What happened
+
+- Old pre-change teach journals had filled the disk and prevented tests or new
+  agent work from starting.
+- With explicit approval, removed only the Google Hotels and Southwest
+  `.teach-runs` directories, reclaiming about 12 GiB.
+- Confirmed that both sites' recordings and existing generated-tool
+  directories remained in place.
+
+### Decision made
+
+Continue with the smallest remaining correctness work: make replay evidence
+useful to focused agents, prevent false replay results, validate the complete
+foreground path, then start entirely fresh teaches. Do not restore the old
+semantic rulebook or add site-specific logic.
+
+### Teach attempts
+
+None yet. The next teach will start only after the current code passes its full
+local checks and is committed as a recovery point.
+
+## 2026-08-29 — Fresh master teaching path is locally complete
+
+### What changed
+
+- `imprint teach` now has one foreground teaching path. It starts a fresh run,
+  stays attached until there is a final result, and prints the exact failure if
+  the run cannot finish.
+- Candidate discovery keeps the shipped mechanical filtering. The master must
+  account for every discovered candidate, may split or merge candidates, and
+  records a clear reason for anything it cannot build. There is no tool-count
+  limit, primary-tool mode, or partial-success mode.
+- The master chooses dependency-aware build waves. Independent tools can build
+  together; consumers wait for their producers. One test builds 41 tools and
+  another attempts all 45 tools even when two fail.
+- Smaller agents now receive focused evidence for one decision at a time:
+  tool boundaries, one tool's plan, one tool's implementation, parameter
+  choice, and final completion review. Their advice is not authoritative; the
+  master can revise the plan and rerun only affected tools and consumers.
+- Request evidence now includes bounded, decoded request structure and neutral
+  observations from a separate execution. It reports only facts such as exact
+  paths, changed values, timing, and possible response-to-request correlation.
+  It does not classify website behavior or decide API versus browser strategy.
+- API replay now compares the exact recorded request only when the check uses
+  recorded parameter values. Synthetic or unavailable values are shown as
+  `not checked`, browser replay is shown as `not applicable`, and host failures
+  cannot masquerade as artifact failures.
+- Every old and current check receipt is retained for the independent final
+  review. A tool cannot be promoted while its required current checks fail or
+  while another discovered candidate is silently unaccounted for.
+- Every master revision compiles into a new directory. A failed parser or
+  request transform cannot leak into the next revision, and the next check
+  cannot accidentally reuse Bun's cached copy of the old code.
+- Removed fixed master-repair and focused-planning attempt counts. Legitimate
+  agent repair continues until it succeeds, the user cancels, or the existing
+  foreground deadline is reached.
+- Parameter reviewers remain optional advisors. If one returns unusable
+  advice, already verified tools stay valid and the master continues. Provider
+  cancellation or unavailability still keeps its exact terminal meaning.
+- Removed the unused code left behind by deleting the old teaching path. No
+  replacement policy layer was added.
+
+### Why
+
+The shipped implementation was reliable because compilers saw small evidence
+packages and the runtime performed mechanical checks. This keeps those useful
+parts while making candidate, parameter, dependency, and backend decisions
+editable by the master. The runtime reports facts and execution results; it
+does not try to encode rules for every website.
+
+### Checks run
+
+- Type checking passed.
+- Lint checked 201 files with no errors.
+- Dead-code and circular-dependency checks passed with no findings.
+- The complete test suite passed: 1,708 tests, 0 failures, 4,559 assertions.
+- A process-cleanup stress case that failed once during the first full run
+  passed in isolation, passed three repeated runs, and passed in the final full
+  suite. No product change was made for that transient test result.
+- The web dashboard production build passed and the local page rendered with
+  the new all-tools teaching explanation and no browser-console errors.
+- The repository whitespace check passed.
+- Two independent final reviews found the stale-revision, hard-attempt-cap,
+  advisory-failure, and nested-provider-status issues above. After the fixes,
+  both reviewers found no remaining high- or medium-priority issue in those
+  paths.
+
+### Teach attempts
+
+None yet. This is the green local checkpoint immediately before the first
+fresh, unsteered neutral teach and the required Google Hotels and Google
+Flights teaches. No pre-change run will be resumed.

@@ -116,24 +116,21 @@ The site is blocking API replay or needs browser-minted state. Three escalating 
    ```
 With a `playbook.yaml` present, the `auto` ladder escalates to a real DOM walk when API replay modes cannot satisfy the workflow.
 
-## Teach stalls or fails during final live verification
+## Teach stalls or a check fails
 
-The final verifier writes an append-only event stream and durable receipts beside each tool:
+The foreground terminal shows which focused tool is being planned, compiled, or
+checked. The fresh run directory in the final summary retains the current plan,
+artifact history, host errors, and factual check receipts.
 
-```bash
-tail -f ~/.imprint/<site>/<toolName>/.live-verifier-log.jsonl
-jq . ~/.imprint/<site>/<toolName>/.live-verification-evidence.json
-```
+Contract, replay, live, and producer-consumer checks are separate facts. A
+failure should identify the request or comparison that failed, including what
+was not checked afterward. Replay for a browser playbook is not applicable and
+does not count as a failure.
 
-`prepare_live_backend` checks `backends.json` before the integration suite starts. A missing or invalid preference runs the normal comprehensive probe on a separate infrastructure budget; compiler revisions retain and rebind an already-proven preference without network I/O. The suite timeout begins after preparation and uses only the selected backend. Only a transport, network, or browser-infrastructure failure justifies a forced reprobe; empty or incorrect output goes back to the compiler unchanged.
-
-Every suite gets a `suite-N` receipt before Bun launches. The receipt ends as `passed`, `failed`, `timed_out`, or `aborted` and retains bounded sanitized stdout/stderr, test names, backend selection, and completed call labels. This means an empty call list is diagnosable rather than being mistaken for a successful semantic review. Reports contain no evidence IDs; readable labels are navigation aids only.
-
-If a live search returns an unexpected empty collection, inspect the exact final response before changing backend policy. Document requests often record an HTML/JavaScript shell while the useful content appears only after client-side rendering in later DOM events. In that case the compiler should use the existing request `mode: "navigate"` and train the parser against the rendered response—not selectors borrowed from a sibling detail endpoint. A request transform returning `{ url }` does not erase an existing request body or headers; only fields explicitly returned by the transform override the workflow request.
-
-If compilation reports that a placeholder-bearing body has no `bodyPlaceholderEncoding`, inspect the recorded request rather than changing its MIME type. Use `json-string` for placeholders inside JSON string literals, `form-urlencoded` for form field values, and `raw` only when delimiters are truly payload bytes. For JSON nested inside a form field, multipart variants, compressed bodies, or proprietary framing, have the compile agent build the body in `request-transform.ts`. The generated `request.test.ts` should render the workflow offline with adversarial characters and decode it back to the original value before any live verification.
-
-The verifier evaluates the core intent separately from secondary parameters. A known-broken secondary input returns `changes_required`; the compiler then repairs it from evidence or removes it from the public contract and records the reason in `workflow.limitations`. A grounded but genuinely untestable input can remain exposed as `verified:false`. Neither mechanism permits a failing core tool to ship.
+The master receives those facts and can change the affected tool plan, artifact,
+parameters, dependencies, or replay strategy. Only that tool and its consumers
+become stale. The run cannot complete until every planned tool has current
+passing checks and the independent completion reviewer approves the evidence.
 
 ## Auth compile: an expected user action never arrives
 
@@ -186,12 +183,12 @@ Authentication runs through the compiled `workflow.json` action program in one p
 
 Before compiling the auth tool, teach needs the login credentials. It uses, in order: credentials extracted from the recording, then the credential store, then — when interactive — it **prompts you** for exactly the credentials the detection LLM identified for this login (`authTool.credentialNames`), pre-filling the username it saw in the recording. This warning means all of those came up empty.
 
-The recording may legitimately omit a credential because Imprint masks sensitive fields and some browser submissions have no request body available to the recorder. Run interactively and enter the missing value at the prompt, or set it up front and resume:
+The recording may legitimately omit a credential because Imprint masks sensitive fields and some browser submissions have no request body available to the recorder. Run interactively and enter the missing value at the prompt, or set it up front and start a fresh teach:
 
 ```
 imprint credential set <site> username
 imprint credential set <site> password
-imprint teach <site> --from-step generate
+imprint teach <site> --agent codex
 ```
 
 Inputs requested by a later auth action are not stored credentials; the compile agent requests them at the appropriate verification checkpoint. Already-stored credentials are reused automatically on later runs.
@@ -219,131 +216,72 @@ The LLM call returned text instead of JSON. This happens occasionally when:
 
 **Fix:** re-run `imprint generate`. If it persists, split the recording into smaller workflows (or, for `compile-playbook`, retry with `--no-shrink`).
 
-## "Replay-and-diff is slow or failing"
+## "Replay is slow or failing"
 
-The replay-and-diff stage re-runs your recorded actions in a fresh browser to classify which request values are ephemeral (timestamps, CSRF tokens) vs constant. If the automated replay fails or the site blocks it, `teach` falls back to asking you to manually re-record the same flow.
-
-To skip this stage entirely:
-
-```bash
-imprint teach <site> --skip-replay
-```
-
-This is faster but means the compile agent won't be able to distinguish browser-minted values from constants, which may reduce workflow accuracy for sites with dynamic request parameters. For simple sites with mostly static API calls, this is usually fine.
+Replay is one of the factual checks used by the fresh master run. It is not a
+separate resumable phase and cannot be hidden with a skip flag. The terminal
+shows the failed comparison; fix the recording, prompt, or compiler and start a
+new teach run.
 
 ## "Compile is slow or looks stuck"
 
-Each tool compiles with a **20-minute timeout** by default. The compile agent writes the MCP server and runs thorough verification tests, so most complex tools take 10-15 minutes — be patient. If a tool hits the timeout, it fails gracefully and other tools continue compiling. Simple tools (2-3 API requests) typically compile in 2-5 minutes. Complex multi-request workflows (e.g. a full checkout flow with 10+ chained requests) may take longer — increase the timeout for those:
+The timeout covers the foreground teach run and defaults to 12 hours. A large
+recording can require many focused planner, compiler, check, advice, and repair
+calls; override it only when you intentionally want another run-wide deadline:
+
+~~~bash
+imprint teach <site> --timeout 12h
+~~~
+
+Provider capacity and overload errors retry automatically with capped
+exponential backoff and jitter. They do not become artifact failures. Invalid
+requests, authentication errors, schema errors, cancellation, and the run-wide
+deadline are terminal instead of being retried forever.
+
+For deeper debugging, enable Phoenix tracing and inspect the focused role or
+tool call that is spending time:
+
+~~~bash
+IMPRINT_TRACE=1 IMPRINT_TRACE_BATCH=false PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 imprint teach <site> --from-session ~/.imprint/<site>/sessions/<ts>.json
+~~~
+
+Using --from-session still starts a fresh run; it does not resume prior work.
+
+## Re-running `imprint teach`
+
+Every teach is a fresh foreground run. It uses the current recording, prompt,
+and code, discovers the complete tool set again, and builds every tool in the
+master's dependency-ordered waves. Old failed runs remain diagnostic evidence
+but cannot be resumed.
+
+After changing code or prompts, simply start a new run:
 
 ```bash
-imprint teach <site> --timeout 30m
+imprint teach <site> --agent codex
 ```
 
-Tools with a **large filter surface** (a search tool exposing 10+ optional filters) take the longest: before finishing, the compile agent reviews every exposed parameter and attempts to prove its effect against live data. A known-broken secondary parameter must be repaired or removed and recorded in `workflow.limitations`; a recording-grounded parameter whose live effect genuinely cannot be tested may instead ship explicitly marked `verified:false`. The independent verifier can return `approved_with_gaps` only when the core tool works and every named gap is untestable rather than broken. This review is thorough but does not require a synthetic 100% live-call success rate, and heavy-search tools can still take 20-30 minutes. Give them more headroom with `--timeout 30m`. When running the from-scratch helper, set the same cap via its passthrough:
+There are no phase-window, primary-tool, or partial-selection flags.
 
-```bash
-IMPRINT_TEACH_TIMEOUT=30m scripts/teach-from-scratch.sh <site>
-```
+## Reading a fresh teach run
 
-This preserves prior compiled outputs and verifier feedback so compile agents
-can revise proven work, while also preserving recordings and analyzed candidate
-state. It runs the explicit `plan-prereqs → emit` phase window. If candidate
-detection has not completed, finish that analysis first; the reteach script
-intentionally does not rediscover tools.
+The command prints the fresh run directory in its terminal summary. Use that
+directory, together with the Phoenix trace when enabled, to find the focused
+job that is slow or failed.
 
-If a tool consistently fails to compile within the timeout (e.g. due to bot defense on verification), try a faster model:
+A run records the master plan and build waves, artifact history, and factual
+contract, replay, live, and producer-consumer receipts. A failed receipt should
+name the exact request or comparison that failed. A browser playbook has no API
+replay check, so replay is reported as not applicable rather than failed.
 
-```bash
-imprint teach <site> --model claude-sonnet-4-6 --timeout 20m
-```
+The foreground command never returns while tools are still active. Its final
+status is completed, blocked, failed, cancelled, or provider unavailable. A
+non-completed result exits non-zero, and no intended tool is silently treated
+as ready.
 
-For deeper debugging, turn on local Phoenix tracing and inspect which stage or tool call is spending time:
-
-```bash
-uv tool install arize-phoenix
-phoenix serve
-
-IMPRINT_TRACE=1 \
-IMPRINT_TRACE_BATCH=false \
-IMPRINT_TRACE_LLM_IO=1 \
-IMPRINT_TRACE_TOOL_IO=1 \
-PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
-imprint teach <site> --from-session ~/.imprint/<site>/sessions/<ts>.json --provider codex-cli
-```
-
-If Phoenix is open at `http://localhost:6006` but empty, check that `PHOENIX_COLLECTOR_ENDPOINT` points at that URL and use `IMPRINT_TRACE_BATCH=false` for immediate local export. Drill into individual `agent.turn.N` spans to see per-turn token counts, and into `agent.tool.X` spans to find which tool call is slow. `IMPRINT_TRACE_LLM_IO=1` records prompts/responses; `IMPRINT_TRACE_TOOL_IO=1` records compile-agent tool arguments/results; `IMPRINT_TRACE_IO_MAX_CHARS=200000` raises the per-payload capture cap when the default is too small.
-
-## Re-running only specific phases of `imprint teach`
-
-A teach run is a chain of phases, persisted as checkpoints in `~/.imprint/<site>/.teach-state.json`:
-
-```
-record → redact → triage → replay-and-diff → detect-candidates → plan-prereqs → generate → compile-playbook → emit → register
-```
-
-To iterate on one phase without re-running the whole chain, use the phase-window flags:
-
-```bash
-imprint teach <site> --from-step <step>     # start at <step>, run to the end (reuses earlier phases' outputs)
-imprint teach <site> --to-step <step>        # stop after <step>
-imprint teach <site> --only <step>           # run exactly one phase (= --from-step X --to-step X)
-```
-
-Examples:
-
-```bash
-imprint teach google-flights --only detect-candidates    # just re-detect candidate tools
-imprint teach google-flights --only plan-prereqs          # just rebuild shared modules (multi-tool sites)
-imprint teach google-flights --to-step triage             # process up to triage, then stop
-imprint teach google-flights --from-step generate          # recompile the tools from the persisted plan
-```
-
-All detected tools are selected by default. Use `--primary-tool` to select only
-the primary candidate and its upstream prerequisites. If an interactive choice
-omits a producer required by a retained downstream tool, Imprint adds it back
-and prints the added names. A scoped resume fails rather than compiling an
-unusable consumer when a persisted prerequisite is missing; rerun from
-`detect-candidates` to rebuild the closed set.
-
-Guard: `--from-step <step>` is **only allowed if a prior run reached or crossed that point** — every earlier phase must already be complete in `.teach-state.json`, otherwise the run errors with the furthest step it actually reached (starting mid-chain without the earlier outputs would be missing dependencies like the redacted/triaged session, classifications, or build plan). It's not combinable with `--from-session` (a separate fresh-input entry mode); use `--to-step` (which must be `redact` or later, since `--from-session` enters the chain at `redact`) with `--from-session` to cap phases on a fresh recording.
-
-Notes: triage is the first analysis phase and is checkpointed before a browser may launch. In a full run, recordings with no irreversible request may replay while candidate detection runs in parallel; recordings with any irreversible request skip replay entirely. There is no unguarded manual re-record fallback. Analysis phase windows are bounded honestly: `--only triage`, `--only replay-and-diff`, and `--only detect-candidates` run only their named phase, reusing required earlier artifacts. Pairing a replay window with `--skip-replay` reuses `.classifications.json` only when the cache is tagged for the exact recording and triage safety decision; untagged or mismatched caches are ignored. The per-tool compile (`generate → compile-playbook → emit`) is still one atomic unit per tool: a `--to-step`/`--only` landing inside it runs the **whole** compile (its summary reports `→ emit`) and stops before `register` (platform integration) rather than mid-tool. `--from-step` *can* still resume mid-compile — each phase loads the prior phase's artifact from disk, so `--from-step compile-playbook` is valid.
-
-## "Build plan skipped" — the shared-module planner timed out
-
-In a multi-tool run the planning spinner steps through `Planning shared modules` → `calling planner LLM` as it works. If the single planner call can't finish in time, the spinner stops with `Build plan skipped.` followed by a warning line:
-
-```
-▲  Build planning failed or timed out (build planner exceeded 600s timeout) — compiling tools independently (no shared modules).
-```
-
-This is **non-fatal**: every tool still compiles, just without shared `_shared/*` modules (each inlines the logic). The planner is a single LLM call bounded at 600s (10 minutes) — it analyzes the whole merged recording across all tools, so it gets the longer cap; the per-tool plan (below) is the 5-minute one.
-
-To see *why* it was slow, turn on Phoenix tracing (above): the `teach.plan_prereqs` span carries `imprint.plan.payload_chars`, `imprint.plan.ephemeral_count`, `imprint.plan.request_count`, and — on timeout — `imprint.plan.timed_out=true` with `imprint.plan.llm_elapsed_ms`. These are set *before* the call, so even a timed-out session exports a useful (errored) span; a large **ephemeral value count** or **payload KB** is the usual cause. (The same input-size summary also flashes in the spinner as `planning N tool(s): … KB payload …` while the planner runs.) To skip shared-module planning entirely and compile every tool independently, set `IMPRINT_NO_BUILD_PLAN=1`.
-
-## A tool compiled but seems to ignore the per-tool plan
-
-Before each tool compiles, Imprint runs a short **per-tool planning pass** (`teach.plan_tool`) that maps every parameter to its recorded field and fixes the request/parse plan, then injects that Markdown plan into the compile agent. The plan is persisted to `~/.imprint/<site>/<toolName>/.tool-plan.md` — open it to see exactly what the planner told the compiler.
-
-The pass is **best-effort**: a 5-minute timeout, a missing `prompts/tool-planning.md`, or any error yields no plan and the tool compiles without one (today's behavior). Under Phoenix tracing, the `teach.plan_tool` span sits as a sibling of that tool's `compile.generate` and carries `imprint.tool_plan.chars` (plan length) or `imprint.tool_plan.skipped=true` — if it's skipped, no plan reached the compiler. To disable per-tool planning entirely, set `IMPRINT_NO_TOOL_PLAN=1`.
-
-## Reading a teach trace stage-by-stage in Phoenix
-
-With tracing on (see "Compile is slow or looks stuck" above), the `cli.teach` root span fans out into one child span per stage, so any part of a run is debuggable in isolation. Open the root trace and locate the failing stage by span status + attributes:
-
-| Stage span | What it covers | Key attributes |
-|---|---|---|
-| `teach.combine_sessions` | from-scratch: merging sibling recordings | `imprint.combine.{session,request,narration}_count` |
-| `teach.record` | the live browser capture | `imprint.record.event_count` |
-| `teach.redact` | credential/PII scrub | `imprint.redact.{totalRedactions,requestsRedacted,cookiesRedacted,placeholdersInjected,freeformRedactions}` |
-| `compile.triage_requests` | LLM request filtering | `imprint.requests_selected` |
-| `teach.detect_tool_candidates` | tool detection | — |
-| `teach.plan_prereqs` | build plan + shared modules (multi-tool) | `imprint.plan.*` (see above) |
-| `teach.build_shared_module` | one `_shared/*.ts` build | `imprint.shared_module.{cycles,ok}` |
-| `teach.plan_tool` | per-tool implementation plan | `imprint.tool_plan.{chars,skipped}` |
-| `compile.generate` | the per-tool compile agent | `imprint.compile.{outcome,turns}` |
-
-A red span tells you where the run broke: a `teach.plan_prereqs` timeout, a `teach.build_shared_module` with `imprint.shared_module.ok=false`, an empty `teach.plan_tool`, or a `compile.generate` with `outcome=give_up`/`timeout`.
+If the master revises a tool, only that tool and consumers which depend on it
+lose their current verification. The next attempt recompiles or rechecks those
+tools in the master-authored wave order. Independent verified tools do not need
+to be rebuilt.
 
 ## `imprint audit` — scoring a site's generated tools
 
@@ -378,25 +316,17 @@ This is expected when the gap is explicit, not a claim that the parameter passed
 
 A tool whose parameter is an opaque token/id minted by a *sibling* tool (e.g. `get_hotel_offers(hotel_id)` ← `search_hotels`) must verify that parameter with a **fresh** token from the producer, not the recorded constant. The gate blocks compile when the consumer's `param:<name>` test only reuses the recorded value (it can't prove a real token works). The fix is almost always on the **producer**: make its parser emit the field in the *full shape* the consumer needs (e.g. a `<ftid>|<area>|<name>|<token>` composite) rather than a bare fragment, so the consumer's chained test — which calls `../<sourceTool>/workflow.json`, reads that field, and feeds it back — gets a working value. If the chained test runs but the consumer returns empty, the producer/consumer field contract is genuinely broken; fix the producer's emitted field (or how the consumer unpacks it). If the producer is blocked by anti-bot at compile time, the param waives to `verified:false` reason `waived-chain` instead of blocking.
 
-## "Compile agent did not produce a verified workflow" — usage-policy / safety refusal
+## The provider is unavailable or refuses a request
 
-A tool can fail compilation with a message mentioning the model's **usage policy** (e.g. `claude-cli exited with code 1 … unable to respond to this request, which appears to violate our Usage Policy`). This is a **transient false positive** from the model's safety filter, not a problem with your recording: reverse-engineering an API trips the classifier probabilistically, and the rate rises with the volume of reasoning the model generates. It's most likely to hit the single most complex tool in a multi-tool run.
+Capacity, overload, and temporary provider failures retry automatically with
+backoff until the provider recovers, the user cancels, or the run deadline
+expires. If the terminal reports provider unavailable, start a fresh teach after
+the provider recovers.
 
-Imprint mitigates this automatically:
-
-- The compile agent runs at **`high`** thinking effort (not `max`), which generates fewer reasoning tokens and measurably lowers the trip rate. This overrides any `CLAUDE_EFFORT` set in your environment.
-- A refusal is **retried in a fresh session up to 3 times** with backoff before the tool is marked failed. A re-roll almost always succeeds.
-- Multi-tool runs compile at **concurrency 2** (down from 3) to avoid bursts of near-identical requests, which raise the trip rate.
-
-If a tool still fails after the automatic retries:
-
-```bash
-# Re-run just the teach flow; the earlier stages are cached.
-imprint teach <site>
-
-# Or compile that tool with a different provider (different safety stack).
-imprint teach <site> --provider codex-cli
-```
+A deterministic refusal, authentication failure, authorization failure, schema
+error, or invalid request is not retried indefinitely. Inspect the top-level host
+error in the terminal and fresh run record, correct the cause, and start a new
+teach. Old run state is diagnostic evidence only.
 
 ## "MCP tools panel is empty in Claude Desktop"
 
@@ -406,7 +336,10 @@ Start with Imprint's local audit:
 imprint mcp status
 ```
 
-It reports external registrations, generated tools under `IMPRINT_HOME`, incomplete `teach` checkpoints, missing session recordings, and stale MCP entries that point at sites with no complete generated tool. It never reports or deletes raw recordings — those are your source of truth.
+It reports external registrations, generated tools under `IMPRINT_HOME`, missing
+session recordings, and stale MCP entries that point at sites with no complete
+generated tool. It never reports or deletes raw recordings or old teach run
+records; those remain diagnostic source material.
 
 Common causes:
 

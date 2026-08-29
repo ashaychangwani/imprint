@@ -8,6 +8,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import { inheritedCompileProviderControl } from './compile-provider-control.ts';
 import {
   type LiveIntegrationEvidence,
   runCapturedIntegrationCase,
@@ -29,6 +30,13 @@ import {
   runLiveAuthRefreshToolCall,
   runLiveIntegrationSuite,
 } from './live-verifier.ts';
+import {
+  ProviderDeadlineError,
+  ProviderUnavailableError,
+  combinedDeadlineSignal,
+  providerControlError,
+  resolvedRunDeadline,
+} from './provider-retry.ts';
 import { buildZodValidator } from './tool-loader.ts';
 import { WorkflowSchema } from './types.ts';
 
@@ -173,216 +181,263 @@ export async function runLiveVerifierMcpServer(opts: {
   }
   const validator = buildZodValidator(workflow.parameters);
   const configuredDeadline = Number(process.env.IMPRINT_LIVE_VERIFIER_DEADLINE_MS);
-  const deadlineMs = Number.isFinite(configuredDeadline) ? configuredDeadline : undefined;
+  const inheritedControl = inheritedCompileProviderControl();
+  const runDeadline =
+    inheritedControl?.deadline ??
+    resolvedRunDeadline(
+      undefined,
+      Number.isFinite(configuredDeadline) ? configuredDeadline : undefined,
+    );
+  const lifetime = new AbortController();
+  const active = combinedDeadlineSignal(runDeadline, undefined, lifetime.signal);
+  const processHandlers = new Map<NodeJS.Signals, () => void>();
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    const handler = (): void =>
+      lifetime.abort(new DOMException(`Live verifier MCP received ${signal}`, 'AbortError'));
+    processHandlers.set(signal, handler);
+    process.once(signal, handler);
+  }
   let authSession: LiveVerificationAuthSession | undefined;
-  let submitted = false;
-  const backendPreparation: {
-    current?: {
-      promise: Promise<Awaited<ReturnType<typeof prepareLiveVerificationBackend>>>;
-      forceReprobe: boolean;
-    };
-  } = {};
-  const evidencePath = pathJoin(dirname(opts.reportPath), LIVE_VERIFICATION_EVIDENCE_FILE);
-  let targetedCallSequence = readPersistedLiveVerificationEvidence(evidencePath).reduce(
-    (highest, item) => {
-      const match = /^targeted-call-(\d+)$/.exec(item.label);
-      return match ? Math.max(highest, Number(match[1])) : highest;
-    },
-    0,
-  );
-  const hasSuiteReceipt = (): boolean => hasSuiteReceiptForSession(evidencePath, opts.sessionLabel);
-
-  const server = new Server(
-    { name: 'imprint-live-verifier', version: '1.0.0' },
-    { capabilities: { tools: {} } },
-  );
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [REFRESH_AUTH_TOOL, PREPARE_BACKEND_TOOL, RUN_SUITE_TOOL, RUN_TOOL, SUBMIT_TOOL],
-  }));
-  server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
-    if (request.params.name === 'refresh_auth_session') {
-      const result = await runLiveAuthRefreshToolCall(authSession, request.params.arguments, {
-        workflowPath: opts.workflowPath,
-        logPath: opts.logPath,
-        attempt: opts.attempt,
-        sessionLabel: opts.sessionLabel,
-        deadlineMs,
-      });
-      authSession = result.session;
-      return result.error
-        ? errorResult(result.error)
-        : { content: [{ type: 'text', text: JSON.stringify(result.observation) }] };
-    }
-    if (request.params.name === 'prepare_live_backend') {
-      const input = request.params.arguments as {
-        params?: unknown;
-        reason?: unknown;
-        forceReprobe?: unknown;
-      };
-      if (typeof input.reason !== 'string' || !input.reason.trim()) {
-        return errorResult('reason must explain the backend preparation or reprobe');
+  try {
+    const rethrowProviderControl = (error: unknown): void => {
+      const control = providerControlError(active.signal?.aborted ? active.signal.reason : error);
+      if (!control) return;
+      if (control instanceof ProviderDeadlineError || control instanceof ProviderUnavailableError) {
+        inheritedControl?.report(control);
       }
-      const parsed = validator.safeParse(input.params ?? {});
-      if (!parsed.success) return errorResult(`invalid tool params: ${parsed.error.message}`);
-      try {
-        const forceReprobe = input.forceReprobe === true;
-        const preparation = joinBackendPreparation(backendPreparation, forceReprobe, () =>
-          prepareLiveVerificationBackend({
+      throw control;
+    };
+    let submitted = false;
+    const backendPreparation: {
+      current?: {
+        promise: Promise<Awaited<ReturnType<typeof prepareLiveVerificationBackend>>>;
+        forceReprobe: boolean;
+      };
+    } = {};
+    const evidencePath = pathJoin(dirname(opts.reportPath), LIVE_VERIFICATION_EVIDENCE_FILE);
+    let targetedCallSequence = readPersistedLiveVerificationEvidence(evidencePath).reduce(
+      (highest, item) => {
+        const match = /^targeted-call-(\d+)$/.exec(item.label);
+        return match ? Math.max(highest, Number(match[1])) : highest;
+      },
+      0,
+    );
+    const hasSuiteReceipt = (): boolean =>
+      hasSuiteReceiptForSession(evidencePath, opts.sessionLabel);
+
+    const server = new Server(
+      { name: 'imprint-live-verifier', version: '1.0.0' },
+      { capabilities: { tools: {} } },
+    );
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: [REFRESH_AUTH_TOOL, PREPARE_BACKEND_TOOL, RUN_SUITE_TOOL, RUN_TOOL, SUBMIT_TOOL],
+    }));
+    server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+      if (request.params.name === 'refresh_auth_session') {
+        try {
+          const result = await runLiveAuthRefreshToolCall(authSession, request.params.arguments, {
             workflowPath: opts.workflowPath,
-            params: parsed.data as Record<string, string | number | boolean>,
-            reason: input.reason as string,
-            forceReprobe,
             logPath: opts.logPath,
             attempt: opts.attempt,
-          }),
-        );
-        if (preparation.joined) {
-          appendLiveVerifierLog(opts.logPath, {
-            type: 'backend.prepare.joined',
-            attempt: opts.attempt,
-            reason: input.reason,
-            forceReprobe: input.forceReprobe === true,
+            sessionLabel: opts.sessionLabel,
+            deadlineMs: runDeadline?.deadlineMs,
+            runDeadline,
+            signal: active.signal,
           });
+          authSession = result.session;
+          return result.error
+            ? errorResult(result.error)
+            : { content: [{ type: 'text', text: JSON.stringify(result.observation) }] };
+        } catch (error) {
+          rethrowProviderControl(error);
+          throw error;
         }
-        const result = await preparation.promise;
-        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
-      } catch (error) {
-        return errorResult(error instanceof Error ? error.message : String(error));
       }
-    }
-    if (request.params.name === 'run_live_integration_suite') {
-      const input = request.params.arguments as { reason?: unknown };
-      try {
-        const suite = await runLiveIntegrationSuite({
-          toolDir: dirname(opts.workflowPath),
-          logPath: opts.logPath,
-          attempt: opts.attempt,
-          reason: typeof input.reason === 'string' ? input.reason : undefined,
-          sessionLabel: opts.sessionLabel,
-        });
-        return { content: [{ type: 'text', text: JSON.stringify(suite) }] };
-      } catch (error) {
-        return errorResult(error instanceof Error ? error.message : String(error));
+      if (request.params.name === 'prepare_live_backend') {
+        const input = request.params.arguments as {
+          params?: unknown;
+          reason?: unknown;
+          forceReprobe?: unknown;
+        };
+        if (typeof input.reason !== 'string' || !input.reason.trim()) {
+          return errorResult('reason must explain the backend preparation or reprobe');
+        }
+        const parsed = validator.safeParse(input.params ?? {});
+        if (!parsed.success) return errorResult(`invalid tool params: ${parsed.error.message}`);
+        try {
+          const forceReprobe = input.forceReprobe === true;
+          const preparation = joinBackendPreparation(backendPreparation, forceReprobe, () =>
+            prepareLiveVerificationBackend({
+              workflowPath: opts.workflowPath,
+              params: parsed.data as Record<string, string | number | boolean>,
+              reason: input.reason as string,
+              forceReprobe,
+              logPath: opts.logPath,
+              attempt: opts.attempt,
+              signal: active.signal,
+            }),
+          );
+          if (preparation.joined) {
+            appendLiveVerifierLog(opts.logPath, {
+              type: 'backend.prepare.joined',
+              attempt: opts.attempt,
+              reason: input.reason,
+              forceReprobe: input.forceReprobe === true,
+            });
+          }
+          const result = await preparation.promise;
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+        } catch (error) {
+          rethrowProviderControl(error);
+          return errorResult(error instanceof Error ? error.message : String(error));
+        }
       }
-    }
-    if (request.params.name === 'run_live_integration_test') {
-      if (!hasSuiteReceipt())
-        return errorResult('run the final integration suite before a targeted call');
-      const input = request.params.arguments as { params?: unknown; reason?: unknown };
-      if (typeof input.reason !== 'string' || !input.reason.trim()) {
-        return errorResult('reason must explain the unresolved semantic question');
+      if (request.params.name === 'run_live_integration_suite') {
+        const input = request.params.arguments as { reason?: unknown };
+        try {
+          const suite = await runLiveIntegrationSuite({
+            toolDir: dirname(opts.workflowPath),
+            logPath: opts.logPath,
+            attempt: opts.attempt,
+            reason: typeof input.reason === 'string' ? input.reason : undefined,
+            sessionLabel: opts.sessionLabel,
+            signal: active.signal,
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(suite) }] };
+        } catch (error) {
+          rethrowProviderControl(error);
+          return errorResult(error instanceof Error ? error.message : String(error));
+        }
       }
-      const parsed = validator.safeParse(input.params ?? {});
-      if (!parsed.success) return errorResult(`invalid tool params: ${parsed.error.message}`);
-      const label = `targeted-call-${++targetedCallSequence}`;
-      const startedAt = Date.now();
-      appendLiveVerifierLog(opts.logPath, {
-        type: 'targeted-call.started',
-        attempt: opts.attempt,
-        label,
-        reason: input.reason,
-        params: parsed.data,
-      });
-      let run: Awaited<ReturnType<typeof runCapturedIntegrationCase>>;
-      try {
-        run = await runCapturedIntegrationCase({
-          caseName: label,
-          workflowPath: opts.workflowPath,
-          params: parsed.data as Record<string, string | number | boolean>,
-          preferredOnlyBackend: true,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+      if (request.params.name === 'run_live_integration_test') {
+        if (!hasSuiteReceipt())
+          return errorResult('run the final integration suite before a targeted call');
+        const input = request.params.arguments as { params?: unknown; reason?: unknown };
+        if (typeof input.reason !== 'string' || !input.reason.trim()) {
+          return errorResult('reason must explain the unresolved semantic question');
+        }
+        const parsed = validator.safeParse(input.params ?? {});
+        if (!parsed.success) return errorResult(`invalid tool params: ${parsed.error.message}`);
+        const label = `targeted-call-${++targetedCallSequence}`;
+        const startedAt = Date.now();
         appendLiveVerifierLog(opts.logPath, {
-          type: 'targeted-call.failed',
+          type: 'targeted-call.started',
           attempt: opts.attempt,
           label,
-          error: message,
+          reason: input.reason,
+          params: parsed.data,
         });
-        return errorResult(message);
+        let run: Awaited<ReturnType<typeof runCapturedIntegrationCase>>;
+        try {
+          run = await runCapturedIntegrationCase({
+            caseName: label,
+            workflowPath: opts.workflowPath,
+            params: parsed.data as Record<string, string | number | boolean>,
+            preferredOnlyBackend: true,
+            deadlineMs: runDeadline?.deadlineMs,
+            signal: active.signal,
+          });
+        } catch (error) {
+          rethrowProviderControl(error);
+          const message = error instanceof Error ? error.message : String(error);
+          appendLiveVerifierLog(opts.logPath, {
+            type: 'targeted-call.failed',
+            attempt: opts.attempt,
+            label,
+            error: message,
+          });
+          return errorResult(message);
+        }
+        const supplemental: LiveIntegrationEvidence = {
+          schemaVersion: 1 as const,
+          kind: 'call',
+          label,
+          caseName: label,
+          toolName: workflow.toolName,
+          requestedParams: parsed.data as Record<string, string | number | boolean>,
+          effectiveParams: effectiveParamsForEvidence(
+            workflow.parameters,
+            parsed.data as Record<string, string | number | boolean>,
+          ),
+          result: run.result,
+          usedBackend: run.usedBackend,
+          attempts: run.attempts,
+          durationMs: Date.now() - startedAt,
+        };
+        persistLiveVerificationEvidence(evidencePath, [supplemental]);
+        appendLiveVerifierLog(opts.logPath, {
+          type: 'targeted-call.completed',
+          attempt: opts.attempt,
+          record: supplemental,
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                label: supplemental.label,
+                toolName: workflow.toolName,
+                requestedParams: parsed.data,
+                result: run.result,
+                usedBackend: run.usedBackend,
+                attempts: run.attempts,
+              }),
+            },
+          ],
+        };
       }
-      const supplemental: LiveIntegrationEvidence = {
-        schemaVersion: 1 as const,
-        kind: 'call',
-        label,
-        caseName: label,
-        toolName: workflow.toolName,
-        requestedParams: parsed.data as Record<string, string | number | boolean>,
-        effectiveParams: effectiveParamsForEvidence(
-          workflow.parameters,
-          parsed.data as Record<string, string | number | boolean>,
-        ),
-        result: run.result,
-        usedBackend: run.usedBackend,
-        attempts: run.attempts,
-        durationMs: Date.now() - startedAt,
-      };
-      persistLiveVerificationEvidence(evidencePath, [supplemental]);
-      appendLiveVerifierLog(opts.logPath, {
-        type: 'targeted-call.completed',
-        attempt: opts.attempt,
-        record: supplemental,
-      });
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              label: supplemental.label,
-              toolName: workflow.toolName,
-              requestedParams: parsed.data,
-              result: run.result,
-              usedBackend: run.usedBackend,
-              attempts: run.attempts,
-            }),
-          },
-        ],
-      };
-    }
-    if (request.params.name === 'submit_verification_report') {
-      if (submitted) return errorResult('verification report was already submitted');
-      const parsed = LiveVerificationReportSchema.safeParse(request.params.arguments);
-      if (!parsed.success)
-        return errorResult(`invalid verification report: ${parsed.error.message}`);
-      if (!hasSuiteReceipt()) {
-        return errorResult('run the final integration suite before submitting');
+      if (request.params.name === 'submit_verification_report') {
+        if (submitted) return errorResult('verification report was already submitted');
+        const parsed = LiveVerificationReportSchema.safeParse(request.params.arguments);
+        if (!parsed.success)
+          return errorResult(`invalid verification report: ${parsed.error.message}`);
+        if (!hasSuiteReceipt()) {
+          return errorResult('run the final integration suite before submitting');
+        }
+        try {
+          assertReportCoversWorkflowParameters(parsed.data, workflow.parameters);
+        } catch (error) {
+          return errorResult(error instanceof Error ? error.message : String(error));
+        }
+        submitted = true;
+        appendLiveVerifierLog(opts.logPath, {
+          type: 'report.submitted',
+          attempt: opts.attempt,
+          report: parsed.data,
+        });
+        writeFileSync(opts.reportPath, `${JSON.stringify(parsed.data, null, 2)}\n`, {
+          encoding: 'utf8',
+          mode: 0o600,
+        });
+        return {
+          content: [{ type: 'text', text: 'Report accepted. End the verification session now.' }],
+        };
       }
-      try {
-        assertReportCoversWorkflowParameters(parsed.data, workflow.parameters);
-      } catch (error) {
-        return errorResult(error instanceof Error ? error.message : String(error));
-      }
-      submitted = true;
-      appendLiveVerifierLog(opts.logPath, {
-        type: 'report.submitted',
-        attempt: opts.attempt,
-        report: parsed.data,
-      });
-      writeFileSync(opts.reportPath, `${JSON.stringify(parsed.data, null, 2)}\n`, {
-        encoding: 'utf8',
-        mode: 0o600,
-      });
-      return {
-        content: [{ type: 'text', text: 'Report accepted. End the verification session now.' }],
-      };
-    }
-    return errorResult(`unknown tool: ${request.params.name}`);
-  });
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-
-  // Server.connect() resolves after initialization; it does not own the
-  // process lifetime. Keep stdio alive until the verifier disconnects, just
-  // like the compile MCP server does, or Codex can lose the server during its
-  // initialize handshake.
-  try {
-    await new Promise<void>((resolve) => {
-      const close = (): void => resolve();
-      transport.onclose = close;
-      process.once('SIGINT', close);
-      process.once('SIGTERM', close);
+      return errorResult(`unknown tool: ${request.params.name}`);
     });
+    const transport = new StdioServerTransport();
+    let closeLifetime: (() => void) | undefined;
+    try {
+      await server.connect(transport);
+
+      // Server.connect() resolves after initialization; it does not own the
+      // process lifetime. Keep stdio alive until the verifier disconnects, just
+      // like the compile MCP server does, or Codex can lose the server during its
+      // initialize handshake.
+      await new Promise<void>((resolve) => {
+        closeLifetime = resolve;
+        transport.onclose = closeLifetime;
+        active.signal?.addEventListener('abort', closeLifetime, { once: true });
+      });
+    } finally {
+      if (closeLifetime) active.signal?.removeEventListener('abort', closeLifetime);
+      transport.onclose = undefined;
+      await server.close().catch(() => undefined);
+    }
   } finally {
+    active.dispose();
+    inheritedControl?.dispose();
+    for (const [signal, handler] of processHandlers) process.removeListener(signal, handler);
     await authSession?.close();
   }
 }

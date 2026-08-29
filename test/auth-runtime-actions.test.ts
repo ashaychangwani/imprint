@@ -132,6 +132,28 @@ describe('auth action runtime', () => {
     expect(await backend.getCookies('fixture-auth')).toEqual([]);
   });
 
+  it('offline request rendering does not load current stored credentials implicitly', async () => {
+    await backend.setSecret('fixture-data', 'api_token', 'current-machine-token');
+    const wf = WorkflowSchema.parse({
+      toolName: 'credentialed_fixture',
+      intent: { description: 'Read fixture data' },
+      site: 'fixture-data',
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://fixture.test/data',
+          headers: { authorization: 'Bearer ${credential.api_token}' },
+        },
+      ],
+    });
+
+    const rendered = await renderWorkflowRequests({ workflow: wf, params: {} });
+
+    expect(rendered.requests).toEqual([]);
+    expect(rendered.result).toMatchObject({ ok: false, error: 'STATE_MISSING' });
+  });
+
   it('executes arbitrary actions and carries only the state declared by the artifact', async () => {
     const seenBodies: string[] = [];
     const wf = workflow({

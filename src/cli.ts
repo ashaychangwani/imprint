@@ -40,45 +40,6 @@ export function parseDuration(dur: string): number | null {
   return num;
 }
 
-export type TeachSelectionMode =
-  | 'tool'
-  | 'primary'
-  | 'all-explicit'
-  | 'all-default'
-  | 'interactive-default-all';
-
-/** Pure CLI selection-mode resolver shared by validation and telemetry. */
-export function resolveTeachSelectionMode(opts: {
-  tool?: string;
-  primaryTool?: boolean;
-  allTools?: boolean;
-  noInteractive?: boolean;
-}): { mode: TeachSelectionMode; error?: string } {
-  if (opts.tool && opts.allTools) {
-    return { mode: 'tool', error: 'error: --tool cannot be combined with --all-tools' };
-  }
-  if (opts.tool && opts.primaryTool) {
-    return { mode: 'tool', error: 'error: --tool cannot be combined with --primary-tool' };
-  }
-  if (opts.allTools && opts.primaryTool) {
-    return {
-      mode: 'primary',
-      error: 'error: --all-tools cannot be combined with --primary-tool',
-    };
-  }
-  return {
-    mode: opts.tool
-      ? 'tool'
-      : opts.primaryTool
-        ? 'primary'
-        : opts.allTools
-          ? 'all-explicit'
-          : opts.noInteractive
-            ? 'all-default'
-            : 'interactive-default-all',
-  };
-}
-
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
 
 USAGE
@@ -149,9 +110,9 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   teach: {
     summary:
-      'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
+      'Record or load a session, then let the master discover, plan, compile, verify, and emit every supported tool.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--primary-tool | --all-tools] [--tool <toolName>] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay] [--from-step <step>] [--to-step <step>] [--only <step>]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--agent codex] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
@@ -162,59 +123,30 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
       {
         name: '--no-interactive',
-        description: 'Run without prompts; compile all detected tools by default.',
+        description: 'Run without prompts. Every tool in the master plan is still built.',
       },
       {
-        name: '--all-tools',
-        description: 'Explicitly compile all detected tools (the default).',
-      },
-      {
-        name: '--primary-tool',
-        description: 'Compile only the primary detected tool and its upstream dependencies.',
-      },
-      {
-        name: '--tool <toolName>',
-        description:
-          'With --from-step/--only, resume exactly one persisted tool from the retained recording.',
+        name: '--agent codex',
+        description: 'Select the master-agent flow explicitly. This never narrows the tool set.',
       },
       {
         name: '--provider <name>',
         description:
-          'Compile-agent provider: anthropic-api, claude-cli, codex-cli (auto-detected if omitted).',
+          'Teaching-agent provider: anthropic-api, claude-cli, codex-cli (auto-detected if omitted).',
       },
       {
         name: '--model <name>',
         description:
-          'Override the compile-agent model (e.g. claude-sonnet-4-6). Default is prompted interactively or auto-selected per provider.',
+          'Override the teaching-agent model (e.g. claude-sonnet-4-6). Otherwise the provider default is used.',
       },
       {
         name: '--timeout <duration>',
-        description: 'Per-tool compile timeout. Accepts 20m, 1h, 300s, or plain ms. Default 20m.',
+        description: 'Foreground teach deadline. Accepts 20m, 12h, 300s, or plain ms. Default 12h.',
       },
       {
         name: '--keep-test',
         description:
           'Retain the agent-generated parser.test.ts and request.test.ts after compile (debug). Default deletes them; parser tests read the gitignored redacted session via $IMPRINT_SESSION_PATH and are not portable. Also settable via IMPRINT_KEEP_TEST=1.',
-      },
-      {
-        name: '--skip-replay',
-        description:
-          "Skip the replay-and-diff stage. Faster, but the compile agent won't be able to distinguish browser-minted values from constants, which may reduce workflow accuracy. By default, the preceding effect-aware triage suppresses replay entirely when the recording contains an irreversible request.",
-      },
-      {
-        name: '--from-step <step>',
-        description:
-          'Resume a prior run starting at <step> (record, redact, triage, replay-and-diff, detect-candidates, plan-prereqs, generate, compile-playbook, emit, register). Only allowed if a prior run reached/crossed that point — earlier phase outputs are reused. Not combinable with --from-session.',
-      },
-      {
-        name: '--to-step <step>',
-        description:
-          'Stop after <step> instead of running to the end. Combine with --from-step (or --from-session) to run a window of phases. Note: the per-tool compile (generate→compile-playbook→emit) is atomic, so a --to-step inside it runs the whole compile and stops before register.',
-      },
-      {
-        name: '--only <step>',
-        description:
-          'Run a single phase: shorthand for --from-step <step> --to-step <step> (not combinable with either). For a compile phase the whole atomic compile unit runs (see --to-step).',
       },
     ],
     example: 'imprint teach google-flights --url https://flights.google.com',
@@ -1463,63 +1395,23 @@ async function main(argv: string[]): Promise<number> {
           'from-session': { type: 'string' },
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
-          'all-tools': { type: 'boolean' },
-          'primary-tool': { type: 'boolean' },
-          tool: { type: 'string' },
+          agent: { type: 'string' },
           provider: { type: 'string' },
           model: { type: 'string' },
           timeout: { type: 'string' },
           'keep-test': { type: 'boolean' },
-          'skip-replay': { type: 'boolean' },
-          'from-step': { type: 'string' },
-          'to-step': { type: 'string' },
-          only: { type: 'string' },
         },
         allowPositionals: false,
       });
 
-      // ── Phase-window flags: run only specific steps of the teach chain ──
-      // `--only X` = `--from-step X --to-step X`. resolveTeachPhaseWindow validates
-      // step names against the canonical list and the flag combinations (ordering,
-      // mutual exclusion with --from-session, and --to-step ≥ redact when
-      // --from-session enters the chain at redact), returning the resolved window
-      // or the exact error message to print. Extracted for unit-testing.
-      const { resolveTeachPhaseWindow, validateToolScopedResumeStep } = await import(
-        './imprint/teach-state.ts'
-      );
-      const phaseWindow = resolveTeachPhaseWindow(values);
-      if ('error' in phaseWindow) {
-        console.error(phaseWindow.error);
-        return 2;
-      }
-      const fromStepArg = phaseWindow.fromStep;
-      const toStepArg = phaseWindow.toStep;
-
-      if (values.tool && !fromStepArg) {
-        console.error('error: --tool requires --from-step or --only');
-        return 2;
-      }
-      if (values.tool) {
-        const toolWindowError = validateToolScopedResumeStep(fromStepArg);
-        if (toolWindowError) {
-          console.error(toolWindowError);
-          return 2;
-        }
-      }
-      const selection = resolveTeachSelectionMode({
-        tool: values.tool,
-        primaryTool: values['primary-tool'],
-        allTools: values['all-tools'],
-        noInteractive: values['no-interactive'],
-      });
-      if (selection.error) {
-        console.error(selection.error);
+      if (values.agent && values.agent !== 'codex') {
+        console.error('error: --agent currently accepts only "codex"');
         return 2;
       }
 
-      if (!site && values['no-interactive']) {
+      if (!site) {
         console.error(
-          'error: `imprint teach` requires a <site> argument in --no-interactive mode.\n  <site> is a label you choose — it names the output folder under ~/.imprint/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
+          'error: `imprint teach` requires a <site> argument.\n  <site> is a label you choose — it names the output folder under ~/.imprint/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
         );
         return 2;
       }
@@ -1548,11 +1440,10 @@ async function main(argv: string[]): Promise<number> {
       const ctrl = new AbortController();
       const onSigint = (): void => ctrl.abort();
       process.once('SIGINT', onSigint);
-      const teachSelectionMode = selection.mode;
 
       try {
         const { teach } = await import('./imprint/teach.ts');
-        await traced(
+        const result = await traced(
           'cli.teach',
           'AGENT',
           {
@@ -1562,13 +1453,8 @@ async function main(argv: string[]): Promise<number> {
             'imprint.provider': values.provider ?? 'auto',
             'imprint.model': values.model ?? 'auto',
             'imprint.timeout_ms': teachTimeoutMs ?? 'default',
-            'imprint.all_tools':
-              teachSelectionMode === 'all-explicit' || teachSelectionMode === 'all-default',
-            'imprint.selection_mode': teachSelectionMode,
-            'imprint.primary_tool': values['primary-tool'] ?? false,
-            'imprint.tool': values.tool,
+            'imprint.agent': values.agent ?? 'master',
             'imprint.no_interactive': values['no-interactive'] ?? false,
-            'imprint.skip_replay': values['skip-replay'] ?? false,
           },
           () =>
             teach({
@@ -1582,17 +1468,24 @@ async function main(argv: string[]): Promise<number> {
               model: values.model,
               maxDurationMs: teachTimeoutMs,
               keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
-              primaryTool: values['primary-tool'],
-              tool: values.tool,
-              skipReplay: values['skip-replay'],
-              fromStep: fromStepArg,
-              toStep: toStepArg,
+              agent: values.agent === 'codex' ? 'codex' : undefined,
+              onProgress: (message) => console.error(`[imprint teach] ${message}`),
             }),
         );
+        const summary = `[imprint] teach ${result.status}: ${result.readyTools} ready, ${result.failedTools} failed — ${result.runRoot}`;
+        if (result.status === 'completed') {
+          console.log(summary);
+          console.log(`[imprint] ${result.message}`);
+        } else {
+          console.error(summary);
+          console.error(`[imprint] ${result.message}`);
+        }
+        if (result.status === 'completed') return 0;
+        if (result.status === 'cancelled') return 130;
+        return 1;
       } finally {
         process.removeListener('SIGINT', onSigint);
       }
-      return 0;
     }
 
     case 'credential': {
@@ -1836,6 +1729,10 @@ if (import.meta.main) {
       process.exit(code);
     })
     .catch(async (err) => {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        await shutdownTracing();
+        process.exit(130);
+      }
       console.error('imprint: fatal:', err instanceof Error ? err.message : String(err));
       if (isDebug()) {
         console.error(err);

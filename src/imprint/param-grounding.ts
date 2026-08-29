@@ -1,376 +1,517 @@
-/**
- * Event-correlated differential param grounding.
- *
- * The candidate detector reliably identifies WHICH inputs the user controlled
- * (`likelyParams`) and WHICH events toggled them (`eventSeqs`) — but the compile
- * agent historically grounded a param by eyeballing a single request, and when
- * the value wasn't obviously present it gave up and shipped the param
- * `verified:false`, inert. Yet the encoding is almost always right there: the
- * request a filter-toggle event triggers differs from the prior equivalent
- * request at exactly the position that param controls.
- *
- * This module makes that differential deterministic: for each UI event, find the
- * request it triggered, diff it against the most recent comparable request (same
- * endpoint), and report the changed paths. The compile agent (and the precomputed
- * hint surfaced to it) then maps each diff to a `likelyParam` — the semantic step
- * the model is good at — instead of guessing at an encoding. Decoding uses a
- * pluggable envelope registry (batchexecute is one registered handler), raw JSON
- * bodies, or plain form fields.
- */
-
-import { getEndpointKey } from './endpoint-key.ts';
+import {
+  type BodyComparison,
+  type BodyScalarType,
+  type BodyStructure,
+  type StructureDifference,
+  compareBodyStructures,
+  decodeBodyStructure,
+  describeBodyPaths,
+  parseBodyFormat,
+  prepareBodyScalarEquality,
+} from './body-structure.ts';
 import type { CapturedRequest, Session } from './types.ts';
 
-interface GroundingChange {
-  /** JSON path into the decoded request body, e.g. "[1][4][3]". */
-  path: string;
-  before: string;
-  after: string;
+type GroundingState = 'compared' | 'not_checked' | 'invalid' | 'not_found';
+type GroundingTruncation =
+  | 'request_index'
+  | 'event_index'
+  | 'before_alternatives'
+  | 'after_alternatives';
+interface GroundingLimits {
+  requestIndex: { total: number; indexed: number; cap: number; truncated: boolean };
+  eventIndex: { total: number; indexed: number; cap: number; truncated: boolean };
+  alternativesPerSide: number;
 }
-
+interface RequestAlternative {
+  seq: number;
+  method: string;
+  resourceType: string;
+  hasBody: boolean;
+  responseStatus?: number;
+}
 interface EventGrounding {
   eventSeq: number;
-  /** Human label from the event detail (button text / aria-label / id). */
-  label: string;
-  /** The request the event triggered (first comparable request after it). */
-  triggeredSeq?: number;
-  /** The prior request of the same endpoint that the diff is taken against. */
-  priorSeq?: number;
-  endpoint?: string;
-  changes: GroundingChange[];
-}
-
-/** First request after `eventSeq`, within a window, that has a decodable body. */
-const TRIGGER_WINDOW = 12;
-
-/** Envelope handlers for unwrapping nested request bodies. Each handler provides
- *  a detection predicate and an unwrapping function. Handlers are tried in order;
- *  first handler whose `detect` returns true and whose `unwrap` returns non-
- *  undefined wins. */
-interface EnvelopeHandler {
-  detect(formParams: URLSearchParams): boolean;
-  unwrap(formParams: URLSearchParams): unknown;
-}
-
-const ENVELOPE_HANDLERS: EnvelopeHandler[] = [
-  {
-    // Google batchexecute envelope: f.req=[[["rpcid","<inner-json-string>",…]]]
-    detect: (formParams) => formParams.get('f.req') != null,
-    unwrap: (formParams) => {
-      const freq = formParams.get('f.req');
-      if (!freq) return undefined;
-      try {
-        const env = JSON.parse(freq);
-        // Unwrap [[["rpcid","<inner json string>", …]]] to the inner payload.
-        const innerStr = env?.[0]?.[0]?.[1];
-        if (typeof innerStr === 'string') {
-          try {
-            return JSON.parse(innerStr);
-          } catch {
-            // Fall through to return the outer envelope if inner parse fails.
-            // This preserves the f.req-wraps-a-flat-object sub-shape that
-            // google-hotels/search_hotels relies on.
-            return env;
-          }
-        }
-        return env;
-      } catch {
-        return undefined;
-      }
-    },
-  },
-];
-
-/** Decode a request body into a comparable structure. Handles, in order:
- *  a raw JSON body; registered envelope handlers (batchexecute is one example);
- *  otherwise a flat form-field map; else the raw string. Never throws. */
-export function decodeBodyForDiff(body: string | undefined): unknown {
-  if (!body) return undefined;
-  const trimmed = body.trim();
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      /* not JSON */
-    }
-  }
-  // form-encoded?
-  if (/(^|&)[\w.]+=/.test(trimmed)) {
-    const params = new URLSearchParams(trimmed);
-    // Try registered envelope handlers.
-    for (const handler of ENVELOPE_HANDLERS) {
-      if (handler.detect(params)) {
-        const unwrapped = handler.unwrap(params);
-        if (unwrapped !== undefined) return unwrapped;
-      }
-    }
-    // Fall through to flat form field map.
-    const out: Record<string, string> = {};
-    for (const [k, v] of params) out[k] = v;
-    return out;
-  }
-  return trimmed;
-}
-
-/** Deep structural diff → changed leaf paths (a→b). Identical subtrees are
- *  skipped via a cheap stringify equality check. */
-export function structuralDiff(
-  a: unknown,
-  b: unknown,
-  path = '',
-  out: GroundingChange[] = [],
-): GroundingChange[] {
-  if (JSON.stringify(a) === JSON.stringify(b)) return out;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    const n = Math.max(a.length, b.length);
-    for (let i = 0; i < n; i++) structuralDiff(a[i], b[i], `${path}[${i}]`, out);
-    return out;
-  }
-  if (a && b && typeof a === 'object' && typeof b === 'object') {
-    const keys = new Set([...Object.keys(a as object), ...Object.keys(b as object)]);
-    for (const k of keys) {
-      structuralDiff(
-        (a as Record<string, unknown>)[k],
-        (b as Record<string, unknown>)[k],
-        path ? `${path}.${k}` : k,
-        out,
-      );
-    }
-    return out;
-  }
-  const cap = (v: unknown) => {
-    const s = v === undefined ? 'undefined' : JSON.stringify(v);
-    return s.length > 48 ? `${s.slice(0, 48)}…` : s;
+  state: GroundingState;
+  reasonCode?: string;
+  outcome?: 'changed' | 'no_change' | 'inconclusive';
+  changes: StructureDifference[];
+  comparison?: Omit<BodyComparison, 'differences'>;
+  selectedPair?: { beforeSeq: number; afterSeq: number };
+  alternatives: { before: RequestAlternative[]; after: RequestAlternative[] };
+  association: { mode: 'unselected' | 'exact_pair' };
+  bodyEncoding?: {
+    beforeFormat: BodyStructure['format'];
+    afterFormat: BodyStructure['format'];
+    beforeJsonStringBoundaries: Array<{ depth: number; path?: string }>;
+    afterJsonStringBoundaries: Array<{ depth: number; path?: string }>;
+    beforePathsTruncated?: true;
+    afterPathsTruncated?: true;
   };
-  out.push({ path: path || '(root)', before: cap(a), after: cap(b) });
-  return out;
+  bodyChecks?: Array<{
+    seq: number;
+    status: 'decoded' | 'skipped' | 'not_checked';
+    reasonCode?: string;
+  }>;
+  work: {
+    beforeRequestsAvailable: number;
+    afterRequestsAvailable: number;
+    alternativesReturned: number;
+    bodyDecodesAttempted: number;
+    bodyDecodesSucceeded: number;
+    bodyDecodesSkipped: number;
+    bodyDecodesTruncated: number;
+  };
+  limits: GroundingLimits;
+  truncated?: GroundingTruncation[];
 }
-
-function bodyOf(req: CapturedRequest): string | undefined {
-  // CapturedRequest stores the request body on `.body`; tolerate alt shapes.
+const MAX_GROUNDING_REQUESTS = 10_000;
+const MAX_GROUNDING_INDEXED_EVENTS = 10_000;
+const MAX_EVENT_ALTERNATIVES = 4;
+const ENCODING_CONTEXT_LIMIT = 4;
+const groundingEncoder = new TextEncoder();
+function bodyOf(request: CapturedRequest): string | undefined {
   return (
-    (req as unknown as { body?: string }).body ??
-    (req as unknown as { requestBody?: string }).requestBody ??
-    undefined
+    (request as unknown as { body?: string }).body ??
+    (request as unknown as { requestBody?: string }).requestBody
   );
 }
-
-function eventLabel(detail: string): string {
-  let d: Record<string, unknown> = {};
-  try {
-    d = JSON.parse(detail);
-  } catch {
-    return detail.slice(0, 48);
+function bodyStructureNotCheckedReason(structure: BodyStructure): string | undefined {
+  if (structure.truncated) return structure.truncated;
+  if ((structure.nestedJsonExpansion?.candidateNotChecked ?? 0) > 0)
+    return 'nested_json_candidate_not_checked';
+  return undefined;
+}
+function lowerBound(requests: CapturedRequest[], seq: number): number {
+  let low = 0;
+  let high = requests.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if ((requests[middle]?.seq ?? Number.POSITIVE_INFINITY) < seq) low = middle + 1;
+    else high = middle;
   }
-  const txt = (d.text ?? d.ariaLabel ?? d.name ?? d.id ?? '') as string;
-  return String(txt).replace(/\s+/g, ' ').trim().slice(0, 48);
+  return low;
 }
-
-/** Telemetry/beacon endpoints that fire constantly and are never the tool's
- *  load-bearing request — excluded when we can't scope to the candidate's own
- *  endpoints. */
-const TELEMETRY = /\/(log|gen_204|jserror|ping|beacon|csi|_\/bscframe|metrics|stats)\b/i;
-
-/** A decoded body worth diffing: a structured array/object, not a raw (often
- *  gzipped/opaque) string. */
-function isStructured(v: unknown): boolean {
-  return v != null && typeof v === 'object';
+interface GroundingIndex {
+  requests: CapturedRequest[];
+  events: Set<number>;
+  limits: GroundingLimits;
 }
-
-/** Ground a single event: find the request it triggered and diff against the
- *  most recent prior request of the same endpoint.
- *
- *  `relevantEndpoints` (the candidate's own request endpoints, via endpointKey)
- *  scopes the search to the tool's load-bearing requests — without it a burst of
- *  telemetry POSTs between the click and the real request would be mistaken for
- *  the trigger. */
+function buildGroundingIndex(session: Session): GroundingIndex {
+  const requests = session.requests
+    .slice(0, MAX_GROUNDING_REQUESTS)
+    .sort((left, right) => left.seq - right.seq);
+  const indexedEvents = session.events.slice(0, MAX_GROUNDING_INDEXED_EVENTS);
+  const events = new Set(indexedEvents.map((event) => event.seq));
+  return {
+    requests,
+    events,
+    limits: {
+      requestIndex: {
+        total: session.requests.length,
+        indexed: requests.length,
+        cap: MAX_GROUNDING_REQUESTS,
+        truncated: session.requests.length > requests.length,
+      },
+      eventIndex: {
+        total: session.events.length,
+        indexed: indexedEvents.length,
+        cap: MAX_GROUNDING_INDEXED_EVENTS,
+        truncated: session.events.length > indexedEvents.length,
+      },
+      alternativesPerSide: MAX_EVENT_ALTERNATIVES,
+    },
+  };
+}
+function boundedEncodingPaths(paths: string[], includePaths: boolean) {
+  const described = describeBodyPaths(paths, includePaths);
+  return {
+    facts: described.facts.slice(0, ENCODING_CONTEXT_LIMIT),
+    ...(described.truncated || described.facts.length > ENCODING_CONTEXT_LIMIT
+      ? { truncated: true as const }
+      : {}),
+  };
+}
+function alternative(request: CapturedRequest): RequestAlternative {
+  return {
+    seq: request.seq,
+    method: String(request.method ?? 'GET'),
+    resourceType: request.resourceType,
+    hasBody: bodyOf(request) !== undefined,
+    ...(request.response ? { responseStatus: request.response.status } : {}),
+  };
+}
+interface GroundEventOptions {
+  includePaths?: boolean;
+  compare?: {
+    beforeSeq: number;
+    afterSeq: number;
+    beforeFormat?: unknown;
+    afterFormat?: unknown;
+  };
+}
+function groundEventWithIndex(
+  index: GroundingIndex,
+  eventSeq: number,
+  options: GroundEventOptions = {},
+): EventGrounding {
+  const split = Number.isInteger(eventSeq) ? lowerBound(index.requests, eventSeq + 1) : 0;
+  const beforeAvailable = split;
+  const afterAvailable = index.requests.length - split;
+  const before = index.requests
+    .slice(Math.max(0, split - MAX_EVENT_ALTERNATIVES), split)
+    .reverse()
+    .map(alternative);
+  const after = index.requests.slice(split, split + MAX_EVENT_ALTERNATIVES).map(alternative);
+  const truncated: GroundingTruncation[] = [];
+  if (index.limits.requestIndex.truncated) truncated.push('request_index');
+  if (index.limits.eventIndex.truncated) truncated.push('event_index');
+  if (beforeAvailable > before.length) truncated.push('before_alternatives');
+  if (afterAvailable > after.length) truncated.push('after_alternatives');
+  const base = {
+    eventSeq,
+    state: 'not_checked' as GroundingState,
+    changes: [] as StructureDifference[],
+    alternatives: { before, after },
+    association: { mode: options.compare ? ('exact_pair' as const) : ('unselected' as const) },
+    work: {
+      beforeRequestsAvailable: beforeAvailable,
+      afterRequestsAvailable: afterAvailable,
+      alternativesReturned: before.length + after.length,
+      bodyDecodesAttempted: 0,
+      bodyDecodesSucceeded: 0,
+      bodyDecodesSkipped: 0,
+      bodyDecodesTruncated: 0,
+    },
+    limits: index.limits,
+    ...(truncated.length ? { truncated } : {}),
+  };
+  if (!Number.isInteger(eventSeq))
+    return { ...base, state: 'invalid', reasonCode: 'invalid_event_seq' };
+  if (!index.events.has(eventSeq))
+    return index.limits.eventIndex.truncated
+      ? { ...base, reasonCode: 'event_not_checked_due_to_index_cap' }
+      : { ...base, state: 'not_found', reasonCode: 'event_not_found' };
+  if (!options.compare) return { ...base, reasonCode: 'agent_pair_required' };
+  const { beforeSeq, afterSeq } = options.compare;
+  if (!Number.isInteger(beforeSeq) || !Number.isInteger(afterSeq))
+    return { ...base, state: 'invalid', reasonCode: 'invalid_request_pair' };
+  const beforeRequest = index.requests.find((request) => request.seq === beforeSeq);
+  const afterRequest = index.requests.find((request) => request.seq === afterSeq);
+  if (!beforeRequest || !afterRequest)
+    return {
+      ...base,
+      state: index.limits.requestIndex.truncated ? 'not_checked' : 'not_found',
+      reasonCode: index.limits.requestIndex.truncated
+        ? 'selected_request_not_checked_due_to_index_cap'
+        : 'selected_request_not_found',
+      selectedPair: { beforeSeq, afterSeq },
+    };
+  const beforeFormat = parseBodyFormat(options.compare.beforeFormat);
+  if (!beforeFormat) return { ...base, state: 'invalid', reasonCode: 'invalid_before_format' };
+  const afterFormat = parseBodyFormat(options.compare.afterFormat);
+  if (!afterFormat) return { ...base, state: 'invalid', reasonCode: 'invalid_after_format' };
+  const beforeDecoded = decodeBodyStructure(bodyOf(beforeRequest), beforeFormat);
+  const afterDecoded = decodeBodyStructure(bodyOf(afterRequest), afterFormat);
+  const beforeTruncation = beforeDecoded.ok
+    ? bodyStructureNotCheckedReason(beforeDecoded.structure)
+    : undefined;
+  const afterTruncation = afterDecoded.ok
+    ? bodyStructureNotCheckedReason(afterDecoded.structure)
+    : undefined;
+  base.work.bodyDecodesAttempted = 2;
+  base.work.bodyDecodesSucceeded =
+    Number(beforeDecoded.ok && !beforeTruncation) + Number(afterDecoded.ok && !afterTruncation);
+  base.work.bodyDecodesSkipped = Number(!beforeDecoded.ok) + Number(!afterDecoded.ok);
+  base.work.bodyDecodesTruncated =
+    Number(Boolean(beforeTruncation)) + Number(Boolean(afterTruncation));
+  const bodyChecks = [
+    {
+      seq: beforeSeq,
+      status: !beforeDecoded.ok
+        ? ('skipped' as const)
+        : beforeTruncation
+          ? ('not_checked' as const)
+          : ('decoded' as const),
+      ...(!beforeDecoded.ok
+        ? { reasonCode: beforeDecoded.code }
+        : beforeTruncation
+          ? { reasonCode: beforeTruncation }
+          : {}),
+    },
+    {
+      seq: afterSeq,
+      status: !afterDecoded.ok
+        ? ('skipped' as const)
+        : afterTruncation
+          ? ('not_checked' as const)
+          : ('decoded' as const),
+      ...(!afterDecoded.ok
+        ? { reasonCode: afterDecoded.code }
+        : afterTruncation
+          ? { reasonCode: afterTruncation }
+          : {}),
+    },
+  ];
+  if (!beforeDecoded.ok || !afterDecoded.ok)
+    return {
+      ...base,
+      reasonCode: 'selected_body_not_decoded',
+      selectedPair: { beforeSeq, afterSeq },
+      bodyChecks,
+    };
+  if (beforeTruncation || afterTruncation)
+    return {
+      ...base,
+      reasonCode: 'selected_body_decode_truncated',
+      selectedPair: { beforeSeq, afterSeq },
+      bodyChecks,
+    };
+  const comparison = compareBodyStructures(beforeDecoded.structure, afterDecoded.structure, {
+    includePaths: options.includePaths === true,
+  });
+  const beforeEncoding = boundedEncodingPaths(
+    beforeDecoded.structure.jsonEncodedStringPaths,
+    options.includePaths === true,
+  );
+  const afterEncoding = boundedEncodingPaths(
+    afterDecoded.structure.jsonEncodedStringPaths,
+    options.includePaths === true,
+  );
+  return {
+    ...base,
+    state: 'compared',
+    outcome:
+      comparison.differences.length > 0
+        ? 'changed'
+        : comparison.truncated
+          ? 'inconclusive'
+          : 'no_change',
+    selectedPair: { beforeSeq, afterSeq },
+    changes: comparison.differences,
+    comparison: {
+      visitedNodes: comparison.visitedNodes,
+      wireEvidence: comparison.wireEvidence,
+      ...(comparison.truncated ? { truncated: comparison.truncated } : {}),
+    },
+    bodyEncoding: {
+      beforeFormat: beforeDecoded.structure.format,
+      afterFormat: afterDecoded.structure.format,
+      beforeJsonStringBoundaries: beforeEncoding.facts,
+      afterJsonStringBoundaries: afterEncoding.facts,
+      ...(beforeEncoding.truncated ? { beforePathsTruncated: true } : {}),
+      ...(afterEncoding.truncated ? { afterPathsTruncated: true } : {}),
+    },
+    bodyChecks,
+  };
+}
 export function groundEvent(
   session: Session,
   eventSeq: number,
-  relevantEndpoints?: Set<string>,
+  options: GroundEventOptions = {},
 ): EventGrounding {
-  const reqs = [...session.requests].sort((a, b) => a.seq - b.seq);
-  const ev = session.events.find((e) => e.seq === eventSeq);
-  const label = ev ? eventLabel(ev.detail) : '';
-
-  const triggered = reqs.find((r) => {
-    if (r.seq <= eventSeq || r.seq > eventSeq + windowEnd(reqs, eventSeq)) return false;
-    const decoded = decodeBodyForDiff(bodyOf(r));
-    if (decoded === undefined) return false;
-    if (relevantEndpoints && relevantEndpoints.size > 0)
-      return relevantEndpoints.has(getEndpointKey(r));
-    // Fallback: structured body + not an obvious telemetry endpoint.
-    return isStructured(decoded) && !TELEMETRY.test(r.url ?? '');
-  });
-  if (!triggered) return { eventSeq, label, changes: [] };
-
-  const key = getEndpointKey(triggered);
-  const prior = [...reqs]
-    .reverse()
-    .find(
-      (r) =>
-        r.seq < triggered.seq &&
-        getEndpointKey(r) === key &&
-        decodeBodyForDiff(bodyOf(r)) !== undefined,
-    );
-
-  const changes = prior
-    ? structuralDiff(decodeBodyForDiff(bodyOf(prior)), decodeBodyForDiff(bodyOf(triggered)))
-    : [];
-  return {
-    eventSeq,
-    label,
-    triggeredSeq: triggered.seq,
-    priorSeq: prior?.seq,
-    endpoint: key,
-    changes,
-  };
+  return groundEventWithIndex(buildGroundingIndex(session), eventSeq, options);
 }
-
-/** Window end: don't scan unboundedly — cap at TRIGGER_WINDOW requests past the
- *  event (by seq distance to the Nth following request). */
-function windowEnd(reqs: CapturedRequest[], eventSeq: number): number {
-  const after = reqs.filter((r) => r.seq > eventSeq).slice(0, TRIGGER_WINDOW);
-  const last = after.at(-1);
-  return last ? last.seq - eventSeq : TRIGGER_WINDOW;
+type Scalar = string | number | boolean | null;
+type ScalarType = BodyScalarType;
+const MAX_EQUALITY_HISTORY_REQUESTS = 4_096;
+const MAX_EQUALITY_RESPONSES = 12;
+const MAX_EQUALITY_RESPONSE_BYTES = 64 * 1024;
+const MAX_EQUALITY_TOTAL_BYTES = 256 * 1024;
+const MAX_EQUALITY_NODES = 512;
+const MAX_EQUALITY_LEAVES = 128;
+const MAX_EQUALITY_MATCHES = 8;
+function scalarType(value: unknown): ScalarType | undefined {
+  if (value === null) return 'null';
+  const type = typeof value;
+  if (type === 'number' && !Number.isFinite(value)) return undefined;
+  return type === 'string' || type === 'number' || type === 'boolean' ? type : undefined;
 }
-
-/** Precompute grounding diffs for a candidate's filter-toggle events, dropping
- *  events that triggered nothing or changed nothing.
- *
- *  Pass `relevantEndpoints` = endpointKey() of the candidate's own request seqs
- *  so the diff is taken against the tool's load-bearing request, not telemetry. */
-export function groundingForEvents(
-  session: Session,
-  eventSeqs: number[],
-  relevantEndpoints?: Set<string>,
-): EventGrounding[] {
-  const all = eventSeqs
-    .map((seq) => groundEvent(session, seq, relevantEndpoints))
-    .filter((g) => g.changes.length > 0);
-
-  // Drop session-churn paths — positions that change across MOST events are
-  // per-call session state (rotating tokens, pagination flags, a display-mode
-  // value), not the param the event toggled. A param's encoding shows up only
-  // in the diff(s) of the event(s) that control it, so frequency cleanly
-  // separates signal from churn.
-  const pathFreq = new Map<string, number>();
-  for (const g of all) {
-    for (const p of new Set(g.changes.map((c) => c.path)))
-      pathFreq.set(p, (pathFreq.get(p) ?? 0) + 1);
-  }
-  const churnAt = Math.max(3, Math.ceil(all.length / 2));
-  for (const g of all) g.changes = g.changes.filter((c) => (pathFreq.get(c.path) ?? 0) < churnAt);
-  return all.filter((g) => g.changes.length > 0);
-}
-
-/** Derive the relevant-endpoint set from a candidate's request seqs. */
-export function endpointsForSeqs(session: Session, seqs: number[]): Set<string> {
-  const set = new Set<string>();
-  for (const seq of seqs) {
-    const r = session.requests.find((x) => x.seq === seq);
-    if (r) set.add(getEndpointKey(r));
-  }
-  return set;
-}
-
-// ─── Input-value provenance ──────────────────────────────────────────────────
-//
-// The grounding above covers params the user *toggled* (filters/sort). It does
-// not cover a primary param whose value is an opaque id the request can't carry
-// as plain text — e.g. an entity/object handle, an account id, a place/geo id, a
-// category token. The compile agent historically shipped these as the raw param
-// text, which the backend silently ignores and falls back to a default (an
-// unfiltered/global result set, or a server-chosen default scope). The id was
-// never the user's text; it was *minted by an earlier response* and chained into
-// the request. That cross-request data-flow is the signal this detects — keyed
-// on structure, not any vendor's id format.
-
-interface InputProvenance {
-  /** JSON path into the decoded request body where the minted value sits. */
-  path: string;
-  /** Example resolved value (truncated). Varies per call — the PATH is the signal. */
-  valueSample: string;
-  /** The candidate request that consumes the value. */
-  requestSeq: number;
-  /** Earliest earlier request whose RESPONSE first carried this value. */
-  sourceSeq: number;
-  sourceEndpoint: string;
-  /** True when the source is the tool's own endpoint (resolve-then-refine: an
-   *  initial text request whose response yields the id, re-sent as a refined
-   *  request carrying that id). */
-  selfChain: boolean;
-}
-
-/** An opaque, machine-minted identifier — not human-typed text. Vendor-agnostic:
- *  keyed on structure (no whitespace, long enough, mixes character classes or is
- *  a delimited handle), not on any specific id format. Excludes free text
- *  (multi-word phrases, single dictionary words), ISO dates, and bare counts so
- *  they never trip it, while still catching namespaced handles ("ns/abc123"),
- *  hex ids, UUIDs, and base64-ish session handles. */
-function isIdLike(v: string): boolean {
-  if (/\s/.test(v)) return false; // free text has spaces
-  if (v.length < 6) return false; // too short to be an opaque handle
-  if (/^\d{4}-\d{2}-\d{2}([T ]|$)/.test(v)) return false; // ISO date / datetime
-  const hasLetter = /[A-Za-z]/.test(v);
-  const hasDigit = /\d/.test(v);
-  const hasIdPunct = /[/:_.+=~-]/.test(v); // namespaced / delimited handle
-  // Opaque if it mixes letters+digits (a token), or is a delimited handle that
-  // still carries an alphanumeric payload. A bare word or a pure number is not.
-  return (hasLetter && hasDigit) || (hasIdPunct && (hasLetter || hasDigit));
-}
-
-function responseBodyOf(req: CapturedRequest): string | undefined {
-  const b = (req as unknown as { response?: { body?: string } }).response?.body;
-  return typeof b === 'string' ? b : undefined;
-}
-
-function leafStrings(
-  v: unknown,
-  path = '',
-  out: { path: string; val: string }[] = [],
-): { path: string; val: string }[] {
-  if (Array.isArray(v)) {
-    v.forEach((x, i) => leafStrings(x, `${path}[${i}]`, out));
-  } else if (v && typeof v === 'object') {
-    for (const k of Object.keys(v as object))
-      leafStrings((v as Record<string, unknown>)[k], path ? `${path}.${k}` : k, out);
-  } else if (typeof v === 'string' && v.length >= 4) {
-    out.push({ path, val: v });
-  }
-  return out;
-}
-
-/** For each candidate request, find body positions holding an id-like value that
- *  first appears in an EARLIER response — i.e. a value the request did not get
- *  from the user's text but chained in from upstream. Deduped by endpoint+path
- *  (the value varies per call; the position is the durable signal). */
-export function inputProvenance(session: Session, candidateSeqs: number[]): InputProvenance[] {
-  const reqs = [...session.requests].sort((a, b) => a.seq - b.seq);
-  const seen = new Set<string>();
-  const out: InputProvenance[] = [];
-  for (const seq of [...candidateSeqs].sort((a, b) => a - b)) {
-    const r = reqs.find((x) => x.seq === seq);
-    if (!r) continue;
-    const decoded = decodeBodyForDiff(bodyOf(r));
-    if (decoded == null || typeof decoded !== 'object') continue;
-    const ep = getEndpointKey(r);
-    for (const { path, val } of leafStrings(decoded)) {
-      if (!isIdLike(val)) continue;
-      const key = `${ep}|${path}`;
-      if (seen.has(key)) continue;
-      const src = reqs.find((x) => x.seq < seq && (responseBodyOf(x)?.includes(val) ?? false));
-      if (!src) continue; // not minted upstream → it IS the param's own text / a constant
-      seen.add(key);
-      out.push({
-        path,
-        valueSample: val.length > 40 ? `${val.slice(0, 40)}…` : val,
-        requestSeq: seq,
-        sourceSeq: src.seq,
-        sourceEndpoint: getEndpointKey(src),
-        selfChain: getEndpointKey(src) === ep,
+function collectResponseScalars(value: unknown) {
+  const leaves: Array<{ path: string; depth: number; type: ScalarType; value: Scalar }> = [];
+  const stack: Array<{ value: unknown; path: string; depth: number }> = [
+    { value, path: '', depth: 0 },
+  ];
+  let nodes = 0;
+  let nodesTruncated = false;
+  let leavesTruncated = false;
+  while (stack.length) {
+    if (nodes >= MAX_EQUALITY_NODES) {
+      nodesTruncated = true;
+      break;
+    }
+    const current = stack.pop();
+    if (!current) break;
+    nodes++;
+    const type = scalarType(current.value);
+    if (type) {
+      if (leaves.length >= MAX_EQUALITY_LEAVES) {
+        leavesTruncated = true;
+        break;
+      }
+      leaves.push({ ...current, type, value: current.value as Scalar });
+      continue;
+    }
+    const entries = Array.isArray(current.value)
+      ? current.value.map((item, index) => [String(index), item] as const)
+      : current.value && typeof current.value === 'object'
+        ? Object.entries(current.value)
+        : [];
+    const room = Math.max(0, MAX_EQUALITY_NODES - nodes - stack.length);
+    if (entries.length > room) nodesTruncated = true;
+    for (let index = Math.min(entries.length, room) - 1; index >= 0; index--) {
+      const entry = entries[index];
+      if (!entry) continue;
+      stack.push({
+        value: entry[1],
+        path: `${current.path}/${entry[0].replaceAll('~', '~0').replaceAll('/', '~1')}`,
+        depth: current.depth + 1,
       });
     }
   }
-  return out;
+  return {
+    leaves,
+    nodes,
+    nodesTruncated,
+    leavesTruncated,
+  };
+}
+export function findEarlierResponseEqualities(
+  session: Session,
+  requestSeq: number,
+  requestPointer: string,
+  selectedStructure: BodyStructure,
+  options: { includePaths?: boolean; responseFormat?: unknown } = {},
+) {
+  const responseFormat = parseBodyFormat(options.responseFormat);
+  const facts: Array<{
+    responseSeq: number;
+    responsePath?: string;
+    responseDepth: number;
+    matchKind: 'exact_scalar_equality_in_supplied_host_redaction_representation';
+    scalarType: ScalarType;
+  }> = [];
+  const work = {
+    earlierHistoryAvailable: 0,
+    earlierHistoryInWindow: 0,
+    earlierHistoryWindowLimit: MAX_EQUALITY_HISTORY_REQUESTS,
+    earlierRequestsScanned: 0,
+    responseBodiesFound: 0,
+    responsesDecoded: 0,
+    responsesSkipped: 0,
+    responseNodes: 0,
+    responseLeaves: 0,
+    comparisons: 0,
+  };
+  const skippedByReason: Record<string, number> = {};
+  const result = {
+    requestSeq,
+    requestPointer,
+    equalityScope: 'supplied_host_redaction_representation_only' as const,
+    responseFormat: responseFormat ?? 'invalid',
+    facts,
+    work,
+    skippedByReason,
+  };
+  if (!responseFormat) return { ...result, reasonCode: 'invalid_response_format' as const };
+  const requestIndex = session.requests.findIndex((item) => item.seq === requestSeq);
+  if (requestIndex < 0) return { ...result, reasonCode: 'request_not_found' as const };
+  if (!session.requests[requestIndex])
+    return { ...result, reasonCode: 'request_not_found' as const };
+  result.work.earlierHistoryAvailable = requestIndex;
+  result.work.earlierHistoryInWindow = Math.min(requestIndex, MAX_EQUALITY_HISTORY_REQUESTS);
+  const requests = session.requests
+    .slice(Math.max(0, requestIndex - MAX_EQUALITY_HISTORY_REQUESTS), requestIndex + 1)
+    .sort((left, right) => left.seq - right.seq);
+  const selected = prepareBodyScalarEquality(selectedStructure, requestPointer);
+  if (!selected.ok) return { ...result, reasonCode: `selected_pointer_${selected.error}` as const };
+  const requestType = selected.scalarType;
+  const truncated = new Set<
+    'earlier_history' | 'responses' | 'bytes' | 'response_decode' | 'nodes' | 'leaves' | 'matches'
+  >();
+  if (requestIndex > MAX_EQUALITY_HISTORY_REQUESTS) truncated.add('earlier_history');
+  const before = lowerBound(requests, requestSeq);
+  let responsesSeen = 0;
+  let responseBytes = 0;
+  let partialResponseDecode = false;
+  const skip = (reason: string) => {
+    result.work.responsesSkipped++;
+    result.skippedByReason[reason] = (result.skippedByReason[reason] ?? 0) + 1;
+  };
+  outer: for (let position = before - 1; position >= 0; position--) {
+    result.work.earlierRequestsScanned++;
+    const earlier = requests[position];
+    const body = earlier?.response?.body;
+    if (!earlier || typeof body !== 'string') {
+      skip('missing_response_body');
+      continue;
+    }
+    if (responsesSeen++ >= MAX_EQUALITY_RESPONSES) {
+      truncated.add('responses');
+      skip('response_count_limit');
+      break;
+    }
+    result.work.responseBodiesFound++;
+    if (body.length > MAX_EQUALITY_RESPONSE_BYTES) {
+      truncated.add('bytes');
+      skip('response_size_limit');
+      continue;
+    }
+    const bytes = groundingEncoder.encode(body).length;
+    if (bytes > MAX_EQUALITY_RESPONSE_BYTES) {
+      truncated.add('bytes');
+      skip('response_size_limit');
+      continue;
+    }
+    if (bytes > MAX_EQUALITY_TOTAL_BYTES - responseBytes) {
+      truncated.add('bytes');
+      skip('total_response_budget');
+      continue;
+    }
+    responseBytes += bytes;
+    const decoded = decodeBodyStructure(body, responseFormat);
+    if (!decoded.ok) {
+      skip(`decode_${decoded.code}`);
+      continue;
+    }
+    const decodeNotCheckedReason = bodyStructureNotCheckedReason(decoded.structure);
+    if (decodeNotCheckedReason) {
+      partialResponseDecode = true;
+      truncated.add('response_decode');
+      skip(`decode_${decodeNotCheckedReason}`);
+      continue;
+    }
+    result.work.responsesDecoded++;
+    const collected = collectResponseScalars(decoded.structure.value);
+    result.work.responseNodes += collected.nodes;
+    result.work.responseLeaves += collected.leaves.length;
+    if (collected.nodesTruncated) truncated.add('nodes');
+    if (collected.leavesTruncated) truncated.add('leaves');
+    for (const leaf of collected.leaves) {
+      result.work.comparisons++;
+      if (leaf.type !== requestType || !selected.equals(leaf.value)) continue;
+      if (result.facts.length >= MAX_EQUALITY_MATCHES) {
+        truncated.add('matches');
+        break outer;
+      }
+      result.facts.push({
+        responseSeq: earlier.seq,
+        ...(options.includePaths ? { responsePath: leaf.path } : {}),
+        responseDepth: leaf.depth,
+        matchKind: 'exact_scalar_equality_in_supplied_host_redaction_representation',
+        scalarType: requestType,
+      });
+    }
+  }
+  return {
+    ...result,
+    reasonCode:
+      facts.length > 0
+        ? 'matches_found'
+        : partialResponseDecode
+          ? 'eligible_response_not_fully_decoded'
+          : work.responsesDecoded > 0
+            ? 'no_equal_scalar_in_supplied_representation'
+            : 'no_decoded_responses',
+    ...(truncated.size ? { truncated: [...truncated] } : {}),
+  };
 }

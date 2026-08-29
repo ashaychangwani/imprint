@@ -49,6 +49,10 @@ interface RawReplayOptions {
   session: Session;
   site: string;
   headed?: boolean;
+  /** Exact values extracted from this recording. They let a redacted event
+   *  carrying `${credential.NAME}` replay the same user input without turning
+   *  the placeholder into a failed or skipped interaction. */
+  credentials?: Record<string, string>;
   onProgress?: (current: number, total: number, captured: number) => void;
 }
 
@@ -57,7 +61,7 @@ const CREDENTIAL_PLACEHOLDER = /^\$\{credential\.([A-Za-z0-9_.-]+)\}$/;
 /** Resolve only a complete credential placeholder. Embedded or missing
  * placeholders are rejected so replay never types placeholder text or a partial
  * secret interpolation into the page. */
-export function resolveReplayEventValue(
+function resolveReplayEventValue(
   value: string,
   credentials: Record<string, string>,
 ): string | null {
@@ -67,6 +71,23 @@ export function resolveReplayEventValue(
     return name && Object.hasOwn(credentials, name) ? (credentials[name] ?? null) : null;
   }
   return value.includes('${credential.') ? null : value;
+}
+
+export function resolveReplayInputValue(
+  value: unknown,
+  credentials: Record<string, string>,
+): string | null {
+  return typeof value === 'string' ? resolveReplayEventValue(value, credentials) : null;
+}
+
+/** Allocate identity at request time so a later out-of-order response cannot
+ * reorder the independently observed execution. */
+export function createReplayRequestIdentityAllocator(
+  startTime: number,
+  now: () => number = Date.now,
+): () => { seq: number; timestamp: number } {
+  let nextSeq = 0;
+  return () => ({ seq: nextSeq++, timestamp: now() - startTime });
 }
 
 /**
@@ -97,19 +118,19 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
   }
 
   const captured: CapturedReplayRequest[] = [];
-  let seq = 0;
   const startTime = Date.now();
+  const allocateRequestIdentity = createReplayRequestIdentityAllocator(startTime);
   try {
     context = await browser.newContext();
     const page = await context.newPage();
     replayLog('browser context + page created');
 
     // Inject credentials if available
-    let credentialValues: Record<string, string> = {};
+    let credentialValues: Record<string, string> = { ...opts.credentials };
     try {
       const { loadSiteCredentials } = await import('./credential-store.ts');
       const view = await loadSiteCredentials(opts.site);
-      credentialValues = view.values;
+      credentialValues = { ...view.values, ...opts.credentials };
       const playwrightCookies = view.cookies
         .map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path }))
         .filter((c) => c.name && c.value);
@@ -126,11 +147,19 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
     let reqId = 0;
     const requestMeta = new Map<
       string,
-      { method: string; url: string; headers: Record<string, string>; body?: string }
+      {
+        seq: number;
+        timestamp: number;
+        method: string;
+        url: string;
+        headers: Record<string, string>;
+        body?: string;
+      }
     >();
     page.on('request', (req) => {
       const id = `${reqId++}`;
       requestMeta.set(id, {
+        ...allocateRequestIdentity(),
         method: req.method(),
         url: req.url(),
         headers: req.headers(),
@@ -144,7 +173,7 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
       const req = resp.request();
       const id = (req as unknown as Record<string, string>).__replayCaptureId;
       const meta = id ? requestMeta.get(id) : undefined;
-      const currentSeq = seq++;
+      const identity = meta ?? allocateRequestIdentity();
       const method = meta?.method ?? req.method();
       const url = meta?.url ?? resp.url();
       const headers = meta?.headers ?? req.headers();
@@ -153,8 +182,8 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
         .text()
         .then((respBody) => {
           captured.push({
-            seq: currentSeq,
-            timestamp: Date.now() - startTime,
+            seq: identity.seq,
+            timestamp: identity.timestamp,
             method,
             url,
             headers,
@@ -170,8 +199,8 @@ export async function replayRawSession(opts: RawReplayOptions): Promise<ReplayCa
         })
         .catch(() => {
           captured.push({
-            seq: currentSeq,
-            timestamp: Date.now() - startTime,
+            seq: identity.seq,
+            timestamp: identity.timestamp,
             method,
             url,
             headers,
@@ -302,11 +331,11 @@ async function replayEvent(
 
   if (event.type === 'input' || event.type === 'change') {
     const loc = buildLocatorFromEvent(page, d);
-    if (!loc || !d.value) {
+    if (!loc || typeof d.value !== 'string') {
       replayLog(`  skip ${event.type}: no locator or no value`);
       return;
     }
-    const resolvedValue = resolveReplayEventValue(d.value, credentials);
+    const resolvedValue = resolveReplayInputValue(d.value, credentials);
     if (resolvedValue === null) {
       replayLog(`  skip ${event.type}: credential placeholder could not be resolved safely`);
       return;

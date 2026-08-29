@@ -186,7 +186,7 @@ describe('validateBuildPlan', () => {
 });
 
 describe('planSliceForTool', () => {
-  it('resolves the tool slice with its shared modules', () => {
+  it('resolves the tool slice with its shared-module proposals', () => {
     const slice = planSliceForTool(basePlan(), 'search_flights');
     expect(slice?.tool.toolName).toBe('search_flights');
     expect(slice?.sharedModules.map((m) => m.path)).toEqual(['_shared/sign.ts']);
@@ -307,26 +307,26 @@ describe('topoLevels', () => {
   });
 });
 
-describe('resolveAssignedModules + sharedModuleImportPath', () => {
+describe('resolveAssignedModules proposals + sharedModuleImportPath', () => {
   it('annotates verified status from the manifest and computes import paths', () => {
-    const assigned = resolveAssignedModules(basePlan(), 'search_flights', [
+    const proposals = resolveAssignedModules(basePlan(), 'search_flights', [
       { path: '_shared/sign.ts', kind: 'request-transform', verified: true },
     ]);
-    expect(assigned).toHaveLength(1);
-    expect(assigned[0]?.verified).toBe(true);
-    expect(assigned[0]?.importPath).toBe('../_shared/sign.ts');
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]?.verified).toBe(true);
+    expect(proposals[0]?.importPath).toBe('../_shared/sign.ts');
   });
 
   it('marks modules unverified when the manifest says so', () => {
-    const assigned = resolveAssignedModules(basePlan(), 'search_flights', [
+    const proposals = resolveAssignedModules(basePlan(), 'search_flights', [
       { path: '_shared/sign.ts', kind: 'request-transform', verified: false },
     ]);
-    expect(assigned[0]?.verified).toBe(false);
+    expect(proposals[0]?.verified).toBe(false);
   });
 
   it('treats every module as verified when no manifest is supplied', () => {
-    const assigned = resolveAssignedModules(basePlan(), 'search_flights');
-    expect(assigned[0]?.verified).toBe(true);
+    const proposals = resolveAssignedModules(basePlan(), 'search_flights');
+    expect(proposals[0]?.verified).toBe(true);
   });
 
   it('builds the relative import path from a module path', () => {
@@ -350,7 +350,7 @@ describe('describeAssignedModules', () => {
     ).toBe('');
   });
 
-  it('lists verified modules with their import path', () => {
+  it('lists built module proposals with their import path', () => {
     const text = describeAssignedModules([
       {
         path: '_shared/sign.ts',
@@ -362,7 +362,7 @@ describe('describeAssignedModules', () => {
       },
     ]);
     expect(text).toContain('../_shared/sign.ts');
-    expect(text).toContain('requestTransformModule');
+    expect(text).toContain('does not require these imports');
   });
 });
 
@@ -415,7 +415,6 @@ describe('buildBuildPlanPayload', () => {
       description: toolName,
       rationale: 'x',
       confidence: 0.9,
-      primary: toolName === 'search_flights',
       requestSeqs: seqs,
       representativeSeqs: [],
       eventSeqs: [],
@@ -1864,7 +1863,6 @@ describe('buildBuildPlanPayload requiredInputHints (end-to-end)', () => {
       description: toolName,
       rationale: 'x',
       confidence: 0.9,
-      primary: true,
       requestSeqs: seqs,
       representativeSeqs: [],
       eventSeqs: [],

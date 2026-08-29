@@ -12,7 +12,6 @@ import {
   VERB_HELP,
   closestVerb,
   inferPlaybookSiteForSmokeCommand,
-  resolveTeachSelectionMode,
   tryParseParamKV,
 } from '../src/cli.ts';
 
@@ -34,28 +33,6 @@ const dispatcherVerbs = (() => {
   return set;
 })();
 
-describe('teach selection mode', () => {
-  it('reports the default all-tools modes accurately for telemetry', () => {
-    expect(resolveTeachSelectionMode({ noInteractive: true })).toEqual({ mode: 'all-default' });
-    expect(resolveTeachSelectionMode({ allTools: true })).toEqual({ mode: 'all-explicit' });
-    expect(resolveTeachSelectionMode({})).toEqual({ mode: 'interactive-default-all' });
-  });
-
-  it('reports narrowing modes and rejects conflicting flags', () => {
-    expect(resolveTeachSelectionMode({ primaryTool: true })).toEqual({ mode: 'primary' });
-    expect(resolveTeachSelectionMode({ tool: 'get_details' })).toEqual({ mode: 'tool' });
-    expect(resolveTeachSelectionMode({ tool: 'x', allTools: true }).error).toContain(
-      '--tool cannot be combined with --all-tools',
-    );
-    expect(resolveTeachSelectionMode({ tool: 'x', primaryTool: true }).error).toContain(
-      '--tool cannot be combined with --primary-tool',
-    );
-    expect(resolveTeachSelectionMode({ allTools: true, primaryTool: true }).error).toContain(
-      '--all-tools cannot be combined with --primary-tool',
-    );
-  });
-});
-
 describe('CLI verb / VERB_HELP drift', () => {
   it('every dispatcher verb has a VERB_HELP entry', () => {
     const missing = [...dispatcherVerbs].filter((v) => !(v in VERB_HELP));
@@ -76,6 +53,34 @@ describe('CLI verb / VERB_HELP drift', () => {
 
   it.each(Object.keys(VERB_HELP))('%s example starts with `imprint %s`', (verb) => {
     expect(VERB_HELP[verb]?.example.startsWith(`imprint ${verb}`)).toBe(true);
+  });
+});
+
+describe('teach help', () => {
+  it('documents the single foreground all-tools flow', () => {
+    const teach = VERB_HELP.teach;
+    const flags = teach?.flags ?? [];
+    expect(teach?.summary).toContain('every supported tool');
+    expect(flags.map(({ name }) => name)).toContain('--agent codex');
+    expect(flags.find(({ name }) => name === '--timeout <duration>')?.description).toContain(
+      'Foreground teach deadline',
+    );
+  });
+
+  it('does not expose retired selection or resume flags', () => {
+    const names = (VERB_HELP.teach?.flags ?? []).map(({ name }) => name);
+    for (const retired of [
+      '--all-tools',
+      '--primary-tool',
+      '--tool',
+      '--skip-replay',
+      '--from-step',
+      '--to-step',
+      '--only',
+      '--resume',
+    ]) {
+      expect(names).not.toContain(retired);
+    }
   });
 });
 

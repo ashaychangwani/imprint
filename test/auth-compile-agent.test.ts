@@ -15,11 +15,17 @@ import {
 } from '../src/imprint/auth-compile-tools.ts';
 import { __setAuthVerifierLadderForTest } from '../src/imprint/auth-verifier.ts';
 import type { AuthToolPlan } from '../src/imprint/build-plan.ts';
+import {
+  ProviderDeadlineError,
+  ProviderReportedError,
+  ProviderUnavailableError,
+} from '../src/imprint/provider-retry.ts';
 import { recordedRequestMatchesWorkflow } from '../src/imprint/recording-request.ts';
 import { type Session, type Workflow, WorkflowSchema } from '../src/imprint/types.ts';
 
 const originalPath = process.env.PATH;
 const originalHome = process.env.IMPRINT_HOME;
+const originalTeachCredentials = process.env.IMPRINT_TEACH_CREDENTIALS;
 type VerifierRunner = NonNullable<Parameters<typeof __setAuthVerifierLadderForTest>[0]>;
 type VerifierRunnerArgs = Parameters<VerifierRunner>[0];
 
@@ -66,6 +72,18 @@ function session(): Session {
     cookieSnapshots: [],
     storageSnapshots: [],
   };
+}
+
+function writeSessionPair(
+  root: string,
+  value = session(),
+): {
+  sessionPath: string;
+} {
+  const sessionPath = pathJoin(root, 'session.json');
+  const text = JSON.stringify(value);
+  writeFileSync(sessionPath, text);
+  return { sessionPath };
 }
 
 function plan(): NonNullable<AuthToolPlan> {
@@ -161,7 +179,7 @@ test('round trips adversarial form values', async () => {
 `;
 
 const NESTED_CAPTURE_CONTRACT_TEST = `
-test('persisted-capture:nested_token matches the exact structured producer field', () => {
+test('nested token matches the exact structured producer field', () => {
   const sessionPath = process.env.IMPRINT_SESSION_PATH;
   if (!sessionPath) throw new Error('IMPRINT_SESSION_PATH is not set');
   const recorded = JSON.parse(readFileSync(sessionPath, 'utf8'));
@@ -198,10 +216,17 @@ afterEach(() => {
   process.env.FAKE_CODEX_TOOL_DIR = undefined;
   process.env.FAKE_CODEX_EARLY_STOP = undefined;
   process.env.FAKE_CODEX_PROMPT_CHECKPOINT = undefined;
+  process.env.FAKE_CODEX_COOLDOWN_CHECKPOINT = undefined;
   process.env.FAKE_CODEX_INSPECT_CHECKPOINT = undefined;
   process.env.FAKE_CODEX_STDIN_LOG = undefined;
   process.env.FAKE_CLAUDE_ARGS_LOG = undefined;
   process.env.FAKE_CLAUDE_TOOL_DIR = undefined;
+  process.env.FAKE_CLAUDE_TERMINAL_ERROR = undefined;
+  process.env.FAKE_CLAUDE_OVERLOAD_ONCE = undefined;
+  process.env.FAKE_CLAUDE_OVERLOAD_DELAY_MS = undefined;
+  process.env.FAKE_CLAUDE_INVALID_RESUME = undefined;
+  if (originalTeachCredentials === undefined) process.env.IMPRINT_TEACH_CREDENTIALS = undefined;
+  else process.env.IMPRINT_TEACH_CREDENTIALS = originalTeachCredentials;
   __setAuthVerifierLadderForTest(null);
 });
 
@@ -247,7 +272,7 @@ describe('auth compile tools', () => {
         relativePath: 'request.test.ts',
         content: `${VALID_REQUEST_TEST}
 test('offline auth tests receive no real teach payload', () => {
-  expect(process.env.IMPRINT_TEACH_CREDENTIALS).toBe('');
+  expect(process.env.IMPRINT_TEACH_CREDENTIALS).toBeUndefined();
 });`,
       });
 
@@ -259,7 +284,7 @@ test('offline auth tests receive no real teach payload', () => {
     }
   });
 
-  it('requires a substantive agent-authored request test before live auth', async () => {
+  it('requires an authored request test and reports its Bun failure before live auth', async () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-request-test-'));
     try {
       const tools = buildAuthCompileTools(session(), dir, '/tmp/session.json', {
@@ -595,7 +620,7 @@ test('agent-chosen encoding check', () => expect(1).toBe(2));`,
       writeFileSync(
         pathJoin(dir, 'request.test.ts'),
         `${VALID_REQUEST_TEST}
-test('persisted-capture:opaque_alpha preserves the planned binding', () => {
+test('the durable interface preserves the planned capture binding', () => {
   const workflow = WorkflowSchema.parse(JSON.parse(readFileSync('workflow.json', 'utf8')));
   expect(workflow.authConfig?.persistBindings?.opaque_alpha).toBe('ticket');
 });`,
@@ -656,7 +681,7 @@ test('persisted-capture:opaque_alpha preserves the planned binding', () => {
     }
   });
 
-  it('requires exact agent-authored proof for a persisted nested JSON capture', async () => {
+  it('requires and runs an authored test for a persisted nested JSON capture', async () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-nested-json-capture-'));
     try {
       const workflow = validWorkflow();
@@ -681,6 +706,7 @@ test('persisted-capture:opaque_alpha preserves the planned binding', () => {
       begin.outcome.evidence = ['nested_token'];
       begin.outcome.carry = ['nested_token'];
       writeWorkflow(dir, workflow);
+      rmSync(pathJoin(dir, 'request.test.ts'));
 
       const recorded = session();
       recorded.requests = [
@@ -709,7 +735,7 @@ test('persisted-capture:opaque_alpha preserves the planned binding', () => {
 
       expect(
         (await authLivePreflightFailures(dir, recorded, [], [], sessionPath)).join('\n'),
-      ).toContain('persisted-capture:nested_token');
+      ).toContain('request.test.ts is required');
 
       writeFileSync(
         pathJoin(dir, 'request.test.ts'),
@@ -863,6 +889,7 @@ if (process.env.FAKE_CODEX_ARGS_LOG) {
 }
 const toolDir = process.env.FAKE_CODEX_TOOL_DIR;
 if (!toolDir) throw new Error('missing fake tool dir');
+if (process.env.IMPRINT_TEACH_CREDENTIALS) throw new Error('teach credentials reached codex child');
 writeFileSync(join(toolDir, 'request.test.ts'), ${JSON.stringify(VALID_REQUEST_TEST)});
 const resumed = process.argv.includes('resume');
 const recoveryMarker = join(toolDir, '.fake-recovered');
@@ -878,7 +905,7 @@ if (process.env.FAKE_CODEX_INSPECT_CHECKPOINT && !resumed) {
   writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'inspect_verification_page', maxChars: 4096, includeCookies: true }));
   writeFileSync(inspectionMarker, '1');
 } else if (process.env.FAKE_CODEX_INSPECT_CHECKPOINT) {
-  writeFileSync(join(toolDir, '.compile-done.json'), JSON.stringify({ verification: 'passed', summary: 'inspected' }));
+  writeFileSync(join(toolDir, '.compile-done.json'), JSON.stringify({ verification: 'mechanical_passed', summary: 'inspected' }));
 } else if (process.env.FAKE_CODEX_EARLY_STOP && !resumed) {
   writeFileSync(join(toolDir, 'workflow.json'), '{}');
 } else if (process.env.FAKE_CODEX_EARLY_STOP && !existsSync(recoveryMarker)) {
@@ -888,15 +915,18 @@ if (process.env.FAKE_CODEX_INSPECT_CHECKPOINT && !resumed) {
 } else if (process.env.FAKE_CODEX_PROMPT_CHECKPOINT && !resumed) {
   writeFileSync(join(toolDir, 'workflow.json'), ${JSON.stringify(JSON.stringify(workflow))});
   writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'prompt_user', message: 'Confirm fixture action.' }));
+} else if (process.env.FAKE_CODEX_COOLDOWN_CHECKPOINT && !resumed) {
+  writeFileSync(join(toolDir, 'workflow.json'), ${JSON.stringify(JSON.stringify(workflow))});
+  writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'wait_for_cooldown', minutes: 1, reason: 'fixture cooldown' }));
 } else if (resumed) {
-  writeFileSync(join(toolDir, '.compile-done.json'), JSON.stringify({ verification: 'passed', summary: 'resumed' }));
+  writeFileSync(join(toolDir, '.compile-done.json'), JSON.stringify({ verification: 'mechanical_passed', summary: 'resumed' }));
 } else {
   writeFileSync(join(toolDir, 'workflow.json'), ${JSON.stringify(JSON.stringify(workflow))});
   writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'run_verification', action: 'finish', parameters: { answer: 'fixture' } }));
 }
 console.log(JSON.stringify({ type: 'thread.started', thread_id: 'fixture-thread' }));
 console.log(JSON.stringify({ type: 'turn.started' }));
-console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 2, cache_write_input_tokens: 3 } }));
 `,
   );
   chmodSync(path, 0o755);
@@ -915,20 +945,83 @@ if (process.env.FAKE_CLAUDE_ARGS_LOG) {
 }
 const toolDir = process.env.FAKE_CLAUDE_TOOL_DIR;
 if (!toolDir) throw new Error('missing fake tool dir');
+if (process.env.IMPRINT_TEACH_CREDENTIALS) throw new Error('teach credentials reached claude child');
 writeFileSync(join(toolDir, 'request.test.ts'), ${JSON.stringify(VALID_REQUEST_TEST)});
-if (process.argv.includes('--resume')) {
-  writeFileSync(join(toolDir, '.compile-done.json'), JSON.stringify({ verification: 'passed', summary: 'resumed' }));
+const resumed = process.argv.includes('--resume');
+const overload = Boolean(process.env.FAKE_CLAUDE_OVERLOAD_ONCE) && !resumed;
+const overloadDelayMs = Number(process.env.FAKE_CLAUDE_OVERLOAD_DELAY_MS) || 10;
+if (overload && process.env.FAKE_CLAUDE_OVERLOAD_DELAY_MS) process.on('SIGTERM', () => {});
+const invalidResume = Boolean(process.env.FAKE_CLAUDE_INVALID_RESUME) && resumed;
+if (process.env.FAKE_CLAUDE_TERMINAL_ERROR || overload || invalidResume) {
+  // A terminal errors[] event with exit 0 is still a provider error.
+} else if (resumed) {
+  writeFileSync(join(toolDir, '.compile-done.json'), JSON.stringify({ verification: 'mechanical_passed', summary: 'resumed' }));
 } else {
   writeFileSync(join(toolDir, 'workflow.json'), ${JSON.stringify(JSON.stringify(workflow))});
   writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'run_verification', action: 'finish', parameters: { answer: 'fixture' } }));
 }
-console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fixture-claude-session' }));
-console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'fixture' }], usage: { input_tokens: 1, output_tokens: 1 } } }));
-console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'fixture' }));
+if (!invalidResume) {
+  console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fixture-claude-session' }));
+}
+if (process.env.FAKE_CLAUDE_TERMINAL_ERROR) {
+  console.log(JSON.stringify({ type: 'result', subtype: 'error', is_error: true, errors: ['workflow schema validation failed'] }));
+} else if (invalidResume) {
+  console.log(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, session_id: 'unrelated-claude-session', errors: ['No conversation found with session ID: fixture-claude-session'] }));
+} else if (overload) {
+  setTimeout(() => console.log(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, session_id: 'fixture-claude-session', api_error_status: 529, errors: ['provider overloaded'] })), overloadDelayMs);
+} else {
+  console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'fixture' }], usage: { input_tokens: 1, output_tokens: 1 } } }));
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'fixture', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 2, cache_creation_input_tokens: 3 } }));
+}
 `,
   );
   chmodSync(path, 0o755);
 }
+
+describe('compile CLI launch errors', () => {
+  for (const provider of ['claude-cli', 'codex-cli'] as const) {
+    it(`preserves an existing compile log when ${provider} cannot launch`, async () => {
+      const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-launch-error-'));
+      try {
+        const bin = pathJoin(root, 'empty-bin');
+        const home = pathJoin(root, 'home');
+        const toolDir = pathJoin(home, 'fixture-site', 'authenticate_fixture');
+        mkdirSync(bin);
+        mkdirSync(toolDir, { recursive: true });
+        process.env.PATH = bin;
+        process.env.IMPRINT_HOME = home;
+        const logPath = pathJoin(toolDir, '.compile-log.json');
+        const existing = [{ type: 'assistant', message: 'prior compile work' }];
+        writeFileSync(logPath, JSON.stringify(existing));
+        const { sessionPath } = writeSessionPair(root);
+
+        const result = await compileAuthAgent({
+          site: 'fixture-site',
+          session: session(),
+          sessionPath,
+          authToolPlan: plan(),
+          teachCredentials: {
+            site: 'fixture-site',
+            values: { username: 'fixture-user', password: 'fixture-pass' },
+          },
+          llmConfig: { provider },
+          maxDurationMs: 5_000,
+        });
+
+        expect(result).toMatchObject({ success: false, outcome: 'error' });
+        const persisted = JSON.parse(readFileSync(logPath, 'utf8')) as Array<{
+          type: string;
+          message?: string;
+          error?: string;
+        }>;
+        expect(persisted[0]).toEqual(existing[0]);
+        expect(persisted.some((event) => event.type === 'host_error')).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
 
 describe('compileAuthAgent with Codex', () => {
   it('lets Codex inspect the existing verification page through a checkpoint', async () => {
@@ -942,11 +1035,14 @@ describe('compileAuthAgent with Codex', () => {
       process.env.IMPRINT_HOME = home;
       process.env.FAKE_CODEX_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
       process.env.FAKE_CODEX_ARGS_LOG = pathJoin(root, 'args.log');
+      process.env.IMPRINT_TEACH_CREDENTIALS = JSON.stringify({
+        site: 'fixture-site',
+        values: { password: 'must-stay-in-root' },
+      });
       process.env.FAKE_CODEX_STDIN_LOG = pathJoin(root, 'stdin.log');
       process.env.FAKE_CODEX_INSPECT_CHECKPOINT = '1';
       installFakeCodex(bin);
-      const sessionPath = pathJoin(root, 'session.json');
-      writeFileSync(sessionPath, JSON.stringify(session()));
+      const { sessionPath } = writeSessionPair(root);
 
       __setAuthVerifierLadderForTest((async (args: VerifierRunnerArgs) => {
         args.cdpPool?.set('fixture', {
@@ -1010,8 +1106,7 @@ describe('compileAuthAgent with Codex', () => {
       process.env.FAKE_CODEX_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
       process.env.FAKE_CODEX_ARGS_LOG = pathJoin(root, 'args.log');
       installFakeCodex(bin);
-      const sessionPath = pathJoin(root, 'session.json');
-      writeFileSync(sessionPath, JSON.stringify(session()));
+      const { sessionPath } = writeSessionPair(root);
 
       __setAuthVerifierLadderForTest(async () => ({
         result: { ok: true, data: { authenticated: true } },
@@ -1031,7 +1126,15 @@ describe('compileAuthAgent with Codex', () => {
         llmConfig: { provider: 'codex-cli', model: 'gpt-5.6-terra' },
         maxDurationMs: 30_000,
       });
-      expect(result).toMatchObject({ success: true, outcome: 'done', turns: 2 });
+      expect(result).toMatchObject({
+        success: true,
+        outcome: 'done',
+        turns: 2,
+        inputTokens: 2,
+        outputTokens: 2,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 6,
+      });
 
       const commands = readFileSync(process.env.FAKE_CODEX_ARGS_LOG, 'utf8')
         .trim()
@@ -1042,6 +1145,9 @@ describe('compileAuthAgent with Codex', () => {
       expect(commands[1]).toContain('fixture-thread');
       for (const command of commands) {
         expect(command[command.indexOf('-m') + 1]).toBe('gpt-5.6-terra');
+        expect(command[command.indexOf('-C') + 1]).toBe(process.env.FAKE_CODEX_TOOL_DIR);
+        expect(command).not.toContain('shell_tool');
+        expect(command).not.toContain('unified_exec');
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1061,8 +1167,7 @@ describe('compileAuthAgent with Codex', () => {
       process.env.FAKE_CODEX_ARGS_LOG = pathJoin(root, 'args.log');
       process.env.FAKE_CODEX_EARLY_STOP = '1';
       installFakeCodex(bin);
-      const sessionPath = pathJoin(root, 'session.json');
-      writeFileSync(sessionPath, JSON.stringify(session()));
+      const { sessionPath } = writeSessionPair(root);
 
       __setAuthVerifierLadderForTest(async () => ({
         result: { ok: true, data: { authenticated: true } },
@@ -1090,7 +1195,7 @@ describe('compileAuthAgent with Codex', () => {
     }
   });
 
-  it('does not charge user-input wait time against the compile deadline', async () => {
+  it('keeps user-input wait inside the one run deadline', async () => {
     const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-codex-prompt-'));
     try {
       const bin = pathJoin(root, 'bin');
@@ -1103,8 +1208,119 @@ describe('compileAuthAgent with Codex', () => {
       process.env.FAKE_CODEX_PROMPT_CHECKPOINT = '1';
       process.env.FAKE_CODEX_STDIN_LOG = pathJoin(root, 'stdin.log');
       installFakeCodex(bin);
-      const sessionPath = pathJoin(root, 'session.json');
-      writeFileSync(sessionPath, JSON.stringify(session()));
+      const { sessionPath } = writeSessionPair(root);
+
+      await expect(
+        compileAuthAgent({
+          site: 'fixture-site',
+          session: session(),
+          sessionPath,
+          authToolPlan: plan(),
+          teachCredentials: {
+            site: 'fixture-site',
+            values: { username: 'fixture-user', password: 'fixture-pass' },
+          },
+          llmConfig: { provider: 'codex-cli' },
+          maxDurationMs: 1000,
+          onPrompt: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 1200));
+            return 'confirmed';
+          },
+        }),
+      ).rejects.toBeInstanceOf(ProviderDeadlineError);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  it('cancels an auth cooldown immediately instead of waiting for its timer', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-codex-cooldown-'));
+    try {
+      const bin = pathJoin(root, 'bin');
+      const home = pathJoin(root, 'home');
+      mkdirSync(bin);
+      mkdirSync(home);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      process.env.IMPRINT_HOME = home;
+      process.env.FAKE_CODEX_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
+      process.env.FAKE_CODEX_COOLDOWN_CHECKPOINT = '1';
+      installFakeCodex(bin);
+      const { sessionPath } = writeSessionPair(root);
+      const controller = new AbortController();
+
+      await expect(
+        compileAuthAgent({
+          site: 'fixture-site',
+          session: session(),
+          sessionPath,
+          authToolPlan: plan(),
+          teachCredentials: {
+            site: 'fixture-site',
+            values: { username: 'fixture-user', password: 'fixture-pass' },
+          },
+          llmConfig: { provider: 'codex-cli' },
+          maxDurationMs: 30_000,
+          signal: controller.signal,
+          onCooldown: async () => {
+            controller.abort(new Error('cancelled during cooldown'));
+            await new Promise<void>(() => {});
+          },
+        }),
+      ).rejects.toThrow('cancelled during cooldown');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 5_000);
+});
+
+describe('compileAuthAgent with Claude', () => {
+  it('surfaces an errors-only deterministic terminal event as a typed provider error', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-claude-error-'));
+    try {
+      const bin = pathJoin(root, 'bin');
+      const home = pathJoin(root, 'home');
+      mkdirSync(bin);
+      mkdirSync(home);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      process.env.IMPRINT_HOME = home;
+      process.env.FAKE_CLAUDE_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
+      process.env.FAKE_CLAUDE_TERMINAL_ERROR = '1';
+      installFakeClaude(bin);
+      const { sessionPath } = writeSessionPair(root);
+
+      await expect(
+        compileAuthAgent({
+          site: 'fixture-site',
+          session: session(),
+          sessionPath,
+          authToolPlan: plan(),
+          teachCredentials: {
+            site: 'fixture-site',
+            values: { username: 'fixture-user', password: 'fixture-pass' },
+          },
+          llmConfig: { provider: 'claude-cli' },
+          maxDurationMs: 30_000,
+        }),
+      ).rejects.toBeInstanceOf(ProviderReportedError);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('drains and recovers a late structured 529 result in the same Claude session', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-claude-overload-'));
+    try {
+      const bin = pathJoin(root, 'bin');
+      const home = pathJoin(root, 'home');
+      mkdirSync(bin);
+      mkdirSync(home);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      process.env.IMPRINT_HOME = home;
+      process.env.FAKE_CLAUDE_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
+      process.env.FAKE_CLAUDE_ARGS_LOG = pathJoin(root, 'args.log');
+      process.env.FAKE_CLAUDE_OVERLOAD_ONCE = '1';
+      installFakeClaude(bin);
+      const { sessionPath } = writeSessionPair(root);
 
       const result = await compileAuthAgent({
         site: 'fixture-site',
@@ -1115,25 +1331,111 @@ describe('compileAuthAgent with Codex', () => {
           site: 'fixture-site',
           values: { username: 'fixture-user', password: 'fixture-pass' },
         },
-        llmConfig: { provider: 'codex-cli' },
-        maxDurationMs: 3000,
-        onPrompt: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 3200));
-          return 'confirmed';
-        },
+        llmConfig: { provider: 'claude-cli' },
+        maxDurationMs: 30_000,
       });
 
-      expect(result).toMatchObject({ success: true, outcome: 'done' });
-      const resumedPrompts = readFileSync(process.env.FAKE_CODEX_STDIN_LOG, 'utf8');
-      expect(resumedPrompts).toContain('${prompt.1}');
-      expect(resumedPrompts).not.toContain('confirmed');
+      expect(result).toMatchObject({
+        success: true,
+        outcome: 'done',
+        sessionId: 'fixture-claude-session',
+      });
+      const commands = readFileSync(process.env.FAKE_CLAUDE_ARGS_LOG, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as string[]);
+      expect(commands).toHaveLength(2);
+      expect(commands[1]).toContain('--resume');
+      expect(commands[1]).toContain('fixture-claude-session');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 10_000);
-});
+  });
 
-describe('compileAuthAgent with Claude', () => {
+  it('classifies a late provider fact as provider unavailable instead of artifact timeout', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-claude-deadline-fact-'));
+    try {
+      const bin = pathJoin(root, 'bin');
+      const home = pathJoin(root, 'home');
+      mkdirSync(bin);
+      mkdirSync(home);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      process.env.IMPRINT_HOME = home;
+      process.env.FAKE_CLAUDE_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
+      process.env.FAKE_CLAUDE_ARGS_LOG = pathJoin(root, 'args.log');
+      process.env.FAKE_CLAUDE_OVERLOAD_ONCE = '1';
+      process.env.FAKE_CLAUDE_OVERLOAD_DELAY_MS = '1500';
+      installFakeClaude(bin);
+      const { sessionPath } = writeSessionPair(root);
+
+      const compile = compileAuthAgent({
+        site: 'fixture-site',
+        session: session(),
+        sessionPath,
+        authToolPlan: plan(),
+        teachCredentials: {
+          site: 'fixture-site',
+          values: { username: 'fixture-user', password: 'fixture-pass' },
+        },
+        llmConfig: { provider: 'claude-cli' },
+        maxDurationMs: 1_000,
+      });
+
+      await expect(compile).rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(compile).rejects.toThrow('artifact was not treated as the cause');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects Claude invalid-resume replacement sessions without retrying', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-claude-invalid-resume-'));
+    try {
+      const bin = pathJoin(root, 'bin');
+      const home = pathJoin(root, 'home');
+      mkdirSync(bin);
+      mkdirSync(home);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      process.env.IMPRINT_HOME = home;
+      process.env.FAKE_CLAUDE_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
+      process.env.FAKE_CLAUDE_ARGS_LOG = pathJoin(root, 'args.log');
+      process.env.FAKE_CLAUDE_INVALID_RESUME = '1';
+      installFakeClaude(bin);
+      const { sessionPath } = writeSessionPair(root);
+      __setAuthVerifierLadderForTest(async () => ({
+        result: { ok: true, data: { authenticated: true } },
+        usedBackend: 'cdp-replay',
+        attempts: [],
+      }));
+
+      const result = await compileAuthAgent({
+        site: 'fixture-site',
+        session: session(),
+        sessionPath,
+        authToolPlan: plan(),
+        teachCredentials: {
+          site: 'fixture-site',
+          values: { username: 'fixture-user', password: 'fixture-pass' },
+        },
+        llmConfig: { provider: 'claude-cli' },
+        maxDurationMs: 30_000,
+      });
+
+      expect(result).toMatchObject({
+        success: false,
+        outcome: 'error',
+        sessionId: 'fixture-claude-session',
+      });
+      expect(result.message).toContain('unrelated-claude-session');
+      expect(result.message).toContain('No conversation found with session ID');
+      expect(
+        readFileSync(process.env.FAKE_CLAUDE_ARGS_LOG, 'utf8').trim().split('\n'),
+      ).toHaveLength(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('resumes the same Claude session after an arbitrary action checkpoint', async () => {
     const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-claude-'));
     try {
@@ -1145,9 +1447,12 @@ describe('compileAuthAgent with Claude', () => {
       process.env.IMPRINT_HOME = home;
       process.env.FAKE_CLAUDE_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
       process.env.FAKE_CLAUDE_ARGS_LOG = pathJoin(root, 'args.log');
+      process.env.IMPRINT_TEACH_CREDENTIALS = JSON.stringify({
+        site: 'fixture-site',
+        values: { password: 'must-stay-in-root' },
+      });
       installFakeClaude(bin);
-      const sessionPath = pathJoin(root, 'session.json');
-      writeFileSync(sessionPath, JSON.stringify(session()));
+      const { sessionPath } = writeSessionPair(root);
 
       __setAuthVerifierLadderForTest(async () => ({
         result: { ok: true, data: { authenticated: true } },
@@ -1167,7 +1472,15 @@ describe('compileAuthAgent with Claude', () => {
         maxDurationMs: 30_000,
       });
 
-      expect(result).toMatchObject({ success: true, outcome: 'done', turns: 2 });
+      expect(result).toMatchObject({
+        success: true,
+        outcome: 'done',
+        turns: 2,
+        inputTokens: 2,
+        outputTokens: 2,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 6,
+      });
       const commands = readFileSync(process.env.FAKE_CLAUDE_ARGS_LOG, 'utf8')
         .trim()
         .split('\n')

@@ -8,6 +8,7 @@
 
 import type { AgentProgress } from './agent.ts';
 import { type AssignedSharedModule, describeAssignedModules } from './build-plan.ts';
+import type { ProviderReportedError } from './provider-retry.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 
 /** Only an independent semantic-verifier result consumes the bounded review
@@ -33,28 +34,28 @@ export function advanceIncompleteSemanticVerificationRuns(
   return semanticReviewAttempted ? current + 1 : current;
 }
 
-/** Render a per-tool implementation plan (param→field mapping, request
- *  construction, response parsing, shared-module imports, edge cases) into an
- *  initial-message section the compile agent must follow. Shared verbatim by the
+/** Render a per-tool implementation proposal (param→field mapping, request
+ *  construction, response parsing, reusable-module ideas, edge cases) into an
+ *  initial-message section the compile agent evaluates. Shared verbatim by the
  *  in-process loop and both CLI drivers. Generic — carries no site-specific
- *  content; the plan itself is derived per-tool from the recording. */
+ *  content; the proposal itself is derived per-tool from the recording. */
 export function formatToolPlan(toolPlan: string | undefined): string {
   const plan = toolPlan?.trim();
   if (!plan) return '';
   return `
 
-IMPLEMENTATION PLAN — a planning pass analyzed the recording for THIS tool and produced the plan below. Follow it. It maps each parameter to its recorded field, specifies how to construct the request(s) and parse the response, and names the shared modules to import. Deviate only where the recorded data plainly contradicts the plan; if you do, note the correction in a brief code comment.
+IMPLEMENTATION PLAN — a planning pass analyzed the recording for THIS tool and produced the advisory plan below. Inspect its evidence and accept, revise, or reject each proposed parameter, request, parser choice, and shared module. Shared modules are reuse options, not runtime-required imports.
 
 ${plan}`;
 }
 
-/** Render the selected candidate + shared compile context (and any assigned
- *  shared modules) into the compile agent's initial message. Shared verbatim by
- *  the in-process loop and both CLI drivers. */
+/** Render the selected candidate + shared compile context (and reusable-module
+ *  proposals) into the compile agent's initial message. Shared verbatim by the
+ *  in-process loop and both CLI drivers. */
 export function formatCandidateContext(
   candidate: ToolCandidate | undefined,
   sharedContext: SharedCompileContext | undefined,
-  assignedSharedModules?: AssignedSharedModule[],
+  sharedModuleProposals?: AssignedSharedModule[],
 ): string {
   if (!candidate && !sharedContext) return '';
   return `
@@ -65,7 +66,7 @@ Shared compile context:
 ${sharedContext ? JSON.stringify(sharedContext, null, 2) : '(none)'}
 
 Compile only the selected candidate. Do not create tools for other actions in the recording.${
-    assignedSharedModules ? describeAssignedModules(assignedSharedModules) : ''
+    sharedModuleProposals ? describeAssignedModules(sharedModuleProposals) : ''
   }`;
 }
 
@@ -127,6 +128,13 @@ export interface CompileAgentResult {
   /** claude-cli session id (from the init event) — `--resume` target for the
    *  next auth segment. */
   sessionId?: string;
+  /** A provider-adapter fact that permits the host to retry this exact logical
+   *  compile. This is intentionally narrow: ordinary policy/content failures
+   *  remain deterministic errors unless an adapter identifies its provider's
+   *  known transient false-positive response. */
+  providerInterruption?: 'capacity_or_overload' | 'transient_safety_filter';
+  /** Full provider-owned terminal facts; never populated from tool/site text. */
+  providerError?: ProviderReportedError;
   /** Path to workflow.json if written. */
   workflowPath?: string;
   /** Path to parser.ts if written. */

@@ -2,7 +2,10 @@
 
 A working MCP tool from a fresh clone in about 5 minutes.
 
-The fastest path is `imprint teach`, which runs the full pipeline interactively and handles platform integration automatically. For manual step-by-step control, follow the commands below.
+The normal path is `imprint teach`. It starts one fresh foreground run, builds
+the complete tool set found in the recording, and returns only after the run
+has completed or failed. Install the completed tools in your MCP client as a
+separate step.
 
 ## Prerequisites
 
@@ -75,52 +78,52 @@ done
 
 Restart or reload Hermes after editing its config. The installed MCP entries will use `$HERMES_HOME/config.yaml` when `HERMES_HOME` is set, or `~/.hermes/config.yaml` outside Hermes. Browser-backed examples install Playwright Chromium into `$HERMES_HOME/.cache/ms-playwright` automatically and add `PLAYWRIGHT_BROWSERS_PATH` to the Hermes MCP entry.
 
-## Your first tool — step by step
+## Teach your first site
 
 Pick a site you want to automate. Internal admin panels, dashboards, and authed tools all work — anything you can drive in a browser.
 
 Pick a short, descriptive label for `<site>` — it becomes the directory name for generated tools and private recordings under `~/.imprint/` (or `IMPRINT_HOME`). Examples: `google-flights`, `southwest`, `company-dashboard`.
 
-`imprint teach` selects every detected tool by default, including in
-`--no-interactive` mode. If you choose a downstream tool, Imprint also selects
-the upstream tools that produce its required IDs or tokens. Pass
-`--primary-tool` to build only the primary tool and that prerequisite closure.
+Start a fresh teach and record the operations you want the site toolset to
+cover:
 
 ```bash
-# 1. Record yourself doing the thing once
-imprint record google-flights --url https://flights.google.com
+imprint teach google-flights --url https://flights.google.com
 #   → Chromium opens. Drive the workflow end-to-end. Narrate what
 #     you're doing in the terminal. Press /done (or Ctrl+C) when finished.
-#   → Output: ~/.imprint/google-flights/sessions/<timestamp>.{jsonl,json}
-
-# 2. Pick the session you just recorded
-SESSION=$(ls ~/.imprint/google-flights/sessions/*.json | grep -v redacted | tail -1)
-
-# 3. Scrub credentials and PII before sending to the LLM
-imprint redact "$SESSION"
-#   → Output: ~/.imprint/google-flights/sessions/<timestamp>.redacted.json
-
-# 4. LLM-compile two artifacts (workflow.json + playbook.yaml)
-imprint generate "${SESSION%.json}.redacted.json"
-#   → Output: ~/.imprint/google-flights/<toolName>/workflow.json
-imprint compile-playbook "${SESSION%.json}.redacted.json"
-#   → Output: ~/.imprint/google-flights/<toolName>/playbook.yaml
-
-# 5. Emit the executable TS module
-imprint emit ~/.imprint/google-flights/search_google_flights/workflow.json
-#   → Output: ~/.imprint/google-flights/search_google_flights/index.ts
-
-# 6. (Optional) Probe which backends work and cache the order.
-#    Safe to skip for plain APIs; useful for stateful or bot-protected sites.
-imprint probe-backends google-flights --tool search_google_flights
-#   Multi-tool site? Refresh every tool with: imprint probe-backends google-flights --all
-#   → Output: ~/.imprint/google-flights/search_google_flights/backends.json
-
-# 7. Test it
-imprint mcp-server google-flights    # stdio MCP server
+#   → The command stays open through planning, compilation, repair, and checks.
+#   → Its final line reports completed, blocked, failed, cancelled, or
+#     provider unavailable, together with the fresh run directory.
 ```
 
-You now have an MCP tool any agent can call.
+The master must account for every credible operation found in the recording.
+A tool-boundary advisor may suggest merging or splitting operations, but the
+master owns the editable final plan. It also chooses explicit build waves:
+producers come before their consumers, while independent tools may compile
+together.
+
+Each tool then gets a small, focused planning and compilation job. Contract,
+replay, live, and producer-consumer checks run when applicable. If a check
+fails, the master can revise the affected plan or artifact and rerun that tool
+and its dependants. An independent reviewer sees the final plan and the factual
+check history before the run can complete.
+
+There are no resume, phase-window, primary-tool, or partial-selection modes.
+Old run directories remain useful for diagnosis, but every new command starts
+a clean teach.
+
+To teach again from a specific existing recording, use `--from-session`. This
+still creates a fresh run:
+
+```bash
+imprint teach google-flights \
+  --from-session ~/.imprint/google-flights/sessions/<session>.json
+```
+
+A completed teach leaves one generated directory per verified tool under
+`~/.imprint/google-flights/`. API workflows are preferred. A
+`playbook.yaml` is added only when the agent has evidence that the higher
+replay paths are incompatible.
 
 To add that same emitted MCP server to another platform later:
 
@@ -142,17 +145,20 @@ imprint install google-flights --source examples --platform claude-code
 
 Stateful workflows still run through the same generated tool. If a request sets a cookie or response value that a later request needs, the workflow compiler emits named captures and `${state.NAME}` placeholders. Plain HTTP producers stay on the fast `fetch` path; browser bootstrap is used only when the workflow declares that Chromium is needed to mint the state.
 
-## Compile options
+## Teach options
 
-`imprint teach` prompts for a **provider** and **model** interactively. To skip the prompts or override defaults:
+Imprint auto-detects an available provider and model. Override them when
+needed:
 
 ```bash
-imprint teach google-flights --provider claude-cli --model claude-sonnet-4-6 --timeout 20m
+imprint teach google-flights --provider claude-cli --model claude-sonnet-4-6 --timeout 12h
 ```
 
-Each tool has a **20-minute compile timeout** by default. The compile agent writes the MCP server and runs thorough verification tests — most complex tools take 10-15 minutes, so be patient. If your site is especially complex, increase the timeout with `--timeout`. If a tool fails to compile (e.g. timeout or bot defense), the other tools in the same recording still compile successfully. To persist the generated tests after compilation, set `IMPRINT_KEEP_TEST=1` or pass `--keep-test`.
-
-To skip the replay-and-diff stage (the automated second pass that classifies values as constant vs browser-minted), add `--skip-replay`. This is faster but means the compile agent can't distinguish ephemeral values (timestamps, CSRF tokens) from constants, which may reduce workflow accuracy for sites with dynamic request parameters.
+The timeout applies to the foreground teach run and defaults to 12 hours so a
+large discovered tool set is not cut off by a single-tool-sized budget. Imprint may keep working on
+independent tools after one tool fails, but the command does not report success
+unless every planned tool is verified. To retain generated tests, set
+`IMPRINT_KEEP_TEST=1` or pass `--keep-test`.
 
 ## Inspect slow compiles
 
@@ -167,14 +173,22 @@ IMPRINT_TRACE_BATCH=false \
 IMPRINT_TRACE_LLM_IO=1 \
 IMPRINT_TRACE_TOOL_IO=1 \
 PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
-imprint teach google-flights --from-session "$SESSION" --provider codex-cli
+imprint teach google-flights \
+  --from-session ~/.imprint/google-flights/sessions/<session>.json \
+  --provider codex-cli
 ```
 
 In Phoenix you'll see every agent turn (`agent.turn.N`) with per-turn token counts, every LLM call (`llm.message_with_tools`) with model and token usage, and every tool dispatch (`agent.tool.X`) with timing. Add `IMPRINT_TRACE_LLM_IO=1` to capture prompts/responses and `IMPRINT_TRACE_TOOL_IO=1` to capture tool arguments and results. Raise `IMPRINT_TRACE_IO_MAX_CHARS` when you need longer payloads.
 
 ## Connect to your AI tool
 
-`imprint teach` handles platform integration automatically at the end of the pipeline. For manual setup, see [docs/integrations.md](integrations.md).
+Teaching and client registration are separate. After a successful teach, run:
+
+```bash
+imprint install google-flights --platform claude-desktop
+```
+
+See [docs/integrations.md](integrations.md) for every supported client.
 
 Quick examples:
 
@@ -192,7 +206,7 @@ Audit the registration and local generated state any time a client does not show
 imprint mcp status --site google-flights
 ```
 
-For cleanup or stale `teach` checkpoints, use the interactive flow:
+For registration cleanup, use the interactive flow:
 
 ```bash
 imprint mcp

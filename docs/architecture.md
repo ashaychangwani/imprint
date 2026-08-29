@@ -2,55 +2,56 @@
 
 ## The core idea
 
-Imprint records a real browser session, then compiles it into TWO deterministic artifacts:
+Imprint records a real browser session and turns every credible recorded
+operation into a deterministic tool. The preferred artifact is
+**`workflow.json`**, an API request chain that can use the fast replay backends.
+When the agent finds those paths incompatible with an operation, it can build a
+**`playbook.yaml`** DOM fallback instead.
 
-1. **`workflow.json`** — the captured API call chain, replayable via native `fetch()`. Fast (~200ms), with named captures for cookies, headers, body values, browser-minted state, and agent-declared body-placeholder encoding.
-2. **`playbook.yaml`** — the captured DOM script, replayable via Playwright. Slow (~9s), works everywhere a real browser does.
-
-Both are auto-discovered by the cron daemon and the MCP server, which dispatch through a **backend ladder** that escalates through cheaper-to-costlier replay strategies on `FORBIDDEN` and satisfiable `STATE_MISSING` errors.
+Generated tools are discovered by the cron daemon and MCP server. At runtime,
+they use a **backend ladder** that escalates through the applicable replay
+strategies. The teaching agents choose the tool design; the runtime only
+executes and checks the artifacts.
 
 ## Data flow
 
 ```
-                       ┌──────────────────┐
-                       │  imprint record  │   ← user drives a real Chrome,
-                       └─────────┬────────┘     narrates what they're doing
-                                 ▼
-                       session.json + .jsonl
-                                 │
-              ┌──────────────────┴──────────────────┐
-              ▼                                     ▼
-   ┌─────────────────────┐               ┌──────────────────────┐
-   │ imprint generate    │               │ imprint compile-     │
-   │  (LLM → workflow)   │               │   playbook (LLM)     │
-   └──────────┬──────────┘               └──────────┬───────────┘
-              ▼                                     ▼
-       workflow.json                          playbook.yaml
-              │                                     │
-       imprint emit                                 │
-              │                                     │
-              ▼                                     │
-   ~/.imprint/<site>/<toolName>/index.ts            │
-              │                                     │
-              ▼                                     ▼
-   ┌─────────────────────────────────────────────────────────┐
-   │  imprint cron <site>     ┌─►  backend ladder            │
-   │  imprint mcp-server      │      fetch ─STATE_MISSING→    │
-   │  imprint playbook        │      fetch-bootstrap ─→       │
-   │                          │      cdp-replay ─→            │
-   │                          │      stealth-fetch ─→         │
-   │                          │      playbook                 │
-   └──────────────────────────┴───────────────────────────────┘
+recording
+   │
+   ▼
+redact + summarize + discover the complete operation set
+   │
+   ▼
+tool-boundary advice ──► master-owned editable plan + dependency waves
+   │
+   ▼
+focused plan ──► focused compile ──► factual checks
+   │                                      │
+   │                        failed ────────┘
+   │                          master revises affected tools
+   ▼
+parameter advice ──► independent completion review
+   │
+   ▼
+verified tool directories ──► cron / MCP ──► runtime backend ladder
 ```
+
+`imprint teach` owns this entire teaching flow. It always creates a fresh run,
+stays in the foreground, and returns only after a terminal result. It never
+resumes an old run or exposes phase, primary-tool, or partial-selection modes.
 
 ## Module map
 
 ```
 src/imprint/
 │ ── Orchestration ──
-├── teach.ts             End-to-end pipeline: record → redact → effect-aware triage → [safe-recording replay-and-diff ‖ detect → dependency-aware select] → close replay edges → plan-prereqs → (per-tool: plan-tool → generate) → compile-playbook → emit → register
-├── teach-plan.ts        plan-prereqs step: build plan + level-parallel shared-module build before the per-tool fan-out (multi-tool only)
-├── tool-plan.ts         plan-tool step: per-tool implementation plan (param→field map, request/parse plan, module imports) injected into the compile agent
+├── teach.ts             Thin public entry for the one fresh master-led flow
+├── master-teach-controller.ts  Foreground sequencing, waves, repair loop, checks, and terminal result
+├── master-teach-plan.ts        Editable full tool plan, dependencies, and master-authored build waves
+├── master-teach-agents.ts      Focused advisor, planner, master, and completion-review calls
+├── master-teach-agent-contracts.ts  Exact inputs and outputs for those focused roles
+├── master-teach-store.ts       Fresh run record, plan history, artifacts, and factual receipts
+├── master-teach-checks.ts      Contract, replay, live, and producer-consumer facts
 ├── integrations.ts      Platform registration (Claude Code, Codex, Claude Desktop, OpenClaw, Hermes)
 │
 │ ── Capture ──
@@ -73,8 +74,6 @@ src/imprint/
 │
 │ ── Compile ──
 ├── compile.ts           LLM compiler entry points: generate() + compilePlaybook()
-├── build-plan.ts        Multi-tool build plan: BuildPlan schema + planner (shared modules, per-tool guidance, auth recipe)
-├── prereq-builder.ts    Builds + verifies shared `_shared/*.ts` modules (single-shot LLM → verifySharedModule loop)
 ├── compile-agent.ts     Agentic compile orchestrator (session → workflow.json + parser.ts)
 ├── compile-agent-types.ts  Shared types for compile agent (progress, result)
 ├── agent.ts             General-purpose tool-using agent loop + per-turn/per-tool tracing
@@ -82,7 +81,7 @@ src/imprint/
 ├── codex-cli-compile.ts   Codex CLI compile driver with JSONL per-turn tracing
 ├── compile-tools.ts     Compile-agent read/write/test tools + state hints
 ├── request-context.ts   Shared request metadata compaction for LLM context
-├── tool-candidates.ts   Multi-tool detection from a single recording session
+├── tool-candidates.ts   Operation evidence and initial candidate discovery from one recording
 ├── tool-selection.ts    Tool selection helpers for cron + probe
 ├── llm.ts               Provider wrappers + JSON extraction + trace spans
 ├── tracing.ts           OpenInference/Phoenix tracing helpers
@@ -150,7 +149,13 @@ The **`cdp-replay`** rung is the record-faithful trusted-browser transport for t
 
 **Auth is an agent-compiled action program.** Candidate detection supplies neutral credential-request and related-auth-request evidence. The auth compile agent reads the recording and defines `authConfig.entry` plus arbitrary named actions. Each action lists its scalar parameters and ordered request steps. A step can declare error handling and a recording-grounded `repeat.until` capture with its own interval and attempt bound. Outcomes may declare required capture evidence and are either `pause` (with the next action, exact carried state names, and a caller message) or `success`. `persist` names non-cookie captures that become durable credentials; cookies persist automatically. There are no runtime push/OTP types, phase boundaries, implicit delivery checks, cookie-based completion guesses, or site-shaped auth heuristics.
 
-**Compile and verification are separate stages.** Claude and Codex use the same recording tools and checkpoint protocol. The compile agent writes artifacts but cannot log in directly. For data tools, a separate semantic verifier prepares the live backend with the existing comprehensive probe, then owns execution of the compiler-written `integration.test.ts`. A valid backend preference is reused across compiler revisions; only a missing/invalid preference or a later transport, network, or browser-infrastructure failure invokes the probe. Semantic failures never trigger backend exploration. Final suite and targeted calls pin that preference rather than silently exploring the runtime ladder. The verifier can run discriminating follow-up calls, and its `changes_required` or `inconclusive` report returns to the compiler revision loop. For auth tools, `run_verification` sends one agent-selected action and its parameters to `AuthVerifier`, which reuses its browser and generic continuation by default and returns observed backend/status/body/next-action facts. When those facts show that the prior session is unusable, the agent can request a fresh verification session without changing runtime policy. The orchestrator resumes the same CLI session after each checkpoint. The agent decides from those facts whether to revise the program, prompt the user, wait, reset verification state, run another action, finish, or give up. `done` is accepted only after a live success action, and the verification receipt is bound to the canonical workflow hash so later edits invalidate it.
+**Compile and verification are separate jobs.** A focused compiler writes the
+artifacts for one tool. The foreground controller then runs the applicable
+contract, replay, live, and producer-consumer checks and records observed facts.
+The master decides whether those facts require a change to the tool,
+parameters, dependencies, or replay strategy. Receipts are tied to the exact
+plan and artifact, so an edit makes only the affected proof stale. The final
+reviewer cannot approve a tool without current passing receipts.
 
 **Body encoding is an agent-owned compile decision.** A newly compiled request body containing runtime placeholders must declare `bodyPlaceholderEncoding` as `raw`, `json-string`, or `form-urlencoded`. `Content-Type` is evidence for the compiler, not a runtime classifier. The compiler also writes `request.test.ts`, renders the actual workflow without network access, chooses synthetic edge cases appropriate to the recorded format, and proves round-trip equality. Mixed or nested encodings belong in an agent-authored `request-transform.ts`. The runtime retains its former inference only as a compatibility path for workflows emitted before this contract; re-teaching migrates them to explicit declarations.
 
@@ -217,16 +222,10 @@ The ladder escalates only when every required missing item is satisfiable by the
 ├── workflow.json               output of `imprint generate`
 ├── parser.ts                   API-response → structured output
 ├── request-transform.ts        optional — URL signing / request mutation (may import ../_shared/*)
-├── playbook.yaml               output of `imprint compile-playbook`
+├── playbook.yaml               optional DOM fallback chosen during teaching
 ├── index.ts                    output of `imprint emit` (consumed by cron + MCP)
 ├── cron.json                   schedule + params + replayBackend + notifyWhen
 └── backends.json               output of `imprint probe-backends`
-
-~/.imprint/<site>/_shared/       (multi-tool only — shared modules reused across the site's tools)
-├── <name>.ts                   request-transform / parser-helper / types, imported via ../_shared/<name>.ts
-└── package.json + node_modules  toolchain for verifying the shared modules
-
-~/.imprint/<site>/.build-plan.json   plan sidecar (shared modules + per-tool guidance + auth recipe)
 
 ~/.imprint/<site>/sessions/      (local only — auth tokens / PII)
 ├── <ts>.jsonl                  raw streaming capture
@@ -248,34 +247,19 @@ LLM-facing overview payloads are intentionally compact. Candidate detection, req
 
 **Input-value provenance hints.** Some parameters carry an opaque id (entity handle, place id, category token) minted by an earlier response, not the user's text. The compile agent historically shipped these as the raw param text, which the backend silently ignored. `param-grounding.ts`'s `inputProvenance()` detects these by walking each candidate request's decoded body for id-like leaf values (no whitespace, ≥6 chars, mixes character classes or is a delimited handle) and searching prior responses for the same value. Each match produces an `InputProvenance` record (`path`, `valueSample`, `requestSeq`, `sourceSeq`, `sourceEndpoint`, `selfChain`). `selfChain: true` indicates a resolve-then-refine pattern: the tool's own endpoint minted the id (e.g. a text search returns a place id, which a refined search sends back). These hints are surfaced as `inputProvenanceHints` in the compile agent's session summary, so the compiler chains the minting request and captures the id rather than hardcoding or substituting raw text.
 
-Set `IMPRINT_TRACE=1` with `PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006` to emit OpenInference spans to a local Phoenix server. See [tracing.md](tracing.md) for the full setup and environment variable reference. The trace hierarchy drills into every stage of the compile pipeline:
+Set `IMPRINT_TRACE=1` with `PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006` to emit OpenInference spans to a local Phoenix server. See [tracing.md](tracing.md) for the full setup and environment variable reference. The trace shows the foreground teach and its focused jobs; exact children depend on the provider and any repairs the master requests:
 
 ```
 cli.teach (AGENT)
-├─ teach.combine_sessions (CHAIN)          ← from-scratch: merge sibling recordings (session/request/narration counts)
-├─ teach.record (CHAIN)                    ← live capture (event count)
-├─ teach.redact (CHAIN)                    ← credential/PII scrub (redaction stats)
-├─ compile.triage_requests (RETRIEVER)
-│   └─ llm.analyze (LLM)
-├─ teach.detect_tool_candidates (AGENT)
-│   └─ llm.analyze (LLM)
-├─ teach.plan_prereqs (AGENT)              ← multi-tool: build plan + shared modules
-│   ├─ llm.analyze (LLM)                       (planner)
-│   └─ teach.build_shared_module (AGENT)       (plan-first + verify cycles; independent modules concurrent)
-│       └─ llm.analyze (LLM)
-├─ teach.plan_tool (AGENT)                 ← per-tool implementation plan (sibling of that tool's compile.generate)
-│   └─ llm.analyze (LLM)
-├─ compile.generate (AGENT)
-│   ├─ agent.turn.1 (CHAIN)           ← per-turn token counts
-│   │   ├─ llm.message_with_tools (LLM)  ← model, tokens, stop reason
-│   │   ├─ agent.tool.read_session_summary (TOOL)
-│   │   └─ agent.tool.write_file (TOOL)
-│   ├─ agent.turn.2 (CHAIN)
-│   │   └─ ...
-│   └─ ...
-└─ compile.playbook (CHAIN)
-    ├─ compile.triage_requests (RETRIEVER)
-    └─ llm.analyze (LLM)
+├─ recording, redaction, triage, and candidate discovery
+├─ focused advisor and master decisions
+├─ focused planning and compilation for each planned tool
+│   ├─ agent.turn.N
+│   │   ├─ llm.message_with_tools
+│   │   └─ agent.tool.X
+│   └─ contract, replay, live, and chain checks
+├─ focused repairs and parameter advice when needed
+└─ independent completion review
 ```
 
 The `audit` verb traces its own tree, so a failing acceptance run is debuggable in isolation:
@@ -290,7 +274,9 @@ The `audit.session` span carries the audit result and, when supplied by the prov
 
 Each `agent.turn.N` span records per-turn input/output tokens and stop reason. Each `llm.message_with_tools` span records model, provider, token counts, and which tools the model called. Each `agent.tool.X` span records tool execution time, result size, and (when `IMPRINT_TRACE_TOOL_IO=1`) the input arguments and output.
 
-Stage spans carry their own end-attributes for fast triage: `teach.record` (`imprint.record.event_count`), `teach.redact` (`imprint.redact.*` counts), `teach.combine_sessions` (`imprint.combine.{session,request,narration}_count`), and `teach.plan_tool` (`imprint.tool_plan.chars` / `.skipped`). Opening the `cli.teach` trace lets you locate the failing stage by span status/attrs — a `teach.plan_prereqs` timeout, a `teach.build_shared_module` with `ok=false`, an empty `teach.plan_tool`, or a `compile.generate` that gave up.
+Open the `cli.teach` trace to find a slow or failing focused job. The fresh run
+directory remains the source of truth for the current plan, artifact history,
+factual receipts, and terminal result.
 
 Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise. Imprint emits the prompt-cache split (`cache_read`/`cache_creation`) using OpenInference attributes; Phoenix owns model pricing and rolls span costs up to trace and project levels. `scripts/analyze-phoenix.ts` requires Phoenix 11.4+, reads GraphQL `costSummary`, paginates complete traces, and distinguishes pending calculations from unpriced or partial costs rather than showing any of them as zero. See [tracing.md](tracing.md) for the full attribute reference.
 
@@ -302,53 +288,45 @@ Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts
 - `.compile-log.json`, `.compile-done.json`, `.compile-give-up.json` — compile-agent transcript + sentinels (gitignored).
 - `.live-verifier-log.jsonl`, `.live-verification-evidence.json`, `.live-verification.json` — crash-safe verifier events, sanitized backend/suite/call receipts, and the final semantic report. A suite receipt is created before Bun starts and survives failure, timeout, or abort even when no individual call completes. Labels are diagnostic only; semantic reports do not cite evidence IDs.
 
-## Multi-tool shared modules (plan-prereqs)
+## Fresh master teach flow
 
-Candidate selection is graph-aware. The candidate agent declares direct
-callable prerequisites as `dependsOnTools`; unambiguous `dependencySeqs` add
-recording-grounded structural edges without inventing dependencies for shared,
-unowned, or self-owned request seqs. After replay finishes,
-`deriveTokenContractHints` runs against the full detected candidate set and adds
-grounded producer-token edges before candidate checkpoints are written. Every
-selection is then closed transitively over those dependencies. All candidates
-start selected, including non-interactive runs; `--primary-tool` selects the
-primary candidate plus its prerequisites. Dependency cycles are retained once
-and reported instead of recursing indefinitely.
+The public teaching path is one fresh foreground controller:
 
-When the resulting selection contains **two or more** tools, `imprint teach` inserts a `plan-prereqs` step between candidate selection and the per-tool compile fan-out. Single-tool recordings skip it entirely (the path is unchanged). Set `IMPRINT_NO_BUILD_PLAN=1` to disable it and compile every tool independently.
+1. It resolves the requested recording, or records a new one, then redacts and
+   summarizes it.
+2. Candidate discovery proposes every credible user-facing operation.
+3. A focused tool-boundary advisor reviews that complete proposal.
+4. The master writes the editable final tool plan. It may merge, split, rename,
+   add, or remove an unsupported duplicate, but it must account for every
+   credible discovered operation and explain its decisions.
+5. The master writes explicit build waves. Every planned tool appears exactly
+   once, and every producer is in an earlier wave than its consumers.
+6. A focused planner receives only one tool, its relevant recording evidence,
+   its dependencies, and the exact artifact contract.
+7. A fresh focused compiler builds that tool. Independent tools in the same
+   master-authored wave may compile in parallel.
+8. The controller records contract, replay, live, and producer-consumer results
+   as factual receipts. A playbook replay check is not applicable, not a
+   failure.
+9. After a tool passes, a focused parameter advisor reviews the public parameter
+   choices. Its advice is not authoritative.
+10. A failed check or useful advisor suggestion returns to the master. A changed
+    tool invalidates only itself and the consumers that depend on it. Unrelated
+    verified tools stay current.
+11. A fresh independent reviewer sees the current plan, result evidence, and
+    immutable check history. Completion is rejected while any planned tool is
+    missing a current verified build.
 
-The step does two things, once per teach, before the fan-out:
+The agents own semantic decisions: tool boundaries, parameters, request
+sequences, dependencies, authentication, and API-versus-playbook strategy. The
+controller only performs mechanical work: validates the plan and wave ordering,
+runs focused jobs and checks, tracks what became stale after a revision, and
+reports the terminal outcome.
 
-1. **Plan** (`build-plan.ts`, single-shot `llm.analyze` against `prompts/build-planning.md`) — produces a `BuildPlan`: the shared modules to create (`request-transform` signing, `parser-helper` decoders, shared `types`), per-tool guidance (load-bearing seqs, parser guidance, parameter checklist), an `authRecipe` each tool replicates inline, and the cross-tool **opaque-token contract** (consumer `tokenParams` ⇄ producer `emitsTokens`). The contract is not left to the planner's discretion: `deriveTokenContractHints` first walks the dual-pass classifications **deterministically** — any value with recovered producer provenance sent by one tool but produced in a *different* tool's response (matched by `producerSeq`/`originalSeq` → owning tool via `requestSeqs`; `header:` session tokens and shared/ambiguous seqs skipped) — and feeds those grounded edges into the planner payload. Provenance covers two cases: a `server_derived` value (it *varied* across the two replay passes and was found in a prior response) and a stable `constant` whose **opaque** value also appears in a prior response. The latter matters because the dual-pass replays the *same* flow, so a per-entity token (same hotel → same id) is identical across passes and classified `constant` — its provenance is recovered by searching the recorded responses, since variance alone can't reveal it. (`producerSeq` is normalized to original-seq space: `searchPriorResponses` over the replay returns a replay seq, which is translated back via the alignment pairs so capture hints and token detection resolve the owning tool correctly.) After the planner returns, `reconcileTokenContracts` re-applies the same edges to the parsed plan: it injects any contract the planner dropped and repairs half-declared ones (a `tokenParam` whose producer forgot the matching `emitsTokens`, which `superRefine` would otherwise reject), so a planner shortcut can't silently lose a chain. The plan is persisted to `~/.imprint/<site>/.build-plan.json`.
-
-**General dependency contract (`requiredInputs`).** Cross-tool tokens are one of *several* input classes a tool's request needs, and the header-blind "keep headers minimal" heuristic used to drop the others (auth tokens, gateway/session headers, the page a request was issued from) and ship tools that fail at runtime. `deriveRequiredInputHints` generalizes the token detector to surface **every** non-param input deterministically, attributing each by source — purely from structural signals (the dual-pass taxonomy, `loginRequestSeqs`, producer ownership, value shape, page-minted detection), never a header name or URL literal:
-  - **`auth`** — a value minted by the login flow's response (`producerSeq ∈ loginRequestSeqs`) → wired `${credential.X}`; the deriver also seeds the matching `authTool.captures` entry, and `authExternalVerification` requires the auth workflow to name it in `authConfig.persist` so the data tool's header resolves at runtime.
-  - **`producer_tool`** — the same cross-tool edge as `tokenParams`/`emitsTokens` (kept in sync by `validateBuildPlan`), wired as a param.
-  - **`browser_state`** — a value an earlier response or the originating page mints; a reused-in-session value is captured as `${state.X}`, and a request that runs **cross-origin** from its originating page (`findOriginatingPage` = `Referer` or the last Document navigation) emits a `referer` input carrying a `bootstrap.url`.
-  - **`generated`** — a per-call value with no producer, its kind inferred by SHAPE (`uuid`/`epoch_ms`/`epoch_s`/`iso8601`/`nonce`) → wired `${generated.KIND}`, which `runtime.ts` mints fresh on every substitution.
-  - **`static`** — a high-entropy constant / page-minted app key → emitted as a verbatim literal (not a per-user secret).
-`reconcileRequiredInputs` re-injects any grounded input the planner dropped (mirroring `reconcileTokenContracts`). At compile time `externalVerification` **deterministically injects** a dropped contracted input (`injectContractedInputs` — credential/static/generated headers, plus `bootstrap.url` for a referer input), then **blocks** if a non-producer contracted input is still unwired (`contractedInputGate`); a live failure that coincides with an unresolved contracted input is classified `contract-gap` (a workflow-correctness error to fix), NOT `waived-bot`. Fan-out ordering (`topoLevelsForTools`) adds the producer→consumer and data→auth edges from the contract.
-
-**Redaction policy + emit-time secret guard.** To wire an auth/session/gateway header the compile agent must be able to *read* its value — so the compile-path redaction no longer scrubs sensitive-header values by default (credential placeholdering and free-form PII redaction still run; re-enable the legacy blanket scrub with `IMPRINT_REDACT_SENSITIVE_HEADERS=1`, and `imprint redact`'s shareable output always applies it). The agent reads real values on demand via the **`reveal_request`** tool (unredacted request+response straight from the recording). Two guards keep secrets out of shipped artifacts: `reveal_request`'s contract tells the agent to emit placeholders, and **`assertNoRawSecrets`** (run after injection) scans `workflow.json`/`parser.ts` for the recording's own sensitive-header + credential values — auto-rewriting a value that maps to a contracted placeholder, blocking any other. (See [security.md](security.md).)
-2. **Build prereqs** (`prereq-builder.ts`) — each shared module is built in two phases. First a **planning pass** (`prompts/prereq-planner.md`, one `llm.analyze`) decodes the recorded sources into a Markdown implementation plan — data shape, per-export algorithm, the exact `noUncheckedIndexedAccess` guards, test plan, risks — persisted to `_shared/<name>.plan.md`. That plan is then injected into an **implement → `verifySharedModule` → feedback loop** (up to 5 cycles, the same shape `compilePlaybook` uses, so it works on every provider) that writes `~/.imprint/<site>/_shared/<name>.ts` plus a test. Planning is best-effort (any failure degrades to implementing without a plan), skipped for `types` modules, and disabled by `IMPRINT_NO_PREREQ_PLAN=1`. Modules build **level-by-level**: those in the same dependency level (no `dependsOn` edge between them) build concurrently under a small cap, while a dependent waits for its dependency's level. `verifySharedModule` is the anti-cheat gate: the module must export what the plan declared, its test must pass with non-trivial assertions, it must typecheck (`tsc` under `strict` + `noUncheckedIndexedAccess`, a gate separate from the test), and a kind-specific ground-truth anchor must reproduce recorded behavior (e.g. a `request-transform` must re-sign a recorded URL to the captured value). Each failed cycle logs which gate blocked it (typecheck / test / anchor).
-
-Each per-tool compile agent then receives its plan slice via a new `read_build_plan` tool (threaded by file path through all three compile drivers — in-process, claude-cli, codex-cli) and **must import the assigned shared modules** rather than re-implementing them: `request-transform` → `workflow.json`'s `requestTransformModule: "../_shared/<name>.ts"`; `parser-helper`/`types` → an import in `parser.ts`. `externalVerification` enforces this — a tool that ignores an assigned (verified) module fails the gate. The same slice carries the opaque-token contract: a **producer** sees its `emitsTokens` (fields its parser must emit for siblings, in the exact consumable shape) and a **consumer** sees its `tokenParams` (`{param, sourceTool, sourceField}`) so it writes the chained `param:<param>` test up front. Both sides are enforced: `externalVerification` fails a producer whose `parser.ts` does not emit a declared `emitsTokens` field (so the contracted name can't silently diverge — e.g. the plan says `hotel_id` but the parser emits `propertyToken`), and fails a consumer whose token param lacks a chained test (`unchained`). The contract is surfaced to the agents, not just validated in the plan — without it the producer would emit its own field name and the chain would break at the consumer's gate where it can't be fixed.
-
-**Why auth is plan-carried, not a shared file.** Login is request data (request[0] + captures) embedded inline by `emit`, and the runtime has no sub-workflow include primitive, so a shared `_shared/auth.ts` cannot be composed. Instead the plan's `authRecipe` describes the exact login + `${state.X}` capture chain.
-
-Whenever neutral candidate evidence contains credential requests, related auth requests, or credential names, the planner emits one standalone **`authTool`** (`authenticate_<site>`). The plan carries only request-sequence evidence and durable credential names; it does not classify the protocol. The auth compile agent derives the action graph from the recording. Data tools set `dependsOnAuth: true` and reuse the stored session instead of replaying login inline. This is why the build planner (`plan-prereqs`) runs whenever auth evidence exists, not only for ≥2 selected tools. `authRecipe` remains the inline fallback for tools when no auth tool was built (for example, credentials unavailable).
-
-**Graceful degrade.** A shared module the builder cannot verify within its cycle budget is marked `verified: false` and pruned from every tool's `usesSharedModules` for that run; the import-assertion never fires on it, and those tools fall back to inlining the logic (today's behavior). A module's relative-path import (`../_shared/<name>.ts`) resolves at runtime because the runtime resolves `parserModule`/`requestTransformModule` relative to each tool's `workflow.json`, and the whole site directory (including `_shared/`) travels together on install/bundle.
-
-## Per-tool plan → execute (plan-tool)
-
-The overall shape is **plan + build shared modules once → for each tool, plan then execute**. After the global `plan-prereqs` step, each tool's compile is preceded by its own short planning pass (`tool-plan.ts`, one `llm.analyze` against `prompts/tool-planning.md`). Tools compile concurrently, but **producer-before-consumer**: when the build plan declares a token contract (a consumer's `tokenParams` sourced from a producer's `emitsTokens`), the producer compiles in an earlier level so the consumer's chained verification test can mint a fresh token from the producer's live `workflow.json` (`topoLevelsForTools`; with no contracts every tool lands in one level — unchanged). The plan→execute is sequential *within* a single tool.
-
-The per-tool plan is grounded in the recording for **that tool only**: the candidate (its parameters, request seqs, dependency seqs), its slice of the global build plan (`parserGuidance` / `paramChecklist` / `authRecipe` / assigned shared modules), and the compacted request/response context for the tool's seqs. The planner returns a concise Markdown plan covering param→recorded-field mapping, request construction (referencing the assigned `request-transform` module by import path), response parsing (exact JSON paths, referencing the assigned `parser-helper`), the shared modules to import, and edge cases. The plan is persisted to `~/.imprint/<site>/<toolName>/.tool-plan.md` and injected into the compile agent's initial message (via `formatToolPlan`, shared verbatim by all three drivers) so the compile follows it instead of re-deriving structure.
-
-It is **best-effort**: a 5-minute timeout, a missing prompt, or any error yields no plan and the compile proceeds exactly as before. Disable it with `IMPRINT_NO_TOOL_PLAN=1`. (The shared-module plan cap is the longer one — 10 minutes — since it analyzes the whole merged recording across all tools.)
-
-This replaced an earlier per-tool **contract-test feedback loop** (compile → run generated contract tests → feed `tool_broken` findings back → recompile). That loop did not measurably raise accuracy and added significant complexity, so it was removed in favor of the single plan→execute pass plus the post-hoc `imprint audit` gate (below). See [decisions.md](decisions.md).
+A teach command never resumes an earlier run. Old run directories are
+diagnostic evidence only. The command stays in the foreground until it reports
+completed, blocked, failed, cancelled, or provider unavailable. Only completed
+exits successfully.
 
 ## Acceptance gate (`imprint audit`)
 

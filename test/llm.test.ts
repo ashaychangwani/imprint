@@ -6,14 +6,12 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { TimeoutError } from '../src/imprint/concurrency.ts';
+import { runOwnedCli } from '../src/imprint/compiler-process.ts';
 import {
   DEFAULT_VERIFICATION_PROVIDER,
   availableModelsForProvider,
-  classifyCliFailure,
   cliStderrTail,
   codexAnalyzeArgs,
-  collectCliProcessOutput,
   detectProvider,
   detectTeachProvider,
   extractJsonObject,
@@ -24,6 +22,14 @@ import {
   preferredAgentModel,
   preferredVerificationModel,
 } from '../src/imprint/llm.ts';
+import {
+  ProviderReportedError,
+  isTransientProviderCapacityError,
+} from '../src/imprint/provider-retry.ts';
+import {
+  parseClaudeTerminalOutput,
+  parseCodexTerminalOutput,
+} from '../src/imprint/provider-terminal.ts';
 
 describe('extractJsonObject', () => {
   it('returns the first balanced object as-is from a bare JSON response', () => {
@@ -87,29 +93,136 @@ describe('normalizeCliAnalyzeOutput', () => {
   });
 });
 
-describe('collectCliProcessOutput', () => {
-  it('drains stdout and stderr concurrently so verbose CLI stderr cannot deadlock', async () => {
-    const proc = Bun.spawn(
+describe('structured CLI provider failures', () => {
+  it('surfaces Claude errors-only output before missing-result or exit reduction', () => {
+    const error = parseClaudeTerminalOutput(
+      JSON.stringify({ type: 'result', is_error: true, errors: ['529 provider overloaded'] }),
+    ).providerError;
+    expect(error).toBeInstanceOf(ProviderReportedError);
+    expect(isTransientProviderCapacityError(error)).toBe(true);
+  });
+
+  it('preserves deterministic Claude facts when a transient status is also present', () => {
+    const error = parseClaudeTerminalOutput(
+      JSON.stringify({
+        type: 'result',
+        is_error: true,
+        api_error_status: 429,
+        errors: ['insufficient_quota'],
+      }),
+    ).providerError;
+    expect(error).toBeInstanceOf(ProviderReportedError);
+    expect(isTransientProviderCapacityError(error)).toBe(false);
+  });
+
+  it('extracts Codex final output and provider terminal facts from JSONL', () => {
+    expect(
+      parseCodexTerminalOutput(
+        [
+          JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),
+          JSON.stringify({
+            type: 'item.completed',
+            item: { type: 'agent_message', text: '{"ok":true}' },
+          }),
+          JSON.stringify({ type: 'turn.completed' }),
+        ].join('\n'),
+      ),
+    ).toMatchObject({ text: '{"ok":true}', sessionId: 'thread-1' });
+
+    const failed = parseCodexTerminalOutput(
+      JSON.stringify({
+        type: 'turn.failed',
+        status: 529,
+        error: { code: 'overloaded', message: 'provider unavailable' },
+      }),
+    );
+    expect(failed.providerError).toBeInstanceOf(ProviderReportedError);
+    expect(isTransientProviderCapacityError(failed.providerError)).toBe(true);
+
+    const contradicted = parseCodexTerminalOutput(
       [
-        'bun',
+        JSON.stringify({ type: 'error', status: 529, error: { code: 'overloaded' } }),
+        JSON.stringify({
+          type: 'turn.failed',
+          error_code: 'insufficient_quota',
+        }),
+      ].join('\n'),
+    );
+    expect(isTransientProviderCapacityError(contradicted.providerError)).toBe(false);
+  });
+
+  it('treats stringified Codex failure messages as diagnostic-only', () => {
+    const nested = JSON.stringify({
+      error: {
+        status: 529,
+        code: 'overloaded_error',
+        message: 'provider temporarily unavailable',
+      },
+    });
+    const parsed = parseCodexTerminalOutput(
+      [
+        JSON.stringify({
+          type: 'item.completed',
+          item: { type: 'agent_message', text: 'target returned HTTP 429 invalid API key' },
+        }),
+        JSON.stringify({ type: 'turn.failed', message: nested }),
+      ].join('\n'),
+    );
+    expect(isTransientProviderCapacityError(parsed.providerError)).toBe(false);
+
+    const trusted = parseCodexTerminalOutput(
+      JSON.stringify({
+        type: 'turn.failed',
+        provider: 'openai',
+        provider_error: { status: 529, code: 'overloaded_error' },
+      }),
+    );
+    expect(isTransientProviderCapacityError(trusted.providerError)).toBe(true);
+  });
+
+  it('never lets stderr or stringified nested facts declare provider disposition', () => {
+    const transient = JSON.stringify({
+      type: 'turn.failed',
+      status: 429,
+      error: JSON.stringify({ code: 'insufficient_quota' }),
+    });
+    expect(
+      isTransientProviderCapacityError(
+        parseCodexTerminalOutput(transient, 'MCP tool: invalid API key').providerError,
+      ),
+    ).toBe(true);
+    const codex = parseCodexTerminalOutput(transient, 'codex provider error: invalid API key');
+    expect(isTransientProviderCapacityError(codex.providerError)).toBe(true);
+
+    const claudeStderr = parseClaudeTerminalOutput(
+      JSON.stringify({ type: 'result', result: '{"ok":true}' }),
+      'claude provider error: 529 overloaded\ninvalid API key',
+    );
+    expect(claudeStderr.providerError).toBeUndefined();
+    expect(claudeStderr.text).toBe('{"ok":true}');
+
+    const claude = parseClaudeTerminalOutput(
+      JSON.stringify({
+        type: 'result',
+        is_error: true,
+        result:
+          'I am unable to respond to this request because it appears to violate our Usage Policy.',
+        errors: ['insufficient_quota'],
+      }),
+    );
+    expect(claude.interruption).toBeUndefined();
+    expect(isTransientProviderCapacityError(claude.providerError)).toBe(false);
+  });
+});
+
+describe('owned CLI process', () => {
+  it('drains stdout and stderr concurrently so verbose CLI stderr cannot deadlock', async () => {
+    const result = await runOwnedCli({
+      command: 'bun',
+      args: [
         '-e',
         "const chunk = 'x'.repeat(1024); for (let i = 0; i < 2048; i++) process.stderr.write(chunk); process.stdout.write('ok');",
       ],
-      { stdout: 'pipe', stderr: 'pipe' },
-    );
-    if (
-      typeof proc.stdout === 'number' ||
-      typeof proc.stderr === 'number' ||
-      !proc.stdout ||
-      !proc.stderr
-    ) {
-      throw new Error('test process did not expose streams');
-    }
-
-    const result = await collectCliProcessOutput({
-      stdout: proc.stdout,
-      stderr: proc.stderr,
-      exited: proc.exited,
     });
 
     expect(result.exitCode).toBe(0);
@@ -117,120 +230,33 @@ describe('collectCliProcessOutput', () => {
     expect(result.stderr.length).toBe(2048 * 1024);
   });
 
-  it('kills a CLI process when collection times out', async () => {
-    const proc = Bun.spawn(['bun', '-e', 'setTimeout(() => process.stdout.write("late"), 2000);'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    if (
-      typeof proc.stdout === 'number' ||
-      typeof proc.stderr === 'number' ||
-      !proc.stdout ||
-      !proc.stderr
-    ) {
-      throw new Error('test process did not expose streams');
-    }
+  it('kills and settles an active CLI provider call when directly aborted', async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error('direct cancellation')), 20);
 
-    const events: string[] = [];
     await expect(
-      collectCliProcessOutput(
-        {
-          stdout: proc.stdout,
-          stderr: proc.stderr,
-          exited: proc.exited,
-          kill: proc.kill.bind(proc),
-        },
-        {
-          timeoutMs: 10,
-          timeoutLabel: 'unit cli',
-          onEvent: (event) => events.push(event.type),
-        },
-      ),
-    ).rejects.toBeInstanceOf(TimeoutError);
-
-    expect(events).toContain('process.timeout');
-    expect(await proc.exited).not.toBe(0);
+      runOwnedCli({
+        command: 'bun',
+        args: ['-e', 'process.on("SIGTERM",()=>{});setInterval(() => {}, 1000)'],
+        signal: controller.signal,
+        shutdownGraceMs: 20,
+      }),
+    ).rejects.toThrow('direct cancellation');
   });
 
-  it('does not hang when a CLI stream stays open after the process exits', async () => {
-    let stdoutController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const stdout = new ReadableStream<Uint8Array>({
-      start(controller) {
-        stdoutController = controller;
-        controller.enqueue(new TextEncoder().encode('ok'));
-      },
-      cancel() {
-        stdoutController = undefined;
-      },
+  it('delivers the final JSONL line when it has no newline', async () => {
+    const lines: string[] = [];
+    const result = await runOwnedCli({
+      command: 'bun',
+      args: ['-e', 'process.stdout.write(JSON.stringify({type:"turn.completed"}))'],
+      onStdoutLine: (line) => lines.push(line),
     });
-    const stderr = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.close();
-      },
-    });
-    const events: string[] = [];
-
-    const result = await collectCliProcessOutput(
-      {
-        stdout,
-        stderr,
-        exited: Promise.resolve(0),
-      },
-      { timeoutMs: 5000, onEvent: (event) => events.push(event.type) },
-    );
-
-    expect(result).toEqual({ stdout: 'ok', stderr: '', exitCode: 0 });
-    expect(events).toContain('process.stream_abandoned');
-    expect(stdoutController).toBeUndefined();
-  });
-
-  it('falls back to PID liveness when Bun does not observe CLI exit', async () => {
-    const proc = Bun.spawn(['bun', '-e', 'process.stdout.write("ok")'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    if (
-      typeof proc.stdout === 'number' ||
-      typeof proc.stderr === 'number' ||
-      !proc.stdout ||
-      !proc.stderr
-    ) {
-      throw new Error('test process did not expose streams');
-    }
-    const events: string[] = [];
-
-    const result = await collectCliProcessOutput(
-      {
-        stdout: proc.stdout,
-        stderr: proc.stderr,
-        exited: new Promise<number>(() => undefined),
-        pid: proc.pid,
-      },
-      { timeoutMs: 5000, onEvent: (event) => events.push(event.type) },
-    );
-
-    expect(result).toEqual({ stdout: 'ok', stderr: '', exitCode: 0 });
-    expect(events).toContain('process.exit_unobserved');
+    expect(result.exitCode).toBe(0);
+    expect(lines).toEqual([JSON.stringify({ type: 'turn.completed' })]);
   });
 });
 
 describe('CLI provider failure diagnostics', () => {
-  it('classifies input-too-large errors without depending on a provider name', () => {
-    expect(
-      classifyCliFailure(
-        'Error: turn/start failed: Input exceeds the maximum length of 1048576 characters.',
-      ),
-    ).toBe('input_too_large');
-  });
-
-  it('classifies Claude subscription access failures', () => {
-    expect(
-      classifyCliFailure(
-        'Your organization has disabled Claude subscription access for Claude Code. Use an Anthropic API key instead.',
-      ),
-    ).toBe('subscription_access_disabled');
-  });
-
   it('keeps only the stderr tail for verbose CLI failures', () => {
     const stderr = `${'prompt echo '.repeat(500)}final error`;
     const tail = cliStderrTail(stderr, 32);
@@ -248,6 +274,7 @@ describe('codexAnalyzeArgs', () => {
     expect(args).toContain('--ignore-rules');
     expect(args).toContain('--skip-git-repo-check');
     expect(args).toContain('--ephemeral');
+    expect(args).toContain('--json');
     expect(args.slice(args.indexOf('-m'), args.indexOf('-m') + 2)).toEqual(['-m', 'gpt-test']);
   });
 });

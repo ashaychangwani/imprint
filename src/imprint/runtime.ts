@@ -164,6 +164,8 @@ interface ExecuteOptions {
   signal?: AbortSignal;
   /** Disable auth cookie/secret writes during offline request rendering. */
   persistAuthState?: boolean;
+  /** Internal observation hook used by offline rendering after transforms run. */
+  onPreparedRequest?: (requestIndex: number) => void;
 }
 
 interface ResponseSlot {
@@ -303,6 +305,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 
     const cookieHeader = cookieJar.getCookieHeader(subbed.url);
     if (cookieHeader && !hasHeader(subbed.headers, 'cookie')) subbed.headers.cookie = cookieHeader;
+    opts.onPreparedRequest?.(i);
 
     let resp: Response;
     let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
@@ -647,6 +650,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     const cookieHeader = cookieJar.getCookieHeader(request.url);
     if (cookieHeader && !hasHeader(request.headers, 'cookie'))
       request.headers.cookie = cookieHeader;
+    opts.onPreparedRequest?.(requestIndex);
 
     let response: Response;
     let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;

@@ -27,7 +27,7 @@ bun install -g imprint-mcp
 imprint teach southwest --url https://www.southwest.com
 ```
 
-A browser opens. You drive the workflow and narrate what you're doing. Imprint records every request and interaction, then compiles a deterministic **MCP tool** your agent can call forever.
+A browser opens. You drive the workflows and narrate what you're doing. Imprint records every request and interaction, then compiles the complete discovered set of deterministic **MCP tools** your agent can call later.
 
 Want to try a finished MCP before recording anything?
 
@@ -81,7 +81,7 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 </td>
 <td align="center" width="33%">
 <h3>2. Compile</h3>
-<p>Generates two replay artifacts:<br><br><code>workflow.json</code> — API-level replay<br><code>playbook.yaml</code> — DOM-level fallback<br><br>Credentials are redacted automatically.</p>
+<p>Builds an API workflow when the recording supports one. A DOM playbook is the final fallback, used only when the agent finds the faster replay paths incompatible.<br><br>Credentials are redacted automatically.</p>
 </td>
 <td align="center" width="34%">
 <h3>3. Use</h3>
@@ -91,12 +91,20 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 </table>
 
 > [!TIP]
-> All three steps happen in a single `imprint teach` command. Credentials and PII are redacted automatically before anything reaches the LLM.
+> Recording and compilation happen in one foreground `imprint teach` command. Install the completed tools in your MCP client with `imprint install`. Credentials and PII are redacted automatically before anything reaches the LLM.
 
-When one recording yields multiple tools, all candidates are selected by default.
-Imprint automatically includes upstream lookup/producer tools required by any
-selected downstream tool. Use `--primary-tool` to compile only the primary tool
-and its prerequisites; `--all-tools` makes the default full-set selection explicit.
+For every teach, a master agent accounts for the complete discovered operation
+set. Focused advisors review tool boundaries and parameters, focused planners
+map one tool at a time, and focused compilers build one tool at a time. The
+master chooses the build waves: independent tools can run together, while a
+producer runs before its consumers. Failed checks return factual evidence to
+the master, which can revise the affected tool and its dependants without
+rebuilding unrelated tools.
+
+Every teach is fresh and stays in the foreground until it reaches a terminal
+result. There are no resume, phase-window, primary-tool, or partial-selection
+modes. A run succeeds only when every planned tool is verified; otherwise the
+terminal reports the failure honestly and exits non-zero.
 
 The recorder also has a bounded fallback for Next.js React Server Component
 responses that Chromium evicts before `Network.getResponseBody` can read them.
@@ -196,21 +204,28 @@ The full order is `fetch → fetch-bootstrap → cdp-replay → stealth-fetch �
 
 For bot-protected sites, `imprint probe-backends <site> --tool <toolName>` writes a `backends.json` preference cache so cron and MCP start from the known-good backend instead of rediscovering blocked rungs. Use `imprint probe-backends <site> --all` to refresh every tool in a multi-tool site; `imprint mcp status` reports stale or invalid backend caches before they quietly fall back to the default ladder. CDP replay records both cold and warm timings when it succeeds: a timeout-safe cold start may rank by its fast warm runtime, but a cold start above the preferred threshold stays behind cold-safe backends in durable cache order.
 
-During `imprint teach`, the independent final verifier uses the same probe before it runs the compiler-written integration suite. Probe time is separate from the suite timeout, and verification pins the selected backend. Compiler revisions reuse that proven preference without probing; only a transport/network/browser failure can prompt a reprobe. Semantic failures return directly to the compiler. Live verifier progress and retained suite receipts are written beside the generated tool as `.live-verifier-log.jsonl` and `.live-verification-evidence.json`.
+During `imprint teach`, each tool goes through contract, replay, live, and
+producer-consumer checks as applicable. The checks leave factual receipts. A
+failure goes back to the master for a focused repair, and an independent final
+reviewer sees both the current plan and the check history before the run can
+complete.
 
-Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder always has a DOM fallback.
+The agent prefers an API `workflow.json`. It adds `playbook.yaml` only as the
+last fallback when the higher replay rungs are not compatible with the
+recorded operation.
 
 ---
 
 ## Platform Support
 
-At the end of `imprint teach`, pick your AI platform and Imprint wires it up:
+After `imprint teach` completes, register the generated site with
+`imprint install <site> --platform <platform>`:
 
 | Platform | Integration |
 |:--|:--|
-| **Claude Code** | Automatic — runs `claude mcp add` |
-| **Codex CLI** | Automatic — runs `codex mcp add` |
-| **Claude Desktop** | Paste-ready JSON config |
+| **Claude Code** | Runs `claude mcp add` |
+| **Codex CLI** | Runs `codex mcp add` |
+| **Claude Desktop** | Writes or prints the MCP config |
 | **OpenClaw** | MCP config + SKILL.md export |
 | **Hermes** | MCP config + SKILL.md + cron mapping |
 
@@ -269,16 +284,20 @@ imprint <command> --help    # per-command options
 
 | Category | Commands |
 |:--|:--|
-| **Pipeline** | `teach` · `record` · `redact` · `generate` · `compile-playbook` · `emit` |
+| **Teaching** | `teach` (the single fresh foreground flow) |
+| **Artifact utilities** | `record` · `redact` · `generate` · `compile-playbook` · `emit` |
 | **Runtime** | `cron` · `mcp-server` · `playbook` · `probe-backends` · `audit` |
 | **Credentials** | `credential set` · `credential list` · `credential export` · `credential import` · `credential migrate` |
 | **Utilities** | `mcp` · `login` · `assemble` · `check` · `doctor` · `install` · `uninstall` |
+
+The artifact utilities are useful on individual files, but they are not
+resumable phases of `imprint teach`.
 
 ---
 
 ## Sharing Skills
 
-Teach on your laptop, ship to a remote agent. Generated MCP folders contain the portable tool artifacts: `workflow.json`, `playbook.yaml`, `index.ts`, optional shared modules, and cron/backend metadata. Copy `~/.imprint/<site>` into the receiver's `~/.imprint/<site>` or commit it to a private repo, install Imprint there, then register it:
+Teach on your laptop, ship to a remote agent. Generated MCP folders contain the portable tool artifacts: `workflow.json` or the fallback `playbook.yaml`, `index.ts`, optional parser/request-transform modules, and cron/backend metadata. Copy `~/.imprint/<site>` into the receiver's `~/.imprint/<site>` or commit it to a private repo, install Imprint there, then register it:
 
 ```bash
 bun install -g imprint-mcp

@@ -22,13 +22,33 @@ You receive `{ site, url, module, availableDependencies, sources, implementation
 ## Output requirements by `kind`
 
 ### `request-transform`
-- Export a `transform` function: `transform(method: string, url: string, responses: unknown[], params?: Record<string, string | number | boolean>): string | { url: string; body?: string }`.
-- It reproduces the site's per-request signing/body logic (e.g. HMAC/MD5/CRC32 + encoding) so the regenerated value matches what the recording sent. Derive the algorithm from `sources` (and any `.js` body included there). Return the URL with the signing param appended (or `{ url, body }` when you must build the body).
-- **The verifier re-signs a recorded URL and checks your output reproduces the recorded signing param.** A no-op that returns the URL unchanged will fail.
+- Export the declared `transform(method, url, responses, params?)` function. Its runtime result is exactly:
+  ```typescript
+  type RequestTransformResult =
+    | string
+    | {
+        url?: string;
+        body?: string;
+        headers?: Record<string, string>;
+        navigation?: {
+          waitUntil?: 'domcontentloaded' | 'load';
+          timeoutMs?: number;
+          pollIntervalMs?: number;
+          urlIncludes?: string;
+          selector?: string;
+          actions?: Array<{ action: 'click'; selector: string }>;
+          resultSelector?: string;
+          cookie?: { name: string; domain?: string; path?: string };
+        };
+        skip?: boolean;
+      };
+  ```
+- Derive any URL, body, header, navigation, or conditional-request change from `sources`. A string replaces only the URL. Object fields patch only the fields present; `headers` are merged, `navigation` is merged, and `skip: true` omits that request.
+- The host checks the declared runtime export, runs the authored test, and typechecks the module. It does not infer which recorded value is a signature or independently re-run a guessed signing algorithm. Focused planning/review agents judge whether the authored test proves the intended behavior.
 
 ### `parser-helper`
 - Export the functions in `exportSignatures` (decoders / normalizers / field mappers shared across tools).
-- They must produce non-empty structured output when applied to a recorded `responseBody` from `sources`.
+- Use recorded response evidence in the authored test. The host does not guess which response or output shape should be load-bearing; focused agents judge behavioral adequacy.
 
 ### `types`
 - Export the interfaces / type aliases in `exportSignatures`. Type-only modules need no test (omit `"test"` or set it to `""`).
@@ -52,8 +72,8 @@ You receive `{ site, url, module, availableDependencies, sources, implementation
   const recordedRequestBody = req?.body ?? req?.requestBody;
   ```
 - Recorded request bodies may be stored as either `body` or `requestBody` depending on the session writer/version. Shared-module tests that read the session file MUST use `req.body ?? req.requestBody` instead of assuming only one field.
-- At least 3 meaningful `expect()` assertions referencing real recorded values. No tautologies (`expect(true).toBe(true)` is rejected).
-- For `request-transform`: strip the signing param from a recorded URL, call `transform`, and assert the regenerated param equals the recorded value.
+- Write several meaningful `expect()` assertions referencing real recorded values. Do not use tautologies such as `expect(true).toBe(true)`: the host executes the authored suite and reports its exit result, while the focused agents remain responsible for deciding whether the evidence is convincing.
+- For `request-transform`: inspect the declared source sequences, identify the exact bytes or fields the transform is meant to produce, call `transform`, and assert that its output reproduces those recorded facts. Do not infer a value's role from its name, length, or shape. The host runs and typechecks this test; independent agents judge whether it is sufficient.
 - For `parser-helper`: call the helper on a recorded `responseBody` and assert concrete fields.
 
 ## Rules

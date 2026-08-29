@@ -2,8 +2,17 @@
  *  user payload → raw model text. */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { withTimeoutCleanup } from './concurrency.ts';
-import { type ProviderRetryEvent, retryTransientProviderFailure } from './provider-retry.ts';
+import { runOwnedCli } from './compiler-process.ts';
+import {
+  ProviderReportedError,
+  type ProviderRetryEvent,
+  type RunDeadlineRef,
+  boundedRunDeadline,
+  providerControlError,
+  resolvedRunDeadline,
+  retryTransientProviderFailure,
+} from './provider-retry.ts';
+import { parseClaudeTerminalOutput, parseCodexTerminalOutput } from './provider-terminal.ts';
 import {
   llmSpanAttributes,
   resolveTraceTokenCount,
@@ -43,26 +52,18 @@ interface LLMProvider {
   ): Promise<AnalyzeResult>;
 }
 
-interface CliProcessWithOutput {
-  stdout: ReadableStream<Uint8Array>;
-  stderr: ReadableStream<Uint8Array>;
-  exited: Promise<number>;
-  kill?: () => void;
-  pid?: number;
-}
-
-const CLI_STREAM_EXIT_GRACE_MS = 1000;
-const CLI_PID_POLL_INTERVAL_MS = 250;
-
 interface AnalyzeInvocationOptions {
   timeoutMs?: number;
+  deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
   timeoutLabel?: string;
   signal?: AbortSignal;
   onEvent?: (event: AnalyzeInvocationEvent) => void;
   onProviderRetry?: (event: ProviderRetryEvent) => void;
+  onDeadlineReached?: () => Promise<number | null | undefined>;
 }
 
-export type AnalyzeInvocationEvent = {
+type AnalyzeInvocationEvent = {
   type: string;
   timestamp: string;
   [key: string]: unknown;
@@ -83,6 +84,7 @@ export interface ToolUseProvider extends LLMProvider {
     messages: Anthropic.MessageParam[];
     tools: Anthropic.Tool[];
     maxTokens?: number;
+    signal?: AbortSignal;
   }): Promise<Anthropic.Message>;
 }
 
@@ -127,7 +129,11 @@ class AnthropicApiProvider implements LLMProvider {
     this.client = new Anthropic();
   }
 
-  async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
+  async analyze(
+    systemPrompt: string,
+    userPayload: unknown,
+    opts: AnalyzeInvocationOptions = {},
+  ): Promise<AnalyzeResult> {
     const userText = JSON.stringify(userPayload);
     const invocationParameters = {
       max_tokens: this.config.maxTokens,
@@ -143,16 +149,22 @@ class AnthropicApiProvider implements LLMProvider {
 
         let response: Awaited<ReturnType<typeof this.client.messages.create>>;
         try {
-          response = await this.client.messages.create({
-            model: this.config.model,
-            max_tokens: invocationParameters.max_tokens,
-            ...(invocationParameters.temperature === undefined
-              ? {}
-              : { temperature: invocationParameters.temperature }),
-            system: systemPrompt,
-            messages: [{ role: 'user', content: userText }],
-          });
+          response = await this.client.messages.create(
+            {
+              model: this.config.model,
+              max_tokens: invocationParameters.max_tokens,
+              ...(invocationParameters.temperature === undefined
+                ? {}
+                : { temperature: invocationParameters.temperature }),
+              system: systemPrompt,
+              messages: [{ role: 'user', content: userText }],
+            },
+            { signal: opts.signal },
+          );
         } catch (err) {
+          if (opts.signal?.aborted && opts.signal.reason instanceof Error) {
+            throw opts.signal.reason;
+          }
           throw enrichAnthropicApiError(err, this.config);
         }
 
@@ -180,19 +192,26 @@ class AnthropicApiProvider implements LLMProvider {
     messages: Anthropic.MessageParam[];
     tools: Anthropic.Tool[];
     maxTokens?: number;
+    signal?: AbortSignal;
   }): Promise<Anthropic.Message> {
     return await traceMessageWithTools(this.name, this.config.model, opts, async () => {
       try {
-        const response = await this.client.messages.create({
-          model: this.config.model,
-          max_tokens: opts.maxTokens ?? this.config.maxTokens,
-          ...temperatureFragment(this.config.model, this.config.temperature),
-          system: opts.system,
-          messages: opts.messages,
-          tools: opts.tools,
-        });
+        const response = await this.client.messages.create(
+          {
+            model: this.config.model,
+            max_tokens: opts.maxTokens ?? this.config.maxTokens,
+            ...temperatureFragment(this.config.model, this.config.temperature),
+            system: opts.system,
+            messages: opts.messages,
+            tools: opts.tools,
+          },
+          { signal: opts.signal },
+        );
         return response;
       } catch (err) {
+        if (opts.signal?.aborted && opts.signal.reason instanceof Error) {
+          throw opts.signal.reason;
+        }
         throw enrichAnthropicApiError(err, this.config);
       }
     });
@@ -200,31 +219,52 @@ class AnthropicApiProvider implements LLMProvider {
 }
 
 function enrichAnthropicApiError(err: unknown, config: { model: string }): Error {
+  const control = providerControlError(err);
+  if (control) return control;
   const msg = err instanceof Error ? err.message : String(err);
   const lc = msg.toLowerCase();
+  const value =
+    err && typeof err === 'object'
+      ? (err as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
+  const nested =
+    value.error && typeof value.error === 'object'
+      ? (value.error as Record<string, unknown>)
+      : undefined;
+  const reported = new ProviderReportedError(
+    'anthropic-api',
+    {
+      statuses: [Number(value.status), Number(value.statusCode)].filter(Number.isInteger),
+      codes: [value.code, value.type, nested?.code, nested?.type].filter(
+        (item): item is string => typeof item === 'string',
+      ),
+      messages: [msg],
+    },
+    err,
+  );
 
   if (lc.includes('401') || lc.includes('authentication') || lc.includes('api key')) {
     return new Error(
       'Anthropic API call failed: invalid API key\n→ check ANTHROPIC_API_KEY is set correctly\n→ get your key at: https://console.anthropic.com/settings/keys',
-      { cause: err },
+      { cause: reported },
     );
   }
 
   if (lc.includes('429') || lc.includes('rate limit')) {
     return new Error(
       'Anthropic API call failed: rate limit exceeded\n→ wait a moment and retry\n→ check usage limits at: https://console.anthropic.com/settings/limits',
-      { cause: err },
+      { cause: reported },
     );
   }
 
   if (lc.includes('400') || lc.includes('invalid') || lc.includes('model')) {
     return new Error(
       `Anthropic API call failed: bad request (model="${config.model}")\n→ check model ID is valid\n→ see available models at: https://docs.anthropic.com/en/docs/about-claude/models`,
-      { cause: err },
+      { cause: reported },
     );
   }
 
-  return new Error(`Anthropic API call failed: ${msg}`, { cause: err });
+  return new Error(`Anthropic API call failed: ${msg}`, { cause: reported });
 }
 
 class ClaudeCliProvider implements LLMProvider {
@@ -263,20 +303,20 @@ class ClaudeCliProvider implements LLMProvider {
           this.model,
         ];
 
-        let proc: ReturnType<typeof Bun.spawn>;
+        opts.onEvent?.({
+          type: 'process.started',
+          timestamp: new Date().toISOString(),
+          provider: this.name,
+          command: args[0],
+          args: args.slice(1),
+        });
+        let output: Awaited<ReturnType<typeof runOwnedCli>>;
         try {
-          proc = Bun.spawn(args, {
-            stdin: new Blob([userText]),
-            stdout: 'pipe',
-            stderr: 'pipe',
-          });
-          opts.onEvent?.({
-            type: 'process.started',
-            timestamp: new Date().toISOString(),
-            provider: this.name,
-            command: args[0],
+          output = await runOwnedCli({
+            command: args[0] as string,
             args: args.slice(1),
-            pid: proc.pid,
+            input: userText,
+            signal: opts.signal,
           });
         } catch (err) {
           opts.onEvent?.({
@@ -287,31 +327,22 @@ class ClaudeCliProvider implements LLMProvider {
           });
           throw enrichClaudeCliError(err, { model: this.model });
         }
-
-        if (
-          typeof proc.stdout === 'number' ||
-          typeof proc.stderr === 'number' ||
-          !proc.stdout ||
-          !proc.stderr
-        ) {
-          throw new Error('Failed to capture claude-cli output streams');
-        }
-
-        const { stdout, stderr, exitCode } = await collectCliProcessOutput(
-          {
-            stdout: proc.stdout,
-            stderr: proc.stderr,
-            exited: proc.exited,
-            kill: proc.kill.bind(proc),
-            pid: proc.pid,
-          },
-          { timeoutMs: opts.timeoutMs, timeoutLabel: opts.timeoutLabel, onEvent: opts.onEvent },
-        );
-
-        if (exitCode !== 0) throw cliExitError('claude-cli', exitCode, stderr);
+        const { stdout, stderr, exitCode } = output;
 
         let parsed: {
+          type?: string;
+          is_error?: boolean;
           result?: string;
+          errors?: string[];
+          api_error_status?: number | string;
+          terminal_reason?: string;
+          error?: {
+            message?: string;
+            type?: string;
+            code?: string;
+            status?: number;
+            status_code?: number;
+          };
           usage?: {
             input_tokens?: number;
             output_tokens?: number;
@@ -319,8 +350,11 @@ class ClaudeCliProvider implements LLMProvider {
             cache_creation_input_tokens?: number;
           };
         };
+        const terminal = parseClaudeTerminalOutput(stdout, stderr);
+        if (terminal.providerError) throw terminal.providerError;
+        if (exitCode !== 0) throw cliExitError('claude-cli', exitCode ?? -1, stderr);
         try {
-          parsed = JSON.parse(stdout);
+          parsed = JSON.parse(stdout) as typeof parsed;
         } catch (parseErr) {
           throw enrichClaudeCliError(parseErr, { model: this.model });
         }
@@ -350,6 +384,8 @@ class ClaudeCliProvider implements LLMProvider {
 }
 
 function enrichClaudeCliError(err: unknown, _config: { model: string }): Error {
+  const control = providerControlError(err);
+  if (control) return control;
   const msg = err instanceof Error ? err.message : String(err);
   const lc = msg.toLowerCase();
 
@@ -399,20 +435,20 @@ ${cliFinalArtifactInstruction()}`;
 
         const args = codexAnalyzeArgs(this.model);
 
-        let proc: ReturnType<typeof Bun.spawn>;
+        opts.onEvent?.({
+          type: 'process.started',
+          timestamp: new Date().toISOString(),
+          provider: this.name,
+          command: args[0],
+          args: args.slice(1),
+        });
+        let output: Awaited<ReturnType<typeof runOwnedCli>>;
         try {
-          proc = Bun.spawn(args, {
-            stdin: new Blob([combinedPrompt]),
-            stdout: 'pipe',
-            stderr: 'pipe',
-          });
-          opts.onEvent?.({
-            type: 'process.started',
-            timestamp: new Date().toISOString(),
-            provider: this.name,
-            command: args[0],
+          output = await runOwnedCli({
+            command: args[0] as string,
             args: args.slice(1),
-            pid: proc.pid,
+            input: combinedPrompt,
+            signal: opts.signal,
           });
         } catch (err) {
           opts.onEvent?.({
@@ -423,30 +459,15 @@ ${cliFinalArtifactInstruction()}`;
           });
           throw enrichCodexCliError(err, { model: this.model });
         }
-
-        if (
-          typeof proc.stdout === 'number' ||
-          typeof proc.stderr === 'number' ||
-          !proc.stdout ||
-          !proc.stderr
-        ) {
-          throw new Error('Failed to capture codex-cli output streams');
+        const { stdout, stderr, exitCode } = output;
+        const parsed = parseCodexTerminalOutput(stdout, stderr);
+        if (parsed.providerError) throw parsed.providerError;
+        if (exitCode !== 0) throw cliExitError('codex-cli', exitCode ?? -1, stderr);
+        if (!parsed.text) {
+          throw new Error('codex-cli output missing a final agent message');
         }
 
-        const { stdout, stderr, exitCode } = await collectCliProcessOutput(
-          {
-            stdout: proc.stdout,
-            stderr: proc.stderr,
-            exited: proc.exited,
-            kill: proc.kill.bind(proc),
-            pid: proc.pid,
-          },
-          { timeoutMs: opts.timeoutMs, timeoutLabel: opts.timeoutLabel, onEvent: opts.onEvent },
-        );
-
-        if (exitCode !== 0) throw cliExitError('codex-cli', exitCode, stderr);
-
-        const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
+        const text = normalizeCliAnalyzeOutput(parsed.text, systemPrompt);
 
         return {
           text,
@@ -478,6 +499,7 @@ export function codexAnalyzeArgs(model: string): string[] {
     '--ignore-user-config',
     '--ignore-rules',
     '--skip-git-repo-check',
+    '--json',
   ];
 }
 
@@ -486,98 +508,12 @@ export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string):
   return extractJsonObject(stdout) ?? stdout;
 }
 
-type CliFailureCode =
-  | 'not_found'
-  | 'input_too_large'
-  | 'subscription_access_disabled'
-  | 'authentication'
-  | 'authorization'
-  | 'rate_limited'
-  | 'model_unavailable'
-  | 'unknown';
-
 const CLI_STDERR_TAIL_LIMIT = 2000;
 
-class CliProviderError extends Error {
-  readonly provider: ProviderName;
-  readonly exitCode: number;
-  readonly errorCode: CliFailureCode;
-  readonly stderrTail: string;
-  readonly stderrChars: number;
-
-  constructor(opts: {
-    provider: ProviderName;
-    exitCode: number;
-    errorCode: CliFailureCode;
-    stderrTail: string;
-    stderrChars: number;
-  }) {
-    super(
-      `${opts.provider} failed: exit_code=${opts.exitCode} error_code=${opts.errorCode} stderr_tail_chars=${opts.stderrTail.length} stderr_chars=${opts.stderrChars}`,
-    );
-    this.name = 'CliProviderError';
-    this.provider = opts.provider;
-    this.exitCode = opts.exitCode;
-    this.errorCode = opts.errorCode;
-    this.stderrTail = opts.stderrTail;
-    this.stderrChars = opts.stderrChars;
-  }
-}
-
-function cliExitError(provider: ProviderName, exitCode: number, stderr: string): CliProviderError {
-  return new CliProviderError({
-    provider,
-    exitCode,
-    errorCode: classifyCliFailure(stderr),
-    stderrTail: cliStderrTail(stderr),
-    stderrChars: stderr.length,
-  });
-}
-
-export function classifyCliFailure(stderr: string): CliFailureCode {
-  const lc = stderr.toLowerCase();
-  if (lc.includes('enoent') || lc.includes('command not found')) return 'not_found';
-  if (
-    lc.includes('input exceeds the maximum length') ||
-    lc.includes('input_too_large') ||
-    lc.includes('maximum length')
-  ) {
-    return 'input_too_large';
-  }
-  if (
-    lc.includes('disabled claude subscription access') ||
-    lc.includes('subscription access') ||
-    lc.includes('use an anthropic api key instead')
-  ) {
-    return 'subscription_access_disabled';
-  }
-  if (lc.includes('rate limit') || lc.includes('rate_limit') || lc.includes('429')) {
-    return 'rate_limited';
-  }
-  if (
-    lc.includes('unauthorized') ||
-    lc.includes('not authenticated') ||
-    lc.includes('login') ||
-    lc.includes('401')
-  ) {
-    return 'authentication';
-  }
-  if (
-    lc.includes('forbidden') ||
-    lc.includes('access denied') ||
-    lc.includes('permission denied') ||
-    lc.includes('403')
-  ) {
-    return 'authorization';
-  }
-  if (
-    lc.includes('model not found') ||
-    lc.includes('model unavailable') ||
-    lc.includes('unsupported model')
-  ) {
-    return 'model_unavailable';
-  }
-  return 'unknown';
+function cliExitError(provider: ProviderName, exitCode: number, stderr: string): Error {
+  return new Error(
+    `${provider} exited ${exitCode}${stderr ? `: ${cliStderrTail(stderr)}` : ' without provider diagnostics'}`,
+  );
 }
 
 export function cliStderrTail(stderr: string, limit = CLI_STDERR_TAIL_LIMIT): string {
@@ -615,20 +551,7 @@ async function traceAnalyze(
         : {}),
     },
     async (span) => {
-      let result: AnalyzeResult;
-      try {
-        result = await fn();
-      } catch (err) {
-        if (err instanceof CliProviderError) {
-          setSpanAttributes(span, {
-            'imprint.llm.provider_error_code': err.errorCode,
-            'imprint.llm.provider_exit_code': err.exitCode,
-            'imprint.llm.stderr_tail_chars': err.stderrTail.length,
-            'imprint.llm.stderr_chars': err.stderrChars,
-          });
-        }
-        throw err;
-      }
+      const result = await fn();
       // Providers report `inputTokens` as the *uncached* input only; the cached
       // portion lives in the cache fields. Phoenix expects the TOTAL prompt plus
       // the cache breakdown so it can calculate cost server-side, so sum them
@@ -679,6 +602,7 @@ async function traceMessageWithTools(
     messages: Anthropic.MessageParam[];
     tools: Anthropic.Tool[];
     maxTokens?: number;
+    signal?: AbortSignal;
   },
   fn: () => Promise<Anthropic.Message>,
 ): Promise<Anthropic.Message> {
@@ -807,152 +731,6 @@ function promptTraceDetails(
   };
 }
 
-export async function collectCliProcessOutput(
-  proc: CliProcessWithOutput,
-  opts: {
-    timeoutMs?: number;
-    timeoutLabel?: string;
-    onEvent?: (event: AnalyzeInvocationEvent) => void;
-  } = {},
-): Promise<{
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}> {
-  const exitPromise = observeCliExit(proc, opts.onEvent);
-  const stdoutPromise = readCliStreamToText(proc.stdout, exitPromise, 'stdout', opts.onEvent);
-  const stderrPromise = readCliStreamToText(proc.stderr, exitPromise, 'stderr', opts.onEvent);
-  const collect = Promise.all([stdoutPromise, stderrPromise, exitPromise]);
-  const [stdout, stderr, exitCode] = opts.timeoutMs
-    ? await withTimeoutCleanup(collect, opts.timeoutMs, opts.timeoutLabel ?? 'cli provider', () => {
-        opts.onEvent?.({
-          type: 'process.timeout',
-          timestamp: new Date().toISOString(),
-          timeoutMs: opts.timeoutMs,
-          timeoutLabel: opts.timeoutLabel ?? 'cli provider',
-        });
-        proc.kill?.();
-      })
-    : await collect;
-  opts.onEvent?.({
-    type: 'process.output_collected',
-    timestamp: new Date().toISOString(),
-    stdoutChars: stdout.length,
-    stderrChars: stderr.length,
-    exitCode,
-  });
-  return { stdout, stderr, exitCode };
-}
-
-function observeCliExit(
-  proc: CliProcessWithOutput,
-  onEvent?: (event: AnalyzeInvocationEvent) => void,
-): Promise<number> {
-  let settled = false;
-  const exited = proc.exited.then((exitCode) => {
-    settled = true;
-    return exitCode;
-  });
-  if (!proc.pid) return exited;
-
-  const pidGone = new Promise<number>((resolve) => {
-    const timer = setInterval(() => {
-      if (settled) {
-        clearInterval(timer);
-        return;
-      }
-      if (processExists(proc.pid)) return;
-      settled = true;
-      clearInterval(timer);
-      onEvent?.({
-        type: 'process.exit_unobserved',
-        timestamp: new Date().toISOString(),
-        pid: proc.pid,
-      });
-      resolve(0);
-    }, CLI_PID_POLL_INTERVAL_MS);
-  });
-
-  return Promise.race([exited, pidGone]);
-}
-
-function processExists(pid: number | undefined): boolean {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const code = typeof err === 'object' && err && 'code' in err ? err.code : undefined;
-    return code === 'EPERM';
-  }
-}
-
-async function readCliStreamToText(
-  stream: ReadableStream<Uint8Array>,
-  exited: Promise<unknown>,
-  streamName: 'stdout' | 'stderr',
-  onEvent?: (event: AnalyzeInvocationEvent) => void,
-): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-  let processExited = false;
-  const exitSignal = exited.then(() => {
-    processExited = true;
-    return 'process-exited' as const;
-  });
-
-  try {
-    while (true) {
-      const read = reader.read();
-      const result = await Promise.race([
-        read,
-        processExited
-          ? new Promise<'stream-timeout'>((resolve) =>
-              setTimeout(() => resolve('stream-timeout'), CLI_STREAM_EXIT_GRACE_MS),
-            )
-          : exitSignal,
-      ]);
-
-      if (result === 'stream-timeout') {
-        read.catch(() => undefined);
-        onEvent?.({
-          type: 'process.stream_abandoned',
-          timestamp: new Date().toISOString(),
-          stream: streamName,
-          graceMs: CLI_STREAM_EXIT_GRACE_MS,
-        });
-        try {
-          await Promise.race([
-            reader.cancel(),
-            new Promise((resolve) => setTimeout(resolve, CLI_STREAM_EXIT_GRACE_MS)),
-          ]);
-        } catch {
-          // The process already exited; returning captured output is more useful.
-        }
-        break;
-      }
-
-      if (result === 'process-exited') {
-        read.catch(() => undefined);
-        continue;
-      }
-
-      if (result.done) break;
-      text += decoder.decode(result.value, { stream: true });
-    }
-  } finally {
-    text += decoder.decode();
-    try {
-      reader.releaseLock();
-    } catch {
-      // Ignore lock-release errors from streams already closed/cancelled by Bun.
-    }
-  }
-
-  return text;
-}
-
 function promptRequestsJsonObject(systemPrompt: string): boolean {
   const lc = systemPrompt.toLowerCase();
   if (/\byaml\b/.test(lc)) return false;
@@ -961,6 +739,8 @@ function promptRequestsJsonObject(systemPrompt: string): boolean {
 }
 
 function enrichCodexCliError(err: unknown, _config: { model: string }): Error {
+  const control = providerControlError(err);
+  if (control) return control;
   const msg = err instanceof Error ? err.message : String(err);
   const lc = msg.toLowerCase();
 
@@ -1009,20 +789,20 @@ ${cliFinalArtifactInstruction()}`;
           args.push('--model', this.model);
         }
 
-        let proc: ReturnType<typeof Bun.spawn>;
+        opts.onEvent?.({
+          type: 'process.started',
+          timestamp: new Date().toISOString(),
+          provider: this.name,
+          command: args[0],
+          args: args.slice(1),
+        });
+        let output: Awaited<ReturnType<typeof runOwnedCli>>;
         try {
-          proc = Bun.spawn(args, {
-            stdin: new Blob([combinedPrompt]),
-            stdout: 'pipe',
-            stderr: 'pipe',
-          });
-          opts.onEvent?.({
-            type: 'process.started',
-            timestamp: new Date().toISOString(),
-            provider: this.name,
-            command: args[0],
+          output = await runOwnedCli({
+            command: args[0] as string,
             args: args.slice(1),
-            pid: proc.pid,
+            input: combinedPrompt,
+            signal: opts.signal,
           });
         } catch (err) {
           opts.onEvent?.({
@@ -1033,28 +813,9 @@ ${cliFinalArtifactInstruction()}`;
           });
           throw enrichCursorCliError(err);
         }
+        const { stdout, stderr, exitCode } = output;
 
-        if (
-          typeof proc.stdout === 'number' ||
-          typeof proc.stderr === 'number' ||
-          !proc.stdout ||
-          !proc.stderr
-        ) {
-          throw new Error('Failed to capture cursor-cli output streams');
-        }
-
-        const { stdout, stderr, exitCode } = await collectCliProcessOutput(
-          {
-            stdout: proc.stdout,
-            stderr: proc.stderr,
-            exited: proc.exited,
-            kill: proc.kill.bind(proc),
-            pid: proc.pid,
-          },
-          { timeoutMs: opts.timeoutMs, timeoutLabel: opts.timeoutLabel, onEvent: opts.onEvent },
-        );
-
-        if (exitCode !== 0) throw cliExitError('cursor-cli', exitCode, stderr);
+        if (exitCode !== 0) throw cliExitError('cursor-cli', exitCode ?? -1, stderr);
 
         const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
 
@@ -1095,7 +856,7 @@ const VALID_PROVIDERS: readonly ProviderName[] = [
   'cursor-cli',
 ];
 
-export interface ProviderStatus {
+interface ProviderStatus {
   name: ProviderName;
   detected: boolean;
   availableForTeach: boolean;
@@ -1222,22 +983,24 @@ function withTransientProviderRetry(provider: LLMProvider): LLMProvider {
     userPayload: unknown,
     opts: AnalyzeInvocationOptions = {},
   ): Promise<AnalyzeResult> => {
-    const retryDeadlineMs =
+    const timeoutDeadline =
       opts.timeoutMs !== undefined && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
+    const runDeadline = resolvedRunDeadline(opts.runDeadline, opts.deadlineMs);
+    const scopedDeadline = boundedRunDeadline(runDeadline, timeoutDeadline);
     return await retryTransientProviderFailure(
-      async () => {
-        const remainingTimeoutMs =
-          retryDeadlineMs === undefined
-            ? opts.timeoutMs
-            : Math.max(1, retryDeadlineMs - Date.now());
-        return await provider.analyze(systemPrompt, userPayload, {
+      async (activeSignal) =>
+        await provider.analyze(systemPrompt, userPayload, {
           ...opts,
-          timeoutMs: remainingTimeoutMs,
-        });
-      },
+          signal: activeSignal,
+          timeoutMs: undefined,
+          deadlineMs: scopedDeadline?.deadlineMs,
+          runDeadline: scopedDeadline,
+        }),
       {
-        deadlineMs: retryDeadlineMs,
+        runDeadline,
+        phaseDeadlineMs: timeoutDeadline,
         signal: opts.signal,
+        onDeadlineReached: opts.onDeadlineReached,
         onRetry: (event) => {
           opts.onProviderRetry?.(event);
           opts.onEvent?.({

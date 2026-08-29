@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join as pathJoin } from 'node:path';
 import { __setAuthVerifierLadderForTest } from '../src/imprint/auth-verifier.ts';
+import { registerCompilerProcessCleanup } from '../src/imprint/compiler-process.ts';
 import { type CredentialBackend, setBackendOverride } from '../src/imprint/credential-store.ts';
 import {
   LIVE_VERIFICATION_EVIDENCE_FILE,
@@ -22,22 +23,22 @@ import {
   appendLiveVerifierLog,
   assertReportCoversWorkflowParameters,
   authRefreshAwaitingContinuation,
-  backendPreparationDeadlineCreditMs,
   buildVerifierArtifactContext,
   compactVerifierEvidenceContext,
   credentialsForAuthRefresh,
   hasSuiteReceiptForSession,
-  isInfrastructureOnlyInconclusiveReport,
   mergeSemanticParamVerification,
   namespaceLiveIntegrationEvidence,
   persistLiveVerificationEvidence,
   prepareLiveVerificationBackend,
   readPersistedLiveVerificationEvidence,
-  registerOwnedProcessTreeCleanup,
   runLiveIntegrationSuite,
+  runLiveSemanticVerification,
   semanticVerificationFailures,
   waitForOwnedProcessTree,
+  waitForVerifierChild,
 } from '../src/imprint/live-verifier.ts';
+import { ProviderDeadlineError, ProviderReportedError } from '../src/imprint/provider-retry.ts';
 import type { BackendsCache } from '../src/imprint/types.ts';
 
 const dirs: string[] = [];
@@ -242,9 +243,7 @@ describe('live verifier auth refresh', () => {
       sessionLabel: 'verifier-session-2',
       deadlineMs: Date.now() + 20,
     });
-    await expect(deadlineSession.run()).rejects.toThrow(
-      'authentication refresh exceeded the live verification deadline',
-    );
+    await expect(deadlineSession.run()).rejects.toBeInstanceOf(ProviderDeadlineError);
     expect(existsSync(pathJoin(siteDir, '.imprint-live-verification.lock'))).toBe(false);
   });
 
@@ -409,6 +408,16 @@ describe('verifier artifact context', () => {
 });
 
 describe('live semantic verification report', () => {
+  it('checks an expired absolute deadline before reading artifacts or spawning a provider', async () => {
+    await expect(
+      runLiveSemanticVerification({
+        provider: 'codex-cli',
+        toolDir: '/definitely/missing/provider-deadline-fixture',
+        evidence: [],
+        deadlineMs: Date.now() - 1,
+      }),
+    ).rejects.toBeInstanceOf(ProviderDeadlineError);
+  });
   const approved = {
     status: 'approved' as const,
     summary: 'The returned products match the requested search.',
@@ -448,16 +457,6 @@ describe('live semantic verification report', () => {
         baseline: { ...approved.baseline, verdict: 'tool_broken' },
       }),
     ).toThrow('approval requires a semantically_correct baseline');
-  });
-
-  it('does not classify an inconclusive core-tool defect as infrastructure-only', () => {
-    const report = LiveVerificationReportSchema.parse({
-      ...approved,
-      status: 'inconclusive',
-      baseline: { verdict: 'tool_broken', reason: 'The search returned the wrong entity.' },
-      gaps: ['Live behavior is not acceptable.'],
-    });
-    expect(isInfrastructureOnlyInconclusiveReport(report)).toBe(false);
   });
 
   it('appends sanitized verifier events without overwriting an earlier attempt', () => {
@@ -712,6 +711,70 @@ function fixtureTool(): {
 }
 
 describe('live verifier backend preparation and suite receipts', () => {
+  it('surfaces a deterministic provider envelope without retrying or creating artifact feedback', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-provider-error-'));
+    dirs.push(dir);
+    const event = JSON.stringify({
+      type: 'turn.failed',
+      status: 422,
+      error_code: 'invalid_request',
+    });
+    const child = spawn(
+      process.execPath,
+      ['-e', `process.stdout.write(${JSON.stringify(event)})`],
+      {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    try {
+      await waitForVerifierChild(
+        child,
+        Date.now() + 60_000,
+        pathJoin(dir, 'verifier.log'),
+        1,
+        Date.now(),
+        undefined,
+        20,
+        'codex-cli',
+      );
+      throw new Error('expected deterministic provider failure');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderReportedError);
+      expect((error as ProviderReportedError).statuses).toEqual([422]);
+      expect((error as ProviderReportedError).codes).toEqual(['invalid_request']);
+    }
+  });
+
+  it('aborts the semantic-verifier process tree and keeps bounded KILL escalation alive', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-abort-'));
+    dirs.push(dir);
+    const child = spawn(
+      process.execPath,
+      [
+        '-e',
+        'process.on("SIGTERM", () => {}); process.stdout.write("ready\\n"); setInterval(() => {}, 1000)',
+      ],
+      { detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    await new Promise<void>((resolve) => child.stdout?.once('data', () => resolve()));
+    const controller = new AbortController();
+    const waiting = waitForVerifierChild(
+      child,
+      Date.now() + 60_000,
+      pathJoin(dir, 'verifier.log'),
+      1,
+      Date.now(),
+      controller.signal,
+      20,
+    );
+    controller.abort(new Error('semantic verifier cancelled'));
+    await expect(waiting).rejects.toThrow('semantic verifier cancelled');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (child.pid === undefined) throw new Error('semantic verifier test child has no pid');
+    expect(() => process.kill(child.pid as number, 0)).toThrow();
+  });
+
   it('terminates an owned probe process tree when its separate budget expires', async () => {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
       detached: true,
@@ -723,59 +786,19 @@ describe('live verifier backend preparation and suite receipts', () => {
     expect(Date.now() - startedAt).toBeLessThan(1_000);
   });
 
-  it('credits actual probe time but not valid-cache preparation time', () => {
-    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-deadline-'));
-    dirs.push(dir);
-    const logPath = pathJoin(dir, '.live-verifier-log.jsonl');
-    const startedAt = Date.parse('2026-07-14T00:00:00.000Z');
-    const events = [
-      {
-        timestamp: new Date(startedAt).toISOString(),
-        type: 'backend.prepare.started',
-        label: 'backend-preparation-1',
-      },
-      {
-        timestamp: new Date(startedAt + 10).toISOString(),
-        type: 'backend.prepare.completed',
-        label: 'backend-preparation-1',
-        reusedCache: true,
-        durationMs: 10,
-      },
-      {
-        timestamp: new Date(startedAt + 20).toISOString(),
-        type: 'backend.prepare.started',
-        label: 'backend-preparation-2',
-      },
-      {
-        timestamp: new Date(startedAt + 30_020).toISOString(),
-        type: 'backend.prepare.completed',
-        label: 'backend-preparation-2',
-        reusedCache: false,
-        durationMs: 30_000,
-      },
-      {
-        timestamp: new Date(startedAt + 30_030).toISOString(),
-        type: 'backend.prepare.started',
-        label: 'backend-preparation-3',
-      },
-    ];
-    writeFileSync(logPath, `${events.map((event) => JSON.stringify(event)).join('\n')}\n{partial`);
-    expect(backendPreparationDeadlineCreditMs(logPath, startedAt, startedAt + 50_030)).toBe(50_000);
-  });
-
   it('escalates parent-signal cleanup when a detached child ignores SIGTERM', async () => {
-    const modulePath = pathJoin(process.cwd(), 'src', 'imprint', 'live-verifier.ts');
+    const modulePath = pathJoin(process.cwd(), 'src', 'imprint', 'compiler-process.ts');
     const childProgram =
       'process.on("SIGTERM", () => {}); process.on("SIGINT", () => {}); setInterval(() => {}, 1000)';
     const helperProgram = `
       import { spawn } from 'node:child_process';
-      import { registerOwnedProcessTreeCleanup } from ${JSON.stringify(modulePath)};
+      import { registerCompilerProcessCleanup } from ${JSON.stringify(modulePath)};
       process.on('SIGTERM', () => {});
       const child = spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], {
         detached: true,
         stdio: 'ignore',
       });
-      registerOwnedProcessTreeCleanup(child, 50);
+      registerCompilerProcessCleanup(child, 50);
       process.stdout.write(String(child.pid) + '\\n');
       setInterval(() => {}, 1000);
     `;
@@ -814,6 +837,175 @@ describe('live verifier backend preparation and suite receipts', () => {
     }
   });
 
+  for (const signal of ['SIGTERM', 'SIGHUP'] as const) {
+    it(`re-raises ${signal} after cleaning an owned child despite an earlier persistent handler`, async () => {
+      const modulePath = pathJoin(process.cwd(), 'src', 'imprint', 'compiler-process.ts');
+      const childProgram =
+        'process.on("SIGTERM", () => {}); process.on("SIGHUP", () => {}); setInterval(() => {}, 1000)';
+      const helperProgram = `
+        import { spawn } from 'node:child_process';
+        import { registerCompilerProcessCleanup } from ${JSON.stringify(modulePath)};
+        process.on(${JSON.stringify(signal)}, () => {});
+        const child = spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], {
+          detached: true,
+          stdio: 'ignore',
+        });
+        registerCompilerProcessCleanup(child, 20);
+        process.stdout.write(String(child.pid) + '\\n');
+        setInterval(() => {}, 1000);
+      `;
+      const helper = spawn(process.execPath, ['-e', helperProgram], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const childPid = await new Promise<number>((resolve, reject) => {
+        let stdout = '';
+        helper.stdout?.on('data', (chunk) => {
+          stdout += String(chunk);
+          const line = stdout.split('\n')[0];
+          if (line && /^\d+$/.test(line)) resolve(Number(line));
+        });
+        helper.once('error', reject);
+        helper.once('close', (code, received) =>
+          reject(new Error(`signal helper exited early ${code}/${received}`)),
+        );
+      });
+      try {
+        helper.kill(signal);
+        const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+          (resolve) =>
+            helper.once('close', (code, received) => resolve({ code, signal: received })),
+        );
+        expect(exit.signal === signal || exit.code === (signal === 'SIGTERM' ? 143 : 129)).toBe(
+          true,
+        );
+        expect(() => process.kill(childPid, 0)).toThrow();
+      } finally {
+        helper.kill('SIGKILL');
+        try {
+          process.kill(-childPid, 'SIGKILL');
+        } catch {}
+      }
+    });
+  }
+
+  it('defers SIGINT once while a production-owned child is reaped beyond its grace', async () => {
+    const modulePath = pathJoin(process.cwd(), 'src', 'imprint', 'compiler-process.ts');
+    const childProgram =
+      'process.on("SIGTERM", () => {}); process.on("SIGINT", () => {}); setInterval(() => {}, 1000)';
+    const helperProgram = `
+      import { registerCompilerProcessCleanup, spawnOwnedProcess } from ${JSON.stringify(modulePath)};
+      let cancellations = 0;
+      process.once('SIGINT', () => process.stdout.write('cancelled:' + String(++cancellations) + '\\n'));
+      const child = spawnOwnedProcess(process.execPath, ['-e', ${JSON.stringify(childProgram)}], {
+        stdio: 'ignore',
+      });
+      registerCompilerProcessCleanup(child, 100);
+      process.stdout.write(String(child.pid) + '\\n');
+      setInterval(() => {}, 1000);
+    `;
+    const helper = spawn(process.execPath, ['-e', helperProgram], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    const childPid = await new Promise<number>((resolve, reject) => {
+      helper.stdout?.on('data', (chunk) => {
+        stdout += String(chunk);
+        const line = stdout.split('\n')[0];
+        if (line && /^\d+$/.test(line)) resolve(Number(line));
+      });
+      helper.once('error', reject);
+      helper.once('close', (code) => reject(new Error(`SIGINT helper exited early ${code}`)));
+    });
+    try {
+      const cancelled = new Promise<void>((resolve) => {
+        helper.stdout?.on('data', (chunk) => {
+          if (String(chunk).includes('cancelled')) resolve();
+        });
+      });
+      helper.kill('SIGINT');
+      await cancelled;
+      const reapDeadline = Date.now() + 100 + 500 + 200;
+      let childAlive = true;
+      while (childAlive && Date.now() < reapDeadline) {
+        try {
+          process.kill(childPid, 0);
+          await Bun.sleep(20);
+        } catch {
+          childAlive = false;
+        }
+      }
+      expect(helper.exitCode).toBeNull();
+      expect(stdout.match(/cancelled:/g)).toHaveLength(1);
+      expect(childAlive).toBe(false);
+    } finally {
+      helper.kill('SIGKILL');
+      try {
+        process.kill(-childPid, 'SIGKILL');
+      } catch {}
+    }
+  });
+
+  for (const fatalSignal of ['SIGTERM', 'SIGHUP'] as const) {
+    it(`lets ${fatalSignal} supersede in-flight SIGINT cleanup for a spawned owned process`, async () => {
+      const modulePath = pathJoin(process.cwd(), 'src', 'imprint', 'compiler-process.ts');
+      const childProgram =
+        'process.on("SIGINT", () => {}); process.on("SIGTERM", () => {}); process.on("SIGHUP", () => {}); setInterval(() => {}, 1000)';
+      const helperProgram = `
+        import { registerCompilerProcessCleanup, spawnOwnedProcess } from ${JSON.stringify(modulePath)};
+        process.once('SIGINT', () => process.stdout.write('delegated\\n'));
+        const child = spawnOwnedProcess(process.execPath, ['-e', ${JSON.stringify(childProgram)}], {
+          stdio: 'ignore',
+        });
+        registerCompilerProcessCleanup(child, 150);
+        process.stdout.write(String(child.pid) + '\\n');
+        setInterval(() => {}, 1000);
+      `;
+      const helper = spawn(process.execPath, ['-e', helperProgram], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      const childPid = await new Promise<number>((resolve, reject) => {
+        helper.stdout?.on('data', (chunk) => {
+          stdout += String(chunk);
+          const line = stdout.split('\n').find((value) => /^\d+$/.test(value));
+          if (line) resolve(Number(line));
+        });
+        helper.once('error', reject);
+        helper.once('close', (code) => reject(new Error(`signal helper exited early ${code}`)));
+      });
+      try {
+        const delegated = new Promise<void>((resolve) => {
+          const inspect = (): void => {
+            if (stdout.includes('delegated')) resolve();
+          };
+          helper.stdout?.on('data', (chunk) => {
+            stdout += String(chunk);
+            inspect();
+          });
+          inspect();
+        });
+        helper.kill('SIGINT');
+        await delegated;
+        await Bun.sleep(20);
+        const startedAt = Date.now();
+        helper.kill(fatalSignal);
+        const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+          (resolve) => helper.once('close', (code, signal) => resolve({ code, signal })),
+        );
+        expect(
+          exit.signal === fatalSignal || exit.code === (fatalSignal === 'SIGTERM' ? 143 : 129),
+        ).toBe(true);
+        expect(Date.now() - startedAt).toBeGreaterThan(75);
+        expect(() => process.kill(childPid, 0)).toThrow();
+      } finally {
+        helper.kill('SIGKILL');
+        try {
+          process.kill(-childPid, 'SIGKILL');
+        } catch {}
+      }
+    });
+  }
+
   it('removes parent cleanup listeners immediately after normal completion', () => {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
       detached: true,
@@ -824,7 +1016,7 @@ describe('live verifier backend preparation and suite receipts', () => {
       sigint: process.listenerCount('SIGINT'),
       sigterm: process.listenerCount('SIGTERM'),
     };
-    const unregister = registerOwnedProcessTreeCleanup(child, 50);
+    const unregister = registerCompilerProcessCleanup(child, 50);
     expect(process.listenerCount('exit')).toBe(before.exit + 1);
     expect(process.listenerCount('SIGINT')).toBe(before.sigint + 1);
     expect(process.listenerCount('SIGTERM')).toBe(before.sigterm + 1);
@@ -843,7 +1035,7 @@ describe('live verifier backend preparation and suite receipts', () => {
   });
 
   it('still reaps a stubborn grandchild after its direct child exits during shutdown', async () => {
-    const modulePath = pathJoin(process.cwd(), 'src', 'imprint', 'live-verifier.ts');
+    const modulePath = pathJoin(process.cwd(), 'src', 'imprint', 'compiler-process.ts');
     const grandchildProgram =
       'process.on("SIGTERM", () => {}); process.on("SIGINT", () => {}); process.stdout.write("ready\\n"); setInterval(() => {}, 1000)';
     const childProgram = `
@@ -858,13 +1050,13 @@ describe('live verifier backend preparation and suite receipts', () => {
     `;
     const helperProgram = `
       import { spawn } from 'node:child_process';
-      import { registerOwnedProcessTreeCleanup } from ${JSON.stringify(modulePath)};
+      import { registerCompilerProcessCleanup } from ${JSON.stringify(modulePath)};
       process.on('SIGTERM', () => {});
       const child = spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], {
         detached: true,
         stdio: ['ignore', 'pipe', 'ignore'],
       });
-      const unregister = registerOwnedProcessTreeCleanup(child, 50);
+      const unregister = registerCompilerProcessCleanup(child, 50);
       child.once('close', unregister);
       child.stdout.once('data', (chunk) => {
         process.stdout.write(String(child.pid) + ':' + String(chunk));

@@ -6,15 +6,20 @@ import {
   DesiredTeachingPlanSchema,
   type EditableTeachingPlan,
   type EditableTeachingTool,
+  ImplementationPlanPayloadSchema,
   type TeachingPlanDecision,
   type TeachingToolCandidate,
   canonicalTeachingPlanJson,
   createEditableTeachingPlan,
+  implementationPlanRequestProvenanceSha256,
   normalizeDetectorCandidateForMaster,
+  proposeDependencyBuildWaves,
   reviseEditableTeachingPlan,
   teachingPlanContentSha256,
   teachingToolCompileInputsSha256,
+  validateBuildWorkflowProvenance,
   validateEditableTeachingPlan,
+  validateImplementationPlanForTool,
 } from '../src/imprint/master-teach-plan.ts';
 
 const RECORDING = teachingPlanContentSha256('recording');
@@ -41,7 +46,6 @@ function ref(name: string, contents = name): ContentAddressedRef {
 function candidate(
   toolName: string,
   options: {
-    primary?: boolean;
     seq?: number;
     dependencies?: string[];
     params?: TeachingToolCandidate['likelyParams'];
@@ -53,7 +57,6 @@ function candidate(
     description: `Perform ${toolName}`,
     rationale: `Request ${seq} supports this tool.`,
     confidence: 0.9,
-    primary: options.primary ?? false,
     requestSeqs: [seq],
     representativeSeqs: [seq],
     eventSeqs: [],
@@ -81,6 +84,9 @@ function tool(
       ? {
           ...ref(`${id}-plan`, options.plan),
           basedOnCompileInputsSha256: teachingPlanContentSha256('pending'),
+          requestProvenanceSha256: implementationPlanRequestProvenanceSha256([
+            { artifactRequestIndex: 0, recordingRequestSeq: options.seq ?? 1 },
+          ]),
         }
       : undefined,
   };
@@ -91,6 +97,12 @@ function desired(tools: EditableTeachingTool[], chainEdges: ChainEdge[] = []): D
     site: 'fixture-site',
     recordingSha256: RECORDING,
     tools,
+    candidateCoverage: tools.map((tool) => ({
+      discoveryCandidateName: tool.candidate.toolName,
+      plannedToolIds: [tool.id],
+      unresolvedReason: null,
+    })),
+    buildWaves: proposeDependencyBuildWaves(tools),
     chainEdges,
   };
   for (const plannedTool of plan.tools) {
@@ -139,10 +151,77 @@ function create(plan: DesiredTeachingPlan): EditableTeachingPlan {
   return createEditableTeachingPlan(plan, { decision: decision('initial') }, validation);
 }
 
+function implementationPayload(
+  strategyKind: 'api' | 'playbook_fallback',
+  recordingRequestSeqs: number[],
+) {
+  return ImplementationPlanPayloadSchema.parse({
+    version: 1,
+    toolId: 'search-id',
+    strategyKind,
+    requestProvenance: recordingRequestSeqs.map((recordingRequestSeq, artifactRequestIndex) => ({
+      artifactRequestIndex,
+      recordingRequestSeq,
+    })),
+    parameterMappings: [],
+    responseDependencies: [],
+    resultSources: [
+      {
+        artifactRequestIndex: recordingRequestSeqs.length ? 0 : null,
+        source: 'Return the actual execution result.',
+      },
+    ],
+    outputGuidance: 'Return a stable public result.',
+    verificationCases: [
+      ...(strategyKind === 'api'
+        ? [
+            {
+              id: 'recorded_replay',
+              check: 'replay' as const,
+              parameterValues: [],
+              expectedResult: 'Return the recorded public result shape.',
+              provenance: {
+                recordingRequestSeqs,
+                recordingEventSeqs: [],
+                evidenceRefs: [ref('search-id-request')],
+              },
+            },
+          ]
+        : []),
+      {
+        id: 'recorded_live',
+        check: 'live',
+        parameterValues: [],
+        expectedResult: 'Return the recorded public result shape.',
+        provenance: {
+          recordingRequestSeqs,
+          recordingEventSeqs: [],
+          evidenceRefs: [ref('search-id-request')],
+        },
+      },
+    ],
+  });
+}
+
+function workflowRequestProvenance(recordingRequestSeqs: Array<number | undefined>) {
+  return {
+    toolName: 'search',
+    intent: { description: 'Search a fixture.' },
+    parameters: [],
+    requests: recordingRequestSeqs.map((recordingRequestSeq, index) => ({
+      method: 'GET',
+      url: `https://fixture.test/request-${index}`,
+      headers: {},
+      ...(recordingRequestSeq === undefined ? {} : { recordingRequestSeq }),
+    })),
+    site: 'fixture-site',
+  };
+}
+
 function chain(): DesiredTeachingPlan {
   return desired(
     [
-      tool('producer-id', 'produce_token', { primary: true, seq: 1 }),
+      tool('producer-id', 'produce_token', { seq: 1 }),
       tool('consumer-id', 'consume_token', {
         seq: 2,
         dependencies: ['produce_token'],
@@ -171,13 +250,13 @@ function chain(): DesiredTeachingPlan {
 
 describe('editable master teaching plan', () => {
   it('creates and validates a strict initial snapshot', () => {
-    const plan = create(desired([tool('search-id', 'search', { primary: true })]));
+    const plan = create(desired([tool('search-id', 'search')]));
     expect(plan.revision).toBe(1);
     expect(plan.decision.outcome).toBe('initial');
     expect(validateEditableTeachingPlan(plan, validation)).toEqual(plan);
     expect(() =>
       createEditableTeachingPlan(
-        desired([tool('search-id', 'search', { primary: true })]),
+        desired([tool('search-id', 'search')]),
         { decision: decision('accepted') },
         validation,
       ),
@@ -185,7 +264,7 @@ describe('editable master teaching plan', () => {
   });
 
   it('rejects unknown fields in plan, tool, candidate, refs, and compile context', () => {
-    const base = desired([tool('search-id', 'search', { primary: true })]);
+    const base = desired([tool('search-id', 'search')]);
     const baseTool = firstTool(base);
     for (const invalid of [
       { ...base, surprise: true },
@@ -214,7 +293,7 @@ describe('editable master teaching plan', () => {
   });
 
   it('uses strict required semantic wire fields without coercion or defaults', () => {
-    const base = desired([tool('search-id', 'search', { primary: true })]);
+    const base = desired([tool('search-id', 'search')]);
     const missingArrays = structuredClone(base) as unknown as Record<string, unknown>;
     const candidateValue = (missingArrays.tools as Array<Record<string, unknown>>)[0]
       ?.candidate as Record<string, unknown>;
@@ -280,7 +359,7 @@ describe('editable master teaching plan', () => {
       ' evidence/request.json',
       'evidence/request.json ',
     ]) {
-      const plan = desired([tool('search-id', 'search', { primary: true })]);
+      const plan = desired([tool('search-id', 'search')]);
       firstEvidence(firstTool(plan)).path = path;
       expect(() => create(plan)).toThrow();
     }
@@ -295,22 +374,14 @@ describe('editable master teaching plan', () => {
     expect(() => create(site)).toThrow('whitespace is not canonical');
   });
 
-  it('requires unique stable ids and names without making primary a runtime decision', () => {
-    expect(() =>
-      create(desired([tool('same-id', 'one', { primary: true }), tool('same-id', 'two')])),
-    ).toThrow('duplicate tool id');
-    expect(() =>
-      create(desired([tool('one-id', 'same', { primary: true }), tool('two-id', 'same')])),
-    ).toThrow('duplicate tool name');
-    expect(create(desired([tool('one-id', 'one')])).tools[0]?.candidate.primary).toBe(false);
-    expect(
-      create(
-        desired([
-          tool('one-id', 'one', { primary: true }),
-          tool('two-id', 'two', { primary: true }),
-        ]),
-      ).tools.map((value) => value.candidate.primary),
-    ).toEqual([true, true]);
+  it('requires unique stable ids and names without ranking tools', () => {
+    expect(() => create(desired([tool('same-id', 'one'), tool('same-id', 'two')]))).toThrow(
+      'duplicate tool id',
+    );
+    expect(() => create(desired([tool('one-id', 'same'), tool('two-id', 'same')]))).toThrow(
+      'duplicate tool name',
+    );
+    expect(create(desired([tool('one-id', 'one'), tool('two-id', 'two')])).tools).toHaveLength(2);
   });
 
   it('bounds stable ids, tool names, and dependency names to snapshot-safe lengths', () => {
@@ -352,13 +423,13 @@ describe('editable master teaching plan', () => {
   });
 
   it('rejects missing recording seqs, missing dependencies, and cycles', () => {
-    expect(() => create(desired([tool('bad-id', 'bad', { primary: true, seq: 99 })]))).toThrow(
+    expect(() => create(desired([tool('bad-id', 'bad', { seq: 99 })]))).toThrow(
       'unknown recording seq 99',
     );
     expect(() =>
       create(
         desired([
-          tool('one-id', 'one', { primary: true }),
+          tool('one-id', 'one'),
           tool('two-id', 'two', { seq: 2, dependencies: ['missing'] }),
         ]),
       ),
@@ -366,10 +437,88 @@ describe('editable master teaching plan', () => {
     expect(() =>
       create(
         desired([
-          tool('one-id', 'one', { primary: true, dependencies: ['two'] }),
+          tool('one-id', 'one', { dependencies: ['two'] }),
           tool('two-id', 'two', { seq: 2, dependencies: ['one'] }),
         ]),
       ),
+    ).toThrow('dependency cycle');
+  });
+
+  it('suggests one parallel wave containing every independent tool exactly once', () => {
+    const tools = [
+      tool('search-id', 'search'),
+      tool('calendar-id', 'calendar', { seq: 2 }),
+      tool('status-id', 'status', { seq: 3 }),
+    ];
+    const waves = proposeDependencyBuildWaves(tools);
+    expect(waves).toEqual([['search-id', 'calendar-id', 'status-id']]);
+    expect(waves.flat()).toEqual(tools.map(({ id }) => id));
+  });
+
+  it('keeps every discovered tool when the plan contains more than 32', () => {
+    const tools = Array.from({ length: 40 }, (_, index) =>
+      tool(`tool-${index}`, `operation_${index}`, { seq: (index % 8) + 1 }),
+    );
+    const plan = create(desired(tools));
+    expect(plan.tools).toHaveLength(40);
+    expect(plan.buildWaves.flat()).toEqual(tools.map(({ id }) => id));
+  });
+
+  it('suggests dependency-ordered waves for producers, consumers, and multiple levels', () => {
+    const tools = [
+      tool('search-id', 'search'),
+      tool('reviews-id', 'reviews', { seq: 2, dependencies: ['details'] }),
+      tool('details-id', 'details', { seq: 3, dependencies: ['search'] }),
+      tool('calendar-id', 'calendar', { seq: 4 }),
+      tool('booking-id', 'booking', {
+        seq: 5,
+        dependencies: ['details', 'calendar'],
+      }),
+    ];
+    expect(proposeDependencyBuildWaves(tools)).toEqual([
+      ['search-id', 'calendar-id'],
+      ['details-id'],
+      ['reviews-id', 'booking-id'],
+    ]);
+  });
+
+  it('validates the master build hierarchy without replacing it with the default suggestion', () => {
+    const plan = desired([
+      tool('producer-id', 'producer'),
+      tool('consumer-id', 'consumer', { seq: 2, dependencies: ['producer'] }),
+      tool('independent-id', 'independent', { seq: 3 }),
+    ]);
+    plan.buildWaves = [['producer-id'], ['independent-id'], ['consumer-id']];
+    expect(create(plan).buildWaves).toEqual([['producer-id'], ['independent-id'], ['consumer-id']]);
+  });
+
+  it('rejects incomplete, duplicate, unknown, same-wave, and reversed master build waves', () => {
+    const valid = desired([
+      tool('producer-id', 'producer'),
+      tool('consumer-id', 'consumer', { seq: 2, dependencies: ['producer'] }),
+    ]);
+    for (const buildWaves of [
+      [['producer-id']],
+      [['producer-id'], ['consumer-id'], ['consumer-id']],
+      [['producer-id'], ['unknown-id'], ['consumer-id']],
+      [['producer-id', 'consumer-id']],
+      [['consumer-id'], ['producer-id']],
+    ]) {
+      const plan = structuredClone(valid);
+      plan.buildWaves = buildWaves;
+      expect(() => create(plan)).toThrow();
+    }
+  });
+
+  it('rejects missing dependencies and cycles when proposing initial waves', () => {
+    expect(() =>
+      proposeDependencyBuildWaves([tool('consumer-id', 'consumer', { dependencies: ['missing'] })]),
+    ).toThrow('depends on missing tool');
+    expect(() =>
+      proposeDependencyBuildWaves([
+        tool('one-id', 'one', { dependencies: ['two'] }),
+        tool('two-id', 'two', { seq: 2, dependencies: ['one'] }),
+      ]),
     ).toThrow('dependency cycle');
   });
 
@@ -391,17 +540,15 @@ describe('editable master teaching plan', () => {
 
   it('treats candidate metadata-only changes as no compile work', () => {
     const original = desired([
-      tool('search-id', 'search', { primary: true }),
+      tool('search-id', 'search'),
       tool('details-id', 'details', { seq: 2 }),
     ]);
     const current = create(original);
     const changed = structuredClone(original);
     firstTool(changed).candidate.confidence = 0.2;
     firstTool(changed).candidate.rationale = 'An advisor supplied a different rationale.';
-    firstTool(changed).candidate.primary = false;
     const details = changed.tools.find((value) => value.id === 'details-id');
     if (!details) throw new Error('test plan has no details tool');
-    details.candidate.primary = true;
     const result = reviseEditableTeachingPlan(
       current,
       changed,
@@ -414,7 +561,7 @@ describe('editable master teaching plan', () => {
   });
 
   it('records rejected advice as a new no-op revision', () => {
-    const original = desired([tool('search-id', 'search', { primary: true })]);
+    const original = desired([tool('search-id', 'search')]);
     const result = reviseEditableTeachingPlan(
       create(original),
       structuredClone(original),
@@ -430,13 +577,238 @@ describe('editable master teaching plan', () => {
   });
 
   it('requires a strategy for an accepted implementation plan', () => {
-    const plan = desired([tool('search-id', 'search', { primary: true, plan: 'plan text' })]);
+    const plan = desired([tool('search-id', 'search', { plan: 'plan text' })]);
     firstTool(plan).strategy = undefined;
     expect(() => create(plan)).toThrow('needs a strategy');
   });
 
+  it('keeps discovery uncertainty but requires concrete public parameters when a plan is accepted', () => {
+    const discovery = desired([
+      tool('search-id', 'search', {
+        params: [{ name: 'query', type: null, description: null }],
+      }),
+    ]);
+    expect(create(discovery).tools[0]?.candidate.likelyParams).toEqual([
+      { name: 'query', type: null, description: null },
+    ]);
+
+    const accepted = desired([
+      tool('search-id', 'search', {
+        plan: 'accepted plan',
+        params: [{ name: 'query', type: null, description: 'Search text.' }],
+      }),
+    ]);
+    expect(() => create(accepted)).toThrow('needs a concrete scalar type');
+
+    firstTool(accepted).candidate.likelyParams = [
+      { name: 'query', type: 'string', description: null },
+    ];
+    const implementation = firstTool(accepted).implementationPlan;
+    if (!implementation) throw new Error('test tool has no implementation ref');
+    implementation.basedOnCompileInputsSha256 = teachingToolCompileInputsSha256(
+      firstTool(accepted),
+    );
+    expect(() => create(accepted)).toThrow('needs a nonempty description');
+  });
+
+  it('binds declared verification cases to public parameter types and focused provenance', () => {
+    const planned = tool('search-id', 'search');
+    const payload = implementationPayload('api', [1]);
+    payload.parameterMappings = [
+      {
+        parameterName: 'query',
+        artifactRequestIndices: [0],
+        guidance: 'Apply the public query to request zero.',
+      },
+    ];
+    for (const verificationCase of payload.verificationCases)
+      verificationCase.parameterValues = [{ parameterName: 'query', value: 'fixture query' }];
+    const replayCase = payload.verificationCases.find(({ check }) => check === 'replay');
+    const liveCase = payload.verificationCases.find(({ check }) => check === 'live');
+    if (!replayCase || !liveCase)
+      throw new Error('test implementation needs replay and live cases');
+    replayCase.parameterValueOrigin = 'recorded_baseline';
+    liveCase.parameterValueOrigin = 'synthetic_live';
+    expect(
+      validateImplementationPlanForTool(
+        payload,
+        planned,
+        validation.requestSeqs,
+        validation.eventSeqs,
+      ),
+    ).toEqual(payload);
+
+    const unavailableBaseline = structuredClone(payload);
+    const unavailableReplay = unavailableBaseline.verificationCases.find(
+      ({ check }) => check === 'replay',
+    );
+    if (!unavailableReplay) throw new Error('test implementation has no replay case');
+    unavailableReplay.parameterValueOrigin = 'unavailable';
+    unavailableReplay.parameterValues = [];
+    expect(
+      validateImplementationPlanForTool(
+        unavailableBaseline,
+        planned,
+        validation.requestSeqs,
+        validation.eventSeqs,
+      ),
+    ).toEqual(unavailableBaseline);
+
+    const syntheticReplay = structuredClone(payload);
+    const invalidReplay = syntheticReplay.verificationCases.find(({ check }) => check === 'replay');
+    if (!invalidReplay) throw new Error('test implementation has no replay case');
+    invalidReplay.parameterValueOrigin = 'synthetic_live';
+    expect(() => ImplementationPlanPayloadSchema.parse(syntheticReplay)).toThrow(
+      'replay parameters cannot be synthetic live values',
+    );
+
+    const wrongType = structuredClone(payload);
+    const wrongTypeCase = wrongType.verificationCases[0];
+    if (!wrongTypeCase) throw new Error('test implementation has no verification case');
+    wrongTypeCase.parameterValues = [{ parameterName: 'query', value: 42 }];
+    expect(() =>
+      validateImplementationPlanForTool(
+        wrongType,
+        planned,
+        validation.requestSeqs,
+        validation.eventSeqs,
+      ),
+    ).toThrow('does not match its public scalar type');
+
+    const foreignEvidence = structuredClone(payload);
+    const foreignCase = foreignEvidence.verificationCases[0];
+    if (!foreignCase) throw new Error('test implementation has no verification case');
+    foreignCase.provenance.evidenceRefs = [ref('foreign')];
+    expect(() =>
+      validateImplementationPlanForTool(
+        foreignEvidence,
+        planned,
+        validation.requestSeqs,
+        validation.eventSeqs,
+      ),
+    ).toThrow('evidence outside the focused tool');
+
+    const unknownEvent = structuredClone(payload);
+    const unknownEventCase = unknownEvent.verificationCases[0];
+    if (!unknownEventCase) throw new Error('test implementation has no verification case');
+    unknownEventCase.provenance.recordingEventSeqs = [999];
+    expect(() =>
+      validateImplementationPlanForTool(
+        unknownEvent,
+        planned,
+        validation.requestSeqs,
+        validation.eventSeqs,
+      ),
+    ).toThrow('unknown recording event seq 999');
+  });
+
+  it('requires the fixed API and playbook verification paths without inventing cases', () => {
+    const api = implementationPayload('api', [1]);
+    expect(() =>
+      ImplementationPlanPayloadSchema.parse({
+        ...api,
+        verificationCases: api.verificationCases.filter(({ check }) => check === 'replay'),
+      }),
+    ).toThrow('at least one live verification case');
+    expect(() =>
+      ImplementationPlanPayloadSchema.parse({
+        ...api,
+        verificationCases: api.verificationCases.filter(({ check }) => check === 'live'),
+      }),
+    ).toThrow('exactly one replay verification case');
+    const replay = api.verificationCases.find(({ check }) => check === 'replay');
+    if (!replay) throw new Error('test API implementation has no replay case');
+    expect(() =>
+      ImplementationPlanPayloadSchema.parse({
+        ...api,
+        verificationCases: [...api.verificationCases, { ...replay, id: 'second_replay' }],
+      }),
+    ).toThrow('exactly one replay verification case');
+
+    const playbook = implementationPayload('playbook_fallback', []);
+    expect(() =>
+      ImplementationPlanPayloadSchema.parse({
+        ...playbook,
+        verificationCases: [
+          ...playbook.verificationCases,
+          {
+            ...replay,
+            id: 'playbook_replay',
+            provenance: { ...replay.provenance, recordingRequestSeqs: [] },
+          },
+        ],
+      }),
+    ).toThrow('playbook implementation plans cannot declare replay verification cases');
+  });
+
+  it('binds implementation plans to the stable tool id', () => {
+    const source = tool('source-id', 'search');
+    const target = { ...structuredClone(source), id: 'target-id' };
+    const sourceCompileInputs = teachingToolCompileInputsSha256(source);
+    const targetCompileInputs = teachingToolCompileInputsSha256(target);
+    expect(sourceCompileInputs).not.toBe(targetCompileInputs);
+    target.implementationPlan = {
+      ...ref('source-plan', 'source implementation plan'),
+      basedOnCompileInputsSha256: sourceCompileInputs,
+      requestProvenanceSha256: implementationPlanRequestProvenanceSha256([
+        { artifactRequestIndex: 0, recordingRequestSeq: 1 },
+      ]),
+    };
+    const crossToolPlan = desired([target]);
+    const crossToolImplementation = firstTool(crossToolPlan).implementationPlan;
+    if (!crossToolImplementation) throw new Error('missing cross-tool implementation fixture');
+    crossToolImplementation.basedOnCompileInputsSha256 = sourceCompileInputs;
+    expect(() => create(crossToolPlan)).toThrow(
+      'implementation plan is based on stale compile inputs',
+    );
+  });
+
+  it('issues API builds only when actual workflow request provenance is exact', () => {
+    const accepted = implementationPayload('api', [1, 2]);
+    expect(
+      validateBuildWorkflowProvenance(workflowRequestProvenance([1, 2]), accepted).requests.map(
+        ({ recordingRequestSeq }) => recordingRequestSeq,
+      ),
+    ).toEqual([1, 2]);
+    expect(() =>
+      validateBuildWorkflowProvenance(workflowRequestProvenance([1, 2]), {
+        ...accepted,
+        requestProvenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 1 }],
+        verificationCases: accepted.verificationCases.map((verificationCase) => ({
+          ...verificationCase,
+          provenance: {
+            ...verificationCase.provenance,
+            recordingRequestSeqs: [1],
+          },
+        })),
+      }),
+    ).toThrow('2 requests but accepted provenance has 1');
+    expect(() =>
+      validateBuildWorkflowProvenance(workflowRequestProvenance([2, 1]), accepted),
+    ).toThrow('accepted provenance requires 1');
+    expect(() =>
+      validateBuildWorkflowProvenance(workflowRequestProvenance([undefined, 2]), accepted),
+    ).toThrow('request 0 is missing recordingRequestSeq');
+  });
+
+  it('issues a playbook shell only with no workflow requests or API request map', () => {
+    const accepted = implementationPayload('playbook_fallback', []);
+    expect(
+      validateBuildWorkflowProvenance(workflowRequestProvenance([]), accepted).requests,
+    ).toEqual([]);
+    expect(() => validateBuildWorkflowProvenance(workflowRequestProvenance([1]), accepted)).toThrow(
+      'playbook_fallback workflow has 1 requests but accepted provenance has 0',
+    );
+    expect(() =>
+      validateBuildWorkflowProvenance(workflowRequestProvenance([]), {
+        ...accepted,
+        requestProvenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 1 }],
+      }),
+    ).toThrow('playbook implementation plans cannot declare API request provenance');
+  });
+
   it('ignores strategy explanation edits but replans when the strategy kind changes', () => {
-    const original = desired([tool('search-id', 'search', { primary: true })]);
+    const original = desired([tool('search-id', 'search')]);
     const explanationOnly = structuredClone(original);
     const explanationTool = firstTool(explanationOnly);
     if (!explanationTool.strategy) throw new Error('test tool has no strategy');
@@ -467,13 +839,16 @@ describe('editable master teaching plan', () => {
   });
 
   it('recompiles for an implementation-plan-only change without replanning', () => {
-    const original = desired([tool('search-id', 'search', { primary: true, plan: 'old plan' })]);
+    const original = desired([tool('search-id', 'search', { plan: 'old plan' })]);
     const changed = structuredClone(original);
     const changedTool = firstTool(changed);
     if (!changedTool.implementationPlan) throw new Error('test tool has no implementation plan');
     changedTool.implementationPlan = {
       ...ref('search-plan', 'new plan'),
       basedOnCompileInputsSha256: teachingToolCompileInputsSha256(changedTool),
+      requestProvenanceSha256: implementationPlanRequestProvenanceSha256([
+        { artifactRequestIndex: 0, recordingRequestSeq: 1 },
+      ]),
     };
     const result = reviseEditableTeachingPlan(
       create(original),
@@ -531,12 +906,15 @@ describe('editable master teaching plan', () => {
           firstTool(plan).implementationPlan = {
             ...ref('search-plan', 'changed plan'),
             basedOnCompileInputsSha256: teachingPlanContentSha256('pending'),
+            requestProvenanceSha256: implementationPlanRequestProvenanceSha256([
+              { artifactRequestIndex: 0, recordingRequestSeq: 1 },
+            ]),
           };
         },
       },
     ];
     for (const { mutate, replan } of cases) {
-      const original = desired([tool('search-id', 'search', { primary: true, plan: 'old plan' })]);
+      const original = desired([tool('search-id', 'search', { plan: 'old plan' })]);
       const changed = structuredClone(original);
       mutate(changed);
       const changedTool = firstTool(changed);
@@ -557,7 +935,7 @@ describe('editable master teaching plan', () => {
   });
 
   it('rejects an implementation plan after its compile inputs change', () => {
-    const original = desired([tool('search-id', 'search', { primary: true, plan: 'old plan' })]);
+    const original = desired([tool('search-id', 'search', { plan: 'old plan' })]);
     const changed = structuredClone(original);
     firstTool(changed).candidate.likelyParams.push({
       name: 'date',
@@ -575,7 +953,7 @@ describe('editable master teaching plan', () => {
   });
 
   it('uses content hashes, not ref paths or ordering, as compile evidence identity', () => {
-    const original = desired([tool('search-id', 'search', { primary: true, plan: 'same plan' })]);
+    const original = desired([tool('search-id', 'search', { plan: 'same plan' })]);
     firstTool(original).evidenceRefs.push(ref('second'));
     const originalTool = firstTool(original);
     if (!originalTool.implementationPlan) throw new Error('test tool has no implementation plan');
@@ -609,7 +987,7 @@ describe('editable master teaching plan', () => {
     expect(result.reverifyToolIds).toEqual(['consumer-id', 'leaf-id', 'producer-id']);
   });
 
-  it('targets a chain-edge edit at its consumer and downstream tools', () => {
+  it('recompiles both ends when the producer output obligation changes', () => {
     const original = chain();
     const changed = structuredClone(original);
     firstEdge(changed).producerResultPath = 'results[0].replacement_token';
@@ -619,8 +997,34 @@ describe('editable master teaching plan', () => {
       { expectedRevision: 1, decision: decision('revised') },
       validation,
     );
+    expect(result.recompileToolIds).toEqual(['consumer-id', 'producer-id']);
+    expect(result.reverifyToolIds).toEqual(['consumer-id', 'leaf-id', 'producer-id']);
+  });
+
+  it('does not make a producer compile depend on a consumer parameter name', () => {
+    const original = chain();
+    const changed = structuredClone(original);
+    const consumer = changed.tools.find(({ id }) => id === 'consumer-id');
+    if (!consumer) throw new Error('missing consumer fixture');
+    consumer.candidate.likelyParams = consumer.candidate.likelyParams.map((parameter) =>
+      parameter.name === firstEdge(changed).consumerParameter
+        ? { ...parameter, name: 'renamed_token' }
+        : parameter,
+    );
+    firstEdge(changed).consumerParameter = 'renamed_token';
+    const originalProducer = original.tools.find(({ id }) => id === 'producer-id');
+    const changedProducer = changed.tools.find(({ id }) => id === 'producer-id');
+    if (!originalProducer || !changedProducer) throw new Error('missing producer fixture');
+    expect(teachingToolCompileInputsSha256(originalProducer, original.chainEdges)).toBe(
+      teachingToolCompileInputsSha256(changedProducer, changed.chainEdges),
+    );
+    const result = reviseEditableTeachingPlan(
+      create(original),
+      changed,
+      { expectedRevision: 1, decision: decision('revised') },
+      validation,
+    );
     expect(result.recompileToolIds).toEqual(['consumer-id']);
-    expect(result.reverifyToolIds).toEqual(['consumer-id', 'leaf-id']);
   });
 
   it('recompiles a changed producer and only reverifies its transitive consumers', () => {
@@ -642,7 +1046,7 @@ describe('editable master teaching plan', () => {
     const original = chain();
     const current = create(original);
     const merged = desired([
-      tool('combined-id', 'produce_and_consume', { primary: true, seq: 1 }),
+      tool('combined-id', 'produce_and_consume', { seq: 1 }),
       tool('leaf-id', 'show_details', { seq: 3, dependencies: ['produce_and_consume'] }),
       tool('other-id', 'unrelated_search', { seq: 4 }),
     ]);
@@ -657,7 +1061,7 @@ describe('editable master teaching plan', () => {
     expect(mergeResult.recompileToolIds).toEqual(['combined-id', 'leaf-id']);
 
     const split = desired([
-      tool('producer-a-id', 'produce_a', { primary: true, seq: 1 }),
+      tool('producer-a-id', 'produce_a', { seq: 1 }),
       tool('producer-b-id', 'produce_b', { seq: 2 }),
       tool('leaf-id', 'show_details', { seq: 3, dependencies: ['produce_a'] }),
       tool('other-id', 'unrelated_search', { seq: 4 }),
@@ -675,7 +1079,7 @@ describe('editable master teaching plan', () => {
   it('reverifies remaining consumers when a producer is removed', () => {
     const original = chain();
     const changed = desired([
-      tool('consumer-id', 'consume_token', { primary: true, seq: 2 }),
+      tool('consumer-id', 'consume_token', { seq: 2 }),
       tool('leaf-id', 'show_details', { seq: 3, dependencies: ['consume_token'] }),
       tool('other-id', 'unrelated_search', { seq: 4 }),
     ]);
@@ -691,7 +1095,7 @@ describe('editable master teaching plan', () => {
   });
 
   it('rejects revision conflicts and changes to immutable recording identity', () => {
-    const original = desired([tool('search-id', 'search', { primary: true })]);
+    const original = desired([tool('search-id', 'search')]);
     const current = create(original);
     expect(() =>
       reviseEditableTeachingPlan(
@@ -720,7 +1124,7 @@ describe('editable master teaching plan', () => {
   });
 
   it('binds initial validation to the controller site and recording hash', () => {
-    const plan = desired([tool('search-id', 'search', { primary: true })]);
+    const plan = desired([tool('search-id', 'search')]);
     expect(() =>
       createEditableTeachingPlan(
         plan,

@@ -71,7 +71,7 @@ const XSSI_GUARDS = [")]}'", 'while(1);', 'for(;;);'];
  * key-based redaction still applies to any clean-JSON bodies; this only gates
  * the flat-text scan.
  */
-export function looksLikeRpcEnvelope(body: string): boolean {
+function looksLikeRpcEnvelope(body: string): boolean {
   const head = body.slice(0, 64).trimStart();
   for (const guard of XSSI_GUARDS) {
     if (head.startsWith(guard)) return true; // )]}' covers )]}'NNN variants

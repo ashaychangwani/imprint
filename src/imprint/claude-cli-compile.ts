@@ -24,7 +24,7 @@
  *   so the spinner UX in teach.ts is unchanged.
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
@@ -37,9 +37,23 @@ import type {
   CompileAgentResult,
 } from './compile-agent-types.ts';
 import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
+import {
+  type CompileProviderControl,
+  compileProviderInterruptionError,
+  createCompileProviderControl,
+  watchCompileProviderDeadline,
+} from './compile-provider-control.ts';
+import { recordCompilerHostError } from './compiler-log.ts';
+import {
+  collectOwnedProcess,
+  spawnOwnedProcess,
+  terminateCompilerProcessTree,
+} from './compiler-process.ts';
 import { preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
-import { COMPILE_SENTINELS, compileDeadlineAfterVerification } from './mcp-compile-server.ts';
+import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
+import { type RunDeadlineRef, resolvedRunDeadline } from './provider-retry.ts';
+import { ProviderTerminalAccumulator } from './provider-terminal.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   endTraceSpan,
@@ -77,57 +91,18 @@ function formatRevisionMode(enabled: boolean | undefined): string {
  */
 const COMPILE_EFFORT_LEVEL = 'high';
 
-/**
- * Signature of Claude Code's usage-policy safety refusal (surfaced in the
- * terminal result event / our error message). The block is a transient,
- * probabilistic false positive on legitimate compiles, so we retry a fresh
- * session a few times before surfacing it as a hard failure.
- */
-const USAGE_POLICY_REFUSAL =
-  /unable to respond to this request|appears to violate our Usage Policy/i;
-
-/** Total attempts (1 initial + retries) when a usage-policy refusal is hit. */
-const MAX_USAGE_POLICY_ATTEMPTS = 3;
-
-interface CompileUsageTotals {
-  turns: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadInputTokens: number;
-  cacheCreationInputTokens: number;
-}
-
-/** Add one paid CLI attempt to the aggregate usage reported for the compile. */
-export function addCompileUsageTotals(
-  totals: CompileUsageTotals,
-  attempt: CompileUsageTotals,
-): CompileUsageTotals {
-  return {
-    turns: totals.turns + attempt.turns,
-    inputTokens: totals.inputTokens + attempt.inputTokens,
-    outputTokens: totals.outputTokens + attempt.outputTokens,
-    cacheReadInputTokens: totals.cacheReadInputTokens + attempt.cacheReadInputTokens,
-    cacheCreationInputTokens: totals.cacheCreationInputTokens + attempt.cacheCreationInputTokens,
-  };
-}
-
-/** Exponential backoff with jitter between refusal retries. Spacing matters:
- *  bursts of near-identical requests raise the safety-filter trip rate. */
-function usagePolicyBackoffMs(attempt: number): number {
-  const base = 5000 * 2 ** (attempt - 1); // 5s, 10s, ...
-  return base + Math.floor(Math.random() * base * 0.5);
-}
-
 interface CompileViaClaudeCliOptions {
   session: Session;
   absoluteToolDir: string;
   sessionPath: string;
   systemPromptPath: string;
   deadlineMs: number;
+  runDeadline?: RunDeadlineRef;
   startTime: number;
   onProgress?: (p: CompileAgentProgress) => void;
   /** Called when wall-clock deadline is reached; return ms to extend or null to time out. */
   onDeadlineReached?: OnDeadlineReached;
+  signal?: AbortSignal;
   /** Retain agent-generated tests after successful verification. Mirrors the
    *  in-process loop's `keepTest`. */
   keepTest?: boolean;
@@ -145,10 +120,6 @@ interface CompileViaClaudeCliOptions {
   sharedTriageSelection?: SharedTriageSelection;
   /** Present → drive an auth compile rather than a data compile. */
   authMode?: AuthCliCompileMode;
-  /** Auth segments only: resume a prior segment's claude session with a new user
-   *  message (the orchestrator's result for the checkpoint the agent reached).
-   *  When set, `--resume <sessionId>` is used and `message` replaces the initial
-   *  prompt. Requires session persistence (auth mode keeps it on). */
   resume?: { sessionId: string; message: string };
   /** Explicit model selected by the caller. Defaults to the provider preference. */
   model?: string;
@@ -162,19 +133,17 @@ interface AuthCompileViaClaudeCliOptions {
   sessionPath: string;
   systemPromptPath: string;
   deadlineMs: number;
+  runDeadline?: RunDeadlineRef;
   startTime: number;
   onProgress?: (p: CompileAgentProgress) => void;
   onDeadlineReached?: OnDeadlineReached;
+  signal?: AbortSignal;
   authMode: AuthCliCompileMode;
   /** Resume a prior segment (see CompileViaClaudeCliOptions.resume). */
   resume?: { sessionId: string; message: string };
   model?: string;
 }
 
-/** Auth-compile entry point for claude-cli. Delegates to the same trace +
- *  usage-policy-retry + stream-json driver as the data path; the only
- *  differences (MCP args, allowedTools, prompts, verification) are carried by
- *  `authMode` and resolved inside runClaudeCliAttempt. */
 export function compileAuthViaClaudeCli(
   opts: AuthCompileViaClaudeCliOptions,
 ): Promise<CompileAgentResult> {
@@ -184,9 +153,11 @@ export function compileAuthViaClaudeCli(
     sessionPath: opts.sessionPath,
     systemPromptPath: opts.systemPromptPath,
     deadlineMs: opts.deadlineMs,
+    runDeadline: opts.runDeadline,
     startTime: opts.startTime,
     onProgress: opts.onProgress,
     onDeadlineReached: opts.onDeadlineReached,
+    signal: opts.signal,
     authMode: opts.authMode,
     resume: opts.resume,
     model: opts.model,
@@ -209,7 +180,11 @@ interface StreamJsonEvent {
   };
   // result envelope (terminal event)
   result?: string;
+  errors?: string[];
   is_error?: boolean;
+  api_error_status?: number | string;
+  terminal_reason?: string;
+  error?: { type?: string; code?: string; status?: number; status_code?: number };
   duration_ms?: number;
   num_turns?: number;
   total_cost_usd?: number;
@@ -271,59 +246,24 @@ export async function compileViaClaudeCli(
   );
 }
 
-/**
- * Drives the compile, retrying a fresh claude-cli session when an attempt is
- * blocked by the usage-policy safety filter. The block is a flaky false positive
- * (see USAGE_POLICY_REFUSAL); a re-roll almost always succeeds. All other
- * outcomes (success, give_up, verification failure, timeout) return immediately.
- */
 async function compileViaClaudeCliImpl(
   opts: CompileViaClaudeCliOptions,
 ): Promise<CompileAgentResult> {
-  let lastResult: CompileAgentResult | undefined;
-  let usageTotals: CompileUsageTotals = {
-    turns: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadInputTokens: 0,
-    cacheCreationInputTokens: 0,
-  };
-  for (let attempt = 1; attempt <= MAX_USAGE_POLICY_ATTEMPTS; attempt++) {
-    const result = await runClaudeCliAttempt(opts);
-    usageTotals = addCompileUsageTotals(usageTotals, result);
-    const resultWithAggregateUsage = { ...result, ...usageTotals };
-    const isRefusal = !result.success && USAGE_POLICY_REFUSAL.test(result.message ?? '');
-    if (!isRefusal) return resultWithAggregateUsage;
-    lastResult = resultWithAggregateUsage;
-    if (attempt < MAX_USAGE_POLICY_ATTEMPTS) {
-      const backoffMs = usagePolicyBackoffMs(attempt);
-      log(
-        `usage-policy refusal on attempt ${attempt}/${MAX_USAGE_POLICY_ATTEMPTS}; ` +
-          `retrying a fresh session in ${Math.round(backoffMs / 1000)}s`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, backoffMs));
-    }
-  }
-
-  // Every attempt was blocked. Annotate the final error so the operator knows
-  // it was the (flaky) safety filter, not their recording or workflow.
-  const exhausted = lastResult as CompileAgentResult;
-  return {
-    ...exhausted,
-    message: `${exhausted.message}\n\nBlocked by the model's usage-policy safety filter on all ${MAX_USAGE_POLICY_ATTEMPTS} attempts. This is typically a transient false positive on reverse-engineering compiles — re-run this tool, or compile it with a different provider (e.g. codex-cli).`,
-  };
+  return await runClaudeCliAttempt(opts);
 }
 
 async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<CompileAgentResult> {
+  const runDeadline = resolvedRunDeadline(opts.runDeadline, opts.deadlineMs);
   // Ensure tool dir exists and clear any prior sentinels — a stale
   // sentinel from a previous run would short-circuit our success detection.
   mkdirSync(opts.absoluteToolDir, { recursive: true });
-  for (const name of [
+  const staleSentinels = [
     COMPILE_SENTINELS.done,
     COMPILE_SENTINELS.giveUp,
     COMPILE_SENTINELS.checkpoint,
-    COMPILE_SENTINELS.verificationState,
-  ]) {
+    ...(!opts.resume ? [COMPILE_SENTINELS.verificationState] : []),
+  ];
+  for (const name of staleSentinels) {
     const p = pathJoin(opts.absoluteToolDir, name);
     if (existsSync(p)) {
       try {
@@ -387,6 +327,7 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
     allowedToolNames = [
       'read_session_summary',
       'read_request',
+      'inspect_body_structure',
       'read_response_body',
       'search_response_body',
       'read_file',
@@ -424,15 +365,8 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     },
   };
 
-  // Auth compiles run in resumable SEGMENTS: each segment ends when the agent
-  // reaches a checkpoint tool; the orchestrator acts and resumes the same
-  // session with the result. That needs session persistence ON (so --resume
-  // works) and, on a resume, `--resume <id>` + the result as the new prompt.
   const promptArg = opts.resume ? opts.resume.message : initialPrompt;
   const resumeArgs = opts.resume ? ['--resume', opts.resume.sessionId] : [];
-  // Data compiles are single-shot — keep session persistence OFF. Auth keeps it
-  // ON so the segment loop can resume.
-  const persistenceArgs = opts.authMode ? [] : ['--no-session-persistence'];
 
   const args = [
     '--print',
@@ -461,7 +395,6 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     '200',
     '--permission-mode',
     'bypassPermissions',
-    ...persistenceArgs,
     '--disable-slash-commands',
     // Cap thinking effort below `max` to reduce usage-policy false positives.
     '--effort',
@@ -475,10 +408,16 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     `spawning claude (max-turns=200, mcp-server=${MCP_SERVER_NAME}${opts.resume ? `, resume=${opts.resume.sessionId.slice(0, 8)}` : ''})`,
   );
 
+  const providerControl = createCompileProviderControl(runDeadline ?? opts.deadlineMs);
+  providerControl.updateSession(opts.resume?.sessionId);
+  const childEnv = { ...process.env, ...providerControl.env };
+  // spawnOwnedProcess merges the parent environment, so an explicit undefined
+  // is required to remove this host-only payload from the child.
+  childEnv.IMPRINT_TEACH_CREDENTIALS = undefined;
   let child: ChildProcess;
   try {
-    child = spawn('claude', args, {
-      cwd: REPO_ROOT,
+    child = spawnOwnedProcess('claude', args, {
+      cwd: opts.absoluteToolDir,
       // Claude CLI's default MCP_TOOL_TIMEOUT is 60s. The compile MCP
       // server's `done` tool runs external verification inline: one live
       // integration suite, parser tests, typechecking, and a fresh semantic
@@ -490,23 +429,28 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       // operator on a fast network can tighten it without editing source.
       // Connection-startup timeout stays at 60s for cold Playwright boot.
       env: {
-        ...process.env,
+        ...childEnv,
         MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? '1800000',
         MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? '60000',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (err) {
+    providerControl.dispose();
     return finalErrorResult(opts, `failed to spawn claude-cli: ${errMsg(err)}`);
   }
 
-  const result = await driveStreamJson(child, opts);
-  return result;
+  try {
+    return await driveStreamJson(child, opts, providerControl);
+  } finally {
+    providerControl.dispose();
+  }
 }
 
 async function driveStreamJson(
   child: ChildProcess,
   opts: CompileViaClaudeCliOptions,
+  providerControl: CompileProviderControl,
 ): Promise<CompileAgentResult> {
   // Capture OTel context so child-process event handlers can parent spans
   // under the current compile.claude_cli_agent span. Bun's event emitters
@@ -514,8 +458,16 @@ async function driveStreamJson(
   // spans appear as orphaned root traces in Phoenix.
   const parentCtx = otelContext.active();
 
-  const conversationLog: unknown[] = [];
   const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
+  const conversationLog: unknown[] = (() => {
+    if (!opts.resume || !existsSync(conversationLogPath)) return [];
+    try {
+      const prior = JSON.parse(readFileSync(conversationLogPath, 'utf8'));
+      return Array.isArray(prior) ? prior : [];
+    } catch {
+      return [];
+    }
+  })();
   const flushLog = (): void => {
     try {
       writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
@@ -527,14 +479,16 @@ async function driveStreamJson(
   let cacheReadInputTokens = 0;
   let cacheCreationInputTokens = 0;
   let turn = 0;
-  let capturedSessionId: string | undefined;
-  let lastErrorEvent: StreamJsonEvent | null = null;
+  let capturedSessionId: string | undefined = opts.resume?.sessionId;
+  const terminalParser = new ProviderTerminalAccumulator('claude-cli');
+  let processErrorMessage = '';
   let stderrBuf = '';
   let currentTurnSpan: Span | null = null;
   let turnInputTokens = 0;
   let turnOutputTokens = 0;
 
-  const budgetMs = Math.max(0, opts.deadlineMs - Date.now());
+  const runDeadline = providerControl.deadline;
+  const budgetMs = Math.max(0, runDeadline.deadlineMs - Date.now());
   const fireProgress = (phase: 'thinking' | 'tool', toolName?: string): void => {
     opts.onProgress?.({
       turn,
@@ -549,171 +503,146 @@ async function driveStreamJson(
     });
   };
 
-  // Wall-clock guard: if we hit the deadline, ask the user or kill the child.
-  let currentDeadlineMs = opts.deadlineMs;
-  let childExited = false;
-
-  const killChild = (): void => {
-    log('wall-clock deadline exceeded, terminating claude');
+  const terminateChild = (reason: string): void => {
+    log(`${reason}, terminating claude`);
     try {
-      child.kill('SIGTERM');
-      setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
-      }, 5000);
+      terminateCompilerProcessTree(child);
     } catch {
       // already gone
     }
   };
+  const deadlineWatch = watchCompileProviderDeadline(providerControl, opts.onDeadlineReached, () =>
+    terminateChild('wall-clock deadline exceeded'),
+  );
 
-  const scheduleDeadlineCheck = (): ReturnType<typeof setTimeout> => {
-    const effectiveDeadlineMs = compileDeadlineAfterVerification(
-      opts.absoluteToolDir,
-      currentDeadlineMs,
-    );
-    const remaining = Math.max(0, effectiveDeadlineMs - Date.now());
-    return setTimeout(async () => {
-      if (childExited) return;
-      // done() verification runs in the MCP child. Re-read its lifecycle clock
-      // before killing the compiler so only reasoning time counts here.
-      if (Date.now() < compileDeadlineAfterVerification(opts.absoluteToolDir, currentDeadlineMs)) {
-        deadlineTimer = scheduleDeadlineCheck();
+  const onStdoutLine = (rawLine: string): void => {
+    otelContext.with(parentCtx, () => {
+      const line = rawLine.trim();
+      if (!line) return;
+
+      let evt: StreamJsonEvent;
+      try {
+        evt = JSON.parse(line);
+      } catch (err) {
+        log(`unparseable stream-json line: ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
-      if (opts.onDeadlineReached) {
-        const extensionMs = await opts.onDeadlineReached();
-        if (childExited) return;
-        if (extensionMs != null && extensionMs > 0) {
-          currentDeadlineMs += extensionMs;
-          deadlineTimer = scheduleDeadlineCheck();
-          return;
-        }
+
+      conversationLog.push(evt);
+      terminalParser.ingest(evt as unknown as Record<string, unknown>);
+
+      // Token accounting from any event that carries usage.
+      const evtInputTokens =
+        (evt.usage?.input_tokens ?? 0) + (evt.message?.usage?.input_tokens ?? 0);
+      const evtOutputTokens =
+        (evt.usage?.output_tokens ?? 0) + (evt.message?.usage?.output_tokens ?? 0);
+      if (evtInputTokens || evtOutputTokens) {
+        inputTokens += evtInputTokens;
+        outputTokens += evtOutputTokens;
+        turnInputTokens += evtInputTokens;
+        turnOutputTokens += evtOutputTokens;
       }
-      killChild();
-    }, remaining);
-  };
 
-  let deadlineTimer = scheduleDeadlineCheck();
-
-  // Stdout: newline-delimited stream-json events.
-  let stdoutBuf = '';
-  child.stdout?.on('data', (chunk: Buffer) => {
-    otelContext.with(parentCtx, () => {
-      stdoutBuf += chunk.toString('utf8');
-      while (true) {
-        const nl = stdoutBuf.indexOf('\n');
-        if (nl < 0) break;
-        const line = stdoutBuf.slice(0, nl).trim();
-        stdoutBuf = stdoutBuf.slice(nl + 1);
-        if (!line) continue;
-
-        let evt: StreamJsonEvent;
-        try {
-          evt = JSON.parse(line);
-        } catch (err) {
-          log(`unparseable stream-json line: ${err instanceof Error ? err.message : String(err)}`);
-          continue;
+      if (evt.type === 'system' && evt.subtype === 'init') {
+        if (evt.session_id) {
+          capturedSessionId = evt.session_id;
+          providerControl.updateSession(evt.session_id);
         }
+        log(`session_id=${evt.session_id ?? '(none)'}`);
+        return;
+      }
 
-        conversationLog.push(evt);
-
-        // Token accounting from any event that carries usage.
-        const evtInputTokens =
-          (evt.usage?.input_tokens ?? 0) + (evt.message?.usage?.input_tokens ?? 0);
-        const evtOutputTokens =
-          (evt.usage?.output_tokens ?? 0) + (evt.message?.usage?.output_tokens ?? 0);
-        if (evtInputTokens || evtOutputTokens) {
-          inputTokens += evtInputTokens;
-          outputTokens += evtOutputTokens;
-          turnInputTokens += evtInputTokens;
-          turnOutputTokens += evtOutputTokens;
-        }
-
-        if (evt.type === 'system' && evt.subtype === 'init') {
-          if (evt.session_id) capturedSessionId = evt.session_id;
-          log(`session_id=${evt.session_id ?? '(none)'}`);
-          continue;
-        }
-
-        if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
-          if (currentTurnSpan) {
-            setSpanAttributes(currentTurnSpan, {
-              'imprint.agent.turn_input_tokens': turnInputTokens,
-              'imprint.agent.turn_output_tokens': turnOutputTokens,
-            });
-            endTraceSpan(currentTurnSpan);
-          }
-          flushLog();
-          turn++;
-          turnInputTokens = 0;
-          turnOutputTokens = 0;
-          currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
-            'imprint.agent.turn': turn,
-            'imprint.agent.cumulative_input_tokens': inputTokens,
-            'imprint.agent.cumulative_output_tokens': outputTokens,
+      if (evt.type === 'assistant' && Array.isArray(evt.message?.content)) {
+        if (currentTurnSpan) {
+          setSpanAttributes(currentTurnSpan, {
+            'imprint.agent.turn_input_tokens': turnInputTokens,
+            'imprint.agent.turn_output_tokens': turnOutputTokens,
           });
-          if (currentTurnSpan && captureLlmIo) {
-            setSpanAttributes(
-              currentTurnSpan,
-              traceJsonInputOutputAttributes('output', evt.message.content),
-            );
-          }
-          fireProgress('thinking');
-          for (const block of evt.message.content) {
-            if (block && (block as { type?: string }).type === 'tool_use') {
-              const fullName = (block as { name?: string }).name ?? '(unknown)';
-              // Strip mcp__<server>__ prefix for human-readable progress.
-              const short = fullName.replace(`mcp__${MCP_SERVER_NAME}__`, '');
-              fireProgress('tool', short);
-            }
-          }
-          continue;
+          endTraceSpan(currentTurnSpan);
         }
+        flushLog();
+        turn++;
+        turnInputTokens = 0;
+        turnOutputTokens = 0;
+        currentTurnSpan = startTraceSpan(`agent.turn.${turn}`, 'CHAIN', {
+          'imprint.agent.turn': turn,
+          'imprint.agent.cumulative_input_tokens': inputTokens,
+          'imprint.agent.cumulative_output_tokens': outputTokens,
+        });
+        if (currentTurnSpan && captureLlmIo) {
+          setSpanAttributes(
+            currentTurnSpan,
+            traceJsonInputOutputAttributes('output', evt.message.content),
+          );
+        }
+        fireProgress('thinking');
+        for (const block of evt.message.content) {
+          if (block && (block as { type?: string }).type === 'tool_use') {
+            const fullName = (block as { name?: string }).name ?? '(unknown)';
+            // Strip mcp__<server>__ prefix for human-readable progress.
+            const short = fullName.replace(`mcp__${MCP_SERVER_NAME}__`, '');
+            fireProgress('tool', short);
+          }
+        }
+        return;
+      }
 
-        if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
-          if (currentTurnSpan && captureLlmIo) {
-            setSpanAttributes(
-              currentTurnSpan,
-              traceJsonInputOutputAttributes('input', evt.message.content),
-            );
-          }
-          continue;
+      if (evt.type === 'user' && Array.isArray(evt.message?.content)) {
+        if (currentTurnSpan && captureLlmIo) {
+          setSpanAttributes(
+            currentTurnSpan,
+            traceJsonInputOutputAttributes('input', evt.message.content),
+          );
         }
+        return;
+      }
 
-        if (evt.type === 'result') {
-          if (evt.usage) {
-            inputTokens = evt.usage.input_tokens ?? inputTokens;
-            outputTokens = evt.usage.output_tokens ?? outputTokens;
-            cacheReadInputTokens = evt.usage.cache_read_input_tokens ?? cacheReadInputTokens;
-            cacheCreationInputTokens =
-              evt.usage.cache_creation_input_tokens ?? cacheCreationInputTokens;
-          }
-          if (evt.is_error) {
-            lastErrorEvent = evt;
-          }
-          continue;
+      if (evt.type === 'result') {
+        if (evt.session_id) {
+          capturedSessionId = evt.session_id;
+          providerControl.updateSession(evt.session_id);
         }
+        if (evt.usage) {
+          inputTokens = evt.usage.input_tokens ?? inputTokens;
+          outputTokens = evt.usage.output_tokens ?? outputTokens;
+          cacheReadInputTokens = evt.usage.cache_read_input_tokens ?? cacheReadInputTokens;
+          cacheCreationInputTokens =
+            evt.usage.cache_creation_input_tokens ?? cacheCreationInputTokens;
+        }
+        return;
+      }
 
-        if (evt.type === 'system' && evt.subtype === 'api_retry') {
-          log(`api_retry: ${(evt as { error?: string }).error ?? '(unknown)'}`);
-        }
+      if (evt.type === 'system' && evt.subtype === 'api_retry') {
+        log(`api_retry: ${(evt as { error?: string }).error ?? '(unknown)'}`);
       }
     });
-  });
+  };
 
-  child.stderr?.on('data', (chunk: Buffer) => {
-    const s = chunk.toString('utf8');
+  const onStderrChunk = (s: string): void => {
     stderrBuf += s;
     // Forward to our debug log only — don't pollute the user's console.
     log(`[claude stderr] ${s.trim()}`);
-  });
+  };
 
-  // Wait for the child to exit on its own. Sentinel detection happens after.
-  const exitCode: number = await new Promise((resolve) => {
-    child.once('exit', (code) => resolve(code ?? -1));
-    child.once('error', () => resolve(-1));
-  });
-  childExited = true;
-  clearTimeout(deadlineTimer);
+  const stopProviderWatch = providerControl.watch(() =>
+    terminateChild('nested live verifier provider interruption'),
+  );
+  let exitCode: number;
+  try {
+    const output = await collectOwnedProcess(child, {
+      signal: opts.signal,
+      onStdoutLine,
+      onStderrChunk,
+    });
+    exitCode = output.exitCode ?? -1;
+  } catch (error) {
+    if (opts.signal?.aborted) throw error;
+    processErrorMessage = errMsg(error);
+    exitCode = -1;
+  } finally {
+    stopProviderWatch();
+    deadlineWatch.dispose();
+  }
   if (currentTurnSpan) {
     setSpanAttributes(currentTurnSpan, {
       'imprint.agent.turn_input_tokens': turnInputTokens,
@@ -722,14 +651,14 @@ async function driveStreamJson(
     endTraceSpan(currentTurnSpan);
   }
 
-  // Drain any remaining buffered output.
-  if (stdoutBuf.trim()) {
-    log(`unflushed stdout tail (${stdoutBuf.length} bytes) discarded`);
+  if (processErrorMessage) {
+    recordCompilerHostError(
+      conversationLogPath,
+      `claude-cli process failed before emitting events: ${processErrorMessage}`,
+    );
+  } else {
+    flushLog();
   }
-
-  // Final flush of the complete conversation log.
-  flushLog();
-
   // Inspect sentinels to determine outcome.
   const doneSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.done);
   const giveUpSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.giveUp);
@@ -737,26 +666,6 @@ async function driveStreamJson(
   const workflowPath = pathJoin(opts.absoluteToolDir, 'workflow.json');
   const parserPath = pathJoin(opts.absoluteToolDir, 'parser.ts');
   const parserTestPath = pathJoin(opts.absoluteToolDir, 'parser.test.ts');
-
-  // Determine success up-front so we can clean up the ephemeral parser.test.ts
-  // before constructing baseResult (which captures parserTestPath via existsSync).
-  const verifiedOk =
-    existsSync(doneSentinel) &&
-    (() => {
-      try {
-        const raw = readFileSync(doneSentinel, 'utf8').trim();
-        return raw ? JSON.parse(raw).verification === 'passed' : false;
-      } catch {
-        return false;
-      }
-    })();
-  if (verifiedOk && !opts.keepTest && existsSync(parserTestPath)) {
-    try {
-      unlinkSync(parserTestPath);
-    } catch {
-      // best effort
-    }
-  }
 
   const baseResult: Pick<
     CompileAgentResult,
@@ -785,6 +694,50 @@ async function driveStreamJson(
     sessionId: capturedSessionId,
   };
 
+  terminalParser.ingestStderr(stderrBuf);
+  const terminal = terminalParser.result();
+  if (terminal.providerError) {
+    const errorMessage =
+      terminal.providerError.providerMessages.join('\n') || 'unknown provider error';
+    return {
+      success: false,
+      outcome: 'error',
+      message: `claude-cli provider call failed${exitCode === 0 ? '' : ` (exit ${exitCode})`}\n${errorMessage}`,
+      providerInterruption: terminal.interruption,
+      providerError: terminal.providerError,
+      ...baseResult,
+    };
+  }
+
+  const nestedInterruption = providerControl.interruption();
+  if (nestedInterruption) {
+    const providerError = compileProviderInterruptionError(nestedInterruption);
+    return {
+      success: false,
+      outcome: 'error',
+      message: `nested live verifier provider ${nestedInterruption.reason}`,
+      providerInterruption: providerError.interruption,
+      providerError,
+      ...baseResult,
+      sessionId: nestedInterruption.sessionId ?? baseResult.sessionId,
+    };
+  }
+
+  if (deadlineWatch.expired) {
+    const providerError = compileProviderInterruptionError({
+      reason: 'deadline',
+      deadlineMs: runDeadline.deadlineMs,
+    });
+    return {
+      success: false,
+      outcome: 'error',
+      message: 'claude-cli reached the run deadline',
+      providerInterruption: providerError.interruption,
+      providerError,
+      ...baseResult,
+    };
+  }
+
   // Auth segment: the agent paused at a checkpoint for the orchestrator to act.
   // Take precedence over done/give_up (a well-behaved segment ends ONLY here).
   if (opts.authMode && existsSync(checkpointSentinel)) {
@@ -807,20 +760,6 @@ async function driveStreamJson(
     }
   }
 
-  // Wall-clock deadline exceeded?
-  if (
-    Date.now() > compileDeadlineAfterVerification(opts.absoluteToolDir, currentDeadlineMs) &&
-    !existsSync(doneSentinel) &&
-    !existsSync(giveUpSentinel)
-  ) {
-    return {
-      success: false,
-      outcome: 'timeout',
-      message: `claude-cli exceeded the ${Math.round((currentDeadlineMs - opts.startTime) / 60000)} minute deadline before completing.`,
-      ...baseResult,
-    };
-  }
-
   if (existsSync(doneSentinel)) {
     let payload: {
       summary?: string;
@@ -834,11 +773,14 @@ async function driveStreamJson(
     } catch (err) {
       log(`failed to parse done sentinel: ${errMsg(err)}`);
     }
-    if (payload.verification === 'passed') {
+    if (payload.verification === 'mechanical_passed' || payload.verification === 'not_applicable') {
       return {
         success: true,
         outcome: 'done',
-        message: payload.summary ?? 'Task completed',
+        message:
+          payload.verification === 'not_applicable'
+            ? `${payload.summary ?? 'Task completed'} (live verification: N/A)`
+            : (payload.summary ?? 'Task completed'),
         ...baseResult,
       };
     }
@@ -879,8 +821,7 @@ async function driveStreamJson(
   }
 
   // Any other exit → error.
-  const errorTail =
-    (lastErrorEvent as StreamJsonEvent | null)?.result ?? stderrBuf.trim().slice(-500);
+  const errorTail = processErrorMessage || stderrBuf.trim().slice(-500);
   return {
     success: false,
     outcome: 'error',
@@ -892,11 +833,7 @@ async function driveStreamJson(
 function finalErrorResult(opts: CompileViaClaudeCliOptions, message: string): CompileAgentResult {
   mkdirSync(opts.absoluteToolDir, { recursive: true });
   const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
-  try {
-    writeFileSync(conversationLogPath, JSON.stringify({ error: message }, null, 2), 'utf8');
-  } catch {
-    // best effort
-  }
+  recordCompilerHostError(conversationLogPath, message);
   return {
     success: false,
     outcome: 'error',

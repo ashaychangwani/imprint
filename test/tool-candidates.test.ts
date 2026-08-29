@@ -3,10 +3,8 @@ import {
   SharedCompileContextSchema,
   buildSharedCompileContext,
   buildToolCandidatePayload,
-  closeCandidateSelection,
   deriveStructuralCandidateDependencies,
   mergeCandidateDependencies,
-  primaryToolCandidate,
   sharedContextHasAuth,
   validateToolCandidateDetection,
 } from '../src/imprint/tool-candidates.ts';
@@ -53,12 +51,10 @@ const session: Session = {
 };
 
 describe('tool candidate payload', () => {
-  it('keeps same-site XHR/fetch metadata and marks auth dependencies', () => {
+  it('keeps same-site XHR/fetch metadata and credential placeholders', () => {
     const payload = buildToolCandidatePayload(session);
     expect(payload.requests.map((r) => r.seq)).toEqual([1, 2]);
     expect(payload.requests[0]?.credentialPlaceholders).toEqual(['username', 'password']);
-    expect(payload.requests[0]?.likelyLoginOrAuth).toBe(true);
-    expect(payload.requests[1]?.likelyLoginOrAuth).toBe(false);
   });
 
   it('excludes telemetry/beacon endpoints without dropping event-listing APIs', () => {
@@ -187,7 +183,6 @@ describe('tool candidate payload', () => {
     const payload = buildToolCandidatePayload(crossDomainAuthSession);
 
     expect(payload.requests.map((r) => r.seq)).toEqual([1, 2]);
-    expect(payload.requests[0]?.likelyLoginOrAuth).toBe(true);
   });
 
   it('uses navigation or document URLs for scoping when session.url is about:blank', () => {
@@ -244,7 +239,6 @@ describe('tool candidate payload', () => {
     const payload = buildToolCandidatePayload(blankSession);
 
     expect(payload.requests.map((r) => r.seq)).toEqual([2, 4]);
-    expect(payload.requests[1]?.likelyLoginOrAuth).toBe(true);
   });
 
   it('promotes all requests to a cross-origin host when any request carries auth signals', () => {
@@ -295,7 +289,7 @@ describe('tool candidate payload', () => {
     expect(payload.requests.map((r) => r.seq)).toEqual([1, 2, 3]);
   });
 
-  it('trusts triaged public cross-origin API scope while still dropping telemetry', () => {
+  it('preserves a caller-triaged request scope without reclassifying it', () => {
     const remitlyTriagedSession: Session = {
       ...session,
       site: 'remitly',
@@ -353,7 +347,7 @@ describe('tool candidate payload', () => {
       buildToolCandidatePayload(remitlyTriagedSession, { trustSessionScope: true }).requests.map(
         (r) => r.seq,
       ),
-    ).toEqual([534, 538]);
+    ).toEqual([534, 536, 537, 538]);
   });
 
   it('compacts identical repeated requests before sending candidate context', () => {
@@ -380,47 +374,30 @@ describe('tool candidate payload', () => {
 });
 
 describe('tool candidate validation', () => {
-  it('reports an empty detector result as a friendly Imprint error', () => {
-    expect(() =>
-      validateToolCandidateDetection({
-        sharedContext: {},
-        candidates: [],
-      }),
-    ).toThrow(/did not identify any tool candidates backed by requests/);
+  it('keeps an empty detector result for the master to review', () => {
+    const detection = validateToolCandidateDetection({
+      sharedContext: {},
+      candidates: [],
+    });
+    expect(detection.candidates).toEqual([]);
   });
 
-  it('requires exactly one primary candidate', () => {
-    expect(() =>
-      validateToolCandidateDetection({
-        sharedContext: {},
-        candidates: [
-          {
-            toolName: 'search_items',
-            description: 'Search items',
-            rationale: 'primary intent',
-            confidence: 0.9,
-            primary: true,
-            requestSeqs: [2],
-          },
-        ],
-      }),
-    ).not.toThrow();
-
-    expect(() =>
-      validateToolCandidateDetection({
-        sharedContext: {},
-        candidates: [
-          {
-            toolName: 'search_items',
-            description: 'Search items',
-            rationale: 'primary intent',
-            confidence: 0.9,
-            primary: false,
-            requestSeqs: [2],
-          },
-        ],
-      }),
-    ).toThrow(/exactly one primary/);
+  it('keeps a recording-grounded browser candidate with no API requests', () => {
+    const detection = validateToolCandidateDetection({
+      sharedContext: {},
+      candidates: [
+        {
+          toolName: 'submit_form',
+          description: 'Submit the recorded form',
+          rationale: 'the useful operation is visible in browser events',
+          confidence: 0.75,
+          requestSeqs: [],
+          eventSeqs: [10, 11],
+        },
+      ],
+    });
+    expect(detection.candidates[0]?.requestSeqs).toEqual([]);
+    expect(detection.candidates[0]?.eventSeqs).toEqual([10, 11]);
   });
 
   it('keeps candidate-specific dependency seqs out of shared login context', () => {
@@ -430,9 +407,8 @@ describe('tool candidate validation', () => {
         {
           toolName: 'search_items',
           description: 'Search items',
-          rationale: 'primary intent',
+          rationale: 'recorded search intent',
           confidence: 0.9,
-          primary: true,
           requestSeqs: [2],
           dependencySeqs: [1, 4],
         },
@@ -441,18 +417,12 @@ describe('tool candidate validation', () => {
           description: 'List orders',
           rationale: 'secondary intent',
           confidence: 0.7,
-          primary: false,
           requestSeqs: [8],
           dependencySeqs: [7, 9],
         },
       ],
     });
-    const primary = primaryToolCandidate(detection);
-    const secondary = detection.candidates[1];
-    const shared = buildSharedCompileContext(
-      detection,
-      secondary ? [primary, secondary] : [primary],
-    );
+    const shared = buildSharedCompileContext(detection);
     expect(shared.loginRequestSeqs).toEqual([1]);
     expect(shared.credentialNames).toEqual(['username']);
   });
@@ -464,9 +434,8 @@ describe('tool candidate validation', () => {
         {
           toolName: 'search_domain_extensions',
           description: 'Search domain extensions',
-          rationale: 'primary intent',
+          rationale: 'recorded search intent',
           confidence: 0.9,
-          primary: true,
           requestSeqs: [2],
           likelyParams: [
             {
@@ -489,9 +458,8 @@ describe('tool candidate validation', () => {
         {
           toolName: 'search_domain_extensions',
           description: 'Search domain extensions',
-          rationale: 'primary intent',
+          rationale: 'recorded search intent',
           confidence: 0.9,
-          primary: true,
           requestSeqs: [2],
           likelyParams: [
             {
@@ -514,9 +482,8 @@ describe('tool candidate validation', () => {
         {
           toolName: 'search_items',
           description: 'Search items',
-          rationale: 'primary intent',
+          rationale: 'recorded search intent',
           confidence: 0.9,
-          primary: true,
           requestSeqs: [2],
         },
       ],
@@ -532,9 +499,8 @@ describe('tool candidate validation', () => {
           {
             toolName: 'get_details',
             description: 'Get details',
-            rationale: 'primary intent',
+            rationale: 'recorded detail intent',
             confidence: 0.9,
-            primary: true,
             requestSeqs: [2],
             dependsOnTools: ['get_details', 'missing_tool'],
           },
@@ -554,7 +520,6 @@ describe('candidate dependency graph', () => {
           description: toolName,
           rationale: toolName,
           confidence: 0.9,
-          primary: true,
           requestSeqs,
           dependencySeqs,
         },
@@ -582,7 +547,7 @@ describe('candidate dependency graph', () => {
     ]);
   });
 
-  it('merges replay edges, computes transitive closure, and preserves detection order', () => {
+  it('merges grounded dependency edges without selecting a subset', () => {
     const structural = deriveStructuralCandidateDependencies([
       candidate('get_details', [3], [2]),
       candidate('lookup_items', [1]),
@@ -594,31 +559,12 @@ describe('candidate dependency graph', () => {
       { consumerTool: 'missing', producerTool: 'lookup_items' },
       { consumerTool: 'search_items', producerTool: 'search_items' },
     ]);
-    const closure = closeCandidateSelection(merged, ['get_details']);
-    expect(closure.selected.map((item) => item.toolName)).toEqual([
-      'get_details',
-      'lookup_items',
-      'search_items',
+    expect(merged.map((item) => [item.toolName, item.dependsOnTools])).toEqual([
+      ['get_details', ['search_items']],
+      ['lookup_items', []],
+      ['search_items', ['lookup_items']],
+      ['independent_tool', []],
     ]);
-    expect(closure.autoAdded.map((item) => item.toolName)).toEqual([
-      'lookup_items',
-      'search_items',
-    ]);
-    expect(closure.cycles).toEqual([]);
-  });
-
-  it('terminates deterministically on cycles and includes every member once', () => {
-    const graph = mergeCandidateDependencies(
-      [candidate('tool_a', [1]), candidate('tool_b', [2])],
-      [
-        { consumerTool: 'tool_a', producerTool: 'tool_b' },
-        { consumerTool: 'tool_b', producerTool: 'tool_a' },
-      ],
-    );
-    const closure = closeCandidateSelection(graph, ['tool_a']);
-    expect(closure.selected.map((item) => item.toolName)).toEqual(['tool_a', 'tool_b']);
-    expect(closure.autoAdded.map((item) => item.toolName)).toEqual(['tool_b']);
-    expect(closure.cycles).toEqual([['tool_a', 'tool_b', 'tool_a']]);
   });
 });
 

@@ -124,14 +124,21 @@ export async function runCapturedIntegrationCase(opts: {
   /** Final semantic verification pins the cache winner so a failed preferred
    * backend becomes explicit reprobe feedback instead of a hidden ladder walk. */
   preferredOnlyBackend?: boolean;
+  deadlineMs?: number;
+  signal?: AbortSignal;
 }): Promise<LadderRun> {
+  if (opts.signal?.aborted) {
+    throw opts.signal.reason instanceof Error
+      ? opts.signal.reason
+      : new DOMException('Live integration cancelled', 'AbortError');
+  }
   const workflow = WorkflowSchema.parse(JSON.parse(readFileSync(opts.workflowPath, 'utf8')));
   if (workflowHasIrreversibleEffect(workflow)) {
     throw new Error(
       `Live integration is disabled for irreversible workflow ${JSON.stringify(workflow.toolName)}.`,
     );
   }
-  const release = await acquireSiteLiveLock(opts.workflowPath);
+  const release = await acquireSiteLiveLock(opts.workflowPath, opts.deadlineMs);
   const startedAt = Date.now();
   let run: LadderRun;
   try {
@@ -156,6 +163,7 @@ export async function runCapturedIntegrationCase(opts: {
       params: opts.params,
       credentials: opts.credentials,
       forceBackend,
+      signal: opts.signal,
     });
   } finally {
     release();

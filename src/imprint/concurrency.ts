@@ -7,64 +7,6 @@
  * for backwards compatibility with existing callers + tests.
  */
 
-/** Run `fn` over `items` with at most `concurrency` in flight, preserving input
- *  order in the result. Throws the first error encountered (after in-flight work
- *  settles); use mapLimitSettled when you need per-item success/failure. */
-export async function mapLimit<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  let firstError: unknown;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length && firstError === undefined) {
-      const index = next++;
-      const item = items[index];
-      if (item === undefined) continue;
-      try {
-        results[index] = await fn(item);
-      } catch (err) {
-        firstError ??= err;
-      }
-    }
-  });
-  await Promise.allSettled(workers);
-  if (firstError !== undefined) throw firstError;
-  return results;
-}
-
-type SettledResult<R> = { ok: true; value: R } | { ok: false; error: unknown };
-
-/** Like mapLimit, but never throws: each item resolves to a tagged
- *  success/failure entry, preserving input order. */
-export async function mapLimitSettled<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>,
-  opts: { stopOnError?: (err: unknown) => boolean } = {},
-): Promise<Array<SettledResult<R> | undefined>> {
-  const results = new Array<SettledResult<R>>(items.length);
-  let next = 0;
-  let stopped = false;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length && !stopped) {
-      const index = next++;
-      const item = items[index];
-      if (item === undefined) continue;
-      try {
-        results[index] = { ok: true, value: await fn(item) };
-      } catch (err) {
-        results[index] = { ok: false, error: err };
-        if (opts.stopOnError?.(err)) stopped = true;
-      }
-    }
-  });
-  await Promise.allSettled(workers);
-  return results;
-}
-
 /** Error thrown by withTimeout when the deadline elapses before the work settles.
  *  A distinct class lets callers tell a timeout apart from a genuine failure. */
 export class TimeoutError extends Error {
@@ -107,4 +49,47 @@ export async function withTimeoutCleanup<T>(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+export function abortSignalError(signal: AbortSignal, message = 'Operation cancelled'): Error {
+  return signal.reason instanceof Error ? signal.reason : new DOMException(message, 'AbortError');
+}
+
+export function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortSignalError(signal));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    const abort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      reject(signal ? abortSignalError(signal) : new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+export async function withAbortSignal<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return await work();
+  if (signal.aborted) throw abortSignalError(signal);
+  return await new Promise<T>((resolve, reject) => {
+    const cleanup = (): void => signal.removeEventListener('abort', abort);
+    const abort = (): void => {
+      cleanup();
+      reject(abortSignalError(signal));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    work().then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
 }

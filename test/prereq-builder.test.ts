@@ -145,7 +145,7 @@ test('re-signs the recorded URL', () => {
     }
   });
 
-  it('warns (but does not fail) when a request-transform reproduces no recorded param', async () => {
+  it('does not infer request-transform quality from a long recorded query value', async () => {
     const dir = scratchDir('prereq-rt-noop-');
     try {
       const session = sessionWithSignedRequest(5, 'ABCDEFGH12345678');
@@ -159,16 +159,13 @@ test('re-signs the recorded URL', () => {
 `,
         'utf8',
       );
-      // A test that passes without asserting reproduction.
+      // The host runs the authored test but does not try to judge assertion quality
+      // or guess that a long value is a signature. Focused agents own that decision.
       writeFileSync(
         pathJoin(dir, 'sign.test.ts'),
         `import { expect, test } from 'bun:test';
 import { transform } from './sign.ts';
-test('returns a string', () => {
-  expect(typeof transform('GET', 'https://x/y?a=b')).toBe('string');
-  expect(transform('GET', 'https://x/y').length).toBeGreaterThan(0);
-  expect(transform('GET', 'https://x/y')).toContain('https');
-});
+test('authored check', () => expect(true).toBe(true));
 `,
         'utf8',
       );
@@ -183,7 +180,7 @@ test('returns a string', () => {
       };
       const { failures, warnings } = await verifySharedModule(dir, module, session, sessionPath);
       expect(failures).toEqual([]);
-      expect(warnings.some((w) => w.includes('did not reproduce'))).toBe(true);
+      expect(warnings).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -212,6 +209,32 @@ export interface Hotel { name: string }
       };
       const { failures } = await verifySharedModule(dir, module, session, sessionPath);
       expect(failures).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires a test for a non-types module even when its source contains only types', async () => {
+    const dir = scratchDir('prereq-declared-kind-');
+    try {
+      const session = sessionWithSignedRequest(5, 'ABCDEFGH12345678');
+      const sessionPath = writeSession(dir, session);
+      writeFileSync(pathJoin(dir, 'helper.ts'), 'export type HelperResult = { ok: boolean };\n');
+      const module: SharedModuleSpec = {
+        path: '_shared/helper.ts',
+        kind: 'parser-helper',
+        purpose: 'helper',
+        exportSignatures: ['export type HelperResult'],
+        spec: 'declared non-types module',
+        sourceSeqs: [5],
+        dependsOn: [],
+      };
+
+      const { failures } = await verifySharedModule(dir, module, session, sessionPath);
+
+      expect(failures.some((failure) => failure.includes('helper.test.ts was not written'))).toBe(
+        true,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -255,9 +278,6 @@ describe('summarizeFailures', () => {
       summarizeFailures(['_shared/x.ts does not export "decode" (declared in exportSignatures)']),
     ).toBe('missing export');
     expect(summarizeFailures(['_shared/x.ts import failed: SyntaxError'])).toBe('import error');
-    expect(
-      summarizeFailures(['_shared/x.ts (request-transform) threw or returned no URL string']),
-    ).toBe('signing anchor');
   });
 
   it('dedupes and joins multiple distinct gates in first-seen order', () => {

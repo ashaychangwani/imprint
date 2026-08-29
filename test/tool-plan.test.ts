@@ -137,7 +137,6 @@ describe('buildToolPlanPayload', () => {
       description: 'search flights between two airports',
       rationale: 'x',
       confidence: 0.9,
-      primary: true,
       requestSeqs: [10],
       representativeSeqs: [],
       eventSeqs: [],

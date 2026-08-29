@@ -1,7 +1,8 @@
-/** Four strict one-shot semantic roles. Store/controller state remains authoritative. */
+/** Five strict one-shot semantic roles. Store/controller state remains authoritative. */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { z } from 'zod';
+import { abortSignalError } from './concurrency.ts';
 import { type LLMOptions, type ProviderName, resolveProvider } from './llm.ts';
 import {
   type CompletionReviewInput,
@@ -9,6 +10,9 @@ import {
   CompletionReviewOutputSchema,
   type CurrentPlanBinding,
   type CurrentPlanProjection,
+  type FocusedPlannerInput,
+  FocusedPlannerInputSchema,
+  FocusedPlannerOutputSchema,
   type MasterDecisionInput,
   MasterDecisionInputSchema,
   MasterDecisionOutputSchema,
@@ -16,22 +20,25 @@ import {
   ParameterSelectionAdvisorInputSchema,
   ParameterSelectionAdvisorOutputSchema,
   ParameterSelectionAdvisorPromptInputSchema,
-  ROLE_OUTPUT_MAX_BYTES,
   type ToolSelectionAdvisorInput,
   ToolSelectionAdvisorInputSchema,
   ToolSelectionAdvisorOutputSchema,
   ToolSelectionAdvisorPromptInputSchema,
-  discoveryContentSha256,
   schemaIssue as issue,
 } from './master-teach-agent-contracts.ts';
 import {
+  type ChainEdge,
   type ContentAddressedRef,
   type DesiredTeachingPlan,
+  type EditableTeachingTool,
   type TeachingCandidateEvidence,
   teachingPlanContentSha256 as digest,
+  proposeDependencyBuildWaves,
   teachingCandidateIssues,
   teachingToolCompileInputsSha256,
+  unresolvedCandidateCoverage,
   validateDesiredTeachingPlan,
+  validateImplementationPlanForTool,
 } from './master-teach-plan.ts';
 import type {
   CurrentExecutionSnapshot,
@@ -39,23 +46,18 @@ import type {
   ReceiptFact,
   RecordingIndex,
 } from './master-teach-prompt-projections.ts';
-import type { ProviderRetryEvent } from './provider-retry.ts';
+import {
+  ProviderDeadlineError,
+  type ProviderRetryEvent,
+  type RunDeadlineRef,
+  combinedDeadlineSignal,
+  resolvedRunDeadline,
+} from './provider-retry.ts';
 export * from './master-teach-agent-contracts.ts';
 export * from './master-teach-prompt-projections.ts';
 const PROMPTS = join(import.meta.dir, '..', '..', 'prompts');
 const same = (left: unknown, right: unknown) => digest(left) === digest(right);
 const refKey = (ref: ContentAddressedRef) => `${ref.path}\u0000${ref.sha256}`;
-function checkRefs(
-  refs: readonly ContentAddressedRef[],
-  known: ReadonlySet<string>,
-  ctx: z.RefinementCtx,
-  path: Array<string | number>,
-  message = 'unknown ref',
-): void {
-  refs.forEach((ref, index) => {
-    if (!known.has(refKey(ref))) issue(ctx, [...path, index], message);
-  });
-}
 function checkSeqs(
   values: readonly number[],
   known: ReadonlySet<number>,
@@ -107,16 +109,7 @@ function validateFactSeqs(
   });
 }
 function validateDiscovery(input: ToolSelectionAdvisorInput, ctx: z.RefinementCtx): void {
-  const expected = discoveryContentSha256({
-    recordingIndex: input.recordingIndex,
-    detectorSharedContext: input.detectorSharedContext,
-    discoveryCandidates: input.discoveryCandidates,
-    evidence: input.evidence,
-  });
-  if (
-    input.run.recordingSha256 !== input.recordingIndex.recordingSha256 ||
-    input.run.discoverySha256 !== expected
-  )
+  if (input.run.recordingSha256 !== input.recordingIndex.recordingSha256)
     issue(ctx, ['run'], 'discovery binding does not match the supplied discovery');
   const requests = new Set(input.recordingIndex.requestSeqs);
   checkSeqs(input.detectorSharedContext.loginRequestSeqs, requests, ctx, [
@@ -137,11 +130,153 @@ function toolOutputSchema(input: ToolSelectionAdvisorInput) {
     validateCandidates(output.boundaries, input.recordingIndex, ctx, ['boundaries']);
   });
 }
+function focusedPlannerBinding(input: FocusedPlannerInput) {
+  return {
+    runId: input.run.runId,
+    site: input.run.site,
+    recordingSha256: input.run.recordingSha256,
+    toolId: input.tool.id,
+  };
+}
+function validateFocusedPlannerEdges(
+  tool: EditableTeachingTool,
+  edges: readonly ChainEdge[],
+  producers: ReadonlyMap<string, { toolName: string }>,
+  ctx: z.RefinementCtx,
+  path: Array<string | number>,
+): void {
+  const ids = new Set<string>();
+  const tuples = new Set<string>();
+  edges.forEach((edge, index) => {
+    const base = [...path, index];
+    if (ids.has(edge.id)) issue(ctx, [...base, 'id'], 'duplicate chain edge id');
+    const tuple = digest([
+      edge.producerToolId,
+      edge.producerResultPath,
+      edge.consumerToolId,
+      edge.consumerParameter,
+    ]);
+    if (tuples.has(tuple)) issue(ctx, base, 'duplicate chain edge');
+    const producer = producers.get(edge.producerToolId);
+    if (!producer) issue(ctx, [...base, 'producerToolId'], 'unknown focused producer tool');
+    if (edge.consumerToolId !== tool.id)
+      issue(ctx, [...base, 'consumerToolId'], 'focused chain edge belongs to another consumer');
+    if (!tool.candidate.likelyParams.some(({ name }) => name === edge.consumerParameter))
+      issue(ctx, [...base, 'consumerParameter'], 'unknown focused consumer parameter');
+    if (producer && !tool.candidate.dependsOnTools.includes(producer.toolName))
+      issue(ctx, base, 'focused chain edge is absent from the proposed tool dependency');
+    ids.add(edge.id);
+    tuples.add(tuple);
+  });
+}
+function validateFocusedPlannerTool(
+  tool: EditableTeachingTool,
+  input: FocusedPlannerInput,
+  ctx: z.RefinementCtx,
+  path: Array<string | number>,
+): void {
+  const knownRequests = new Set(input.recordingIndex.requestSeqs);
+  const knownEvents = new Set(input.recordingIndex.eventSeqs);
+  for (const field of ['requestSeqs', 'representativeSeqs', 'dependencySeqs'] as const)
+    checkSeqs(tool.candidate[field], knownRequests, ctx, [...path, 'candidate', field]);
+  checkSeqs(tool.candidate.eventSeqs, knownEvents, ctx, [...path, 'candidate', 'eventSeqs']);
+  const ownedRequests = new Set(tool.candidate.requestSeqs);
+  tool.candidate.representativeSeqs.forEach((seq, index) => {
+    if (!ownedRequests.has(seq))
+      issue(
+        ctx,
+        [...path, 'candidate', 'representativeSeqs', index],
+        `representative seq ${seq} is absent from this candidate's requestSeqs`,
+      );
+  });
+  if (new Set(tool.candidate.dependsOnTools).size !== tool.candidate.dependsOnTools.length)
+    issue(ctx, [...path, 'candidate', 'dependsOnTools'], 'duplicate dependency');
+  const parameterNames = tool.candidate.likelyParams.map(({ name }) => name);
+  if (new Set(parameterNames).size !== parameterNames.length)
+    issue(ctx, [...path, 'candidate', 'likelyParams'], 'duplicate parameter');
+  checkSeqs(tool.compileContext.loginRequestSeqs, knownRequests, ctx, [
+    ...path,
+    'compileContext',
+    'loginRequestSeqs',
+  ]);
+  checkSeqs(tool.compileContext.authRequestSeqs, knownRequests, ctx, [
+    ...path,
+    'compileContext',
+    'authRequestSeqs',
+  ]);
+}
+const FocusedPlannerInputValidationSchema = FocusedPlannerInputSchema.superRefine((input, ctx) => {
+  if (input.run.recordingSha256 !== input.recordingIndex.recordingSha256)
+    issue(ctx, ['run'], 'focused planner recording binding is stale');
+  validateEvidence(input.evidence, input.recordingIndex, ctx, ['evidence']);
+  validateFocusedPlannerTool(input.tool as EditableTeachingTool, input, ctx, ['tool']);
+  const producerIds = new Set<string>();
+  const producerNames = new Set<string>();
+  const producers = new Map<string, { toolName: string }>();
+  input.availableProducers.forEach((producer, index) => {
+    if (producer.toolId === input.tool.id)
+      issue(ctx, ['availableProducers', index, 'toolId'], 'focused tool cannot produce for itself');
+    if (producerIds.has(producer.toolId))
+      issue(ctx, ['availableProducers', index, 'toolId'], 'duplicate focused producer id');
+    if (producerNames.has(producer.toolName))
+      issue(ctx, ['availableProducers', index, 'toolName'], 'duplicate focused producer name');
+    producerIds.add(producer.toolId);
+    producerNames.add(producer.toolName);
+    producers.set(producer.toolId, producer);
+  });
+  input.tool.candidate.dependsOnTools.forEach((toolName, index) => {
+    if (!producerNames.has(toolName))
+      issue(ctx, ['tool', 'candidate', 'dependsOnTools', index], 'unknown focused dependency tool');
+  });
+  validateFocusedPlannerEdges(
+    input.tool as EditableTeachingTool,
+    input.incomingChainEdges,
+    producers,
+    ctx,
+    ['incomingChainEdges'],
+  );
+  input.outgoingChainEdges.forEach((edge, index) => {
+    if (edge.producerToolId !== input.tool.id)
+      issue(ctx, ['outgoingChainEdges', index], 'outgoing edge belongs to another producer');
+  });
+});
+function focusedPlannerOutputSchema(input: FocusedPlannerInput) {
+  return FocusedPlannerOutputSchema.superRefine((output, ctx) => {
+    if (!same(output.binding, focusedPlannerBinding(input)))
+      issue(ctx, ['binding'], 'stale focused-planner binding');
+    if (output.tool.id !== input.tool.id)
+      issue(ctx, ['tool', 'id'], 'focused planner cannot replace the stable tool id');
+    validateFocusedPlannerTool(output.tool, input, ctx, ['tool']);
+    const producers = new Map(
+      input.availableProducers.map((producer) => [producer.toolId, producer]),
+    );
+    output.tool.candidate.dependsOnTools.forEach((toolName, index) => {
+      if (![...producers.values()].some((producer) => producer.toolName === toolName))
+        issue(
+          ctx,
+          ['tool', 'candidate', 'dependsOnTools', index],
+          'unknown focused dependency tool',
+        );
+    });
+    validateFocusedPlannerEdges(output.tool, output.chainEdges, producers, ctx, ['chainEdges']);
+    try {
+      validateImplementationPlanForTool(
+        output.implementationPlan,
+        output.tool,
+        new Set(input.recordingIndex.requestSeqs),
+        new Set(input.recordingIndex.eventSeqs),
+      );
+    } catch (error) {
+      issue(ctx, ['implementationPlan'], error instanceof Error ? error.message : String(error));
+    }
+  });
+}
 function validatePlan(
   plan: DesiredTeachingPlan,
   index: RecordingIndex,
   ctx: z.RefinementCtx,
   path: Array<string | number>,
+  discoveryCandidateNames?: readonly string[],
 ): void {
   try {
     validateDesiredTeachingPlan(
@@ -149,6 +284,8 @@ function validatePlan(
         site: plan.site,
         recordingSha256: plan.recordingSha256,
         tools: plan.tools,
+        candidateCoverage: plan.candidateCoverage,
+        buildWaves: plan.buildWaves,
         chainEdges: plan.chainEdges,
       },
       {
@@ -156,6 +293,7 @@ function validatePlan(
         recordingSha256: plan.recordingSha256,
         requestSeqs: new Set(index.requestSeqs),
         eventSeqs: new Set(index.eventSeqs),
+        discoveryCandidateNames,
       },
     );
   } catch (error) {
@@ -206,11 +344,12 @@ function validateSnapshot(
     const base = [...path, 'payload', 'tools', proofIndex];
     if (!tool) return issue(ctx, base, 'stray execution proof');
     const binding = proof.executionBinding;
-    checkSeqs(binding.replayRequestSeqs, requestSeqs, ctx, [
-      ...base,
-      'executionBinding',
-      'replayRequestSeqs',
-    ]);
+    checkSeqs(
+      binding.requestProvenance.map(({ recordingRequestSeq }) => recordingRequestSeq),
+      requestSeqs,
+      ctx,
+      [...base, 'executionBinding', 'requestProvenance'],
+    );
     if (
       !tool.strategy ||
       !tool.implementationPlan ||
@@ -260,6 +399,13 @@ export function mechanicalProofFailures(
   const tools = targetToolId ? plan.tools.filter(({ id }) => id === targetToolId) : plan.tools;
   const failures: string[] = [];
   if (!targetToolId && tools.length === 0) failures.push('plan: completion requires a tool');
+  if (!targetToolId) {
+    for (const coverage of unresolvedCandidateCoverage(plan)) {
+      failures.push(
+        `candidate ${coverage.discoveryCandidateName}: unresolved discovery candidate cannot complete`,
+      );
+    }
+  }
   for (const tool of tools) {
     const proof = proofs.get(tool.id);
     if (!tool.strategy || !proof) {
@@ -289,11 +435,11 @@ export function mechanicalProofFailures(
   }
   return failures;
 }
-function planRoleBinding(input: MasterDecisionInput) {
-  return input.current ? { ...input.current.run, inputSha256: digest(input) } : input.discovery.run;
+function masterDecisionBinding(input: MasterDecisionInput) {
+  return input.current?.run ?? input.discovery.run;
 }
 function completionBinding(input: CompletionReviewInput) {
-  return { ...input.run, inputSha256: digest(input) };
+  return input.run;
 }
 function parameterBinding(input: ParameterSelectionAdvisorInput) {
   const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === input.toolId);
@@ -307,8 +453,6 @@ function parameterBinding(input: ParameterSelectionAdvisorInput) {
       tool,
       input.currentPlan.payload.chainEdges,
     ),
-    verificationSha256: digest(proof),
-    evidenceSha256: input.evidence.ref.sha256,
   };
 }
 const ParameterInputSchema = ParameterSelectionAdvisorInputSchema.superRefine((input, ctx) => {
@@ -331,9 +475,6 @@ function parameterOutputSchema(input: ParameterSelectionAdvisorInput) {
     if (!same(output.binding, parameterBinding(input)))
       issue(ctx, ['binding'], 'stale parameter-advice binding');
   });
-}
-function evidenceRefs(evidence: PromptEvidenceProjection): ContentAddressedRef[] {
-  return [evidence.ref, ...evidence.payload.entries.map(({ ref }) => ref)];
 }
 function toolAdvisorPromptInput(input: ToolSelectionAdvisorInput) {
   return ToolSelectionAdvisorPromptInputSchema.parse({
@@ -370,14 +511,6 @@ function parameterAdvisorPromptInput(input: ParameterSelectionAdvisorInput) {
 }
 const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => {
   validateDiscovery(input.discovery, ctx);
-  const authorizedEvidence = new Set(input.authorizedRefs.evidence.map(refKey));
-  const authorizedPlans = new Set(input.authorizedRefs.implementationPlans.map(digest));
-  if (
-    new Set(input.authorizedRefs.evidence.map(refKey)).size !== input.authorizedRefs.evidence.length
-  )
-    issue(ctx, ['authorizedRefs', 'evidence'], 'duplicate authorized evidence ref');
-  if (authorizedPlans.size !== input.authorizedRefs.implementationPlans.length)
-    issue(ctx, ['authorizedRefs', 'implementationPlans'], 'duplicate implementation plan ref');
   if (input.toolSelectionAdvice) {
     if (!same(input.toolSelectionAdvice.binding, input.discovery.run))
       issue(ctx, ['toolSelectionAdvice', 'binding'], 'stale tool advice');
@@ -408,16 +541,29 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
   }
   const proposalIds = new Set<string>();
   const tools = new Map((input.current?.plan.payload.tools ?? []).map((tool) => [tool.id, tool]));
+  const proposedConsumerIds = new Set(input.plannerProposals.map(({ payload }) => payload.tool.id));
+  const proposalEdges = input.plannerProposals.flatMap(({ payload }) => payload.chainEdges);
+  const effectiveProposalEdges = [
+    ...(input.current?.plan.payload.chainEdges ?? []).filter(
+      ({ consumerToolId }) => !proposedConsumerIds.has(consumerToolId),
+    ),
+    ...proposalEdges,
+  ];
   input.plannerProposals.forEach((proposal, index) => {
-    const { binding, tool, chainEdges } = proposal.payload;
+    const { binding, tool, chainEdges, implementationPlan } = proposal.payload;
+    // The compiler contract includes every incident edge. Incoming edges name
+    // consumer parameters; outgoing edges name result paths this producer must
+    // preserve. The focused reply proposes only its incoming edges, so the
+    // host assembles the full current edge set before binding the proposal.
+    const compileInputsSha256 = teachingToolCompileInputsSha256(tool, effectiveProposalEdges);
     if (proposalIds.has(tool.id))
       issue(ctx, ['plannerProposals', index], 'duplicate proposal tool');
     if (
       binding.runId !== input.discovery.run.runId ||
+      binding.site !== input.discovery.run.site ||
       binding.recordingSha256 !== input.discovery.run.recordingSha256 ||
-      binding.discoverySha256 !== input.discovery.run.discoverySha256 ||
       binding.toolId !== tool.id ||
-      binding.compileInputsSha256 !== teachingToolCompileInputsSha256(tool, chainEdges)
+      binding.compileInputsSha256 !== compileInputsSha256
     )
       issue(ctx, ['plannerProposals', index, 'payload', 'binding'], 'stale planner proposal');
     chainEdges.forEach((edge, edgeIndex) => {
@@ -428,40 +574,57 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
           'proposal chain edges must target the proposed tool',
         );
     });
-    checkRefs(
-      tool.evidenceRefs,
-      authorizedEvidence,
-      ctx,
-      ['plannerProposals', index, 'payload', 'tool', 'evidenceRefs'],
-      'unauthorized evidence ref',
-    );
-    if (tool.implementationPlan && !authorizedPlans.has(digest(tool.implementationPlan)))
+    if (
+      !tool.implementationPlan ||
+      !same(tool.implementationPlan, implementationPlan.ref) ||
+      implementationPlan.ref.basedOnCompileInputsSha256 !== compileInputsSha256
+    )
       issue(
         ctx,
-        ['plannerProposals', index, 'payload', 'tool', 'implementationPlan'],
-        'unauthorized implementation plan',
+        ['plannerProposals', index, 'payload', 'implementationPlan'],
+        'hosted implementation plan does not bind the proposed compile inputs',
       );
+    try {
+      validateImplementationPlanForTool(
+        implementationPlan.payload,
+        tool,
+        new Set(input.discovery.recordingIndex.requestSeqs),
+        new Set(input.discovery.recordingIndex.eventSeqs),
+      );
+    } catch (error) {
+      issue(
+        ctx,
+        ['plannerProposals', index, 'payload', 'implementationPlan', 'payload'],
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     proposalIds.add(tool.id);
     tools.set(tool.id, tool);
   });
-  const proposalEdges = input.plannerProposals.flatMap(({ payload }) => payload.chainEdges);
-  if (input.plannerProposals.length)
-    validatePlan(
-      {
-        site: input.discovery.run.site,
-        recordingSha256: input.discovery.run.recordingSha256,
-        tools: [...tools.values()],
-        chainEdges: [
-          ...(input.current?.plan.payload.chainEdges ?? []).filter(
-            (edge) => !proposalIds.has(edge.consumerToolId),
-          ),
-          ...proposalEdges,
-        ],
-      },
-      input.discovery.recordingIndex,
-      ctx,
-      ['plannerProposals'],
-    );
+  if (input.plannerProposals.length) {
+    const proposalTools = [...tools.values()];
+    try {
+      validatePlan(
+        {
+          site: input.discovery.run.site,
+          recordingSha256: input.discovery.run.recordingSha256,
+          tools: proposalTools,
+          candidateCoverage: proposalTools.map((tool) => ({
+            discoveryCandidateName: tool.candidate.toolName,
+            plannedToolIds: [tool.id],
+            unresolvedReason: null,
+          })),
+          buildWaves: proposeDependencyBuildWaves(proposalTools),
+          chainEdges: effectiveProposalEdges,
+        },
+        input.discovery.recordingIndex,
+        ctx,
+        ['plannerProposals'],
+      );
+    } catch (error) {
+      issue(ctx, ['plannerProposals'], error instanceof Error ? error.message : String(error));
+    }
+  }
   const seenAdvice = new Set<string>();
   input.parameterAdvice.forEach((submission, index) => {
     if (!input.current?.snapshot)
@@ -496,30 +659,23 @@ function masterOutputSchema(input: MasterDecisionInput) {
       ...input.plannerProposals.map(({ payload }) => payload.tool),
     ].flatMap(({ implementationPlan }) => (implementationPlan ? [digest(implementationPlan)] : [])),
   );
-  const authorizedPlans = new Set(input.authorizedRefs.implementationPlans.map(digest));
-  const authorizedEvidence = new Set(input.authorizedRefs.evidence.map(refKey));
   return MasterDecisionOutputSchema.superRefine((output, ctx) => {
-    if (!same(output.binding, planRoleBinding(input)))
+    if (!same(output.binding, masterDecisionBinding(input)))
       issue(ctx, ['binding'], 'stale master binding');
     if (
       output.desiredPlan.site !== input.discovery.run.site ||
       output.desiredPlan.recordingSha256 !== input.discovery.run.recordingSha256
     )
       issue(ctx, ['desiredPlan'], 'desired plan belongs to another recording');
-    validatePlan(output.desiredPlan, input.discovery.recordingIndex, ctx, ['desiredPlan']);
+    validatePlan(
+      output.desiredPlan,
+      input.discovery.recordingIndex,
+      ctx,
+      ['desiredPlan'],
+      input.discovery.discoveryCandidates.map(({ toolName }) => toolName),
+    );
     output.desiredPlan.tools.forEach((tool, toolIndex) => {
-      checkRefs(
-        tool.evidenceRefs,
-        authorizedEvidence,
-        ctx,
-        ['desiredPlan', 'tools', toolIndex, 'evidenceRefs'],
-        'unauthorized evidence ref',
-      );
-      if (
-        tool.implementationPlan &&
-        (!authorizedPlans.has(digest(tool.implementationPlan)) ||
-          !suppliedPlans.has(digest(tool.implementationPlan)))
-      )
+      if (tool.implementationPlan && !suppliedPlans.has(digest(tool.implementationPlan)))
         issue(
           ctx,
           ['desiredPlan', 'tools', toolIndex, 'implementationPlan'],
@@ -527,30 +683,6 @@ function masterOutputSchema(input: MasterDecisionInput) {
         );
     });
   });
-}
-function currentFactRefs(input: CompletionReviewInput): ContentAddressedRef[] {
-  const refs = [
-    input.currentPlan.ref,
-    input.snapshot.ref,
-    input.history.ref,
-    input.history.payload.historyRoot,
-    ...input.currentPlan.payload.decision.advisorRefs,
-    ...input.currentPlan.payload.decision.evidenceRefs,
-    ...evidenceRefs(input.evidence),
-    ...input.currentPlan.payload.tools.flatMap((tool) => [
-      ...tool.evidenceRefs,
-      ...(tool.implementationPlan ? [tool.implementationPlan] : []),
-    ]),
-    ...input.snapshot.payload.tools.flatMap((tool) => [
-      tool.currentBuildRef,
-      tool.artifactManifestRef,
-      tool.executionBinding.sharedManifestRef,
-      ...tool.receipts.map(({ ref }) => ref),
-      ...tool.executionBinding.dependencies.map(({ buildRef }) => buildRef),
-    ]),
-    ...input.history.payload.entries.map(({ receipt }) => receipt.ref),
-  ];
-  return [...new Map(refs.map((ref) => [refKey(ref), ref])).values()];
 }
 const CompletionInputSchema = CompletionReviewInputSchema.superRefine((input, ctx) => {
   validateCurrent(input.run, input.currentPlan, input.recordingIndex, ctx, ['currentPlan']);
@@ -586,14 +718,52 @@ const CompletionInputSchema = CompletionReviewInputSchema.superRefine((input, ct
       'receipt.facts',
     ]);
   });
-  const refs = new Set(currentFactRefs(input).map(refKey));
-  const tools = new Set(input.currentPlan.payload.tools.map(({ id }) => id));
+  const planTools = new Map(input.currentPlan.payload.tools.map((tool) => [tool.id, tool]));
+  const tools = new Set(planTools.keys());
+  if (input.terminalIntent === 'completed' && !input.toolResultEvidence)
+    issue(ctx, ['toolResultEvidence'], 'completed intent requires semantic live result evidence');
+  if (input.toolResultEvidence) {
+    const seenResultTools = new Set<string>();
+    input.toolResultEvidence.forEach((result, index) => {
+      const payload = result.payload;
+      const tool = planTools.get(payload.toolId);
+      if (!tool) {
+        issue(ctx, ['toolResultEvidence', index, 'payload', 'toolId'], 'unknown current tool');
+        return;
+      }
+      if (seenResultTools.has(payload.toolId))
+        issue(ctx, ['toolResultEvidence', index, 'payload', 'toolId'], 'duplicate tool result');
+      seenResultTools.add(payload.toolId);
+      if (payload.toolName !== tool.candidate.toolName)
+        issue(ctx, ['toolResultEvidence', index, 'payload', 'toolName'], 'tool name mismatch');
+      if (!tool.implementationPlan || !same(payload.implementationPlanRef, tool.implementationPlan))
+        issue(
+          ctx,
+          ['toolResultEvidence', index, 'payload', 'implementationPlanRef'],
+          'result evidence belongs to another implementation plan',
+        );
+      const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === payload.toolId);
+      if (
+        !proof?.receipts.some(
+          (receipt) =>
+            receipt.check === 'live' && refKey(receipt.ref) === refKey(payload.liveReceiptRef),
+        )
+      )
+        issue(
+          ctx,
+          ['toolResultEvidence', index, 'payload', 'liveReceiptRef'],
+          'result evidence does not cite the current live receipt',
+        );
+    });
+    for (const toolId of tools)
+      if (!seenResultTools.has(toolId))
+        issue(ctx, ['toolResultEvidence'], `missing result evidence for "${toolId}"`);
+  }
   const claims = new Set<string>();
   input.claims.forEach((claim, index) => {
     if (claims.has(claim.id)) issue(ctx, ['claims', index, 'id'], 'duplicate claim');
     if (claim.toolId && !tools.has(claim.toolId))
       issue(ctx, ['claims', index, 'toolId'], 'unknown tool');
-    checkRefs(claim.evidenceRefs, refs, ctx, ['claims', index, 'evidenceRefs']);
     claims.add(claim.id);
   });
   const blockers = input.claims.filter(({ kind }) => kind === 'blocker');
@@ -604,9 +774,11 @@ const CompletionInputSchema = CompletionReviewInputSchema.superRefine((input, ct
       issue(ctx, ['snapshot'], failure);
 });
 function completionOutputSchema(input: CompletionReviewInput) {
-  const refs = new Set(currentFactRefs(input).map(refKey));
   const claims = new Map(input.claims.map((claim) => [claim.id, claim]));
   const tools = new Set(input.currentPlan.payload.tools.map(({ id }) => id));
+  const resultEvidence = new Map(
+    (input.toolResultEvidence ?? []).map((result) => [result.payload.toolId, result]),
+  );
   return CompletionReviewOutputSchema.superRefine((output, ctx) => {
     if (!same(output.binding, completionBinding(input)))
       issue(ctx, ['binding'], 'stale completion binding');
@@ -616,7 +788,6 @@ function completionOutputSchema(input: CompletionReviewInput) {
         issue(ctx, ['claimDispositions', index], 'unknown claim');
       if (seen.has(disposition.claimId))
         issue(ctx, ['claimDispositions', index], 'duplicate disposition');
-      checkRefs(disposition.evidenceRefs, refs, ctx, ['claimDispositions', index, 'evidenceRefs']);
       seen.add(disposition.claimId);
     });
     for (const id of claims.keys())
@@ -624,8 +795,48 @@ function completionOutputSchema(input: CompletionReviewInput) {
     output.findings.forEach((finding, index) => {
       if (finding.toolId && !tools.has(finding.toolId))
         issue(ctx, ['findings', index, 'toolId'], 'unknown tool');
-      checkRefs(finding.evidenceRefs, refs, ctx, ['findings', index, 'evidenceRefs']);
     });
+    const seenResultReviews = new Set<string>();
+    output.toolResultReviews.forEach((review, index) => {
+      const evidence = resultEvidence.get(review.toolId);
+      if (!tools.has(review.toolId))
+        issue(ctx, ['toolResultReviews', index, 'toolId'], 'unknown tool');
+      if (!evidence)
+        issue(ctx, ['toolResultReviews', index, 'toolId'], 'no result evidence for tool');
+      if (seenResultReviews.has(review.toolId))
+        issue(ctx, ['toolResultReviews', index, 'toolId'], 'duplicate tool result review');
+      seenResultReviews.add(review.toolId);
+      if (evidence && !review.evidenceRefs.some((ref) => refKey(ref) === refKey(evidence.ref)))
+        issue(
+          ctx,
+          ['toolResultReviews', index, 'evidenceRefs'],
+          'tool result review must cite its result evidence',
+        );
+      if (review.status === 'revision_required') {
+        if (output.verdict !== 'failed')
+          issue(ctx, ['verdict'], 'revision-required result review must fail completion');
+        const blockingFinding = output.findings.some(
+          (finding) =>
+            finding.severity === 'blocking' &&
+            finding.toolId === review.toolId &&
+            evidence &&
+            finding.evidenceRefs.some((ref) => refKey(ref) === refKey(evidence.ref)),
+        );
+        if (!blockingFinding)
+          issue(
+            ctx,
+            ['findings'],
+            `revision-required result review for "${review.toolId}" needs a blocking finding`,
+          );
+      }
+    });
+    if (input.toolResultEvidence) {
+      for (const toolId of tools)
+        if (!seenResultReviews.has(toolId))
+          issue(ctx, ['toolResultReviews'], `missing result review for "${toolId}"`);
+    } else if (output.toolResultReviews.length > 0) {
+      issue(ctx, ['toolResultReviews'], 'result reviews require supplied result evidence');
+    }
     if (output.verdict !== 'passed') return;
     const dispositions = new Map(
       output.claimDispositions.map((item) => [item.claimId, item.status]),
@@ -649,19 +860,27 @@ export interface MasterTeachAnalyzer {
     options?: {
       timeoutMs?: number;
       deadlineMs?: number;
+      runDeadline?: RunDeadlineRef;
       timeoutLabel?: string;
       signal?: AbortSignal;
       onProviderRetry?: (event: ProviderRetryEvent) => void;
+      onDeadlineReached?: () => Promise<number | null | undefined>;
     },
   ): Promise<{ text: string }>;
 }
-type Role = 'tool advisor' | 'master decision' | 'parameter advisor' | 'completion reviewer';
+type Role =
+  | 'tool advisor'
+  | 'focused planner'
+  | 'master decision'
+  | 'parameter advisor'
+  | 'completion reviewer';
 export interface MasterTeachAgentOptions {
   provider?: ProviderName;
   model?: string;
   timeoutMs?: number;
   /** Absolute teach-run deadline shared by every semantic role and provider retry. */
   deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
   signal?: AbortSignal;
   analyzer?: MasterTeachAnalyzer;
   onRetry?: (event: {
@@ -671,6 +890,7 @@ export interface MasterTeachAgentOptions {
     signal: AbortSignal;
   }) => void | Promise<void>;
   onProviderRetry?: (event: ProviderRetryEvent) => void;
+  onDeadlineReached?: () => Promise<number | null | undefined>;
 }
 export class SemanticAgentOutputError extends Error {
   constructor(
@@ -690,12 +910,6 @@ function parse<S extends z.ZodTypeAny>(
   schema: S,
   attempts: 1 | 2 = 1,
 ): z.output<S> {
-  if (Buffer.byteLength(text, 'utf8') > ROLE_OUTPUT_MAX_BYTES)
-    throw new SemanticAgentOutputError(
-      role,
-      [`response exceeds ${ROLE_OUTPUT_MAX_BYTES} bytes`],
-      attempts,
-    );
   const trimmed = text.trim();
   const fence = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/.exec(trimmed);
   if (trimmed.startsWith('```') && !fence)
@@ -722,6 +936,10 @@ export function parseToolSelectionAdvisorOutput(text: string, input: ToolSelecti
   const checked = ToolInputSchema.parse(input);
   return parse('tool advisor', text, toolOutputSchema(checked));
 }
+export function parseFocusedPlannerOutput(text: string, input: FocusedPlannerInput) {
+  const checked = FocusedPlannerInputValidationSchema.parse(input);
+  return parse('focused planner', text, focusedPlannerOutputSchema(checked));
+}
 export function parseMasterDecisionOutput(text: string, input: MasterDecisionInput) {
   const checked = MasterInputSchema.parse(input);
   return parse('master decision', text, masterOutputSchema(checked));
@@ -747,55 +965,83 @@ function utf8Prefix(value: string, maxBytes: number): string {
 async function invoke<T>(
   start: () => Promise<T>,
   signal: AbortSignal,
-  expiresAt: number | undefined,
+  waitForDeadlineDecision: () => Promise<void>,
   label: string,
 ): Promise<T> {
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
-    const expired = () => signal.aborted || (expiresAt !== undefined && Date.now() >= expiresAt);
     const cleanup = () => signal.removeEventListener('abort', abort);
     const abort = () => {
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error(`${label} aborted`, { cause: signal.reason }));
+      reject(abortSignalError(signal, `${label} aborted`));
+    };
+    const finish = async (result: { ok: true; value: T } | { ok: false; error: unknown }) => {
+      try {
+        await waitForDeadlineDecision();
+      } catch (error) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+        return;
+      }
+      if (settled) return;
+      if (signal.aborted) return abort();
+      settled = true;
+      cleanup();
+      if (result.ok) resolve(result.value);
+      else reject(result.error);
     };
     signal.addEventListener('abort', abort, { once: true });
-    if (expired()) return abort();
+    if (signal.aborted) return abort();
     let promise: Promise<T>;
     try {
       promise = start();
     } catch (error) {
-      settled = true;
-      cleanup();
-      reject(error);
+      void finish({ ok: false, error });
       return;
     }
-    if (expired()) return abort();
+    if (signal.aborted) return abort();
     promise.then(
-      (value) => {
-        if (settled) return;
-        if (expired()) return abort();
-        settled = true;
-        cleanup();
-        resolve(value);
-      },
-      (error) => {
-        if (settled) return;
-        if (expired()) return abort();
-        settled = true;
-        cleanup();
-        reject(error);
-      },
+      (value) => void finish({ ok: true, value }),
+      (error) => void finish({ ok: false, error }),
     );
   });
+}
+async function ensureSemanticRoleDeadline(
+  runDeadline: RunDeadlineRef | undefined,
+  roleExpiresAt: number | undefined,
+  signal: AbortSignal | undefined,
+  onDeadlineReached: (() => Promise<number | null | undefined>) | undefined,
+): Promise<void> {
+  while (true) {
+    if (signal?.aborted) throw abortSignalError(signal);
+    const now = Date.now();
+    const runExpiresAt = runDeadline?.deadlineMs;
+    const phaseIsFirst =
+      roleExpiresAt !== undefined && (runExpiresAt === undefined || roleExpiresAt <= runExpiresAt);
+    if (phaseIsFirst && now >= roleExpiresAt) {
+      throw new ProviderDeadlineError(roleExpiresAt, undefined, 'phase');
+    }
+    if (runExpiresAt !== undefined && now >= runExpiresAt) {
+      const canExtend = (runDeadline?.scope ?? 'run') === 'run';
+      if (canExtend && (await runDeadline?.requestExtension?.(onDeadlineReached)) === true)
+        continue;
+      throw new ProviderDeadlineError(runExpiresAt, undefined, runDeadline?.scope ?? 'run');
+    }
+    if (roleExpiresAt !== undefined && now >= roleExpiresAt) {
+      throw new ProviderDeadlineError(roleExpiresAt, undefined, 'phase');
+    }
+    return;
+  }
 }
 async function request<S extends z.ZodTypeAny>(options: {
   role: Role;
   prompt: string;
   input: unknown;
   validation: unknown;
-  refs: ContentAddressedRef[];
   schema: S;
   agent: MasterTeachAgentOptions;
 }): Promise<z.output<S>> {
@@ -809,72 +1055,81 @@ async function request<S extends z.ZodTypeAny>(options: {
   const startedAt = Date.now();
   const roleExpiresAt =
     options.agent.timeoutMs === undefined ? undefined : startedAt + options.agent.timeoutMs;
-  const expiresAt =
-    options.agent.deadlineMs === undefined
-      ? roleExpiresAt
-      : roleExpiresAt === undefined
-        ? options.agent.deadlineMs
-        : Math.min(options.agent.deadlineMs, roleExpiresAt);
-  const timeoutSignal =
-    expiresAt === undefined ? undefined : AbortSignal.timeout(Math.max(0, expiresAt - Date.now()));
-  const signals = [options.agent.signal, timeoutSignal].filter((value): value is AbortSignal =>
-    Boolean(value),
+  const runDeadline = resolvedRunDeadline(options.agent.runDeadline, options.agent.deadlineMs);
+  await ensureSemanticRoleDeadline(
+    runDeadline,
+    roleExpiresAt,
+    options.agent.signal,
+    options.agent.onDeadlineReached,
   );
-  const signal = signals.length ? AbortSignal.any(signals) : new AbortController().signal;
+  const active = combinedDeadlineSignal(
+    runDeadline,
+    roleExpiresAt,
+    options.agent.signal,
+    Date.now,
+    undefined,
+    options.agent.onDeadlineReached,
+  );
+  const signal = active.signal ?? new AbortController().signal;
   const analyze = (payload: unknown) =>
     invoke(
       () =>
         analyzer.analyze(system, payload, {
           signal,
-          timeoutMs: expiresAt === undefined ? undefined : Math.max(0, expiresAt - Date.now()),
-          deadlineMs: options.agent.deadlineMs,
+          timeoutMs:
+            roleExpiresAt === undefined ? undefined : Math.max(0, roleExpiresAt - Date.now()),
+          deadlineMs: runDeadline?.deadlineMs,
+          runDeadline,
           timeoutLabel: `master teach ${options.role}`,
           onProviderRetry: options.agent.onProviderRetry,
+          onDeadlineReached: options.agent.onDeadlineReached,
         }),
       signal,
-      expiresAt,
+      active.waitForDeadlineDecision,
       options.role,
     );
-  const first = await analyze({
-    input: options.input,
-    validationContext: options.validation,
-    projectionRefs: options.refs,
-  });
   try {
-    return await invoke(
-      () => Promise.resolve(parse(options.role, first.text, options.schema)),
-      signal,
-      expiresAt,
-      `${options.role} output validation`,
-    );
-  } catch (error) {
-    if (!(error instanceof SemanticAgentOutputError)) throw error;
-    if (options.agent.onRetry)
-      await invoke(
-        async () =>
-          options.agent.onRetry?.({
-            role: options.role,
-            attempt: 2,
-            parseErrors: error.parseErrors,
-            signal,
-          }),
-        signal,
-        expiresAt,
-        `${options.role} retry callback`,
-      );
-    const repaired = await analyze({
-      originalInput: options.input,
+    const first = await analyze({
+      input: options.input,
       validationContext: options.validation,
-      projectionRefs: options.refs,
-      priorResponse: utf8Prefix(first.text, 12_000),
-      parseErrors: error.parseErrors,
     });
-    return await invoke(
-      () => Promise.resolve(parse(options.role, repaired.text, options.schema, 2)),
-      signal,
-      expiresAt,
-      `${options.role} repaired output validation`,
-    );
+    try {
+      return await invoke(
+        () => Promise.resolve(parse(options.role, first.text, options.schema)),
+        signal,
+        active.waitForDeadlineDecision,
+        `${options.role} output validation`,
+      );
+    } catch (error) {
+      if (!(error instanceof SemanticAgentOutputError)) throw error;
+      if (options.agent.onRetry)
+        await invoke(
+          async () =>
+            options.agent.onRetry?.({
+              role: options.role,
+              attempt: 2,
+              parseErrors: error.parseErrors,
+              signal,
+            }),
+          signal,
+          active.waitForDeadlineDecision,
+          `${options.role} retry callback`,
+        );
+      const repaired = await analyze({
+        originalInput: options.input,
+        validationContext: options.validation,
+        priorResponse: utf8Prefix(first.text, 12_000),
+        parseErrors: error.parseErrors,
+      });
+      return await invoke(
+        () => Promise.resolve(parse(options.role, repaired.text, options.schema, 2)),
+        signal,
+        active.waitForDeadlineDecision,
+        `${options.role} repaired output validation`,
+      );
+    }
+  } finally {
+    active.dispose();
   }
 }
 export async function requestToolSelectionAdvice(
@@ -887,8 +1142,24 @@ export async function requestToolSelectionAdvice(
     prompt: 'master-teach-tool-advisor.md',
     input: toolAdvisorPromptInput(checked),
     validation: { binding: checked.run, recordingIndex: checked.recordingIndex },
-    refs: evidenceRefs(checked.evidence),
     schema: toolOutputSchema(checked),
+    agent,
+  });
+}
+export async function requestFocusedPlan(
+  input: FocusedPlannerInput,
+  agent: MasterTeachAgentOptions = {},
+) {
+  const checked = FocusedPlannerInputValidationSchema.parse(input);
+  return request({
+    role: 'focused planner',
+    prompt: 'master-teach-focused-planner.md',
+    input: checked,
+    validation: {
+      binding: focusedPlannerBinding(checked),
+      recordingIndex: checked.recordingIndex,
+    },
+    schema: focusedPlannerOutputSchema(checked),
     agent,
   });
 }
@@ -902,15 +1173,9 @@ export async function requestMasterDecision(
     prompt: 'master-teach-decision.md',
     input: checked,
     validation: {
-      binding: planRoleBinding(checked),
+      binding: masterDecisionBinding(checked),
       recordingIndex: checked.discovery.recordingIndex,
-      authorizedRefs: checked.authorizedRefs,
     },
-    refs: [
-      ...checked.authorizedRefs.evidence,
-      ...checked.authorizedRefs.implementationPlans,
-      ...checked.plannerProposals.map(({ ref }) => ref),
-    ],
     schema: masterOutputSchema(checked),
     agent,
   });
@@ -925,7 +1190,6 @@ export async function requestParameterSelectionAdvice(
     prompt: 'master-teach-parameter-advisor.md',
     input: parameterAdvisorPromptInput(checked),
     validation: { binding: parameterBinding(checked) },
-    refs: [...evidenceRefs(checked.evidence), checked.currentPlan.ref, checked.snapshot.ref],
     schema: parameterOutputSchema(checked),
     agent,
   });
@@ -943,14 +1207,7 @@ export async function requestCompletionReview(
       binding: completionBinding(checked),
       terminalIntent: checked.terminalIntent,
       knownToolIds: checked.currentPlan.payload.tools.map(({ id }) => id),
-      knownRefs: currentFactRefs(checked),
     },
-    refs: [
-      checked.currentPlan.ref,
-      checked.snapshot.ref,
-      checked.history.ref,
-      ...evidenceRefs(checked.evidence),
-    ],
     schema: completionOutputSchema(checked),
     agent,
   });

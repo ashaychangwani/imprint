@@ -79,7 +79,7 @@ export function listSiteSessions(site: string): SessionInfo[] {
   return listSessionsInDir(localSessionsDir(site));
 }
 
-export function listSessionsInDir(dir: string): SessionInfo[] {
+function listSessionsInDir(dir: string): SessionInfo[] {
   if (!existsSync(dir)) return [];
 
   const files = readdirSync(dir).filter(

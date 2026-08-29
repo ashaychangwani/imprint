@@ -6,6 +6,7 @@
 
 import { runWorkflowWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch, CdpPageSnapshot } from './cdp-browser-fetch.ts';
+import { abortSignalError, withAbortSignal } from './concurrency.ts';
 import { redactFreeformText } from './freeform-redact.ts';
 import { createLog } from './log.ts';
 import type { CredentialStore } from './runtime.ts';
@@ -61,6 +62,7 @@ export class AuthVerifier {
     parameters: Record<string, string | number | boolean> = {},
     options: { freshSession?: boolean; cleanSession?: boolean; signal?: AbortSignal } = {},
   ): Promise<AuthActionResult> {
+    if (options.signal?.aborted) throw abortSignalError(options.signal);
     if (options.freshSession || options.cleanSession) await this.reset();
     this.rememberSensitiveValues(parameters);
     const previousContinuation = this.continuation;
@@ -122,18 +124,19 @@ export class AuthVerifier {
   }
 
   async inspectPage(
-    options: { maxChars?: number; includeCookies?: boolean } = {},
+    options: { maxChars?: number; includeCookies?: boolean; signal?: AbortSignal } = {},
   ): Promise<AuthPageInspection> {
     const browser = Array.from(this.cdpPool.values()).at(-1);
     if (!browser) {
       return { ok: false, message: 'No active verification browser session exists.' };
     }
-    if (!browser.inspectPage) {
+    const inspectPage = browser.inspectPage;
+    if (!inspectPage) {
       return { ok: false, message: 'The active verification browser cannot inspect pages.' };
     }
 
     const maxChars = Math.max(256, Math.min(20_000, Math.floor(options.maxChars ?? 8_000)));
-    const snapshot = await browser.inspectPage();
+    const snapshot = await withAbortSignal(() => inspectPage.call(browser), options.signal);
     const bodyText = this.sanitize(snapshot.bodyText);
     return {
       ok: true,

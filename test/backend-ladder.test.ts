@@ -1247,6 +1247,70 @@ describe('renderWorkflowRequests — offline param verification', () => {
     expect(act?.body).toContain('q=hello');
   });
 
+  it('selects recorded responses by accepted request provenance, not rendered URL', async () => {
+    const wf: Workflow = {
+      toolName: 'provenance_response_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [{ name: 'q', type: 'string', description: 'q' }],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/same?q=${param.q}',
+          headers: {},
+          captures: [
+            {
+              name: 'first',
+              required: true,
+              capability: 'ordinary_http',
+              source: 'json',
+              path: 'value',
+            },
+          ],
+        },
+        {
+          method: 'GET',
+          url: 'https://example.com/same?q=${param.q}',
+          headers: { 'x-first': '${state.first}' },
+        },
+      ],
+    };
+    const lookups: Array<{ ordinal: number; seq?: number; url: string }> = [];
+    const { requests, result } = await renderWorkflowRequests({
+      workflow: wf,
+      params: { q: 'synthetic-render-value' },
+      requestProvenance: [
+        { artifactRequestIndex: 0, recordingRequestSeq: 71 },
+        { artifactRequestIndex: 1, recordingRequestSeq: 93 },
+      ],
+      recordedResponseFor: (_method, url, lookup) => {
+        lookups.push({
+          ordinal: lookup.requestOrdinal,
+          seq: lookup.provenance?.recordingRequestSeq,
+          url,
+        });
+        return lookup.provenance?.recordingRequestSeq === 71
+          ? { status: 200, body: '{"value":"from-seq-71"}' }
+          : { status: 200, body: '{"done":true}' };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(lookups).toEqual([
+      {
+        ordinal: 0,
+        seq: 71,
+        url: 'https://example.com/same?q=synthetic-render-value',
+      },
+      {
+        ordinal: 1,
+        seq: 93,
+        url: 'https://example.com/same?q=synthetic-render-value',
+      },
+    ]);
+    expect(requests[1]?.headers['x-first']).toBe('from-seq-71');
+  });
+
   it('seeds captured state for an isolated downstream request test', async () => {
     const wf: Workflow = {
       toolName: 'state_seed_test',
@@ -1307,6 +1371,50 @@ describe('renderWorkflowRequests — offline param verification', () => {
       recordedResponseFor: () => ({ status: 200, body: '{"ok":true}' }),
     });
     expect(requests.map((r) => r.url)).toEqual(['https://example.com/search']);
+  });
+
+  it('keeps accepted provenance aligned when a transform skips an earlier request', async () => {
+    const toolDir = pathJoin(root, 'skip-first-render');
+    mkdirSync(toolDir, { recursive: true });
+    const wf: Workflow = {
+      toolName: 'skip_first_render_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [],
+      requestTransformModule: './request-transform.ts',
+      requests: [
+        { method: 'GET', url: 'https://example.com/skipped', headers: {} },
+        { method: 'GET', url: 'https://example.com/sent', headers: {} },
+      ],
+    };
+    const workflowPath = pathJoin(toolDir, 'workflow.json');
+    writeFileSync(workflowPath, JSON.stringify(wf));
+    writeFileSync(
+      pathJoin(toolDir, 'request-transform.ts'),
+      `export function transform(_method, url) {
+        return url.endsWith('/skipped') ? { skip: true } : { url };
+      }`,
+    );
+    const seen: Array<{ ordinal: number; seq?: number }> = [];
+
+    await renderWorkflowRequests({
+      workflow: wf,
+      workflowPath,
+      params: {},
+      requestProvenance: [
+        { artifactRequestIndex: 0, recordingRequestSeq: 10 },
+        { artifactRequestIndex: 1, recordingRequestSeq: 20 },
+      ],
+      recordedResponseFor: (_method, _url, lookup) => {
+        seen.push({
+          ordinal: lookup.requestOrdinal,
+          seq: lookup.provenance?.recordingRequestSeq,
+        });
+        return { status: 200, body: '{"ok":true}' };
+      },
+    });
+
+    expect(seen).toEqual([{ ordinal: 0, seq: 20 }]);
   });
 });
 

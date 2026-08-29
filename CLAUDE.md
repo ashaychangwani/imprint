@@ -57,13 +57,19 @@ parameters they expose, which requests belong together, how response-produced
 state is used, whether API or browser execution fits, and how authentication
 should work. The master may revise those decisions at any stage.
 
-The runtime owns mechanical facts and boundaries only: sanitization and secret
-protection, file integrity and schemas, content hashes, exact request replay,
-safe execution, cancellation and deadlines, provider retry, and immutable check
-receipts. It may decode nested representations and report paths, lengths,
-changes, matches, and mismatches. It must not turn those facts into universal
-labels such as browser-minted, server-derived, authentication state, or user
-input, and it must not add site-specific strategy rules.
+The runtime owns only small mechanical jobs: ordinary recording redaction,
+basic file and schema validation, exact request replay and execution,
+cancellation and deadlines, provider retry, and factual check history. Do not
+grow production-grade security machinery around this local development tool.
+It may decode nested representations and report paths, lengths, changes,
+matches, and mismatches. It must not turn those facts into universal labels
+such as browser-minted, server-derived, authentication state, or user input,
+and it must not add site-specific strategy rules.
+
+Teaching covers the complete discovered operation set. There is no primary
+tool, single-tool mode, or partial selection. The master decides the build
+waves and places dependencies before their consumers; the runtime executes
+that complete schedule without choosing a subset.
 
 Prompts should prefer compatible API execution over browser playbooks, with the
 playbook as the final fallback. This is guidance for the agents, not a runtime

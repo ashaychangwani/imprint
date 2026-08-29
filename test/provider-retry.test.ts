@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  ProviderDeadlineError,
+  ProviderReportedError,
+  ProviderUnavailableError,
+  RunDeadline,
+  boundedRunDeadline,
+  combinedDeadlineSignal,
   isTransientProviderCapacityError,
   jitteredBackoffMs,
   retryTransientProviderFailure,
@@ -8,39 +14,95 @@ import {
 describe('isTransientProviderCapacityError', () => {
   it('recognizes provider-neutral capacity and overload shapes', () => {
     expect(
-      isTransientProviderCapacityError(Object.assign(new Error('busy'), { status: 429 })),
+      isTransientProviderCapacityError(
+        new ProviderReportedError('fixture', { statuses: [429], messages: ['busy'] }),
+      ),
     ).toBe(true);
-    expect(isTransientProviderCapacityError(new Error('API is temporarily overloaded'))).toBe(true);
     expect(
       isTransientProviderCapacityError(
-        Object.assign(new Error('request failed'), { code: 'resource_exhausted' }),
+        new ProviderReportedError('fixture', { codes: ['resource_exhausted'] }),
       ),
     ).toBe(true);
     expect(
       isTransientProviderCapacityError(
         new Error('wrapped provider error', {
-          cause: Object.assign(new Error('upstream'), { status: 529 }),
+          cause: new ProviderReportedError('fixture', { statuses: [529] }),
         }),
       ),
     ).toBe(true);
     expect(
       isTransientProviderCapacityError(
-        new Error("You've hit your usage limit. Try again at 3:24 AM."),
+        new ProviderReportedError('fixture', {
+          messages: ["You've hit your usage limit. Try again at 3:24 AM."],
+        }),
       ),
     ).toBe(true);
   });
 
-  it('does not retry deterministic request or access failures', () => {
+  it('does not classify arbitrary orchestration or target text', () => {
+    expect(isTransientProviderCapacityError(new Error('target returned HTTP 429'))).toBe(false);
+    expect(isTransientProviderCapacityError(new Error('provider overloaded'))).toBe(false);
+  });
+
+  it('does not retry deterministic provider request or access failures', () => {
     for (const error of [
-      Object.assign(new Error('invalid request'), { status: 400 }),
-      Object.assign(new Error('rate limit text in an invalid API key hint'), { status: 401 }),
-      Object.assign(new Error('forbidden'), { errorCode: 'authorization' }),
-      new Error('workflow schema validation failed'),
-      new Error('input_too_large'),
-      new Error('insufficient quota; update billing'),
+      new ProviderReportedError('fixture', { statuses: [400] }),
+      new ProviderReportedError('fixture', { statuses: [401], messages: ['rate limit'] }),
+      new ProviderReportedError('fixture', { codes: ['authorization'] }),
+      new ProviderReportedError('fixture', { codes: ['input_too_large'] }),
+      new ProviderReportedError('fixture', { messages: ['insufficient quota; update billing'] }),
     ]) {
       expect(isTransientProviderCapacityError(error)).toBe(false);
     }
+  });
+
+  it('treats every non-rate-limit 4xx and deterministic provider code as non-retryable', () => {
+    for (let status = 400; status < 500; status++) {
+      if (status === 429) continue;
+      expect(
+        isTransientProviderCapacityError(
+          new ProviderReportedError('fixture', {
+            statuses: [429, status],
+            codes: ['rate_limited'],
+          }),
+        ),
+      ).toBe(false);
+    }
+    for (const code of [
+      'schema_error',
+      'permission_denied',
+      'request-too-large',
+      'invalid_request',
+      'authentication-error',
+      'authorization.failed',
+      'billing_required',
+    ]) {
+      expect(
+        isTransientProviderCapacityError(
+          new ProviderReportedError('fixture', { statuses: [429], codes: [code] }),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it('lets deterministic provider facts override simultaneous transient facts', () => {
+    expect(
+      isTransientProviderCapacityError(
+        new ProviderReportedError('claude-cli', {
+          statuses: [429],
+          codes: ['rate_limited', 'insufficient_quota'],
+          messages: ['provider overloaded', 'invalid API key'],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isTransientProviderCapacityError(
+        new ProviderReportedError('codex-cli', {
+          statuses: [429],
+          codes: ['insufficient_quota'],
+        }),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -54,6 +116,222 @@ describe('jitteredBackoffMs', () => {
 });
 
 describe('retryTransientProviderFailure', () => {
+  it('asks only once when the caller declines an extension for the current deadline', async () => {
+    const runDeadline = new RunDeadline(100);
+    let requests = 0;
+    const decline = async () => {
+      requests++;
+      return null;
+    };
+    expect(
+      await Promise.all([
+        runDeadline.requestExtension(decline),
+        runDeadline.requestExtension(decline),
+      ]),
+    ).toEqual([false, false]);
+    expect(await runDeadline.requestExtension(decline)).toBe(false);
+    expect(requests).toBe(1);
+    runDeadline.extend(10);
+    expect(await runDeadline.requestExtension(async () => 5)).toBe(true);
+    expect(runDeadline.deadlineMs).toBe(115);
+  });
+
+  it('extends only the run boundary and never a shorter phase boundary', async () => {
+    const phaseBoundRun = new RunDeadline(200);
+    let phasePrompts = 0;
+    const phaseError = retryTransientProviderFailure(async () => 'not called', {
+      runDeadline: boundedRunDeadline(phaseBoundRun, 150),
+      now: () => 160,
+      onDeadlineReached: async () => {
+        phasePrompts++;
+        return 100;
+      },
+    });
+    await expect(phaseError).rejects.toMatchObject({ scope: 'phase' });
+    expect(phasePrompts).toBe(0);
+
+    await expect(
+      retryTransientProviderFailure(async () => 'not called', {
+        runDeadline: boundedRunDeadline(undefined, 150),
+        now: () => 160,
+        onDeadlineReached: async () => {
+          phasePrompts++;
+          return 100;
+        },
+      }),
+    ).rejects.toMatchObject({ scope: 'phase' });
+    expect(phasePrompts).toBe(0);
+
+    const runBound = new RunDeadline(150);
+    let runPrompts = 0;
+    expect(
+      await retryTransientProviderFailure(async () => 'continued', {
+        runDeadline: boundedRunDeadline(runBound, 300),
+        now: () => 160,
+        onDeadlineReached: async () => {
+          runPrompts++;
+          return 100;
+        },
+      }),
+    ).toBe('continued');
+    expect(runPrompts).toBe(1);
+    expect(runBound.deadlineMs).toBe(250);
+  });
+
+  it('treats equal run and phase deadlines as the nonextendable phase boundary', async () => {
+    const runDeadline = new RunDeadline(150);
+    let extensionRequests = 0;
+    await expect(
+      retryTransientProviderFailure(async () => 'not called', {
+        runDeadline: boundedRunDeadline(runDeadline, 150),
+        now: () => 150,
+        onDeadlineReached: async () => {
+          extensionRequests += 1;
+          return 100;
+        },
+      }),
+    ).rejects.toMatchObject({ scope: 'phase' });
+    expect(extensionRequests).toBe(0);
+    expect(runDeadline.deadlineMs).toBe(150);
+  });
+
+  it('reschedules an already-active deadline signal when the run is extended', async () => {
+    const runDeadline = new RunDeadline(Date.now() + 40);
+    const active = combinedDeadlineSignal(runDeadline, undefined, undefined);
+    try {
+      const aborted = new Promise<unknown>((resolve) =>
+        active.signal?.addEventListener('abort', () => resolve(active.signal?.reason), {
+          once: true,
+        }),
+      );
+      await Bun.sleep(10);
+      runDeadline.extend(100);
+      await Bun.sleep(50);
+      expect(active.signal?.aborted).toBe(false);
+      expect(await aborted).toBeInstanceOf(ProviderDeadlineError);
+    } finally {
+      active.dispose();
+    }
+  });
+
+  it('keeps an active operation alive when the caller accepts at the deadline', async () => {
+    const runDeadline = new RunDeadline(Date.now() + 25);
+    let prompts = 0;
+    const active = combinedDeadlineSignal(
+      runDeadline,
+      undefined,
+      undefined,
+      Date.now,
+      undefined,
+      async () => {
+        prompts++;
+        return 100;
+      },
+    );
+    try {
+      await Bun.sleep(50);
+      expect(prompts).toBe(1);
+      expect(active.signal?.aborted).toBe(false);
+    } finally {
+      active.dispose();
+    }
+  });
+
+  it('does not start an operation when the absolute deadline already passed', async () => {
+    let calls = 0;
+    await expect(
+      retryTransientProviderFailure(
+        async () => {
+          calls++;
+          return 'impossible';
+        },
+        { deadlineMs: 99, now: () => 100 },
+      ),
+    ).rejects.toBeInstanceOf(ProviderDeadlineError);
+    expect(calls).toBe(0);
+  });
+
+  it('retries a typed exact safety interruption without a fabricated status', async () => {
+    let calls = 0;
+    const safety = new ProviderReportedError(
+      'claude-cli',
+      {
+        messages: [
+          'I am unable to respond to this request because it appears to violate our Usage Policy.',
+        ],
+      },
+      undefined,
+      'transient_safety_filter',
+    );
+    const value = await retryTransientProviderFailure(
+      async () => {
+        calls++;
+        if (calls === 1) throw safety;
+        return 'recovered';
+      },
+      { sleep: async () => {} },
+    );
+    expect(value).toBe('recovered');
+    expect(calls).toBe(2);
+  });
+
+  it('does not retry a typed safety interruption contradicted by deterministic facts', async () => {
+    let calls = 0;
+    await expect(
+      retryTransientProviderFailure(
+        async () => {
+          calls++;
+          throw new ProviderReportedError(
+            'claude-cli',
+            { codes: ['invalid_api_key'] },
+            undefined,
+            'transient_safety_filter',
+          );
+        },
+        { sleep: async () => {} },
+      ),
+    ).rejects.toBeInstanceOf(ProviderReportedError);
+    expect(calls).toBe(1);
+  });
+
+  it('aborts an active provider call at the hard deadline', async () => {
+    let activeSignal: AbortSignal | undefined;
+    await expect(
+      retryTransientProviderFailure(
+        async (signal) => {
+          activeSignal = signal;
+          return await new Promise((_, reject) => {
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          });
+        },
+        { deadlineMs: Date.now() + 10 },
+      ),
+    ).rejects.toBeInstanceOf(ProviderDeadlineError);
+    expect(activeSignal?.aborted).toBe(true);
+  });
+
+  it('preserves the last provider cause when a recovery attempt reaches its deadline', async () => {
+    const providerCause = new ProviderReportedError('fixture', { statuses: [529] });
+    let calls = 0;
+    await expect(
+      retryTransientProviderFailure(
+        async (signal) => {
+          calls++;
+          if (calls === 1) throw providerCause;
+          return await new Promise((_, reject) => {
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          });
+        },
+        {
+          deadlineMs: Date.now() + 20,
+          initialDelayMs: 1,
+          random: () => 0.5,
+        },
+      ),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
+    expect(calls).toBe(2);
+  });
+
   it('keeps the same logical operation alive until the provider recovers', async () => {
     let calls = 0;
     const delays: number[] = [];
@@ -62,7 +340,7 @@ describe('retryTransientProviderFailure', () => {
     const result = await retryTransientProviderFailure(
       async () => {
         calls++;
-        if (calls < 4) throw new Error('provider overloaded; try again later');
+        if (calls < 4) throw new ProviderReportedError('fixture', { statuses: [529] });
         return 'recovered';
       },
       {
@@ -91,7 +369,7 @@ describe('retryTransientProviderFailure', () => {
       retryTransientProviderFailure(
         async () => {
           calls++;
-          throw new Error('rate_limited');
+          throw new ProviderReportedError('fixture', { codes: ['rate_limited'] });
         },
         {
           deadlineMs: 1_250,
@@ -104,7 +382,7 @@ describe('retryTransientProviderFailure', () => {
           },
         },
       ),
-    ).rejects.toThrow('rate_limited');
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
 
     expect(calls).toBe(1);
     expect(delays).toEqual([250]);
@@ -118,7 +396,7 @@ describe('retryTransientProviderFailure', () => {
     const result = await retryTransientProviderFailure(
       async () => {
         calls++;
-        if (calls === 1) throw new Error('provider overloaded');
+        if (calls === 1) throw new ProviderReportedError('fixture', { statuses: [529] });
         return 'done';
       },
       {
@@ -150,7 +428,7 @@ describe('retryTransientProviderFailure', () => {
       retryTransientProviderFailure(
         async () => {
           calls++;
-          throw new Error('429 too many requests');
+          throw new ProviderReportedError('fixture', { statuses: [429] });
         },
         {
           signal: controller.signal,
@@ -172,7 +450,10 @@ describe('retryTransientProviderFailure', () => {
       retryTransientProviderFailure(
         async () => {
           calls++;
-          throw Object.assign(new Error('bad schema'), { status: 400 });
+          throw new ProviderReportedError('fixture', {
+            statuses: [400],
+            messages: ['bad schema'],
+          });
         },
         {
           sleep: async () => {

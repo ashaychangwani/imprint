@@ -41,6 +41,8 @@ import type {
   CompileAgentProgress,
   CompileAgentResult,
 } from './compile-agent-types.ts';
+import { runCompileWithProviderRecovery } from './compile-provider-recovery.ts';
+import { abortSignalError, abortableDelay, withAbortSignal } from './concurrency.ts';
 import {
   type LLMOptions,
   type ToolUseProvider,
@@ -49,6 +51,13 @@ import {
 } from './llm.ts';
 import { createLog } from './log.ts';
 import { localToolDir } from './paths.ts';
+import {
+  ProviderDeadlineError,
+  type RunDeadlineRef,
+  combinedDeadlineSignal,
+  providerControlError,
+  resolvedRunDeadline,
+} from './provider-retry.ts';
 import { loadCredentialStore } from './runtime.ts';
 import { type Session, WorkflowSchema } from './types.ts';
 
@@ -66,7 +75,11 @@ interface CompileAuthAgentOptions {
   llmConfig?: LLMOptions;
   llmProvider?: ToolUseProvider;
   maxDurationMs?: number;
+  deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
   onProgress?: (p: CompileAgentProgress) => void;
+  onDeadlineReached?: () => Promise<number | null>;
+  signal?: AbortSignal;
   /** Interactive bridge for the agent's `prompt_user` checkpoint: shows the
    *  agent-generated message (+ optional choices) in the teach TUI and returns
    *  the user's input. When omitted, the agent receives an empty response and
@@ -74,7 +87,7 @@ interface CompileAuthAgentOptions {
   onPrompt?: (message: string, options?: string[]) => Promise<string>;
   /** Cool-off bridge for the agent's `wait_for_cooldown` checkpoint: wait the
    *  given minutes (informing the user, firing NO login). Default sleeps. */
-  onCooldown?: (minutes: number, reason?: string) => Promise<void>;
+  onCooldown?: (minutes: number, reason?: string, signal?: AbortSignal) => Promise<void>;
 }
 
 /** Build the initial user message handed to the agent on its first turn.
@@ -129,7 +142,10 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
     throw new Error(`Auth compile agent prompt not found at ${systemPromptPath}`);
   }
 
-  const deadlineMs = Date.now() + (opts.maxDurationMs ?? 10 * 60 * 1000);
+  const runDeadline = resolvedRunDeadline(
+    opts.runDeadline,
+    opts.deadlineMs ?? Date.now() + (opts.maxDurationMs ?? 10 * 60 * 1000),
+  );
   const initialUserMessage = buildAuthInitialMessage({ site, toolName, toolDir, authToolPlan });
 
   // Provider dispatch mirrors compile-agent.ts. CLI providers don't implement
@@ -146,7 +162,8 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
         session,
         sessionPath: opts.sessionPath,
         systemPromptPath,
-        deadlineMs,
+        deadlineMs: runDeadline?.deadlineMs ?? Date.now(),
+        runDeadline,
         startTime,
         toolDir,
         authToolPlan,
@@ -154,6 +171,8 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
         model: opts.llmConfig?.model,
         initialPrompt: initialUserMessage,
         onProgress: opts.onProgress,
+        onDeadlineReached: opts.onDeadlineReached,
+        signal: opts.signal,
         onPrompt: opts.onPrompt,
         onCooldown: opts.onCooldown,
       });
@@ -165,7 +184,8 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
         session,
         sessionPath: opts.sessionPath,
         systemPromptPath,
-        deadlineMs,
+        deadlineMs: runDeadline?.deadlineMs ?? Date.now(),
+        runDeadline,
         startTime,
         toolDir,
         authToolPlan,
@@ -173,6 +193,8 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
         model: opts.llmConfig?.model,
         initialPrompt: initialUserMessage,
         onProgress: opts.onProgress,
+        onDeadlineReached: opts.onDeadlineReached,
+        signal: opts.signal,
         onPrompt: opts.onPrompt,
         onCooldown: opts.onCooldown,
       });
@@ -224,7 +246,8 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
       systemPrompt,
       initialUserMessage: currentInitialMessage,
       tools,
-      deadlineMs,
+      deadlineMs: runDeadline?.deadlineMs ?? Date.now(),
+      runDeadline,
       softTurnCap: 30,
       llm: provider,
       onProgress: wrappedOnProgress,
@@ -232,6 +255,8 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
         const fullLog = [...conversationLog, ...currentCycleLog];
         writeFileSync(conversationLogPath, JSON.stringify(fullLog, null, 2), 'utf8');
       },
+      onDeadlineReached: opts.onDeadlineReached,
+      signal: opts.signal,
     });
 
     totalTurns += result.turns;
@@ -294,6 +319,7 @@ interface AuthSegmentLoopOptions {
   sessionPath: string;
   systemPromptPath: string;
   deadlineMs: number;
+  runDeadline?: RunDeadlineRef;
   startTime: number;
   toolDir: string;
   authToolPlan: NonNullable<AuthToolPlan>;
@@ -301,12 +327,10 @@ interface AuthSegmentLoopOptions {
   model?: string;
   initialPrompt: string;
   onProgress?: (p: CompileAgentProgress) => void;
+  onDeadlineReached?: () => Promise<number | null>;
+  signal?: AbortSignal;
   onPrompt?: (message: string, options?: string[]) => Promise<string>;
-  onCooldown?: (minutes: number, reason?: string) => Promise<void>;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  onCooldown?: (minutes: number, reason?: string, signal?: AbortSignal) => Promise<void>;
 }
 
 /** The full set of live-execution facts every verification result carries, so the
@@ -347,6 +371,15 @@ function formatVerifyResult(action: string, r: AuthActionResult): string {
  * (`claude --resume`, `codex exec resume`), not retained here.
  */
 async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<CompileAgentResult> {
+  const runDeadline = resolvedRunDeadline(opts.runDeadline, opts.deadlineMs);
+  const active = combinedDeadlineSignal(
+    runDeadline,
+    undefined,
+    opts.signal,
+    Date.now,
+    undefined,
+    opts.onDeadlineReached,
+  );
   const workflowPath = pathJoin(opts.toolDir, 'workflow.json');
   const verificationAttemptPath = pathJoin(opts.toolDir, AUTH_VERIFICATION_ATTEMPT_SENTINEL);
   if (existsSync(verificationAttemptPath)) unlinkSync(verificationAttemptPath);
@@ -366,12 +399,18 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
   };
 
   const onPrompt = opts.onPrompt ?? (async () => '');
-  const onCooldown = opts.onCooldown ?? (async (minutes: number) => sleep(minutes * 60_000));
+  const onCooldown =
+    opts.onCooldown ??
+    (async (minutes: number, _reason?: string, signal?: AbortSignal) =>
+      abortableDelay(minutes * 60_000, signal));
 
   let resume: { sessionId: string; message: string } | undefined;
   let last: CompileAgentResult | undefined;
   let totalTurns = 0;
-  let activeDeadlineMs = opts.deadlineMs;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCacheReadInputTokens = 0;
+  let totalCacheCreationInputTokens = 0;
   // The most recent live verification, surfaced on the orchestrator's progress
   // line so a failure (e.g. a 403) is visible the instant it happens.
   let lastVerification: CompileAgentProgress['lastVerification'];
@@ -395,37 +434,52 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
             })
         : undefined;
 
-      const result =
-        opts.driver === 'claude-cli'
-          ? await compileAuthViaClaudeCli({
-              session: opts.session,
-              absoluteToolDir: opts.toolDir,
-              sessionPath: opts.sessionPath,
-              systemPromptPath: opts.systemPromptPath,
-              deadlineMs: activeDeadlineMs,
-              startTime: opts.startTime,
-              onProgress: wrappedOnProgress,
-              authMode,
-              resume,
-              model: opts.model,
-            })
-          : await compileViaCodexCli({
-              session: opts.session,
-              absoluteToolDir: opts.toolDir,
-              sessionPath: opts.sessionPath,
-              systemPromptPath: opts.systemPromptPath,
-              deadlineMs: activeDeadlineMs,
-              startTime: opts.startTime,
-              onProgress: wrappedOnProgress,
-              authMode,
-              resume,
-              model: opts.model,
-            });
+      const result = await runCompileWithProviderRecovery({
+        runDeadline,
+        deadlineMs: opts.deadlineMs,
+        initialResume: resume,
+        signal: opts.signal,
+        onDeadlineReached: opts.onDeadlineReached,
+        onRetry: ({ attempt, delayMs, sessionId }) =>
+          log(
+            `${opts.driver} provider interruption after auth segment ${segment}.${attempt}; ` +
+              `${sessionId ? `will resume ${sessionId.slice(0, 8)}` : 'no session started yet'} ` +
+              `in ${Math.round(delayMs / 1000)}s`,
+          ),
+        run: (providerResume, segmentDeadline) => {
+          const common = {
+            session: opts.session,
+            absoluteToolDir: opts.toolDir,
+            sessionPath: opts.sessionPath,
+            systemPromptPath: opts.systemPromptPath,
+            deadlineMs: segmentDeadline?.deadlineMs ?? opts.deadlineMs,
+            runDeadline: segmentDeadline,
+            startTime: opts.startTime,
+            onProgress: wrappedOnProgress,
+            onDeadlineReached: opts.onDeadlineReached,
+            signal: opts.signal,
+            authMode,
+            resume: providerResume,
+            model: opts.model,
+          };
+          return opts.driver === 'claude-cli'
+            ? compileAuthViaClaudeCli(common)
+            : compileViaCodexCli(common);
+        },
+      });
       last = result;
       totalTurns += result.turns;
+      totalInputTokens += result.inputTokens;
+      totalOutputTokens += result.outputTokens;
+      totalCacheReadInputTokens += result.cacheReadInputTokens;
+      totalCacheCreationInputTokens += result.cacheCreationInputTokens;
 
       if (result.outcome !== 'checkpoint' || !result.checkpoint) {
-        if (result.outcome === 'soft_cap' && result.sessionId && Date.now() < activeDeadlineMs) {
+        if (
+          result.outcome === 'soft_cap' &&
+          result.sessionId &&
+          Date.now() < (runDeadline?.deadlineMs ?? opts.deadlineMs)
+        ) {
           const failures = authWorkflowPreflightFailures(
             opts.toolDir,
             opts.session,
@@ -455,7 +509,6 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
 
       const cp: AuthCheckpoint = result.checkpoint;
       let resultMsg: string;
-      const checkpointStartedAt = Date.now();
       try {
         if (cp.kind === 'run_verification') {
           const preflightFailures = await authLivePreflightFailures(
@@ -465,10 +518,10 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
             [...opts.authToolPlan.credentialRequestSeqs, ...opts.authToolPlan.authRequestSeqs],
             opts.sessionPath,
           );
-          if (Date.now() >= activeDeadlineMs) {
-            resultMsg =
-              'run_verification was blocked because the auth compile deadline expired; no live login was fired.';
-          } else if (preflightFailures.length > 0) {
+          if (Date.now() >= (runDeadline?.deadlineMs ?? opts.deadlineMs)) {
+            throw new ProviderDeadlineError(runDeadline?.deadlineMs ?? opts.deadlineMs);
+          }
+          if (preflightFailures.length > 0) {
             resultMsg = `run_verification was blocked before any live login was fired because workflow.json failed auth preflight:\n${preflightFailures
               .map((failure) => `- ${failure}`)
               .join('\n')}`;
@@ -489,6 +542,7 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
             const r = await verifier.runAction(cp.action, resolvedParameters, {
               freshSession: cp.freshSession,
               cleanSession: cp.cleanSession,
+              signal: active.signal,
             });
             writeFileSync(
               verificationAttemptPath,
@@ -522,9 +576,9 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
               turn: totalTurns,
               phase: 'tool',
               elapsedMs: Date.now() - opts.startTime,
-              budgetMs: Math.max(0, activeDeadlineMs - Date.now()),
-              inputTokens: 0,
-              outputTokens: 0,
+              budgetMs: Math.max(0, (runDeadline?.deadlineMs ?? opts.deadlineMs) - Date.now()),
+              inputTokens: totalInputTokens,
+              outputTokens: totalOutputTokens,
               verificationCycle: 1,
               segment,
               lastVerification,
@@ -535,27 +589,33 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
           const inspected = await verifier.inspectPage({
             maxChars: cp.maxChars,
             includeCookies: cp.includeCookies,
+            signal: active.signal,
           });
           resultMsg = inspected.ok
             ? `Current verification page snapshot:\n${JSON.stringify(inspected, null, 2)}`
             : `Verification page inspection was unavailable: ${inspected.message ?? 'unknown reason'}`;
         } else if (cp.kind === 'prompt_user') {
-          const answer = await onPrompt(cp.message, cp.options);
+          const answer = await withAbortSignal(
+            () => onPrompt(cp.message, cp.options),
+            active.signal,
+          );
           const reference = `\${prompt.${++promptSecretSequence}}`;
           promptSecrets.set(reference, answer);
           resultMsg = answer
             ? `The user response is stored locally as ${reference}. Pass that exact reference as the appropriate run_verification parameter value; the orchestrator resolves it without exposing the answer to the model.`
             : 'The user provided no input.';
         } else {
-          await onCooldown(cp.minutes, cp.reason);
+          await withAbortSignal(
+            () => onCooldown(cp.minutes, cp.reason, active.signal),
+            active.signal,
+          );
           resultMsg = `Requested delay of ~${cp.minutes} min completed; no live action ran during the wait.`;
         }
       } catch (err) {
+        if (opts.signal?.aborted) throw abortSignalError(opts.signal, 'Auth compile cancelled');
+        const control = providerControlError(active.signal?.aborted ? active.signal.reason : err);
+        if (control) throw control;
         resultMsg = `The orchestrator could not perform ${cp.kind}: ${err instanceof Error ? err.message : String(err)}`;
-      } finally {
-        if (cp.kind === 'prompt_user' || cp.kind === 'wait_for_cooldown') {
-          activeDeadlineMs += Date.now() - checkpointStartedAt;
-        }
       }
 
       const resumeMessage = `[orchestrator result for your ${cp.kind} request]\n${resultMsg}\n\nContinue from the recording and observed result. You control the next action or checkpoint.`;
@@ -565,6 +625,7 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
       };
     }
   } finally {
+    active.dispose();
     await verifier.drain();
   }
 
@@ -582,8 +643,17 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
       cacheCreationInputTokens: 0,
     };
   }
-  // Surface the cumulative turn count across segments.
-  return { ...last, turns: totalTurns };
+  // Each segment result already includes any same-session provider retries.
+  // Add each completed auth segment exactly once.
+  return {
+    ...last,
+    turns: totalTurns,
+    durationMs: Date.now() - opts.startTime,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    cacheReadInputTokens: totalCacheReadInputTokens,
+    cacheCreationInputTokens: totalCacheCreationInputTokens,
+  };
 }
 
 function buildMessageFromOutcome(result: AgentResult): string {

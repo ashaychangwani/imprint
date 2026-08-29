@@ -11,7 +11,6 @@ import { join as pathJoin } from 'node:path';
 import {
   type AgentProgress,
   type AgentResult,
-  type AgentTool,
   type OnDeadlineReached,
   doneTool,
   giveUpTool,
@@ -25,8 +24,10 @@ import {
   type CompileAgentResult,
   advanceIncompleteSemanticVerificationRuns,
   advanceSemanticVerificationCycle,
+  formatCandidateContext,
+  formatToolPlan,
 } from './compile-agent-types.ts';
-import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
+import { runCompileWithProviderRecovery } from './compile-provider-recovery.ts';
 import {
   applyIrreversibleVerificationWaiver,
   applyLiveVerification,
@@ -34,10 +35,9 @@ import {
   buildCompileTools,
   externalVerification,
 } from './compile-tools.ts';
-import { type Replacement, extractCredentials } from './credential-extract.ts';
+import { extractCredentials } from './credential-extract.ts';
 import { workflowHasIrreversibleEffect } from './effects.ts';
 import {
-  isInfrastructureOnlyInconclusiveReport,
   mergeSemanticParamVerification,
   runLiveSemanticVerification,
   semanticVerificationFailures,
@@ -53,15 +53,10 @@ import {
 } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
-import {
-  canAcceptInconclusiveDecision,
-  compileArtifactFingerprint,
-  inconclusiveDecisionAtSemanticCap,
-} from './mcp-compile-server.ts';
 import { localSiteDir } from './paths.ts';
 import { rebindExistingBackendsCacheToWorkflow } from './probe-backends.ts';
+import { type RunDeadlineRef, resolvedRunDeadline } from './provider-retry.ts';
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
-import type { ClassifiedValue } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   type SharedTriageSelection,
@@ -76,31 +71,6 @@ const log = createLog('compile-agent');
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const PROMPTS_DIR = pathJoin(REPO_ROOT, 'prompts');
-
-function compileDoneTool(): AgentTool {
-  const tool = doneTool();
-  return {
-    ...tool,
-    description:
-      'Call this when compilation is complete. After an infrastructure-only inconclusive live review, call it again on unchanged artifacts with an explicit acceptance decision and reasoning.',
-    input_schema: {
-      ...tool.input_schema,
-      properties: {
-        ...tool.input_schema.properties,
-        accept_inconclusive: {
-          type: 'boolean',
-          description:
-            'Explicitly ship an unchanged deterministic artifact after an infrastructure-only inconclusive live review.',
-        },
-        inconclusive_reason: {
-          type: 'string',
-          description:
-            'Concrete compiler reasoning for accepting the unchanged artifact without a liveVerified stamp.',
-        },
-      },
-    },
-  };
-}
 
 let claudeCliCompiler = compileViaClaudeCli;
 let codexCliCompiler = compileViaCodexCli;
@@ -121,11 +91,21 @@ export function resolveCompileAgentModel(provider: ProviderName): string {
   return preferredAgentModel(provider);
 }
 
+function removeEphemeralTests(toolDir: string): void {
+  for (const name of ['parser.test.ts', 'request.test.ts', 'integration.test.ts']) {
+    const path = pathJoin(toolDir, name);
+    if (existsSync(path)) unlinkSync(path);
+  }
+}
+
 interface CompileAgentOptions {
   /** Path to the recorded session JSON (absolute or relative). */
   sessionPath: string;
   /** Hard wall-clock budget. Default 20 minutes. */
   maxDurationMs?: number;
+  /** Absolute teach-run deadline shared by planning, compile, and verification. */
+  deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
   /** Override LLM config (region, model, project). */
   llmConfig?: LLMOptions;
   /** For testing only — inject a pre-configured provider instead of using llmConfig.
@@ -139,20 +119,12 @@ interface CompileAgentOptions {
    *  on disk just confuses `bun test`). Pass true with `--keep-test` to
    *  inspect the agent's test output locally. */
   keepTest?: boolean;
-  /** Credential placeholders to inject before redaction. Provided by `imprint
-   *  teach` when the credential-extract pass found a login pair; for direct
-   *  `imprint generate` callers we run extraction inline (best-effort, no
-   *  prompts — values flow into the credential manager only when the user
-   *  goes through the teach flow). */
-  replacements?: Replacement[];
   /** Directory where workflow.json/parser.ts/parser.test.ts are written. */
   outDir?: string;
   /** Candidate-specific compile scope for multi-tool teach. */
   candidate?: ToolCandidate;
   /** Shared auth/helper guidance generated once for a multi-tool teach run. */
   sharedContext?: SharedCompileContext;
-  /** Dual-pass value classifications from replay-and-diff. */
-  classifications?: ClassifiedValue[];
   /** Credential values extracted during teach, passed to integration tests via env var. */
   teachCredentials?: { site: string; values: Record<string, string> };
   /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). */
@@ -161,9 +133,10 @@ interface CompileAgentOptions {
   sharedModules?: SharedModuleManifestEntry[];
   /** Called when wall-clock deadline is reached; return ms to extend or null to time out. */
   onDeadlineReached?: OnDeadlineReached;
-  /** Per-tool implementation plan (param→field mapping, request construction,
-   *  response parsing, shared-module imports). Injected into the agent's initial
-   *  message so the compile follows it. Generic — not tied to any site. */
+  /** Cancels the active provider call, any backoff wait, and its compiler child process. */
+  signal?: AbortSignal;
+  /** Advisory per-tool implementation plan. The agent may accept, revise, or
+   * reject its parameter, request, response, and shared-module proposals. */
   toolPlan?: string;
   /** Revise an existing generated artifact, using durable verification feedback
    *  as the starting point instead of rebuilding it from raw capture. */
@@ -184,11 +157,12 @@ function formatRevisionMode(enabled: boolean | undefined): string {
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
   const startTime = Date.now();
-  // Resolve the shared modules + token contracts the plan assigned this tool, so
-  // the in-process verifier can assert modules are imported and require a chained
-  // test for each producer-sourced token param.
-  const { assignedSharedModules, tokenParams, tokenParamShapes, emittedTokens, requiredInputs } =
-    resolvePlanSliceFromFile(opts.buildPlanPath, opts.candidate?.toolName, opts.sharedModules);
+  // Build-plan fields are bounded proposals for the compile/master agents.
+  const { assignedSharedModules } = resolvePlanSliceFromFile(
+    opts.buildPlanPath,
+    opts.candidate?.toolName,
+    opts.sharedModules,
+  );
 
   // 1. Load + validate the session
   let session: Session = loadJsonFile(
@@ -202,30 +176,17 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
     'session',
   );
 
-  // 2. Auto-redact if not already redacted (preserves any ${credential.X}
-  //    placeholders that teach.ts already injected). When replacements are
-  //    passed in via opts (the teach path), we honor them; otherwise we run
-  //    extraction inline so direct `imprint generate` callers also get
-  //    credential-aware redaction (values are NOT persisted to the keychain
-  //    on this path — that requires going through `imprint teach` or
-  //    `imprint credential set`).
+  // 2. Auto-redact raw direct-generate inputs. Teach normally supplies an
+  // already-redacted focused recording.
   const looksRedacted = JSON.stringify(session).includes('[REDACTED:');
   if (!looksRedacted) {
-    let replacements = opts.replacements;
-    if (!replacements) {
-      const auto = extractCredentials(session);
-      replacements = auto.replacements;
-    }
+    const replacements = extractCredentials(session).replacements;
     const pageMintedHeaders = detectPageMintedHeaders(session);
-    const r = redactSession(session, { replacements, keepHeaders: pageMintedHeaders });
-    session = r.session;
-    if (r.stats.totalRedactions > 0 || r.stats.placeholdersInjected > 0) {
-      const freeformNote =
-        r.stats.freeformRedactions > 0
-          ? ` (${r.stats.freeformRedactions} free-form finding(s))`
-          : '';
+    const redaction = redactSession(session, { replacements, keepHeaders: pageMintedHeaders });
+    session = redaction.session;
+    if (redaction.stats.totalRedactions > 0 || redaction.stats.placeholdersInjected > 0) {
       log(
-        `redacted ${r.stats.totalRedactions} value(s)${freeformNote} and injected ${r.stats.placeholdersInjected} credential placeholder(s) before sending to LLM`,
+        `redacted ${redaction.stats.totalRedactions} value(s) and injected ${redaction.stats.placeholdersInjected} credential placeholder(s) before sending to LLM`,
       );
     }
   }
@@ -238,10 +199,10 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
 
   // 3. Determine the generated tool directory.
   const absoluteToolDir = opts.outDir ?? localSiteDir(session.site);
+  mkdirSync(absoluteToolDir, { recursive: true });
 
   // 3b. Ensure type dependencies exist so the agent doesn't waste turns
   //     discovering and installing @types/bun + @types/node during the loop.
-  mkdirSync(absoluteToolDir, { recursive: true });
   const harnessPkgPath = pathJoin(absoluteToolDir, 'package.json');
   if (!existsSync(harnessPkgPath)) {
     writeFileSync(
@@ -284,13 +245,12 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
     ...buildCompileTools(session, absoluteToolDir, sessionPathAbs, {
       candidate: opts.candidate,
       sharedContext: opts.sharedContext,
-      classifications: opts.classifications,
       teachCredentials: opts.teachCredentials,
       buildPlanPath: opts.buildPlanPath,
       sharedModules: opts.sharedModules,
       revisionMode: opts.revisionMode,
     }),
-    compileDoneTool(),
+    doneTool(),
     giveUpTool(),
   ];
 
@@ -307,7 +267,10 @@ ${formatRevisionMode(opts.revisionMode)}
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
 
   // 7. Compute deadline
-  let deadlineMs = Date.now() + (opts.maxDurationMs ?? 20 * 60 * 1000);
+  const runDeadline = resolvedRunDeadline(
+    opts.runDeadline,
+    opts.deadlineMs ?? Date.now() + (opts.maxDurationMs ?? 20 * 60 * 1000),
+  );
 
   // 8. Instantiate provider (or use injected one for testing).
   //    CLI providers take a different path: they don't implement Anthropic
@@ -318,50 +281,50 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     provider = opts.llmProvider;
   } else {
     const resolvedProvider = resolveProvider(opts.llmConfig);
-    if (resolvedProvider.name === 'claude-cli') {
-      return await claudeCliCompiler({
-        session,
-        absoluteToolDir,
-        sessionPath: opts.sessionPath,
-        systemPromptPath,
-        deadlineMs,
-        onProgress: opts.onProgress,
+    if (resolvedProvider.name === 'claude-cli' || resolvedProvider.name === 'codex-cli') {
+      const providerName = resolvedProvider.name;
+      const compiler = providerName === 'claude-cli' ? claudeCliCompiler : codexCliCompiler;
+      const result = await runCompileWithProviderRecovery({
+        runDeadline,
+        signal: opts.signal,
         onDeadlineReached: opts.onDeadlineReached,
-        startTime,
-        keepTest: opts.keepTest,
-        candidate: opts.candidate,
-        sharedContext: opts.sharedContext,
-        buildPlanPath: opts.buildPlanPath,
-        sharedModules: opts.sharedModules,
-        toolPlan: opts.toolPlan,
-        revisionMode: opts.revisionMode,
-        model: opts.llmConfig?.model,
-        sharedTriageSelection: opts.preTriagedSession
-          ? minimalSharedTriageSelection(opts.preTriagedSession)
-          : undefined,
+        onRetry: ({ attempt, delayMs, sessionId }) =>
+          log(
+            `${providerName} provider interruption after segment ${attempt}; ` +
+              `${sessionId ? `will resume session ${sessionId.slice(0, 8)}` : 'no session started yet'} ` +
+              `in ${Math.round(delayMs / 1000)}s`,
+          ),
+        run: (resume, segmentDeadline) =>
+          compiler({
+            session,
+            absoluteToolDir,
+            sessionPath: opts.sessionPath,
+            systemPromptPath,
+            deadlineMs: segmentDeadline?.deadlineMs ?? runDeadline?.deadlineMs ?? Date.now(),
+            runDeadline: segmentDeadline,
+            onProgress: opts.onProgress,
+            onDeadlineReached: opts.onDeadlineReached,
+            signal: opts.signal,
+            startTime,
+            keepTest: opts.keepTest,
+            candidate: opts.candidate,
+            sharedContext: opts.sharedContext,
+            buildPlanPath: opts.buildPlanPath,
+            sharedModules: opts.sharedModules,
+            toolPlan: opts.toolPlan,
+            revisionMode: opts.revisionMode,
+            resume,
+            model: opts.llmConfig?.model,
+            sharedTriageSelection: opts.preTriagedSession
+              ? minimalSharedTriageSelection(opts.preTriagedSession)
+              : undefined,
+          }),
       });
-    }
-    if (resolvedProvider.name === 'codex-cli') {
-      return await codexCliCompiler({
-        session,
-        absoluteToolDir,
-        sessionPath: opts.sessionPath,
-        systemPromptPath,
-        deadlineMs,
-        onProgress: opts.onProgress,
-        startTime,
-        keepTest: opts.keepTest,
-        candidate: opts.candidate,
-        sharedContext: opts.sharedContext,
-        buildPlanPath: opts.buildPlanPath,
-        sharedModules: opts.sharedModules,
-        toolPlan: opts.toolPlan,
-        revisionMode: opts.revisionMode,
-        model: opts.llmConfig?.model,
-        sharedTriageSelection: opts.preTriagedSession
-          ? minimalSharedTriageSelection(opts.preTriagedSession)
-          : undefined,
-      });
+      if (!result.success) return result;
+      if (!opts.keepTest) {
+        removeEphemeralTests(absoluteToolDir);
+      }
+      return result;
     }
     if (!isToolUseProvider(resolvedProvider)) {
       throw new Error(
@@ -389,12 +352,6 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
   const MAX_INCOMPLETE_VERIFIER_RUNS = 2;
   let semanticVerificationCycles = 0;
   let incompleteVerifierRuns = 0;
-  let pendingInconclusive:
-    | {
-        artifactFingerprint: string;
-        report: Awaited<ReturnType<typeof runLiveSemanticVerification>>;
-      }
-    | undefined;
   let result: AgentResult | null = null;
   let currentInitialMessage = initialUserMessage;
 
@@ -417,7 +374,8 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       systemPrompt,
       initialUserMessage: currentInitialMessage,
       tools,
-      deadlineMs,
+      deadlineMs: runDeadline?.deadlineMs ?? Date.now(),
+      runDeadline,
       llm: provider,
       onProgress: wrappedOnProgress,
       onConversationUpdate: (currentCycleLog) => {
@@ -425,6 +383,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         writeFileSync(conversationLogPath, JSON.stringify(fullLog, null, 2), 'utf8');
       },
       onDeadlineReached: opts.onDeadlineReached,
+      signal: opts.signal,
     });
 
     totalTurns += result.turns;
@@ -441,27 +400,19 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
 
     // Perform external verification
-    const deterministicVerificationStartedAt = Date.now();
     const { failures, warnings, paramVerification, integrationEvidence } =
       await externalVerification(absoluteToolDir, session, sessionPathAbs, {
         expectedToolName: opts.candidate?.toolName,
-        likelyParams: opts.candidate?.likelyParams,
         candidateRequestSeqs: opts.candidate?.requestSeqs,
         // Widen checks to requests this tool depends on (bootstrap/login/etc.).
         dependencyRequestSeqs: [
           ...(opts.candidate?.dependencySeqs ?? []),
           ...(opts.sharedContext?.loginRequestSeqs ?? []),
         ],
-        assignedSharedModules,
-        tokenParams,
-        tokenParamShapes,
-        emittedTokens,
-        requiredInputs,
         credentialValues: opts.teachCredentials?.values,
         credentialNames: opts.sharedContext?.credentialNames,
         deferLiveIntegrationToSemanticAgent: true,
       });
-    deadlineMs += Date.now() - deterministicVerificationStartedAt;
 
     if (warnings.length > 0) {
       log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
@@ -475,140 +426,56 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     }
     if (workflow && workflowHasIrreversibleEffect(workflow)) {
       warnings.push(...applyIrreversibleVerificationWaiver(absoluteToolDir, workflow));
-      message = result.doneSummary ?? 'Task completed';
-      message += `\n\nWarnings:\n${warnings.join('\n')}`;
-      if (!opts.keepTest) {
-        for (const file of ['parser.test.ts', 'request.test.ts', 'integration.test.ts']) {
-          const testPath = pathJoin(absoluteToolDir, file);
-          if (existsSync(testPath)) unlinkSync(testPath);
-        }
+      if (failures.length === 0) {
+        message = `${result.doneSummary ?? 'Task completed'}\n\nLive verification: N/A (irreversible workflow).`;
+        if (warnings.length > 0) message += `\n\nWarnings:\n${warnings.join('\n')}`;
+        if (!opts.keepTest) removeEphemeralTests(absoluteToolDir);
       }
-      break;
+      if (failures.length === 0) {
+        break;
+      }
     }
 
     let semanticReviewCompleted = false;
     let semanticReviewAttempted = false;
+    let paramWarnings: string[] = [];
     if (failures.length === 0) {
-      const doneInput = result.doneInput ?? {};
-      const currentFingerprint = compileArtifactFingerprint(absoluteToolDir);
-      if (
-        pendingInconclusive &&
-        canAcceptInconclusiveDecision({
-          semanticVerificationCycles,
-          maxVerificationCycles: MAX_VERIFICATION_CYCLES,
-          completedReview: pendingInconclusive.report.completedReview,
-          infrastructureOnly: isInfrastructureOnlyInconclusiveReport(
-            pendingInconclusive.report.report,
-          ),
-          pendingFingerprint: pendingInconclusive.artifactFingerprint,
-          currentFingerprint,
-          acceptInconclusive: doneInput.accept_inconclusive === true,
-          inconclusiveReason:
-            typeof doneInput.inconclusive_reason === 'string'
-              ? doneInput.inconclusive_reason
-              : undefined,
-        })
-      ) {
-        const semantic = pendingInconclusive.report;
-        const inconclusiveReason = String(doneInput.inconclusive_reason).trim();
-        applyLiveVerification(absoluteToolDir, {
-          kind: 'waived-infra',
-          firstError: inconclusiveReason,
-          exhaustedBackends: [],
-        });
-        const paramWarnings = applyParamVerification(
+      semanticReviewAttempted = true;
+      const semantic = await runLiveSemanticVerification({
+        provider: DEFAULT_VERIFICATION_PROVIDER,
+        toolDir: absoluteToolDir,
+        evidence: integrationEvidence,
+        signal: opts.signal,
+        deadlineMs: runDeadline?.deadlineMs,
+        runDeadline,
+        onDeadlineReached: opts.onDeadlineReached,
+      });
+      semanticReviewCompleted = semantic.completedReview;
+      failures.push(...semanticVerificationFailures(semantic.report));
+      if (semantic.report.status === 'approved_with_gaps') {
+        warnings.push(
+          `independent semantic verification approved with gaps: ${semantic.report.gaps.join('; ')}`,
+        );
+      }
+      if (failures.length === 0) {
+        applyLiveVerification(absoluteToolDir, undefined);
+        paramWarnings = applyParamVerification(
           absoluteToolDir,
           mergeSemanticParamVerification(paramVerification, semantic.report),
         );
         rebindExistingBackendsCacheToWorkflow(absoluteToolDir);
-        warnings.push(
-          `independent semantic verification was inconclusive: ${semantic.report.summary}`,
-          `compiler accepted the unchanged artifact without live verification: ${inconclusiveReason}`,
-          ...paramWarnings,
-        );
-        message = result.doneSummary ?? 'Task completed';
-        message += `\n\nWarnings:\n${warnings.join('\n')}`;
-        if (!opts.keepTest) {
-          for (const f of ['parser.test.ts', 'request.test.ts', 'integration.test.ts']) {
-            const testPath = pathJoin(absoluteToolDir, f);
-            if (existsSync(testPath)) unlinkSync(testPath);
-          }
-        }
-        break;
       }
-
-      const capDecision = inconclusiveDecisionAtSemanticCap({
-        semanticVerificationCycles,
-        maxVerificationCycles: MAX_VERIFICATION_CYCLES,
-        pendingFingerprint: pendingInconclusive?.artifactFingerprint,
-        currentFingerprint,
-      });
-      if (capDecision === 'fail-artifact-changed') {
-        pendingInconclusive = undefined;
-        failures.push(
-          'compile artifacts changed after the final allowed inconclusive semantic review; refusing to run an additional review beyond the semantic cycle cap',
-        );
-      } else if (capDecision === 'await-compiler-decision') {
-        failures.push(
-          'semantic review limit reached with an unchanged infrastructure-only inconclusive result; explicitly accept the unverified artifact with reasoning or revise it',
-        );
-      } else {
-        if (pendingInconclusive && pendingInconclusive.artifactFingerprint !== currentFingerprint) {
-          pendingInconclusive = undefined;
+      if (failures.length === 0 && workflow) {
+        const allWarnings = [...warnings, ...paramWarnings];
+        if (paramWarnings.length > 0) {
+          log(`parameter verification:\n${paramWarnings.join('\n')}`);
         }
-        const semanticVerificationStartedAt = Date.now();
-        semanticReviewAttempted = true;
-        const semantic = await runLiveSemanticVerification({
-          provider: DEFAULT_VERIFICATION_PROVIDER,
-          toolDir: absoluteToolDir,
-          evidence: integrationEvidence,
-          // Live semantic verification is a distinct phase. Do not inherit a
-          // nearly exhausted compile-agent deadline.
-        });
-        deadlineMs += Date.now() - semanticVerificationStartedAt;
-        semanticReviewCompleted = semantic.completedReview;
-        if (semantic.report.status === 'inconclusive') {
-          pendingInconclusive = {
-            artifactFingerprint: compileArtifactFingerprint(absoluteToolDir),
-            report: semantic,
-          };
-        } else {
-          pendingInconclusive = undefined;
+        message = result.doneSummary ?? 'Task completed';
+        if (allWarnings.length > 0) {
+          message += `\n\nWarnings:\n${allWarnings.join('\n')}`;
         }
-        failures.push(...semanticVerificationFailures(semantic.report));
-        if (semantic.report.status === 'approved_with_gaps') {
-          warnings.push(
-            `independent semantic verification approved with gaps: ${semantic.report.gaps.join('; ')}`,
-          );
-        }
-        if (failures.length === 0) {
-          // Success (possibly with explicit semantic gaps). Persist per-parameter
-          // flags and mint liveVerified=true only after independent approval.
-          applyLiveVerification(absoluteToolDir, undefined);
-          const paramWarnings = applyParamVerification(
-            absoluteToolDir,
-            mergeSemanticParamVerification(paramVerification, semantic.report),
-          );
-          // liveVerified/parameter annotations change the hash-strict cache key,
-          // but not transport capabilities. Rebind the backend already exercised
-          // by the verifier instead of triggering another probe.
-          rebindExistingBackendsCacheToWorkflow(absoluteToolDir);
-          const allWarnings = [...warnings, ...paramWarnings];
-          if (paramWarnings.length > 0) {
-            log(`parameter verification:\n${paramWarnings.join('\n')}`);
-          }
-          message = result.doneSummary ?? 'Task completed';
-          if (allWarnings.length > 0) {
-            message += `\n\nWarnings:\n${allWarnings.join('\n')}`;
-          }
-          if (!opts.keepTest) {
-            for (const f of ['parser.test.ts', 'request.test.ts', 'integration.test.ts']) {
-              const testPath = pathJoin(absoluteToolDir, f);
-              if (existsSync(testPath)) unlinkSync(testPath);
-            }
-          }
-          break;
-        }
+        if (!opts.keepTest) removeEphemeralTests(absoluteToolDir);
+        if (failures.length === 0) break;
       }
     }
 
@@ -627,12 +494,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       message = `Independent semantic verifier failed to complete after ${MAX_INCOMPLETE_VERIFIER_RUNS} bounded runs. Final failures:\n${failures.join('\n')}`;
       break;
     }
-    const awaitingFinalInconclusiveDecision =
-      semanticVerificationCycles >= MAX_VERIFICATION_CYCLES && pendingInconclusive !== undefined;
-    if (
-      semanticVerificationCycles >= MAX_VERIFICATION_CYCLES &&
-      !awaitingFinalInconclusiveDecision
-    ) {
+    if (semanticVerificationCycles >= MAX_VERIFICATION_CYCLES) {
       outcome = 'error';
       message = `Semantic verification failed after ${MAX_VERIFICATION_CYCLES} cycles. Final failures:\n${failures.join('\n')}`;
       break;
@@ -649,14 +511,6 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
 ${failures.map((f) => `- ${f}`).join('\n')}
 
 Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.test.ts), fix the issues, re-run tests, and call done again when fixed.`;
-    currentInitialMessage += `\n\nUse the verifier's semantic evidence, not a requirement for 100% of the original candidate inputs. If the core intent works but a secondary parameter cannot be supported from the recording and live evidence without guessing, remove that parameter and add workflow.limitations with omittedParameters and a specific reason. Treat emitsTokens as downstream compatibility targets, not automatic definitions of producer success: when useful core records lack an optional consumer token, preserve the records and supported input classes, document the missing output and affected consumers, and leave those consumers limited/unverified. Narrow an input class only when its core results are unusable or misleading. Do not use a limitation to hide a broken core tool, and do not keep a known broken or ignored public input.`;
-    if (pendingInconclusive) {
-      currentInitialMessage +=
-        semanticVerificationCycles >= MAX_VERIFICATION_CYCLES &&
-        pendingInconclusive.report.completedReview
-          ? '\n\nThe final allowed live semantic review was infrastructure-only inconclusive. Review its evidence and log. If no tool defect is exposed and the unchanged deterministic artifact should ship explicitly unverified, call done again with accept_inconclusive=true and a concrete inconclusive_reason. This does not mint liveVerified.'
-          : '\n\nThe live verifier was infrastructure-only inconclusive. Review its evidence and log. Fix any exposed tool defect, or call done normally to request another independent review. Explicit unverified acceptance is available only after the semantic review limit is reached.';
-    }
   }
 
   // 10. Final flush of the complete conversation log

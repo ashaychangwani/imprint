@@ -1,43 +1,24 @@
 /** Bounded factual projections. Store/controller code owns issuance and freshness. */
 import { z } from 'zod';
 import {
+  ArtifactRequestProvenanceListSchema,
   ContentAddressedRefSchema,
   ImplementationPlanRefSchema,
   teachingPlanContentSha256 as digest,
+  implementationPlanRequestProvenanceSha256,
 } from './master-teach-plan.ts';
 import { type Session, SessionSchema } from './types.ts';
 export const PromptShaSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export const PromptIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 export const PromptToolIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,127}$/);
-export const PromptCheckSchema = z.enum(['contract', 'replay', 'live', 'chain']);
-export const PromptCheckStatusSchema = z.enum([
-  'passed',
-  'failed',
-  'not_applicable',
-  'not_checked',
-]);
+const PromptMechanismSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
+const PromptCheckSchema = z.enum(['contract', 'replay', 'live', 'chain']);
+const PromptCheckStatusSchema = z.enum(['passed', 'failed', 'not_applicable', 'not_checked']);
 export function utf8Text(minBytes: number, maxBytes: number) {
   return z.string().refine((value) => {
     const bytes = Buffer.byteLength(value, 'utf8');
     return bytes >= minBytes && bytes <= maxBytes;
   }, `expected ${minBytes}..${maxBytes} UTF-8 bytes`);
-}
-/**
- * Store/controller receipt issuers must call this with their complete secret set.
- * The schemas below validate structure; they cannot discover or sanitize secrets.
- */
-export function sanitizeHostError(message: string, secretValues: readonly string[]): string {
-  let sanitized = message;
-  for (const secret of [...new Set(secretValues)]
-    .filter(Boolean)
-    .sort((a, b) => b.length - a.length)) {
-    sanitized = sanitized.split(secret).join('[REDACTED]');
-  }
-  const bytes = Buffer.from(sanitized, 'utf8');
-  if (bytes.length <= 1_000) return sanitized || '[empty host error]';
-  let end = 1_000;
-  while (end > 0 && (bytes[end] ?? 0) >> 6 === 2) end -= 1;
-  return bytes.subarray(0, end).toString() || '[truncated host error]';
 }
 function issue(ctx: z.RefinementCtx, path: Array<string | number>, message: string): void {
   ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
@@ -59,9 +40,6 @@ export const RunIdentitySchema = strictObject({
   site: utf8Text(1, 255),
   recordingSha256: PromptShaSchema,
 });
-export const DiscoveryBindingSchema = RunIdentitySchema.extend({
-  discoverySha256: PromptShaSchema,
-}).strict();
 export const RecordingIndexSchema = strictObject({
   recordingSha256: PromptShaSchema,
   requestSeqs: z.array(z.number().int().nonnegative()).max(50_000),
@@ -93,7 +71,7 @@ export const ReceiptFactSchema = z
   .discriminatedUnion('kind', [
     fact({
       kind: z.literal('request_comparison'),
-      requestIndex: z.number().int().nonnegative(),
+      artifactRequestIndex: z.number().int().nonnegative(),
       recordingSeq: z.number().int().nonnegative(),
       expectedBytes: z.number().int().nonnegative().optional(),
       actualBytes: z.number().int().nonnegative().optional(),
@@ -104,6 +82,7 @@ export const ReceiptFactSchema = z
       kind: z.literal('invocation'),
       invocationIndex: z.number().int().nonnegative(),
       durationMs: z.number().nonnegative().optional(),
+      executionMechanism: PromptMechanismSchema.optional(),
     }),
     fact({ kind: z.literal('result'), resultCount: z.number().int().nonnegative() }),
     fact({
@@ -119,13 +98,6 @@ export const ReceiptFactSchema = z
       issue(ctx, ['expectedBytes'], 'checked comparisons require both byte lengths');
     if ((fact.status === 'failed') !== (fact.firstMismatchByte !== undefined))
       issue(ctx, ['firstMismatchByte'], 'failed comparisons alone require a first mismatch');
-    if (
-      fact.status === 'passed' &&
-      fact.expectedBytes !== undefined &&
-      fact.actualBytes !== undefined &&
-      fact.expectedBytes !== fact.actualBytes
-    )
-      issue(ctx, ['actualBytes'], 'passed comparison byte lengths must match');
     if (
       fact.firstMismatchByte !== undefined &&
       fact.expectedBytes !== undefined &&
@@ -161,41 +133,35 @@ const MechanicalEvidenceSchema = strictObject({
   if (value.facts && value.status !== summarizedStatus(value.facts))
     issue(ctx, ['status'], 'status does not summarize facts');
 });
-export const PromptEvidencePayloadSchema = strictObject({
-  entries: z
-    .array(
-      z.union([
-        MechanicalEvidenceSchema,
-        strictObject({
-          kind: z.literal('untrusted_redacted_quote'),
-          ref: ContentAddressedRefSchema,
-          provenance: z.enum([
-            'recording_request',
-            'recording_response',
-            'recording_event',
-            'plan_note',
-            'artifact_excerpt',
-            'check_history',
-          ]),
-          quote: utf8Text(1, 4_000),
-        }),
-      ]),
-    )
-    .max(64),
-}).refine(
-  (value) => Buffer.byteLength(JSON.stringify(value), 'utf8') <= 96 * 1_024,
-  'evidence exceeds 96 KiB',
-);
+const PromptEvidencePayloadSchema = strictObject({
+  entries: z.array(
+    z.union([
+      MechanicalEvidenceSchema,
+      strictObject({
+        kind: z.literal('untrusted_redacted_quote'),
+        ref: ContentAddressedRefSchema,
+        provenance: z.enum([
+          'recording_request',
+          'recording_response',
+          'recording_event',
+          'plan_note',
+          'artifact_excerpt',
+          'check_history',
+        ]),
+        quote: utf8Text(1, 4_000),
+      }),
+    ]),
+  ),
+});
 export const PromptEvidenceProjectionSchema = contentProjection(PromptEvidencePayloadSchema);
 export type PromptEvidenceProjection = z.infer<typeof PromptEvidenceProjectionSchema>;
-export const DependencyExecutionBindingSchema = strictObject({
+const DependencyExecutionBindingSchema = strictObject({
   toolId: PromptToolIdSchema,
   buildRef: ContentAddressedRefSchema,
   executionBindingSha256: PromptShaSchema,
 });
 const DependencyListSchema = z
   .array(DependencyExecutionBindingSchema)
-  .max(32)
   .superRefine((dependencies, ctx) => {
     const ids = new Set<string>();
     const refs = new Set<string>();
@@ -207,7 +173,7 @@ const DependencyListSchema = z
       refs.add(refKey(dependency.buildRef));
     });
   });
-/** Store/controller issues this binding, including the exact ordered replay targets. */
+/** Store/controller issues this binding from the accepted implementation plan. */
 export const ToolExecutionBindingSchema = strictObject({
   runId: PromptIdSchema,
   recordingSha256: PromptShaSchema,
@@ -215,17 +181,22 @@ export const ToolExecutionBindingSchema = strictObject({
   compileInputsSha256: PromptShaSchema,
   implementationPlan: ImplementationPlanRefSchema,
   strategyKind: z.enum(['api', 'playbook_fallback']),
-  replayRequestSeqs: z.array(z.number().int().nonnegative()).max(256),
+  requestProvenance: ArtifactRequestProvenanceListSchema,
   artifactManifestRef: ContentAddressedRefSchema,
   sharedManifestRef: ContentAddressedRefSchema,
   dependencies: DependencyListSchema,
 }).superRefine((binding, ctx) => {
-  if (new Set(binding.replayRequestSeqs).size !== binding.replayRequestSeqs.length)
-    issue(ctx, ['replayRequestSeqs'], 'replay request targets must be unique');
-  if (binding.strategyKind === 'api' && binding.replayRequestSeqs.length === 0)
-    issue(ctx, ['replayRequestSeqs'], 'API execution requires replay request targets');
-  if (binding.strategyKind === 'playbook_fallback' && binding.replayRequestSeqs.length > 0)
-    issue(ctx, ['replayRequestSeqs'], 'playbook replay request targets must be empty');
+  if (binding.implementationPlan.basedOnCompileInputsSha256 !== binding.compileInputsSha256)
+    issue(ctx, ['implementationPlan'], 'implementation plan is based on other compile inputs');
+  if (
+    implementationPlanRequestProvenanceSha256(binding.requestProvenance) !==
+    binding.implementationPlan.requestProvenanceSha256
+  )
+    issue(ctx, ['requestProvenance'], 'request provenance does not match implementation plan');
+  if (binding.strategyKind === 'api' && binding.requestProvenance.length === 0)
+    issue(ctx, ['requestProvenance'], 'API execution requires recorded request provenance');
+  if (binding.strategyKind === 'playbook_fallback' && binding.requestProvenance.length > 0)
+    issue(ctx, ['requestProvenance'], 'playbook request provenance must be empty');
   if (binding.dependencies.some(({ toolId }) => toolId === binding.toolId))
     issue(ctx, ['dependencies'], 'execution binding cannot depend on itself');
 });
@@ -261,7 +232,7 @@ export const ToolVerificationPayloadSchema = strictObject({
   artifactManifestRef: ContentAddressedRefSchema,
   executionBinding: ToolExecutionBindingSchema,
   executionBindingSha256: PromptShaSchema,
-  receipts: z.array(ExecutionReceiptSchema).min(1).max(64),
+  receipts: z.array(ExecutionReceiptSchema).min(1),
 }).superRefine((tool, ctx) => {
   const binding = tool.executionBinding;
   if (digest(binding) !== tool.executionBindingSha256)
@@ -309,18 +280,18 @@ export const ToolVerificationPayloadSchema = strictObject({
   }
   if (replay.status === 'not_applicable')
     issue(ctx, ['receipts'], 'API replay cannot be not applicable');
-  if (comparisons.length !== binding.replayRequestSeqs.length) {
-    issue(ctx, ['receipts'], 'API replay must report every replay request target');
+  if (comparisons.length !== binding.requestProvenance.length) {
+    issue(ctx, ['receipts'], 'API replay must report every artifact request');
     return;
   }
   let stopped = false;
   comparisons.forEach((comparison, index) => {
     if (
-      comparison.requestIndex !== index ||
-      comparison.recordingSeq !== binding.replayRequestSeqs[index] ||
-      comparison.remainingComparisons !== binding.replayRequestSeqs.length - index - 1
+      comparison.artifactRequestIndex !== index ||
+      comparison.recordingSeq !== binding.requestProvenance[index]?.recordingRequestSeq ||
+      comparison.remainingComparisons !== binding.requestProvenance.length - index - 1
     )
-      issue(ctx, ['receipts'], 'API replay report does not match exact ordered targets');
+      issue(ctx, ['receipts'], 'API replay report does not match exact artifact provenance');
     if (comparison.status === 'not_applicable')
       issue(ctx, ['receipts'], 'API request comparisons cannot be not applicable');
     if (stopped && comparison.status !== 'not_checked')
@@ -339,11 +310,11 @@ export const ToolVerificationPayloadSchema = strictObject({
     issue(ctx, ['receipts'], 'unchecked replay needs an unchecked target');
   }
 });
-export const CurrentExecutionSnapshotPayloadSchema = strictObject({
+const CurrentExecutionSnapshotPayloadSchema = strictObject({
   run: RunIdentitySchema,
   currentPlanRef: ContentAddressedRefSchema,
   sharedManifestRef: ContentAddressedRefSchema,
-  tools: z.array(ToolVerificationPayloadSchema).max(32),
+  tools: z.array(ToolVerificationPayloadSchema),
 }).superRefine((snapshot, ctx) => {
   const tools = new Map(snapshot.tools.map((tool) => [tool.toolId, tool]));
   const toolIds = new Set<string>();
@@ -387,26 +358,23 @@ export const CurrentExecutionSnapshotSchema = contentProjection(
   CurrentExecutionSnapshotPayloadSchema,
 );
 export type CurrentExecutionSnapshot = z.infer<typeof CurrentExecutionSnapshotSchema>;
-export const ReceiptHistoryPayloadSchema = strictObject({
+const ReceiptHistoryPayloadSchema = strictObject({
   run: RunIdentitySchema,
   historyRoot: ContentAddressedRefSchema,
   totalCount: z.number().int().nonnegative(),
   includedCount: z.number().int().nonnegative(),
   truncated: z.boolean(),
-  entries: z
-    .array(
-      strictObject({ ordinal: z.number().int().nonnegative(), receipt: ExecutionReceiptSchema }),
-    )
-    .max(512),
+  entries: z.array(
+    strictObject({ ordinal: z.number().int().nonnegative(), receipt: ExecutionReceiptSchema }),
+  ),
 }).superRefine((history, ctx) => {
-  const expectedIncluded = Math.min(history.totalCount, 512);
   if (
     history.includedCount !== history.entries.length ||
-    history.includedCount !== expectedIncluded
+    history.includedCount !== history.totalCount
   )
     issue(ctx, ['includedCount'], 'receipt-history counts are inconsistent');
-  if (history.truncated !== history.includedCount < history.totalCount)
-    issue(ctx, ['truncated'], 'receipt-history truncation flag is inconsistent');
+  if (history.truncated)
+    issue(ctx, ['truncated'], 'receipt history must include every superseded receipt');
   const ids = new Set<string>();
   const refs = new Set<string>();
   history.entries.forEach(({ ordinal, receipt }, index) => {

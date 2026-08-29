@@ -28,10 +28,10 @@ import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir, localSiteDir, localToolDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
+import type { RunDeadlineRef } from './provider-retry.ts';
 import { redactSession } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
-import type { ClassifiedValue } from './session-diff.ts';
 import { isTelemetryRequest } from './telemetry.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
@@ -44,13 +44,11 @@ import {
   WorkflowSchema,
 } from './types.ts';
 
-export type { CompileAgentProgress } from './compile-agent.ts';
-
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
 const log = createLog('compile');
 
 interface CompileOptions {
-  /** Path to session.json or session.redacted.json */
+  /** Path to session.json or session.redacted.json. */
   sessionPath: string;
   /** Where to write the artifact. Defaults to the generated tool directory. */
   outPath?: string;
@@ -71,6 +69,10 @@ interface CompileOptions {
    *  uses this instead of re-inferring the public parameter surface from the
    *  recording candidate. */
   workflow?: Workflow;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
 }
 
 // ─── generate (workflow.json) ────────────────────────────────────────────────
@@ -86,8 +88,6 @@ interface GenerateOptions extends CompileOptions {
   keepTest?: boolean;
   /** Directory where workflow.json/parser.ts/parser.test.ts are written. */
   outDir?: string;
-  /** Dual-pass value classifications from replay-and-diff. */
-  classifications?: ClassifiedValue[];
   /** Credential values extracted during teach, passed to integration tests via env var. */
   teachCredentials?: { site: string; values: Record<string, string> };
   /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). */
@@ -119,7 +119,6 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
     'compile.generate',
     'AGENT',
     {
-      'imprint.session_path': opts.sessionPath,
       'imprint.provider': opts.llmConfig?.provider ?? 'auto',
       'imprint.tool_name': opts.candidate?.toolName,
       'imprint.out_path': opts.outPath,
@@ -131,14 +130,16 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       const result = await compileAgent({
         sessionPath: opts.sessionPath,
         maxDurationMs: opts.maxDurationMs,
+        deadlineMs: opts.deadlineMs,
+        runDeadline: opts.runDeadline,
         llmConfig: opts.llmConfig,
         onProgress: opts.onProgress,
+        signal: opts.signal,
         onDeadlineReached: opts.onDeadlineReached,
         keepTest: opts.keepTest,
         outDir,
         candidate: opts.candidate,
         sharedContext: opts.sharedContext,
-        classifications: opts.classifications,
         teachCredentials: opts.teachCredentials,
         buildPlanPath: opts.buildPlanPath,
         sharedModules: opts.sharedModules,
@@ -194,7 +195,6 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       if (opts.outPath && opts.outPath !== result.workflowPath) {
         writeFileSync(opts.outPath, `${JSON.stringify(workflow, null, 2)}\n`, 'utf8');
       }
-
       setSpanAttributes(span, {
         'imprint.workflow_path': workflowPath,
         'imprint.workflow_tool_name': workflow.toolName,
@@ -474,10 +474,13 @@ export function parseTriageSelectionResponse(text: string): {
   );
 }
 
-export async function triageRequests(
+async function triageRequests(
   session: Session,
   llmConfig?: LLMOptions,
-  context: Pick<CompileOptions, 'candidate' | 'sharedContext'> = {},
+  context: Pick<
+    CompileOptions,
+    'candidate' | 'sharedContext' | 'signal' | 'timeoutMs' | 'deadlineMs' | 'runDeadline'
+  > = {},
 ): Promise<TriageResult> {
   const preserveSeqs = new Set([
     ...(context.candidate?.requestSeqs ?? []),
@@ -576,7 +579,13 @@ export async function triageRequests(
       log(
         `triaging ${relevanceCompacted.length} relevance candidates; ${Math.round(JSON.stringify(relevancePayload).length / 1024)} KB payload…`,
       );
-      const relevanceResult = await llm.analyze(systemPrompt, relevancePayload);
+      const relevanceResult = await llm.analyze(systemPrompt, relevancePayload, {
+        signal: context.signal,
+        deadlineMs: context.deadlineMs,
+        runDeadline: context.runDeadline,
+        timeoutMs: context.timeoutMs,
+        timeoutLabel: 'request triage',
+      });
       const { keepSeqs } = parseTriageSelectionResponse(relevanceResult.text);
       const candidateSet = new Set(
         expandCompactedTriageSeqs(
@@ -620,7 +629,13 @@ export async function triageRequests(
           outboundWebSockets: batchWebSockets,
         };
         safetyPayloadChars += JSON.stringify(safetyPayload).length;
-        const result = await llm.analyze(systemPrompt, safetyPayload);
+        const result = await llm.analyze(systemPrompt, safetyPayload, {
+          signal: context.signal,
+          deadlineMs: context.deadlineMs,
+          runDeadline: context.runDeadline,
+          timeoutMs: context.timeoutMs,
+          timeoutLabel: 'request safety triage',
+        });
         const parsed = parseTriageSelectionResponse(result.text);
         const batchRequestSeqs = new Set(
           batchRequests.flatMap((request) => compactedRequestSeqs(request)),
@@ -934,7 +949,6 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
     'compile.playbook',
     'CHAIN',
     {
-      'imprint.session_path': opts.sessionPath,
       'imprint.provider': opts.llmConfig?.provider ?? 'auto',
       'imprint.tool_name': opts.candidate?.toolName,
       'imprint.out_path': opts.outPath,
@@ -1002,6 +1016,10 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
     const triage = await triageRequests(session, opts.llmConfig, {
       candidate: opts.candidate,
       sharedContext: opts.sharedContext,
+      signal: opts.signal,
+      deadlineMs: opts.deadlineMs,
+      runDeadline: opts.runDeadline,
+      timeoutMs: opts.timeoutMs,
     });
     session = triage.session;
     triageTokens = {
@@ -1069,7 +1087,13 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
   const llm = resolveProvider(opts.llmConfig ?? {});
 
   let playbook: Playbook | undefined;
-  let lastResult = await llm.analyze(systemPrompt, slimmed);
+  let lastResult = await llm.analyze(systemPrompt, slimmed, {
+    signal: opts.signal,
+    deadlineMs: opts.deadlineMs,
+    runDeadline: opts.runDeadline,
+    timeoutMs: opts.timeoutMs,
+    timeoutLabel: 'playbook compiler',
+  });
   let llmInputTokens = lastResult.inputTokens;
   let llmOutputTokens = lastResult.outputTokens;
   let llmDurationMs = lastResult.durationMs;
@@ -1092,7 +1116,13 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
       if (attempt === 0) {
         log('playbook failed validation, retrying with error feedback…');
         const fixPrompt = `Your previous playbook was invalid. The validation error was:\n\n${err instanceof Error ? err.message : String(err)}\n\nReason about the verified workflow contract, fix the YAML, and return the corrected playbook. Output ONLY valid YAML, no prose.`;
-        lastResult = await llm.analyze(systemPrompt, `${JSON.stringify(slimmed)}\n\n${fixPrompt}`);
+        lastResult = await llm.analyze(systemPrompt, `${JSON.stringify(slimmed)}\n\n${fixPrompt}`, {
+          signal: opts.signal,
+          deadlineMs: opts.deadlineMs,
+          runDeadline: opts.runDeadline,
+          timeoutMs: opts.timeoutMs,
+          timeoutLabel: 'playbook compiler repair',
+        });
         llmInputTokens = addNullable(llmInputTokens, lastResult.inputTokens);
         llmOutputTokens = addNullable(llmOutputTokens, lastResult.outputTokens);
         llmDurationMs += lastResult.durationMs;
@@ -1116,8 +1146,9 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
 
   const outPath =
     opts.outPath ?? resolveDefaultCompilePlaybookPath(session.site, playbook.toolName);
+  const playbookText = `${stripCodeFences(lastResult.text).trim()}\n`;
   mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, `${stripCodeFences(lastResult.text).trim()}\n`);
+  writeFileSync(outPath, playbookText);
 
   return {
     playbook,

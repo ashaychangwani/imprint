@@ -1,0 +1,361 @@
+import { describe, expect, it } from 'bun:test';
+import { prepareRedactedTeachingSession } from '../src/imprint/master-teach-controller.ts';
+import {
+  createReplayRequestIdentityAllocator,
+  resolveReplayInputValue,
+} from '../src/imprint/replay-capture.ts';
+import {
+  compareIndependentExecution,
+  focusedEvidenceDocuments,
+  observeIndependentExecution,
+} from '../src/imprint/replay-evidence.ts';
+import type { Session } from '../src/imprint/types.ts';
+
+function session(): Session {
+  return {
+    site: 'fixture',
+    startedAt: '2026-01-01T00:00:00.000Z',
+    url: 'https://fixture.invalid',
+    imprintVersion: '0.6.6',
+    requests: [
+      {
+        seq: 10,
+        timestamp: 10,
+        method: 'GET',
+        url: 'https://fixture.invalid/search',
+        headers: {},
+        resourceType: 'XHR',
+        response: {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({ token: 'recording-token' }),
+          mimeType: 'application/json',
+        },
+      },
+      {
+        seq: 20,
+        timestamp: 20,
+        method: 'POST',
+        url: 'https://fixture.invalid/detail',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          token: 'recording-token',
+          username: '${credential.username}',
+          query: 'recorded',
+        }),
+        resourceType: 'XHR',
+        response: {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({ ok: true }),
+          mimeType: 'application/json',
+        },
+      },
+    ],
+    events: [
+      {
+        seq: 15,
+        timestamp: 15,
+        type: 'input',
+        detail: JSON.stringify({ selector: '#query', value: 'recorded' }),
+      },
+    ],
+    narration: Array.from({ length: 20 }, (_, index) => ({
+      seq: 100 + index,
+      timestamp: index + 1,
+      text: `narration ${index}`,
+    })),
+    cookieSnapshots: [],
+    storageSnapshots: [],
+  };
+}
+
+describe('factual independent-execution evidence', () => {
+  it('reports exact variation and prior-response correlation without assigning meaning', () => {
+    const recording = session();
+    const observation = compareIndependentExecution(
+      recording,
+      [
+        {
+          seq: 110,
+          timestamp: 10,
+          method: 'GET',
+          url: 'https://fixture.invalid/search',
+          headers: {},
+          resourceType: 'xhr',
+          response: {
+            status: 200,
+            headers: {},
+            body: JSON.stringify({ token: 'independent-token' }),
+            mimeType: 'application/json',
+          },
+        },
+        {
+          seq: 120,
+          timestamp: 20,
+          method: 'POST',
+          url: 'https://fixture.invalid/detail',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            token: 'independent-token',
+            username: 'alice@example.test',
+            query: 'fresh',
+          }),
+          resourceType: 'xhr',
+          response: { status: 200, headers: {}, body: JSON.stringify({ ok: true }) },
+        },
+      ],
+      [
+        {
+          requestSeq: 20,
+          location: { kind: 'body-json', path: ['username'] },
+          originalValue: 'alice@example.test',
+          placeholder: '${credential.username}',
+        },
+      ],
+    );
+
+    expect(observation.status).toBe('observed');
+    if (observation.status !== 'observed') throw new Error('expected observed execution');
+    const detail = observation.requests.find(
+      ({ recordingRequestSeq }) => recordingRequestSeq === 20,
+    );
+    expect(detail?.alignmentConfidence).toBeGreaterThanOrEqual(0.7);
+    expect(detail?.fields.find(({ location }) => location === 'body:/username')).toMatchObject({
+      comparison: 'same',
+    });
+    expect(detail?.fields.find(({ location }) => location === 'body:/query')).toMatchObject({
+      comparison: 'different',
+      priorResponseCorrelation: null,
+    });
+    expect(detail?.fields.find(({ location }) => location === 'body:/token')).toMatchObject({
+      comparison: 'different',
+      priorResponseCorrelation: {
+        responseRequestSeq: 10,
+        responsePath: '$.token',
+        observedIn: 'independent_execution',
+      },
+    });
+  });
+
+  it('keeps replay observation failure non-fatal and forwards extracted credentials', async () => {
+    let replayCredentials: Record<string, string> | undefined;
+    const unavailable = await observeIndependentExecution({
+      session: session(),
+      site: 'fixture',
+      credentials: { username: 'alice@example.test' },
+      replay: async (input) => {
+        replayCredentials = input.credentials;
+        throw new Error('browser did not start');
+      },
+    });
+    expect(replayCredentials).toEqual({ username: 'alice@example.test' });
+    expect(unavailable).toEqual({
+      status: 'unavailable',
+      requests: [],
+      unmatchedRecordingRequestSeqs: [],
+      message: 'browser did not start',
+    });
+  });
+
+  it('does not infer variation or correlation from a missing repeated occurrence', () => {
+    const recording = session();
+    recording.requests = [
+      {
+        seq: 10,
+        timestamp: 10,
+        method: 'POST',
+        url: 'https://fixture.invalid/repeat',
+        headers: {},
+        body: JSON.stringify({ query: 'first' }),
+        resourceType: 'XHR',
+      },
+      {
+        seq: 20,
+        timestamp: 20,
+        method: 'POST',
+        url: 'https://fixture.invalid/repeat',
+        headers: {},
+        body: JSON.stringify({ query: 'second' }),
+        resourceType: 'XHR',
+      },
+    ];
+    const observation = compareIndependentExecution(recording, [
+      {
+        seq: 110,
+        timestamp: 10,
+        method: 'POST',
+        url: 'https://fixture.invalid/repeat',
+        headers: {},
+        body: JSON.stringify({ query: 'second' }),
+        resourceType: 'xhr',
+      },
+    ]);
+
+    expect(observation.status).toBe('observed');
+    if (observation.status !== 'observed') throw new Error('expected observed execution');
+    expect(observation.requests).toHaveLength(1);
+    expect(observation.requests[0]).toMatchObject({
+      recordingRequestSeq: 10,
+      independentRequestSeq: 110,
+      alignmentStatus: 'ambiguous_repeated_occurrence',
+      fields: [
+        {
+          location: 'body:/query',
+          comparison: 'not_observed',
+          priorResponseCorrelation: null,
+        },
+      ],
+    });
+    const evidence = focusedEvidenceDocuments({
+      session: recording,
+      scope: { requestSeqs: [10, 20], dependencySeqs: [], eventSeqs: [] },
+      independent: observation,
+    });
+    const variationFacts = evidence
+      .filter(({ value }) => value.kind === 'request_variation_and_response_correlation')
+      .flatMap(({ value }) => (Array.isArray(value.fields) ? value.fields : []));
+    expect(variationFacts).toContainEqual(
+      expect.objectContaining({
+        acceptedConsumerRequestSeq: 10,
+        alignmentStatus: 'ambiguous_repeated_occurrence',
+        comparison: 'not_observed',
+        priorResponseCorrelation: null,
+      }),
+    );
+    expect(variationFacts).not.toContainEqual(
+      expect.objectContaining({
+        acceptedConsumerRequestSeq: 10,
+        comparison: expect.stringMatching(/^(same|different)$/),
+      }),
+    );
+  });
+
+  it('emits focused evidence in multiple bounded documents including late narration', () => {
+    const recording = session();
+    const observation = compareIndependentExecution(recording, []);
+    const documents = focusedEvidenceDocuments({
+      session: recording,
+      scope: {
+        toolId: 'detail',
+        toolName: 'get_detail',
+        requestSeqs: [10, 20],
+        dependencySeqs: [],
+        eventSeqs: [15],
+      },
+      independent: observation,
+    });
+
+    expect(documents.length).toBeGreaterThan(4);
+    expect(JSON.stringify(documents)).toContain('narration 19');
+    expect(JSON.stringify(documents)).toContain('acceptedConsumerRequestSeq');
+    expect(JSON.stringify(documents)).toContain('event_driven_request_differences');
+    expect(JSON.stringify(documents)).toContain('absenceOfCorrelationHasNoStrategyMeaning');
+    for (const document of documents) {
+      expect(Buffer.byteLength(JSON.stringify(document.value), 'utf8')).toBeLessThanOrEqual(4_000);
+    }
+  });
+
+  it('chunks exact deep redacted request structure for JSON, forms, and framed JSON', () => {
+    const recording = session();
+    const nestedRequest = recording.requests[1];
+    if (!nestedRequest) throw new Error('fixture nested request is missing');
+    nestedRequest.url = 'https://fixture.invalid/detail?mode=full';
+    nestedRequest.headers['x-fixture'] = 'header-value';
+    nestedRequest.body = JSON.stringify({
+      padding: 'x'.repeat(900),
+      payload: JSON.stringify({ deep: { query: 'deep-redacted-value' } }),
+    });
+    recording.requests.push(
+      {
+        seq: 30,
+        timestamp: 30,
+        method: 'POST',
+        url: 'https://fixture.invalid/form',
+        headers: {},
+        body: 'origin=SFO&destination=LAX',
+        resourceType: 'XHR',
+      },
+      {
+        seq: 40,
+        timestamp: 40,
+        method: 'POST',
+        url: 'https://fixture.invalid/framed',
+        headers: {},
+        body: '18\n{"query":"framed"}',
+        resourceType: 'XHR',
+      },
+    );
+    const documents = focusedEvidenceDocuments({
+      session: recording,
+      scope: {
+        toolId: 'detail',
+        toolName: 'get_detail',
+        requestSeqs: [20, 30, 40],
+        dependencySeqs: [],
+        eventSeqs: [],
+      },
+      independent: compareIndependentExecution(recording, []),
+    });
+    const structures = documents
+      .map(({ value }) => value)
+      .filter(({ kind }) => kind === 'focused_request_structure');
+
+    expect(JSON.stringify(structures)).toContain('body:/payload/deep/query');
+    expect(JSON.stringify(structures)).toContain('deep-redacted-value');
+    expect(JSON.stringify(structures)).toContain('json-string');
+    expect(JSON.stringify(structures)).toContain('query:mode[0]');
+    expect(JSON.stringify(structures)).toContain('header:x-fixture');
+    expect(structures.find(({ recordingRequestSeq }) => recordingRequestSeq === 30)).toMatchObject({
+      bodyDecode: { status: 'decoded', format: 'form-urlencoded' },
+    });
+    expect(structures.find(({ recordingRequestSeq }) => recordingRequestSeq === 40)).toMatchObject({
+      bodyDecode: { status: 'decoded', format: 'decimal-framed-json' },
+    });
+    for (const document of documents) {
+      expect(Buffer.byteLength(JSON.stringify(document.value), 'utf8')).toBeLessThanOrEqual(4_000);
+    }
+  });
+});
+
+describe('teaching recording credential preparation', () => {
+  it('uses shipped credential extraction before generic redaction', () => {
+    const recording = session();
+    const loginRequest = recording.requests[1];
+    if (!loginRequest) throw new Error('fixture login request is missing');
+    loginRequest.body = JSON.stringify({
+      username: 'alice@example.test',
+      password: 'correct horse battery staple',
+    });
+    const prepared = prepareRedactedTeachingSession(recording);
+
+    expect(prepared.session.requests[1]?.body).toContain('${credential.username}');
+    expect(prepared.session.requests[1]?.body).toContain('${credential.password}');
+    expect(prepared.credentialValues).toEqual({
+      username: 'alice@example.test',
+      password: 'correct horse battery staple',
+    });
+    expect(prepared.credentialReplacements).toHaveLength(2);
+  });
+});
+
+describe('raw replay capture mechanics', () => {
+  it('keeps request identity stable when responses finish out of order', () => {
+    const timestamps = [1_010, 1_020];
+    const allocate = createReplayRequestIdentityAllocator(1_000, () => timestamps.shift() ?? 1_020);
+    const first = allocate();
+    const second = allocate();
+
+    expect([second, first]).toEqual([
+      { seq: 1, timestamp: 20 },
+      { seq: 0, timestamp: 10 },
+    ]);
+  });
+
+  it('accepts an empty input value and resolves complete credential placeholders', () => {
+    expect(resolveReplayInputValue('', {})).toBe('');
+    expect(resolveReplayInputValue(undefined, {})).toBeNull();
+    expect(resolveReplayInputValue('${credential.username}', { username: 'alice' })).toBe('alice');
+    expect(resolveReplayInputValue('${credential.missing}', {})).toBeNull();
+  });
+});

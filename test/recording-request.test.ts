@@ -109,13 +109,15 @@ describe('compareRecordedRequest', () => {
     expect(result.comparisons.body.status).toBe('matched');
   });
 
-  test('does not pretend transform-owned URL and body checks ran', () => {
-    const result = compareRecordedRequest(recorded, workflow, {
-      hasRequestTransform: true,
+  test('compares the concrete URL and body produced after a request transform', () => {
+    const result = compareRecordedRequest(recorded, {
+      ...workflow,
+      url: 'https://example.test/search?q=wrong',
+      body: JSON.stringify({ query: 'wrong', page: 1 }),
     });
 
-    expect(result.matches).toBe(true);
-    expect(result.comparisons.url.status).toBe('not_applicable');
-    expect(result.comparisons.body.status).toBe('not_applicable');
+    expect(result.matches).toBe(false);
+    expect(result.comparisons.url.status).toBe('mismatched');
+    expect(result.comparisons.body.status).toBe('not_checked');
   });
 });

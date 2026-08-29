@@ -1,0 +1,535 @@
+import { describe, expect, it } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pathJoin } from 'node:path';
+import {
+  apiReplayFacts,
+  compileEveryToolInBuildWaves,
+  implementationPlanRepairToolIds,
+  prepareFullSessionForTeach,
+  promoteReviewedCompletion,
+  revisionStagingDir,
+  runFocusedWaveOrchestration,
+  terminalStatusForError,
+} from '../src/imprint/master-teach-controller.ts';
+import {
+  type EditableTeachingPlan,
+  type EditableTeachingTool,
+  type ImplementationPlanPayload,
+  teachingToolCompileInputsSha256,
+} from '../src/imprint/master-teach-plan.ts';
+import { ProviderUnavailableError } from '../src/imprint/provider-retry.ts';
+import type { Session, Workflow } from '../src/imprint/types.ts';
+
+const SHA = `sha256:${'a'.repeat(64)}`;
+
+function replaySession(request: Session['requests'][number]): Session {
+  return {
+    site: 'fixture-site',
+    startedAt: '2026-01-01T00:00:00.000Z',
+    url: 'https://fixture.invalid',
+    imprintVersion: '0.6.6',
+    requests: [request],
+    events: [],
+    narration: [],
+    cookieSnapshots: [],
+    storageSnapshots: [],
+  };
+}
+
+function replayImplementation(
+  parameterValueOrigin: 'recorded_baseline' | 'synthetic_live' | 'unavailable' | undefined,
+  parameterValues: ImplementationPlanPayload['verificationCases'][number]['parameterValues'],
+): ImplementationPlanPayload {
+  return {
+    version: 1,
+    toolId: 'fixture-tool',
+    strategyKind: 'api',
+    requestProvenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 7 }],
+    parameterMappings: parameterValues.map(({ parameterName }) => ({
+      parameterName,
+      artifactRequestIndices: [0],
+      guidance: 'Use the public value in the request.',
+    })),
+    responseDependencies: [],
+    resultSources: [{ artifactRequestIndex: 0, source: 'Return the response.' }],
+    outputGuidance: 'Return the fixture response.',
+    verificationCases: [
+      {
+        id: 'recorded_replay',
+        check: 'replay',
+        ...(parameterValueOrigin === undefined ? {} : { parameterValueOrigin }),
+        parameterValues,
+        expectedResult: 'Return the recorded fixture response.',
+        provenance: {
+          recordingRequestSeqs: [7],
+          recordingEventSeqs: [],
+          evidenceRefs: [{ path: 'evidence/replay.json', sha256: SHA }],
+        },
+      },
+      {
+        id: 'live_fixture',
+        check: 'live',
+        parameterValueOrigin: 'synthetic_live',
+        parameterValues,
+        expectedResult: 'Return the live fixture response.',
+        provenance: {
+          recordingRequestSeqs: [7],
+          recordingEventSeqs: [],
+          evidenceRefs: [{ path: 'evidence/replay.json', sha256: SHA }],
+        },
+      },
+    ],
+  };
+}
+
+function focusedTool(index: number, dependencyNames: string[] = []): EditableTeachingTool {
+  const toolName = `tool_${index}`;
+  return {
+    id: toolName,
+    candidate: {
+      toolName,
+      description: `Focused tool ${index}`,
+      rationale: `Recording evidence for focused tool ${index}`,
+      confidence: 1,
+      requestSeqs: [index],
+      representativeSeqs: [index],
+      eventSeqs: [],
+      expectedOutput: `Result ${index}`,
+      likelyParams: [],
+      dependencySeqs: [],
+      dependsOnTools: dependencyNames,
+    },
+    compileContext: {
+      loginRequestSeqs: [],
+      credentialNames: [],
+      tokenExtractionNotes: '',
+      sharedHelperNotes: '',
+      authRequestSeqs: [],
+      authNotes: '',
+    },
+    evidenceRefs: [{ path: `evidence/tool-${index}.json`, sha256: SHA }],
+  };
+}
+
+describe('master-owned focused build waves', () => {
+  it('mechanically prepares every recorded request without semantic triage', () => {
+    const session = {
+      site: 'fixture-site',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      url: 'https://fixture.invalid',
+      imprintVersion: '0.6.6',
+      requests: [{ seq: 3 }, { seq: 8 }, { seq: 13 }],
+      events: [
+        { seq: 21, type: 'ws-sent' },
+        { seq: 22, type: 'click' },
+      ],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    const prepared = prepareFullSessionForTeach(session as never);
+    expect(prepared.session).toBe(session as never);
+    expect(prepared.selectedSeqs).toEqual([3, 8, 13]);
+    expect(prepared.replaySafeSeqs).toEqual([3, 8, 13]);
+    expect(prepared.irreversibleSeqs).toEqual([]);
+    expect(prepared.coveredOutboundEventSeqs).toEqual([21]);
+    expect(prepared.inputTokens).toBeNull();
+  });
+
+  it('compiles every one of 41 planned tools and waits for dependencies first', async () => {
+    const producers = Array.from({ length: 21 }, (_, index) => focusedTool(index));
+    const consumers = Array.from({ length: 20 }, (_, offset) =>
+      focusedTool(offset + 21, [`tool_${offset}`]),
+    );
+    const plan = {
+      tools: [...producers, ...consumers],
+      buildWaves: [producers.map(({ id }) => id), consumers.map(({ id }) => id)],
+    };
+    const attempted: string[] = [];
+    let active = 0;
+    let maximumActive = 0;
+    let unfinishedProducers = producers.length;
+
+    const result = await compileEveryToolInBuildWaves(plan, {
+      concurrency: 3,
+      compileTool: async (tool, waveIndex) => {
+        if (waveIndex === 1) expect(unfinishedProducers).toBe(0);
+        attempted.push(tool.id);
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await Promise.resolve();
+        active -= 1;
+        if (waveIndex === 0) unfinishedProducers -= 1;
+        return tool.id;
+      },
+    });
+
+    expect(result.failures).toEqual([]);
+    expect(result.completed).toHaveLength(41);
+    expect(new Set(attempted)).toEqual(new Set(plan.tools.map(({ id }) => id)));
+    expect(maximumActive).toBeGreaterThan(1);
+    expect(maximumActive).toBeLessThanOrEqual(3);
+  });
+
+  it('settles every tool before returning an honest failed terminal status', async () => {
+    const tools = Array.from({ length: 45 }, (_, index) => focusedTool(index));
+    const plan = {
+      tools,
+      buildWaves: [
+        tools.slice(0, 15).map(({ id }) => id),
+        tools.slice(15, 30).map(({ id }) => id),
+        tools.slice(30).map(({ id }) => id),
+      ],
+    };
+    const attempted: string[] = [];
+    const result = await runFocusedWaveOrchestration(
+      plan,
+      {
+        concurrency: 4,
+        compileTool: async (tool) => {
+          attempted.push(tool.id);
+          if (tool.id === 'tool_2' || tool.id === 'tool_33') {
+            throw new Error(`focused failure: ${tool.id}`);
+          }
+          return tool.id;
+        },
+      },
+      '/tmp/fresh-master-run',
+    );
+
+    expect(attempted).toHaveLength(45);
+    expect(new Set(attempted)).toEqual(new Set(tools.map(({ id }) => id)));
+    expect(result.builds.completed).toHaveLength(43);
+    expect(result.builds.failures.map(({ toolId }) => toolId).sort()).toEqual([
+      'tool_2',
+      'tool_33',
+    ]);
+    expect(result.terminal).toEqual({
+      status: 'failed',
+      readyTools: 43,
+      failedTools: 2,
+      runRoot: '/tmp/fresh-master-run',
+      message: '2 planned focused build(s) failed.',
+    });
+  });
+});
+
+describe('master API replay facts', () => {
+  it('does not compare synthetic or unavailable inputs with recorded bytes', async () => {
+    const workflow: Workflow = {
+      toolName: 'fixture_tool',
+      intent: { description: 'Fixture replay' },
+      site: 'fixture-site',
+      parameters: [{ name: 'query', type: 'string', description: 'Query' }],
+      requests: [
+        {
+          recordingRequestSeq: 7,
+          method: 'GET',
+          url: 'https://fixture.invalid/search?q=${param.query}',
+          headers: {},
+        },
+      ],
+    };
+    const session = replaySession({
+      seq: 7,
+      timestamp: 1,
+      method: 'GET',
+      url: 'https://fixture.invalid/search?q=recorded',
+      headers: {},
+      resourceType: 'xhr',
+      response: { status: 200, headers: {}, body: '{"ok":true}' },
+    });
+
+    const unavailableFacts = await apiReplayFacts({
+      compiled: {
+        workflow,
+        workflowPath: '/unused/workflow.json',
+        toolDir: '/unused',
+      },
+      implementation: replayImplementation('unavailable', []),
+      session,
+    });
+    const legacySyntheticFacts = await apiReplayFacts({
+      compiled: {
+        workflow,
+        workflowPath: '/unused/workflow.json',
+        toolDir: '/unused',
+      },
+      implementation: replayImplementation(undefined, [
+        { parameterName: 'query', value: 'synthetic-value' },
+      ]),
+      session,
+    });
+
+    for (const facts of [unavailableFacts, legacySyntheticFacts]) {
+      expect(facts).toHaveLength(1);
+      expect(facts[0]).toMatchObject({
+        kind: 'request_comparison',
+        status: 'not_checked',
+      });
+    }
+  });
+
+  it('compares the concrete URL and body emitted by the request transform', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-master-replay-transform-'));
+    try {
+      const workflowPath = pathJoin(root, 'workflow.json');
+      const workflow: Workflow = {
+        toolName: 'fixture_tool',
+        intent: { description: 'Fixture replay' },
+        site: 'fixture-site',
+        parameters: [{ name: 'query', type: 'string', description: 'Query' }],
+        requestTransformModule: './request-transform.ts',
+        requests: [
+          {
+            recordingRequestSeq: 7,
+            method: 'POST',
+            url: 'https://fixture.invalid/search',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          },
+        ],
+      };
+      mkdirSync(root, { recursive: true });
+      writeFileSync(workflowPath, JSON.stringify(workflow));
+      writeFileSync(
+        pathJoin(root, 'request-transform.ts'),
+        `export function transform(method, url) {
+          return { method, url: url + '?q=wrong', body: '{"query":"wrong"}' };
+        }`,
+      );
+      const session = replaySession({
+        seq: 7,
+        timestamp: 1,
+        method: 'POST',
+        url: 'https://fixture.invalid/search?q=recorded',
+        headers: { 'content-type': 'application/json' },
+        body: '{"query":"recorded"}',
+        resourceType: 'xhr',
+        response: { status: 200, headers: {}, body: '{"ok":true}' },
+      });
+
+      const facts = await apiReplayFacts({
+        compiled: { workflow, workflowPath, toolDir: root },
+        implementation: replayImplementation('recorded_baseline', [
+          { parameterName: 'query', value: 'recorded' },
+        ]),
+        session,
+      });
+
+      expect(facts[0]).toMatchObject({
+        kind: 'request_comparison',
+        status: 'failed',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails replay when offline rendering returns an error', async () => {
+    const workflow: Workflow = {
+      toolName: 'fixture_tool',
+      intent: { description: 'Fixture replay' },
+      site: 'fixture-site',
+      parameters: [],
+      requests: [
+        {
+          recordingRequestSeq: 7,
+          method: 'GET',
+          url: 'https://fixture.invalid/search',
+          headers: {},
+          captures: [
+            {
+              name: 'required_value',
+              required: true,
+              capability: 'ordinary_http',
+              source: 'json',
+              path: 'missing',
+            },
+          ],
+        },
+      ],
+    };
+    const session = replaySession({
+      seq: 7,
+      timestamp: 1,
+      method: 'GET',
+      url: 'https://fixture.invalid/search',
+      headers: {},
+      resourceType: 'xhr',
+      response: { status: 200, headers: {}, body: '{"other":true}' },
+    });
+
+    const facts = await apiReplayFacts({
+      compiled: {
+        workflow,
+        workflowPath: '/unused/workflow.json',
+        toolDir: '/unused',
+      },
+      implementation: replayImplementation(undefined, []),
+      session,
+    });
+
+    expect(facts.map(({ status }) => status)).toEqual(['not_checked', 'failed']);
+    expect(facts.at(-1)).toMatchObject({ kind: 'host_error' });
+  });
+
+  it('uses deterministic credential placeholders instead of current stored values', async () => {
+    const workflow: Workflow = {
+      toolName: 'fixture_tool',
+      intent: { description: 'Fixture replay' },
+      site: 'fixture-site',
+      parameters: [],
+      requests: [
+        {
+          recordingRequestSeq: 7,
+          method: 'GET',
+          url: 'https://fixture.invalid/private',
+          headers: { 'x-api-key': '${credential.api_key}' },
+        },
+      ],
+    };
+    const session = replaySession({
+      seq: 7,
+      timestamp: 1,
+      method: 'GET',
+      url: 'https://fixture.invalid/private',
+      headers: { 'x-api-key': '[REDACTED:v3:id=1:len=12]' },
+      resourceType: 'xhr',
+      response: { status: 200, headers: {}, body: '{"ok":true}' },
+    });
+
+    const facts = await apiReplayFacts({
+      compiled: { workflow, workflowPath: '/unused/workflow.json', toolDir: '/unused' },
+      implementation: replayImplementation(undefined, []),
+      session,
+      credentialNames: ['api_key'],
+    });
+
+    expect(facts).toHaveLength(1);
+    expect(facts[0]).toMatchObject({ kind: 'request_comparison', status: 'passed' });
+  });
+});
+
+describe('reviewed promotion lifecycle', () => {
+  it('does not mark the journal completed when promotion fails', async () => {
+    const events: string[] = [];
+    const journal = {
+      recordCompletionReview: () => {
+        events.push('review');
+      },
+      finish: () => {
+        events.push('finish');
+      },
+    };
+    await expect(
+      promoteReviewedCompletion({
+        journal: journal as never,
+        reviewInput: {} as never,
+        review: {} as never,
+        promote: async () => {
+          events.push('promote');
+          throw new Error('promotion failed');
+        },
+      }),
+    ).rejects.toThrow('promotion failed');
+    expect(events).toEqual(['review', 'promote']);
+  });
+
+  it('marks completion only after promotion succeeds', async () => {
+    const events: string[] = [];
+    await promoteReviewedCompletion({
+      journal: {
+        recordCompletionReview: () => {
+          events.push('review');
+        },
+        finish: () => {
+          events.push('finish');
+        },
+      } as never,
+      reviewInput: {} as never,
+      review: {} as never,
+      promote: async () => {
+        events.push('promote');
+      },
+    });
+    expect(events).toEqual(['review', 'promote', 'finish']);
+  });
+});
+
+describe('master repair revisions', () => {
+  it('gives every plan revision a clean tool directory', () => {
+    expect(revisionStagingDir('/run/staging', 3, 'search_items')).toBe(
+      '/run/staging/revision-3/search_items',
+    );
+    expect(revisionStagingDir('/run/staging', 4, 'search_items')).toBe(
+      '/run/staging/revision-4/search_items',
+    );
+  });
+
+  it('preserves provider and cancellation status through fan-out errors', () => {
+    expect(
+      terminalStatusForError(
+        new AggregateError([
+          new Error('another focused task failed'),
+          new ProviderUnavailableError(new Error('capacity unavailable')),
+        ]),
+      ),
+    ).toBe('provider_unavailable');
+    expect(
+      terminalStatusForError(
+        new AggregateError([
+          new Error('another focused task failed'),
+          new DOMException('', 'AbortError'),
+        ]),
+      ),
+    ).toBe('cancelled');
+  });
+
+  it('focused-plans every missing or compile-input-stale final tool', () => {
+    const current = focusedTool(1);
+    const stale = focusedTool(2);
+    const missing = focusedTool(3);
+    current.strategy = {
+      kind: 'api',
+      reason: 'Recorded request is replayable.',
+    };
+    stale.strategy = { kind: 'api', reason: 'Recorded request is replayable.' };
+    current.implementationPlan = {
+      path: 'objects/current.json',
+      sha256: SHA,
+      basedOnCompileInputsSha256: teachingToolCompileInputsSha256(current, []),
+      requestProvenanceSha256: SHA,
+    };
+    stale.implementationPlan = {
+      path: 'objects/stale.json',
+      sha256: SHA,
+      basedOnCompileInputsSha256: `sha256:${'b'.repeat(64)}`,
+      requestProvenanceSha256: SHA,
+    };
+    const plan: EditableTeachingPlan = {
+      version: 1,
+      revision: 2,
+      site: 'fixture-site',
+      recordingSha256: SHA,
+      tools: [current, stale, missing],
+      candidateCoverage: [current, stale, missing].map((tool) => ({
+        discoveryCandidateName: tool.candidate.toolName,
+        plannedToolIds: [tool.id],
+        unresolvedReason: null,
+      })),
+      buildWaves: [[current.id, stale.id, missing.id]],
+      chainEdges: [],
+      decision: {
+        timestamp: '2026-01-01T00:00:00.000Z',
+        outcome: 'revised',
+        reason: 'Fixture repair revision.',
+        advisorRefs: [],
+        evidenceRefs: [],
+      },
+    };
+
+    expect(implementationPlanRepairToolIds(plan)).toEqual([stale.id, missing.id]);
+  });
+});
