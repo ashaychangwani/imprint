@@ -34,6 +34,7 @@ import {
   readBuildPlanFile,
   resolveAssignedModules,
 } from './build-plan.ts';
+import type { CompileStrategyKind } from './compile-strategy.ts';
 import {
   LIVE_EVIDENCE_PATH_ENV,
   type LiveIntegrationEvidence,
@@ -41,6 +42,7 @@ import {
 } from './compile-verification.ts';
 import { isIrreversibleRequest, workflowHasIrreversibleEffect } from './effects.ts';
 import { findEarlierResponseEqualities, groundEvent } from './param-grounding.ts';
+import { parsePlaybook } from './playbook-parser.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
@@ -117,7 +119,7 @@ export function buildCompileTools(
     buildDiffRequestForEventTool(session),
     buildReadResponseBodyTool(session),
     buildSearchResponseBodyTool(session),
-    buildWriteFileTool(toolDir),
+    buildWriteFileTool(toolDir, [], context.strategyKind),
     buildReadFileTool(toolDir),
     buildRunBashTool(toolDir),
   ];
@@ -147,6 +149,8 @@ export interface CompileToolContext {
   buildPlanPath?: string;
   /** Shared-module build manifest (verified flags) for this site. */
   sharedModules?: SharedModuleManifestEntry[];
+  /** Master-accepted execution strategy for this focused compile. */
+  strategyKind?: CompileStrategyKind;
   /** A bounded teach resume is revising an already-generated tool. Surface the
    *  existing artifact and durable verifier/audit feedback to the agent so it
    *  preserves proven behavior instead of re-deriving the tool from raw capture. */
@@ -1259,14 +1263,22 @@ function buildSearchResponseBodyTool(session: Session): AgentTool {
 
 // ─── Tool: write_file ────────────────────────────────────────────────────────
 
-export function buildWriteFileTool(toolDir: string, extraAllowed: string[] = []): AgentTool {
+export function buildWriteFileTool(
+  toolDir: string,
+  extraAllowed: string[] = [],
+  strategyKind: CompileStrategyKind = 'api',
+): AgentTool {
   const allowed = [
-    'workflow.json',
-    'parser.ts',
-    'parser.test.ts',
-    'request.test.ts',
-    'request-transform.ts',
-    'integration.test.ts',
+    ...(strategyKind === 'playbook_fallback'
+      ? ['workflow.json', 'playbook.yaml']
+      : [
+          'workflow.json',
+          'parser.ts',
+          'parser.test.ts',
+          'request.test.ts',
+          'request-transform.ts',
+          'integration.test.ts',
+        ]),
     ...extraAllowed,
   ];
   return {
@@ -2323,6 +2335,8 @@ export async function externalVerification(
     credentialValues?: Record<string, string>;
     /** Credential names provisioned or declared by the site's auth contract. */
     credentialNames?: string[];
+    /** Master-accepted execution strategy for this focused compile. */
+    strategyKind?: CompileStrategyKind;
     /** Agentic compile path only: let the independent verifier run the live
      *  suite and judge its factual outputs. No source-shape inspection occurs. */
     deferLiveIntegrationToSemanticAgent?: boolean;
@@ -2341,6 +2355,7 @@ export async function externalVerification(
   const paramVerification: ParamVerification[] = [];
   let irreversibleProvenanceMissing = false;
   let hasIrreversibleWorkflow = false;
+  let parsedWorkflow: Workflow | undefined;
 
   const workflowPath = pathJoin(toolDir, 'workflow.json');
   const parserPath = pathJoin(toolDir, 'parser.ts');
@@ -2351,12 +2366,12 @@ export async function externalVerification(
   } else {
     try {
       const raw = JSON.parse(readFileSync(workflowPath, 'utf8'));
-      const workflow = WorkflowSchema.parse(raw);
-      failures.push(...bodyEncodingContractFailures(workflow));
-      hasIrreversibleWorkflow = workflowHasIrreversibleEffect(workflow);
-      if (opts.expectedToolName && workflow.toolName !== opts.expectedToolName) {
+      parsedWorkflow = WorkflowSchema.parse(raw);
+      failures.push(...bodyEncodingContractFailures(parsedWorkflow));
+      hasIrreversibleWorkflow = workflowHasIrreversibleEffect(parsedWorkflow);
+      if (opts.expectedToolName && parsedWorkflow.toolName !== opts.expectedToolName) {
         failures.push(
-          `workflow.toolName "${workflow.toolName}" does not match selected candidate "${opts.expectedToolName}"`,
+          `workflow.toolName "${parsedWorkflow.toolName}" does not match selected candidate "${opts.expectedToolName}"`,
         );
       }
       const wfStr = JSON.stringify(raw);
@@ -2376,17 +2391,86 @@ export async function externalVerification(
       // response with no such header (or `html_regex` whose pattern doesn't
       // match the recorded body, etc.) will silently return null at runtime;
       // we reject it at compile so the agent picks a source that works.
-      const crossRef = crossReferenceCaptures(workflow, session, opts.candidateRequestSeqs);
+      const crossRef = crossReferenceCaptures(parsedWorkflow, session, opts.candidateRequestSeqs);
       failures.push(...crossRef.failures);
 
       // A referenced capture is mechanically required regardless of its flag.
-      const stateRef = crossReferenceReferencedStateCaptures(workflow, session);
+      const stateRef = crossReferenceReferencedStateCaptures(parsedWorkflow, session);
       failures.push(...stateRef.failures);
     } catch (err) {
       failures.push(
         `workflow.json schema invalid: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  if (opts.strategyKind === 'playbook_fallback') {
+    if (parsedWorkflow && parsedWorkflow.requests.length !== 0) {
+      failures.push(
+        `playbook_fallback requires a request-free workflow.json, but found ${parsedWorkflow.requests.length} request(s)`,
+      );
+    }
+
+    const playbookPath = pathJoin(toolDir, 'playbook.yaml');
+    if (!existsSync(playbookPath)) {
+      failures.push('playbook.yaml was not written for the accepted playbook_fallback strategy');
+    } else {
+      try {
+        const playbook = parsePlaybook(readFileSync(playbookPath, 'utf8'));
+        if (parsedWorkflow) {
+          if (playbook.toolName !== parsedWorkflow.toolName) {
+            failures.push(
+              `playbook.toolName "${playbook.toolName}" does not match workflow.toolName "${parsedWorkflow.toolName}"`,
+            );
+          }
+          const workflowParameters = new Map(
+            parsedWorkflow.parameters.map((parameter) => [parameter.name, parameter.type]),
+          );
+          const playbookParameters = new Map(
+            playbook.parameters.map((parameter) => [parameter.name, parameter.type]),
+          );
+          for (const [name, type] of workflowParameters) {
+            const playbookType = playbookParameters.get(name);
+            if (playbookType === undefined) {
+              failures.push(`playbook.yaml is missing workflow parameter "${name}"`);
+            } else if (playbookType !== type) {
+              failures.push(
+                `playbook parameter "${name}" has type "${playbookType}" but workflow.json declares "${type}"`,
+              );
+            }
+          }
+          for (const name of playbookParameters.keys()) {
+            if (!workflowParameters.has(name)) {
+              failures.push(`playbook.yaml declares unexpected parameter "${name}"`);
+            }
+          }
+        }
+      } catch (error) {
+        failures.push(
+          `playbook.yaml schema invalid: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    for (const artifact of [
+      'parser.ts',
+      'parser.test.ts',
+      'request.test.ts',
+      'request-transform.ts',
+      'integration.test.ts',
+    ]) {
+      if (existsSync(pathJoin(toolDir, artifact))) {
+        failures.push(
+          `${artifact} is an API artifact and is not allowed by the accepted playbook_fallback strategy`,
+        );
+      }
+    }
+
+    return { failures, warnings, paramVerification, integrationEvidence };
+  }
+
+  if (opts.strategyKind === 'api' && existsSync(pathJoin(toolDir, 'playbook.yaml'))) {
+    failures.push('playbook.yaml does not match the accepted api strategy');
   }
 
   if (existsSync(workflowPath) && existsSync(parserPath)) {

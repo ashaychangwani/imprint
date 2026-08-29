@@ -28,6 +28,7 @@ import {
   formatToolPlan,
 } from './compile-agent-types.ts';
 import { runCompileWithProviderRecovery } from './compile-provider-recovery.ts';
+import type { CompileStrategyKind } from './compile-strategy.ts';
 import {
   applyIrreversibleVerificationWaiver,
   applyLiveVerification,
@@ -135,9 +136,11 @@ interface CompileAgentOptions {
   onDeadlineReached?: OnDeadlineReached;
   /** Cancels the active provider call, any backoff wait, and its compiler child process. */
   signal?: AbortSignal;
-  /** Advisory per-tool implementation plan. The agent may accept, revise, or
-   * reject its parameter, request, response, and shared-module proposals. */
+  /** Per-tool implementation plan. Its strategy is master-accepted; focused
+   * construction details remain open to evidence-backed repair or rejection. */
   toolPlan?: string;
+  /** Master-accepted execution strategy for this focused compile. */
+  strategyKind?: CompileStrategyKind;
   /** Revise an existing generated artifact, using durable verification feedback
    *  as the starting point instead of rebuilding it from raw capture. */
   revisionMode?: boolean;
@@ -248,6 +251,7 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
       teachCredentials: opts.teachCredentials,
       buildPlanPath: opts.buildPlanPath,
       sharedModules: opts.sharedModules,
+      strategyKind: opts.strategyKind,
       revisionMode: opts.revisionMode,
     }),
     doneTool(),
@@ -312,6 +316,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
             buildPlanPath: opts.buildPlanPath,
             sharedModules: opts.sharedModules,
             toolPlan: opts.toolPlan,
+            strategyKind: opts.strategyKind,
             revisionMode: opts.revisionMode,
             resume,
             model: opts.llmConfig?.model,
@@ -411,6 +416,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         ],
         credentialValues: opts.teachCredentials?.values,
         credentialNames: opts.sharedContext?.credentialNames,
+        strategyKind: opts.strategyKind,
         deferLiveIntegrationToSemanticAgent: true,
       });
 
@@ -423,6 +429,13 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       workflow = WorkflowSchema.parse(
         JSON.parse(readFileSync(pathJoin(absoluteToolDir, 'workflow.json'), 'utf8')),
       );
+    }
+    if (failures.length === 0 && workflow && opts.strategyKind === 'playbook_fallback') {
+      message = result.doneSummary ?? 'Browser artifact contract passed';
+      message += '\n\nLive playbook verification is owned by the master.';
+      if (warnings.length > 0) message += `\n\nWarnings:\n${warnings.join('\n')}`;
+      if (!opts.keepTest) removeEphemeralTests(absoluteToolDir);
+      break;
     }
     if (workflow && workflowHasIrreversibleEffect(workflow)) {
       warnings.push(...applyIrreversibleVerificationWaiver(absoluteToolDir, workflow));
@@ -506,11 +519,15 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         ? 'semantic verifier did not complete a review (semantic cycle limit unchanged)'
         : 'deterministic verification failed (semantic cycle limit unchanged)';
     log(`${failurePhase}, resuming agent loop...`);
+    const repairFiles =
+      opts.strategyKind === 'playbook_fallback'
+        ? 'workflow.json and playbook.yaml'
+        : 'workflow.json, parser.ts, and parser.test.ts';
     currentInitialMessage = `You called done but ${failurePhase}:
 
 ${failures.map((f) => `- ${f}`).join('\n')}
 
-Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.test.ts), fix the issues, re-run tests, and call done again when fixed.`;
+Resume your work. Read the files you wrote (${repairFiles}), fix the issues, re-run the applicable checks, and call done again when fixed.`;
   }
 
   // 10. Final flush of the complete conversation log

@@ -43,6 +43,7 @@ import {
   createCompileProviderControl,
   watchCompileProviderDeadline,
 } from './compile-provider-control.ts';
+import type { CompileStrategyKind } from './compile-strategy.ts';
 import { recordCompilerHostError } from './compiler-log.ts';
 import {
   collectOwnedProcess,
@@ -114,6 +115,8 @@ interface CompileViaClaudeCliOptions {
   sharedModules?: SharedModuleManifestEntry[];
   /** Per-tool implementation plan injected into the agent's initial message. */
   toolPlan?: string;
+  /** Master-accepted execution strategy for this focused compile. */
+  strategyKind?: CompileStrategyKind;
   /** Revise existing generated artifacts from durable verification feedback. */
   revisionMode?: boolean;
   /** Shared triage result for irreversible-effect propagation in the MCP server. */
@@ -319,6 +322,7 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
       ...(opts.sharedContext ? ['--shared-context-json', JSON.stringify(opts.sharedContext)] : []),
       ...(opts.buildPlanPath ? ['--build-plan-path', opts.buildPlanPath] : []),
       ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
+      ...(opts.strategyKind ? ['--strategy-kind', opts.strategyKind] : []),
       ...(opts.revisionMode ? ['--revision-mode'] : []),
       ...(opts.sharedTriageSelection
         ? ['--shared-triage-json', JSON.stringify(opts.sharedTriageSelection)]

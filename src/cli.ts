@@ -1511,6 +1511,7 @@ async function main(argv: string[]): Promise<number> {
           'shared-context-json': { type: 'string' },
           'build-plan-path': { type: 'string' },
           'shared-modules-json': { type: 'string' },
+          'strategy-kind': { type: 'string' },
           'auth-plan-json': { type: 'string' },
           'revision-mode': { type: 'boolean' },
           provider: { type: 'string' },
@@ -1534,6 +1535,7 @@ async function main(argv: string[]): Promise<number> {
         './imprint/build-plan.ts'
       );
       const { SharedTriageSelectionSchema } = await import('./imprint/triage-selection.ts');
+      const { CompileStrategyKindSchema } = await import('./imprint/compile-strategy.ts');
       const candidate = values['candidate-json']
         ? ToolCandidateSchema.parse(JSON.parse(values['candidate-json']))
         : undefined;
@@ -1549,6 +1551,9 @@ async function main(argv: string[]): Promise<number> {
       const sharedTriageSelection = values['shared-triage-json']
         ? SharedTriageSelectionSchema.parse(JSON.parse(values['shared-triage-json']))
         : undefined;
+      const strategyKind = values['strategy-kind']
+        ? CompileStrategyKindSchema.parse(values['strategy-kind'])
+        : undefined;
       await runCompileMcpServer({
         sessionPath: values['session-path'],
         toolDir,
@@ -1556,6 +1561,7 @@ async function main(argv: string[]): Promise<number> {
         sharedContext,
         buildPlanPath: values['build-plan-path'],
         sharedModules,
+        strategyKind,
         authToolPlan: authToolPlan ?? undefined,
         revisionMode: values['revision-mode'],
         provider: values.provider as

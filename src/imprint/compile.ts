@@ -21,6 +21,7 @@ import type { OnDeadlineReached } from './agent.ts';
 import { inferAppApiHosts } from './app-api-hosts.ts';
 import type { SharedModuleManifestEntry } from './build-plan.ts';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
+import type { CompileStrategyKind } from './compile-strategy.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactUrlForLlm } from './llm-url.ts';
 import { type LLMOptions, extractJsonArray, extractJsonObject, resolveProvider } from './llm.ts';
@@ -98,6 +99,8 @@ interface GenerateOptions extends CompileOptions {
    *  response parsing, shared-module imports). Injected into the agent's initial
    *  message so the compile follows it. */
   toolPlan?: string;
+  /** Master-accepted execution strategy for this focused compile. */
+  strategyKind?: CompileStrategyKind;
   /** Bounded teach resume: revise the current artifact from durable feedback. */
   revisionMode?: boolean;
 }
@@ -144,6 +147,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         buildPlanPath: opts.buildPlanPath,
         sharedModules: opts.sharedModules,
         toolPlan: opts.toolPlan,
+        strategyKind: opts.strategyKind,
         revisionMode: opts.revisionMode,
         preTriagedSession: opts.preTriagedSession,
       });
@@ -220,6 +224,7 @@ function relocateGeneratedWorkflow(workflowPath: string, workflow: Workflow): st
   mkdirSync(finalDir, { recursive: true });
   for (const artifact of [
     'workflow.json',
+    'playbook.yaml',
     'parser.ts',
     'parser.test.ts',
     '.compile-log.json',

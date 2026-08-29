@@ -804,6 +804,7 @@ async function compileFocusedToolWithShippedAgent(input: {
       null,
       2,
     ),
+    strategyKind: input.implementationPlan.strategyKind,
   });
   return {
     workflow: result.workflow,

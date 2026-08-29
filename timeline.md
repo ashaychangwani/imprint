@@ -1065,3 +1065,56 @@ tools or audit targets. This is a general file-layout fix, not a teaching rule.
 Type checking, lint, 67 focused loader/audit tests, and the repository
 whitespace check passed. A new fresh neutral teach will validate this code
 change before the Google runs; attempt 2 will not be resumed.
+
+## 2026-08-29 15:42 PDT — Fresh validation attempt 3: neutral fixture
+
+### Result
+
+Cancelled after diagnosis: 1 ready, 1 failed. Run
+`31e3aedc-2c6c-4228-8e92-e375077e2ff3` used the same correct recording hash
+and again discovered two requests and two operations.
+
+The first `search_stories` artifact passed contract and live execution but
+failed exact replay: it emitted an empty POST body where the recording had 16
+bytes. The master correctly rebuilt it with the recorded body, after which its
+contract, replay, and live checks all passed.
+
+The master consistently chose the browser playbook fallback for
+`open_story_comments`. The focused compiler also tried to follow that plan,
+but the compiler host rejected `playbook.yaml` as an allowed file. When the
+agent called `done`, the host then demanded the API-only files `parser.ts`,
+`parser.test.ts`, and `integration.test.ts`. This forced the agent to replace
+the correct browser artifact with a one-request API workflow, which the
+master's contract check correctly rejected. Fresh repair compilers repeated
+the same contradiction, so the run was cancelled instead of letting it loop
+until the 12-hour deadline.
+
+### General fix chosen
+
+Pass the master-accepted strategy to the compiler host as typed data. For an
+API plan, keep the existing API files and checks. For a playbook fallback,
+allow and validate only the request-free `workflow.json` plus
+`playbook.yaml`; do not demand API parser or integration files, and let the
+master perform the existing live browser check. The compiler prompt will state
+these two file contracts near the top instead of presenting API files as
+unconditional.
+
+This is mechanical agreement between an agent decision and the host. It adds
+no website rule and does not let the runtime choose API versus browser. The
+cancelled run will never be resumed.
+
+## 2026-08-29 15:57 PDT — Browser fallback boundary clarified
+
+The fallback compiler fix is complete and narrowly tested. It only makes the
+compiler obey a fallback choice that the master has already justified; it does
+not require a playbook or make one easier for the runtime to select. The API
+file contract and API verification path remain unchanged. Type checking,
+formatting, 441 focused compiler/master tests, and the repository whitespace
+check passed.
+
+Google Hotels and Google Flights are different from the neutral comments-page
+fixture: their recordings contain the API traffic needed for useful tools. A
+fresh run that chooses a playbook for either site will therefore be recorded as
+an API teaching failure to diagnose, not accepted as a successful teach. This
+is a validation expectation, not a Google-specific runtime rule. The next run
+will be a fresh Google Hotels teach; no failed run will be resumed.

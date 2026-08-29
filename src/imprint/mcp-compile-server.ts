@@ -35,6 +35,7 @@ import {
   advanceSemanticVerificationCycle,
 } from './compile-agent-types.ts';
 import { inheritedCompileProviderControl } from './compile-provider-control.ts';
+import type { CompileStrategyKind } from './compile-strategy.ts';
 import {
   applyIrreversibleVerificationWaiver,
   applyLiveVerification,
@@ -81,6 +82,8 @@ interface RunCompileMcpServerOptions {
   buildPlanPath?: string;
   /** Shared-module build manifest for this site (verified flags). */
   sharedModules?: SharedModuleManifestEntry[];
+  /** Master-accepted execution strategy for this focused compile. */
+  strategyKind?: CompileStrategyKind;
   /** Present → run in AUTH mode: register the auth checkpoint toolset
    *  and run authExternalVerification in done() instead of the data-tool
    *  verification. */
@@ -179,6 +182,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
         sharedContext: opts.sharedContext,
         buildPlanPath: opts.buildPlanPath,
         sharedModules: opts.sharedModules,
+        strategyKind: opts.strategyKind,
         revisionMode: opts.revisionMode,
       });
     }
@@ -413,6 +417,7 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
               ...(opts.sharedContext?.loginRequestSeqs ?? []),
             ],
             credentialNames: opts.sharedContext?.credentialNames,
+            strategyKind: opts.strategyKind,
             deferLiveIntegrationToSemanticAgent: true,
           });
         if (warnings.length > 0) {
@@ -423,6 +428,34 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
           workflow = WorkflowSchema.parse(
             JSON.parse(readFileSync(pathJoin(opts.toolDir, 'workflow.json'), 'utf8')),
           );
+        }
+        if (failures.length === 0 && workflow && opts.strategyKind === 'playbook_fallback') {
+          const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
+          writeFileSync(
+            sentinel,
+            JSON.stringify(
+              {
+                summary,
+                verification: 'mechanical_passed',
+                liveVerified: false,
+                liveVerificationOwner: 'master',
+                warnings,
+                timestamp: Date.now(),
+              },
+              null,
+              2,
+            ),
+            'utf8',
+          );
+          log(`browser artifact contract passed; wrote ${sentinel}`);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'DONE — browser artifact contract passed. The master owns live playbook verification. Do not call any more tools.',
+              },
+            ],
+          };
         }
         if (workflow && workflowHasIrreversibleEffect(workflow)) {
           const allWarnings = [
@@ -617,11 +650,15 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
           };
         }
 
+        const repairFiles =
+          opts.strategyKind === 'playbook_fallback'
+            ? 'workflow.json and playbook.yaml'
+            : 'workflow.json, parser.ts, and parser.test.ts';
         const continuationMessage = `You called done but ${failurePhase}:
 
 ${failures.map((f) => `- ${f}`).join('\n')}
 
-Resume your work. Read the files you wrote (workflow.json, parser.ts, parser.test.ts), fix the issues, re-run tests, and call done again when fixed.`;
+Resume your work. Read the files you wrote (${repairFiles}), fix the issues, re-run the applicable checks, and call done again when fixed.`;
         return {
           isError: true,
           content: [
