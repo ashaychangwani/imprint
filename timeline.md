@@ -76,3 +76,40 @@ and supervision that were missing, one checked change at a time.
 None yet. The implementation has not changed, so a teach at this checkpoint would
 only repeat shipped `v0.6.6` behavior and would not test the new design.
 
+## 2026-08-29 — Recovery checkpoint 2: factual request comparisons
+
+### What changed
+
+- Added a value-free comparison report for a generated API request and its
+  recorded source request.
+- The report checks in the real stop order: headers, method, origin and path,
+  full URL and query, then body.
+- When one comparison fails, every later comparison is marked `not_checked`.
+  This prevents an unexamined field from looking as though it passed.
+- When `request-transform.ts` owns the final URL or body, those comparisons are
+  marked `not_applicable` instead of failed.
+- A mismatch reports byte lengths, its first byte position, and—when both bodies
+  are JSON—the first differing path and the two data types. It never includes
+  the recorded values themselves.
+
+### Why
+
+The earlier experimental teach only reported “body mismatch.” That hid which
+earlier comparisons had actually passed and gave the agent too little evidence,
+so it guessed at several encodings and eventually abandoned a usable API route.
+The runtime should report mechanical facts precisely, then let the agent decide
+what those facts mean.
+
+This checkpoint adds the comparison data only. A later checkpoint will store it
+in immutable check receipts and pass those receipts to the master and final
+verifier. It does not add a repair rule or make a semantic decision.
+
+### Checks run
+
+- Five focused request-comparison tests passed.
+- The changed source and test files passed the formatter and linter.
+
+### Teach attempts
+
+None. This helper is not yet connected to the master teaching flow, so a fresh
+teach would not exercise it honestly yet.
