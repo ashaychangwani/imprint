@@ -199,8 +199,6 @@ function validateDesiredTeachingPlan(
   }
   const ids = new Set<string>();
   const names = new Set<string>();
-  let primaryCount = 0;
-
   assertKnownSeqs(
     'shared context',
     [...plan.sharedContext.loginRequestSeqs, ...plan.sharedContext.authRequestSeqs],
@@ -214,7 +212,6 @@ function validateDesiredTeachingPlan(
     }
     ids.add(tool.id);
     names.add(tool.candidate.toolName);
-    if (tool.candidate.primary) primaryCount += 1;
     assertKnownSeqs(
       `tool "${tool.candidate.toolName}" compile context`,
       [...tool.compileContext.loginRequestSeqs, ...tool.compileContext.authRequestSeqs],
@@ -245,9 +242,6 @@ function validateDesiredTeachingPlan(
     }
   }
 
-  if (primaryCount !== 1) {
-    throw new TeachingPlanValidationError(`expected exactly one primary tool, got ${primaryCount}`);
-  }
   const dependencies = dependencyIds(plan);
   assertAcyclic(plan, dependencies);
   return plan;

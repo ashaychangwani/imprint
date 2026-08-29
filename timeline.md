@@ -338,3 +338,32 @@ accepted checkpoint a genuinely safe recovery point.
 
 None. The public command still points at shipped Imprint, and none of these
 working drafts is a valid new teaching flow yet.
+
+## 2026-08-29 — Recovery checkpoint 6: the master chooses tool priority
+
+### What changed
+
+- Removed the rule that an editable teaching plan must contain exactly one tool
+  marked as primary.
+- Kept the `primary` flag as optional agent advice and display information. A
+  plan may contain no primary flags or several of them without the runtime
+  rejecting otherwise valid tools.
+- Kept the mechanical checks for unique tool identities, real recording
+  positions, valid evidence hashes, known dependencies, and dependency cycles.
+
+### Why
+
+Choosing the most important tool is a judgment call. It should not stop a teach
+run or force the master to rewrite a sound proposal just to satisfy a runtime
+count. The master can explain which advice it accepted when it finalizes the
+tool set.
+
+### Checks run
+
+- All 21 editable-plan tests passed with 69 assertions.
+- The changed files passed formatting, linting, and the whitespace check.
+
+### Teach attempts
+
+None. The new foreground master controller is not connected yet, so a teach
+would still exercise the shipped controller rather than this plan.

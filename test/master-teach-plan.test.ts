@@ -185,22 +185,22 @@ describe('editable master teaching plan', () => {
     }
   });
 
-  it('requires unique stable ids, unique names, and exactly one primary', () => {
+  it('requires unique stable ids and names without making primary a runtime decision', () => {
     expect(() =>
       create(desired([tool('same-id', 'one', { primary: true }), tool('same-id', 'two')])),
     ).toThrow('duplicate tool id');
     expect(() =>
       create(desired([tool('one-id', 'same', { primary: true }), tool('two-id', 'same')])),
     ).toThrow('duplicate tool name');
-    expect(() => create(desired([tool('one-id', 'one')]))).toThrow('exactly one primary');
-    expect(() =>
+    expect(create(desired([tool('one-id', 'one')])).tools[0]?.candidate.primary).toBe(false);
+    expect(
       create(
         desired([
           tool('one-id', 'one', { primary: true }),
           tool('two-id', 'two', { primary: true }),
         ]),
-      ),
-    ).toThrow('exactly one primary');
+      ).tools.map((value) => value.candidate.primary),
+    ).toEqual([true, true]);
   });
 
   it('rejects missing recording seqs, missing dependencies, and cycles', () => {
