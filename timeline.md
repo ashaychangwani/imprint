@@ -288,3 +288,53 @@ module yet.
 
 None. The master controller is not wired yet, so a teach would not exercise this
 checkpoint.
+
+## 2026-08-29 — Design review: three working drafts sent back
+
+### What happened
+
+- A bounded body-inspection draft passed 174 focused tests, formatting, and the
+  type check. An independent hostile-input review still found that it could
+  label an echoed user value as server-produced, show that value automatically,
+  lose JSON-string and form-encoding differences, expose data placed in object
+  keys, and do too much work on repeated form fields. The draft was returned for
+  a site-neutral, value-free replacement. It has not been committed.
+- The first set of small master/advisor agents passed its own tests, but review
+  found that their outputs could cite invented recording positions, create
+  dependency loops, rely on unbounded evidence text, and approve completion
+  without being tied tightly enough to current check facts. That version was
+  replaced in the working tree and is undergoing a second independent review.
+- The first immutable-store draft passed its original tests, but a two-writer
+  probe proved that one process could erase another process's receipt. Other
+  probes showed that caller-provided recording positions, incomplete artifacts,
+  arbitrary detail files, and an unsupported completion pass could be accepted.
+  The corrected first pass grew to nearly two thousand lines, so it was also
+  discarded before handoff. Its replacement will use one write lock and a chain
+  of complete immutable snapshots instead of a new event/recovery framework.
+
+### Why
+
+A green test suite only proves the cases the suite contains. These failures
+would recreate the exact problems this rebuild is meant to remove: the runtime
+guessing at meaning, hidden evidence loss, unsafe continuation, and a large state
+machine that is hard to reason about. Keeping them out of git makes the last
+accepted checkpoint a genuinely safe recovery point.
+
+### Decision made
+
+- Automatic evidence remains factual and value-free. When exact paths or
+  redacted values are genuinely needed, the agent must request a small,
+  explicitly scoped view.
+- A response/request match will be reported only as a match. The runtime will
+  not call it a minted token, authentication state, or user input.
+- Completion must be tied to the exact current plan, artifacts, checks, and a
+  fresh independent review attempt. A caller cannot manufacture a passing
+  review record.
+- Persistence will use the smallest mechanical design that provides one writer,
+  immutable history, and exact stale-write detection. It will not grow a list of
+  teaching operations or recovery rules.
+
+### Teach attempts
+
+None. The public command still points at shipped Imprint, and none of these
+working drafts is a valid new teaching flow yet.
