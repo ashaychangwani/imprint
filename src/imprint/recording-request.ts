@@ -19,7 +19,7 @@ function templateMatchesRecorded(template: string, recorded: string): boolean {
   let pattern = '^';
   for (const match of template.matchAll(TEMPLATE_PLACEHOLDER)) {
     pattern += escapeRegExp(template.slice(cursor, match.index));
-    pattern += '.*?';
+    pattern += '[\\s\\S]*?';
     cursor = (match.index ?? 0) + match[0].length;
   }
   if (cursor === 0) return false;
@@ -159,10 +159,12 @@ function bodyStructuralMismatch(
 }
 
 function firstMismatchByte(workflow: string, recorded: string): number {
-  const limit = Math.min(workflow.length, recorded.length);
+  const workflowBytes = Buffer.from(workflow, 'utf8');
+  const recordedBytes = Buffer.from(recorded, 'utf8');
+  const limit = Math.min(workflowBytes.length, recordedBytes.length);
   let index = 0;
-  while (index < limit && workflow[index] === recorded[index]) index++;
-  return Buffer.byteLength(workflow.slice(0, index), 'utf8');
+  while (index < limit && workflowBytes[index] === recordedBytes[index]) index++;
+  return index;
 }
 
 function mismatchFact(

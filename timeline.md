@@ -464,3 +464,27 @@ mismatch is a fact. What that fact means belongs to the teaching agents.
 
 None. This is project guidance only; the new foreground controller is still not
 connected.
+
+## 2026-08-29 — Recovery checkpoint 9: exact byte positions stay exact
+
+### What changed
+
+- Request mismatch positions are now counted from the real UTF-8 bytes instead
+  of JavaScript character positions.
+- A workflow placeholder can match a recorded value containing a newline.
+
+### Why
+
+The verifier must report measurements without guessing or leaking the compared
+values. A wrong byte position would send an agent to the wrong part of a request
+body, while the newline bug could call a valid template a mismatch.
+
+### Checks run
+
+- The focused request-comparison tests passed, including Unicode and multiline
+  cases.
+
+### Teach attempts
+
+None. These are factual comparison fixes; the new controller is still not
+connected.
