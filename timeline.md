@@ -488,3 +488,264 @@ body, while the newline bug could call a valid template a mismatch.
 
 None. These are factual comparison fixes; the new controller is still not
 connected.
+
+## 2026-08-29 — Design correction: fresh runs do not need a resume system
+
+### What happened
+
+- A second store draft fixed the data-integrity bugs found in the first one,
+  but it still grew to about 1,360 lines of source and 1,090 lines of tests.
+- Most of that code handled clean pauses, version compatibility, process
+  ownership, linked history nodes, and restarting an interrupted run.
+- Those features solve a problem the new flow deliberately does not have. A
+  teach is a fresh foreground run, and code or prompt changes always require a
+  new run.
+- The large draft was rejected and remains uncommitted while it is replaced.
+
+### Decision made
+
+The replacement will keep only what a single fresh run needs:
+
+- immutable files addressed by their content hash;
+- one atomically written, checksummed current-state file;
+- references to the current plan, builds, and check receipts;
+- a simple list of older receipts for the final reviewer;
+- factual invalidation when the master changes a tool or one of its producers.
+
+There will be no resume state, pause status, compatibility hash, cross-process
+writer lock, linked-list ledger, or runtime vocabulary for different kinds of
+master edits. The foreground controller is the only writer. A separate small
+site lock will protect final promotion, not teaching strategy.
+
+### Why
+
+Crash recovery is useful only if the recovered decisions still match the code,
+prompt, recording, and evidence. That is the same unsafe continuation pattern
+that let earlier failed runs keep correcting themselves in the wrong direction.
+Keeping immutable diagnostic facts is valuable; restarting old teaching work is
+not.
+
+### Teach attempts
+
+None. The fresh-run journal and foreground controller are not connected yet.
+
+## 2026-08-29 — Provider interruptions no longer become tool failures
+
+### What changed
+
+- Claude and Codex compiles keep the same provider conversation when the
+  provider reports temporary capacity, overload, or rate-limit trouble.
+- Retries wait longer between attempts, add a small random delay, and remain
+  inside the one teach deadline.
+- Cancellation and deadline signals now stop the whole compiler process tree,
+  including child processes that would otherwise keep the terminal open.
+- A deadline extension is accepted only after the parent teach process records
+  the decision. A child cannot extend itself or publish a late result after the
+  parent has stopped it.
+
+### Why
+
+Temporary provider trouble says nothing about the generated tool. Turning it
+into a schema, replay, or live failure taught the agent to repair code that was
+not broken. Keeping the same conversation also avoids starting over after a
+capacity interruption.
+
+### Checks run
+
+- The focused provider, control-file, process, and signal tests passed.
+- Repeated signal and deadline stress runs passed.
+- An independent review found and helped close several timing races before it
+  marked this part clean.
+
+### Teach attempts
+
+None. These checks use synthetic provider processes; the new teach controller
+is not connected yet.
+
+## 2026-08-29 — Focused plans bind to exact recording requests
+
+### What changed
+
+- Each small planning agent now receives only one tool, its allowed evidence,
+  possible producers, and the relevant current plan.
+- Its plan records the exact recorded request used for each workflow request,
+  in order.
+- A generated workflow is rejected when it adds, drops, reorders, or silently
+  substitutes one of those requests.
+- Planning and master replies are tied to the exact input they saw, so an old
+  reply cannot be applied after the master changes the plan.
+
+### Why
+
+The compile agent needs freedom to understand a protocol, but the host must be
+able to prove which recording facts its files came from. Exact request order is
+a file-integrity fact, not a judgment about what a field means.
+
+### Checks run
+
+- The focused planner and master contract tests passed.
+- Deadline, stale-reply, request-order, and producer-consumer cases passed.
+- An independent review marked this contract clean.
+
+### Teach attempts
+
+None. These contracts are not yet called by the public command.
+
+## 2026-08-29 — The first small journal draft was rejected after review
+
+### What happened
+
+- The replacement journal was reduced to about 600 lines and passed its own
+  tests, but an independent reviewer found gaps those tests missed.
+- It could accept a workflow for the wrong site, lose the accepted public
+  parameter list, refer to files outside the tool, trust missing shared files,
+  or save a plan that referred to an object that was never written.
+- Rebuilding a producer did not honestly mark its consumers stale, and an
+  accidental browser replay could still throw an error instead of returning
+  `N/A`.
+- Error redaction depended on the caller remembering to pass secrets every
+  time. File writes also needed stronger protection against partial files and
+  symbolic-link aliases.
+
+### Decision made
+
+The journal remains uncommitted until those exact gaps are fixed and reviewed
+again. The fixes stay mechanical: site identity, parameter identity, safe file
+paths, exact file contents, current dependencies, browser replay applicability,
+and complete error redaction. They do not add website meanings or teaching
+strategy.
+
+### Teach attempts
+
+None. A journal that can mislabel current work is not safe enough to drive a
+teach.
+
+## 2026-08-29 — Restore exact artifact examples in the teaching prompt
+
+### What changed
+
+- Added complete, site-neutral examples for an API workflow, parser, request
+  transform, request-free browser workflow, and browser playbook.
+- The examples show exact parameter interpolation, request order and recording
+  positions, locator fallbacks, result extraction, allowed files, file hashes,
+  and a producer-consumer edge.
+- Added the simple check order: API uses contract, replay, then live; browser
+  uses contract and live, while replay is `N/A`.
+- The prompt now tells the agent to rerun contract after every edit, route each
+  failure from the fact that failed, and keep every API route above the browser
+  playbook unless the evidence proves none can work.
+- Removed the named-site playbook example and the blanket instruction to drop
+  login steps. The playbook agent now follows the accepted authentication plan.
+- Removed the fixed forty-tool-call exit. The focused agent works until success,
+  a supported blocker, cancellation, or the shared run deadline.
+
+### Why
+
+Making the runtime smaller does not mean asking an agent to guess file formats
+or operating procedure. The prompt must carry that knowledge, while decisions
+about tools, parameters, authentication, and execution strategy remain with the
+agents.
+
+### Checks run
+
+- Tests extracted the examples from the prompt and parsed both workflows and
+  the playbook with the real production schemas.
+- The parser and request-transform examples passed TypeScript syntax checks.
+- A prompt test confirms the browser guidance stays site-neutral.
+- Committed as `4d251d9`.
+
+### Teach attempts
+
+None. Prompt correctness is necessary, but the foreground controller still has
+to call the new agents and checks before a fresh teach is meaningful.
+
+## 2026-08-29 — Green tests did not overrule independent review
+
+### What happened
+
+- The compiler and secret-boundary changes passed 320 tests, full type
+  checking, and full linting.
+- A separate reviewer still found that real teaching credentials reached an
+  agent shell environment, external compiler processes could discover the raw
+  recording path, and later verification work happened after the supposed
+  final secret scan.
+- The raw-to-redacted comparison also missed original secrets in URL and body
+  fields, and a changing raw file was not checked again after its first read.
+- The journal passed 203 focused tests, but a separate reviewer found that an
+  invalid plan could echo a known secret in an error, a foreign old build could
+  corrupt state during rebinding, and a caller could mutate the validation
+  sets after journal creation.
+
+### Decision made
+
+Neither part is accepted or committed yet. Their authors are fixing the exact
+host-boundary and write-order gaps, with new reproductions. These fixes protect
+files, credentials, and factual state. They do not add website classifications
+or teaching strategy.
+
+### Why
+
+Passing self-authored tests is useful evidence, not independent proof. Keeping
+the rejected versions uncommitted preserves the last good recovery point and
+prevents the foreground controller from depending on a false safety claim.
+
+### Teach attempts
+
+None. A fresh teach would not be trustworthy while raw inputs or journal state
+can cross their intended boundaries.
+
+## 2026-08-29 — Recovery checkpoint 10: bind a run to exact recording bytes
+
+### What changed
+
+- Recording selection now returns the hash of the exact combined recording
+  file it selected.
+- A new run can use that one value to bind its plan, generated files, and check
+  receipts to the same input.
+- Committed as `12e811b`.
+
+### Why
+
+The combined recording may be refreshed when a new recording appears. A file
+path alone cannot prove which contents an agent saw. Returning the hash avoids
+guessing and reuses a fact the recording selector was already computing.
+
+### Checks run
+
+- All seven focused recording-selection tests passed.
+- Formatting, linting, whitespace, and the staged secret scan passed.
+
+### Teach attempts
+
+None. The public command still uses the shipped controller.
+
+## 2026-08-29 — Keep the new controller small and foreground-only
+
+### Decision made
+
+- Replace the large shipped `teach.ts` flow with one thin controller rather
+  than wrapping it or adding another entrypoint.
+- Reuse the shipped recorder, redactor, evidence builder, compiler, emitter,
+  and verifier behind small factual adapters.
+- Keep only one fresh run state machine: discover, advise, decide, plan,
+  compile, check, revise if needed, independently review, and promote.
+- Remove resume windows, primary/all selection flags, replay skipping, and
+  checkpoint-driven partial compiles from the public teach command.
+- Keep `--agent codex` as an optional explicit name for the same master flow.
+- A returned command must always have a terminal result. It cannot return an
+  “active” or “paused” status.
+
+### Why
+
+Wrapping the old flow would leave two sources of truth. Replacing it makes the
+master's editable plan the only semantic decision record while retaining the
+parts of shipped Imprint that were already good at recording, file generation,
+and execution.
+
+The controller will translate checks into measurements only. It will not add
+rules about websites, endpoint meanings, authentication categories, or how
+many tools should exist.
+
+### Teach attempts
+
+None. The controller is mapped but not yet connected.
