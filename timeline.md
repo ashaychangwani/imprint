@@ -198,3 +198,93 @@ mechanics, while artifact failures remain reserved for factual artifact checks.
 ### Teach attempts
 
 None. The single master controller is not wired yet.
+
+## 2026-08-29 — Design review: two prototypes rejected before commit
+
+### What happened
+
+- An initial editable-state prototype mixed plan edits, run status, artifacts,
+  receipts, persistence, and resume handling into one 1,363-line file.
+- Its tests passed, but an independent review found that it could resume work
+  that had never reached a clean pause, overwrite newer state with an older
+  copy, attach a plan to the wrong recording, and mark a run complete without
+  proving the required checks had passed.
+- It also encoded separate runtime operations for rename, merge, split, primary
+  selection, parameter changes, and other master decisions.
+- A separate body-explorer prototype was also rejected. It erased the
+  difference between a JSON-encoded string and an actual JSON object, and its
+  comparison limit did not stop traversal when promised.
+- Neither prototype was committed. Both were removed from the working tree.
+
+### Why
+
+Passing tests are not enough when the tests preserve the wrong behavior. The
+first prototype recreated the unsafe resume pattern this rebuild is meant to
+remove, and it made the runtime interpret too many kinds of agent decisions.
+The second could give an agent false evidence about the exact request encoding.
+
+The replacements are deliberately smaller. The master supplies a complete
+desired plan instead of asking the runtime to perform a special kind of edit.
+Body inspection will preserve the exact encoding and will extend the shipped
+evidence tools rather than becoming a second parallel subsystem.
+
+### Teach attempts
+
+None. These prototypes never reached the public command and were rejected
+before a checkpoint commit.
+
+## 2026-08-29 — Recovery checkpoint 5: a small editable teaching plan
+
+### What changed
+
+- Added a 411-line, site-neutral teaching-plan module. The master supplies the
+  complete desired plan on every revision; the runtime does not implement
+  separate rename, merge, split, parameter-edit, or repair operations.
+- Each tool has a stable internal identifier, its proposed public definition,
+  exact content hashes for its evidence, a focused compile context, and the
+  master's API-or-playbook-fallback choice with a plain-language reason.
+- An accepted implementation plan is tied to the exact compile inputs it was
+  based on. If parameters, request scope, evidence, focused context, or strategy
+  changes, the old implementation plan is rejected as stale.
+- A plan change reports three mechanical effects: tools that need a new plan,
+  tools whose compiled artifact is stale, and downstream tools that need new
+  verification. A changed producer does not force an unrelated tool to compile
+  again.
+- Explanatory changes such as confidence, rationale, primary selection, or a
+  clearer strategy reason do not invalidate working code.
+- The plan is bound to the run's exact site, recording hash, and request/event
+  sequence numbers. References must be normalized, workspace-relative paths and
+  carry content hashes.
+- Every revision carries the master's accepted, rejected, or revised decision
+  and why. The later immutable store will link all revision snapshots into the
+  durable decision history.
+
+### Why
+
+The master needs freedom to replace the whole proposal when the evidence changes.
+The runtime only needs to compare the previous complete proposal with the next
+one and say what factual work became stale. Tying an implementation plan to its
+inputs prevents the exact failure where changed parameters are compiled using an
+older agent plan.
+
+The API/playbook choice is written by the master, not inferred by a site rule.
+That choice gives the runtime just enough information to make browser replay
+`not applicable` while still requiring real browser contract and live checks.
+
+### Checks run
+
+- Twenty-one focused plan tests passed with sixty-nine assertions.
+- The changed files passed the formatter and linter.
+- The full TypeScript type check passed.
+
+### Important boundary
+
+This checkpoint is the pure plan and change calculation only. The immutable
+on-disk store, artifact manifests, check receipts, paused-only resume, and final
+completion gate are deliberately separate work. No public command uses this
+module yet.
+
+### Teach attempts
+
+None. The master controller is not wired yet, so a teach would not exercise this
+checkpoint.
