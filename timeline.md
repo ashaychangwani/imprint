@@ -1026,3 +1026,42 @@ will be a new run, not a resume of this cancelled run.
   touch these changes and had already flaked before this checkpoint. Its
   hostile 20-repetition case passed three consecutive isolated runs. No
   unrelated lifecycle change was made to hide that result.
+
+## 2026-08-29 15:09 PDT — Fresh validation attempt 2: neutral fixture
+
+### Result
+
+Success: 2 ready, 0 failed. Run
+`b8a7ed2e-69e6-41f4-a6ba-129e79cbfff1` used recording hash
+`sha256:b35bfed4dc93f944ac7245df6d0487a500747e190c7807b41292bf42565e8acb`,
+the same correct recording as attempt 1.
+
+Candidate discovery now saw the two recorded API requests instead of zero. The
+master planned both discovered operations:
+
+- `search_stories` used the recorded Algolia API and passed its checks through
+  the ordinary fetch path.
+- `open_story_comments` first tried the recorded page request as an API. A host
+  check rejected that artifact even though its live semantic test worked. The
+  master kept the passing search tool, rebuilt only the affected comments tool
+  in a fresh directory, chose the recorded navigation playbook fallback, and
+  passed the browser check.
+
+The independent completion reviewer accepted both tools, and both were
+promoted. The earlier repeated planning rejection loop did not recur.
+
+### Independent audit issue and fix
+
+The first audit was inconclusive because the default Claude subscription is
+disabled. A second audit using Codex found a separate file-scanning bug: teach
+promotion had correctly kept the previous `search_stories` tool in a hidden
+backup directory, but audit counted that backup as a third active tool. Codex
+skipped the duplicate name, which made a conclusive audit impossible, so the
+audit was cancelled.
+
+The shared tool scanner now ignores dot-prefixed history directories. It still
+keeps those backups on disk for recovery; it simply does not expose them as MCP
+tools or audit targets. This is a general file-layout fix, not a teaching rule.
+Type checking, lint, 67 focused loader/audit tests, and the repository
+whitespace check passed. A new fresh neutral teach will validate this code
+change before the Google runs; attempt 2 will not be resumed.
