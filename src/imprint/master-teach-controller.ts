@@ -1009,6 +1009,7 @@ async function requestFocusedPlannerBundles(input: {
       const plannerInput: FocusedPlannerInput = {
         run: input.discoveryRun,
         recordingIndex: input.recordingIndex,
+        masterGuidance: input.plan.decision.reason,
         tool,
         availableProducers: available.filter(({ toolId }) => toolId !== sourceTool.id),
         incomingChainEdges: input.plan.chainEdges.filter(

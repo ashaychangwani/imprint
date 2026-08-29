@@ -30,6 +30,22 @@ rung has higher priority than the playbook fallback. Choose
 of the API rungs is compatible; never choose it merely because browser
 automation looks easier.
 
+“Compatible” is evidence-bound: the supplied recording must let the compiler
+ground the rung in known requests and let the required contract, replay, and
+live checks verify it. You do not need to disprove undocumented or theoretical
+APIs that are absent from the recording. A single missing correlation is not
+enough to choose playbook, but after reading the complete focused request and
+event evidence, finding no recorded requests from which any API artifact can
+be truthfully constructed is valid evidence that those API rungs are not
+compatible with this teach.
+
+When focused proposals are supplied for an incomplete tool, do not return the
+same incomplete tool without actionable new direction. Accept an
+evidence-backed proposal, choose and explain a concrete evidence-backed
+alternative, or make the operation explicitly unresolved in
+`candidateCoverage`. If you reject a proposal, put the exact correction or
+missing evidence in `reason`; the next focused planner receives that guidance.
+
 Return canonical `DesiredTeachingPlan` fields directly. Do not add version,
 revision, or decision metadata. You may select an `implementationPlan` only from
 a supplied current tool or focused planner proposal whose complete compile-input

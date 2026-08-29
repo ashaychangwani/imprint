@@ -69,6 +69,8 @@ const AvailableProducerSchema = strictObject({
 export const FocusedPlannerInputSchema = strictObject({
   run: RunIdentitySchema,
   recordingIndex: RecordingIndexSchema,
+  /** The master's latest accepted/rejected/revised reasoning for this plan. */
+  masterGuidance: Reason,
   tool: PlannableTeachingToolSchema,
   availableProducers: z.array(AvailableProducerSchema),
   incomingChainEdges: z.array(ChainEdgeSchema),

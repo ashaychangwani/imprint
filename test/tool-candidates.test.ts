@@ -146,7 +146,7 @@ describe('tool candidate payload', () => {
     expect(seqs).not.toContain(3); // analytics-style /events dropped
   });
 
-  it('keeps cross-domain auth setup requests while dropping unrelated third parties', () => {
+  it('keeps non-telemetry cross-domain requests while dropping telemetry', () => {
     const crossDomainAuthSession: Session = {
       ...session,
       requests: [
@@ -185,7 +185,7 @@ describe('tool candidate payload', () => {
     expect(payload.requests.map((r) => r.seq)).toEqual([1, 2]);
   });
 
-  it('uses navigation or document URLs for scoping when session.url is about:blank', () => {
+  it('ignores document loads while preserving cross-origin XHR and fetch evidence', () => {
     const blankSession: Session = {
       ...session,
       url: 'about:blank',
@@ -241,7 +241,7 @@ describe('tool candidate payload', () => {
     expect(payload.requests.map((r) => r.seq)).toEqual([2, 4]);
   });
 
-  it('promotes all requests to a cross-origin host when any request carries auth signals', () => {
+  it('keeps public cross-origin API requests without requiring auth signals', () => {
     const crossOriginApiSession: Session = {
       ...session,
       requests: [
@@ -250,7 +250,7 @@ describe('tool candidate payload', () => {
           timestamp: 100,
           method: 'POST',
           url: 'https://api.backend.net/auth/login',
-          headers: { authorization: '[REDACTED:v3:id=1:len=32]' },
+          headers: { 'content-type': 'application/json' },
           body: '{"user":"test"}',
           resourceType: 'Fetch',
           response: { status: 200, headers: {}, body: '{"token":"abc"}' },
@@ -289,7 +289,7 @@ describe('tool candidate payload', () => {
     expect(payload.requests.map((r) => r.seq)).toEqual([1, 2, 3]);
   });
 
-  it('preserves a caller-triaged request scope without reclassifying it', () => {
+  it('keeps public cross-origin APIs by default and preserves an exact trusted scope', () => {
     const remitlyTriagedSession: Session = {
       ...session,
       site: 'remitly',
@@ -342,7 +342,9 @@ describe('tool candidate payload', () => {
       ],
     };
 
-    expect(buildToolCandidatePayload(remitlyTriagedSession).requests.map((r) => r.seq)).toEqual([]);
+    expect(buildToolCandidatePayload(remitlyTriagedSession).requests.map((r) => r.seq)).toEqual([
+      534, 538,
+    ]);
     expect(
       buildToolCandidatePayload(remitlyTriagedSession, { trustSessionScope: true }).requests.map(
         (r) => r.seq,

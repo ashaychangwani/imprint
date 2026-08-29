@@ -956,3 +956,73 @@ does not try to encode rules for every website.
 None yet. This is the green local checkpoint immediately before the first
 fresh, unsteered neutral teach and the required Google Hotels and Google
 Flights teaches. No pre-change run will be resumed.
+
+## 2026-08-29 14:21 PDT — Fresh validation attempt 1: neutral fixture
+
+### Starting conditions
+
+- Recovery commit: `4f7e8ed`.
+- Site: `hn-algolia-stream-test`.
+- Input: the existing neutral recording, selected through the normal fresh
+  recording resolver.
+- Command: the normal foreground master teach with Codex, no resume flag, no
+  steering, and the run-wide 12-hour deadline.
+- Environment doctor passed before the run.
+
+### Result
+
+Cancelled after diagnosis: 0 ready, 2 failed. The foreground command stayed
+attached and printed the exact run directory, so the earlier lifecycle bug did
+not recur.
+
+The resolver selected the correct recording. It created a fresh combined file
+from the only raw session; the source and combined hashes were identical, and
+both contained 21 HTTP requests, 5 events, and 2 narrations. The detector's
+“0 requests” line meant its old cross-origin filter had hidden all candidate
+HTTP requests, not that the recording was empty.
+
+The master discovered `search_stories` and `open_story_comments`, but reached
+revision 9 without accepting either focused implementation plan. The focused
+agents proposed browser fallbacks because their evidence contained no accepted
+request. The master repeatedly rejected them because it read “playbook only
+when certain no API rung is compatible” as requiring proof about every
+theoretical API, rather than the ability to ground and verify an artifact from
+the supplied recording.
+
+### General fixes chosen
+
+- Give candidate discovery every non-telemetry XHR/Fetch request, regardless
+  of host or authentication. Keep the shipped compact telemetry filter so
+  large recordings remain usable, but do not use a host/auth heuristic to hide
+  public cross-origin APIs.
+- Clarify in the agent prompts that a rung is compatible only when the supplied
+  recording evidence can ground and verify it. The agent must still inspect
+  all available request evidence before choosing playbook, but it need not
+  prove that no undocumented API exists anywhere.
+- Tell the master not to repeat an unchanged incomplete plan after rejecting a
+  focused proposal. It must accept an evidence-backed proposal, state a
+  concrete evidence-backed alternative, or mark the operation explicitly
+  unresolved.
+
+These are site-neutral evidence and prompt changes. No Hacker News, Algolia,
+Google, or browser-specific runtime rule will be added. The next validation
+will be a new run, not a resume of this cancelled run.
+
+### Fix validation before attempt 2
+
+- The corrected neutral discovery payload contains exactly the two recorded
+  Algolia XHR requests, sequences 9 and 16. It still excludes the three
+  analytics requests, sequences 10, 12, and 13.
+- The master now passes its exact rejection reason back to the small planning
+  agents. An end-to-end test rejects the first proposal, confirms that both
+  planners receive the reason, accepts the next proposal, and only then starts
+  compilation.
+- Type checking, lint, dead-code checks, circular-dependency checks, the
+  repository whitespace check, and 92 focused tests passed.
+- An independent final review found no high- or medium-priority problem in the
+  change.
+- Two complete-suite runs each passed 1,707 of 1,708 tests. The sole failure
+  both times was the existing process-cleanup stress test, which does not
+  touch these changes and had already flaked before this checkpoint. Its
+  hostile 20-repetition case passed three consecutive isolated runs. No
+  unrelated lifecycle change was made to hide that result.

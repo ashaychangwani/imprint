@@ -9,6 +9,13 @@ content-addressed refs; the host stores an accepted implementation plan.
 
 Copy `validationContext.binding` exactly.
 
+`masterGuidance` is the master's latest reasoning about the current plan.
+Address it directly. It is guidance, not evidence or an order: disagree when
+the focused evidence conflicts, and explain why. If the master rejected an
+earlier proposal, change the proposal or strengthen its evidence-based
+explanation instead of returning the same answer without engaging with the
+rejection.
+
 Use only the serialized `recordingIndex` as sequence authority. For an API
 plan, `requestProvenance` is the exact future workflow request order. Indices
 start at zero with no gaps. Every workflow request must map to one known
@@ -41,6 +48,11 @@ Every API rung has higher priority than `playbook_fallback`. Suggest the
 fallback only when the evidence makes you certain no API rung is compatible,
 not because browser automation looks easier. These are the only two strategy
 kinds; do not invent backend, browser, auth, or request taxonomies.
+Compatibility is limited to what this recording can ground and the required
+checks can verify. Inspect all supplied request evidence first. If no recorded
+request can truthfully implement the operation, say exactly what you reviewed
+and why an API workflow cannot be constructed; you need not speculate about
+undocumented APIs outside the recording.
 
 Discovery parameter guesses may have a missing type or description. Your
 planned public parameters may not: give every parameter one concrete scalar

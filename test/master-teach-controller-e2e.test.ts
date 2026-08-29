@@ -286,6 +286,8 @@ describe('fresh foreground master controller end to end', () => {
       let promotedTools: string[] = [];
       let discoveryTrustedPreparedScope: boolean | undefined;
       const parameterAdvisorCalls: string[] = [];
+      const plannerGuidance: string[] = [];
+      let focusedProposalDecisions = 0;
 
       const terminal = await runFreshMasterTeach(
         {
@@ -328,21 +330,31 @@ describe('fresh foreground master controller end to end', () => {
           requestMasterDecision: async (input: MasterDecisionInput) => {
             events.push(`master:${input.phase}`);
             if (input.verificationFindings) throw new Error('unexpected fixture repair revision');
+            const reviewingFocusedProposals =
+              input.phase === 'revision' && input.plannerProposals.length > 0;
+            if (reviewingFocusedProposals) focusedProposalDecisions += 1;
+            const rejectsFirstFocusedProposal =
+              reviewingFocusedProposals && focusedProposalDecisions === 1;
             const desiredPlan =
               input.phase === 'discovery'
                 ? initialDesiredPlan(input)
-                : input.plannerProposals.length > 0
-                  ? proposalDesiredPlan(input)
-                  : desiredFromCurrent(input);
+                : rejectsFirstFocusedProposal
+                  ? desiredFromCurrent(input)
+                  : input.plannerProposals.length > 0
+                    ? proposalDesiredPlan(input)
+                    : desiredFromCurrent(input);
             return MasterDecisionOutputSchema.parse({
               binding: input.current?.run ?? input.discovery.run,
-              outcome: 'accepted',
-              reason: 'The complete dependency-ordered plan remains supported.',
+              outcome: rejectsFirstFocusedProposal ? 'rejected' : 'accepted',
+              reason: rejectsFirstFocusedProposal
+                ? 'Address why the supplied recording can ground and verify the proposed strategy.'
+                : 'The complete dependency-ordered plan remains supported.',
               desiredPlan,
             });
           },
           requestFocusedPlan: async (input: FocusedPlannerInput) => {
             events.push(`plan:${input.tool.id}`);
+            plannerGuidance.push(input.masterGuidance ?? '');
             return FocusedPlannerOutputSchema.parse({
               binding: {
                 runId: input.run.runId,
@@ -482,6 +494,13 @@ describe('fresh foreground master controller end to end', () => {
       expect(resultEvidenceCount).toBe(2);
       expect(discoveryTrustedPreparedScope).toBeUndefined();
       expect(parameterAdvisorCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
+      expect(plannerGuidance).toEqual([
+        'The complete dependency-ordered plan remains supported.',
+        'The complete dependency-ordered plan remains supported.',
+        'Address why the supplied recording can ground and verify the proposed strategy.',
+        'Address why the supplied recording can ground and verify the proposed strategy.',
+      ]);
+      expect(focusedProposalDecisions).toBe(2);
       expect(events.filter((event) => event.startsWith('compile:'))).toEqual([
         `compile:${PRODUCER_ID}`,
         `compile:${CONSUMER_ID}`,

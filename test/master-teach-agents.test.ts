@@ -681,6 +681,7 @@ function focusedInput(tool: EditableTeachingTool = searchTool) {
   return {
     run: discoveryRun,
     recordingIndex,
+    masterGuidance: 'Use the focused evidence to finish this tool or explain the exact gap.',
     tool: focusedTool,
     availableProducers: isDetail
       ? [
@@ -894,11 +895,13 @@ describe('prompts and pre-plan discovery', () => {
       'availableProducers',
       'evidence',
       'incomingChainEdges',
+      'masterGuidance',
       'outgoingChainEdges',
       'recordingIndex',
       'run',
       'tool',
     ]);
+    expect(sent.masterGuidance).toBe(input.masterGuidance);
     expect(sent.outgoingChainEdges).toEqual(edges);
   });
 

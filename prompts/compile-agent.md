@@ -574,8 +574,10 @@ fallback has a request-free `workflow.json`; its behavior lives in
 Run the contract check again after every artifact edit. All compatible API
 execution rungs have higher priority than the browser playbook. Choose the
 playbook only when you are 100% certain, from the supplied evidence, that the
-API paths cannot implement the accepted operation. The host records this
-choice but does not make it for you.
+API paths cannot implement the accepted operation. This means no API artifact
+can be truthfully grounded and verified from the supplied recording; it does
+not require disproving undocumented APIs that are absent from the evidence.
+The host records this choice but does not make it for you.
 
 Route failures by the fact that failed:
 

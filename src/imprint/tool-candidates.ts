@@ -9,8 +9,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
-import { inferAppApiHosts } from './app-api-hosts.ts';
-import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactUrlForLlm } from './llm-url.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
@@ -183,9 +181,9 @@ interface DetectToolCandidatesResult extends ToolCandidateDetection {
 
 interface DetectToolCandidatesOptions {
   /**
-   * The input session has already been reduced by request triage. Trust that
-   * selected XHR/Fetch scope instead of re-applying the raw-session origin
-   * heuristic, which would drop public cross-origin APIs such as api.remitly.io.
+   * The caller has already selected the exact request scope. Preserve even
+   * telemetry-shaped XHR/Fetch entries instead of applying the normal compact
+   * telemetry filter.
    */
   trustSessionScope?: boolean;
   signal?: AbortSignal;
@@ -385,15 +383,9 @@ export function buildToolCandidatePayload(
   session: Session,
   opts: DetectToolCandidatesOptions = {},
 ): ToolCandidatePayload {
-  const startRoot = candidateStartRoot(session);
-  const appApiHosts = inferAppApiHosts(session, startRoot);
   const requests = compactRequestContexts(
     session.requests
-      .filter((request) =>
-        isCandidateRequest(request, startRoot, appApiHosts, {
-          trustSessionScope: opts.trustSessionScope,
-        }),
-      )
+      .filter((request) => isCandidateRequest(request, opts))
       .map((request) => {
         const body = truncate(request.body, BODY_LIMIT);
         const responsePreview = truncate(request.response?.body, RESPONSE_PREVIEW_LIMIT);
@@ -437,27 +429,6 @@ export function buildToolCandidatePayload(
   };
 }
 
-function candidateStartRoot(session: Session): string | null {
-  for (const value of [
-    session.url,
-    ...session.events.filter((event) => event.type === 'navigation').map((event) => event.detail),
-    ...session.requests
-      .filter((request) => request.resourceType === 'Document')
-      .map((request) => request.url),
-  ]) {
-    const root = rootFromHttpUrl(value);
-    if (root) return root;
-  }
-  return null;
-}
-
-function rootFromHttpUrl(value: string): string | null {
-  const url = safeUrl(value);
-  if (!url || !url.hostname) return null;
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-  return registrableDomain(url.hostname) || null;
-}
-
 function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
   return [
     request.method,
@@ -472,30 +443,20 @@ function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
   ];
 }
 
-/** Telemetry / beacon endpoints. These fire constantly during any real session
- *  and are never the load-bearing request behind a user intent. Left in the
- *  candidate payload they add noise that pushes the detector to under-segment,
- *  and — worse — the detector can anchor a candidate's `requestSeqs` on one,
- *  sending compile to reverse-engineer a beacon. Excluded only for the legacy
- *  untriaged input path; trusted focused evidence is preserved exactly. */
+/** Keep every non-telemetry XHR/Fetch regardless of host or authentication.
+ * Public cross-origin APIs are ordinary candidate evidence; the agent decides
+ * whether they implement a user operation. */
 function isCandidateRequest(
   request: CapturedRequest,
-  startRoot: string | null,
-  appApiHosts: Set<string>,
   opts: DetectToolCandidatesOptions = {},
 ): boolean {
   if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
-  const url = safeUrl(request.url);
-  if (!url) return false;
+  if (!safeUrl(request.url)) return false;
   // A caller that supplies a triaged evidence package has already selected its
   // request scope. Preserve it exactly; reclassifying it here can silently hide
   // evidence the discovery agent needs.
   if (opts.trustSessionScope) return true;
-  if (isTelemetryRequest(request)) return false;
-  if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) {
-    return appApiHosts.has(url.hostname);
-  }
-  return true;
+  return !isTelemetryRequest(request);
 }
 
 function credentialPlaceholders(s: string): string[] {

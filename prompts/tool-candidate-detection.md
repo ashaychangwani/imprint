@@ -40,6 +40,10 @@ Rules:
 2. Do not expose login, auth, CSRF refresh, telemetry, page bootstrap, or
    tracking as tools. Put login/auth request seqs in sharedContext.loginRequestSeqs
    or candidate.dependencySeqs instead.
+   Non-telemetry XHR/Fetch evidence may come from any host. Do not discard a
+   public cross-origin API merely because it lacks cookies, auth headers, or
+   the page's registrable domain; decide from narration, timing, request, and
+   response evidence whether it implements the user's operation.
 3. Put every request that belongs to authentication in `authRequestSeqs`,
    including credential submission, user-interaction checkpoints, repeated
    status checks, redirects, exchanges, and finalization. Describe only the
