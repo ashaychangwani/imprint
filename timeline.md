@@ -113,3 +113,41 @@ verifier. It does not add a repair rule or make a semantic decision.
 
 None. This helper is not yet connected to the master teaching flow, so a fresh
 teach would not exercise it honestly yet.
+
+## 2026-08-29 — Recovery checkpoint 3: trustworthy recording selection
+
+### What changed
+
+- Added one resolver for the recording used by a fresh teach.
+- It chooses a valid combined recording when that recording already represents
+  every current raw recording for the site.
+- If a raw recording was added or changed, it creates a new combined recording
+  with the shipped merge code before teaching starts.
+- Freshness is based on the contents of the raw recordings, not their file
+  dates. Touching a file therefore does not cause needless work, while changing
+  its contents cannot be missed because an old date was preserved.
+- A small sidecar records only hashes and counts. It contains no requests,
+  cookies, storage, narration, URLs, headers, or secret values.
+- Malformed combined files are preserved as diagnostic evidence but are skipped.
+  No existing recording is deleted or overwritten.
+
+### Why
+
+Running `imprint teach <site> --agent codex` should not require the user to find
+and pass a session path. It should use the most complete current evidence. The
+experimental implementation sometimes selected an older combined file even when
+a newer raw recording existed. Exact content hashes make that choice factual
+without teaching the runtime anything about the site's meaning.
+
+This checkpoint exports the resolver but does not change the public command yet.
+The master controller will call it when the single teaching path is wired.
+
+### Checks run
+
+- Seven new recording-selection tests passed.
+- Sixteen existing session-merge tests still passed.
+- The changed source and test files passed the formatter and linter.
+
+### Teach attempts
+
+None. The public command still uses the shipped entrypoint at this checkpoint.

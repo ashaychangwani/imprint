@@ -7,11 +7,51 @@
  * pipeline consumes unchanged.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { join as pathJoin } from 'node:path';
+import { z } from 'zod';
 import { localSessionsDir } from './paths.ts';
 import { friendlySessionTimestamp } from './teach-state.ts';
 import { type Session, SessionSchema } from './types.ts';
+
+const Sha256IdSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+const CombinedSessionManifestSchema = z.object({
+  version: z.literal(1),
+  combinedSha256: Sha256IdSchema,
+  sourceSetSha256: Sha256IdSchema,
+  sourceSha256: z.array(Sha256IdSchema),
+});
+
+type CombinedSessionManifest = z.infer<typeof CombinedSessionManifestSchema>;
+
+interface LoadedRawSession {
+  session: Session;
+  sha256: string;
+}
+
+interface ValidCombinedSession {
+  absPath: string;
+  sha256: string;
+}
+
+export interface TeachingRecordingResolution {
+  /** Absolute path to the valid combined recording selected for a fresh teach. */
+  path: string;
+  /** Number of raw recording contents represented by the aggregate. */
+  sourceCount: number;
+  /** Digest of the source-content digest list, when provenance is available. */
+  sourceSetSha256?: string;
+  /** True only when this call had to write a new aggregate. */
+  refreshed: boolean;
+}
 
 /**
  * Format an ISO timestamp string (e.g. "2026-05-24T09:00:00.000Z") into
@@ -199,4 +239,156 @@ export function writeCombinedSession(site: string, combined: Session): string {
   const absPath = pathJoin(sessDir, filename);
   writeFileSync(absPath, `${JSON.stringify(combined, null, 2)}\n`, 'utf8');
   return absPath;
+}
+
+/**
+ * Select the current aggregate recording for a fresh teach run.
+ *
+ * Freshness is based on hashes of the valid raw recording contents, not file
+ * modification times. An aggregate is reused only when its private sidecar
+ * proves that it represents the exact current source set and that the
+ * aggregate itself has not changed. The sidecar contains hashes and counts,
+ * never captured request, cookie, storage, or narration values.
+ */
+export function resolveTeachingRecording(site: string): TeachingRecordingResolution | undefined {
+  const rawSessions = loadRawSessions(site);
+  const latestCombined = findLatestValidCombinedSession(site);
+
+  // A combined recording can remain useful after its source files have been
+  // moved elsewhere. There is nothing to refresh in that case, so select the
+  // newest valid aggregate instead of failing the teach before it starts.
+  if (rawSessions.length === 0) {
+    if (!latestCombined) return undefined;
+    const manifest = readCombinedSessionManifest(latestCombined);
+    return {
+      path: latestCombined.absPath,
+      sourceCount: manifest?.sourceSha256.length ?? 0,
+      ...(manifest ? { sourceSetSha256: manifest.sourceSetSha256 } : {}),
+      refreshed: false,
+    };
+  }
+
+  const sourceSha256 = rawSessions.map((source) => source.sha256).sort();
+  const sourceSetSha256 = digestSourceSet(sourceSha256);
+  if (latestCombined) {
+    const manifest = readCombinedSessionManifest(latestCombined);
+    if (
+      manifest?.combinedSha256 === latestCombined.sha256 &&
+      manifest.sourceSetSha256 === sourceSetSha256 &&
+      stringArraysEqual(manifest.sourceSha256, sourceSha256)
+    ) {
+      return {
+        path: latestCombined.absPath,
+        sourceCount: sourceSha256.length,
+        sourceSetSha256,
+        refreshed: false,
+      };
+    }
+  }
+
+  const combined = mergeSessions(rawSessions.map((source) => source.session));
+  const combinedPath = writeCombinedSession(site, combined);
+  const combinedSha256 = sha256Id(readFileSync(combinedPath));
+  writeCombinedSessionManifest(combinedPath, {
+    version: 1,
+    combinedSha256,
+    sourceSetSha256,
+    sourceSha256,
+  });
+  return {
+    path: combinedPath,
+    sourceCount: sourceSha256.length,
+    sourceSetSha256,
+    refreshed: true,
+  };
+}
+
+/** Compatibility-shaped helper for callers that only need the recording path. */
+export function resolveLatestCombinedSession(site: string): string | undefined {
+  return resolveTeachingRecording(site)?.path;
+}
+
+function loadRawSessions(site: string): LoadedRawSession[] {
+  const loaded: LoadedRawSession[] = [];
+  for (const info of listSiteSessions(site)) {
+    try {
+      const contents = readFileSync(info.absPath);
+      loaded.push({
+        session: SessionSchema.parse(JSON.parse(contents.toString('utf8'))),
+        sha256: sha256Id(contents),
+      });
+    } catch {
+      // The file may have changed since listSiteSessions validated it. Ignore
+      // that unstable input; a later fresh run can include it once valid.
+    }
+  }
+  return loaded;
+}
+
+function findLatestValidCombinedSession(site: string): ValidCombinedSession | undefined {
+  const sessionDir = localSessionsDir(site);
+  if (!existsSync(sessionDir)) return undefined;
+
+  const filenames = readdirSync(sessionDir)
+    .filter((filename) => filename.startsWith('combined-') && filename.endsWith('.json'))
+    .sort((left, right) => right.localeCompare(left));
+
+  for (const filename of filenames) {
+    const absPath = pathJoin(sessionDir, filename);
+    try {
+      const contents = readFileSync(absPath);
+      SessionSchema.parse(JSON.parse(contents.toString('utf8')));
+      return { absPath, sha256: sha256Id(contents) };
+    } catch {
+      // Malformed aggregates are diagnostic evidence, not candidates. Keep
+      // looking for the latest valid recording without deleting anything.
+    }
+  }
+  return undefined;
+}
+
+function manifestPathFor(combinedPath: string): string {
+  // Do not use a .json suffix: legacy session discovery treats every JSON
+  // file in this directory as a recording candidate.
+  return `${combinedPath}.sources-manifest`;
+}
+
+function readCombinedSessionManifest(
+  combined: ValidCombinedSession,
+): CombinedSessionManifest | undefined {
+  try {
+    const parsed = CombinedSessionManifestSchema.parse(
+      JSON.parse(readFileSync(manifestPathFor(combined.absPath), 'utf8')),
+    );
+    if (parsed.combinedSha256 !== combined.sha256) return undefined;
+    if (parsed.sourceSetSha256 !== digestSourceSet(parsed.sourceSha256)) return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCombinedSessionManifest(
+  combinedPath: string,
+  manifest: CombinedSessionManifest,
+): void {
+  const manifestPath = manifestPathFor(combinedPath);
+  const temporaryPath = `${manifestPath}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  renameSync(temporaryPath, manifestPath);
+}
+
+function digestSourceSet(sourceSha256: string[]): string {
+  const hash = createHash('sha256');
+  hash.update('imprint-combined-session-sources-v1\0');
+  for (const digest of sourceSha256) hash.update(`${digest}\0`);
+  return `sha256:${hash.digest('hex')}`;
+}
+
+function sha256Id(contents: Uint8Array): string {
+  return `sha256:${createHash('sha256').update(contents).digest('hex')}`;
+}
+
+function stringArraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
