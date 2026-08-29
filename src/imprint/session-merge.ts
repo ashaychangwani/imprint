@@ -45,6 +45,8 @@ interface ValidCombinedSession {
 export interface TeachingRecordingResolution {
   /** Absolute path to the valid combined recording selected for a fresh teach. */
   path: string;
+  /** Digest of the exact aggregate recording bytes selected for this run. */
+  recordingSha256: string;
   /** Number of raw recording contents represented by the aggregate. */
   sourceCount: number;
   /** Digest of the source-content digest list, when provenance is available. */
@@ -262,6 +264,7 @@ export function resolveTeachingRecording(site: string): TeachingRecordingResolut
     const manifest = readCombinedSessionManifest(latestCombined);
     return {
       path: latestCombined.absPath,
+      recordingSha256: latestCombined.sha256,
       sourceCount: manifest?.sourceSha256.length ?? 0,
       ...(manifest ? { sourceSetSha256: manifest.sourceSetSha256 } : {}),
       refreshed: false,
@@ -279,6 +282,7 @@ export function resolveTeachingRecording(site: string): TeachingRecordingResolut
     ) {
       return {
         path: latestCombined.absPath,
+        recordingSha256: latestCombined.sha256,
         sourceCount: sourceSha256.length,
         sourceSetSha256,
         refreshed: false,
@@ -297,6 +301,7 @@ export function resolveTeachingRecording(site: string): TeachingRecordingResolut
   });
   return {
     path: combinedPath,
+    recordingSha256: combinedSha256,
     sourceCount: sourceSha256.length,
     sourceSetSha256,
     refreshed: true,

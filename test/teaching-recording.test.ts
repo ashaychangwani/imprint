@@ -78,6 +78,7 @@ describe('resolveTeachingRecording', () => {
     const resolved = mustResolve();
 
     expect(resolved.refreshed).toBe(true);
+    expect(resolved.recordingSha256).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(resolved.sourceCount).toBe(1);
     expect(resolved.sourceSetSha256).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(SessionSchema.parse(JSON.parse(readFileSync(resolved.path, 'utf8')))).toBeDefined();
@@ -169,6 +170,7 @@ describe('resolveTeachingRecording', () => {
 
     expect(resolved).toEqual({
       path: combinedPath,
+      recordingSha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       sourceCount: 0,
       refreshed: false,
     });
