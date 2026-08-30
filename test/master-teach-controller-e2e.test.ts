@@ -12,6 +12,7 @@ import {
   type ToolSelectionAdvisorInput,
   ToolSelectionAdvisorOutputSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
+import { requestMasterDecision as requestValidatedMasterDecision } from '../src/imprint/master-teach-agents.ts';
 import { runFreshMasterTeach } from '../src/imprint/master-teach-controller.ts';
 import {
   type DesiredTeachingPlan,
@@ -197,28 +198,14 @@ function proposalDesiredPlan(input: MasterDecisionInput): DesiredTeachingPlan {
   const proposals = new Map(
     input.plannerProposals.map((proposal) => [proposal.payload.tool.id, proposal.payload.tool]),
   );
-  const producer = proposals.get(PRODUCER_ID);
-  const consumer = proposals.get(CONSUMER_ID);
-  if (!producer || !consumer) throw new Error('fixture expected both focused proposals');
-  return {
-    site: input.discovery.run.site,
-    recordingSha256: input.discovery.run.recordingSha256,
-    tools: [producer, consumer],
-    candidateCoverage: [
-      {
-        discoveryCandidateName: PRODUCER_NAME,
-        plannedToolIds: [PRODUCER_ID],
-        unresolvedReason: null,
-      },
-      {
-        discoveryCandidateName: CONSUMER_NAME,
-        plannedToolIds: [CONSUMER_ID],
-        unresolvedReason: null,
-      },
-    ],
-    buildWaves: [[PRODUCER_ID], [CONSUMER_ID]],
-    chainEdges: [chainEdge],
-  };
+  const desired = desiredFromCurrent(input);
+  const proposedConsumers = new Set(input.plannerProposals.map(({ payload }) => payload.tool.id));
+  desired.tools = desired.tools.map((tool) => structuredClone(proposals.get(tool.id) ?? tool));
+  desired.chainEdges = [
+    ...desired.chainEdges.filter(({ consumerToolId }) => !proposedConsumers.has(consumerToolId)),
+    ...input.plannerProposals.flatMap(({ payload }) => payload.chainEdges),
+  ];
+  return desired;
 }
 
 function focusedImplementation(input: FocusedPlannerInput) {
@@ -294,6 +281,8 @@ describe('fresh foreground master controller end to end', () => {
       const parameterAdvisorCalls: string[] = [];
       const plannerGuidance: string[] = [];
       let focusedProposalDecisions = 0;
+      let revisedProducerWasReplanned = false;
+      const revisedProducerDescription = 'Search the revised fixture item catalog.';
 
       const terminal = await runFreshMasterTeach(
         {
@@ -349,6 +338,8 @@ describe('fresh foreground master controller end to end', () => {
             if (reviewingFocusedProposals) focusedProposalDecisions += 1;
             const rejectsFirstFocusedProposal =
               reviewingFocusedProposals && focusedProposalDecisions === 1;
+            const revisesWithStalePlan =
+              reviewingFocusedProposals && focusedProposalDecisions === 2;
             const desiredPlan =
               input.phase === 'discovery'
                 ? initialDesiredPlan(input)
@@ -357,18 +348,43 @@ describe('fresh foreground master controller end to end', () => {
                   : input.plannerProposals.length > 0
                     ? proposalDesiredPlan(input)
                     : desiredFromCurrent(input);
-            return MasterDecisionOutputSchema.parse({
+            if (revisesWithStalePlan) {
+              const producer = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+              if (!producer?.implementationPlan)
+                throw new Error('fixture expected a supplied producer implementation plan');
+              producer.candidate.description = revisedProducerDescription;
+            }
+            const output = MasterDecisionOutputSchema.parse({
               binding: input.current?.run ?? input.discovery.run,
-              outcome: rejectsFirstFocusedProposal ? 'rejected' : 'accepted',
+              outcome: rejectsFirstFocusedProposal
+                ? 'rejected'
+                : revisesWithStalePlan
+                  ? 'revised'
+                  : 'accepted',
               reason: rejectsFirstFocusedProposal
                 ? 'Address why the supplied recording can ground and verify the proposed strategy.'
-                : 'The complete dependency-ordered plan remains supported.',
+                : revisesWithStalePlan
+                  ? 'Keep the semantic description revision and replan only its stale implementation.'
+                  : 'The complete dependency-ordered plan remains supported.',
               desiredPlan,
+            });
+            return requestValidatedMasterDecision(input, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
             });
           },
           requestFocusedPlan: async (input: FocusedPlannerInput) => {
             events.push(`plan:${input.tool.id}`);
             plannerGuidance.push(input.masterGuidance ?? '');
+            if (
+              input.tool.id === PRODUCER_ID &&
+              input.tool.candidate.description === revisedProducerDescription
+            ) {
+              revisedProducerWasReplanned = true;
+            }
             return FocusedPlannerOutputSchema.parse({
               binding: {
                 runId: input.run.runId,
@@ -483,10 +499,12 @@ describe('fresh foreground master controller end to end', () => {
         readJson(join(terminal.runRoot, 'journal', 'current.json')),
       );
       const plan = readJson(join(terminal.runRoot, 'journal', state.currentPlanRef.path)) as {
-        tools: Array<{ id: string }>;
+        tools: Array<{ id: string; candidate: { description: string } }>;
         buildWaves: string[][];
       };
       expect(plan.tools.map(({ id }) => id)).toEqual([PRODUCER_ID, CONSUMER_ID]);
+      expect(plan.tools[0]?.candidate.description).toBe(revisedProducerDescription);
+      expect(revisedProducerWasReplanned).toBe(true);
       expect(plan.buildWaves).toEqual([[PRODUCER_ID], [CONSUMER_ID]]);
       expect(state.tools.every(({ buildRef }) => buildRef !== undefined)).toBe(true);
       expect(state.status).toBe('completed');
@@ -516,8 +534,9 @@ describe('fresh foreground master controller end to end', () => {
         'The complete dependency-ordered plan remains supported.',
         'Address why the supplied recording can ground and verify the proposed strategy.',
         'Address why the supplied recording can ground and verify the proposed strategy.',
+        'Keep the semantic description revision and replan only its stale implementation.',
       ]);
-      expect(focusedProposalDecisions).toBe(2);
+      expect(focusedProposalDecisions).toBe(3);
       expect(events.filter((event) => event.startsWith('compile:'))).toEqual([
         `compile:${PRODUCER_ID}`,
         `compile:${CONSUMER_ID}`,

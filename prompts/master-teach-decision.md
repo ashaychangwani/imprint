@@ -68,6 +68,10 @@ revision, or decision metadata. You may select an `implementationPlan` only from
 a supplied current tool or focused planner proposal whose complete compile-input
 binding still matches. A retained tool keeps its stable ID. Added, split, or
 merged tools use new IDs. Never author `eventTimeRange`.
+Whenever you change a tool's parameters, evidence, compile context, strategy,
+or incident chain edges, omit its old `implementationPlan`; the host will send
+the changed tool to a fresh focused planner. Do not copy an implementation plan
+whose `basedOnCompileInputsSha256` describes the pre-change tool.
 An implementation plan may be accepted only when every public parameter has a
 concrete scalar type and a useful nonempty description. Its agent-authored,
 redacted live cases and recorded-baseline replay cases must cover exactly those

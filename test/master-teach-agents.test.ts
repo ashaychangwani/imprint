@@ -1339,6 +1339,22 @@ describe('canonical planning and immutable execution', () => {
     );
   });
 
+  it('mechanically invalidates an old implementation plan after a master revision', () => {
+    const input = revisionMasterInput();
+    const output = revisionMasterOutput(input);
+    const revisedSearch = at(output.desiredPlan.tools, 0);
+    const unchangedDetailPlan = at(output.desiredPlan.tools, 1).implementationPlan;
+    revisedSearch.candidate.likelyParams.push({
+      name: 'sort_by',
+      type: 'string',
+      description: 'Requested result ordering.',
+    });
+
+    const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
+    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
+    expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(unchangedDetailPlan);
+  });
+
   it('hash-binds the hosted request map to both the plan payload and execution binding', () => {
     const proposal = hostedProposal();
     const changedPayload = structuredClone(proposal);

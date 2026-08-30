@@ -750,7 +750,30 @@ function masterOutputSchema(input: MasterDecisionInput) {
       ...input.plannerProposals.map(({ payload }) => payload.tool),
     ].flatMap(({ implementationPlan }) => (implementationPlan ? [digest(implementationPlan)] : [])),
   );
-  return MasterDecisionOutputSchema.superRefine((output, ctx) => {
+  return MasterDecisionOutputSchema.transform((output) => {
+    const tools = output.desiredPlan.tools.map((tool): EditableTeachingTool => {
+      if (
+        !tool.implementationPlan ||
+        !suppliedPlans.has(digest(tool.implementationPlan)) ||
+        tool.implementationPlan.basedOnCompileInputsSha256 ===
+          teachingToolCompileInputsSha256(tool, output.desiredPlan.chainEdges)
+      ) {
+        return tool;
+      }
+      // A revision may change compile inputs while accidentally echoing the
+      // old hosted plan. Invalidate that mechanically unusable plan and let a
+      // fresh focused planner rebuild it instead of rejecting the revision.
+      const { implementationPlan: _stale, ...revisedTool } = tool;
+      return revisedTool;
+    });
+    return {
+      ...output,
+      desiredPlan: {
+        ...output.desiredPlan,
+        tools,
+      },
+    };
+  }).superRefine((output, ctx) => {
     if (!same(output.binding, masterDecisionBinding(input)))
       issue(ctx, ['binding'], 'stale master binding');
     if (

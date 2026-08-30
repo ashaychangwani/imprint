@@ -1333,3 +1333,44 @@ reference, verifies the repair call receives the allowed whole-bundle
 reference, and succeeds on the corrected answer. All 119 focused tests pass,
 along with type checking and lint. This run will not be resumed; the next
 Hotels validation will be fresh.
+
+## 2026-08-29 18:56 PDT — Fresh Google Hotels attempt 5
+
+### Result
+
+Failed after compilation and live checking. Run
+`9d5331e7-2801-4765-ab03-9b636779efcc` used the latest combined Hotels
+recording. The detector proposed three API tools: destination suggestions,
+stay search, and hotel details. The master kept all three and placed them in
+three dependency-ordered build waves. No playbook was selected.
+
+Suggestions and the large fifteen-parameter search tool compiled. The details
+tool worked live for the recorded Hyatt token, dates, traveler counts, and
+currency. Its independent verifier then found the important real failure: the
+search tool exposed a `CIABI...` photo identifier as its hotel token, while the
+details requests need the separate `ChcI...` property selector. A fresh search
+result therefore produced empty details. The focused compiler gave up instead
+of falsely claiming success.
+
+The master used those facts correctly. It kept all three API operations,
+changed search to return the real property selector, changed the chain to pass
+that selector into details, and asked for fresh plans for all affected tools.
+The final merge accidentally carried an old implementation-plan reference
+after changing the search tool and chain. The integrity check rejected that
+stale reference twice, so the foreground command honestly ended with `0 ready,
+3 failed`.
+
+### General fix chosen
+
+Keep the strict stored-plan integrity check, but do not abort a teach because
+the master echoed an old plan while changing its inputs. At the master-output
+handoff, remove only a supplied implementation-plan reference whose recorded
+input hash no longer matches the changed tool. Preserve every semantic change
+the master made, then let the existing focused-planner loop rebuild only the
+affected tool. Unknown or forged plan references remain rejected.
+
+The master prompt now also says to omit an old plan whenever parameters,
+evidence, strategy, compile context, or chain edges change. Unit and end-to-end
+regressions prove that the semantic edit survives, the stale plan is cleared,
+unchanged tools retain their plans, the affected tool is replanned, and the run
+can complete. This run will never be resumed.
