@@ -87,6 +87,11 @@ test('the pinned contract states applicability, edit invalidation, and playbook 
   expect(prompt).toContain('execution rungs have higher priority');
   expect(prompt).toContain('only when you are 100% certain');
   expect(prompt).toContain('recordingRequestSeq` is mandatory for every API artifact request');
+  expect(prompt).toContain(
+    'Start request construction from the complete recorded request template',
+  );
+  expect(prompt).toContain('call `compare_rendered_requests`');
+  expect(prompt).toContain('partial facts to distinguish the request that was actually sent');
 });
 
 test('the playbook compiler remains site-neutral and follows the accepted auth and fallback plans', () => {

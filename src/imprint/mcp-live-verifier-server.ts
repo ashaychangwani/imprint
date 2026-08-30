@@ -22,6 +22,7 @@ import {
   LiveVerificationReportSchema,
   appendLiveVerifierLog,
   assertReportCoversWorkflowParameters,
+  backendPreparationFailureObservation,
   effectiveParamsForEvidence,
   hasSuiteReceiptForSession,
   persistLiveVerificationEvidence,
@@ -79,7 +80,7 @@ const RUN_TOOL: Tool = {
 const PREPARE_BACKEND_TOOL: Tool = {
   name: 'prepare_live_backend',
   description:
-    'Reuse the preferred backend and probe only when no valid preference exists. Set forceReprobe only after a transport, network, or browser-infrastructure failure from that backend; never reprobe for empty, incorrect, or otherwise semantic output failures.',
+    'Reuse the preferred backend and probe only when no valid preference exists. Set forceReprobe only after a transport, network, or browser-infrastructure failure from that backend; never reprobe for empty, incorrect, or otherwise semantic output failures. On failure, requestStageFacts report value-free preparation, transform, and send outcomes for each attempted request.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -289,7 +290,7 @@ export async function runLiveVerifierMcpServer(opts: {
           return { content: [{ type: 'text', text: JSON.stringify(result) }] };
         } catch (error) {
           rethrowProviderControl(error);
-          return errorResult(error instanceof Error ? error.message : String(error));
+          return errorResult(JSON.stringify(backendPreparationFailureObservation(error)));
         }
       }
       if (request.params.name === 'run_live_integration_suite') {

@@ -33,9 +33,13 @@ import {
   resolveProvider,
 } from './llm.ts';
 import {
+  type BackendRequestStageFact,
   canRebindBackendsCacheToWorkflow,
+  parseBackendRequestStageFacts,
   type probeResolvedTool,
   rebindBackendsCacheToWorkflow,
+  sanitizeBackendRequestStageFacts,
+  stripBackendRequestStageFacts,
 } from './probe-backends.ts';
 import {
   ProviderDeadlineError,
@@ -229,6 +233,40 @@ interface BackendPreparationResult {
   preferredBackend: ConcreteBackend;
   reusedCache: boolean;
   durationMs: number;
+}
+
+interface BackendPreparationFailureObservation {
+  error: string;
+  requestStageFacts: BackendRequestStageFact[];
+}
+
+type BackendPreparationError = Error & {
+  requestStageFacts?: unknown;
+};
+
+function backendPreparationError(
+  message: string,
+  requestStageFacts: readonly BackendRequestStageFact[],
+): BackendPreparationError {
+  const error = new Error(message) as BackendPreparationError;
+  error.requestStageFacts = sanitizeBackendRequestStageFacts(requestStageFacts);
+  return error;
+}
+
+/** Convert any backend-preparation error into the value-free observation given
+ * to the verifier. Subprocess trailers and arbitrary extra fields are removed. */
+export function backendPreparationFailureObservation(
+  error: unknown,
+): BackendPreparationFailureObservation {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const attached =
+    error instanceof Error
+      ? sanitizeBackendRequestStageFacts((error as BackendPreparationError).requestStageFacts)
+      : [];
+  return {
+    error: stripBackendRequestStageFacts(rawMessage),
+    requestStageFacts: attached.length > 0 ? attached : parseBackendRequestStageFacts(rawMessage),
+  };
 }
 
 export function effectiveParamsForEvidence(
@@ -1008,7 +1046,7 @@ export async function prepareLiveVerificationBackend(opts: {
     });
     return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const failure = backendPreparationFailureObservation(error);
     const durationMs = Date.now() - startedAt;
     persistLiveVerificationEvidence(evidencePath, [
       {
@@ -1019,7 +1057,8 @@ export async function prepareLiveVerificationBackend(opts: {
         finishedAt: new Date().toISOString(),
         reason: opts.reason,
         forceReprobe: opts.forceReprobe ?? false,
-        error: message,
+        error: failure.error,
+        requestStageFacts: failure.requestStageFacts,
         durationMs,
       },
     ]);
@@ -1027,9 +1066,13 @@ export async function prepareLiveVerificationBackend(opts: {
       type: 'backend.prepare.failed',
       attempt: opts.attempt,
       label,
-      error: message,
+      error: failure.error,
+      requestStageFacts: failure.requestStageFacts,
       durationMs,
     });
+    if (failure.requestStageFacts.length > 0) {
+      throw backendPreparationError(failure.error, failure.requestStageFacts);
+    }
     throw error;
   }
 }
@@ -1068,9 +1111,14 @@ async function runBackendProbeSubprocess(opts: {
   child.stdin?.end(JSON.stringify(opts.params));
 
   let stderr = '';
+  let rawStderrTail = '';
   const logChunk = (stream: 'stdout' | 'stderr', raw: unknown): void => {
-    const chunk = redactFreeformText(boundedTail(String(raw), 4_000)).redacted;
-    if (stream === 'stderr') stderr = boundedTail(`${stderr}${chunk}`, 8_000);
+    const rawChunk = String(raw);
+    const chunk = redactFreeformText(boundedTail(rawChunk, 4_000)).redacted;
+    if (stream === 'stderr') {
+      rawStderrTail = appendBackendProbeRawStderrTail(rawStderrTail, rawChunk);
+      stderr = boundedTail(`${stderr}${chunk}`, 8_000);
+    }
     appendLiveVerifierLog(opts.logPath, {
       type: 'backend.probe.progress',
       attempt: opts.attempt,
@@ -1119,8 +1167,11 @@ async function runBackendProbeSubprocess(opts: {
     );
   }
   if (outcome.exitCode !== 0) {
-    throw new Error(
-      `backend probe exited ${outcome.exitCode}${stderr ? `: ${stderr.slice(-2_000)}` : ''}`,
+    const requestStageFacts = parseBackendRequestStageFacts(rawStderrTail);
+    const publicStderr = stripBackendRequestStageFacts(stderr);
+    throw backendPreparationError(
+      `backend probe exited ${outcome.exitCode}${publicStderr ? `: ${publicStderr.slice(-2_000)}` : ''}`,
+      requestStageFacts,
     );
   }
 
@@ -1132,6 +1183,12 @@ async function runBackendProbeSubprocess(opts: {
     throw new Error(`backend probe completed without a valid cache (${cacheStatus.status})`);
   }
   return { cache: cacheStatus.cache, outPath: opts.outPath };
+}
+
+/** Retain the private transport marker independently of the shorter public log
+ * chunk. The subprocess emits at most 32 whitelisted request-stage facts. */
+export function appendBackendProbeRawStderrTail(current: string, raw: unknown): string {
+  return boundedTail(`${current}${String(raw)}`, 8_000);
 }
 
 interface LiveSemanticVerificationResult {
@@ -1412,6 +1469,8 @@ export function buildVerifierArtifactContext(toolDir: string, toolName: string):
   }
   return {
     workflow: JSON.parse(readFileSync(pathJoin(toolDir, 'workflow.json'), 'utf8')),
+    requestTransform: readVerifierArtifact(pathJoin(toolDir, 'request-transform.ts')),
+    requestTests: readVerifierArtifact(pathJoin(toolDir, 'request.test.ts')),
     parser: readVerifierArtifact(pathJoin(toolDir, 'parser.ts')),
     parserTests: readVerifierArtifact(pathJoin(toolDir, 'parser.test.ts')),
     integrationTests: readVerifierArtifact(pathJoin(toolDir, 'integration.test.ts')),
@@ -1596,7 +1655,7 @@ async function runAnthropicVerifier(opts: {
     {
       name: 'prepare_live_backend',
       description:
-        'Reuse the current preferred backend, probing only when no valid preference exists. Set forceReprobe only after the preferred backend fails because of a transport, network, or browser-infrastructure error; semantic output failures must go back to the compiler without reprobe.',
+        'Reuse the current preferred backend, probing only when no valid preference exists. Set forceReprobe only after the preferred backend fails because of a transport, network, or browser-infrastructure error; semantic output failures must go back to the compiler without reprobe. On failure, requestStageFacts report value-free preparation, transform, and send outcomes for each attempted request.',
       input_schema: {
         type: 'object',
         properties: {
@@ -1632,7 +1691,7 @@ async function runAnthropicVerifier(opts: {
           const control = providerControlError(error);
           if (control) throw control;
           return {
-            result: error instanceof Error ? error.message : String(error),
+            result: JSON.stringify(backendPreparationFailureObservation(error)),
             isError: true,
           };
         }

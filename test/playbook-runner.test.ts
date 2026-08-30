@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  closePlaybookResources,
   extractPlaybookCaptures,
   extractResult,
   runPlaybook,
@@ -144,7 +145,7 @@ describe('runPlaybook', () => {
     } as unknown as import('playwright').Page;
     const startedAt = Date.now();
 
-    const r = await runPlaybook({
+    const result = await runPlaybook({
       playbook: MIN_PLAYBOOK,
       params: { q: 'hello' },
       pageOverride: stubPage,
@@ -154,10 +155,55 @@ describe('runPlaybook', () => {
     });
 
     expect(Date.now() - startedAt).toBeLessThan(1000);
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error).toBe('NETWORK');
-    expect(r.message).toContain('Playbook step 1/1 (navigate) timed out');
+    expect(result).toMatchObject({ ok: false, error: 'NETWORK' });
+    if (result.ok) return;
+    expect(result.message).toContain('Playbook lifecycle');
+  });
+
+  it('clears a long step timer when the caller cancels', async () => {
+    const stubPage = {
+      on: () => {},
+      goto: () => new Promise(() => {}),
+    } as unknown as import('playwright').Page;
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    setTimeout(() => controller.abort(new Error('cancel fixture')), 20);
+
+    await expect(
+      runPlaybook({
+        playbook: MIN_PLAYBOOK,
+        params: { q: 'hello' },
+        pageOverride: stubPage,
+        stepTimeoutMs: 10_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('cancel fixture');
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+  });
+
+  it('bounds teardown when dead browser resources never close', async () => {
+    const closed: string[] = [];
+    const never = () => new Promise<void>(() => {});
+    const startedAt = Date.now();
+
+    await closePlaybookResources(
+      {
+        close: async () => {
+          closed.push('context');
+          await never();
+        },
+      },
+      {
+        close: async () => {
+          closed.push('browser');
+          await never();
+        },
+      },
+      20,
+    );
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(closed.sort()).toEqual(['browser', 'context']);
   });
 
   it('extracts a best-effort 2FA-chain token from a matching XHR (Component D)', () => {
@@ -226,5 +272,27 @@ describe('runPlaybook', () => {
     expect(r.error).toBe('NETWORK');
     expect(r.message).toContain('Timeout 10ms exceeded');
     expect(r.message).not.toContain('screenshot:');
+  });
+
+  it('returns a network result when the lifecycle expires during a failure screenshot', async () => {
+    const stubPage = {
+      on: () => {},
+      goto: async () => {
+        throw new Error('fast navigation failure');
+      },
+      screenshot: () => new Promise(() => {}),
+    } as unknown as import('playwright').Page;
+
+    const result = await runPlaybook({
+      playbook: MIN_PLAYBOOK,
+      params: { q: 'hello' },
+      pageOverride: stubPage,
+      maxDurationMs: 25,
+      screenshotTimeoutMs: 1_000,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: 'NETWORK' });
+    if (result.ok) return;
+    expect(result.message).toContain('Playbook lifecycle');
   });
 });

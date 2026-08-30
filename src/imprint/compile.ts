@@ -479,7 +479,7 @@ export function parseTriageSelectionResponse(text: string): {
   );
 }
 
-export interface TriageRequestsOptions {
+interface TriageRequestsOptions {
   /** Compiler callers classify effects by default. Master candidate discovery
    * skips those LLM batches because their effect result is not authoritative. */
   effectClassification?: 'classify' | 'skip';

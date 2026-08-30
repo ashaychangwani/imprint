@@ -296,6 +296,41 @@ function focusedImplementation(input: FocusedPlannerInput) {
   });
 }
 
+function browserFocusedImplementation(input: FocusedPlannerInput) {
+  const parameterValues = input.tool.candidate.likelyParams.map(({ name, type }) => ({
+    parameterName: name,
+    value: type === 'string' ? 'item-1' : type === 'number' ? 1 : true,
+  }));
+  return ImplementationPlanPayloadSchema.parse({
+    version: 1,
+    toolId: input.tool.id,
+    strategyKind: 'playbook_fallback',
+    requestProvenance: [],
+    parameterMappings: input.tool.candidate.likelyParams.map(({ name }) => ({
+      parameterName: name,
+      artifactRequestIndices: [],
+      guidance: `Apply ${name} through the rendered browser flow.`,
+    })),
+    responseDependencies: [],
+    resultSources: [{ artifactRequestIndex: null, source: 'Return the rendered item detail.' }],
+    outputGuidance: `Return the current ${input.tool.candidate.toolName} result.`,
+    verificationCases: [
+      {
+        id: `live_${input.tool.id}`,
+        check: 'live',
+        parameterValueOrigin: 'synthetic_live',
+        parameterValues,
+        expectedResult: input.tool.candidate.expectedOutput,
+        provenance: {
+          recordingRequestSeqs: input.tool.candidate.requestSeqs,
+          recordingEventSeqs: [],
+          evidenceRefs: [input.evidence.ref],
+        },
+      },
+    ],
+  });
+}
+
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
@@ -616,6 +651,237 @@ describe('fresh foreground master controller end to end', () => {
       ]);
       expect(events.indexOf('completion-review')).toBeLessThan(events.indexOf('promotion'));
       expect(events.at(-1)).toBe('promotion');
+    });
+  });
+
+  it('records a timed-out browser chain as a host error and continues after revision', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      let playbookCalls = 0;
+      let timedOutChainSignal: AbortSignal | undefined;
+      let timedOutChainDurationMs: number | undefined;
+      let consumerCompiles = 0;
+      let removedTimedOutChain = false;
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          now: () => FIXED_NOW,
+          runId: () => 'run-e2e-browser-chain-timeout',
+          playbookInvocationTimeoutMs: 25,
+          playbookCleanupGraceMs: 15,
+          prepareSession: async (session) => preparedSession(session),
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate, consumerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          observeIndependentExecution: async () => ({
+            status: 'unavailable',
+            requests: [],
+            unmatchedRecordingRequestSeqs: [],
+            message: 'The fixture uses injected tool runners.',
+          }),
+          requestToolSelectionAdvice: async (input: ToolSelectionAdvisorInput) =>
+            ToolSelectionAdvisorOutputSchema.parse({
+              binding: input.run,
+              boundaries: input.discoveryCandidates.map(
+                ({ likelyParams: _params, ...candidate }) => candidate,
+              ),
+              concerns: [],
+              reason: 'The two fixture operations have an explicit producer-consumer boundary.',
+            }),
+          requestMasterDecision: async (input: MasterDecisionInput) => {
+            let desiredPlan: DesiredTeachingPlan;
+            let outcome: 'accepted' | 'revised' = 'accepted';
+            let reason = 'Keep the focused dependency-ordered fixture plan.';
+            if (input.phase === 'discovery') {
+              desiredPlan = initialDesiredPlan(input);
+            } else if (input.plannerProposals.length > 0) {
+              desiredPlan = proposalDesiredPlan(input);
+            } else if (input.verificationFindings) {
+              desiredPlan = desiredFromCurrent(input);
+              desiredPlan.chainEdges = [];
+              removedTimedOutChain = true;
+              outcome = 'revised';
+              reason = 'Remove the chain whose factual host receipt timed out.';
+            } else {
+              desiredPlan = desiredFromCurrent(input);
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: input.current?.run ?? input.discovery.run,
+              outcome,
+              reason,
+              desiredPlan,
+            });
+            return await requestValidatedMasterDecision(input, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          requestFocusedPlan: async (input: FocusedPlannerInput) => {
+            const browser = input.tool.id === CONSUMER_ID;
+            return FocusedPlannerOutputSchema.parse({
+              binding: {
+                runId: input.run.runId,
+                site: input.run.site,
+                recordingSha256: input.run.recordingSha256,
+                toolId: input.tool.id,
+              },
+              tool: {
+                ...input.tool,
+                strategy: {
+                  kind: browser ? 'playbook_fallback' : 'api',
+                  reason: browser
+                    ? 'The fixture exercises the rendered-browser lifecycle.'
+                    : 'The producer has one replayable API request.',
+                },
+              },
+              chainEdges: input.incomingChainEdges,
+              implementationPlan: browser
+                ? browserFocusedImplementation(input)
+                : focusedImplementation(input),
+              reason: 'The fixture implementation is fully specified.',
+            });
+          },
+          compileFocusedTool: async ({ tool, stagingDir }) => {
+            mkdirSync(stagingDir, { recursive: true });
+            const browser = tool.id === CONSUMER_ID;
+            if (browser) consumerCompiles += 1;
+            const workflow = WorkflowSchema.parse({
+              toolName: tool.candidate.toolName,
+              intent: { description: tool.candidate.description },
+              parameters: tool.candidate.likelyParams.map(({ name, type, description }) => ({
+                name,
+                type,
+                description,
+              })),
+              requests: browser
+                ? []
+                : [
+                    {
+                      recordingRequestSeq: 1,
+                      method: 'GET',
+                      url: 'https://fixture.invalid/api/items',
+                      headers: { accept: 'application/json' },
+                    },
+                  ],
+              site: SITE,
+            });
+            const workflowPath = join(stagingDir, 'workflow.json');
+            writeFileSync(workflowPath, `${JSON.stringify(workflow)}\n`);
+            if (browser) {
+              writeFileSync(
+                join(stagingDir, 'playbook.yaml'),
+                [
+                  `toolName: ${CONSUMER_NAME}`,
+                  'summary: Render one fixture item.',
+                  'parameters:',
+                  '  - name: item_id',
+                  '    type: string',
+                  '    description: Item identifier.',
+                  'steps:',
+                  '  - action: navigate',
+                  '    url: "https://fixture.invalid/items/${item_id}"',
+                  'result:',
+                  '  source: dom',
+                  '  locators:',
+                  '    - by: role',
+                  '      value: main',
+                  '  extract: text',
+                  '  return_as: item',
+                  '',
+                ].join('\n'),
+              );
+            }
+            return { workflow, workflowPath, toolDir: stagingDir };
+          },
+          runApiTool: async () => ({
+            result: { ok: true as const, data: { items: [{ id: 'item-1' }] } },
+            executionMechanism: 'fixture-api',
+          }),
+          runPlaybookTool: async ({ parameters, signal, maxDurationMs }) => {
+            playbookCalls += 1;
+            if (playbookCalls === 2) {
+              timedOutChainSignal = signal;
+              timedOutChainDurationMs = maxDurationMs;
+              return await new Promise<never>(() => {});
+            }
+            return {
+              result: {
+                ok: true as const,
+                data: { id: parameters.item_id, name: 'Fixture item' },
+              },
+              executionMechanism: 'fixture-playbook',
+            };
+          },
+          requestParameterSelectionAdvice: async () => {
+            throw new Error('Optional fixture parameter advice is unavailable.');
+          },
+          requestCompletionReview: async (input) =>
+            CompletionReviewOutputSchema.parse({
+              binding: input.run,
+              verdict: 'passed',
+              summary: 'The revised tools have current factual receipts.',
+              findings: [],
+              toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                status: 'credible',
+                reason: 'The current result matches the focused fixture expectation.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: input.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The current immutable receipts support the claim.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            }),
+          promote: async () => {},
+        },
+      );
+
+      if (terminal.status !== 'completed') {
+        throw new Error(
+          `chain-timeout fixture teach failed: ${JSON.stringify({ terminal, playbookCalls, consumerCompiles, removedTimedOutChain, timedOutChainDurationMs })}`,
+        );
+      }
+      expect(terminal.status).toBe('completed');
+      expect(removedTimedOutChain).toBe(true);
+      expect(timedOutChainSignal?.aborted).toBe(true);
+      expect(timedOutChainDurationMs).toBe(25);
+      expect(playbookCalls).toBe(3);
+      expect(consumerCompiles).toBe(2);
+
+      const state = FreshTeachJournalStateSchema.parse(
+        readJson(join(terminal.runRoot, 'journal', 'current.json')),
+      );
+      const archivedReceipts = state.supersededReceiptRefs.map((ref) =>
+        readJson(join(terminal.runRoot, 'journal', ref.path)),
+      ) as Array<{
+        check?: string;
+        chainEdgeId?: string;
+        facts?: Array<{ kind: string; status: string }>;
+      }>;
+      const timedOutChain = archivedReceipts.find(
+        (receipt) => receipt.check === 'chain' && receipt.chainEdgeId === EDGE_ID,
+      );
+      expect(timedOutChain?.facts).toContainEqual(
+        expect.objectContaining({ kind: 'host_error', status: 'failed' }),
+      );
     });
   });
 

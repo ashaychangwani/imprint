@@ -3127,6 +3127,442 @@ describe('inspect_body_structure compile tool', () => {
   });
 });
 
+describe('compare_rendered_requests compile tool', () => {
+  it('compares the real transformed body with recording provenance and keeps partial facts', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-rendered-request-'));
+    const recordedBody = `f.req=${encodeURIComponent(
+      JSON.stringify([
+        null,
+        [
+          ['recorded destination', 1],
+          [2026, 10, 12],
+        ],
+      ]),
+    )}`;
+    const request = {
+      seq: 42,
+      timestamp: 1,
+      method: 'POST',
+      url: 'https://api.example.test/search?rpc=A',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      resourceType: 'Fetch' as const,
+      body: recordedBody,
+      response: {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        mimeType: 'application/json',
+        body: '{"items":[]}',
+      },
+    };
+    const session: Session = {
+      site: 'fixture',
+      startedAt: '2026-08-29T00:00:00.000Z',
+      url: 'https://example.test/',
+      imprintVersion: '0.1.0',
+      requests: [
+        request,
+        {
+          ...request,
+          seq: 43,
+          timestamp: 2,
+          url: 'https://api.example.test/second?rpc=B',
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+
+    writeFileSync(
+      pathJoin(dir, 'workflow.json'),
+      JSON.stringify({
+        toolName: 'search_fixture',
+        intent: { description: 'Search the fixture.' },
+        site: 'fixture',
+        parameters: [{ name: 'query', type: 'string', description: 'Search text.' }],
+        requestTransformModule: './request-transform.ts',
+        requests: [
+          {
+            method: 'POST',
+            url: request.url,
+            headers: request.headers,
+            body: 'f.req=',
+            recordingRequestSeq: 42,
+          },
+          {
+            method: 'POST',
+            url: 'https://api.example.test/second?rpc=B',
+            headers: request.headers,
+            body: 'f.req=',
+            recordingRequestSeq: 43,
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      pathJoin(dir, 'request-transform.ts'),
+      `export function transform(_method: string, url: string, _responses: unknown[], params: Record<string, unknown>) {
+        if (url.includes('/second')) throw new Error('producer result was unusable');
+        return { body: 'f.req=' + encodeURIComponent(JSON.stringify([null, [String(params.query ?? '')]])) };
+      }`,
+    );
+
+    try {
+      const compare = buildCompileTools(session, dir, pathJoin(dir, 'session.json')).find(
+        (tool) => tool.name === 'compare_rendered_requests',
+      );
+      expect(compare?.description).toContain('real substitutions and request transform');
+      const result = await compare?.handler({
+        params: { query: 'fresh destination' },
+        recordedFormat: 'form-urlencoded',
+        renderedFormat: 'form-urlencoded',
+        includePaths: true,
+      });
+      const facts = JSON.parse(result?.result ?? '{}');
+      expect(facts).toMatchObject({
+        source: 'offline_real_workflow_render',
+        transformDeclared: true,
+        execution: {
+          ok: false,
+          error: 'BAD_RESPONSE',
+        },
+        preparedRequestCount: 1,
+        comparisons: [
+          {
+            artifactRequestIndex: 0,
+            recordingRequestSeq: 42,
+            transformDeclared: true,
+            method: { equal: true },
+            url: { equal: true },
+            body: { state: 'checked' },
+          },
+        ],
+      });
+      expect(facts.comparisons[0].bodyBytes.rendered).toBeGreaterThan('f.req='.length);
+      expect(facts.comparisons[0].body.comparison.differences.length).toBeGreaterThan(0);
+      expect(facts.comparisons[0].body.comparison.differences[0]).toHaveProperty('path');
+
+      writeFileSync(
+        pathJoin(dir, 'request-transform.ts'),
+        `import { renderedBody } from './transform-helper.ts';
+        export function transform(_method: string, url: string) {
+          if (url.includes('/second')) throw new Error('producer result was unusable');
+          return { body: renderedBody };
+        }`,
+      );
+      writeFileSync(
+        pathJoin(dir, 'transform-helper.ts'),
+        `export const renderedBody = ${JSON.stringify(recordedBody)};`,
+      );
+      const afterEdit = await compare?.handler({
+        params: { query: 'fresh destination' },
+        artifactRequestIndex: 0,
+        recordedFormat: 'form-urlencoded',
+        renderedFormat: 'form-urlencoded',
+        includePaths: true,
+      });
+      const afterEditFacts = JSON.parse(afterEdit?.result ?? '{}');
+      expect(afterEditFacts.comparisons[0].body.comparison.differences).toEqual([]);
+      expect(afterEditFacts.comparisons[0].bodyBytes).toEqual({
+        recorded: new TextEncoder().encode(recordedBody).length,
+        rendered: new TextEncoder().encode(recordedBody).length,
+      });
+
+      writeFileSync(
+        pathJoin(dir, 'request-transform.ts'),
+        `import { renderedBody } from './transform-helper.ts';
+        export function transform(_method: string, url: string) {
+          if (url.includes('/second')) throw new Error('producer result was unusable');
+          return { url: url.replace('rpc=A', 'rpc=WRONG'), body: renderedBody };
+        }`,
+      );
+      const queryMismatch = await compare?.handler({
+        params: { query: 'fresh destination' },
+        artifactRequestIndex: 0,
+        recordedFormat: 'form-urlencoded',
+        renderedFormat: 'form-urlencoded',
+      });
+      expect(JSON.parse(queryMismatch?.result ?? '{}').comparisons[0]).toMatchObject({
+        url: { equal: false, queryValuesEqual: false },
+        body: { comparison: { differences: [] } },
+      });
+
+      const downstream = await compare?.handler({
+        params: { query: 'fresh destination' },
+        artifactRequestIndex: 1,
+        recordedFormat: 'form-urlencoded',
+        renderedFormat: 'form-urlencoded',
+      });
+      expect(JSON.parse(downstream?.result ?? '{}').comparisons).toEqual([
+        {
+          artifactRequestIndex: 1,
+          state: 'not_checked',
+          reason: 'no outgoing fetch was captured before workflow execution failed',
+        },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reloads an edited shared transform from a fresh copied site tree', async () => {
+    const siteDir = mkdtempSync(pathJoin(tmpdir(), 'imprint-rendered-shared-'));
+    const toolDir = pathJoin(siteDir, 'search');
+    const sharedDir = pathJoin(siteDir, '_shared');
+    const producerDir = pathJoin(siteDir, 'producer');
+    mkdirSync(toolDir, { recursive: true });
+    mkdirSync(sharedDir, { recursive: true });
+    mkdirSync(producerDir, { recursive: true });
+    const recordedBody = JSON.stringify({ value: 'recorded' });
+    const session: Session = {
+      site: 'shared-fixture',
+      startedAt: '2026-08-29T00:00:00.000Z',
+      url: 'https://example.test/',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 7,
+          timestamp: 1,
+          method: 'POST',
+          url: 'https://api.example.test/search',
+          headers: { 'content-type': 'application/json' },
+          resourceType: 'Fetch',
+          body: recordedBody,
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: '{}',
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    writeFileSync(
+      pathJoin(toolDir, 'workflow.json'),
+      JSON.stringify({
+        toolName: 'search_shared_fixture',
+        intent: { description: 'Search the fixture.' },
+        site: 'shared-fixture',
+        parameters: [],
+        requestTransformModule: './request-transform.ts',
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://api.example.test/search',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+            recordingRequestSeq: 7,
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      pathJoin(sharedDir, 'transform.ts'),
+      `export const sharedBody = ${JSON.stringify(JSON.stringify({ value: 'old' }))};`,
+    );
+    writeFileSync(pathJoin(producerDir, 'parser.ts'), 'export const useSharedBody = true;');
+    writeFileSync(
+      pathJoin(toolDir, 'request-transform.ts'),
+      `import { sharedBody } from '../_shared/transform.ts';
+       import { useSharedBody } from '../producer/parser.ts';
+       export function transform() { return { body: useSharedBody ? sharedBody : '{}' }; }`,
+    );
+
+    try {
+      const compare = buildCompileTools(session, toolDir, pathJoin(siteDir, 'session.json')).find(
+        (tool) => tool.name === 'compare_rendered_requests',
+      );
+      const first = JSON.parse((await compare?.handler({ includePaths: true }))?.result ?? '{}');
+      expect(first.comparisons[0].body.comparison.differences.length).toBeGreaterThan(0);
+
+      writeFileSync(
+        pathJoin(sharedDir, 'transform.ts'),
+        `export const sharedBody = ${JSON.stringify(recordedBody)};`,
+      );
+      const second = JSON.parse((await compare?.handler({ includePaths: true }))?.result ?? '{}');
+      expect(second.comparisons[0].body.comparison.differences).toEqual([]);
+      expect(second.comparisons[0].bodyBytes.recorded).toBe(
+        second.comparisons[0].bodyBytes.rendered,
+      );
+
+      writeFileSync(pathJoin(producerDir, 'parser.ts'), 'export const useSharedBody = false;');
+      const third = JSON.parse((await compare?.handler({ includePaths: true }))?.result ?? '{}');
+      expect(third.comparisons[0].body.comparison.differences.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(siteDir, { recursive: true, force: true });
+    }
+  });
+
+  it('snapshots only declared artifacts when the compile directory is a site root', async () => {
+    const siteDir = mkdtempSync(pathJoin(tmpdir(), 'imprint-rendered-site-root-'));
+    const sessionsDir = pathJoin(siteDir, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(pathJoin(sessionsDir, 'must-not-be-copied'), 'unrelated recording');
+    const recordedBody = JSON.stringify({ value: 'recorded' });
+    const session: Session = {
+      site: 'site-root-fixture',
+      startedAt: '2026-08-29T00:00:00.000Z',
+      url: 'https://example.test/',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 8,
+          timestamp: 1,
+          method: 'POST',
+          url: 'https://api.example.test/search',
+          headers: { 'content-type': 'application/json' },
+          resourceType: 'Fetch',
+          body: recordedBody,
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: '{}',
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    writeFileSync(
+      pathJoin(siteDir, 'workflow.json'),
+      JSON.stringify({
+        toolName: 'site_root_fixture',
+        intent: { description: 'Search the fixture.' },
+        site: 'site-root-fixture',
+        parameters: [],
+        requestTransformModule: './request-transform.ts',
+        requests: [
+          {
+            method: 'POST',
+            url: 'https://api.example.test/search',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+            recordingRequestSeq: 8,
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      pathJoin(siteDir, 'request-transform.ts'),
+      `import { existsSync } from 'node:fs';
+       import { join } from 'node:path';
+       export function transform() {
+         if (existsSync(join(import.meta.dir, 'sessions', 'must-not-be-copied'))) {
+           throw new Error('unrelated site contents entered the artifact snapshot');
+         }
+         return { body: ${JSON.stringify(recordedBody)} };
+       }`,
+    );
+
+    try {
+      const compare = buildCompileTools(session, siteDir, pathJoin(siteDir, 'session.json')).find(
+        (tool) => tool.name === 'compare_rendered_requests',
+      );
+      const facts = JSON.parse((await compare?.handler({ includePaths: true }))?.result ?? '{}');
+      expect(facts.execution).toMatchObject({ ok: true });
+      expect(facts.comparisons[0].body.comparison.differences).toEqual([]);
+    } finally {
+      rmSync(siteDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses synthetic credential values and fails factually when a declared transform is missing', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-rendered-credential-'));
+    const hostSecret = 'host-secret-must-not-appear';
+    const session: Session = {
+      site: 'credential-fixture',
+      startedAt: '2026-08-29T00:00:00.000Z',
+      url: 'https://example.test/',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 9,
+          timestamp: 1,
+          method: 'GET',
+          url: 'https://api.example.test/recorded?mode=one',
+          headers: {},
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: '{}',
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    writeFileSync(
+      pathJoin(dir, 'workflow.json'),
+      JSON.stringify({
+        toolName: 'credential_fixture',
+        intent: { description: 'Read the fixture.' },
+        site: 'credential-fixture',
+        parameters: [],
+        requests: [
+          {
+            method: 'GET',
+            url: 'https://api.example.test/${credential.api_key}?mode=one',
+            headers: {},
+            recordingRequestSeq: 9,
+          },
+        ],
+      }),
+    );
+
+    try {
+      const context = {
+        sharedContext: {
+          loginRequestSeqs: [],
+          credentialNames: ['api_key'],
+          tokenExtractionNotes: '',
+          sharedHelperNotes: '',
+          authRequestSeqs: [],
+          authNotes: '',
+        },
+        teachCredentials: { site: 'credential-fixture', values: { api_key: hostSecret } },
+      };
+      const compare = buildCompileTools(session, dir, pathJoin(dir, 'session.json'), context).find(
+        (tool) => tool.name === 'compare_rendered_requests',
+      );
+      const credentialResult = (await compare?.handler({}))?.result ?? '';
+      expect(credentialResult).not.toContain(hostSecret);
+      expect(JSON.parse(credentialResult)).toMatchObject({
+        execution: { ok: true },
+        preparedRequestCount: 1,
+      });
+
+      const workflow = JSON.parse(readFileSync(pathJoin(dir, 'workflow.json'), 'utf8'));
+      workflow.requestTransformModule = './missing-transform.ts';
+      workflow.requests[0].url = session.requests[0]?.url;
+      writeFileSync(pathJoin(dir, 'workflow.json'), JSON.stringify(workflow));
+      const unavailable = JSON.parse((await compare?.handler({}))?.result ?? '{}');
+      expect(unavailable).toMatchObject({
+        transformDeclared: true,
+        execution: {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: 'request transform module was unavailable for request 0',
+        },
+        preparedRequestCount: 0,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('externalVerification — advisory shared-module proposals', () => {
   function fixtureSession(site: string): Session {
     return {

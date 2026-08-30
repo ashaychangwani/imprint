@@ -26,7 +26,7 @@ import {
   generate,
   triageRequests,
 } from './compile.ts';
-import { abortSignalError } from './concurrency.ts';
+import { TimeoutError, abortSignalError } from './concurrency.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import { emit } from './emit.ts';
 import { type LLMOptions, type ProviderName, detectTeachProvider } from './llm.ts';
@@ -85,7 +85,7 @@ import {
   type FreshTeachRunStatus,
 } from './master-teach-store.ts';
 import { localSiteDir, localToolDir } from './paths.ts';
-import { runPlaybook } from './playbook-runner.ts';
+import { DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS, runPlaybook } from './playbook-runner.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import {
   ProviderUnavailableError,
@@ -109,6 +109,8 @@ import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type Session, SessionSchema, type ToolResult, type Workflow } from './types.ts';
 
 const FOCUSED_COMPILE_CONCURRENCY = 2;
+const DEFAULT_PLAYBOOK_CHECK_TIMEOUT_MS = 150_000;
+const PLAYBOOK_INVOCATION_SETTLE_GRACE_MS = DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS + 500;
 export const DISCOVERY_EVIDENCE_CHARACTER_BUDGET = 750_000;
 export const FOCUSED_EVIDENCE_CHARACTER_BUDGET = 700_000;
 const PROMOTED_FILES = [
@@ -331,7 +333,10 @@ interface FreshTeachControllerDependencies {
     site: string;
     parameters: Record<string, string | number | boolean>;
     maxDurationMs?: number;
+    signal?: AbortSignal;
   }) => Promise<{ result: ToolResult<unknown>; executionMechanism: string }>;
+  playbookInvocationTimeoutMs: number;
+  playbookCleanupGraceMs: number;
   promote: (input: {
     site: string;
     runId: string;
@@ -362,15 +367,18 @@ const defaultDependencies: FreshTeachControllerDependencies = {
     });
     return { result: run.result, executionMechanism: run.usedBackend };
   },
-  runPlaybookTool: async ({ playbookPath, site, parameters, maxDurationMs }) => ({
+  runPlaybookTool: async ({ playbookPath, site, parameters, maxDurationMs, signal }) => ({
     result: await runPlaybook({
       playbook: playbookPath,
       params: parameters,
       site,
       maxDurationMs,
+      signal,
     }),
     executionMechanism: 'playbook',
   }),
+  playbookInvocationTimeoutMs: DEFAULT_PLAYBOOK_CHECK_TIMEOUT_MS,
+  playbookCleanupGraceMs: PLAYBOOK_INVOCATION_SETTLE_GRACE_MS,
   promote: promoteCompletedTools,
 };
 
@@ -1453,6 +1461,7 @@ async function runLiveCheck(input: {
   compiled: CompiledFocusedTool;
   implementation: ImplementationPlanPayload;
   deps: FreshTeachControllerDependencies;
+  runDeadline: RunDeadlineRef;
   signal?: AbortSignal;
   maxDurationMs?: number;
 }): Promise<UnboundLiveCheckResult> {
@@ -1463,11 +1472,15 @@ async function runLiveCheck(input: {
     if (!existsSync(playbookPath)) {
       throw new Error(`playbook fallback "${input.tool.id}" did not produce playbook.yaml`);
     }
-    const checked = await input.deps.runPlaybookTool({
+    const checked = await runPlaybookToolCheck({
+      deps: input.deps,
       playbookPath,
       site: input.compiled.workflow.site,
       parameters,
+      runDeadline: input.runDeadline,
+      signal: input.signal,
       maxDurationMs: input.maxDurationMs,
+      label: `live check for "${input.tool.id}"`,
     });
     return { ...checked, durationMs: Date.now() - startedAt, parameters };
   }
@@ -1477,6 +1490,103 @@ async function runLiveCheck(input: {
     signal: input.signal,
   });
   return { ...checked, durationMs: Date.now() - startedAt, parameters };
+}
+
+/** Bound an external playbook promise even when an injected runner ignores
+ * cancellation. The normal runner receives the child signal and gets a short
+ * chance to close its browser before this host-side guard gives up waiting. */
+export async function runPlaybookInvocationWithDeadline<T>(
+  input: {
+    timeoutMs: number;
+    label: string;
+    signal?: AbortSignal;
+    cleanupGraceMs?: number;
+  },
+  invoke: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const timeoutMs = Math.max(1, Math.floor(input.timeoutMs));
+  const cleanupGraceMs = Math.max(
+    1,
+    Math.floor(input.cleanupGraceMs ?? PLAYBOOK_INVOCATION_SETTLE_GRACE_MS),
+  );
+  const controller = new AbortController();
+  const timeoutError = new TimeoutError(input.label, timeoutMs);
+  const abortFromParent = (): void => {
+    controller.abort(input.signal ? abortSignalError(input.signal) : timeoutError);
+  };
+  if (input.signal?.aborted) abortFromParent();
+  else input.signal?.addEventListener('abort', abortFromParent, { once: true });
+
+  let rejectAfterCleanup: ReturnType<typeof setTimeout> | undefined;
+  let rejectAbort: ((error: Error) => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const settleAfterAbort = (): void => {
+    if (rejectAfterCleanup) return;
+    rejectAfterCleanup = setTimeout(
+      () => rejectAbort?.(abortSignalError(controller.signal)),
+      cleanupGraceMs,
+    );
+  };
+  controller.signal.addEventListener('abort', settleAfterAbort, { once: true });
+  if (controller.signal.aborted) settleAfterAbort();
+  const deadlineTimer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+  const invocation = Promise.resolve().then(async () => await invoke(controller.signal));
+  const completedBeforeAbort = new Promise<T>((resolve, reject) => {
+    invocation.then(
+      (value) => {
+        if (!controller.signal.aborted) resolve(value);
+      },
+      (error) => {
+        if (!controller.signal.aborted) reject(error);
+      },
+    );
+  });
+
+  try {
+    return await Promise.race([completedBeforeAbort, aborted]);
+  } finally {
+    clearTimeout(deadlineTimer);
+    if (rejectAfterCleanup) clearTimeout(rejectAfterCleanup);
+    controller.signal.removeEventListener('abort', settleAfterAbort);
+    input.signal?.removeEventListener('abort', abortFromParent);
+  }
+}
+
+async function runPlaybookToolCheck(input: {
+  deps: FreshTeachControllerDependencies;
+  playbookPath: string;
+  site: string;
+  parameters: Record<string, string | number | boolean>;
+  runDeadline: RunDeadlineRef;
+  signal?: AbortSignal;
+  maxDurationMs?: number;
+  label: string;
+}): Promise<{ result: ToolResult<unknown>; executionMechanism: string }> {
+  const remainingRunMs = input.runDeadline.deadlineMs - Date.now();
+  if (remainingRunMs <= 0) throw new TimeoutError(input.label, 0);
+  const timeoutMs = Math.min(
+    remainingRunMs,
+    input.deps.playbookInvocationTimeoutMs,
+    input.maxDurationMs === undefined ? Number.POSITIVE_INFINITY : input.maxDurationMs,
+  );
+  return await runPlaybookInvocationWithDeadline(
+    {
+      timeoutMs,
+      label: input.label,
+      signal: input.signal,
+      cleanupGraceMs: input.deps.playbookCleanupGraceMs,
+    },
+    async (signal) =>
+      await input.deps.runPlaybookTool({
+        playbookPath: input.playbookPath,
+        site: input.site,
+        parameters: input.parameters,
+        maxDurationMs: timeoutMs,
+        signal,
+      }),
+  );
 }
 
 function receiptPassed(facts: readonly ReceiptFact[]): boolean {
@@ -1661,6 +1771,7 @@ async function compileAndCheckCurrentPlan(input: {
         compiled: focused,
         implementation,
         deps: input.deps,
+        runDeadline: input.runDeadline,
         signal: input.signal,
         maxDurationMs: input.maxDurationMs,
       });
@@ -1703,6 +1814,7 @@ async function compileAndCheckCurrentPlan(input: {
     }
 
     for (const edge of plan.chainEdges.filter(({ consumerToolId }) => consumerToolId === tool.id)) {
+      input.report?.(`checking chain ${edge.id}`);
       try {
         const producer = liveByToolId.get(edge.producerToolId);
         if (!producer?.result.ok) {
@@ -1718,11 +1830,15 @@ async function compileAndCheckCurrentPlan(input: {
         const startedAt = Date.now();
         const chained =
           tool.strategy.kind === 'playbook_fallback'
-            ? await input.deps.runPlaybookTool({
+            ? await runPlaybookToolCheck({
+                deps: input.deps,
                 playbookPath: pathJoin(focused.toolDir, 'playbook.yaml'),
                 site: focused.workflow.site,
                 parameters: binding.parameters,
+                runDeadline: input.runDeadline,
+                signal: input.signal,
                 maxDurationMs: input.maxDurationMs,
+                label: `chain check "${edge.id}"`,
               })
             : await input.deps.runApiTool({
                 workflowPath: focused.workflowPath,
@@ -1810,6 +1926,7 @@ async function compileAndCheckCurrentPlan(input: {
         compiled: focused,
         implementation,
         deps: input.deps,
+        runDeadline: input.runDeadline,
         signal: input.signal,
         maxDurationMs: input.maxDurationMs,
       });
@@ -2021,6 +2138,7 @@ async function compileAndCheckCurrentPlan(input: {
         ({ consumerToolId }) => consumerToolId === tool.id,
       )) {
         if (hasReceipt(tool.id, 'chain', 'passed', edge.id)) continue;
+        input.report?.(`checking chain ${edge.id}`);
         try {
           const producer = await ensureProducerLive(edge.producerToolId);
           if (!producer?.result.ok) {
@@ -2036,11 +2154,15 @@ async function compileAndCheckCurrentPlan(input: {
           const startedAt = Date.now();
           const chained =
             tool.strategy.kind === 'playbook_fallback'
-              ? await input.deps.runPlaybookTool({
+              ? await runPlaybookToolCheck({
+                  deps: input.deps,
                   playbookPath: pathJoin(focused.toolDir, 'playbook.yaml'),
                   site: focused.workflow.site,
                   parameters: binding.parameters,
+                  runDeadline: input.runDeadline,
+                  signal: input.signal,
                   maxDurationMs: input.maxDurationMs,
+                  label: `chain check "${edge.id}"`,
                 })
               : await input.deps.runApiTool({
                   workflowPath: focused.workflowPath,

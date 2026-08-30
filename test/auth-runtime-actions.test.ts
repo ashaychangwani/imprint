@@ -93,6 +93,48 @@ afterEach(() => {
 });
 
 describe('auth action runtime', () => {
+  it('does not send an auth request when its declared transform is unavailable', async () => {
+    const wf = {
+      ...workflow({
+        requests: [{ method: 'POST', url: 'https://fixture.test/login', headers: {} }],
+        authConfig: {
+          entry: 'login',
+          actions: {
+            login: {
+              steps: [{ request: 0 }],
+              outcome: {
+                type: 'pause',
+                next: 'login',
+                evidence: [],
+                carry: [],
+                message: 'Continue login.',
+              },
+            },
+          },
+        },
+      }),
+      requestTransformModule: './missing-transform.ts',
+    };
+    let sends = 0;
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      workflowPath: '/tmp/imprint-auth-transform-fixture/workflow.json',
+      fetchImpl: (async () => {
+        sends++;
+        return new Response('{}');
+      }) as unknown as typeof fetch,
+    });
+
+    expect(sends).toBe(0);
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'BAD_RESPONSE',
+      requestStageFacts: [{ requestIndex: 0, stage: 'transform', outcome: 'unavailable' }],
+    });
+  });
+
   it('offline request rendering never persists auth cookies or secrets', async () => {
     const wf = workflow({
       requests: [

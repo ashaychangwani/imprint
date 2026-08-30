@@ -20,9 +20,11 @@ import {
   LIVE_VERIFICATION_EVIDENCE_FILE,
   LiveVerificationAuthSession,
   LiveVerificationReportSchema,
+  appendBackendProbeRawStderrTail,
   appendLiveVerifierLog,
   assertReportCoversWorkflowParameters,
   authRefreshAwaitingContinuation,
+  backendPreparationFailureObservation,
   buildVerifierArtifactContext,
   compactVerifierEvidenceContext,
   credentialsForAuthRefresh,
@@ -38,6 +40,7 @@ import {
   waitForOwnedProcessTree,
   waitForVerifierChild,
 } from '../src/imprint/live-verifier.ts';
+import { parseBackendRequestStageFacts } from '../src/imprint/probe-backends.ts';
 import { ProviderDeadlineError, ProviderReportedError } from '../src/imprint/provider-retry.ts';
 import type { BackendsCache } from '../src/imprint/types.ts';
 
@@ -326,7 +329,7 @@ describe('live verifier auth refresh', () => {
 });
 
 describe('verifier artifact context', () => {
-  it('supplies workflow, implementation, integration, playbook, and plan context', () => {
+  it('supplies workflow, request, parser, integration, playbook, and plan context', () => {
     const siteDir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-context-'));
     dirs.push(siteDir);
     const toolDir = pathJoin(siteDir, 'search_things');
@@ -335,6 +338,11 @@ describe('verifier artifact context', () => {
       pathJoin(toolDir, 'workflow.json'),
       JSON.stringify({ toolName: 'search_things', requests: [] }),
     );
+    writeFileSync(
+      pathJoin(toolDir, 'request-transform.ts'),
+      'export const transform = () => ({ body: "encoded" });',
+    );
+    writeFileSync(pathJoin(toolDir, 'request.test.ts'), 'test("encoded request", () => {});');
     writeFileSync(pathJoin(toolDir, 'parser.ts'), 'export const parse = () => [];');
     writeFileSync(pathJoin(toolDir, 'parser.test.ts'), 'test("recorded", () => {});');
     writeFileSync(pathJoin(toolDir, 'integration.test.ts'), 'test("live", async () => {});');
@@ -360,6 +368,8 @@ describe('verifier artifact context', () => {
       toolName: 'search_things',
       requests: [],
     });
+    expect(context.requestTransform).toContain('transform');
+    expect(context.requestTests).toContain('encoded request');
     expect(context.parser).toContain('parse');
     expect(context.integrationTests).toContain('live');
     expect(context.playbook).toContain('steps');
@@ -370,6 +380,17 @@ describe('verifier artifact context', () => {
       },
       dynamicValueFindings: [{ name: 'csrf' }],
     });
+  });
+
+  it('tells the verifier that transformed workflow bodies are templates', () => {
+    const prompt = readFileSync(
+      pathJoin(import.meta.dir, '..', 'prompts/live-verifier-agent.md'),
+      'utf8',
+    );
+    expect(prompt).toContain('Workflow request bodies are templates');
+    expect(prompt).toContain('requestStageFacts');
+    expect(prompt).toContain('Never infer the');
+    expect(prompt).toContain('workflow template alone');
   });
 
   it('bounds large retained live outputs while preserving durable navigation metadata', () => {
@@ -1097,6 +1118,131 @@ describe('live verifier backend preparation and suite receipts', () => {
         // The expected path already reaped the process group.
       }
     }
+  });
+
+  it('persists and returns only whitelisted request-stage facts from preparation failures', async () => {
+    const { toolDir, workflowPath } = fixtureTool();
+    const markerFacts = [
+      {
+        backend: 'fetch',
+        requestIndex: 0,
+        stage: 'transform',
+        outcome: 'failed',
+        bodyPresent: true,
+        bodyByteLength: 17,
+        body: 'must-not-escape',
+        url: 'https://secret.example/private',
+      },
+    ];
+    const markedError = new Error(
+      `backend broke\nIMPRINT_REQUEST_STAGE_FACTS=${JSON.stringify(markerFacts)}`,
+    );
+
+    expect(backendPreparationFailureObservation(markedError)).toEqual({
+      error: 'backend broke',
+      requestStageFacts: [
+        {
+          backend: 'fetch',
+          requestIndex: 0,
+          stage: 'transform',
+          outcome: 'failed',
+          bodyPresent: true,
+          bodyByteLength: 17,
+        },
+      ],
+    });
+
+    await expect(
+      prepareLiveVerificationBackend({
+        workflowPath,
+        params: { query: 'private-query' },
+        reason: 'prepare baseline',
+        probe: async () => {
+          throw markedError;
+        },
+      }),
+    ).rejects.toThrow('backend broke');
+
+    const records = readPersistedLiveVerificationEvidence(
+      pathJoin(toolDir, LIVE_VERIFICATION_EVIDENCE_FILE),
+    );
+    const failure = records.find(
+      (record) => record.kind === 'backend-preparation' && record.status === 'failed',
+    );
+    expect(failure).toMatchObject({
+      error: 'backend broke',
+      requestStageFacts: [
+        {
+          backend: 'fetch',
+          requestIndex: 0,
+          stage: 'transform',
+          outcome: 'failed',
+          bodyPresent: true,
+          bodyByteLength: 17,
+        },
+      ],
+    });
+    const serializedFailure = JSON.stringify(failure);
+    expect(serializedFailure).not.toContain('must-not-escape');
+    expect(serializedFailure).not.toContain('secret.example');
+    expect(serializedFailure).not.toContain('private-query');
+  });
+
+  it('carries request-stage facts through the real probe subprocess transport', async () => {
+    const { toolDir, workflowPath } = fixtureTool();
+    const workflow = JSON.parse(readFileSync(workflowPath, 'utf8'));
+    workflow.requestTransformModule = './missing-transform.ts';
+    writeFileSync(workflowPath, JSON.stringify(workflow));
+
+    await expect(
+      prepareLiveVerificationBackend({
+        workflowPath,
+        params: { query: 'private-query' },
+        reason: 'exercise real subprocess transport',
+      }),
+    ).rejects.toThrow('backend probe exited');
+
+    const records = readPersistedLiveVerificationEvidence(
+      pathJoin(toolDir, LIVE_VERIFICATION_EVIDENCE_FILE),
+    );
+    const failure = records.find(
+      (record) => record.kind === 'backend-preparation' && record.status === 'failed',
+    );
+    expect(failure).toMatchObject({
+      requestStageFacts: [
+        {
+          backend: 'fetch',
+          requestIndex: 0,
+          stage: 'preparation',
+          outcome: 'passed',
+        },
+        {
+          backend: 'fetch',
+          requestIndex: 0,
+          stage: 'transform',
+          outcome: 'unavailable',
+        },
+      ],
+    });
+    expect(JSON.stringify(failure)).not.toContain('private-query');
+  });
+
+  it('retains a maximum-size request-stage marker delivered in one stderr chunk', () => {
+    const markerFacts = Array.from({ length: 32 }, (_, requestIndex) => ({
+      backend: 'fetch-bootstrap',
+      requestIndex: requestIndex + 1_000_000_000,
+      stage: 'preparation',
+      outcome: 'unavailable',
+      bodyPresent: true,
+      bodyByteLength: Number.MAX_SAFE_INTEGER,
+      bodyChanged: true,
+      httpStatus: 599,
+    }));
+    const marker = `IMPRINT_REQUEST_STAGE_FACTS=${JSON.stringify(markerFacts)}\n`;
+    expect(marker.length).toBeGreaterThan(4_000);
+
+    const retained = appendBackendProbeRawStderrTail('', Buffer.from(marker));
+    expect(parseBackendRequestStageFacts(retained)).toHaveLength(32);
   });
 
   it('reuses a valid backend cache without invoking the probe', async () => {

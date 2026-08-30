@@ -363,6 +363,16 @@ describe('executeWorkflow', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toBe('NETWORK');
+    expect(r.requestStageFacts).toEqual([
+      {
+        requestIndex: 0,
+        stage: 'preparation',
+        outcome: 'passed',
+        bodyPresent: false,
+        bodyByteLength: 0,
+      },
+      { requestIndex: 0, stage: 'send', outcome: 'failed' },
+    ]);
   });
 
   it('returns UNKNOWN with the parameter name when a required param is missing', async () => {
@@ -584,6 +594,46 @@ describe('executeWorkflow', () => {
     if (result.ok) return;
     expect(result.error).toBe('STATE_MISSING');
     expect(result.message).toMatch(/unsafe request/);
+    expect(result.requestStageFacts).toEqual([
+      { requestIndex: 1, stage: 'preparation', outcome: 'failed' },
+    ]);
+  });
+
+  it('attributes a bracket-form missing state failure only to its first blocked request', async () => {
+    const workflow: Workflow = {
+      ...baseWorkflow,
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          effect: 'unsafe',
+          url: 'https://api.example.com/start',
+          headers: {},
+        },
+        {
+          method: 'POST',
+          url: 'https://api.example.com/first',
+          headers: { 'X-CSRF-Token': '${state["csrf-token"]}' },
+        },
+        {
+          method: 'POST',
+          url: 'https://api.example.com/second',
+          headers: { 'X-CSRF-Token': '${state["csrf-token"]}' },
+        },
+      ],
+    };
+    const result = await executeWorkflow({
+      workflow,
+      params: {},
+      credentials: STORE,
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.requestStageFacts).toEqual([
+      { requestIndex: 1, stage: 'preparation', outcome: 'failed' },
+    ]);
   });
 
   it('URL-encodes credential values inside form-urlencoded request bodies', async () => {
@@ -776,6 +826,91 @@ describe('requestTransformModule', () => {
       const parsed = JSON.parse(data.body);
       expect(parsed.q).toBe('hello');
       expect(parsed.filter).toBe('price<100');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports value-free stage facts when a later request transform fails', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-stage-facts-'));
+    const workflow: Workflow = {
+      ...transformWorkflow,
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://api.example.com/first',
+          headers: {},
+          body: 'f.req=${param.q}',
+        },
+        {
+          method: 'POST',
+          url: 'https://api.example.com/second',
+          headers: {},
+          body: 'f.req=${param.q}',
+        },
+      ],
+    };
+    let sends = 0;
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform(_method, url, responses) {
+          if (responses.length > 0) throw new Error('could not derive downstream request state');
+          return { url, body: 'f.req=rendered-state' };
+        }`,
+      );
+
+      const result = await executeWorkflow({
+        workflow,
+        params: { q: 'private-query', filter: 'private-filter' },
+        workflowPath: join(tmpDir, 'workflow.json'),
+        fetchImpl: (async () => {
+          sends++;
+          return new Response('{"state":"opaque"}', {
+            headers: { 'content-type': 'application/json' },
+          });
+        }) as unknown as typeof fetch,
+      });
+
+      expect(sends).toBe(1);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.requestStageFacts).toEqual([
+        expect.objectContaining({
+          requestIndex: 0,
+          stage: 'preparation',
+          outcome: 'passed',
+          bodyPresent: true,
+        }),
+        expect.objectContaining({
+          requestIndex: 0,
+          stage: 'transform',
+          outcome: 'passed',
+          bodyChanged: true,
+        }),
+        { requestIndex: 0, stage: 'send', outcome: 'passed', httpStatus: 200 },
+        expect.objectContaining({
+          requestIndex: 1,
+          stage: 'preparation',
+          outcome: 'passed',
+          bodyPresent: true,
+        }),
+        expect.objectContaining({
+          requestIndex: 1,
+          stage: 'transform',
+          outcome: 'failed',
+          bodyChanged: false,
+        }),
+      ]);
+      const serializedFacts = JSON.stringify(result.requestStageFacts);
+      expect(serializedFacts).not.toContain('private-query');
+      expect(serializedFacts).not.toContain('private-filter');
+      expect(serializedFacts).not.toContain('rendered-state');
+      expect(serializedFacts).not.toContain('api.example.com');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

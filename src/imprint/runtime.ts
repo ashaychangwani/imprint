@@ -27,6 +27,7 @@ import {
 } from './request-capture.ts';
 import type {
   RequestCapture,
+  RequestStageFact,
   StateCapability,
   StateMissingItem,
   ToolResult,
@@ -57,6 +58,13 @@ type RequestTransformResult =
       navigation?: Partial<NavigationOptions>;
       skip?: boolean;
     };
+
+type RequestTransform = (
+  method: string,
+  url: string,
+  responses: unknown[],
+  params?: Record<string, string | number | boolean>,
+) => RequestTransformResult;
 
 function mergeNavigationOptions(
   base: WorkflowRequest['navigation'],
@@ -173,6 +181,27 @@ interface ResponseSlot {
   aliases: Record<string, unknown>;
 }
 
+function bodyStageFacts(
+  body: string | undefined,
+): Pick<RequestStageFact, 'bodyPresent' | 'bodyByteLength'> {
+  return {
+    bodyPresent: body !== undefined,
+    bodyByteLength: body === undefined ? 0 : new TextEncoder().encode(body).byteLength,
+  };
+}
+
+function withRequestStageFacts<T>(
+  result: ToolResult<T>,
+  facts: readonly RequestStageFact[],
+): ToolResult<T> {
+  if (result.ok || facts.length === 0) return result;
+  return { ...result, requestStageFacts: [...facts] };
+}
+
+function requestReferencesMissingItem(request: WorkflowRequest, item: StateMissingItem): boolean {
+  return item.source === 'state' && collectStatePlaceholders(request).includes(item.name);
+}
+
 export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promise<ToolResult<T>> {
   if (opts.workflow.toolKind === 'authenticate') {
     return executeAuthWorkflow(opts) as Promise<ToolResult<T>>;
@@ -223,22 +252,30 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   // keeps legacy request.extract aliases without replacing raw parser input.
   const responseSlots: ResponseSlot[] = [];
   const state: Record<string, unknown> = { ...(opts.initialState ?? {}) };
+  const requestStageFacts: RequestStageFact[] = [];
 
   // Per-execution mutable jar. Never shared across MCP/cron calls.
   const cookieJar = new RuntimeCookieJar(credentials.cookies);
   const liveCredentials: CredentialStore = { ...credentials, cookies: cookieJar.toJSON() };
   const stateCapabilities = collectStateCapabilities(opts.workflow);
   const dependencyPreflight = preflightStateDependencies(opts.workflow, state, stateCapabilities);
-  if (!dependencyPreflight.ok) return dependencyPreflight.result;
+  if (!dependencyPreflight.ok) {
+    const blockingRequestIndex = opts.workflow.requests.findIndex((request) =>
+      dependencyPreflight.result.missing?.some((item) =>
+        requestReferencesMissingItem(request, item),
+      ),
+    );
+    if (blockingRequestIndex >= 0) {
+      requestStageFacts.push({
+        requestIndex: blockingRequestIndex,
+        stage: 'preparation',
+        outcome: 'failed',
+      });
+    }
+    return withRequestStageFacts(dependencyPreflight.result, requestStageFacts);
+  }
 
-  let requestTransform:
-    | ((
-        method: string,
-        url: string,
-        responses: unknown[],
-        params?: Record<string, string | number | boolean>,
-      ) => RequestTransformResult)
-    | null = null;
+  let requestTransform: RequestTransform | null = null;
   if (opts.workflow.requestTransformModule && opts.workflowPath) {
     try {
       const transformPath = pathResolve(
@@ -246,7 +283,9 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         opts.workflow.requestTransformModule,
       );
       const mod = await import(transformPath);
-      if (typeof mod.transform === 'function') requestTransform = mod.transform;
+      if (typeof mod.transform === 'function') {
+        requestTransform = mod.transform as RequestTransform;
+      }
     } catch {
       // Non-fatal — proceed without transform.
     }
@@ -265,11 +304,37 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       stateCapabilities,
       requestUrlTemplate: req.url,
     });
-    if (!subbedResult.ok) return subbedResult.result;
+    if (!subbedResult.ok) {
+      requestStageFacts.push({ requestIndex: i, stage: 'preparation', outcome: 'failed' });
+      return withRequestStageFacts(subbedResult.result, requestStageFacts);
+    }
     const subbed = subbedResult.value;
+    requestStageFacts.push({
+      requestIndex: i,
+      stage: 'preparation',
+      outcome: 'passed',
+      ...bodyStageFacts(subbed.body),
+    });
     let navigation = req.navigation;
 
+    if (opts.workflow.requestTransformModule && !requestTransform) {
+      requestStageFacts.push({
+        requestIndex: i,
+        stage: 'transform',
+        outcome: 'unavailable',
+        ...bodyStageFacts(subbed.body),
+      });
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: `request transform module was unavailable for request ${i}`,
+        },
+        requestStageFacts,
+      );
+    }
     if (requestTransform) {
+      const bodyBeforeTransform = subbed.body;
       try {
         const transformResult = requestTransform(
           subbed.method,
@@ -280,7 +345,16 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         if (typeof transformResult === 'string') {
           subbed.url = transformResult;
         } else if (transformResult && typeof transformResult === 'object') {
-          if (transformResult.skip === true) continue;
+          if (transformResult.skip === true) {
+            requestStageFacts.push({
+              requestIndex: i,
+              stage: 'transform',
+              outcome: 'skipped',
+              ...bodyStageFacts(subbed.body),
+              bodyChanged: false,
+            });
+            continue;
+          }
           if (typeof transformResult.url === 'string') subbed.url = transformResult.url;
           if (transformResult.body !== undefined) subbed.body = transformResult.body;
           if (transformResult.headers) {
@@ -292,14 +366,31 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
             navigation = mergeNavigationOptions(navigation, transformResult.navigation);
           }
         }
+        requestStageFacts.push({
+          requestIndex: i,
+          stage: 'transform',
+          outcome: 'passed',
+          ...bodyStageFacts(subbed.body),
+          bodyChanged: subbed.body !== bodyBeforeTransform,
+        });
       } catch (err) {
-        return {
-          ok: false,
-          error: 'BAD_RESPONSE',
-          message: `request transform failed for request ${i}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        };
+        requestStageFacts.push({
+          requestIndex: i,
+          stage: 'transform',
+          outcome: 'failed',
+          ...bodyStageFacts(subbed.body),
+          bodyChanged: subbed.body !== bodyBeforeTransform,
+        });
+        return withRequestStageFacts(
+          {
+            ok: false,
+            error: 'BAD_RESPONSE',
+            message: `request transform failed for request ${i}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          },
+          requestStageFacts,
+        );
       }
     }
 
@@ -311,11 +402,15 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
     if (req.mode === 'navigate') {
       if (!opts.browser) {
-        return {
-          ok: false,
-          error: 'BAD_RESPONSE',
-          message: `Request ${i} requires top-level browser navigation; retry with cdp-replay.`,
-        };
+        requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
+        return withRequestStageFacts(
+          {
+            ok: false,
+            error: 'BAD_RESPONSE',
+            message: `Request ${i} requires top-level browser navigation; retry with cdp-replay.`,
+          },
+          requestStageFacts,
+        );
       }
       try {
         resp = await opts.browser.navigate(subbed.url, {
@@ -328,7 +423,11 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         liveCredentials.cookies = cookieJar.toJSON();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: 'NETWORK', message: `Navigation ${i} failed: ${msg}` };
+        requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
+        return withRequestStageFacts(
+          { ok: false, error: 'NETWORK', message: `Navigation ${i} failed: ${msg}` },
+          requestStageFacts,
+        );
       }
     } else {
       const controller = new AbortController();
@@ -345,16 +444,30 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         if (responseAbortTimer) clearTimeout(responseAbortTimer);
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('aborted') || msg.includes('AbortError')) {
-          return {
-            ok: false,
-            error: 'NETWORK',
-            message: `Request ${i} timed out after ${timeoutMs}ms`,
-            remediation: 'Retry, or increase the timeout if the endpoint is slow.',
-          };
+          requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
+          return withRequestStageFacts(
+            {
+              ok: false,
+              error: 'NETWORK',
+              message: `Request ${i} timed out after ${timeoutMs}ms`,
+              remediation: 'Retry, or increase the timeout if the endpoint is slow.',
+            },
+            requestStageFacts,
+          );
         }
-        return { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` };
+        requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
+        return withRequestStageFacts(
+          { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` },
+          requestStageFacts,
+        );
       }
     }
+    requestStageFacts.push({
+      requestIndex: i,
+      stage: 'send',
+      outcome: 'passed',
+      httpStatus: resp.status,
+    });
 
     let text = '';
     let responseReadError: string | undefined;
@@ -371,51 +484,66 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       : text;
 
     if (resp.status === 401) {
-      return {
-        ok: false,
-        error: 'AUTH_EXPIRED',
-        message: `Request ${i} returned 401 — auth has likely expired: ${bodyPreview.slice(0, 300)}`,
-        remediation: `Run \`imprint login ${opts.workflow.site}\` to refresh credentials.`,
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'AUTH_EXPIRED',
+          message: `Request ${i} returned 401 — auth has likely expired: ${bodyPreview.slice(0, 300)}`,
+          remediation: `Run \`imprint login ${opts.workflow.site}\` to refresh credentials.`,
+        },
+        requestStageFacts,
+      );
     }
     if (resp.status === 403) {
       // 403 = bot detection / geo / ToS / missing capability. The body
       // usually disambiguates — surface it rather than guessing.
-      return {
-        ok: false,
-        error: 'FORBIDDEN',
-        message: `Request ${i} returned 403: ${bodyPreview.slice(0, 300)}`,
-        remediation: `Common causes: bot detection (Akamai/Cloudflare/DataDome), geo-block, expired credential, or ToS violation. Inspect the response body above; if it looks like bot detection, the captured workflow can't replay against this site without a real browser. If it's auth, try \`imprint login ${opts.workflow.site}\`.`,
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'FORBIDDEN',
+          message: `Request ${i} returned 403: ${bodyPreview.slice(0, 300)}`,
+          remediation: `Common causes: bot detection (Akamai/Cloudflare/DataDome), geo-block, expired credential, or ToS violation. Inspect the response body above; if it looks like bot detection, the captured workflow can't replay against this site without a real browser. If it's auth, try \`imprint login ${opts.workflow.site}\`.`,
+        },
+        requestStageFacts,
+      );
     }
     if (resp.status === 429) {
-      return {
-        ok: false,
-        error: 'RATE_LIMITED',
-        message: `Request ${i} returned 429: ${bodyPreview.slice(0, 300)}`,
-        remediation: 'Back off and retry after the Retry-After interval.',
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'RATE_LIMITED',
+          message: `Request ${i} returned 429: ${bodyPreview.slice(0, 300)}`,
+          remediation: 'Back off and retry after the Retry-After interval.',
+        },
+        requestStageFacts,
+      );
     }
     if (resp.status >= 400) {
-      return {
-        ok: false,
-        error: 'BAD_RESPONSE',
-        message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${bodyPreview.slice(0, 500)}`,
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${bodyPreview.slice(0, 500)}`,
+        },
+        requestStageFacts,
+      );
     }
     if (responseReadError) {
       const timedOut =
         responseReadError.includes('aborted') || responseReadError.includes('AbortError');
-      return {
-        ok: false,
-        error: 'NETWORK',
-        message: timedOut
-          ? `Request ${i} timed out after ${timeoutMs}ms`
-          : `Response ${i} could not be read: ${responseReadError}`,
-        remediation: timedOut
-          ? 'Retry, or increase the timeout if the endpoint is slow.'
-          : undefined,
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'NETWORK',
+          message: timedOut
+            ? `Request ${i} timed out after ${timeoutMs}ms`
+            : `Response ${i} could not be read: ${responseReadError}`,
+          remediation: timedOut
+            ? 'Retry, or increase the timeout if the endpoint is slow.'
+            : undefined,
+        },
+        requestStageFacts,
+      );
     }
 
     // Capture Set-Cookie response headers into the in-flight cookie jar before
@@ -444,7 +572,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       requestUrl: subbed.url,
       cookieJar,
     });
-    if (!captureResult.ok) return captureResult.result;
+    if (!captureResult.ok) return withRequestStageFacts(captureResult.result, requestStageFacts);
     Object.assign(state, captureResult.value);
   }
 
@@ -455,24 +583,30 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       const parserModulePath = pathResolve(dirname(opts.workflowPath), opts.workflow.parserModule);
       const mod = await import(parserModulePath);
       if (typeof mod.extract !== 'function') {
-        return {
-          ok: false,
-          error: 'BAD_RESPONSE',
-          message: 'parser module does not export extract function',
-          remediation: 'regenerate the workflow via `imprint compile`',
-        };
+        return withRequestStageFacts(
+          {
+            ok: false,
+            error: 'BAD_RESPONSE',
+            message: 'parser module does not export extract function',
+            remediation: 'regenerate the workflow via `imprint compile`',
+          },
+          requestStageFacts,
+        );
       }
       finalData = mod.extract(finalData, {
         params,
         responses: responseSlots.map((s) => s.raw),
       });
     } catch (err) {
-      return {
-        ok: false,
-        error: 'BAD_RESPONSE',
-        message: `parser failed: ${err instanceof Error ? err.message : String(err)}`,
-        remediation: 'check the parser module or regenerate the workflow',
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: `parser failed: ${err instanceof Error ? err.message : String(err)}`,
+          remediation: 'check the parser module or regenerate the workflow',
+        },
+        requestStageFacts,
+      );
     }
   }
 
@@ -524,20 +658,15 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       message: `Auth action ${JSON.stringify(actionName)} requires: ${missingParameters.join(', ')}.`,
     };
   }
-  let requestTransform:
-    | ((
-        method: string,
-        url: string,
-        responses: unknown[],
-        params?: Record<string, string | number | boolean>,
-      ) => RequestTransformResult)
-    | undefined;
+  let requestTransform: RequestTransform | undefined;
   if (opts.workflow.requestTransformModule && opts.workflowPath) {
     try {
       const mod = await import(
         pathResolve(dirname(opts.workflowPath), opts.workflow.requestTransformModule)
       );
-      if (typeof mod.transform === 'function') requestTransform = mod.transform;
+      if (typeof mod.transform === 'function') {
+        requestTransform = mod.transform as RequestTransform;
+      }
     } catch {
       // A missing transform is surfaced by the request that depended on it.
     }
@@ -557,6 +686,21 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       continuation: Object.keys(initialState).length > 0 ? initialState : undefined,
     };
   };
+
+  if (opts.workflow.requestTransformModule && !requestTransform) {
+    return fail({
+      ok: false,
+      error: 'BAD_RESPONSE',
+      message: `request transform module was unavailable for auth action ${JSON.stringify(actionName)}`,
+      requestStageFacts: [
+        {
+          requestIndex: action.steps[0]?.request ?? 0,
+          stage: 'transform',
+          outcome: 'unavailable',
+        },
+      ],
+    });
+  }
 
   const persistenceFailure = (material: string, err: unknown): RuntimeErrorResult =>
     fail({

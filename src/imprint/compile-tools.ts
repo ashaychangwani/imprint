@@ -8,18 +8,31 @@
 
 import { spawn } from 'node:child_process';
 import {
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   opendirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join as pathJoin, relative as pathRelative } from 'node:path';
+import {
+  basename,
+  dirname,
+  extname,
+  join as pathJoin,
+  relative as pathRelative,
+  resolve as pathResolve,
+  sep as pathSeparator,
+} from 'node:path';
 import type { AgentTool } from './agent.ts';
+import { renderWorkflowRequests } from './backend-ladder.ts';
 import {
   bodyEncodingPathsAtPointer,
   compareBodyStructures,
@@ -115,6 +128,7 @@ export function buildCompileTools(
     buildReadSessionSummaryTool(session, context, toolDir),
     buildReadRequestTool(session),
     buildInspectBodyStructureTool(session),
+    buildCompareRenderedRequestsTool(session, toolDir, context),
     buildSearchRequestsTool(session),
     buildDiffRequestForEventTool(session),
     buildReadResponseBodyTool(session),
@@ -959,6 +973,432 @@ function buildInspectBodyStructureTool(session: Session): AgentTool {
         );
       }
       return boundedBodyInspectionResult(result);
+    },
+  };
+}
+
+// ─── Tool: compare_rendered_requests ────────────────────────────────────────
+
+type ScalarParams = Record<string, string | number | boolean>;
+
+function scalarParams(value: unknown): ScalarParams | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value);
+  if (
+    entries.some(
+      ([, item]) =>
+        typeof item !== 'string' && typeof item !== 'number' && typeof item !== 'boolean',
+    )
+  )
+    return undefined;
+  return Object.fromEntries(entries) as ScalarParams;
+}
+
+function requestUrlShape(value: string): Record<string, unknown> {
+  try {
+    const parsed = new URL(value);
+    const queryKeys = [...new Set([...parsed.searchParams.keys()])].sort();
+    return {
+      state: 'parsed',
+      protocol: parsed.protocol,
+      host: parsed.host,
+      pathname: parsed.pathname,
+      queryFieldCount: [...parsed.searchParams].length,
+      queryKeys,
+    };
+  } catch {
+    return { state: 'invalid_url' };
+  }
+}
+
+function requestUrlsEqual(recorded: string, rendered: string): boolean {
+  try {
+    const left = new URL(recorded);
+    const right = new URL(rendered);
+    return (
+      left.protocol === right.protocol &&
+      left.host === right.host &&
+      left.pathname === right.pathname &&
+      left.search === right.search
+    );
+  } catch {
+    return recorded === rendered;
+  }
+}
+
+function requestQueryValuesEqual(recorded: string, rendered: string): boolean | undefined {
+  try {
+    return new URL(recorded).search === new URL(rendered).search;
+  } catch {
+    return undefined;
+  }
+}
+
+const artifactImportScanner = new Bun.Transpiler({ loader: 'ts' });
+
+function resolveRelativeArtifactImport(importer: string, specifier: string): string | undefined {
+  if (!specifier.startsWith('.')) return undefined;
+  const base = pathResolve(dirname(importer), specifier);
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.js`,
+    `${base}.mjs`,
+    `${base}.json`,
+    pathJoin(base, 'index.ts'),
+    pathJoin(base, 'index.js'),
+  ];
+  return candidates.find((candidate) => {
+    try {
+      return statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Copy only the relative module closure needed by a rendered artifact. The
+ * destination keeps the original site-relative layout, so sibling-tool and
+ * `_shared` imports resolve without copying unrelated tools or recordings. */
+function copyArtifactDependencyClosure(
+  entryPath: string,
+  siteDir: string,
+  freshRoot: string,
+  visited = new Set<string>(),
+): void {
+  const absolute = pathResolve(entryPath);
+  if (visited.has(absolute)) return;
+  visited.add(absolute);
+  const relative = pathRelative(siteDir, absolute);
+  if (
+    relative === '' ||
+    relative === '..' ||
+    relative.startsWith(`..${pathSeparator}`) ||
+    pathResolve(siteDir, relative) !== absolute
+  )
+    return;
+  let source: string;
+  try {
+    if (!statSync(absolute).isFile()) return;
+    source = readFileSync(absolute, 'utf8');
+  } catch {
+    return;
+  }
+  const destination = pathJoin(freshRoot, relative);
+  mkdirSync(dirname(destination), { recursive: true });
+  copyFileSync(absolute, destination);
+  if (!['.ts', '.tsx', '.js', '.mjs'].includes(extname(absolute))) return;
+  let imports: ReturnType<typeof artifactImportScanner.scanImports>;
+  try {
+    imports = artifactImportScanner.scanImports(source);
+  } catch {
+    return;
+  }
+  for (const dependency of imports) {
+    const resolved = resolveRelativeArtifactImport(absolute, dependency.path);
+    if (resolved) copyArtifactDependencyClosure(resolved, siteDir, freshRoot, visited);
+  }
+}
+
+function buildCompareRenderedRequestsTool(
+  session: Session,
+  toolDir: string,
+  context: CompileToolContext,
+): AgentTool {
+  return {
+    name: 'compare_rendered_requests',
+    description:
+      'Render the current workflow offline with its real substitutions and request transform, feed its accepted recorded responses through request chains, and compare each prepared request with its recordingRequestSeq. Returns factual URL/body sizes and bounded structural differences without making a semantic judgment. Run this after every request-construction edit, especially for forms, nested JSON, framed bodies, and positional arrays.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        params: {
+          type: 'object',
+          description:
+            'Scalar workflow parameters used for this offline render. Defaults may fill omitted parameters.',
+          additionalProperties: {
+            oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
+          },
+        },
+        state: {
+          type: 'object',
+          description:
+            'Optional synthetic scalar capture state for an offline render when the workflow normally obtains it during bootstrap.',
+          additionalProperties: {
+            oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
+          },
+        },
+        credentialValues: {
+          type: 'object',
+          description:
+            'Optional harmless synthetic string values for credential placeholders during offline rendering.',
+          additionalProperties: { type: 'string' },
+        },
+        artifactRequestIndex: {
+          type: 'number',
+          description: 'Optional zero-based workflow request index to report.',
+        },
+        recordedFormat: {
+          type: 'string',
+          enum: ['auto', 'json', 'form-urlencoded', 'decimal-framed-json'],
+          description: 'Recorded-body format. Defaults to auto.',
+        },
+        renderedFormat: {
+          type: 'string',
+          enum: ['auto', 'json', 'form-urlencoded', 'decimal-framed-json'],
+          description: 'Rendered-body format. Defaults to auto.',
+        },
+        includePaths: {
+          type: 'boolean',
+          description: 'Include a small capped list of exact differing structural paths.',
+        },
+      },
+      required: [],
+    },
+    handler: async (input: unknown) => {
+      const args = inputRecord(input);
+      const params = scalarParams(args.params ?? {});
+      if (!params) return { result: 'params must contain only scalar values', isError: true };
+      const state = scalarParams(args.state ?? {});
+      if (!state) return { result: 'state must contain only scalar values', isError: true };
+      const credentialValues = scalarParams(args.credentialValues ?? {});
+      if (
+        !credentialValues ||
+        Object.values(credentialValues).some((value) => typeof value !== 'string')
+      )
+        return { result: 'credentialValues must contain only string values', isError: true };
+      const defaultCredentialValues = Object.fromEntries(
+        (context.sharedContext?.credentialNames ?? []).map((name, index) => [
+          name,
+          `synthetic-credential-${index + 1}`,
+        ]),
+      );
+      const artifactRequestIndex =
+        typeof args.artifactRequestIndex === 'number' && Number.isInteger(args.artifactRequestIndex)
+          ? args.artifactRequestIndex
+          : undefined;
+      if (args.artifactRequestIndex !== undefined && artifactRequestIndex === undefined)
+        return { result: 'artifactRequestIndex must be an integer', isError: true };
+      const recordedFormat = parseBodyFormat(args.recordedFormat);
+      if (!recordedFormat) return { result: 'unsupported recorded body format', isError: true };
+      const renderedFormat = parseBodyFormat(args.renderedFormat);
+      if (!renderedFormat) return { result: 'unsupported rendered body format', isError: true };
+
+      const workflowPath = pathJoin(toolDir, 'workflow.json');
+      if (!existsSync(workflowPath))
+        return { result: 'workflow.json has not been written', isError: true };
+
+      let workflow: Workflow;
+      try {
+        workflow = WorkflowSchema.parse(JSON.parse(readFileSync(workflowPath, 'utf8')));
+      } catch (error) {
+        return {
+          result: `workflow.json schema invalid: ${error instanceof Error ? error.message : String(error)}`,
+          isError: true,
+        };
+      }
+
+      if (
+        artifactRequestIndex !== undefined &&
+        (artifactRequestIndex < 0 || artifactRequestIndex >= workflow.requests.length)
+      )
+        return { result: 'artifactRequestIndex is outside workflow.requests', isError: true };
+
+      const requestProvenance = workflow.requests.flatMap((request, index) =>
+        request.recordingRequestSeq === undefined
+          ? []
+          : [{ artifactRequestIndex: index, recordingRequestSeq: request.recordingRequestSeq }],
+      );
+      const lookups: Array<{
+        requestOrdinal: number;
+        artifactRequestIndex?: number;
+        recordingRequestSeq?: number;
+      }> = [];
+      let rendered: Awaited<ReturnType<typeof renderWorkflowRequests>>;
+      const siteDir = dirname(toolDir);
+      const freshRoot = mkdtempSync(pathJoin(siteDir, '.imprint-render-'));
+      const freshToolDir = pathJoin(freshRoot, basename(toolDir));
+      try {
+        mkdirSync(freshToolDir, { recursive: true });
+        copyFileSync(workflowPath, pathJoin(freshToolDir, 'workflow.json'));
+        const dependencyDir = pathJoin(toolDir, 'node_modules');
+        if (existsSync(dependencyDir)) {
+          symlinkSync(dependencyDir, pathJoin(freshToolDir, 'node_modules'), 'dir');
+          symlinkSync(dependencyDir, pathJoin(freshRoot, 'node_modules'), 'dir');
+        }
+        for (const modulePath of [workflow.requestTransformModule, workflow.parserModule]) {
+          if (modulePath) {
+            copyArtifactDependencyClosure(pathResolve(toolDir, modulePath), siteDir, freshRoot);
+          }
+        }
+        rendered = await renderWorkflowRequests({
+          workflow,
+          workflowPath: pathJoin(freshToolDir, 'workflow.json'),
+          params,
+          initialState: state,
+          credentials: {
+            site: workflow.site,
+            cookies: [],
+            values: {
+              ...defaultCredentialValues,
+              ...(credentialValues as Record<string, string>),
+            },
+            storage: [],
+          },
+          requestProvenance,
+          recordedResponseFor: (_method, _url, lookup) => {
+            lookups.push({
+              requestOrdinal: lookup.requestOrdinal,
+              ...(lookup.provenance
+                ? {
+                    artifactRequestIndex: lookup.provenance.artifactRequestIndex,
+                    recordingRequestSeq: lookup.provenance.recordingRequestSeq,
+                  }
+                : {}),
+            });
+            const recorded = lookup.provenance
+              ? session.requests.find(
+                  (request) => request.seq === lookup.provenance?.recordingRequestSeq,
+                )
+              : undefined;
+            return recorded?.response
+              ? {
+                  status: recorded.response.status,
+                  body: recorded.response.body ?? '',
+                  headers: recorded.response.headers,
+                }
+              : undefined;
+          },
+        });
+      } catch (error) {
+        return {
+          result: JSON.stringify({
+            state: 'render_failed',
+            error: error instanceof Error ? error.message : String(error),
+          }),
+          isError: true,
+        };
+      } finally {
+        rmSync(freshRoot, { recursive: true, force: true });
+      }
+
+      const comparisons = lookups.flatMap<Record<string, unknown>>((lookup) => {
+        if (
+          artifactRequestIndex !== undefined &&
+          lookup.artifactRequestIndex !== artifactRequestIndex
+        )
+          return [];
+        const prepared = rendered.requests[lookup.requestOrdinal];
+        const recorded =
+          lookup.recordingRequestSeq === undefined
+            ? undefined
+            : session.requests.find((request) => request.seq === lookup.recordingRequestSeq);
+        if (!prepared || !recorded)
+          return [
+            {
+              requestOrdinal: lookup.requestOrdinal,
+              artifactRequestIndex: lookup.artifactRequestIndex,
+              recordingRequestSeq: lookup.recordingRequestSeq,
+              state: 'not_checked',
+              reason: prepared ? 'recording request was unavailable' : 'request was not prepared',
+            },
+          ];
+
+        const recordedBody = recorded.body ?? null;
+        const renderedBody = prepared.body;
+        let bodyComparison: Record<string, unknown>;
+        if (recordedBody === null && renderedBody === null) {
+          bodyComparison = { state: 'not_applicable', reason: 'both requests have no body' };
+        } else if (recordedBody === null || renderedBody === null) {
+          bodyComparison = {
+            state: 'different',
+            reason: recordedBody === null ? 'recorded body is absent' : 'rendered body is absent',
+          };
+        } else {
+          const left = decodeBodyStructure(recordedBody, recordedFormat);
+          const right = decodeBodyStructure(renderedBody, renderedFormat);
+          bodyComparison =
+            left.ok && right.ok
+              ? {
+                  state: 'checked',
+                  recordedFormat: left.structure.format,
+                  renderedFormat: right.structure.format,
+                  comparison: compareBodyStructures(left.structure, right.structure, {
+                    includePaths: args.includePaths === true,
+                  }),
+                }
+              : {
+                  state: 'not_checked',
+                  recordedDecode: left.ok
+                    ? { state: 'decoded', format: left.structure.format }
+                    : { state: 'failed', code: left.code, error: left.error },
+                  renderedDecode: right.ok
+                    ? { state: 'decoded', format: right.structure.format }
+                    : { state: 'failed', code: right.code, error: right.error },
+                };
+        }
+
+        const recordedUrl = requestUrlShape(recorded.url);
+        const renderedUrl = requestUrlShape(prepared.url);
+        return [
+          {
+            requestOrdinal: lookup.requestOrdinal,
+            artifactRequestIndex: lookup.artifactRequestIndex,
+            recordingRequestSeq: lookup.recordingRequestSeq,
+            transformDeclared: workflow.requestTransformModule !== undefined,
+            method: {
+              recorded: recorded.method.toUpperCase(),
+              rendered: prepared.method.toUpperCase(),
+              equal: recorded.method.toUpperCase() === prepared.method.toUpperCase(),
+            },
+            url: {
+              recorded: recordedUrl,
+              rendered: renderedUrl,
+              equal: requestUrlsEqual(recorded.url, prepared.url),
+              queryValuesEqual: requestQueryValuesEqual(recorded.url, prepared.url),
+            },
+            bodyBytes: {
+              recorded:
+                recordedBody === null ? null : bodyInspectionEncoder.encode(recordedBody).length,
+              rendered:
+                renderedBody === null ? null : bodyInspectionEncoder.encode(renderedBody).length,
+            },
+            body: bodyComparison,
+          },
+        ];
+      });
+
+      const missingRequested =
+        artifactRequestIndex !== undefined && comparisons.length === 0
+          ? workflow.requests[artifactRequestIndex]?.mode === 'navigate'
+            ? {
+                artifactRequestIndex,
+                state: 'not_applicable',
+                reason: 'browser navigation is not an offline fetch comparison',
+              }
+            : {
+                artifactRequestIndex,
+                state: 'not_checked',
+                reason: rendered.result.ok
+                  ? 'workflow completed without capturing an outgoing fetch for this request'
+                  : 'no outgoing fetch was captured before workflow execution failed',
+              }
+          : undefined;
+      const execution = rendered.result.ok
+        ? { ok: true }
+        : {
+            ok: false,
+            error: rendered.result.error,
+            message: rendered.result.message,
+          };
+      return boundedBodyInspectionResult({
+        source: 'offline_real_workflow_render',
+        transformDeclared: workflow.requestTransformModule !== undefined,
+        execution,
+        preparedRequestCount: rendered.requests.length,
+        comparisons: missingRequested ? [missingRequested] : comparisons,
+      });
     },
   };
 }

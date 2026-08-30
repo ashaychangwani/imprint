@@ -25,6 +25,13 @@ sequence supported by the focused evidence, or repeat a sequence when the
 artifact truthfully makes repeated requests. Never invent an unrecorded API
 call. A `playbook_fallback` plan has an empty API request map.
 
+Make every construction instruction executable from named evidence. If you say
+the compiler must resolve, regenerate, capture, derive, or refresh a value, name
+the recording request that supplies it, a `responseDependencies` entry, an
+incoming producer result path, or the exact supported computation that produces
+it. A promise to “resolve current state” with no such source is an incomplete
+plan. Do not fix that gap by asking the compiler to guess.
+
 The focused evidence is intentionally split across several small entries. It
 contains a compact request summary for every owned and dependency sequence,
 then distributes detailed evidence across representative requests and needed
@@ -77,6 +84,15 @@ request, the response path, and its consumer target. Result sources say which
 artifact response (or, for a playbook, `null`) supplies results, followed by
 concise output guidance. These are declared facts and instructions for the
 compiler, not semantic classifications.
+
+Preserve the exact response-produced selection context a consumer request
+needs. A readable name or label is not a substitute for an opaque identifier,
+token, or composite selection object merely because both describe the same
+thing. When the evidence supports a producer-consumer flow, expose the required
+scalar field or keep the producing request inside the consumer workflow and map
+its exact response path. When the evidence does not establish which field is
+required, state that gap and ask the master for a revised evidence plan instead
+of choosing the friendliest-looking value.
 
 Author the invocation cases that should verify this exact plan. Each case
 chooses exactly one executable check (`replay` or `live`), states where its

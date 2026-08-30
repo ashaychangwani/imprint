@@ -17,12 +17,14 @@ import {
   canRebindBackendsCacheToWorkflow,
   loadBackendsCache,
   loadBackendsCacheStatus,
+  parseBackendRequestStageFacts,
   persistRuntimeBackendsCache,
   probeAllBackends,
   probeCandidateBackendsForWorkflow,
   probeResolvedTool,
   rankSuccessfulBackends,
   rebindExistingBackendsCacheToWorkflow,
+  stripBackendRequestStageFacts,
   workflowCapabilityHash,
 } from '../src/imprint/probe-backends.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
@@ -800,6 +802,14 @@ describe('backendInvariantProbeFailure', () => {
         message: 'request transform failed for request 0: brands must be a non-empty array',
       }),
     ).toBe('request transform failed for request 0: brands must be a non-empty array');
+    expect(
+      backendInvariantProbeFailure({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'request transform module was unavailable for request 0',
+        requestStageFacts: [{ requestIndex: 0, stage: 'transform', outcome: 'unavailable' }],
+      }),
+    ).toBe('request transform module was unavailable for request 0');
   });
 
   it('keeps remote BAD_RESPONSE and transport failures eligible for fallback', () => {
@@ -817,6 +827,70 @@ describe('backendInvariantProbeFailure', () => {
         message: 'request timed out',
       }),
     ).toBeNull();
+  });
+
+  it('carries only value-free request-stage facts through a failed probe', async () => {
+    const dir = pathResolve(root, 'fixture', 'search_fixture');
+    mkdirSync(dir, { recursive: true });
+    const tool: ResolvedTool = {
+      site: 'fixture',
+      dir,
+      workflow: WorkflowSchema.parse({
+        toolName: 'search_fixture',
+        intent: { description: 'Search a fixture' },
+        parameters: [],
+        requests: [{ method: 'POST', url: 'https://example.com/search', headers: {} }],
+        site: 'fixture',
+      }),
+      toolFn: async () => ({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'request transform failed for request 1: state was unavailable',
+        requestStageFacts: [
+          {
+            requestIndex: 0,
+            stage: 'send',
+            outcome: 'passed',
+            httpStatus: 200,
+          },
+          {
+            requestIndex: 1,
+            stage: 'transform',
+            outcome: 'failed',
+            bodyPresent: true,
+            bodyByteLength: 42,
+          },
+        ],
+      }),
+    };
+
+    let message = '';
+    try {
+      await probeResolvedTool({ site: 'fixture' }, root, tool);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(stripBackendRequestStageFacts(message)).toContain(
+      'Backend-independent workflow failure for search_fixture',
+    );
+    expect(parseBackendRequestStageFacts(message)).toEqual([
+      {
+        backend: 'fetch',
+        requestIndex: 0,
+        stage: 'send',
+        outcome: 'passed',
+        httpStatus: 200,
+      },
+      {
+        backend: 'fetch',
+        requestIndex: 1,
+        stage: 'transform',
+        outcome: 'failed',
+        bodyPresent: true,
+        bodyByteLength: 42,
+      },
+    ]);
   });
 });
 

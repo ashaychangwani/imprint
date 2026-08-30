@@ -27,6 +27,7 @@ import {
   BackendsCacheSchema,
   type ConcreteBackend,
   CronConfigSchema,
+  type RequestStageFact,
   type ToolResult,
   WorkflowSchema,
 } from './types.ts';
@@ -47,6 +48,98 @@ interface ProbeBackendsOptions {
 interface ProbeBackendsResult {
   cache: BackendsCache;
   outPath: string;
+}
+
+export type BackendRequestStageFact = RequestStageFact & { backend: ConcreteBackend };
+
+const REQUEST_STAGE_FACTS_MARKER = 'IMPRINT_REQUEST_STAGE_FACTS=';
+const MAX_BACKEND_REQUEST_STAGE_FACTS = 32;
+
+function backendRequestStageFacts(
+  backend: ConcreteBackend,
+  value: unknown,
+): BackendRequestStageFact[] {
+  if (!Array.isArray(value)) return [];
+  const facts: BackendRequestStageFact[] = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+    const fact = candidate as Record<string, unknown>;
+    if (typeof fact.requestIndex !== 'number' || !Number.isInteger(fact.requestIndex)) continue;
+    if (!['preparation', 'transform', 'send'].includes(String(fact.stage))) continue;
+    if (!['passed', 'failed', 'skipped', 'unavailable'].includes(String(fact.outcome))) continue;
+    facts.push({
+      backend,
+      requestIndex: fact.requestIndex,
+      stage: fact.stage as RequestStageFact['stage'],
+      outcome: fact.outcome as RequestStageFact['outcome'],
+      ...(typeof fact.bodyPresent === 'boolean' ? { bodyPresent: fact.bodyPresent } : {}),
+      ...(typeof fact.bodyByteLength === 'number' &&
+      Number.isInteger(fact.bodyByteLength) &&
+      fact.bodyByteLength >= 0
+        ? { bodyByteLength: fact.bodyByteLength }
+        : {}),
+      ...(typeof fact.bodyChanged === 'boolean' ? { bodyChanged: fact.bodyChanged } : {}),
+      ...(typeof fact.httpStatus === 'number' &&
+      Number.isInteger(fact.httpStatus) &&
+      fact.httpStatus >= 100 &&
+      fact.httpStatus <= 599
+        ? { httpStatus: fact.httpStatus }
+        : {}),
+    });
+  }
+  return facts.slice(-MAX_BACKEND_REQUEST_STAGE_FACTS);
+}
+
+function requestStageFactsSuffix(facts: readonly BackendRequestStageFact[]): string {
+  if (facts.length === 0) return '';
+  return `\n${REQUEST_STAGE_FACTS_MARKER}${JSON.stringify(
+    facts.slice(-MAX_BACKEND_REQUEST_STAGE_FACTS),
+  )}`;
+}
+
+export function parseBackendRequestStageFacts(text: string): BackendRequestStageFact[] {
+  const markerIndex = text.lastIndexOf(REQUEST_STAGE_FACTS_MARKER);
+  if (markerIndex < 0) return [];
+  const encoded = text
+    .slice(markerIndex + REQUEST_STAGE_FACTS_MARKER.length)
+    .split(/\r?\n/, 1)[0]
+    ?.trim();
+  if (!encoded) return [];
+  try {
+    return sanitizeBackendRequestStageFacts(JSON.parse(encoded) as unknown);
+  } catch {
+    return [];
+  }
+}
+
+/** Whitelist subprocess facts before retaining or returning them. */
+export function sanitizeBackendRequestStageFacts(value: unknown): BackendRequestStageFact[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .flatMap((candidate): BackendRequestStageFact[] => {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [];
+      const backend = (candidate as { backend?: unknown }).backend;
+      if (
+        backend !== 'fetch' &&
+        backend !== 'fetch-bootstrap' &&
+        backend !== 'cdp-replay' &&
+        backend !== 'stealth-fetch' &&
+        backend !== 'playbook'
+      ) {
+        return [];
+      }
+      return backendRequestStageFacts(backend, [candidate]);
+    })
+    .slice(-MAX_BACKEND_REQUEST_STAGE_FACTS);
+}
+
+/** Remove the internal subprocess transport trailer before surfacing an error.
+ * The parsed, whitelisted facts are returned separately to verifier callers. */
+export function stripBackendRequestStageFacts(text: string): string {
+  const markerIndex = text.lastIndexOf(REQUEST_STAGE_FACTS_MARKER);
+  if (markerIndex < 0) return text;
+  const prefix = text.slice(0, markerIndex);
+  return prefix.endsWith('\n') ? prefix.slice(0, -1).trimEnd() : prefix.trimEnd();
 }
 
 const log = createLog('probe');
@@ -125,7 +218,7 @@ export async function probeResolvedTool(
   const params = resolveParams(tool, opts.paramOverrides);
 
   log(`probing backends for ${tool.workflow.toolName}…`);
-  log(`  params: ${JSON.stringify(params)}`);
+  log(`  parameter names: ${JSON.stringify(Object.keys(params).sort())}`);
 
   // Probe the workflow's normal candidates first. Plain workflows keep the
   // cheap fetch/stealth/playbook path; browser-backed API transports are only
@@ -135,6 +228,7 @@ export async function probeResolvedTool(
   const allBackends = probeCandidateBackendsForWorkflow(tool.workflow);
   const results: BackendsCache['results'] = {};
   const working: BackendProbeCandidate[] = [];
+  const requestStageFacts: BackendRequestStageFact[] = [];
   const preferredMaxMs = preferredBackendMaxMs();
   const persistCurrentCache = (): BackendsCache => {
     const cache: BackendsCache = {
@@ -165,12 +259,15 @@ export async function probeResolvedTool(
       );
       const durationMs = Date.now() - t0;
       const attempt = attempts[0];
+      if (!result.ok) {
+        requestStageFacts.push(...backendRequestStageFacts(backend, result.requestStageFacts));
+      }
 
       const invariantFailure = backendInvariantProbeFailure(result);
       if (invariantFailure) {
         log(`  ${backend}: workflow rejected the request before transport — stopping probe`);
         throw new Error(
-          `Backend-independent workflow failure for ${tool.workflow.toolName}: ${invariantFailure}`,
+          `Backend-independent workflow failure for ${tool.workflow.toolName}: ${invariantFailure}${requestStageFactsSuffix(requestStageFacts)}`,
         );
       }
 
@@ -260,7 +357,7 @@ export async function probeResolvedTool(
     const hint =
       'For bot-protected sites, ensure stealth-fetch can reach the site (try `imprint cron <site> --once` with replayBackend: stealth-fetch). For sites that need DOM walks, ensure `imprint compile-playbook` produced a working playbook.yaml.';
     throw new Error(
-      `No backend succeeded for ${opts.site}. Results:\n${JSON.stringify(results, null, 2)}\n${hint}`,
+      `No backend succeeded for ${opts.site}. Results:\n${JSON.stringify(results, null, 2)}\n${hint}${requestStageFactsSuffix(requestStageFacts)}`,
     );
   }
 
@@ -279,7 +376,14 @@ export async function probeResolvedTool(
  */
 export function backendInvariantProbeFailure(result: ToolResult): string | null {
   if (result.ok || result.error !== 'BAD_RESPONSE') return null;
-  return /^request transform failed for request \d+:/i.test(result.message) ? result.message : null;
+  const transformCouldNotPrepareRequest = result.requestStageFacts?.some(
+    ({ stage, outcome }) =>
+      stage === 'transform' && (outcome === 'failed' || outcome === 'unavailable'),
+  );
+  return transformCouldNotPrepareRequest ||
+    /^request transform (?:failed for request \d+:|module was unavailable)/i.test(result.message)
+    ? result.message
+    : null;
 }
 
 export function rankSuccessfulBackends(candidates: BackendProbeCandidate[]): ConcreteBackend[] {

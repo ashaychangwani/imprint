@@ -7,6 +7,7 @@ import {
   resolve as pathResolve,
 } from 'node:path';
 import type { Browser, BrowserContext, Frame, Locator as PWLocator, Page } from 'playwright';
+import { TimeoutError, abortSignalError, withAbortSignal } from './concurrency.ts';
 import { extractAt } from './json-path.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir } from './paths.ts';
@@ -33,6 +34,10 @@ interface RunPlaybookOptions {
   stepTimeoutMs?: number;
   /** Whole-playbook timeout in ms. Default unbounded for direct playbook runs. */
   maxDurationMs?: number;
+  /** Cancel the complete browser lifecycle, including setup and result extraction. */
+  signal?: AbortSignal;
+  /** Best-effort browser teardown grace. Default 2000ms. */
+  cleanupTimeoutMs?: number;
   /** Timeout for diagnostic screenshots in ms. Default 5000. */
   screenshotTimeoutMs?: number;
   /** Screenshot after every step (not just on failure). */
@@ -55,14 +60,90 @@ interface RunPlaybookOptions {
 const log = createLog('playbook');
 const DEFAULT_STEP_TIMEOUT_MS = 30000;
 const DEFAULT_SCREENSHOT_TIMEOUT_MS = 5000;
+export const DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS = 2000;
+
+interface PlaybookLifecycleControl {
+  signal?: AbortSignal;
+  dispose(): void;
+}
+
+function playbookLifecycleControl(
+  parent: AbortSignal | undefined,
+  maxDurationMs: number | undefined,
+): PlaybookLifecycleControl {
+  if (!parent && maxDurationMs === undefined) return { dispose: () => {} };
+  const controller = new AbortController();
+  const abortFromParent = (): void => {
+    controller.abort(
+      parent ? abortSignalError(parent) : new DOMException('Cancelled', 'AbortError'),
+    );
+  };
+  if (parent?.aborted) abortFromParent();
+  else parent?.addEventListener('abort', abortFromParent, { once: true });
+  const durationMs = maxDurationMs === undefined ? undefined : positiveMs(maxDurationMs, 1);
+  const timer =
+    durationMs === undefined
+      ? undefined
+      : setTimeout(
+          () => controller.abort(new TimeoutError('Playbook lifecycle', durationMs)),
+          durationMs,
+        );
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      if (timer) clearTimeout(timer);
+      parent?.removeEventListener('abort', abortFromParent);
+    },
+  };
+}
+
+/** Close browser resources without allowing a dead Playwright transport to
+ * keep a foreground command alive. Both closes start immediately and share a
+ * short grace that is deliberately independent of the teach-run deadline. */
+export async function closePlaybookResources(
+  context: Pick<BrowserContext, 'close'> | undefined,
+  browser: Pick<Browser, 'close'> | undefined,
+  timeoutMs = DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS,
+): Promise<void> {
+  const graceMs = positiveMs(timeoutMs, DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS);
+  const boundedClose = async (label: string, close: () => Promise<unknown>): Promise<void> => {
+    try {
+      await withTimeout(Promise.resolve().then(close), graceMs, label);
+    } catch {
+      // Cleanup is best effort. The original execution result or lifecycle
+      // failure remains the factual outcome returned to the controller.
+    }
+  };
+  await Promise.all([
+    ...(context ? [boundedClose('Playbook context cleanup', () => context.close())] : []),
+    ...(browser ? [boundedClose('Playbook browser cleanup', () => browser.close())] : []),
+  ]);
+}
 
 export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult> {
+  const lifecycleDurationMs =
+    opts.maxDurationMs === undefined ? undefined : positiveMs(opts.maxDurationMs, 1);
+  const lifecycle = playbookLifecycleControl(opts.signal, lifecycleDurationMs);
+  const controlled = async <T>(operation: () => Promise<T>): Promise<T> =>
+    await withAbortSignal(operation, lifecycle.signal);
+  const callerCancelled = (): boolean => opts.signal?.aborted === true;
+  const lifecycleFailure = (phase: string): ToolResult => ({
+    ok: false,
+    error: 'NETWORK',
+    message: `${phase}: ${errMsg(abortSignalError(lifecycle.signal as AbortSignal))}`,
+  });
   let playbook: Playbook;
   let params: Record<string, string | number | boolean>;
   try {
-    playbook = await loadPlaybook(opts.playbook);
+    playbook = await controlled(async () => await loadPlaybook(opts.playbook));
     params = coerceParams(opts.params, playbook);
   } catch (err) {
+    if (lifecycle.signal?.aborted) {
+      lifecycle.dispose();
+      if (callerCancelled()) throw abortSignalError(lifecycle.signal);
+      return lifecycleFailure('Playbook setup failed');
+    }
+    lifecycle.dispose();
     return { ok: false, error: 'UNKNOWN', message: errMsg(err) };
   }
   // Generous default — Akamai sensor JS, A/B loaders, lazy bundles all
@@ -70,8 +151,7 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   // worse than they are.
   const stepTimeoutMs = positiveMs(opts.stepTimeoutMs, DEFAULT_STEP_TIMEOUT_MS);
   const screenshotTimeoutMs = positiveMs(opts.screenshotTimeoutMs, DEFAULT_SCREENSHOT_TIMEOUT_MS);
-  const deadlineAt =
-    opts.maxDurationMs !== undefined ? Date.now() + positiveMs(opts.maxDurationMs, 1) : null;
+  const deadlineAt = lifecycleDurationMs !== undefined ? Date.now() + lifecycleDurationMs : null;
 
   // Resolve the site once (used for cookie injection, credential resolution in
   // login playbooks, and post-run session persistence).
@@ -88,8 +168,14 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
   } else {
     let chromium: typeof import('playwright').chromium;
     try {
-      chromium = await getStealthChromium();
+      chromium = await controlled(getStealthChromium);
     } catch (innerErr) {
+      if (lifecycle.signal?.aborted) {
+        lifecycle.dispose();
+        if (callerCancelled()) throw abortSignalError(lifecycle.signal);
+        return lifecycleFailure('Playwright setup failed');
+      }
+      lifecycle.dispose();
       return {
         ok: false,
         error: 'UNKNOWN',
@@ -100,33 +186,67 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
       // Use the same full Chrome binary as `imprint record` — NOT
       // chrome-headless-shell, which Akamai detects at the binary level
       // regardless of stealth-plugin JS patches.
-      browser = await chromium.launch({
+      const launch = chromium.launch({
         headless: !opts.headed,
         executablePath: getStealthExecutablePath(),
       });
+      void launch.then(
+        async (launched) => {
+          if (lifecycle.signal?.aborted) {
+            await closePlaybookResources(undefined, launched, opts.cleanupTimeoutMs);
+          }
+        },
+        () => {},
+      );
+      browser = await controlled(async () => await launch);
     } catch (err) {
+      if (lifecycle.signal?.aborted) {
+        lifecycle.dispose();
+        if (callerCancelled()) throw abortSignalError(lifecycle.signal);
+        return lifecycleFailure('Chromium launch failed');
+      }
+      lifecycle.dispose();
       return {
         ok: false,
         error: 'UNKNOWN',
         message: `Could not launch Chromium: ${errMsg(err)}. Run: bunx playwright install chromium`,
       };
     }
-    context = await browser.newContext();
-    page = await context.newPage();
+    try {
+      const launchedBrowser = browser;
+      if (!launchedBrowser) throw new Error('Playwright did not launch a browser');
+      context = await controlled(async () => await launchedBrowser.newContext());
+      const initializedContext = context;
+      page = await controlled(async () => await initializedContext.newPage());
+    } catch (err) {
+      await closePlaybookResources(context, browser, opts.cleanupTimeoutMs);
+      lifecycle.dispose();
+      if (lifecycle.signal?.aborted) {
+        if (callerCancelled()) throw abortSignalError(lifecycle.signal);
+        return lifecycleFailure('Chromium initialization failed');
+      }
+      return {
+        ok: false,
+        error: 'UNKNOWN',
+        message: `Could not initialize Chromium: ${errMsg(err)}`,
+      };
+    }
 
     // Inject credentials.cookies into the browser so the playbook can navigate
     // an authenticated flow (e.g., my-trips → reservation → seat map), and load
     // credential values for ${credential.X} placeholders in login playbooks.
     if (site) {
       try {
-        const { loadSiteCredentials } = await import('./credential-store.ts');
-        const view = await loadSiteCredentials(site);
+        const { loadSiteCredentials } = await controlled(
+          async () => await import('./credential-store.ts'),
+        );
+        const view = await controlled(async () => await loadSiteCredentials(site));
         credValues = view.values ?? {};
         const playwrightCookies = view.cookies
           .map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path }))
           .filter((c) => c.name && c.value);
         if (playwrightCookies.length > 0) {
-          await context.addCookies(playwrightCookies);
+          await controlled(async () => await context?.addCookies(playwrightCookies));
           log(`injected ${playwrightCookies.length} cookies for site ${site}`);
         }
         // Rehydrate persisted localStorage (Option B): a prior `initiate` run may
@@ -144,27 +264,36 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
             byOrigin.set(rec.origin, list);
           }
           for (const [origin, entries] of byOrigin) {
-            await context.addInitScript(
-              ({ origin: o, entries: e }) => {
-                // Runs in the browser; type the needed globals locally since the
-                // Node typecheck has no DOM lib.
-                const w = globalThis as unknown as {
-                  location: { origin: string };
-                  localStorage: { setItem(k: string, v: string): void };
-                };
-                try {
-                  if (w.location.origin !== o) return;
-                  for (const { key, value } of e) w.localStorage.setItem(key, value);
-                } catch {
-                  /* storage may be unavailable (sandboxed frame) — skip */
-                }
-              },
-              { origin, entries },
+            await controlled(
+              async () =>
+                await context?.addInitScript(
+                  ({ origin: o, entries: e }) => {
+                    // Runs in the browser; type the needed globals locally since the
+                    // Node typecheck has no DOM lib.
+                    const w = globalThis as unknown as {
+                      location: { origin: string };
+                      localStorage: { setItem(k: string, v: string): void };
+                    };
+                    try {
+                      if (w.location.origin !== o) return;
+                      for (const { key, value } of e) w.localStorage.setItem(key, value);
+                    } catch {
+                      /* storage may be unavailable (sandboxed frame) — skip */
+                    }
+                  },
+                  { origin, entries },
+                ),
             );
           }
           log(`seeded ${localStorageRecords.length} localStorage keys for site ${site}`);
         }
       } catch (err) {
+        if (lifecycle.signal?.aborted) {
+          await closePlaybookResources(context, browser, opts.cleanupTimeoutMs);
+          lifecycle.dispose();
+          if (callerCancelled()) throw abortSignalError(lifecycle.signal);
+          return lifecycleFailure('Browser credential setup failed');
+        }
         log(`failed to inject cookies: ${errMsg(err)} (proceeding without)`);
       }
     }
@@ -202,6 +331,7 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
         executeStep(page, step, params, credValues, budgetMs),
         budgetMs,
         `Playbook step ${lastStep}/${playbook.steps.length} (${step.action})`,
+        lifecycle.signal,
       );
       if (opts.trace) {
         const traceShot = await screenshot(
@@ -209,6 +339,7 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
           `${playbook.toolName}-trace`,
           lastStep,
           screenshotTimeoutMs,
+          lifecycle.signal,
         );
         log(`  url=${page.url()}`);
         if (traceShot) log(`  trace screenshot: ${traceShot}`);
@@ -223,8 +354,9 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
       Promise.allSettled(pendingBodyReads),
       bodyReadBudgetMs,
       'Playbook captured-response drain',
+      lifecycle.signal,
     );
-    const data = await extractResult(page, playbook.result, captured);
+    const data = await controlled(async () => await extractResult(page, playbook.result, captured));
     // Best-effort 2FA-chain captures: pull named tokens (e.g. a single-use
     // SecurityCode minted during an OTP-send) out of the run so the ladder can
     // echo them as twoFactorContext for a later submit_otp. Missing captures are
@@ -238,19 +370,23 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     // caller (the ladder sets this only for toolKind==='authenticate').
     if (opts.persistCookies && site && context) {
       try {
-        const harvested = (await context.cookies()).map((c) => ({
-          name: c.name,
-          value: c.value,
-          domain: c.domain,
-          path: c.path,
-          expires: c.expires,
-          httpOnly: c.httpOnly,
-          secure: c.secure,
-          sameSite: c.sameSite,
-        }));
+        const harvested = ((await controlled(async () => await context?.cookies())) ?? []).map(
+          (c) => ({
+            name: c.name,
+            value: c.value,
+            domain: c.domain,
+            path: c.path,
+            expires: c.expires,
+            httpOnly: c.httpOnly,
+            secure: c.secure,
+            sameSite: c.sameSite,
+          }),
+        );
         if (harvested.length > 0) {
-          const { saveSiteCookies } = await import('./credential-store.ts');
-          await saveSiteCookies(site, harvested);
+          const { saveSiteCookies } = await controlled(
+            async () => await import('./credential-store.ts'),
+          );
+          await controlled(async () => await saveSiteCookies(site, harvested));
           log(`persisted ${harvested.length} session cookies for site ${site}`);
         }
         // Also harvest localStorage (Option B): serialize the post-login
@@ -258,7 +394,8 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
         // the same session state. storageState() captures cookies + localStorage;
         // we already persist cookies above, so take only the localStorage here.
         // sessionStorage is not captured by storageState() — a documented gap.
-        const state = await context.storageState();
+        const state = await controlled(async () => await context?.storageState());
+        if (!state) throw new Error('Playwright context closed before storage capture');
         const storageRecords = state.origins.flatMap((o) =>
           o.localStorage.map((entry) => ({
             origin: o.origin,
@@ -268,19 +405,49 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
           })),
         );
         if (storageRecords.length > 0) {
-          const { saveSiteStorage } = await import('./credential-store.ts');
-          await saveSiteStorage(site, storageRecords);
+          const { saveSiteStorage } = await controlled(
+            async () => await import('./credential-store.ts'),
+          );
+          await controlled(async () => await saveSiteStorage(site, storageRecords));
           log(`persisted ${storageRecords.length} localStorage keys for site ${site}`);
         }
       } catch (err) {
+        if (lifecycle.signal?.aborted) throw abortSignalError(lifecycle.signal);
         log(`failed to persist session cookies: ${errMsg(err)} (proceeding)`);
       }
     }
     return { ok: true, data };
   } catch (err) {
-    const screenshotPath = await screenshot(page, playbook.toolName, lastStep, screenshotTimeoutMs);
+    if (lifecycle.signal?.aborted && callerCancelled()) {
+      throw abortSignalError(lifecycle.signal);
+    }
+    let screenshotPath: string | null = null;
+    if (!lifecycle.signal?.aborted) {
+      try {
+        screenshotPath = await controlled(
+          async () =>
+            await screenshot(
+              page,
+              playbook.toolName,
+              lastStep,
+              screenshotTimeoutMs,
+              lifecycle.signal,
+            ),
+        );
+      } catch {
+        // The whole-playbook deadline may expire while a best-effort failure
+        // screenshot is pending. Classify that deadline below instead of
+        // allowing the diagnostic step to replace the execution result.
+      }
+    }
+    if (lifecycle.signal?.aborted && callerCancelled()) {
+      throw abortSignalError(lifecycle.signal);
+    }
+    const lifecycleTimedOut = lifecycle.signal?.aborted === true;
     const suffix = screenshotPath ? `\nscreenshot: ${screenshotPath}` : '';
-    const errStr = errMsg(err);
+    const errStr = lifecycleTimedOut
+      ? errMsg(abortSignalError(lifecycle.signal as AbortSignal))
+      : errMsg(err);
     // Classify the failure mode honestly: a missing locator, a step
     // timeout, or a `forResponse` wait that didn't resolve are
     // transient page-state signals (the DOM rendered differently than
@@ -291,6 +458,7 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     // transient-shape errors to NETWORK so they count as `infra`
     // (re-runnable) rather than `tool_broken` (permanent defect).
     const isTransient =
+      lifecycleTimedOut ||
       /No locator matched|Timeout \d+ms exceeded|timed out after|exceeded max duration|forResponse|waiting for/i.test(
         errStr,
       );
@@ -301,9 +469,9 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
     };
   } finally {
     if (!opts.pageOverride) {
-      await context?.close().catch(() => {});
-      await browser?.close().catch(() => {});
+      await closePlaybookResources(context, browser, opts.cleanupTimeoutMs);
     }
+    lifecycle.dispose();
   }
 }
 
@@ -312,13 +480,19 @@ async function screenshot(
   toolName: string,
   stepNum: number,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   try {
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const path = join(tmpdir(), `imprint-playbook-${toolName}-step${stepNum}-${ts}.png`);
-    await withTimeout(page.screenshot({ path, fullPage: true }), timeoutMs, 'Playbook screenshot');
+    await withTimeout(
+      page.screenshot({ path, fullPage: true }),
+      timeoutMs,
+      'Playbook screenshot',
+      signal,
+    );
     return path;
   } catch {
     return null;
@@ -341,22 +515,39 @@ function budgetedTimeoutMs(
   return Math.max(1, Math.min(configuredMs, Math.floor(remainingMs)));
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+  signal?: AbortSignal,
+): Promise<T> {
   const boundedMs = positiveMs(timeoutMs, 1);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`${label} timed out after ${boundedMs}ms`)),
-          boundedMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  if (signal?.aborted) throw abortSignalError(signal);
+  return await new Promise<T>((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    };
+    const abort = (): void => {
+      cleanup();
+      reject(abortSignalError(signal as AbortSignal));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`${label} timed out after ${boundedMs}ms`));
+    }, boundedMs);
+    signal?.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
 }
 
 async function loadPlaybook(input: string | Playbook): Promise<Playbook> {

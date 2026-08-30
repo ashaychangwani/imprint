@@ -9,9 +9,16 @@ tool-level input parameters, parsed ToolResult, backend, and attempt metadata.
 Treat those parsed outputs as the primary evidence. Suite and call labels are for
 navigation only; do not manufacture or cite evidence IDs.
 
-You also receive read-only artifact context: the generated workflow, parser,
-parser tests, integration suite, current playbook when one exists, and this
-tool's build-plan contract. Use it to interpret live results and catch concrete
+You also receive read-only artifact context: the generated workflow, request
+transform and its tests when one exists, parser, parser tests, integration
+suite, current playbook when one exists, and this tool's build-plan contract.
+Workflow request bodies are templates. When `requestTransformModule` exists, the
+transform can replace the final outgoing URL, headers, or body. Never infer the
+emitted request bytes from the workflow template alone: inspect the transform
+and its tests, then use backend-preparation `requestStageFacts` as factual
+execution receipts. A passed send stage proves that request reached transport;
+a later transform failure does not mean earlier requests used their templates.
+Use this context to interpret live results and catch concrete
 contradictions such as a producer/consumer type mismatch, a required recorded
 header omitted from the workflow, a synthetic-only positive parser test, or an
 integration suite that cannot construct its producer inputs. Artifact context

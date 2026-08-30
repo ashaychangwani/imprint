@@ -13,6 +13,7 @@ import {
   promoteReviewedCompletion,
   revisionStagingDir,
   runFocusedWaveOrchestration,
+  runPlaybookInvocationWithDeadline,
   terminalStatusForError,
 } from '../src/imprint/master-teach-controller.ts';
 import {
@@ -116,6 +117,59 @@ function focusedTool(index: number, dependencyNames: string[] = []): EditableTea
 }
 
 describe('master-owned focused build waves', () => {
+  it('bounds an injected playbook invocation that ignores cancellation', async () => {
+    let childSignal: AbortSignal | undefined;
+    const startedAt = Date.now();
+    let failure: unknown;
+
+    try {
+      await runPlaybookInvocationWithDeadline(
+        {
+          timeoutMs: 20,
+          cleanupGraceMs: 15,
+          label: 'fixture chain check',
+        },
+        async (signal) => {
+          childSignal = signal;
+          return await new Promise<never>(() => {});
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(childSignal?.aborted).toBe(true);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).name).toBe('TimeoutError');
+    expect((failure as Error).message).toContain('fixture chain check');
+  });
+
+  it('does not accept a playbook result that arrives after its deadline', async () => {
+    let returned: string | undefined;
+    let failure: unknown;
+    try {
+      returned = await runPlaybookInvocationWithDeadline(
+        {
+          timeoutMs: 10,
+          cleanupGraceMs: 35,
+          label: 'late fixture check',
+        },
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return 'late success';
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(returned).toBeUndefined();
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).name).toBe('TimeoutError');
+    expect((failure as Error).message).toContain('late fixture check');
+  });
+
   it('mechanically keeps every request in the authoritative teaching scope', () => {
     const session = {
       site: 'fixture-site',

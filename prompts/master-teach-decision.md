@@ -71,6 +71,23 @@ alternative, or make the operation explicitly unresolved in
 `candidateCoverage`. If you reject a proposal, put the exact correction or
 missing evidence in `reason`; the next focused planner receives that guidance.
 
+Reject an implementation plan whose instructions require a value but do not
+name how the artifact can obtain it from its recorded requests, a declared
+response dependency, an available producer result path, or an exact supported
+computation. In particular, do not accept “resolve current state” or “regenerate
+the token” as a plan by itself. Preserve opaque or composite producer output
+when the consumer request uses it; a readable label is not automatically an
+equivalent replacement.
+
+A compiler `give_up`, failed live call, or malformed generated request proves
+that the current plan or artifact failed. It does not prove the recorded API is
+incompatible. Before changing an API tool to `playbook_fallback`, reopen its
+request provenance, producer inputs, response dependencies, and factual
+prepared-request diagnostics, then try a fresh evidence-backed API plan when
+any untested construction remains. Do not cite the failed compiler's conclusion
+as the sole fallback evidence. The master may choose fallback only after the
+evidence itself closes those API repair paths.
+
 Return canonical `DesiredTeachingPlan` fields directly. Do not add version,
 revision, or decision metadata. You may select an `implementationPlan` only from
 a supplied current tool or focused planner proposal whose complete compile-input

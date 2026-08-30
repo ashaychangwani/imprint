@@ -860,6 +860,17 @@ describe('prompts and pre-plan discovery', () => {
     expect(focusedPrompt).toContain('`input.evidence.payload.entries[].ref`');
   });
 
+  it('keeps API repair and response-produced state decisions agent-owned and evidence-backed', () => {
+    const focusedPrompt = prompt('master-teach-focused-planner.md');
+    expect(focusedPrompt).toContain('A promise to “resolve current state”');
+    expect(focusedPrompt).toContain('readable name or label is not a substitute');
+
+    const masterPrompt = prompt('master-teach-decision.md');
+    expect(masterPrompt).toContain('malformed generated request proves');
+    expect(masterPrompt).toContain('It does not prove the recorded API is');
+    expect(masterPrompt).toContain("failed compiler's conclusion");
+  });
+
   it('makes the first advisor and master calls honestly pre-plan', async () => {
     const seen: unknown[] = [];
     const advisor: MasterTeachAnalyzer = {

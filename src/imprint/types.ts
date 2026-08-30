@@ -495,6 +495,22 @@ export interface StateMissingItem {
   message: string;
 }
 
+/** Value-free execution facts retained only to explain where a generated
+ * request failed. They intentionally omit URLs, headers, bodies, parameter
+ * values, and response content. */
+export interface RequestStageFact {
+  requestIndex: number;
+  stage: 'preparation' | 'transform' | 'send';
+  outcome: 'passed' | 'failed' | 'skipped' | 'unavailable';
+  /** Final body metadata at this stage. No body bytes are retained. */
+  bodyPresent?: boolean;
+  bodyByteLength?: number;
+  /** Whether a request transform replaced the prepared body. */
+  bodyChanged?: boolean;
+  /** HTTP status proves transport completed without exposing response content. */
+  httpStatus?: number;
+}
+
 /** Discriminated union returned by every generated tool. */
 export type ToolResult<T = unknown> =
   | { ok: true; data: T }
@@ -518,6 +534,8 @@ export type ToolResult<T = unknown> =
       status?: number;
       /** Truncated response body of the failing request (first ~500 chars). */
       responseBodyPreview?: string;
+      /** Value-free stage receipts for requests attempted before this failure. */
+      requestStageFacts?: RequestStageFact[];
       /** Recording-derived state and generic action progress. Echo this object
        *  unchanged on the next auth call. */
       continuation?: Record<string, unknown>;

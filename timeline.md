@@ -1445,3 +1445,105 @@ The focused discovery and compiler suite passes all 170 tests. Type checking,
 lint, and the complete repository suite also pass; the full suite is 1,739
 tests. Independent code, simplicity, and design-boundary reviews found no
 remaining issue.
+
+## 2026-08-29 22:02 PDT — Fresh Hotels run proves discovery works, then exposes a later API failure
+
+A completely fresh, unsteered Google Hotels teach was started as run
+`9f820ff3-7fcf-4b24-8dd2-6edf4a73fac3`. It used the latest combined recording.
+This run will never be resumed after the changes described below.
+
+The restored shipped discovery path did its job. It proposed four useful
+operations: location suggestions, hotel search, hotel details, and booking
+options. The master accepted all four and arranged them in dependency waves.
+This is strong evidence that candidate selection is no longer the problem in
+this run, so it will not be changed in response to the later failures.
+
+Location suggestions compiled as an API tool and passed its contract, exact
+recording replay, and live test. The replay matched all 691 recorded bytes, and
+the live request returned ten results in 286 milliseconds.
+
+The remaining API tools exposed a different problem. The search compiler had
+the complete recorded request body, but rebuilt its complex body from guessed
+positions and passed a readable location label where the recorded sequence
+appeared to require the exact selection produced by the suggestion response.
+Its live reply contained only control data. Details and booking also found real
+request or result problems during their checks. These are failed artifacts,
+not evidence that the recorded API itself is unusable.
+
+The master correctly revised parameters and started fresh compile agents, but
+after those agents still failed it incorrectly changed search, details, and
+booking to browser playbooks. The search playbook then failed its live check
+with no results. A later producer-to-consumer playbook check stopped making
+progress and the foreground command did not return. The run was manually
+cancelled after confirming that it was idle. No audit was run because the teach
+did not complete.
+
+Two general fixes follow from this evidence. First, API planning and compilation
+must preserve exact response-produced selection data and begin with exact
+recorded request bytes, changing only fields whose construction is supported by
+evidence. A failed generated artifact does not by itself prove that API use is
+impossible or justify a browser fallback. Second, every browser launch, check,
+and cleanup step needs a real bounded deadline so one stuck browser operation
+cannot hold the foreground command forever. Neither fix requires a Hotels rule
+or a change to candidate selection.
+
+## 2026-08-29 22:47 PDT — Give API compilers exact facts before allowing fallback
+
+The original shipped candidate-selector core remains in place. It still runs
+once as a proposing agent, after which the advisor and master can revise every
+tool boundary. Its old exactly-one-primary restriction is gone, and no new
+candidate-count or site rule was added.
+
+The failed Hotels run showed that the compiler and verifier were looking at
+different versions of a request. The verifier saw the static body template but
+did not see `request-transform.ts`, even though the runtime had applied that
+transform. The runtime now reports only simple execution facts: which request
+was prepared, transformed, and sent; whether a body existed or changed; its
+byte length; and the HTTP status. The verifier also receives the transform and
+request test, so it no longer has to guess what was sent. A missing or broken
+declared transform now fails before any static template is sent, including for
+login tools.
+
+The focused compiler gained one mechanical comparison tool. It renders the
+current workflow without using the network, applies the current transform,
+feeds the recorded responses through multi-request chains, and compares the
+prepared request with its recorded source. It reports exact URL equality,
+value-free query equality, body sizes, and bounded structural differences. It
+uses synthetic credential values and fresh copies of only the current tool and
+the exact relative helper files it imports (including shared or sibling-tool
+modules), so edits are never hidden by Bun's module cache and
+stored secrets are never handed to the compiler. The agent still decides what
+the differences mean and how to repair them.
+
+The planning and master prompts now require vague phrases such as “resolve the
+current state” to name a real producer, response path, request, or supported
+calculation. They also say that a failed compiler artifact is not proof that an
+API is incompatible. Before choosing the final browser fallback, the master
+must inspect remaining request provenance and try a fresh API plan when an
+untested evidence-backed path remains. This is guidance for the agent, not a
+runtime fallback classifier.
+
+Browser checks now have one complete deadline covering launch, setup, steps,
+result reading, and cleanup. Late success after the deadline is rejected,
+cleanup is bounded, caller cancellation clears long timers, and an internal
+browser timeout remains a visible network failure rather than hanging the
+foreground command. A neutral end-to-end test proves that a stuck browser chain
+becomes a factual host error, the master can revise only the affected edge, and
+the run can continue.
+
+Two independent reviews found three narrow lifecycle boundaries before this
+checkpoint. The offline comparison snapshot could still copy unrelated site
+files when the older direct compiler wrote into a site root; it now copies only
+`workflow.json` and the exact declared module dependencies. A diagnostic
+screenshot could outlive the browser deadline and throw instead of returning a
+factual network failure; it now stays best effort. Finally, one large batch of
+request-stage facts could be shortened before the verifier read it; the private
+fact channel now keeps the complete bounded batch while the public log remains
+short. Regressions cover all three cases.
+
+The selector and all runtime changes remain site-neutral. Focused validation
+passes 313 tests, along with type checking, lint, dead-code checks, and
+circular-dependency checks. The full repository run passed 1,754 of 1,755
+tests; one unrelated recorder browser test hit its 30-second test limit, then
+passed alone in 4.1 seconds. A real child-process regression also proves that
+request-stage facts survive the probe process without copying parameter values.
