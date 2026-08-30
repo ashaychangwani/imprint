@@ -63,6 +63,13 @@ describe('shipped candidate detector guidance', () => {
     expect(detectorPrompt).toContain('The master may later split them');
     expect(detectorPrompt).not.toContain('There must be exactly one primary candidate');
   });
+
+  it('keeps narration and event citations in their real namespaces', () => {
+    expect(detectorPrompt).toContain('A `narration[].seq` is not an event');
+    expect(detectorPrompt).toContain('`requests[].repeatedSeqs` value');
+    expect(detectorPrompt).toContain('`eventSeqs` may use only');
+    expect(detectorPrompt).toContain('`events[].seq`');
+  });
 });
 
 describe('tool candidate payload', () => {

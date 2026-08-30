@@ -838,6 +838,12 @@ describe('prompts and pre-plan discovery', () => {
     });
   }
 
+  it('tells the master that an unavailable replay has no parameter values', () => {
+    const masterPrompt = prompt('master-teach-decision.md');
+    expect(masterPrompt).toContain('An unavailable replay case instead has an empty');
+    expect(masterPrompt).toContain('alone a reason to reject an API plan');
+  });
+
   it('makes the first advisor and master calls honestly pre-plan', async () => {
     const seen: unknown[] = [];
     const advisor: MasterTeachAnalyzer = {

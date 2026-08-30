@@ -70,12 +70,15 @@ binding still matches. A retained tool keeps its stable ID. Added, split, or
 merged tools use new IDs. Never author `eventTimeRange`.
 An implementation plan may be accepted only when every public parameter has a
 concrete scalar type and a useful nonempty description. Its agent-authored,
-redacted verification cases must cover exactly those parameter names and types,
-        cite the tool's supplied evidence and known recording sequences, and choose
-the fixed verification path: every plan has one or more live cases; API has
-exactly one replay case; playbook has no replay case. The runtime executes
-those declared semantic cases; it does not invent new ones. An unplanned discovery
-candidate may still retain `null` for an uncertain type or description.
+redacted live cases and recorded-baseline replay cases must cover exactly those
+parameter names and types. An unavailable replay case instead has an empty
+`parameterValues` array and is reported as not checked; that exception is not
+alone a reason to reject an API plan. Every case must cite the tool's supplied
+evidence and known recording sequences and choose the fixed verification path:
+every plan has one or more live cases; API has exactly one replay case; playbook
+has no replay case. The runtime executes those declared semantic cases; it does
+not invent new ones. An unplanned discovery candidate may still retain `null`
+for an uncertain type or description.
 Account for every credible user-facing operation found in discovery. You may
 merge, split, or rename operations when the evidence supports better public
 tool boundaries, but do not narrow the plan to a preferred subset. If you omit

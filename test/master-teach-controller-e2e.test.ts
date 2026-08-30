@@ -116,7 +116,7 @@ function syntheticSessionPath(root: string): string {
       },
     ],
     events: [],
-    narration: [],
+    narration: [{ seq: 3, timestamp: 150, text: 'Fixture narration remains visible.' }],
     cookieSnapshots: [],
     storageSnapshots: [],
   });
@@ -289,6 +289,8 @@ describe('fresh foreground master controller end to end', () => {
       let promotedTools: string[] = [];
       let discoveryTrustedPreparedScope: boolean | undefined;
       let detectorReusedControllerPayload = false;
+      let narrationCitationWasGrounded = false;
+      let narrationRemainedInEvidence = false;
       const parameterAdvisorCalls: string[] = [];
       const plannerGuidance: string[] = [];
       let focusedProposalDecisions = 0;
@@ -312,7 +314,7 @@ describe('fresh foreground master controller end to end', () => {
             return {
               ...validateToolCandidateDetection({
                 sharedContext,
-                candidates: [producerCandidate, consumerCandidate],
+                candidates: [{ ...producerCandidate, eventSeqs: [3] }, consumerCandidate],
               }),
               inputTokens: 0,
               outputTokens: 0,
@@ -325,15 +327,20 @@ describe('fresh foreground master controller end to end', () => {
             unmatchedRecordingRequestSeqs: [],
             message: 'The deterministic fixture does not run a browser replay.',
           }),
-          requestToolSelectionAdvice: async (input: ToolSelectionAdvisorInput) =>
-            ToolSelectionAdvisorOutputSchema.parse({
+          requestToolSelectionAdvice: async (input: ToolSelectionAdvisorInput) => {
+            narrationCitationWasGrounded = input.discoveryCandidates[0]?.eventSeqs.length === 0;
+            narrationRemainedInEvidence = JSON.stringify(input.evidence).includes(
+              'Fixture narration remains visible.',
+            );
+            return ToolSelectionAdvisorOutputSchema.parse({
               binding: input.run,
               boundaries: input.discoveryCandidates.map(
                 ({ likelyParams: _params, ...candidate }) => candidate,
               ),
               concerns: [],
               reason: 'Both recorded operations have clear request boundaries.',
-            }),
+            });
+          },
           requestMasterDecision: async (input: MasterDecisionInput) => {
             events.push(`master:${input.phase}`);
             if (input.verificationFindings) throw new Error('unexpected fixture repair revision');
@@ -501,6 +508,8 @@ describe('fresh foreground master controller end to end', () => {
       expect(resultEvidenceCount).toBe(2);
       expect(discoveryTrustedPreparedScope).toBeUndefined();
       expect(detectorReusedControllerPayload).toBe(true);
+      expect(narrationCitationWasGrounded).toBe(true);
+      expect(narrationRemainedInEvidence).toBe(true);
       expect(parameterAdvisorCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
       expect(plannerGuidance).toEqual([
         'The complete dependency-ordered plan remains supported.',

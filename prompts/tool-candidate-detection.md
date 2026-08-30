@@ -115,7 +115,10 @@ Rules:
     proposals: the advisor and master may merge candidates when the complete
     evidence supports one operation.
 18. Every candidate must have either requestSeqs or eventSeqs grounded in the
-    supplied recording. Never invent request or event sequence numbers.
+    supplied recording. `requestSeqs` may use only `requests[].seq` or a listed
+    `requests[].repeatedSeqs` value, and `eventSeqs` may use only
+    `events[].seq`. A `narration[].seq` is not an event sequence and must not be
+    copied into either field. Never invent sequence numbers.
 19. When the same API endpoint (same URL path and method) is called multiple
     times with different parameter values — such as toggling filters, changing
     sort order, adjusting constraints, or paginating — treat those as parameter

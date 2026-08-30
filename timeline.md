@@ -1257,3 +1257,45 @@ This does not change planning, retry counts, tool selection, parameters, or
 strategy. It only preserves the facts already produced by the failed agent
 call. Type checking, lint, and 15 controller tests pass. This failed run will
 not be resumed; the next validation will be another fresh Hotels run.
+
+## 2026-08-29 17:40 PDT — Fresh Google Hotels attempt 3
+
+### Result
+
+Failed before planning or compilation. Run
+`32a0fc81-057c-48cd-9a72-26f04d395c7d` used the latest combined Hotels
+recording. The shipped detector again found three operations, and the
+independent replay captured 1,462 requests. The command stayed in the
+foreground and honestly returned a failure.
+
+The detector copied five narration entry numbers into its event-number field.
+Those numbers existed in the exact compact input, but they were narration IDs,
+not browser-event IDs. The strict handoff therefore rejected the entire
+three-tool proposal before the advisor or master could review it. No tool was
+planned, compiled, or checked.
+
+### General fixes chosen
+
+Keep using the shipped detector and keep its tool proposal editable. Clarify in
+its instructions that request, event, and narration numbers are different. At
+the handoff, remove only a narration number copied into the event-number field.
+Completely unknown numbers and every other malformed citation still fail the
+strict check. Do not change tool names, meanings, parameters, dependencies,
+confidence, or the recording evidence shown to the master. This is bookkeeping,
+not tool selection.
+
+The previous failed run also revealed one contradictory instruction. The
+focused planner was correctly told to leave replay values empty when the exact
+recorded public inputs could not be recovered, while the master was told every
+case must contain every public input. The master instruction now matches the
+planner and runtime: an unavailable replay has no values, is reported as not
+checked, and is not by itself a reason to abandon the API design.
+
+These changes are site-neutral. They add no Google policy and no new teaching
+strategy. All 139 focused tests pass, along with type checking and lint. This
+failed run will not be resumed; validation will start with another fresh
+Hotels run.
+
+The complete repository run passed 1,725 of 1,726 tests. The only miss was the
+same timing-sensitive process-cleanup stress test seen in earlier checkpoints;
+it passed immediately when rerun by itself. No process-cleanup code changed.
