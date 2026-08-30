@@ -186,6 +186,8 @@ interface DetectToolCandidatesOptions {
    * telemetry filter.
    */
   trustSessionScope?: boolean;
+  /** Reuse one exact compact payload across detector and master discovery. */
+  candidatePayload?: ToolCandidatePayload;
   signal?: AbortSignal;
   deadlineMs?: number;
   runDeadline?: RunDeadlineRef;
@@ -212,9 +214,11 @@ export async function detectToolCandidates(
         );
       }
       const systemPrompt = readFileSync(promptPath, 'utf8');
-      const payload = buildToolCandidatePayload(session, {
-        trustSessionScope: opts.trustSessionScope,
-      });
+      const payload =
+        opts.candidatePayload ??
+        buildToolCandidatePayload(session, {
+          trustSessionScope: opts.trustSessionScope,
+        });
       const payloadChars = JSON.stringify(payload).length;
 
       setSpanAttributes(span, {
@@ -371,7 +375,7 @@ interface CandidateRequestPayload {
   lastTimestamp?: number;
 }
 
-interface ToolCandidatePayload {
+export interface ToolCandidatePayload {
   site: string;
   url: string;
   narration: Array<{ seq: number; timestamp: number; text: string }>;

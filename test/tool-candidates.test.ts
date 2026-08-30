@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   SharedCompileContextSchema,
   buildSharedCompileContext,
@@ -9,6 +10,11 @@ import {
   validateToolCandidateDetection,
 } from '../src/imprint/tool-candidates.ts';
 import type { Session } from '../src/imprint/types.ts';
+
+const detectorPrompt = readFileSync(
+  new URL('../prompts/tool-candidate-detection.md', import.meta.url),
+  'utf8',
+);
 
 const session: Session = {
   site: 'demo',
@@ -49,6 +55,15 @@ const session: Session = {
   cookieSnapshots: [],
   storageSnapshots: [],
 };
+
+describe('shipped candidate detector guidance', () => {
+  it('keeps standalone lookup and read-only operations visible while leaving revision to master', () => {
+    expect(detectorPrompt).toContain('Prefer more candidates over fewer');
+    expect(detectorPrompt).toContain('A read-only query that returns data');
+    expect(detectorPrompt).toContain('The master may later split them');
+    expect(detectorPrompt).not.toContain('There must be exactly one primary candidate');
+  });
+});
 
 describe('tool candidate payload', () => {
   it('keeps same-site XHR/fetch metadata and credential placeholders', () => {

@@ -553,13 +553,15 @@ type TeachingBuildWaves = z.infer<typeof TeachingBuildWavesSchema>;
 /**
  * Durable accounting for the detector's original operation inventory. Several
  * discoveries may merge into one public tool, and one discovery may split into
- * several tools. An unresolved entry is explicit and cannot be promoted.
+ * several tools. An unsupported detector proposal may be explicitly excluded;
+ * an unresolved entry remains unfinished and cannot be promoted.
  */
 const CandidateCoverageSchema = z
   .object({
     discoveryCandidateName: ToolNameSchema,
     plannedToolIds: z.array(ToolIdSchema),
     unresolvedReason: canonicalText(1, 2_000).nullable(),
+    excludedReason: canonicalText(1, 2_000).nullable().optional(),
   })
   .strict()
   .superRefine((coverage, ctx) => {
@@ -570,13 +572,15 @@ const CandidateCoverageSchema = z
         message: 'candidate coverage tool ids must be unique',
       });
     }
-    const resolved = coverage.plannedToolIds.length > 0;
-    if (resolved === (coverage.unresolvedReason !== null)) {
+    const planned = coverage.plannedToolIds.length > 0;
+    const unresolved = coverage.unresolvedReason !== null;
+    const excluded = coverage.excludedReason !== undefined && coverage.excludedReason !== null;
+    if (Number(planned) + Number(unresolved) + Number(excluded) !== 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['unresolvedReason'],
         message:
-          'candidate coverage requires one or more planned tools or an explicit unresolved reason',
+          'candidate coverage requires exactly one of planned tools, an unresolved reason, or an excluded reason',
       });
     }
   });
@@ -810,7 +814,10 @@ function validateCandidateCoverage(
 }
 
 export function unresolvedCandidateCoverage(plan: DesiredTeachingPlan): CandidateCoverage[] {
-  return plan.candidateCoverage.filter(({ plannedToolIds }) => plannedToolIds.length === 0);
+  return plan.candidateCoverage.filter(
+    ({ plannedToolIds, excludedReason }) =>
+      plannedToolIds.length === 0 && (excludedReason === undefined || excludedReason === null),
+  );
 }
 
 function validateChainEdges(plan: DesiredTeachingPlan): void {

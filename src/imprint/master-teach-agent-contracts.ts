@@ -248,6 +248,7 @@ const ParameterAdviceBindingSchema = strictObject({
 export const ParameterSelectionAdvisorOutputSchema = strictObject({
   binding: ParameterAdviceBindingSchema,
   likelyParams: z.array(TeachingParameterSchema).max(64),
+  evidenceRefs: z.array(ContentAddressedRefSchema).min(1).max(16),
   concerns: z.array(Short).max(32),
   reason: Reason,
 }).superRefine((value, ctx) => {
@@ -257,10 +258,10 @@ export const ParameterSelectionAdvisorOutputSchema = strictObject({
 });
 const ClaimSchema = strictObject({
   id: PromptIdSchema,
-  kind: z.enum(['blocker', 'waiver']),
+  kind: z.enum(['blocker', 'waiver', 'exclusion']),
   statement: Short,
   toolId: PromptToolIdSchema.optional(),
-  evidenceRefs: z.array(ContentAddressedRefSchema).max(32),
+  evidenceRefs: z.array(ContentAddressedRefSchema).min(1).max(32),
 });
 const CompletionActualResultSchema = strictObject({
   observed: z.boolean(),

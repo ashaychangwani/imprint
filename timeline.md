@@ -1118,3 +1118,112 @@ fresh run that chooses a playbook for either site will therefore be recorded as
 an API teaching failure to diagnose, not accepted as a successful teach. This
 is a validation expectation, not a Google-specific runtime rule. The next run
 will be a fresh Google Hotels teach; no failed run will be resumed.
+
+## 2026-08-29 16:09 PDT — Fresh Google Hotels attempt 1
+
+### Input
+
+The automatic recording resolver rebuilt the aggregate from all four raw
+recordings before the run. The selected file contained 611 requests, 328
+events, and 24 narration lines. It passed `imprint check` with no warnings and
+had hash `sha256:85ceb6570b12c69d095ef288873659d9f293c4ddeb38251396e9cca630d07241`.
+
+### Result
+
+Failed before a teaching plan or strategy existed. Run
+`b998f33b-483a-43e8-83f7-5423793a11a9` completed candidate discovery and the
+independent browser observation, which captured 1,445 requests. Discovery
+proposed two operations. The first advisor request then contained 4,578,240
+characters, above the Codex input limit of 1,048,576, so the provider rejected
+it. The foreground command returned exit code 1 and wrote an honest failed
+terminal record with 0 ready and 0 failed tools.
+
+This was not an API-versus-playbook failure: that decision had not happened.
+The evidence builder expanded deeply nested request bodies into thousands of
+small prompt documents without a total prompt budget. The next change will be
+a site-neutral mechanical context bound that preserves broad request/event
+summaries and the most useful focused facts while leaving exact bodies
+available to the compile agent's existing on-demand readers. This failed run
+will not be resumed.
+
+## 2026-08-29 16:45 PDT — Reuse the shipped candidate detector module under the master
+
+The initial selection stage reuses the shipped Imprint detector module and its
+compact recording format. It is not being replaced by a master rulebook. The
+compact recording payload is now built once, passed to that detector, and then
+reused for the small boundary advisor and master. The detector's output is a
+starting proposal: the master may add a missed operation, remove an unsupported
+one, or merge, split, rename, and reorder tools before compilation.
+
+The first Hotels attempt showed that the detector itself worked and proposed two
+operations. The failure came from the later review step expanding the same
+recording into a 4.58-million-character prompt. The fix therefore leaves
+candidate judgment with the existing detector and agents, while mechanically
+packing evidence so it fits the provider:
+
+- Discovery carries a content-complete, mechanically chunked copy of every
+  compact detector request, event, and narration entry, including requests the
+  detector did not assign to a candidate. Core discovery
+  evidence is required and cannot be silently dropped.
+- The redundant discovery-wide request classifier was removed. Detailed
+  request comparisons are reserved for each focused planning agent.
+- Each focused planner receives a compact summary of every request and event,
+  then representative request details in breadth-first order. An empty detector
+  representative list now correctly falls back to the candidate's owned
+  requests.
+- When the master weighs several parameter-advisor suggestions, it receives
+  their reasons, content-addressed evidence summaries, and the bounded focused
+  evidence entries each advisor cited instead of copying hundreds of thousands
+  of characters for every tool into one prompt. The master can inspect those
+  facts and disagree with the suggestion.
+- Candidate accounting now distinguishes unfinished work from a detector false
+  positive. The master may explicitly exclude an unsupported or non-user-facing
+  proposal, but the fresh completion reviewer must approve that reason against
+  the discovery evidence. A credible operation that is merely difficult remains
+  unresolved and still prevents completion.
+
+On the exact Hotels recording, all 120 compact requests, 328 events, and 24
+narration entries remain present. The conservative full discovery/master prompt
+is about 550,000 characters, below Codex's 1,048,576-character limit. A
+two-tool parameter-review stress case that previously produced about 1.92
+million characters now produces about 30,000. Type checking, lint, and 111
+focused tests pass. The complete suite passed 1,717 of 1,718 tests; its one
+failure was the already known process-cleanup stress flake, which then passed
+three consecutive isolated runs. No unrelated lifecycle code was changed. No
+Google-specific selection or strategy rule was added.
+
+## 2026-08-29 17:07 PDT — Restore the shipped detector's useful breadth
+
+A direct comparison with the `v0.6.6` tag found one important drift in the
+previous entry: the code module and compact input format were reused, but its
+instructions had been weakened. The newer wording no longer strongly asked for
+standalone lookup and read-only tools and said not to prefer a broader starting
+set. That could explain why a recording with many useful operations began with
+only two proposals.
+
+The detector instructions now restore the shipped behavior: propose a separate
+candidate for every independently useful read-only or lookup operation, keep
+different uses of the same endpoint together as parameter variations, and let
+the later advisor and master merge anything that was split too aggressively.
+The rigid parts were intentionally not restored: there is no primary tool, no
+exactly-one rule, no permanent selection, and no runtime rule that prevents the
+master from adding, removing, merging, splitting, or revising candidates.
+
+The detector and the master receive the same compact object. The master also
+receives every compact request, event, and narration item, including evidence
+the detector did not claim. This keeps the proven first proposal while making
+it revisable.
+
+Two mechanical review gaps were also corrected. Parameter advisors may still
+cite exact facts, but all citations together now fit one fixed prompt budget and
+the master is told how many extra citations were left out. At least one cited
+fact per advisor must remain. Completion reviewers must cite evidence that was
+actually supplied for a candidate exclusion; an invented reference is rejected.
+Neither change decides what a tool or parameter means.
+
+Validation now passes type checking, lint, and 147 focused detector/master
+tests. Three independent read-only reviews found no remaining blocker for the
+Hotels, Flights, or Southwest recordings. The complete repository run passed
+1,721 of 1,722 tests; the only miss was the known timing-sensitive process
+cleanup stress test, which passed immediately when rerun by itself. No process
+cleanup code was changed in this checkpoint.

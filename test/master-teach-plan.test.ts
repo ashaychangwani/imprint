@@ -17,6 +17,7 @@ import {
   reviseEditableTeachingPlan,
   teachingPlanContentSha256,
   teachingToolCompileInputsSha256,
+  unresolvedCandidateCoverage,
   validateBuildWorkflowProvenance,
   validateEditableTeachingPlan,
   validateImplementationPlanForTool,
@@ -261,6 +262,40 @@ describe('editable master teaching plan', () => {
         validation,
       ),
     ).toThrow('first plan decision');
+  });
+
+  it('distinguishes an evidence-backed detector exclusion from unfinished work', () => {
+    const plan = desired([tool('search-id', 'search')]);
+    plan.candidateCoverage.push({
+      discoveryCandidateName: 'telemetry_false_positive',
+      plannedToolIds: [],
+      unresolvedReason: null,
+      excludedReason: 'The recording shows this is telemetry, not a user-facing operation.',
+    });
+    const created = createEditableTeachingPlan(
+      plan,
+      { decision: decision('initial') },
+      {
+        ...validation,
+        discoveryCandidateNames: ['search', 'telemetry_false_positive'],
+      },
+    );
+    expect(unresolvedCandidateCoverage(created)).toEqual([]);
+
+    const invalid = structuredClone(plan);
+    const invalidCoverage = invalid.candidateCoverage[1];
+    if (!invalidCoverage) throw new Error('missing exclusion fixture');
+    invalidCoverage.unresolvedReason = 'The operation is also unfinished.';
+    expect(DesiredTeachingPlanSchema.safeParse(invalid).success).toBe(false);
+
+    const unresolved = structuredClone(plan);
+    const unresolvedCoverage = unresolved.candidateCoverage[1];
+    if (!unresolvedCoverage) throw new Error('missing unresolved fixture');
+    unresolvedCoverage.excludedReason = null;
+    unresolvedCoverage.unresolvedReason = 'The credible operation is not solved yet.';
+    expect(unresolvedCandidateCoverage(DesiredTeachingPlanSchema.parse(unresolved))).toHaveLength(
+      1,
+    );
   });
 
   it('rejects unknown fields in plan, tool, candidate, refs, and compile context', () => {

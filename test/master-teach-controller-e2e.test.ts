@@ -18,7 +18,10 @@ import {
   ImplementationPlanPayloadSchema,
 } from '../src/imprint/master-teach-plan.ts';
 import { FreshTeachJournalStateSchema } from '../src/imprint/master-teach-store.ts';
-import { validateToolCandidateDetection } from '../src/imprint/tool-candidates.ts';
+import {
+  buildToolCandidatePayload,
+  validateToolCandidateDetection,
+} from '../src/imprint/tool-candidates.ts';
 import { SessionSchema, WorkflowSchema } from '../src/imprint/types.ts';
 
 const SITE = 'foreground-e2e-fixture';
@@ -285,6 +288,7 @@ describe('fresh foreground master controller end to end', () => {
       let reviewWasRecordedDuringPromotion = false;
       let promotedTools: string[] = [];
       let discoveryTrustedPreparedScope: boolean | undefined;
+      let detectorReusedControllerPayload = false;
       const parameterAdvisorCalls: string[] = [];
       const plannerGuidance: string[] = [];
       let focusedProposalDecisions = 0;
@@ -302,6 +306,9 @@ describe('fresh foreground master controller end to end', () => {
           runId: () => 'run-e2e-completed',
           detectToolCandidates: async (_session, _llm, options) => {
             discoveryTrustedPreparedScope = options?.trustSessionScope;
+            detectorReusedControllerPayload =
+              JSON.stringify(options?.candidatePayload) ===
+              JSON.stringify(buildToolCandidatePayload(_session));
             return {
               ...validateToolCandidateDetection({
                 sharedContext,
@@ -493,6 +500,7 @@ describe('fresh foreground master controller end to end', () => {
       ]);
       expect(resultEvidenceCount).toBe(2);
       expect(discoveryTrustedPreparedScope).toBeUndefined();
+      expect(detectorReusedControllerPayload).toBe(true);
       expect(parameterAdvisorCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
       expect(plannerGuidance).toEqual([
         'The complete dependency-ordered plan remains supported.',

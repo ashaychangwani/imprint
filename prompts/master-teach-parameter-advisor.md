@@ -5,6 +5,11 @@ Review only its public parameter choice and coverage. Do not review code,
 request construction, parsers, authentication, boundaries, or strategy. The
 master may disagree.
 
+Cite one to sixteen exact refs from the supplied focused evidence that most
+directly support your parameter choice. The host validates those citations and
+forwards the cited entries with your suggestion so the master can inspect the
+facts instead of trusting your prose.
+
 The host-current snapshot is content-addressed and includes the exact shared
 manifest, current producer builds, execution bindings, and receipts. The host
 calls this role only after the target tool's mechanically selected contract,
@@ -23,6 +28,7 @@ Exact output schema (all objects reject extra fields):
   likelyParams: Array<{
     name, type:"string"|"number"|"boolean"|null, description:string|null
   }>,
+  evidenceRefs: ref[],
   concerns: string[], reason: string
 }
 ```
@@ -36,6 +42,10 @@ Exact output schema (all objects reject extra fields):
     "compileInputsSha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   },
   "likelyParams": [{"name":"query","type":"string","description":"Catalog search text"}],
+  "evidenceRefs": [{
+    "path": "runs/run-fixture-1/evidence.json",
+    "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  }],
   "concerns": [],
   "reason": "The current evidence supports one public search input."
 }

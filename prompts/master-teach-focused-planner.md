@@ -25,13 +25,18 @@ sequence supported by the focused evidence, or repeat a sequence when the
 artifact truthfully makes repeated requests. Never invent an unrecorded API
 call. A `playbook_fallback` plan has an empty API request map.
 
-The focused evidence is intentionally split across several small entries. Read
-all of them: later request, response, event, and narration entries are not less
-important than the first entry. `focused_request_structure` entries carry
-chunked exact redacted scalar values and pointers for query, headers, JSON,
-forms, decimal-framed JSON, and successfully decoded nested JSON strings. Read
-their explicit decode and truncation status; an omitted oversized scalar is not
-an observed empty value. A
+The focused evidence is intentionally split across several small entries. It
+contains a compact request summary for every owned and dependency sequence,
+then distributes detailed evidence across representative requests and needed
+dependencies within one mechanical prompt budget. Read every supplied entry
+and the final `prompt_evidence_omissions` counts. Missing detail means only that
+the budget omitted it; do not infer a value or strategy from an omission.
+`focused_request_structure` entries carry chunked exact redacted scalar values
+and pointers for query, headers, JSON, forms, decimal-framed JSON, and
+successfully decoded nested JSON strings. `focused_request_preview` preserves
+bounded request and response previews for those same representative/dependency
+requests. Read their explicit decode and truncation status; an omitted oversized
+scalar is not an observed empty value. A
 `request_variation_and_response_correlation` fact names the accepted consumer
 request sequence and exact request location, whether that location was the same
 or different in an independently executed recording, the mechanical alignment

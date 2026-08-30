@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  type CompletionReviewInput,
   CompletionReviewInputSchema,
   CompletionReviewOutputSchema,
   CompletionToolResultEvidenceSchema,
@@ -15,6 +16,7 @@ import {
   type SemanticToolCandidate,
   SemanticToolCandidateSchema,
   ToolSelectionAdvisorOutputSchema,
+  mechanicalProofFailures,
   parseCompletionReviewOutput,
   parseFocusedPlannerOutput,
   parseMasterDecisionOutput,
@@ -544,13 +546,17 @@ const parameterBinding = (input = parameterInput()) => {
     compileInputsSha256: teachingToolCompileInputsSha256(tool, plan.chainEdges),
   };
 };
-const parameterOutput = (input = parameterInput()) =>
-  ParameterSelectionAdvisorOutputSchema.parse({
+const parameterOutput = (input = parameterInput()) => {
+  const cited = input.evidence.payload.entries[0];
+  if (!cited) throw new Error('parameter fixture needs evidence');
+  return ParameterSelectionAdvisorOutputSchema.parse({
     binding: parameterBinding(input),
     likelyParams: detail.likelyParams,
+    evidenceRefs: [cited.ref],
     concerns: [],
     reason: 'Both public inputs are grounded in current producer results.',
   });
+};
 
 function completionResultEvidence(
   tool: EditableTeachingTool,
@@ -612,7 +618,10 @@ function completionInput() {
   };
   return input;
 }
-const completionOutput = (input = completionInput(), verdict: 'passed' | 'failed' = 'passed') =>
+const completionOutput = (
+  input: CompletionReviewInput = completionInput(),
+  verdict: 'passed' | 'failed' = 'passed',
+) =>
   CompletionReviewOutputSchema.parse({
     binding: completionBinding(input),
     verdict,
@@ -769,7 +778,7 @@ const revisionMasterInput = () => ({
   plannerProposals: [],
   parameterAdvice: [],
 });
-const revisionMasterOutput = (input = revisionMasterInput()) =>
+const revisionMasterOutput = (input: MasterDecisionInput = revisionMasterInput()) =>
   MasterDecisionOutputSchema.parse({
     binding: masterDecisionBinding(input),
     outcome: 'accepted',
@@ -1595,10 +1604,17 @@ describe('host-current snapshots and structural chains', () => {
     expect('currentPlan' in sentInput).toBe(false);
     expect('snapshot' in sentInput).toBe(false);
 
+    const forgedCitation = structuredClone(parameterOutput());
+    forgedCitation.evidenceRefs = [ref('runs/run-fixture-1/evidence/not-supplied.json', 'f')];
+    expect(() =>
+      parseParameterSelectionAdvisorOutput(JSON.stringify(forgedCitation), parameterInput()),
+    ).toThrow('cites unsupplied evidence');
+
     const producerInput = parameterInput({ toolId: 'catalog_search' });
     const producerOutput = ParameterSelectionAdvisorOutputSchema.parse({
       binding: parameterBinding(producerInput),
       likelyParams: search.likelyParams,
+      evidenceRefs: [evidenceRef],
       concerns: [],
       reason: 'The current search proof supports the public query parameter.',
     });
@@ -1627,6 +1643,83 @@ describe('host-current snapshots and structural chains', () => {
     ).toThrow('snapshot is stale');
   });
 
+  it('does not repeat every focused quote when the master weighs parameter advice', async () => {
+    const largeEvidence = (name: string, entryCount = 150) =>
+      PromptEvidenceProjectionSchema.parse(
+        projection(`runs/run-fixture-1/${name}.json`, {
+          entries: Array.from({ length: entryCount }, (_, index) => ({
+            kind: 'untrusted_redacted_quote' as const,
+            ref: ref(`runs/run-fixture-1/${name}/${index}.json`, 'b'),
+            provenance: 'recording_request' as const,
+            quote: `${name}-${index}-${'x'.repeat(3_850)}`,
+          })),
+        }),
+      );
+    const searchEvidence = largeEvidence('search-parameter-evidence');
+    const detailEvidence = largeEvidence('detail-parameter-evidence');
+    const discoveryEvidence = largeEvidence('large-discovery-evidence', 210);
+    const searchInput = parameterInput({ toolId: 'catalog_search', evidence: searchEvidence });
+    const detailInput = parameterInput({ evidence: detailEvidence });
+    const base = revisionMasterInput();
+    const input: MasterDecisionInput = {
+      ...base,
+      discovery: { ...base.discovery, evidence: discoveryEvidence },
+      parameterAdvice: [
+        {
+          toolId: 'catalog_search',
+          evidence: searchEvidence,
+          advice: ParameterSelectionAdvisorOutputSchema.parse({
+            ...parameterOutput(searchInput),
+            likelyParams: search.likelyParams,
+            evidenceRefs: searchEvidence.payload.entries
+              .slice(0, 16)
+              .map(({ ref: evidenceEntryRef }) => evidenceEntryRef),
+          }),
+        },
+        {
+          toolId: 'catalog_detail',
+          evidence: detailEvidence,
+          advice: ParameterSelectionAdvisorOutputSchema.parse({
+            ...parameterOutput(detailInput),
+            evidenceRefs: detailEvidence.payload.entries
+              .slice(0, 16)
+              .map(({ ref: evidenceEntryRef }) => evidenceEntryRef),
+          }),
+        },
+      ],
+    };
+    expect(JSON.stringify(input).length).toBeGreaterThan(1_048_576);
+    let seenPayload: unknown;
+    const output = revisionMasterOutput(input);
+    await requestMasterDecision(input, {
+      analyzer: {
+        async analyze(_prompt, payload) {
+          seenPayload = payload;
+          return { text: JSON.stringify(output) };
+        },
+      },
+    });
+    const sent = seenPayload as {
+      input: { parameterAdvice: Array<Record<string, unknown>> };
+    };
+    expect(JSON.stringify(seenPayload).length).toBeLessThan(1_048_576);
+    expect(JSON.stringify(sent.input).length).toBeLessThanOrEqual(900_000);
+    expect(sent.input.parameterAdvice).toHaveLength(2);
+    let totalCitedEntries = 0;
+    for (const submission of sent.input.parameterAdvice) {
+      expect(submission).not.toHaveProperty('evidence');
+      expect(submission).toHaveProperty('evidenceSummary');
+      const summary = submission.evidenceSummary as {
+        citedEntries: unknown[];
+        omittedCitedEntryCount: number;
+      };
+      expect(summary.citedEntries.length).toBeGreaterThanOrEqual(1);
+      expect(summary.citedEntries.length + summary.omittedCitedEntryCount).toBe(16);
+      totalCitedEntries += summary.citedEntries.length;
+    }
+    expect(totalCitedEntries).toBeLessThan(32);
+  });
+
   it('keeps parameter advice valid across an unrelated tool edit', () => {
     const revised = structuredClone(editablePlan);
     revised.revision += 1;
@@ -1651,6 +1744,7 @@ describe('host-current snapshots and structural chains', () => {
     const output = ParameterSelectionAdvisorOutputSchema.parse({
       binding: parameterBinding(before),
       likelyParams: search.likelyParams,
+      evidenceRefs: [evidenceRef],
       concerns: [],
       reason: 'The search parameter evidence is unchanged.',
     });
@@ -1739,6 +1833,59 @@ describe('host-current snapshots and structural chains', () => {
 });
 
 describe('completion history and factual pass gate', () => {
+  it('does not treat an explicitly excluded detector false positive as unfinished', () => {
+    const plan = desiredFromEditable();
+    expect(mechanicalProofFailures(plan, snapshot)).toEqual([]);
+    plan.candidateCoverage.push({
+      discoveryCandidateName: 'telemetry_false_positive',
+      plannedToolIds: [],
+      unresolvedReason: null,
+      excludedReason: 'The recording identifies telemetry rather than a user-facing operation.',
+    });
+    expect(mechanicalProofFailures(plan, snapshot)).toEqual([]);
+    const coverage = at(plan.candidateCoverage, plan.candidateCoverage.length - 1);
+    coverage.excludedReason = null;
+    coverage.unresolvedReason = 'This operation remains unfinished.';
+    expect(mechanicalProofFailures(plan, snapshot)).toContain(
+      'candidate telemetry_false_positive: unresolved discovery candidate cannot complete',
+    );
+  });
+
+  it('requires the independent reviewer to support a completed candidate exclusion', () => {
+    const base = completionInput();
+    const input = {
+      ...base,
+      claims: [
+        ...base.claims,
+        {
+          id: 'exclude-telemetry_false_positive',
+          kind: 'exclusion' as const,
+          statement: 'Exclude the detector telemetry false positive.',
+          evidenceRefs: [evidenceRef],
+        },
+      ],
+    };
+    const output = completionOutput(input);
+    output.claimDispositions.push({
+      claimId: 'exclude-telemetry_false_positive',
+      status: 'supported',
+      reason: 'The discovery evidence shows telemetry rather than a user-facing operation.',
+      evidenceRefs: [evidenceRef],
+    });
+    expect(parseCompletionReviewOutput(JSON.stringify(output), input)).toEqual(output);
+    const forged = structuredClone(output);
+    at(forged.claimDispositions, forged.claimDispositions.length - 1).evidenceRefs = [
+      ref('forged/exclusion-evidence.json', 'f'),
+    ];
+    expect(() => parseCompletionReviewOutput(JSON.stringify(forged), input)).toThrow(
+      'claim disposition must cite supplied claim evidence',
+    );
+    at(output.claimDispositions, output.claimDispositions.length - 1).status = 'unsupported';
+    expect(() => parseCompletionReviewOutput(JSON.stringify(output), input)).toThrow(
+      'requires every candidate exclusion to be supported',
+    );
+  });
+
   it('requires one bounded current-live result projection per tool before completion', () => {
     const input = completionInput();
     expect(CompletionReviewInputSchema.safeParse(input).success).toBe(true);

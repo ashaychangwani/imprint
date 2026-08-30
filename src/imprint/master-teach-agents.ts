@@ -474,6 +474,15 @@ function parameterOutputSchema(input: ParameterSelectionAdvisorInput) {
   return ParameterSelectionAdvisorOutputSchema.superRefine((output, ctx) => {
     if (!same(output.binding, parameterBinding(input)))
       issue(ctx, ['binding'], 'stale parameter-advice binding');
+    const supplied = new Set(input.evidence.payload.entries.map(({ ref }) => refKey(ref)));
+    const cited = new Set<string>();
+    output.evidenceRefs.forEach((ref, index) => {
+      const key = refKey(ref);
+      if (!supplied.has(key))
+        issue(ctx, ['evidenceRefs', index], 'parameter advice cites unsupplied evidence');
+      if (cited.has(key)) issue(ctx, ['evidenceRefs', index], 'duplicate evidence citation');
+      cited.add(key);
+    });
   });
 }
 function toolAdvisorPromptInput(input: ToolSelectionAdvisorInput) {
@@ -508,6 +517,86 @@ function parameterAdvisorPromptInput(input: ParameterSelectionAdvisorInput) {
     producers,
     evidence: input.evidence,
   });
+}
+
+function evidenceCoverage(
+  evidence: PromptEvidenceProjection,
+  citedRefs: readonly ContentAddressedRef[],
+) {
+  const entryCounts = new Map<string, number>();
+  const cited = new Set(citedRefs.map(refKey));
+  const citedEntries: PromptEvidenceProjection['payload']['entries'] = [];
+  let omissions: unknown = null;
+  for (const entry of evidence.payload.entries) {
+    const key =
+      entry.kind === 'mechanical_fact'
+        ? 'mechanical_fact'
+        : `untrusted_redacted_quote:${entry.provenance}`;
+    entryCounts.set(key, (entryCounts.get(key) ?? 0) + 1);
+    if (cited.has(refKey(entry.ref))) citedEntries.push(entry);
+    if (entry.kind !== 'untrusted_redacted_quote') continue;
+    try {
+      const value = JSON.parse(entry.quote) as { kind?: unknown };
+      if (value.kind === 'prompt_evidence_omissions') omissions = value;
+    } catch {
+      // Quotes may be bounded previews. Only the host-authored omissions entry
+      // is expected to be complete JSON.
+    }
+  }
+  return {
+    ref: evidence.ref,
+    entryCounts: [...entryCounts].map(([kind, count]) => ({ kind, count })),
+    omissions,
+    citedEntries,
+  };
+}
+
+const MASTER_DECISION_INPUT_CHARACTER_BUDGET = 900_000;
+
+/** The parameter advisor has already read its focused evidence. Do not repeat
+ * every large quote when the master weighs several suggestions together. */
+function masterDecisionPromptInput(input: MasterDecisionInput) {
+  const submissions = input.parameterAdvice.map(({ evidence, ...submission }) => {
+    const coverage = evidenceCoverage(evidence, submission.advice.evidenceRefs);
+    return {
+      submission: {
+        ...submission,
+        evidenceSummary: {
+          ...coverage,
+          citedEntries: [] as typeof coverage.citedEntries,
+          omittedCitedEntryCount: coverage.citedEntries.length,
+        },
+      },
+      citedEntries: coverage.citedEntries,
+    };
+  });
+  const promptInput = {
+    ...input,
+    parameterAdvice: submissions.map(({ submission }) => submission),
+  };
+  if (JSON.stringify(promptInput).length > MASTER_DECISION_INPUT_CHARACTER_BUDGET)
+    throw new Error('master decision core input exceeds the provider-safe character budget');
+
+  const maximumCitations = Math.max(
+    0,
+    ...submissions.map(({ citedEntries }) => citedEntries.length),
+  );
+  for (let citationIndex = 0; citationIndex < maximumCitations; citationIndex += 1) {
+    for (const { submission, citedEntries } of submissions) {
+      const entry = citedEntries[citationIndex];
+      if (!entry) continue;
+      submission.evidenceSummary.citedEntries.push(entry);
+      submission.evidenceSummary.omittedCitedEntryCount -= 1;
+      if (JSON.stringify(promptInput).length <= MASTER_DECISION_INPUT_CHARACTER_BUDGET) continue;
+      submission.evidenceSummary.citedEntries.pop();
+      submission.evidenceSummary.omittedCitedEntryCount += 1;
+      if (citationIndex === 0)
+        throw new Error(
+          'master decision input cannot preserve one parameter-advice citation per tool',
+        );
+    }
+  }
+  return promptInput;
 }
 const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => {
   validateDiscovery(input.discovery, ctx);
@@ -784,10 +873,21 @@ function completionOutputSchema(input: CompletionReviewInput) {
       issue(ctx, ['binding'], 'stale completion binding');
     const seen = new Set<string>();
     output.claimDispositions.forEach((disposition, index) => {
-      if (!claims.has(disposition.claimId))
-        issue(ctx, ['claimDispositions', index], 'unknown claim');
+      const claim = claims.get(disposition.claimId);
+      if (!claim) issue(ctx, ['claimDispositions', index], 'unknown claim');
       if (seen.has(disposition.claimId))
         issue(ctx, ['claimDispositions', index], 'duplicate disposition');
+      if (
+        claim &&
+        !disposition.evidenceRefs.some((ref) =>
+          claim.evidenceRefs.some((claimRef) => refKey(ref) === refKey(claimRef)),
+        )
+      )
+        issue(
+          ctx,
+          ['claimDispositions', index, 'evidenceRefs'],
+          'claim disposition must cite supplied claim evidence',
+        );
       seen.add(disposition.claimId);
     });
     for (const id of claims.keys())
@@ -844,8 +944,20 @@ function completionOutputSchema(input: CompletionReviewInput) {
     const blockerStatuses = input.claims
       .filter(({ kind }) => kind === 'blocker')
       .map(({ id }) => dispositions.get(id));
+    const exclusionStatuses = input.claims
+      .filter(({ kind }) => kind === 'exclusion')
+      .map(({ id }) => dispositions.get(id));
     if (input.terminalIntent === 'completed' && blockerStatuses.includes('supported'))
       issue(ctx, ['verdict'], 'completed intent cannot pass with a supported blocker');
+    if (
+      input.terminalIntent === 'completed' &&
+      exclusionStatuses.some((status) => status !== 'supported')
+    )
+      issue(
+        ctx,
+        ['verdict'],
+        'completed intent requires every candidate exclusion to be supported',
+      );
     if (
       input.terminalIntent === 'blocked' &&
       blockerStatuses.some((status) => status !== 'supported')
@@ -961,6 +1073,10 @@ function utf8Prefix(value: string, maxBytes: number): string {
   let end = maxBytes;
   while (end > 0 && (bytes[end] ?? 0) >> 6 === 2) end -= 1;
   return bytes.subarray(0, end).toString();
+}
+
+function semanticRoleRequestPayload(input: unknown, validation: unknown) {
+  return { input, validationContext: validation };
 }
 async function invoke<T>(
   start: () => Promise<T>,
@@ -1089,10 +1205,7 @@ async function request<S extends z.ZodTypeAny>(options: {
       options.role,
     );
   try {
-    const first = await analyze({
-      input: options.input,
-      validationContext: options.validation,
-    });
+    const first = await analyze(semanticRoleRequestPayload(options.input, options.validation));
     try {
       return await invoke(
         () => Promise.resolve(parse(options.role, first.text, options.schema)),
@@ -1171,7 +1284,7 @@ export async function requestMasterDecision(
   return request({
     role: 'master decision',
     prompt: 'master-teach-decision.md',
-    input: checked,
+    input: masterDecisionPromptInput(checked),
     validation: {
       binding: masterDecisionBinding(checked),
       recordingIndex: checked.discovery.recordingIndex,

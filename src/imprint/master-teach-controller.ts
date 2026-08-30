@@ -84,17 +84,21 @@ import { ProviderUnavailableError, RunDeadline, type RunDeadlineRef } from './pr
 import { record } from './record.ts';
 import { redactSession } from './redact.ts';
 import {
+  type FocusedEvidenceDocument,
   type FocusedEvidenceScope,
   type IndependentExecutionObservation,
+  discoveryEvidenceDocuments,
   focusedEvidenceDocuments,
   observeIndependentExecution,
 } from './replay-evidence.ts';
 import { resolveTeachingRecording } from './session-merge.ts';
-import { detectToolCandidates } from './tool-candidates.ts';
+import { buildToolCandidatePayload, detectToolCandidates } from './tool-candidates.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type Session, SessionSchema, type ToolResult, type Workflow } from './types.ts';
 
 const FOCUSED_COMPILE_CONCURRENCY = 2;
+export const DISCOVERY_EVIDENCE_CHARACTER_BUDGET = 750_000;
+export const FOCUSED_EVIDENCE_CHARACTER_BUDGET = 700_000;
 const PROMOTED_FILES = [
   'workflow.json',
   'parser.ts',
@@ -567,36 +571,141 @@ function toolEvidenceScope(tool: EditableTeachingTool): FocusedEvidenceScope {
     toolId: tool.id,
     toolName: tool.candidate.toolName,
     requestSeqs: tool.candidate.requestSeqs,
+    representativeSeqs: tool.candidate.representativeSeqs,
     dependencySeqs: tool.candidate.dependencySeqs,
     eventSeqs: tool.candidate.eventSeqs,
   };
 }
 
-function discoveryEvidenceScope(detection: Detection): FocusedEvidenceScope {
+type UntrustedEvidenceEntry = Extract<
+  PromptEvidenceProjection['payload']['entries'][number],
+  { kind: 'untrusted_redacted_quote' }
+>;
+
+function evidenceDocumentKind(document: FocusedEvidenceDocument): string {
+  return typeof document.value.kind === 'string' ? document.value.kind : 'unknown';
+}
+
+function omissionDocument(input: {
+  totalDocuments: number;
+  includedDocuments: number;
+  omittedByKind: ReadonlyMap<string, number>;
+  maximumCharacters: number;
+}): FocusedEvidenceDocument {
+  const omittedByKind = [...input.omittedByKind]
+    .filter(([, count]) => count > 0)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([kind, count]) => ({ kind, count }));
+  const omittedDocuments = omittedByKind.reduce((total, { count }) => total + count, 0);
   return {
-    requestSeqs: [...new Set(detection.candidates.flatMap(({ requestSeqs }) => requestSeqs))],
-    dependencySeqs: [
-      ...new Set(detection.candidates.flatMap(({ dependencySeqs }) => dependencySeqs)),
-    ],
-    eventSeqs: [...new Set(detection.candidates.flatMap(({ eventSeqs }) => eventSeqs))],
+    provenance: 'plan_note',
+    value: {
+      kind: 'prompt_evidence_omissions',
+      totalDocuments: input.totalDocuments,
+      includedDocuments: input.includedDocuments,
+      omittedDocuments,
+      omittedByKind,
+      projectionCharacterBudget: input.maximumCharacters,
+      truncated: omittedDocuments > 0,
+    },
   };
 }
 
-function evidenceProjection(
-  documents: ReturnType<typeof focusedEvidenceDocuments>,
-  seeds: Map<string, FreshTeachBootstrapObject>,
-): PromptEvidenceProjection {
-  const payload = {
-    entries: documents.map(({ provenance, value }) => {
-      const documentRef = addBootstrap(seeds, jsonRef(value));
-      return {
-        kind: 'untrusted_redacted_quote' as const,
-        ref: documentRef,
-        provenance,
-        quote: utf8Prefix(JSON.stringify(value), 4_000) || '{}',
-      };
-    }),
+function untrustedEvidenceEntry(document: FocusedEvidenceDocument): {
+  entry: UntrustedEvidenceEntry;
+  object: ReturnType<typeof jsonRef>;
+} {
+  const object = jsonRef(document.value);
+  return {
+    object,
+    entry: {
+      kind: 'untrusted_redacted_quote',
+      ref: object.ref,
+      provenance: document.provenance,
+      quote: utf8Prefix(JSON.stringify(document.value), 4_000) || '{}',
+    },
   };
+}
+
+const EMPTY_EVIDENCE_PROJECTION_CHARACTERS = JSON.stringify({
+  ref: jsonRef({ entries: [] }).ref,
+  payload: { entries: [] },
+}).length;
+
+function evidenceProjectionCharacters(entries: readonly UntrustedEvidenceEntry[]): number {
+  return (
+    EMPTY_EVIDENCE_PROJECTION_CHARACTERS +
+    entries.reduce((total, entry) => total + JSON.stringify(entry).length, 0) +
+    Math.max(0, entries.length - 1)
+  );
+}
+
+/** Construct the exact prompt projection under a mechanical character budget.
+ * Documents are considered in their supplied order; callers put complete
+ * skeletons first and breadth-ordered detail afterward. */
+export function buildPromptEvidenceProjection(
+  documents: readonly FocusedEvidenceDocument[],
+  seeds: Map<string, FreshTeachBootstrapObject>,
+  maximumCharacters: number,
+  requiredKinds: ReadonlySet<string> = new Set(),
+): PromptEvidenceProjection {
+  const candidates = documents
+    .map((document) => ({
+      kind: evidenceDocumentKind(document),
+      ...untrustedEvidenceEntry(document),
+    }))
+    .map((candidate) => ({
+      ...candidate,
+      characters: JSON.stringify(candidate.entry).length,
+    }));
+  const remainingByKind = new Map<string, number>();
+  for (const { kind } of candidates)
+    remainingByKind.set(kind, (remainingByKind.get(kind) ?? 0) + 1);
+  const selected: typeof candidates = [];
+  let selectedCharacters = 0;
+  for (const candidate of candidates) {
+    const trialRemaining = new Map(remainingByKind);
+    trialRemaining.set(candidate.kind, (trialRemaining.get(candidate.kind) ?? 1) - 1);
+    const omission = untrustedEvidenceEntry(
+      omissionDocument({
+        totalDocuments: candidates.length,
+        includedDocuments: selected.length + 1,
+        omittedByKind: trialRemaining,
+        maximumCharacters,
+      }),
+    );
+    const trialEntryCount = selected.length + 2;
+    const trialCharacters =
+      EMPTY_EVIDENCE_PROJECTION_CHARACTERS +
+      selectedCharacters +
+      candidate.characters +
+      JSON.stringify(omission.entry).length +
+      Math.max(0, trialEntryCount - 1);
+    if (trialCharacters > maximumCharacters) {
+      if (requiredKinds.has(candidate.kind))
+        throw new RangeError(
+          `required ${candidate.kind} evidence cannot fit ${maximumCharacters} characters`,
+        );
+      continue;
+    }
+    selected.push(candidate);
+    selectedCharacters += candidate.characters;
+    remainingByKind.set(candidate.kind, (remainingByKind.get(candidate.kind) ?? 1) - 1);
+  }
+  const omission = untrustedEvidenceEntry(
+    omissionDocument({
+      totalDocuments: candidates.length,
+      includedDocuments: selected.length,
+      omittedByKind: remainingByKind,
+      maximumCharacters,
+    }),
+  );
+  const entries = [...selected.map(({ entry }) => entry), omission.entry];
+  if (evidenceProjectionCharacters(entries) > maximumCharacters)
+    throw new RangeError(`evidence projection cannot fit ${maximumCharacters} characters`);
+  for (const { object } of selected) addBootstrap(seeds, object);
+  addBootstrap(seeds, omission.object);
+  const payload = { entries };
   const ref = addBootstrap(seeds, jsonRef(payload));
   return PromptEvidenceProjectionSchema.parse({ ref, payload });
 }
@@ -976,13 +1085,19 @@ async function requestFocusedPlannerBundles(input: {
   for (const tool of targetTools) {
     evidenceByTool.set(
       tool.id,
-      evidenceProjection(
+      buildPromptEvidenceProjection(
         focusedEvidenceDocuments({
           session: input.triagedSession,
           scope: toolEvidenceScope(tool),
           independent: input.independent,
         }),
         input.seeds,
+        FOCUSED_EVIDENCE_CHARACTER_BUDGET,
+        new Set([
+          'focused_recording_scope',
+          'focused_request_summaries',
+          'focused_event_summaries',
+        ]),
       ),
     );
   }
@@ -1093,6 +1208,7 @@ async function discoverAndPlan(input: {
   runId: string;
   recordingSha256: string;
   triage: TriageResult;
+  candidatePayload: ReturnType<typeof buildToolCandidatePayload>;
   detection: Detection;
   independent: IndependentExecutionObservation;
   seeds: Map<string, FreshTeachBootstrapObject>;
@@ -1111,13 +1227,18 @@ async function discoverAndPlan(input: {
   const discoveryCandidates = input.detection.candidates.map((candidate) =>
     normalizeDetectorCandidateForMaster(candidate),
   );
-  const discoveryEvidence = evidenceProjection(
-    focusedEvidenceDocuments({
-      session: input.triage.session,
-      scope: discoveryEvidenceScope(input.detection),
-      independent: input.independent,
+  const discoveryEvidence = buildPromptEvidenceProjection(
+    discoveryEvidenceDocuments({
+      candidatePayload: input.candidatePayload,
     }),
     input.seeds,
+    DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
+    new Set([
+      'discovery_detector_evidence',
+      'discovery_detector_narration',
+      'discovery_detector_events',
+      'discovery_detector_requests',
+    ]),
   );
   const detectorSharedContext = normalizeDetectorCompileContextForMaster(
     input.detection.sharedContext,
@@ -2185,6 +2306,22 @@ function completionInput(input: {
   liveByToolId?: ReadonlyMap<string, LiveCheckResult>;
 }): CompletionReviewInput {
   const current = currentPlanProjection(input.journal);
+  const exclusionClaims = current.plan.candidateCoverage.flatMap(
+    ({ discoveryCandidateName, excludedReason }, index) =>
+      excludedReason
+        ? [
+            {
+              id: `candidate-exclusion-${index}`,
+              kind: 'exclusion' as const,
+              statement: utf8Prefix(
+                `Exclude detector candidate "${discoveryCandidateName}": ${excludedReason}`,
+                1_000,
+              ),
+              evidenceRefs: [input.evidence.ref],
+            },
+          ]
+        : [],
+  );
   const claims =
     input.terminalIntent === 'blocked'
       ? [
@@ -2195,7 +2332,7 @@ function completionInput(input: {
             evidenceRefs: [input.evidence.ref],
           },
         ]
-      : [];
+      : exclusionClaims;
   const toolResultEvidence =
     input.terminalIntent === 'completed'
       ? completionToolResultEvidence(input.journal, current.plan, input.liveByToolId ?? new Map())
@@ -2417,9 +2554,11 @@ export async function runFreshMasterTeach(
     const triage = deps.prepareSession(redacted.session);
     const triagedPath = pathJoin(runRoot, 'recording.triaged.json');
     writeJson(triagedPath, triage.session);
+    const candidatePayload = buildToolCandidatePayload(triage.session);
     reportProgress(opts, 'discovering operations while observing an independent execution');
     const [detection, independent] = await Promise.all([
       deps.detectToolCandidates(triage.session, llmOptions(opts), {
+        candidatePayload,
         signal: opts.signal,
         deadlineMs: deadline.deadlineMs,
         runDeadline: deadline,
@@ -2447,6 +2586,7 @@ export async function runFreshMasterTeach(
       runId,
       recordingSha256: recording.recordingSha256,
       triage,
+      candidatePayload,
       detection,
       independent,
       seeds,

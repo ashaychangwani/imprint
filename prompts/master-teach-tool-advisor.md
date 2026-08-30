@@ -15,11 +15,12 @@ dependencies through `dependsOnTools` and `dependencySeqs`. Do not rank tools.
 Review the complete discovered set and keep every credible user-facing operation
 represented. Never output parameters or event timestamps.
 
-Evidence may be split into many focused entries so later narration and request
-facts are not hidden by one short preview. Read every supplied entry. Independent
-execution equality/difference, alignment confidence, prior-response matches,
-and event/request differences are factual clues only. A prior-response match is
-correlation, not causality, and the absence of a match has no strategy meaning.
+Discovery evidence is a content-complete, mechanically chunked copy of the
+compact narration, events, and request payload used by the shipped detector,
+including operations no candidate claimed. The
+detector's boundaries are only a proposal: you may add, merge, split, or remove
+them. Read every supplied entry. Candidate request ownership does not limit
+which credible operations you may propose.
 
 Exact output schema (all objects reject extra fields):
 

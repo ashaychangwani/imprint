@@ -2,6 +2,19 @@
 
 Items deferred from the v0.1 design + eng review. Not blocking the 2-week sprint. Address these between launch (day 14) and "v0.2" if/when interest justifies it.
 
+## Current master-teach follow-ups
+
+- A request-free browser fallback passes its direct teach check, but the normal
+  automatic runtime ladder currently tries the empty API shell first and stops
+  before playbook. Route an explicitly accepted request-free fallback directly
+  to its playbook and cover it with an end-to-end ladder test. This is deferred
+  while Google Hotels and Google Flights are being judged on API tools; a
+  playbook for either Google run is a teaching failure, not success.
+- Direct `imprint generate` does not carry the master strategy binding now
+  described by the shared compiler prompt. Either bind that legacy command to
+  API explicitly or make the prompt conditional. The master-driven `teach`
+  path already supplies the binding.
+
 ## v0.2 candidates (post-sprint, in priority order)
 
 ### 1. Auth refresh: detect cookie expiry and re-prompt without manual intervention

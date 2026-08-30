@@ -1,14 +1,21 @@
 import { describe, expect, it } from 'bun:test';
-import { prepareRedactedTeachingSession } from '../src/imprint/master-teach-controller.ts';
+import {
+  DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
+  FOCUSED_EVIDENCE_CHARACTER_BUDGET,
+  buildPromptEvidenceProjection,
+  prepareRedactedTeachingSession,
+} from '../src/imprint/master-teach-controller.ts';
 import {
   createReplayRequestIdentityAllocator,
   resolveReplayInputValue,
 } from '../src/imprint/replay-capture.ts';
 import {
   compareIndependentExecution,
+  discoveryEvidenceDocuments,
   focusedEvidenceDocuments,
   observeIndependentExecution,
 } from '../src/imprint/replay-evidence.ts';
+import { buildToolCandidatePayload } from '../src/imprint/tool-candidates.ts';
 import type { Session } from '../src/imprint/types.ts';
 
 function session(): Session {
@@ -68,6 +75,16 @@ function session(): Session {
     cookieSnapshots: [],
     storageSnapshots: [],
   };
+}
+
+function projectedValues(
+  projection: ReturnType<typeof buildPromptEvidenceProjection>,
+): Record<string, unknown>[] {
+  return projection.payload.entries.flatMap((entry) =>
+    entry.kind === 'untrusted_redacted_quote'
+      ? [JSON.parse(entry.quote) as Record<string, unknown>]
+      : [],
+  );
 }
 
 describe('factual independent-execution evidence', () => {
@@ -315,6 +332,156 @@ describe('factual independent-execution evidence', () => {
     for (const document of documents) {
       expect(Buffer.byteLength(JSON.stringify(document.value), 'utf8')).toBeLessThanOrEqual(4_000);
     }
+  });
+
+  it('gives discovery the complete detector payload, including unclaimed operations', () => {
+    const recording = session();
+    recording.requests.push({
+      seq: 30,
+      timestamp: 30,
+      method: 'GET',
+      url: 'https://fixture.invalid/unclaimed',
+      headers: {},
+      resourceType: 'XHR',
+      response: { status: 200, headers: {}, body: '{"unclaimed":true}' },
+    });
+    recording.events.push({
+      seq: 25,
+      timestamp: 25,
+      type: 'click',
+      detail: '{"selector":"#unclaimed"}',
+    });
+    const candidatePayload = buildToolCandidatePayload(recording);
+    const documents = discoveryEvidenceDocuments({
+      candidatePayload,
+    });
+    const projection = buildPromptEvidenceProjection(
+      documents,
+      new Map(),
+      DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
+      new Set([
+        'discovery_detector_evidence',
+        'discovery_detector_narration',
+        'discovery_detector_events',
+        'discovery_detector_requests',
+      ]),
+    );
+    const values = projectedValues(projection);
+    const projectedRequests = values
+      .filter(({ kind }) => kind === 'discovery_detector_requests')
+      .flatMap(({ requests }) => (Array.isArray(requests) ? requests : []));
+    const projectedEvents = values
+      .filter(({ kind }) => kind === 'discovery_detector_events')
+      .flatMap(({ events }) => (Array.isArray(events) ? events : []));
+
+    expect(projectedRequests.map(({ seq }) => seq)).toEqual(
+      candidatePayload.requests.map(({ seq }) => seq),
+    );
+    expect(projectedRequests).toContainEqual(expect.objectContaining({ seq: 30 }));
+    expect(projectedEvents).toContainEqual(expect.objectContaining({ seq: 25 }));
+    expect(projectedRequests).toEqual(candidatePayload.requests);
+    expect(projectedEvents).toEqual(candidatePayload.events);
+    expect(JSON.stringify(projection).length).toBeLessThanOrEqual(
+      DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
+    );
+    expect(() =>
+      buildPromptEvidenceProjection(
+        documents,
+        new Map(),
+        1_000,
+        new Set(['discovery_detector_requests']),
+      ),
+    ).toThrow('required discovery_detector_requests evidence cannot fit');
+  });
+
+  it('keeps every focused request summary but limits detail to representatives and dependencies', () => {
+    const recording = session();
+    recording.requests.push({
+      seq: 30,
+      timestamp: 30,
+      method: 'POST',
+      url: 'https://fixture.invalid/later',
+      headers: {},
+      body: '{"later":"not-detailed"}',
+      resourceType: 'XHR',
+      response: { status: 200, headers: {}, body: '{"ok":true}' },
+    });
+    const documents = focusedEvidenceDocuments({
+      session: recording,
+      scope: {
+        toolId: 'detail',
+        toolName: 'get_detail',
+        requestSeqs: [10, 20, 30],
+        representativeSeqs: [20],
+        dependencySeqs: [10],
+        eventSeqs: [15],
+      },
+      independent: compareIndependentExecution(recording, []),
+    });
+    const projection = buildPromptEvidenceProjection(
+      documents,
+      new Map(),
+      FOCUSED_EVIDENCE_CHARACTER_BUDGET,
+    );
+    const values = projectedValues(projection);
+    const summaries = values
+      .filter(({ kind }) => kind === 'focused_request_summaries')
+      .flatMap(({ requests }) => (Array.isArray(requests) ? requests : []));
+    const detailedSeqs = new Set(
+      values
+        .filter(({ kind }) => kind === 'focused_request_structure')
+        .map(({ recordingRequestSeq }) => recordingRequestSeq),
+    );
+    const previewSeqs = new Set(
+      values
+        .filter(({ kind }) => kind === 'focused_request_preview')
+        .map(({ recordingRequestSeq }) => recordingRequestSeq),
+    );
+
+    expect(summaries.map(({ recordingRequestSeq }) => recordingRequestSeq)).toEqual([10, 20, 30]);
+    expect(detailedSeqs).toEqual(new Set([10, 20]));
+    expect(previewSeqs).toEqual(new Set([10, 20]));
+    expect(JSON.stringify(values)).not.toContain('not-detailed');
+    expect(values.at(-1)).toMatchObject({ kind: 'prompt_evidence_omissions' });
+    expect(JSON.stringify(projection).length).toBeLessThanOrEqual(
+      FOCUSED_EVIDENCE_CHARACTER_BUDGET,
+    );
+    const deliberatelySmallProjection = buildPromptEvidenceProjection(documents, new Map(), 8_000);
+    expect(JSON.stringify(deliberatelySmallProjection).length).toBeLessThanOrEqual(8_000);
+    expect(projectedValues(deliberatelySmallProjection).at(-1)).toMatchObject({
+      kind: 'prompt_evidence_omissions',
+      truncated: true,
+      omittedDocuments: expect.any(Number),
+    });
+    expect(() =>
+      buildPromptEvidenceProjection(
+        documents,
+        new Map(),
+        1_000,
+        new Set(['focused_request_summaries']),
+      ),
+    ).toThrow('required focused_request_summaries evidence cannot fit');
+  });
+
+  it('uses every owned request as detail when the detector leaves representatives empty', () => {
+    const documents = focusedEvidenceDocuments({
+      session: session(),
+      scope: {
+        toolId: 'search',
+        toolName: 'search_catalog',
+        requestSeqs: [10, 20],
+        representativeSeqs: [],
+        dependencySeqs: [],
+        eventSeqs: [15],
+      },
+      independent: compareIndependentExecution(session(), []),
+    });
+    const detailedSeqs = new Set(
+      documents
+        .filter(({ value }) => value.kind === 'focused_request_preview')
+        .map(({ value }) => value.recordingRequestSeq),
+    );
+    expect(detailedSeqs).toEqual(new Set([10, 20]));
   });
 });
 

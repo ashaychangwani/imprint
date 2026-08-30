@@ -35,8 +35,8 @@ Schema:
 
 Rules:
 
-1. Propose user-facing independent intents as tools. A recording may support no
-   credible tool, one tool, or several tools. Do not aim for a particular count.
+1. Expose user-facing independent intents as tools. A recording may include one
+   intent or several independent intents.
 2. Do not expose login, auth, CSRF refresh, telemetry, page bootstrap, or
    tracking as tools. Put login/auth request seqs in sharedContext.loginRequestSeqs
    or candidate.dependencySeqs instead.
@@ -89,29 +89,39 @@ Rules:
 12. likelyParams.type must be exactly one of "string", "number", or "boolean".
     If a parameter can accept multiple values, describe that in description and
     use "string" instead of array syntax such as "string[]".
-13. Return an empty candidates array when the evidence does not support a useful
-    tool. Do not invent a tool merely to avoid an empty answer.
-14. Consider response contents, narration, timing, repeated calls, and
-    dependencies together. Response size alone does not prove that a request is
-    load-bearing or independently useful.
+13. If the recording has only one useful intent, return one candidate. Return an
+    empty candidates array only when the evidence supports no useful tool.
+14. When an endpoint returns a large dataset (high responseBodyLength — e.g. a
+    product catalog, pricing index, or comprehensive listing), prefer it as a
+    load-bearing request over smaller supplementary endpoints (status checks,
+    metadata lookups, narrow feeds). Include both in requestSeqs when they serve
+    the same user intent.
 15. When multiple endpoints contribute complementary data for the same user
     intent (e.g. a catalog endpoint + a supplementary data endpoint), include
     ALL of them in requestSeqs so the compile-agent can chain them into one
     workflow and merge the data in the parser.
-16. A lookup or resolution request may be a separate candidate when the evidence
-    supports a standalone user-facing use case. It may instead be an internal
-    prerequisite. Explain the boundary in rationale rather than applying a
-    universal lookup rule.
-17. Do not prefer more or fewer candidates. Split when callers gain genuinely
-    independent operations; merge when requests are parts or variations of one
-    operation. State the evidence for the choice so the tool-selection advisor
-    and master can revise it.
+16. Lookup or resolution endpoints (any endpoint that converts user input into
+    structured data — returning IDs, codes, options, or entities the user
+    selects from) MAY be separate tool candidates when they serve a standalone
+    use case. Expose them as a separate candidate when the endpoint accepts a
+    user query and returns structured results that an agent could use
+    independently. Include them in dependencySeqs of another tool when that
+    tool's parameters depend on the lookup result.
+17. Prefer more candidates over fewer. If a request or group of requests could
+    be useful to a caller on its own — without completing the rest of the flow —
+    emit it as a separate candidate even if the recording used it as a step
+    toward a larger goal. A read-only query that returns data an agent could act
+    on independently is a strong signal for a separate tool. These are still
+    proposals: the advisor and master may merge candidates when the complete
+    evidence supports one operation.
 18. Every candidate must have either requestSeqs or eventSeqs grounded in the
     supplied recording. Never invent request or event sequence numbers.
-19. Repeated calls to the same endpoint with changed values often represent
-    parameter variations of one tool, but endpoint identity is not conclusive.
-    Use the user-facing intent and observed outputs to decide whether to merge or
-    split them, and explain exceptions in rationale.
+19. When the same API endpoint (same URL path and method) is called multiple
+    times with different parameter values — such as toggling filters, changing
+    sort order, adjusting constraints, or paginating — treat those as parameter
+    variations of a single candidate, not separate candidates. Consolidate them
+    and add the varying values as likelyParams. The master may later split them
+    when broader evidence supports genuinely independent user-facing intents.
 20. When requestSeqs contains multiple calls to the same API endpoint with
     different parameter values (autocomplete keystrokes, pagination, filter
     toggles, sort changes), select representativeSeqs to MAXIMIZE likelyParam

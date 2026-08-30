@@ -10,12 +10,29 @@ Treat the serialized `recordingIndex` as the authority for which request and
 event sequence numbers exist; reason from the supplied evidence and proposals
 without inventing additional facts.
 
-Read every focused evidence entry. Independent-execution comparisons and
+Discovery evidence reuses a content-complete, mechanically chunked copy of the
+detector's compact narration, events, and requests, including operations not
+claimed by a proposed candidate;
+candidate ownership does not limit what tools you may add, merge, or split.
+Focused evidence keeps a summary for every owned/dependency request and bounded
+detail for representative requests and dependencies. Read every entry
+and its `prompt_evidence_omissions` counts. Omitted detail is not evidence for a
+semantic conclusion or strategy. Independent-execution comparisons and
 event/request differences are observations, not runtime decisions. An exact
 prior-response sequence/path match is correlation rather than proof of origin
 or causality. Missing correlation, a different value, low alignment, or an
 unavailable replay is never by itself evidence that API execution is
 incompatible or that the playbook fallback is required.
+
+When several parameter advisors are supplied together, each suggestion carries
+an `evidenceSummary` with the content-addressed evidence reference, entry counts,
+any omission counts, and the bounded evidence entries that advisor cited
+instead of repeating every focused quote. Inspect those cited facts. The
+advisor's judgment is still only a suggestion; weigh its reason against the
+discovery evidence, current plan, and factual check snapshot, and disagree when
+those facts support a better public parameter choice. `omittedCitedEntryCount`
+states how many additional advisor citations did not fit the combined prompt;
+never treat omitted citations as evidence for or against the suggestion.
 
 For every phase, copy the single exact master-decision binding from
 `validationContext.binding`. Discovery decisions use the run identity. Revision
@@ -68,11 +85,15 @@ Persist that accounting in `candidateCoverage`. Include every original
 `discoveryCandidates[].toolName` exactly once, with no maximum count. Map it to
 one or more final stable tool IDs. Several discoveries may map to the same tool
 when you merge them; one discovery may map to several tools when you split it.
-If current evidence cannot support any final tool for an operation, use an empty
-`plannedToolIds` array and a specific nonempty `unresolvedReason`. Resolved rows
-use `unresolvedReason: null`. Never remove a coverage row during repair merely
-to make a failing tool disappear. A mixed plan with an unresolved row cannot
-complete or promote; keep investigating and revising it.
+If a detector proposal is a duplicate, unsupported by the recording, or not a
+user-facing operation, use an empty `plannedToolIds` array,
+`unresolvedReason: null`, and a specific nonempty `excludedReason`. This is a
+final semantic rejection that the independent completion reviewer must approve.
+If a credible operation is not solved yet, use empty `plannedToolIds`, a
+specific nonempty `unresolvedReason`, and no `excludedReason`. Resolved rows use
+one or more planned tool IDs with both reasons null or absent. Never exclude a
+candidate merely to make a failing tool disappear. A mixed plan with an
+unresolved row cannot complete or promote; keep investigating and revising it.
 If the supplied evidence supports no honest tool yet, return `tools: []` and
 `buildWaves: []` and `chainEdges: []` instead of inventing one. That plan can be
 reviewed as blocked and revised when more evidence exists. `expectedOutput` may
@@ -99,7 +120,8 @@ Exact output schema (all objects reject extra fields):
     site: string, recordingSha256: sha256,
     candidateCoverage: Array<{
       discoveryCandidateName: snake_case,
-      plannedToolIds: Array<tool ID>, unresolvedReason: string | null
+      plannedToolIds: Array<tool ID>, unresolvedReason: string | null,
+      excludedReason?: string | null
     }>,
     tools: Array<{
       id: string,
@@ -145,7 +167,8 @@ Exact output schema (all objects reject extra fields):
     "candidateCoverage": [{
       "discoveryCandidateName": "search_catalog",
       "plannedToolIds": ["catalog_search"],
-      "unresolvedReason": null
+      "unresolvedReason": null,
+      "excludedReason": null
     }],
     "tools": [
       {

@@ -14,13 +14,17 @@ failures may be superseded by a current receipt for the exact current tool
 execution. For `completed`, the host admits this review only after contract and
 live pass for every tool, API replay passes, playbook replay is not applicable,
 every current chain edge passes against exact builds, and the plan contains at
-least one tool. Every original discovery row in `candidateCoverage` must also
-resolve to at least one current tool; a mixed plan with any unresolved row
-cannot complete. An entirely empty, explicitly unresolved plan can only support
-`blocked`. For `blocked`, every
+least one tool. Every original discovery row in `candidateCoverage` must either
+resolve to a current tool or carry an explicit exclusion reason. Each exclusion
+is supplied as an `exclusion` claim: compare it with the discovery evidence and
+mark it supported only when the detector proposal is genuinely duplicate,
+unsupported, or not user-facing. A completed review cannot pass with an
+unsupported exclusion. A mixed plan with any unresolved row cannot complete.
+An entirely empty, explicitly unresolved plan can only support `blocked`. For `blocked`, every
 blocker claim must be evidence-supported; unsupported blocker claims reject the
 terminal intent. Each explicit claim must appear exactly once as supported or
-unsupported. Blocking findings must cite evidence. Copy
+unsupported, and each disposition must cite at least one reference supplied on
+that claim. Blocking findings must cite evidence. Copy
 `validationContext.binding` exactly.
 An invocation fact may include a slug-only `executionMechanism`. It reports
 which backend actually ran for that invocation; it is evidence only and never
