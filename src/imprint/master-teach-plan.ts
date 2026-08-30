@@ -1091,7 +1091,7 @@ export function validateImplementationPlanForTool(
     for (const ref of verificationCase.provenance.evidenceRefs) {
       if (!authorizedEvidence.has(canonicalTeachingPlanJson(ref))) {
         throw new TeachingPlanValidationError(
-          `verification case "${verificationCase.id}" references evidence outside the focused tool`,
+          `verification case "${verificationCase.id}" references evidence outside tool.evidenceRefs; copy the supplied authorized evidence refs exactly`,
         );
       }
     }

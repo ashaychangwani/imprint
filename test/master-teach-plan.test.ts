@@ -765,7 +765,7 @@ describe('editable master teaching plan', () => {
         validation.requestSeqs,
         validation.eventSeqs,
       ),
-    ).toThrow('evidence outside the focused tool');
+    ).toThrow('evidence outside tool.evidenceRefs');
 
     const unknownEvent = structuredClone(payload);
     const unknownEventCase = unknownEvent.verificationCases[0];

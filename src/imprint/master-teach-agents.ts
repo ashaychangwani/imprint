@@ -246,6 +246,8 @@ function focusedPlannerOutputSchema(input: FocusedPlannerInput) {
       issue(ctx, ['binding'], 'stale focused-planner binding');
     if (output.tool.id !== input.tool.id)
       issue(ctx, ['tool', 'id'], 'focused planner cannot replace the stable tool id');
+    if (!same(output.tool.evidenceRefs, input.tool.evidenceRefs))
+      issue(ctx, ['tool', 'evidenceRefs'], 'focused planner cannot change supplied evidence refs');
     validateFocusedPlannerTool(output.tool, input, ctx, ['tool']);
     const producers = new Map(
       input.availableProducers.map((producer) => [producer.toolId, producer]),
@@ -1271,6 +1273,7 @@ export async function requestFocusedPlan(
     validation: {
       binding: focusedPlannerBinding(checked),
       recordingIndex: checked.recordingIndex,
+      authorizedEvidenceRefs: checked.tool.evidenceRefs,
     },
     schema: focusedPlannerOutputSchema(checked),
     agent,

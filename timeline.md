@@ -1299,3 +1299,37 @@ Hotels run.
 The complete repository run passed 1,725 of 1,726 tests. The only miss was the
 same timing-sensitive process-cleanup stress test seen in earlier checkpoints;
 it passed immediately when rerun by itself. No process-cleanup code changed.
+
+## 2026-08-29 18:04 PDT — Fresh Google Hotels attempt 4
+
+### Result
+
+Failed during focused planning, before compilation. Run
+`59c2148d-e404-41a5-8230-70204865da68` used the latest combined Hotels
+recording. The shipped detector found three operations again. The narration-ID
+handoff fix worked: the advisor and master were reached, so attempt 3's failure
+did not repeat. The independent replay captured 1,445 requests. No playbook was
+selected.
+
+One of the three focused planners, for `hotel_search_suggestions`, returned an
+invalid evidence reference even after its one repair attempt. The command now
+preserved the useful exact error: its recorded replay case cited one small piece
+inside the focused evidence bundle instead of the one reference for the whole
+bundle. No tool reached compilation or verification.
+
+### General fix chosen
+
+Make the existing evidence contract unambiguous. The planner now receives a
+short explicit list of the references it is allowed to copy. Its instructions
+say to use that list for the tool and every verification case, and not to copy
+the separate references attached to individual evidence pieces. The validator
+also rejects a planner that changes the supplied list, and its repair message
+names the exact field to copy.
+
+This does not alter candidate selection, parameters, strategy, request choice,
+or evidence content. It only makes an existing bookkeeping requirement clear.
+A production-shaped regression test now starts with the same wrong inner
+reference, verifies the repair call receives the allowed whole-bundle
+reference, and succeeds on the corrected answer. All 119 focused tests pass,
+along with type checking and lint. This run will not be resumed; the next
+Hotels validation will be fresh.

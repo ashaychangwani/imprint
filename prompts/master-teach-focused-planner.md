@@ -49,6 +49,14 @@ means its values and correlations were not observed; do not guess which repeated
 request matched. Likewise, event/request associations are only temporal; use
 narration and the focused request facts to decide what they mean.
 
+The only evidence references authorized for your output are listed in
+`validationContext.authorizedEvidenceRefs` and are identical to
+`input.tool.evidenceRefs`. Copy that list exactly into `tool.evidenceRefs` and
+into every `verificationCases[].provenance.evidenceRefs`. Do not copy the
+individual `input.evidence.payload.entries[].ref` values into the output; those
+identify pieces inside the one authorized focused bundle, not separately
+authorized verification evidence.
+
 Every API rung has higher priority than `playbook_fallback`. Suggest the
 fallback only when the evidence makes you certain no API rung is compatible,
 not because browser automation looks easier. These are the only two strategy
@@ -99,8 +107,8 @@ applicable to it.
 
 Incoming chain edges may refer only to `availableProducers`, must target this
 tool's stable ID, and must name a proposed public consumer parameter. Keep the
-stable tool ID even when suggesting candidate changes. Evidence refs must be
-copied exactly from the focused input. Return no implementation-plan ref.
+stable tool ID even when suggesting candidate changes. Return no
+implementation-plan ref.
 
 `outgoingChainEdges` are current consumer obligations on this tool's result.
 Account for each named `producerResultPath` when proposing the result shape.

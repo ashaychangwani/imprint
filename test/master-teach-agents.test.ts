@@ -844,6 +844,13 @@ describe('prompts and pre-plan discovery', () => {
     expect(masterPrompt).toContain('alone a reason to reject an API plan');
   });
 
+  it('tells the focused planner exactly which evidence refs it may copy', () => {
+    const focusedPrompt = prompt('master-teach-focused-planner.md');
+    expect(focusedPrompt).toContain('`validationContext.authorizedEvidenceRefs`');
+    expect(focusedPrompt).toContain('Do not copy the');
+    expect(focusedPrompt).toContain('`input.evidence.payload.entries[].ref`');
+  });
+
   it('makes the first advisor and master calls honestly pre-plan', async () => {
     const seen: unknown[] = [];
     const advisor: MasterTeachAnalyzer = {
@@ -918,6 +925,48 @@ describe('prompts and pre-plan discovery', () => {
     ]);
     expect(sent.masterGuidance).toBe(input.masterGuidance);
     expect(sent.outgoingChainEdges).toEqual(edges);
+    expect(
+      (seen[0] as { validationContext: { authorizedEvidenceRefs: ContentAddressedRef[] } })
+        .validationContext.authorizedEvidenceRefs,
+    ).toEqual(input.tool.evidenceRefs);
+  });
+
+  it('repairs an evidence-entry ref using the one authorized focused bundle ref', async () => {
+    const base = focusedInput();
+    const input = {
+      ...base,
+      tool: { ...base.tool, evidenceRefs: [base.evidence.ref] },
+    };
+    const valid = focusedOutput(input);
+    const invalid = structuredClone(valid);
+    const entryRef = at(input.evidence.payload.entries, 0).ref;
+    expect(entryRef).not.toEqual(input.tool.evidenceRefs[0]);
+    at(invalid.implementationPlan.verificationCases, 0).provenance.evidenceRefs = [entryRef];
+    const seen: Array<{
+      validationContext: { authorizedEvidenceRefs: ContentAddressedRef[] };
+      parseErrors?: string[];
+    }> = [];
+    let calls = 0;
+    const analyzer: MasterTeachAnalyzer = {
+      async analyze(_system, payload) {
+        seen.push(
+          payload as {
+            validationContext: { authorizedEvidenceRefs: ContentAddressedRef[] };
+            parseErrors?: string[];
+          },
+        );
+        calls += 1;
+        return { text: JSON.stringify(calls === 1 ? invalid : valid) };
+      },
+    };
+
+    expect(await requestFocusedPlan(input, { analyzer })).toEqual(valid);
+    expect(calls).toBe(2);
+    expect(seen.map(({ validationContext }) => validationContext.authorizedEvidenceRefs)).toEqual([
+      input.tool.evidenceRefs,
+      input.tool.evidenceRefs,
+    ]);
+    expect(seen[1]?.parseErrors?.join(' ')).toContain('outside tool.evidenceRefs');
   });
 
   it('binds focused output to the current run and tool while leaving request choice to the planner', () => {
@@ -991,7 +1040,16 @@ describe('prompts and pre-plan discovery', () => {
     ];
     expect(() =>
       parseFocusedPlannerOutput(JSON.stringify(foreignCaseEvidence), detailInput),
-    ).toThrow('evidence outside the focused tool');
+    ).toThrow('evidence outside tool.evidenceRefs');
+
+    const changedToolEvidence = structuredClone(valid);
+    changedToolEvidence.tool.evidenceRefs = [ref('forged/tool-evidence.json', 'f')];
+    for (const verificationCase of changedToolEvidence.implementationPlan.verificationCases) {
+      verificationCase.provenance.evidenceRefs = changedToolEvidence.tool.evidenceRefs;
+    }
+    expect(() =>
+      parseFocusedPlannerOutput(JSON.stringify(changedToolEvidence), detailInput),
+    ).toThrow('focused planner cannot change supplied evidence refs');
 
     const backwards = structuredClone(valid);
     backwards.implementationPlan.requestProvenance.push({
