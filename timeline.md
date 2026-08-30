@@ -1227,3 +1227,33 @@ Hotels, Flights, or Southwest recordings. The complete repository run passed
 1,721 of 1,722 tests; the only miss was the known timing-sensitive process
 cleanup stress test, which passed immediately when rerun by itself. No process
 cleanup code was changed in this checkpoint.
+
+## 2026-08-29 17:29 PDT — Fresh Google Hotels attempt 2
+
+### Result
+
+Failed before compilation. Run `88ad7055-f4a2-4f1f-bf25-fb682c688059`
+used the same current combined recording and hash as attempt 1. The restored
+detector proposed three operations instead of two. The master kept all three:
+`suggest_hotel_searches`, `search_hotels`, and `get_hotel_details`. All three
+used the API strategy; details depended on search, so the master created two
+build waves. No playbook was selected.
+
+The master revised `search_hotels` after its first focused plan, which correctly
+made only that tool's old implementation plan stale. The controller then asked
+a clean focused planner to re-plan only `search_hotels`. That call failed, so
+the command honestly returned `0 ready, 3 failed` rather than compiling an
+incomplete plan.
+
+The saved error only said `focused planning failed for 1 of 1 tools`. The
+underlying planner error was still inside the in-memory aggregate error, but
+the aggregate's short heading replaced it in both the terminal and run record.
+That makes diagnosis impossible after the process exits.
+
+### General fix chosen
+
+Keep the tool name and its exact nested planner error in the aggregate message.
+This does not change planning, retry counts, tool selection, parameters, or
+strategy. It only preserves the facts already produced by the failed agent
+call. Type checking, lint, and 15 controller tests pass. This failed run will
+not be resumed; the next validation will be another fresh Hotels run.

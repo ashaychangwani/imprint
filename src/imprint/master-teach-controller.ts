@@ -431,6 +431,20 @@ function boundedTerminalMessage(value: unknown): string {
   return utf8Prefix(message.trim() || 'teach failed', 1_000);
 }
 
+export function focusedPlanningFailureMessage(
+  failures: readonly { toolId: string; error: unknown }[],
+  targetCount: number,
+): string {
+  const details = failures.map(({ toolId, error }) => {
+    const message = error instanceof Error ? error.message : String(error);
+    return `${toolId}: ${utf8Prefix(message.trim() || 'unknown planning failure', 800)}`;
+  });
+  return [
+    `focused planning failed for ${failures.length} of ${targetCount} tools`,
+    ...details,
+  ].join('\n');
+}
+
 function reportProgress(opts: FreshTeachOptions, message: string): void {
   opts.onProgress?.(message);
 }
@@ -1146,7 +1160,7 @@ async function requestFocusedPlannerBundles(input: {
     throwTerminalFanoutFailure(planned.failures, input.agent.signal);
     throw new AggregateError(
       planned.failures.map(({ error }) => error),
-      `focused planning failed for ${planned.failures.length} of ${targetTools.length} tools`,
+      focusedPlanningFailureMessage(planned.failures, targetTools.length),
     );
   }
 

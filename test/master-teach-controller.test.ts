@@ -5,6 +5,7 @@ import { join as pathJoin } from 'node:path';
 import {
   apiReplayFacts,
   compileEveryToolInBuildWaves,
+  focusedPlanningFailureMessage,
   implementationPlanRepairToolIds,
   prepareFullSessionForTeach,
   promoteReviewedCompletion,
@@ -485,6 +486,23 @@ describe('master repair revisions', () => {
         ]),
       ),
     ).toBe('cancelled');
+  });
+
+  it('keeps the exact per-tool focused-planner failure in the terminal message', () => {
+    const message = focusedPlanningFailureMessage(
+      [
+        {
+          toolId: 'search_hotels',
+          error: new Error(
+            'focused planner returned invalid output after one repair: binding.toolId: stale binding',
+          ),
+        },
+      ],
+      1,
+    );
+    expect(message).toContain('focused planning failed for 1 of 1 tools');
+    expect(message).toContain('search_hotels: focused planner returned invalid output');
+    expect(message).toContain('binding.toolId: stale binding');
   });
 
   it('focused-plans every missing or compile-input-stale final tool', () => {
