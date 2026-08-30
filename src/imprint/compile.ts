@@ -317,7 +317,7 @@ export function findCredentialBearingSeqs(session: Session): number[] {
 
 const AUTH_ADJACENT_WINDOW_MS = 120_000;
 const MFA_PATTERN =
-  /mfa|2fa|two.?factor|otp|verify|verification|challenge|push.?notification|authenticate|oauth|token|trusted.?device|security.?code/i;
+  /mfa|2fa|two.?factor|otp|verify|verification|challenge|push.?notification|authenticate|oauth|trusted.?device|security.?code/i;
 
 /** Find requests that are temporally and semantically adjacent to credential-
  *  bearing login POSTs — 2FA triggers, status polls, OTP submits, OAuth

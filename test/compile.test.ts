@@ -889,4 +889,48 @@ describe('findAuthAdjacentSeqs', () => {
     });
     expect(findAuthAdjacentSeqs(session, [1])).toEqual([3]);
   });
+
+  it('does not treat ordinary business-token fields as authentication', () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 1000,
+          method: 'POST',
+          url: 'https://example.com/login',
+          headers: {},
+          body: '${credential.username}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 2,
+          timestamp: 2000,
+          method: 'POST',
+          url: 'https://example.com/api/search',
+          headers: {},
+          body: '{"selection_token":"fixture-selection"}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 3,
+          timestamp: 3000,
+          method: 'GET',
+          url: 'https://example.com/api/property?property_token=fixture-property',
+          headers: {},
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 4,
+          timestamp: 4000,
+          method: 'POST',
+          url: 'https://example.com/api/page',
+          headers: {},
+          body: '{"next_page_token":"fixture-page"}',
+          resourceType: 'Fetch',
+        },
+      ],
+    });
+
+    expect(findAuthAdjacentSeqs(session, [1])).toEqual([]);
+  });
 });

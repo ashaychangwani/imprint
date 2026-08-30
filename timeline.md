@@ -1420,3 +1420,28 @@ This checkpoint adds no Google- or travel-specific behavior. It restores the
 shipped detector as a suggesting subagent while leaving the master in control.
 All 180 combined discovery, compiler, and master tests pass, along with type
 checking and lint. The complete repository suite passes all 1,749 tests.
+
+## 2026-08-29 20:01 PDT — Remove the last runtime tool-selection opinion
+
+A final simplicity review found one part of the restored code that should not
+survive: after the detector proposed one tool, the runtime counted endpoint
+families, called the detector again, and automatically preferred the answer
+with more tools. Its endpoint grouping also knew about Google's `rpcid` query
+format. That was a hidden tool-selection opinion and a Google-shaped rule.
+
+The automatic second attempt and endpoint grouping were removed. The shipped
+detector now proposes tools once. The separate tool-boundary advisor and master
+review that proposal, and the master can add, remove, merge, or split tools
+using the complete request index. This keeps correction agent-owned instead of
+teaching the runtime that “more tools” is always better.
+
+The same review found that the old login-adjacent hint still matched the bare
+word `token`. That could label ordinary fields such as `selection_token`,
+`property_token`, or `next_page_token` as login traffic after a user signed in.
+The bare match was removed; explicit signals such as MFA, OTP, verification,
+challenge, OAuth, and trusted-device requests remain.
+
+The focused discovery and compiler suite passes all 170 tests. Type checking,
+lint, and the complete repository suite also pass; the full suite is 1,739
+tests. Independent code, simplicity, and design-boundary reviews found no
+remaining issue.

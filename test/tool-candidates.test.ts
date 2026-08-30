@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import {
-  ProviderDeadlineError,
-  RunDeadline,
-  type RunDeadlineRef,
-} from '../src/imprint/provider-retry.ts';
+import { RunDeadline, type RunDeadlineRef } from '../src/imprint/provider-retry.ts';
 import {
   SharedCompileContextSchema,
   buildSharedCompileContext,
@@ -124,21 +120,6 @@ function scriptedDetectorAnalyzer(
     callCount: () => calls,
   };
 }
-
-const multiFamilySession: Session = {
-  ...session,
-  requests: ['search', 'pricing'].flatMap((family, familyIndex) =>
-    [1, 2, 3].map((value, valueIndex) => ({
-      seq: familyIndex * 3 + valueIndex + 1,
-      timestamp: (familyIndex * 3 + valueIndex + 1) * 100,
-      method: 'GET',
-      url: `https://www.example.com/api/${family}?fixture=${value}`,
-      headers: {},
-      resourceType: 'XHR' as const,
-      response: { status: 200, headers: {}, body: `{"value":${value}}` },
-    })),
-  ),
-};
 
 describe('shipped candidate detector guidance', () => {
   it('keeps standalone lookup and read-only operations visible while leaving revision to master', () => {
@@ -512,213 +493,28 @@ describe('tool candidate payload', () => {
   });
 });
 
-describe('candidate anti-collapse retry', () => {
-  it('retries a collapsed multi-family result and keeps the richer detection and usage', async () => {
-    const payload = buildToolCandidatePayload(multiFamilySession);
-    const scripted = scriptedDetectorAnalyzer([
-      detectorFixtureResult(['combined_operation']),
-      detectorFixtureResult(['search_items', 'get_pricing'], {
-        inputTokens: 21,
-        outputTokens: 13,
-        durationMs: 34,
-      }),
-    ]);
-
-    const detection = await detectToolCandidates(multiFamilySession, undefined, {
-      analyzer: scripted.analyzer,
-      candidatePayload: payload,
-    });
-
-    expect(detection.candidates.map((candidate) => candidate.toolName)).toEqual([
-      'search_items',
-      'get_pricing',
-    ]);
-    expect(detection.inputTokens).toBe(21);
-    expect(detection.outputTokens).toBe(13);
-    expect(detection.durationMs).toBe(34);
-    expect(scripted.callCount()).toBe(2);
-    expect(scripted.payloads[0]).toBe(payload);
-    expect(scripted.payloads[1]).toBe(payload);
-  });
-
-  it('does not retry when only one endpoint family is well represented', async () => {
-    const payload = buildToolCandidatePayload({
-      ...multiFamilySession,
-      requests: multiFamilySession.requests.slice(0, 3),
-    });
-    const scripted = scriptedDetectorAnalyzer([detectorFixtureResult(['search_items'])]);
-
-    await detectToolCandidates(multiFamilySession, undefined, {
-      analyzer: scripted.analyzer,
-      candidatePayload: payload,
-    });
-
-    expect(scripted.callCount()).toBe(1);
-  });
-
-  it('does not retry an already segmented multi-family result', async () => {
-    const payload = buildToolCandidatePayload(multiFamilySession);
-    const scripted = scriptedDetectorAnalyzer([
-      detectorFixtureResult(['search_items', 'get_pricing']),
-    ]);
-
-    await detectToolCandidates(multiFamilySession, undefined, {
-      analyzer: scripted.analyzer,
-      candidatePayload: payload,
-    });
-
-    expect(scripted.callCount()).toBe(1);
-  });
-
-  it('keeps the first result when the optional retry fails ordinarily', async () => {
-    const payload = buildToolCandidatePayload(multiFamilySession);
-    const scripted = scriptedDetectorAnalyzer([
-      detectorFixtureResult(['combined_operation']),
-      new Error('fixture retry failure'),
-    ]);
-
-    const detection = await detectToolCandidates(multiFamilySession, undefined, {
-      analyzer: scripted.analyzer,
-      candidatePayload: payload,
-    });
-
-    expect(detection.candidates.map((candidate) => candidate.toolName)).toEqual([
-      'combined_operation',
-    ]);
-    expect(detection.inputTokens).toBe(10);
-    expect(detection.outputTokens).toBe(5);
-    expect(detection.durationMs).toBe(20);
-    expect(scripted.callCount()).toBe(2);
-  });
-
-  it('keeps the grounded first result when a richer retry invents a recording seq', async () => {
-    const payload = buildToolCandidatePayload(multiFamilySession);
-    const ungroundedRetry = detectorFixtureResult(['search_items', 'get_pricing'], {
-      inputTokens: 21,
-      outputTokens: 13,
-      durationMs: 34,
-    });
-    const retryBody = JSON.parse(ungroundedRetry.text) as {
-      candidates: Array<{ requestSeqs: number[] }>;
-    };
-    if (!retryBody.candidates[1]) throw new Error('Expected the richer fixture candidate');
-    retryBody.candidates[1].requestSeqs = [999];
-    ungroundedRetry.text = JSON.stringify(retryBody);
-    const scripted = scriptedDetectorAnalyzer([
-      detectorFixtureResult(['combined_operation']),
-      ungroundedRetry,
-    ]);
-
-    const detection = await detectToolCandidates(multiFamilySession, undefined, {
-      analyzer: scripted.analyzer,
-      candidatePayload: payload,
-    });
-
-    expect(detection.candidates.map((candidate) => candidate.toolName)).toEqual([
-      'combined_operation',
-    ]);
-    expect(detection.inputTokens).toBe(10);
-    expect(detection.outputTokens).toBe(5);
-    expect(detection.durationMs).toBe(20);
-    expect(scripted.callCount()).toBe(2);
-  });
-
-  it('keeps the first result when a richer retry violates master candidate structure', async () => {
-    type RetryBody = {
-      candidates: Array<{
-        requestSeqs: number[];
-        representativeSeqs?: number[];
-        dependsOnTools?: string[];
-      }>;
-    };
-    const cases: Array<(body: RetryBody) => void> = [
-      (body) => {
-        const second = body.candidates[1];
-        if (!second) throw new Error('Expected the richer fixture candidate');
-        second.representativeSeqs = [1];
-      },
-      (body) => {
-        const first = body.candidates[0];
-        const second = body.candidates[1];
-        if (!first || !second) throw new Error('Expected both richer fixture candidates');
-        first.dependsOnTools = ['get_pricing'];
-        second.dependsOnTools = ['search_items'];
-      },
-    ];
-
-    for (const mutate of cases) {
-      const payload = buildToolCandidatePayload(multiFamilySession);
-      const invalidRetry = detectorFixtureResult(['search_items', 'get_pricing'], {
-        inputTokens: 21,
-        outputTokens: 13,
-        durationMs: 34,
-      });
-      const retryBody = JSON.parse(invalidRetry.text) as RetryBody;
-      mutate(retryBody);
-      invalidRetry.text = JSON.stringify(retryBody);
-      const scripted = scriptedDetectorAnalyzer([
-        detectorFixtureResult(['combined_operation']),
-        invalidRetry,
-      ]);
-
-      const detection = await detectToolCandidates(multiFamilySession, undefined, {
-        analyzer: scripted.analyzer,
-        candidatePayload: payload,
-      });
-
-      expect(detection.candidates.map((candidate) => candidate.toolName)).toEqual([
-        'combined_operation',
-      ]);
-      expect(detection.inputTokens).toBe(10);
-      expect(detection.outputTokens).toBe(5);
-      expect(detection.durationMs).toBe(20);
-      expect(scripted.callCount()).toBe(2);
-    }
-  });
-
-  it('propagates cancellation during the optional retry', async () => {
-    const payload = buildToolCandidatePayload(multiFamilySession);
-    const controller = new AbortController();
-    const scripted = scriptedDetectorAnalyzer([
-      detectorFixtureResult(['combined_operation']),
-      () => {
-        controller.abort('fixture cancellation');
-        throw new Error('provider stopped after cancellation');
-      },
-    ]);
-
-    await expect(
-      detectToolCandidates(multiFamilySession, undefined, {
-        analyzer: scripted.analyzer,
-        candidatePayload: payload,
-        signal: controller.signal,
-      }),
-    ).rejects.toMatchObject({ name: 'AbortError' });
-    expect(scripted.callCount()).toBe(2);
-  });
-
-  it('propagates provider deadlines and forwards the same run controls to both calls', async () => {
-    const payload = buildToolCandidatePayload(multiFamilySession);
+describe('candidate detector handoff', () => {
+  it('runs the shipped detector once and forwards the exact evidence and run controls', async () => {
+    const payload = buildToolCandidatePayload(session);
     const signal = new AbortController().signal;
     const runDeadline = new RunDeadline(Date.now() + 60_000);
-    const deadlineError = new ProviderDeadlineError(runDeadline.deadlineMs);
-    const scripted = scriptedDetectorAnalyzer([
-      detectorFixtureResult(['combined_operation']),
-      deadlineError,
-    ]);
+    const scripted = scriptedDetectorAnalyzer([detectorFixtureResult(['search_items'])]);
 
-    await expect(
-      detectToolCandidates(multiFamilySession, undefined, {
-        analyzer: scripted.analyzer,
-        candidatePayload: payload,
-        signal,
-        deadlineMs: runDeadline.deadlineMs,
-        runDeadline,
-      }),
-    ).rejects.toBe(deadlineError);
-    expect(scripted.callCount()).toBe(2);
+    const detection = await detectToolCandidates(session, undefined, {
+      analyzer: scripted.analyzer,
+      candidatePayload: payload,
+      signal,
+      deadlineMs: runDeadline.deadlineMs,
+      runDeadline,
+    });
+
+    expect(detection.candidates.map((candidate) => candidate.toolName)).toEqual(['search_items']);
+    expect(detection.inputTokens).toBe(10);
+    expect(detection.outputTokens).toBe(5);
+    expect(detection.durationMs).toBe(20);
+    expect(scripted.callCount()).toBe(1);
+    expect(scripted.payloads).toEqual([payload]);
     expect(scripted.controls).toEqual([
-      { signal, deadlineMs: runDeadline.deadlineMs, runDeadline },
       { signal, deadlineMs: runDeadline.deadlineMs, runDeadline },
     ]);
   });

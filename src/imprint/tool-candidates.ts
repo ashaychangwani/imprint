@@ -9,17 +9,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
-import { abortSignalError } from './concurrency.ts';
-import { getEndpointKey } from './endpoint-key.ts';
 import { compactUrlForLlm } from './llm-url.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
-import {
-  groundDetectorCandidateForMaster,
-  normalizeDetectorCompileContextForMaster,
-  teachingCandidateIssues,
-} from './master-teach-plan.ts';
-import { type RunDeadlineRef, providerControlError } from './provider-retry.ts';
+import type { RunDeadlineRef } from './provider-retry.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { isTelemetryRequest } from './telemetry.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
@@ -283,39 +276,7 @@ export async function detectToolCandidates(
         return { detection: validateToolCandidateDetection(parsed), result };
       };
 
-      let { detection, result } = await runOnce();
-
-      // A single candidate across several well-represented endpoint families is
-      // commonly a stochastic under-segmentation. Sample once more and retain
-      // only a strictly richer proposal; the master remains free to merge it.
-      if (detection.candidates.length === 1 && distinctEndpointFamilies(payload) >= 2) {
-        log(
-          'detector returned 1 candidate but the session spans ≥2 endpoint families — re-running once to guard against under-segmentation…',
-        );
-        try {
-          const retry = await runOnce();
-          if (retry.detection.candidates.length > detection.candidates.length) {
-            const groundingIssue = detectionGroundingIssue(retry.detection, payload);
-            if (groundingIssue) {
-              log(
-                `retry was not grounded in the detector payload (${groundingIssue}); keeping the original detection`,
-              );
-            } else {
-              log(`retry segmented into ${retry.detection.candidates.length} candidates; using it`);
-              ({ detection, result } = retry);
-            }
-          } else {
-            log('retry did not segment further; keeping the original detection');
-          }
-        } catch (error) {
-          if (opts.signal?.aborted) throw abortSignalError(opts.signal);
-          const controlError = providerControlError(error);
-          if (controlError) throw controlError;
-          log(
-            `retry failed (${error instanceof Error ? error.message : String(error)}); keeping original`,
-          );
-        }
-      }
+      const { detection, result } = await runOnce();
 
       setSpanAttributes(span, {
         'imprint.candidate_count': detection.candidates.length,
@@ -506,61 +467,6 @@ function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
     request.credentialPlaceholders,
     request.likelyLoginOrAuth,
   ];
-}
-
-/** Count endpoint families with enough distinct compact rows to indicate that
- * a one-candidate response may have collapsed independent operations. */
-function distinctEndpointFamilies(payload: ToolCandidatePayload): number {
-  const counts = new Map<string, number>();
-  for (const request of payload.requests) {
-    const key = getEndpointKey(request as unknown as CapturedRequest);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return [...counts.values()].filter((count) => count >= 3).length;
-}
-
-function detectionGroundingIssue(
-  detection: ToolCandidateDetection,
-  payload: ToolCandidatePayload,
-): string | undefined {
-  const requestSeqs = new Set(
-    payload.requests.flatMap((request) => [request.seq, ...(request.repeatedSeqs ?? [])]),
-  );
-  const eventSeqs = new Set(payload.events.map(({ seq }) => seq));
-  const narrationSeqs = new Set(payload.narration.map(({ seq }) => seq));
-  const unknownRequest = (seqs: readonly number[], path: string): string | undefined => {
-    const seq = seqs.find((candidate) => !requestSeqs.has(candidate));
-    return seq === undefined ? undefined : `${path} references unknown request seq ${seq}`;
-  };
-
-  let sharedContext: ReturnType<typeof normalizeDetectorCompileContextForMaster>;
-  let candidates: ReturnType<typeof groundDetectorCandidateForMaster>[];
-  try {
-    sharedContext = normalizeDetectorCompileContextForMaster(detection.sharedContext);
-    candidates = detection.candidates.map((candidate) =>
-      groundDetectorCandidateForMaster(candidate, { eventSeqs, narrationSeqs }),
-    );
-  } catch (error) {
-    const issue = error instanceof z.ZodError ? error.issues[0] : undefined;
-    return issue
-      ? `master candidate structure ${issue.path.join('.')} ${issue.message}`
-      : `master candidate structure ${error instanceof Error ? error.message : String(error)}`;
-  }
-
-  for (const [path, seqs] of [
-    ['sharedContext.loginRequestSeqs', sharedContext.loginRequestSeqs],
-    ['sharedContext.authRequestSeqs', sharedContext.authRequestSeqs],
-  ] as const) {
-    const issue = unknownRequest(seqs, path);
-    if (issue) return issue;
-  }
-
-  const issue = teachingCandidateIssues(candidates, requestSeqs, eventSeqs)[0];
-  if (issue) {
-    const path = issue.path.length > 0 ? issue.path.join('.') : 'candidates';
-    return `${path} ${issue.message}`;
-  }
-  return undefined;
 }
 
 /** Trust an explicitly triaged scope exactly. Otherwise keep every
