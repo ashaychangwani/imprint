@@ -844,6 +844,15 @@ describe('prompts and pre-plan discovery', () => {
     expect(masterPrompt).toContain('alone a reason to reject an API plan');
   });
 
+  it('explains the complete boundary index and deferred wire detail to discovery agents', () => {
+    for (const name of ['master-teach-decision.md', 'master-teach-tool-advisor.md']) {
+      const discoveryPrompt = prompt(name);
+      expect(discoveryPrompt).toContain('every valid');
+      expect(discoveryPrompt).toContain('exact digests and lengths');
+      expect(discoveryPrompt).toContain('focused planning');
+    }
+  });
+
   it('tells the focused planner exactly which evidence refs it may copy', () => {
     const focusedPrompt = prompt('master-teach-focused-planner.md');
     expect(focusedPrompt).toContain('`validationContext.authorizedEvidenceRefs`');

@@ -479,18 +479,29 @@ export function parseTriageSelectionResponse(text: string): {
   );
 }
 
-async function triageRequests(
+export interface TriageRequestsOptions {
+  /** Compiler callers classify effects by default. Master candidate discovery
+   * skips those LLM batches because their effect result is not authoritative. */
+  effectClassification?: 'classify' | 'skip';
+  /** Focused test seam; production resolves the configured provider. */
+  analyzer?: Pick<ReturnType<typeof resolveProvider>, 'analyze'>;
+}
+
+export async function triageRequests(
   session: Session,
   llmConfig?: LLMOptions,
   context: Pick<
     CompileOptions,
     'candidate' | 'sharedContext' | 'signal' | 'timeoutMs' | 'deadlineMs' | 'runDeadline'
   > = {},
+  options: TriageRequestsOptions = {},
 ): Promise<TriageResult> {
+  const classifyEffects = options.effectClassification !== 'skip';
   const preserveSeqs = new Set([
     ...(context.candidate?.requestSeqs ?? []),
     ...(context.candidate?.dependencySeqs ?? []),
     ...(context.sharedContext?.loginRequestSeqs ?? []),
+    ...(context.sharedContext?.authRequestSeqs ?? []),
   ]);
   const candidates = selectTriageCandidateRequests(session, preserveSeqs);
   const keepEligibleSeqs = new Set(candidates.map((request) => request.seq));
@@ -563,7 +574,7 @@ async function triageRequests(
         );
       }
       const systemPrompt = readFileSync(promptPath, 'utf8');
-      const llm = resolveProvider(llmConfig ?? {});
+      const llm = options.analyzer ?? resolveProvider(llmConfig ?? {});
       const contextEvents = buildTriageEventContexts(session).filter(
         (event) => event.type !== 'ws-sent',
       );
@@ -609,7 +620,9 @@ async function triageRequests(
         ...metadata.map((request) => ({ kind: 'request' as const, value: request })),
         ...outboundEvents.map((event) => ({ kind: 'websocket' as const, value: event })),
       ];
-      const safetyBatches = chunkTriageItems(safetyItems, EFFECT_TRIAGE_BATCH_CHARS);
+      const safetyBatches = classifyEffects
+        ? chunkTriageItems(safetyItems, EFFECT_TRIAGE_BATCH_CHARS)
+        : [];
       const irreversibleSeqs: number[] = [];
       const irreversibleEventSeqs: number[] = [];
       let inputTokens = relevanceResult.inputTokens;
@@ -674,28 +687,37 @@ async function triageRequests(
       const selectedSet = new Set([...keepSeqs, ...rescuedSeqs, ...preserveSeqs]);
       const irreversibleSet = new Set(expandCompactedTriageSeqs(irreversibleSeqs, compacted));
       const irreversibleEventSet = new Set(irreversibleEventSeqs);
-      const replaySafeSeqs = coveredSeqs.filter((seq) => !irreversibleSet.has(seq));
+      const replaySafeSeqs = classifyEffects
+        ? coveredSeqs.filter((seq) => !irreversibleSet.has(seq))
+        : [];
       const triaged: Session = {
         ...session,
-        triage: {
-          effectSchemaVersion: 2,
-          coveredSeqs,
-          irreversibleSeqs: [...irreversibleSet].sort((a, b) => a - b),
-          coveredOutboundEventSeqs,
-          irreversibleEventSeqs: [...irreversibleEventSet].sort((a, b) => a - b),
-        },
+        ...(classifyEffects
+          ? {
+              triage: {
+                effectSchemaVersion: 2 as const,
+                coveredSeqs,
+                irreversibleSeqs: [...irreversibleSet].sort((a, b) => a - b),
+                coveredOutboundEventSeqs,
+                irreversibleEventSeqs: [...irreversibleEventSet].sort((a, b) => a - b),
+              },
+            }
+          : {}),
         requests: session.requests
           .filter((r) => selectedSet.has(r.seq))
           .map((r) => (irreversibleSet.has(r.seq) ? { ...r, effect: 'irreversible' as const } : r)),
       };
 
       log(
-        `triage selected ${selectedSet.size} requests out of ${candidates.length} relevance candidates (${irreversibleSet.size} irreversible requests and ${irreversibleEventSet.size} irreversible outbound WebSocket events across ${safetyBatches.length} bounded safety batch(es))`,
+        classifyEffects
+          ? `triage selected ${selectedSet.size} requests out of ${candidates.length} relevance candidates (${irreversibleSet.size} irreversible requests and ${irreversibleEventSet.size} irreversible outbound WebSocket events across ${safetyBatches.length} bounded safety batch(es))`
+          : `triage selected ${selectedSet.size} requests out of ${candidates.length} relevance candidates; effect classification skipped`,
       );
 
       setSpanAttributes(span, {
         'imprint.requests_compacted': metadata.length,
         'imprint.requests_selected': selectedSet.size,
+        'imprint.triage.effect_classification': classifyEffects,
         'imprint.triage.payload_chars':
           JSON.stringify(relevancePayload).length + safetyPayloadChars,
         'imprint.requests_irreversible': irreversibleSet.size,
@@ -710,7 +732,7 @@ async function triageRequests(
         selectedSeqs: [...selectedSet],
         replaySafeSeqs,
         irreversibleSeqs: [...irreversibleSet],
-        coveredOutboundEventSeqs,
+        coveredOutboundEventSeqs: classifyEffects ? coveredOutboundEventSeqs : [],
         irreversibleEventSeqs: [...irreversibleEventSet],
         consideredCount: candidates.length,
         inputTokens,

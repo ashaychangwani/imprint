@@ -1374,3 +1374,49 @@ evidence, strategy, compile context, or chain edges change. Unit and end-to-end
 regressions prove that the semantic edit survives, the stale plan is cleared,
 unchanged tools retain their plans, the affected tool is replanned, and the run
 can complete. This run will never be resumed.
+
+## 2026-08-29 19:32 PDT — Restore shipped discovery without making it permanent
+
+The first tool proposal now comes from the useful shipped Imprint discovery
+path again. The shipped relevance step narrows the recording for the shipped
+detector, and the detector can retry once when it appears to have collapsed
+several busy API families into one tool. Discovery does not run the old safety
+review calls because their answers would not control execution here. There is
+still no primary tool, one-tool rule, or maximum tool count.
+
+The old rigidity was not restored. The narrowed request list is advice for the
+detector only. The master, focused planners, compiler, replay checks, and
+independent execution all retain the complete redacted recording. The master
+also sees every browser API request, including one a simple telemetry filter
+might have hidden. This means the master can add an operation the detector
+missed, change boundaries, or change parameters later. If the narrowing step
+returns an ordinary error, discovery continues from the complete recording.
+Cancellation, provider failure, and the run deadline still stop it.
+
+Two over-broad old hints were deliberately left out. Public APIs are not hidden
+just because they use a different host, and ordinary fields such as
+`property_token`, `selection_token`, and `next_page_token` are not called login
+traffic. Login endpoints and real credential placeholders remain visible as
+authentication evidence for the agents to interpret.
+
+One evidence handoff bug was also fixed. Evidence entries are never silently
+cut into invalid JSON. For tool-boundary review, the master now gets a compact
+index containing every browser API request, with its URL, timing, type, status,
+exact lengths, and fingerprints. Large headers and wire bodies are deliberately
+left for the focused planner after a boundary is chosen. This keeps all request
+choices visible without filling the master prompt with repeated browser data.
+On the latest recordings, the complete master index is about 254,000 characters
+for Hotels, 546,000 for Flights, and 577,000 for Southwest, all below the
+750,000-character evidence limit. The full detailed Flights and Southwest views
+would not have fit.
+
+Two small failure guards were added. If the detector's optional second attempt
+invents a request or browser-event number, assigns a representative request to
+the wrong tool, or creates a broken dependency loop, Imprint keeps the valid
+first answer. A malformed encoded request URL also stays usable instead of
+crashing discovery.
+
+This checkpoint adds no Google- or travel-specific behavior. It restores the
+shipped detector as a suggesting subagent while leaving the master in control.
+All 180 combined discovery, compiler, and master tests pass, along with type
+checking and lint. The complete repository suite passes all 1,749 tests.

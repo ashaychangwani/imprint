@@ -15,12 +15,15 @@ dependencies through `dependsOnTools` and `dependencySeqs`. Do not rank tools.
 Review the complete discovered set and keep every credible user-facing operation
 represented. Never output parameters or event timestamps.
 
-Discovery evidence is a content-complete, mechanically chunked copy of the
-compact narration, events, and request payload used by the shipped detector,
-including operations no candidate claimed. The
-detector's boundaries are only a proposal: you may add, merge, split, or remove
-them. Read every supplied entry. Candidate request ownership does not limit
-which credible operations you may propose.
+Discovery evidence contains a mechanically chunked index of every valid
+XHR/Fetch request in the complete redacted recording, including requests that
+advisory detector triage or a telemetry heuristic may not have selected. The
+index uses exact digests and lengths instead of repeating large headers and
+wire bodies; full redacted request evidence is supplied to focused planning
+after the master chooses a boundary. The detector's boundaries
+are only a proposal: you may add, merge, split, or remove them. Read every
+supplied entry. Candidate request ownership does not limit which credible
+operations you may propose.
 
 Exact output schema (all objects reject extra fields):
 

@@ -27,6 +27,7 @@ import {
   selectTriageCandidateRequests,
   shrinkSession,
   triageBodySnippet,
+  triageRequests,
 } from '../src/imprint/compile.ts';
 import type { Playbook, Session, Workflow } from '../src/imprint/types.ts';
 
@@ -468,6 +469,57 @@ describe('parseTriageSelectionResponse', () => {
       irreversibleSeqs: [],
       irreversibleEventSeqs: [17],
     });
+  });
+});
+
+describe('triage request modes', () => {
+  it('keeps effect classification enabled by default for shipped compiler callers', async () => {
+    const session = makeSession({
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://example.com/api/update',
+          headers: {},
+          body: '{"fixture":true}',
+          resourceType: 'Fetch',
+        },
+      ],
+    });
+    const modes: string[] = [];
+
+    const triage = await triageRequests(
+      session,
+      { provider: 'codex-cli' },
+      {},
+      {
+        analyzer: {
+          async analyze(_systemPrompt, payload) {
+            const mode = (payload as { mode: string }).mode;
+            modes.push(mode);
+            return {
+              text:
+                mode === 'effect'
+                  ? '{"keep":[],"irreversible":[1],"irreversibleEvents":[]}'
+                  : '{"keep":[1],"irreversible":[],"irreversibleEvents":[]}',
+              inputTokens: 5,
+              outputTokens: 2,
+              durationMs: 7,
+              stopReason: null,
+            };
+          },
+        },
+      },
+    );
+
+    expect(modes).toEqual(['relevance', 'effect']);
+    expect(triage.irreversibleSeqs).toEqual([1]);
+    expect(triage.session.triage?.effectSchemaVersion).toBe(2);
+    expect(triage.session.requests[0]?.effect).toBe('irreversible');
+    expect(triage.inputTokens).toBe(10);
+    expect(triage.outputTokens).toBe(4);
+    expect(triage.durationMs).toBe(14);
   });
 });
 

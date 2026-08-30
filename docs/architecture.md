@@ -292,9 +292,19 @@ Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts
 
 The public teaching path is one fresh foreground controller:
 
-1. It resolves the requested recording, or records a new one, then redacts and
-   summarizes it.
-2. Candidate discovery proposes every credible user-facing operation.
+1. It resolves the requested recording, or records a new one, then redacts it.
+   The complete redacted recording remains authoritative for the master,
+   focused planning, compilation, replay checks, and independent execution.
+2. The relevance pass from shipped semantic triage gives only the candidate
+   detector a narrower advisory view; the discarded effect-classification
+   passes are not run here. An ordinary relevance-triage failure falls back to
+   the complete view; cancellation and provider deadlines still stop the run.
+   The master receives a separate compact boundary index of every valid
+   XHR/Fetch across hosts, even when a telemetry heuristic would hide it. The
+   index keeps request identity, URL, timing, status, types, exact digests, and
+   lengths; full redacted request evidence is
+   supplied to focused planning after the master chooses a boundary. The
+   master may merge, split, rename, add, or remove detector proposals.
 3. A focused tool-boundary advisor reviews that complete proposal.
 4. The master writes the editable final tool plan. It may merge, split, rename,
    add, or remove an unsupported duplicate, but it must account for every

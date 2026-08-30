@@ -2,12 +2,14 @@ import { describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
+import { triageRequests } from '../src/imprint/compile.ts';
 import {
   apiReplayFacts,
   compileEveryToolInBuildWaves,
   focusedPlanningFailureMessage,
   implementationPlanRepairToolIds,
   prepareFullSessionForTeach,
+  prepareSessionForTeach,
   promoteReviewedCompletion,
   revisionStagingDir,
   runFocusedWaveOrchestration,
@@ -19,7 +21,7 @@ import {
   type ImplementationPlanPayload,
   teachingToolCompileInputsSha256,
 } from '../src/imprint/master-teach-plan.ts';
-import { ProviderUnavailableError } from '../src/imprint/provider-retry.ts';
+import { ProviderUnavailableError, RunDeadline } from '../src/imprint/provider-retry.ts';
 import type { Session, Workflow } from '../src/imprint/types.ts';
 
 const SHA = `sha256:${'a'.repeat(64)}`;
@@ -114,7 +116,7 @@ function focusedTool(index: number, dependencyNames: string[] = []): EditableTea
 }
 
 describe('master-owned focused build waves', () => {
-  it('mechanically prepares every recorded request without semantic triage', () => {
+  it('mechanically keeps every request in the authoritative teaching scope', () => {
     const session = {
       site: 'fixture-site',
       startedAt: '2026-01-01T00:00:00.000Z',
@@ -128,14 +130,161 @@ describe('master-owned focused build waves', () => {
       narration: [],
       cookieSnapshots: [],
       storageSnapshots: [],
-    };
-    const prepared = prepareFullSessionForTeach(session as never);
-    expect(prepared.session).toBe(session as never);
+    } as unknown as Session;
+
+    const prepared = prepareFullSessionForTeach(session);
+    expect(prepared.session).toBe(session);
     expect(prepared.selectedSeqs).toEqual([3, 8, 13]);
     expect(prepared.replaySafeSeqs).toEqual([3, 8, 13]);
     expect(prepared.irreversibleSeqs).toEqual([]);
     expect(prepared.coveredOutboundEventSeqs).toEqual([21]);
-    expect(prepared.inputTokens).toBeNull();
+  });
+
+  it('reuses semantic triage with credential and auth-adjacent requests preserved', async () => {
+    const session: Session = {
+      site: 'fixture-site',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      url: 'https://fixture.invalid',
+      imprintVersion: '0.6.6',
+      requests: [
+        {
+          seq: 3,
+          timestamp: 100,
+          method: 'POST',
+          url: 'https://fixture.invalid/login',
+          headers: {},
+          body: '{"username":"${credential.username}"}',
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 8,
+          timestamp: 150,
+          method: 'POST',
+          url: 'https://fixture.invalid/mfa/challenge',
+          headers: {},
+          resourceType: 'Fetch',
+        },
+        {
+          seq: 13,
+          timestamp: 300,
+          method: 'GET',
+          url: 'https://fixture.invalid/api/items',
+          headers: {},
+          resourceType: 'XHR',
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    const selectedSession: Session = { ...session, requests: session.requests.slice(2) };
+    const triageResult = {
+      session: selectedSession,
+      selectedSeqs: [13],
+      replaySafeSeqs: [3, 8, 13],
+      irreversibleSeqs: [],
+      coveredOutboundEventSeqs: [],
+      irreversibleEventSeqs: [],
+      consideredCount: 3,
+      inputTokens: 10,
+      outputTokens: 5,
+      durationMs: 20,
+    };
+    const llmConfig = { provider: 'codex-cli' as const, model: 'fixture-model' };
+    const signal = new AbortController().signal;
+    const runDeadline = new RunDeadline(Date.now() + 60_000);
+    let triageCalled = false;
+
+    const prepared = await prepareSessionForTeach(
+      session,
+      llmConfig,
+      { signal, deadlineMs: runDeadline.deadlineMs, runDeadline },
+      async (triageSession, config, context, options) => {
+        triageCalled = true;
+        expect(triageSession).toBe(session);
+        expect(config).toBe(llmConfig);
+        if (!context) throw new Error('Expected semantic triage context');
+        expect(context.sharedContext).toEqual({
+          loginRequestSeqs: [3],
+          credentialNames: [],
+          tokenExtractionNotes: '',
+          sharedHelperNotes: '',
+          authRequestSeqs: [3, 8],
+          authNotes: '',
+        });
+        expect(context.signal).toBe(signal);
+        expect(context.deadlineMs).toBe(runDeadline.deadlineMs);
+        expect(context.runDeadline).toBe(runDeadline);
+        expect(options).toEqual({ effectClassification: 'skip' });
+        return triageResult;
+      },
+    );
+
+    expect(prepared).toBe(triageResult);
+    expect(triageCalled).toBe(true);
+  });
+
+  it('runs only shipped relevance selection for master candidate preparation', async () => {
+    const session: Session = {
+      site: 'fixture-site',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      url: 'https://fixture.invalid',
+      imprintVersion: '0.6.6',
+      requests: [
+        {
+          seq: 1,
+          timestamp: 100,
+          method: 'GET',
+          url: 'https://fixture.invalid/api/items',
+          headers: {},
+          resourceType: 'XHR',
+        },
+      ],
+      events: [
+        {
+          seq: 2,
+          timestamp: 150,
+          type: 'ws-sent',
+          detail: '{"fixture":true}',
+        },
+      ],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    const modes: string[] = [];
+
+    const prepared = await prepareSessionForTeach(
+      session,
+      { provider: 'codex-cli' },
+      {},
+      (triageSession, config, context, options) =>
+        triageRequests(triageSession, config, context, {
+          ...options,
+          analyzer: {
+            async analyze(_systemPrompt, payload) {
+              modes.push((payload as { mode: string }).mode);
+              return {
+                text: '{"keep":[1],"irreversible":[],"irreversibleEvents":[]}',
+                inputTokens: 7,
+                outputTokens: 3,
+                durationMs: 11,
+                stopReason: null,
+              };
+            },
+          },
+        }),
+    );
+
+    expect(modes).toEqual(['relevance']);
+    expect(prepared.selectedSeqs).toEqual([1]);
+    expect(prepared.replaySafeSeqs).toEqual([]);
+    expect(prepared.coveredOutboundEventSeqs).toEqual([]);
+    expect(prepared.session.triage).toBeUndefined();
+    expect(prepared.inputTokens).toBe(7);
+    expect(prepared.outputTokens).toBe(3);
+    expect(prepared.durationMs).toBe(11);
   });
 
   it('compiles every one of 41 planned tools and waits for dependencies first', async () => {

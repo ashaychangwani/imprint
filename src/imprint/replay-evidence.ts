@@ -513,6 +513,9 @@ function pushArrayDocuments(
   };
   for (const value of values) {
     const next = [...chunk, value];
+    // Never split one structured value into an invalid JSON prefix. A value
+    // larger than the preferred document size stays whole; the prompt-level
+    // budget either includes that complete document or rejects it explicitly.
     if (
       chunk.length > 0 &&
       Buffer.byteLength(JSON.stringify({ ...base, [key]: next }), 'utf8') > DOCUMENT_BYTES
@@ -682,12 +685,17 @@ function utf8Fragments(value: string, maximumBytes: number): string[] {
   return fragments;
 }
 
-/** Reuse a content-complete, mechanically chunked copy of the detector's
- * compact evidence without deciding which operations should exist. */
+/** Build a complete, mechanically chunked request index for tool-boundary
+ * review without deciding which operations should exist. Every compacted
+ * XHR/Fetch stays visible; large wire detail remains available to the later
+ * focused planner for whichever boundaries the master chooses. */
 export function discoveryEvidenceDocuments(input: {
   candidatePayload: ToolCandidatePayload;
 }): FocusedEvidenceDocument[] {
   const { candidatePayload } = input;
+  const requestIndex = candidatePayload.requests.map(
+    ({ headers: _headers, body: _body, responsePreview: _responsePreview, ...request }) => request,
+  );
   const output: FocusedEvidenceDocument[] = [
     {
       provenance: 'plan_note',
@@ -698,6 +706,12 @@ export function discoveryEvidenceDocuments(input: {
         narrationCount: candidatePayload.narration.length,
         eventCount: candidatePayload.events.length,
         compactedRequestCount: candidatePayload.requests.length,
+        requestIndexPolicy: {
+          coverage: 'every compacted XHR/Fetch request',
+          headers: 'omitted after credential and login hints were extracted',
+          bodies: 'omitted; exact digest and full byte length retained',
+          fullRequestEvidence: 'provided to focused planning after the master selects a boundary',
+        },
       },
     },
   ];
@@ -730,7 +744,7 @@ export function discoveryEvidenceDocuments(input: {
     'recording_request',
     { kind: 'discovery_detector_requests' },
     'requests',
-    candidatePayload.requests,
+    requestIndex,
   );
 
   return output;

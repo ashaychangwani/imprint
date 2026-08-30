@@ -334,7 +334,7 @@ describe('factual independent-execution evidence', () => {
     }
   });
 
-  it('gives discovery the complete detector payload, including unclaimed operations', () => {
+  it('gives the master complete compact evidence, including unclaimed operations', () => {
     const recording = session();
     recording.requests.push({
       seq: 30,
@@ -379,7 +379,14 @@ describe('factual independent-execution evidence', () => {
     );
     expect(projectedRequests).toContainEqual(expect.objectContaining({ seq: 30 }));
     expect(projectedEvents).toContainEqual(expect.objectContaining({ seq: 25 }));
-    expect(projectedRequests).toEqual(candidatePayload.requests);
+    expect(
+      projectedRequests.every(
+        (request) =>
+          request.headers === undefined &&
+          request.body === undefined &&
+          request.responsePreview === undefined,
+      ),
+    ).toBe(true);
     expect(projectedEvents).toEqual(candidatePayload.events);
     expect(JSON.stringify(projection).length).toBeLessThanOrEqual(
       DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
@@ -392,6 +399,87 @@ describe('factual independent-execution evidence', () => {
         new Set(['discovery_detector_requests']),
       ),
     ).toThrow('required discovery_detector_requests evidence cannot fit');
+  });
+
+  it('round-trips an oversized evidence document without clipping its JSON', () => {
+    const escaped = '\\"'.repeat(3_000);
+    const document = {
+      provenance: 'recording_request' as const,
+      value: {
+        kind: 'discovery_detector_requests',
+        requests: [{ seq: 30, bodyPrefix: escaped }],
+      },
+    };
+    const projection = buildPromptEvidenceProjection(
+      [document],
+      new Map(),
+      DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
+      new Set(['discovery_detector_requests']),
+    );
+    const requestEntries = projection.payload.entries.flatMap((entry) =>
+      entry.kind === 'untrusted_redacted_quote' && entry.provenance === 'recording_request'
+        ? [entry]
+        : [],
+    );
+    const projectedRequests = requestEntries.flatMap((entry) => {
+      const value = JSON.parse(entry.quote) as { requests?: unknown[] };
+      return value.requests ?? [];
+    });
+
+    expect(requestEntries.some(({ quote }) => Buffer.byteLength(quote, 'utf8') > 4_000)).toBe(true);
+    expect(projectedRequests).toEqual(document.value.requests);
+  });
+
+  it('keeps every request visible when the detailed inventory exceeds the prompt budget', () => {
+    const recording = session();
+    recording.requests = Array.from({ length: 720 }, (_, index) => ({
+      seq: index + 1,
+      timestamp: index + 1,
+      method: 'POST',
+      url: `https://fixture.invalid/api/operation/${index}?variant=${index}`,
+      headers: { 'x-large-fixture': 'h'.repeat(900) },
+      body: JSON.stringify({ operation: index, payload: 'b'.repeat(900) }),
+      resourceType: 'Fetch' as const,
+      response: {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        mimeType: 'application/json',
+        body: JSON.stringify({ operation: index, result: 'r'.repeat(700) }),
+      },
+    }));
+    recording.events = [];
+    recording.narration = [];
+    const candidatePayload = buildToolCandidatePayload(recording, {
+      trustSessionScope: true,
+    });
+    expect(JSON.stringify(candidatePayload).length).toBeGreaterThan(
+      DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
+    );
+
+    const projection = buildPromptEvidenceProjection(
+      discoveryEvidenceDocuments({ candidatePayload }),
+      new Map(),
+      DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
+      new Set(['discovery_detector_evidence', 'discovery_detector_requests']),
+    );
+    const projectedRequests = projectedValues(projection)
+      .filter(({ kind }) => kind === 'discovery_detector_requests')
+      .flatMap(({ requests }) => (Array.isArray(requests) ? requests : []));
+
+    expect(projectedRequests.map(({ seq }) => seq)).toEqual(
+      candidatePayload.requests.map(({ seq }) => seq),
+    );
+    expect(
+      projectedRequests.every(
+        (request) =>
+          request.headers === undefined &&
+          request.body === undefined &&
+          request.responsePreview === undefined,
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(projection).length).toBeLessThanOrEqual(
+      DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
+    );
   });
 
   it('keeps every focused request summary but limits detail to representatives and dependencies', () => {

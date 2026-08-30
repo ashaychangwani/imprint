@@ -9,10 +9,17 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
+import { abortSignalError } from './concurrency.ts';
+import { getEndpointKey } from './endpoint-key.ts';
 import { compactUrlForLlm } from './llm-url.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
-import type { RunDeadlineRef } from './provider-retry.ts';
+import {
+  groundDetectorCandidateForMaster,
+  normalizeDetectorCompileContextForMaster,
+  teachingCandidateIssues,
+} from './master-teach-plan.ts';
+import { type RunDeadlineRef, providerControlError } from './provider-retry.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { isTelemetryRequest } from './telemetry.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
@@ -179,6 +186,23 @@ interface DetectToolCandidatesResult extends ToolCandidateDetection {
   durationMs: number;
 }
 
+interface CandidateDetectorAnalyzer {
+  analyze(
+    systemPrompt: string,
+    payload: unknown,
+    options?: {
+      signal?: AbortSignal;
+      deadlineMs?: number;
+      runDeadline?: RunDeadlineRef;
+    },
+  ): Promise<{
+    text: string;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    durationMs: number;
+  }>;
+}
+
 interface DetectToolCandidatesOptions {
   /**
    * The caller has already selected the exact request scope. Preserve even
@@ -186,8 +210,10 @@ interface DetectToolCandidatesOptions {
    * telemetry filter.
    */
   trustSessionScope?: boolean;
-  /** Reuse one exact compact payload across detector and master discovery. */
+  /** Reuse one exact compact payload for this detector call. */
   candidatePayload?: ToolCandidatePayload;
+  /** Focused test seam; production resolves the configured shipped provider. */
+  analyzer?: CandidateDetectorAnalyzer;
   signal?: AbortSignal;
   deadlineMs?: number;
   runDeadline?: RunDeadlineRef;
@@ -230,7 +256,7 @@ export async function detectToolCandidates(
       log(
         `detecting candidate tools from ${payload.events.length} event(s), ${payload.requests.length} request(s); ${Math.round(payloadChars / 1024)} KB payload…`,
       );
-      const llm = resolveProvider(llmConfig ?? {});
+      const llm: CandidateDetectorAnalyzer = opts.analyzer ?? resolveProvider(llmConfig ?? {});
       const runOnce = async (): Promise<{
         detection: ToolCandidateDetection;
         result: Awaited<ReturnType<typeof llm.analyze>>;
@@ -257,7 +283,39 @@ export async function detectToolCandidates(
         return { detection: validateToolCandidateDetection(parsed), result };
       };
 
-      const { detection, result } = await runOnce();
+      let { detection, result } = await runOnce();
+
+      // A single candidate across several well-represented endpoint families is
+      // commonly a stochastic under-segmentation. Sample once more and retain
+      // only a strictly richer proposal; the master remains free to merge it.
+      if (detection.candidates.length === 1 && distinctEndpointFamilies(payload) >= 2) {
+        log(
+          'detector returned 1 candidate but the session spans ≥2 endpoint families — re-running once to guard against under-segmentation…',
+        );
+        try {
+          const retry = await runOnce();
+          if (retry.detection.candidates.length > detection.candidates.length) {
+            const groundingIssue = detectionGroundingIssue(retry.detection, payload);
+            if (groundingIssue) {
+              log(
+                `retry was not grounded in the detector payload (${groundingIssue}); keeping the original detection`,
+              );
+            } else {
+              log(`retry segmented into ${retry.detection.candidates.length} candidates; using it`);
+              ({ detection, result } = retry);
+            }
+          } else {
+            log('retry did not segment further; keeping the original detection');
+          }
+        } catch (error) {
+          if (opts.signal?.aborted) throw abortSignalError(opts.signal);
+          const controlError = providerControlError(error);
+          if (controlError) throw controlError;
+          log(
+            `retry failed (${error instanceof Error ? error.message : String(error)}); keeping original`,
+          );
+        }
+      }
 
       setSpanAttributes(span, {
         'imprint.candidate_count': detection.candidates.length,
@@ -370,6 +428,7 @@ interface CandidateRequestPayload {
   responseBodyDigest?: string;
   responseBodyLength?: number;
   credentialPlaceholders: string[];
+  likelyLoginOrAuth: boolean;
   repeatCount?: number;
   repeatedSeqs?: number[];
   lastTimestamp?: number;
@@ -410,6 +469,7 @@ export function buildToolCandidatePayload(
           responseBodyDigest: requestContextDigest(request.response?.body),
           responseBodyLength: request.response?.body?.length,
           credentialPlaceholders: credentialPlaceholders(placeholderText),
+          likelyLoginOrAuth: likelyLoginOrAuth(request),
         };
       }),
     candidateRequestGroupKey,
@@ -444,23 +504,94 @@ function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
     request.responseBodyDigest,
     request.responseBodyLength,
     request.credentialPlaceholders,
+    request.likelyLoginOrAuth,
   ];
 }
 
-/** Keep every non-telemetry XHR/Fetch regardless of host or authentication.
- * Public cross-origin APIs are ordinary candidate evidence; the agent decides
- * whether they implement a user operation. */
+/** Count endpoint families with enough distinct compact rows to indicate that
+ * a one-candidate response may have collapsed independent operations. */
+function distinctEndpointFamilies(payload: ToolCandidatePayload): number {
+  const counts = new Map<string, number>();
+  for (const request of payload.requests) {
+    const key = getEndpointKey(request as unknown as CapturedRequest);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.values()].filter((count) => count >= 3).length;
+}
+
+function detectionGroundingIssue(
+  detection: ToolCandidateDetection,
+  payload: ToolCandidatePayload,
+): string | undefined {
+  const requestSeqs = new Set(
+    payload.requests.flatMap((request) => [request.seq, ...(request.repeatedSeqs ?? [])]),
+  );
+  const eventSeqs = new Set(payload.events.map(({ seq }) => seq));
+  const narrationSeqs = new Set(payload.narration.map(({ seq }) => seq));
+  const unknownRequest = (seqs: readonly number[], path: string): string | undefined => {
+    const seq = seqs.find((candidate) => !requestSeqs.has(candidate));
+    return seq === undefined ? undefined : `${path} references unknown request seq ${seq}`;
+  };
+
+  let sharedContext: ReturnType<typeof normalizeDetectorCompileContextForMaster>;
+  let candidates: ReturnType<typeof groundDetectorCandidateForMaster>[];
+  try {
+    sharedContext = normalizeDetectorCompileContextForMaster(detection.sharedContext);
+    candidates = detection.candidates.map((candidate) =>
+      groundDetectorCandidateForMaster(candidate, { eventSeqs, narrationSeqs }),
+    );
+  } catch (error) {
+    const issue = error instanceof z.ZodError ? error.issues[0] : undefined;
+    return issue
+      ? `master candidate structure ${issue.path.join('.')} ${issue.message}`
+      : `master candidate structure ${error instanceof Error ? error.message : String(error)}`;
+  }
+
+  for (const [path, seqs] of [
+    ['sharedContext.loginRequestSeqs', sharedContext.loginRequestSeqs],
+    ['sharedContext.authRequestSeqs', sharedContext.authRequestSeqs],
+  ] as const) {
+    const issue = unknownRequest(seqs, path);
+    if (issue) return issue;
+  }
+
+  const issue = teachingCandidateIssues(candidates, requestSeqs, eventSeqs)[0];
+  if (issue) {
+    const path = issue.path.length > 0 ? issue.path.join('.') : 'candidates';
+    return `${path} ${issue.message}`;
+  }
+  return undefined;
+}
+
+/** Trust an explicitly triaged scope exactly. Otherwise keep every
+ * non-telemetry XHR/Fetch across hosts so public APIs remain visible to the
+ * master; the agents decide which requests implement user-facing operations. */
 function isCandidateRequest(
   request: CapturedRequest,
   opts: DetectToolCandidatesOptions = {},
 ): boolean {
   if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
-  if (!safeUrl(request.url)) return false;
+  const url = safeUrl(request.url);
+  if (!url) return false;
   // A caller that supplies a triaged evidence package has already selected its
   // request scope. Preserve it exactly; reclassifying it here can silently hide
   // evidence the discovery agent needs.
   if (opts.trustSessionScope) return true;
   return !isTelemetryRequest(request);
+}
+
+function likelyLoginOrAuth(request: CapturedRequest): boolean {
+  const url = safeUrl(request.url);
+  const endpointText =
+    `${request.method} ${url ? `${url.pathname} ${url.search}` : request.url} ${request.body ?? ''}`.toLowerCase();
+  const headerText = JSON.stringify(request.headers ?? {}).toLowerCase();
+  if (/\$\{credential\.[^}]+\}/.test(`${endpointText} ${headerText}`)) return true;
+
+  // CSRF headers are common on ordinary data requests. Endpoint/body semantics
+  // are the hint so authenticated API calls are not all mislabeled as setup.
+  return /login|signin|sign-in|authenticate|authentication|oauth|session|password|csrf/.test(
+    endpointText,
+  );
 }
 
 function credentialPlaceholders(s: string): string[] {

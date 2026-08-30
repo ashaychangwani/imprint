@@ -19,7 +19,14 @@ import {
 import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { type RenderedRequestLookup, runWorkflowWithLadder } from './backend-ladder.ts';
 import type { CompileAgentProgress } from './compile-agent-types.ts';
-import { type TriageResult, generate } from './compile.ts';
+import {
+  type TriageResult,
+  findAuthAdjacentSeqs,
+  findCredentialBearingSeqs,
+  generate,
+  triageRequests,
+} from './compile.ts';
+import { abortSignalError } from './concurrency.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import { emit } from './emit.ts';
 import { type LLMOptions, type ProviderName, detectTeachProvider } from './llm.ts';
@@ -80,7 +87,12 @@ import {
 import { localSiteDir, localToolDir } from './paths.ts';
 import { runPlaybook } from './playbook-runner.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
-import { ProviderUnavailableError, RunDeadline, type RunDeadlineRef } from './provider-retry.ts';
+import {
+  ProviderUnavailableError,
+  RunDeadline,
+  type RunDeadlineRef,
+  providerControlError,
+} from './provider-retry.ts';
 import { record } from './record.ts';
 import { redactSession } from './redact.ts';
 import {
@@ -284,7 +296,11 @@ interface FreshTeachControllerDependencies {
   runId: () => string;
   record: typeof record;
   resolveTeachingRecording: typeof resolveTeachingRecording;
-  prepareSession: (session: Session) => TriageResult;
+  prepareSession: (
+    session: Session,
+    llmConfig: LLMOptions,
+    control: PrepareSessionControl,
+  ) => Promise<TriageResult>;
   observeIndependentExecution: typeof observeIndependentExecution;
   detectToolCandidates: typeof detectToolCandidates;
   requestToolSelectionAdvice: typeof requestToolSelectionAdvice;
@@ -329,7 +345,7 @@ const defaultDependencies: FreshTeachControllerDependencies = {
   runId: () => randomUUID(),
   record,
   resolveTeachingRecording,
-  prepareSession: prepareFullSessionForTeach,
+  prepareSession: prepareSessionForTeach,
   observeIndependentExecution,
   detectToolCandidates,
   requestToolSelectionAdvice,
@@ -472,28 +488,63 @@ export function revisionStagingDir(
   return pathJoin(stagingRoot, `revision-${planRevision}`, toolId);
 }
 
-/**
- * Teaching discovery needs the complete redacted recording. This mechanically
- * marks every request as selected and performs no semantic or effect analysis;
- * focused agents decide what the operations mean later.
- */
+/** The authoritative teaching scope. Semantic triage may advise candidate
+ * detection, but it must not remove recording evidence from the master,
+ * focused planners, compilation, or verification. */
 export function prepareFullSessionForTeach(session: Session): TriageResult {
   const selectedSeqs = session.requests.map(({ seq }) => seq);
-  const coveredOutboundEventSeqs = session.events
-    .filter(({ type }) => type === 'ws-sent')
-    .map(({ seq }) => seq);
   return {
     session,
     selectedSeqs,
     replaySafeSeqs: selectedSeqs,
     irreversibleSeqs: [],
-    coveredOutboundEventSeqs,
+    coveredOutboundEventSeqs: session.events
+      .filter(({ type }) => type === 'ws-sent')
+      .map(({ seq }) => seq),
     irreversibleEventSeqs: [],
     consideredCount: session.requests.length,
     inputTokens: null,
     outputTokens: null,
     durationMs: 0,
   };
+}
+
+interface PrepareSessionControl {
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
+}
+
+/** Reuse shipped semantic request triage only as detector advice. Auth requests
+ * are preserved so the detector can keep them as shared context. */
+export async function prepareSessionForTeach(
+  session: Session,
+  llmConfig: LLMOptions,
+  control: PrepareSessionControl = {},
+  runTriage: typeof triageRequests = triageRequests,
+): Promise<TriageResult> {
+  const credentialSeqs = findCredentialBearingSeqs(session);
+  const authRequestSeqs = [
+    ...new Set([...credentialSeqs, ...findAuthAdjacentSeqs(session, credentialSeqs)]),
+  ];
+  return await runTriage(
+    session,
+    llmConfig,
+    {
+      sharedContext: {
+        loginRequestSeqs: credentialSeqs,
+        credentialNames: [],
+        tokenExtractionNotes: '',
+        sharedHelperNotes: '',
+        authRequestSeqs,
+        authNotes: '',
+      },
+      ...control,
+    },
+    {
+      effectClassification: 'skip',
+    },
+  );
 }
 
 async function resolveRecordingForFreshRun(
@@ -630,13 +681,14 @@ function untrustedEvidenceEntry(document: FocusedEvidenceDocument): {
   object: ReturnType<typeof jsonRef>;
 } {
   const object = jsonRef(document.value);
+  const quote = JSON.stringify(document.value);
   return {
     object,
     entry: {
       kind: 'untrusted_redacted_quote',
       ref: object.ref,
       provenance: document.provenance,
-      quote: utf8Prefix(JSON.stringify(document.value), 4_000) || '{}',
+      quote,
     },
   };
 }
@@ -2568,22 +2620,47 @@ export async function runFreshMasterTeach(
     reportProgress(opts, 'resolving the latest recording');
     const recording = await resolveRecordingForFreshRun(opts, site, deps);
     const redacted = redactRecording(recording, runRoot);
-    reportProgress(opts, 'preparing the complete redacted recording');
-    const triage = deps.prepareSession(redacted.session);
+    const fullScope = prepareFullSessionForTeach(redacted.session);
+    reportProgress(opts, 'triaging the redacted recording');
+    let detectorScope = fullScope;
+    try {
+      detectorScope = await deps.prepareSession(redacted.session, llmOptions(opts), {
+        signal: opts.signal,
+        deadlineMs: deadline.deadlineMs,
+        runDeadline: deadline,
+      });
+    } catch (error) {
+      if (opts.signal?.aborted) throw abortSignalError(opts.signal);
+      const controlError = providerControlError(error);
+      if (controlError) throw controlError;
+      reportProgress(
+        opts,
+        `request triage was unavailable; discovering from the complete recording (${boundedTerminalMessage(error)})`,
+      );
+    }
     const triagedPath = pathJoin(runRoot, 'recording.triaged.json');
-    writeJson(triagedPath, triage.session);
-    const candidatePayload = buildToolCandidatePayload(triage.session);
+    writeJson(triagedPath, detectorScope.session);
+    const detectorPayload = buildToolCandidatePayload(detectorScope.session, {
+      trustSessionScope: true,
+    });
+    // The detector may use a narrowed advisory view, but the master must be
+    // able to recover from both triage and telemetry-classifier mistakes.
+    // Preserve every valid XHR/Fetch from the redacted recording here.
+    const masterPayload = buildToolCandidatePayload(redacted.session, {
+      trustSessionScope: true,
+    });
     reportProgress(opts, 'discovering operations while observing an independent execution');
     const [detection, independent] = await Promise.all([
-      deps.detectToolCandidates(triage.session, llmOptions(opts), {
-        candidatePayload,
+      deps.detectToolCandidates(detectorScope.session, llmOptions(opts), {
+        trustSessionScope: true,
+        candidatePayload: detectorPayload,
         signal: opts.signal,
         deadlineMs: deadline.deadlineMs,
         runDeadline: deadline,
       }),
       deps
         .observeIndependentExecution({
-          session: triage.session,
+          session: redacted.session,
           site,
           credentials: redacted.credentialValues,
           replacements: redacted.credentialReplacements,
@@ -2603,8 +2680,8 @@ export async function runFreshMasterTeach(
       site,
       runId,
       recordingSha256: recording.recordingSha256,
-      triage,
-      candidatePayload,
+      triage: fullScope,
+      candidatePayload: masterPayload,
       detection,
       independent,
       seeds,
@@ -2644,7 +2721,7 @@ export async function runFreshMasterTeach(
       discoveryEvidence: planned.discoveryEvidence,
       focusedEvidence: planned.focusedEvidence,
       toolAdvice: planned.toolAdvice,
-      triagedSession: triage.session,
+      triagedSession: fullScope.session,
       independent,
       agent: agents,
       deps,
@@ -2698,8 +2775,8 @@ export async function runFreshMasterTeach(
       try {
         checked = await compileAndCheckCurrentPlan({
           journal: activeJournal,
-          triage,
-          sessionPath: triagedPath,
+          triage: fullScope,
+          sessionPath: redacted.path,
           stagingRoot,
           llmConfig: llmOptions(opts),
           runDeadline: deadline,
@@ -2741,7 +2818,7 @@ export async function runFreshMasterTeach(
             discoveryEvidence: planned.discoveryEvidence,
             focusedEvidence: planned.focusedEvidence,
             toolAdvice: planned.toolAdvice,
-            triagedSession: triage.session,
+            triagedSession: fullScope.session,
             independent,
             agent: agents,
             deps,

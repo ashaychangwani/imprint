@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { TriageResult } from '../src/imprint/compile.ts';
 import {
   CompletionReviewOutputSchema,
   type FocusedPlannerInput,
@@ -19,11 +20,12 @@ import {
   ImplementationPlanPayloadSchema,
 } from '../src/imprint/master-teach-plan.ts';
 import { FreshTeachJournalStateSchema } from '../src/imprint/master-teach-store.ts';
+import { ProviderDeadlineError, ProviderUnavailableError } from '../src/imprint/provider-retry.ts';
 import {
   buildToolCandidatePayload,
   validateToolCandidateDetection,
 } from '../src/imprint/tool-candidates.ts';
-import { SessionSchema, WorkflowSchema } from '../src/imprint/types.ts';
+import { type Session, SessionSchema, WorkflowSchema } from '../src/imprint/types.ts';
 
 const SITE = 'foreground-e2e-fixture';
 const PRODUCER_ID = 'search_items_tool';
@@ -80,7 +82,7 @@ const chainEdge = {
   consumerParameter: 'item_id',
 };
 
-function syntheticSessionPath(root: string): string {
+function syntheticSessionPath(root: string, includeTelemetryShapedRequest = false): string {
   const session = SessionSchema.parse({
     site: SITE,
     startedAt: '2026-08-29T11:59:00.000Z',
@@ -115,6 +117,25 @@ function syntheticSessionPath(root: string): string {
           body: JSON.stringify({ id: 'item-1', name: 'Fixture item' }),
         },
       },
+      ...(includeTelemetryShapedRequest
+        ? [
+            {
+              seq: 4,
+              timestamp: 250,
+              method: 'POST',
+              url: 'https://telemetry.invalid/collect',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ marker: 'master-can-overrule-telemetry' }),
+              resourceType: 'Fetch' as const,
+              response: {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+                mimeType: 'application/json',
+                body: JSON.stringify({ accepted: true }),
+              },
+            },
+          ]
+        : []),
     ],
     events: [],
     narration: [{ seq: 3, timestamp: 150, text: 'Fixture narration remains visible.' }],
@@ -124,6 +145,27 @@ function syntheticSessionPath(root: string): string {
   const path = join(root, 'recording.json');
   writeFileSync(path, `${JSON.stringify(session)}\n`);
   return path;
+}
+
+function preparedSession(
+  session: Session,
+  selectedSeqs = session.requests.map(({ seq }) => seq),
+): TriageResult {
+  const selected = new Set(selectedSeqs);
+  return {
+    session: { ...session, requests: session.requests.filter(({ seq }) => selected.has(seq)) },
+    selectedSeqs,
+    replaySafeSeqs: selectedSeqs,
+    irreversibleSeqs: [],
+    coveredOutboundEventSeqs: session.events
+      .filter(({ type }) => type === 'ws-sent')
+      .map(({ seq }) => seq),
+    irreversibleEventSeqs: [],
+    consideredCount: session.requests.length,
+    inputTokens: 0,
+    outputTokens: 0,
+    durationMs: 0,
+  };
 }
 
 async function withTemporaryImprintHome<T>(run: (root: string, home: string) => Promise<T>) {
@@ -163,7 +205,8 @@ function initialDesiredPlan(input: MasterDecisionInput): DesiredTeachingPlan {
     input.discovery.discoveryCandidates.map((candidate) => [candidate.toolName, candidate]),
   );
   const makeTool = (name: string) => {
-    const candidate = candidates.get(name);
+    const candidate =
+      candidates.get(name) ?? (name === CONSUMER_NAME ? structuredClone(consumerCandidate) : null);
     if (!candidate) throw new Error(`missing discovery candidate ${name}`);
     return {
       id: toolId(name),
@@ -177,18 +220,11 @@ function initialDesiredPlan(input: MasterDecisionInput): DesiredTeachingPlan {
     site: input.discovery.run.site,
     recordingSha256: input.discovery.run.recordingSha256,
     tools: [makeTool(PRODUCER_NAME), makeTool(CONSUMER_NAME)],
-    candidateCoverage: [
-      {
-        discoveryCandidateName: PRODUCER_NAME,
-        plannedToolIds: [PRODUCER_ID],
-        unresolvedReason: null,
-      },
-      {
-        discoveryCandidateName: CONSUMER_NAME,
-        plannedToolIds: [CONSUMER_ID],
-        unresolvedReason: null,
-      },
-    ],
+    candidateCoverage: input.discovery.discoveryCandidates.map(({ toolName }) => ({
+      discoveryCandidateName: toolName,
+      plannedToolIds: [toolId(toolName)],
+      unresolvedReason: null,
+    })),
     buildWaves: [[PRODUCER_ID], [CONSUMER_ID]],
     chainEdges: [chainEdge],
   };
@@ -267,7 +303,7 @@ function readJson(path: string): unknown {
 describe('fresh foreground master controller end to end', () => {
   it('settles both dependency waves, every check, completion review, and promotion', async () => {
     await withTemporaryImprintHome(async (root) => {
-      const recordingPath = syntheticSessionPath(root);
+      const recordingPath = syntheticSessionPath(root, true);
       const events: string[] = [];
       let checksSeenByReviewer = new Map<string, string[]>();
       let resultEvidenceCount = 0;
@@ -276,6 +312,14 @@ describe('fresh foreground master controller end to end', () => {
       let promotedTools: string[] = [];
       let discoveryTrustedPreparedScope: boolean | undefined;
       let detectorReusedControllerPayload = false;
+      let detectorRequestSeqs: number[] = [];
+      let masterRequestSeqs: number[] = [];
+      let masterEvidenceIncludedSecondRequest = false;
+      let masterEvidenceIncludedTelemetryShapedRequest = false;
+      let independentRequestSeqs: number[] = [];
+      let compilerRequestSeqs: number[] = [];
+      let compilerScopeSeqs: number[] = [];
+      let consumerFocusedEvidenceWasComplete = false;
       let narrationCitationWasGrounded = false;
       let narrationRemainedInEvidence = false;
       const parameterAdvisorCalls: string[] = [];
@@ -295,28 +339,40 @@ describe('fresh foreground master controller end to end', () => {
         {
           now: () => FIXED_NOW,
           runId: () => 'run-e2e-completed',
+          prepareSession: async (session) => preparedSession(session, [1]),
           detectToolCandidates: async (_session, _llm, options) => {
+            detectorRequestSeqs = _session.requests.map(({ seq }) => seq);
             discoveryTrustedPreparedScope = options?.trustSessionScope;
             detectorReusedControllerPayload =
               JSON.stringify(options?.candidatePayload) ===
-              JSON.stringify(buildToolCandidatePayload(_session));
+              JSON.stringify(buildToolCandidatePayload(_session, { trustSessionScope: true }));
             return {
               ...validateToolCandidateDetection({
                 sharedContext,
-                candidates: [{ ...producerCandidate, eventSeqs: [3] }, consumerCandidate],
+                candidates: [{ ...producerCandidate, eventSeqs: [3] }],
               }),
               inputTokens: 0,
               outputTokens: 0,
               durationMs: 0,
             };
           },
-          observeIndependentExecution: async () => ({
-            status: 'unavailable',
-            requests: [],
-            unmatchedRecordingRequestSeqs: [],
-            message: 'The deterministic fixture does not run a browser replay.',
-          }),
+          observeIndependentExecution: async ({ session }) => {
+            independentRequestSeqs = session.requests.map(({ seq }) => seq);
+            return {
+              status: 'unavailable',
+              requests: [],
+              unmatchedRecordingRequestSeqs: [],
+              message: 'The deterministic fixture does not run a browser replay.',
+            };
+          },
           requestToolSelectionAdvice: async (input: ToolSelectionAdvisorInput) => {
+            masterRequestSeqs = input.recordingIndex.requestSeqs;
+            masterEvidenceIncludedSecondRequest = JSON.stringify(input.evidence).includes(
+              'fixture.invalid/api/items/item-1',
+            );
+            masterEvidenceIncludedTelemetryShapedRequest = JSON.stringify(input.evidence).includes(
+              'telemetry.invalid/collect',
+            );
             narrationCitationWasGrounded = input.discoveryCandidates[0]?.eventSeqs.length === 0;
             narrationRemainedInEvidence = JSON.stringify(input.evidence).includes(
               'Fixture narration remains visible.',
@@ -378,6 +434,11 @@ describe('fresh foreground master controller end to end', () => {
           },
           requestFocusedPlan: async (input: FocusedPlannerInput) => {
             events.push(`plan:${input.tool.id}`);
+            if (input.tool.id === CONSUMER_ID) {
+              consumerFocusedEvidenceWasComplete = JSON.stringify(input.evidence).includes(
+                'Fixture item',
+              );
+            }
             plannerGuidance.push(input.masterGuidance ?? '');
             if (
               input.tool.id === PRODUCER_ID &&
@@ -404,8 +465,12 @@ describe('fresh foreground master controller end to end', () => {
               reason: 'The focused request and expected result are explicit.',
             });
           },
-          compileFocusedTool: async ({ tool, stagingDir }) => {
+          compileFocusedTool: async ({ tool, triage, sessionPath, stagingDir }) => {
             events.push(`compile:${tool.id}`);
+            compilerScopeSeqs = triage.selectedSeqs;
+            compilerRequestSeqs = SessionSchema.parse(readJson(sessionPath)).requests.map(
+              ({ seq }) => seq,
+            );
             mkdirSync(stagingDir, { recursive: true });
             const workflow = WorkflowSchema.parse({
               toolName: tool.candidate.toolName,
@@ -524,8 +589,16 @@ describe('fresh foreground master controller end to end', () => {
         'chain:passed',
       ]);
       expect(resultEvidenceCount).toBe(2);
-      expect(discoveryTrustedPreparedScope).toBeUndefined();
+      expect(discoveryTrustedPreparedScope).toBe(true);
       expect(detectorReusedControllerPayload).toBe(true);
+      expect(detectorRequestSeqs).toEqual([1]);
+      expect(masterRequestSeqs).toEqual([1, 2, 4]);
+      expect(masterEvidenceIncludedSecondRequest).toBe(true);
+      expect(masterEvidenceIncludedTelemetryShapedRequest).toBe(true);
+      expect(independentRequestSeqs).toEqual([1, 2, 4]);
+      expect(compilerRequestSeqs).toEqual([1, 2, 4]);
+      expect(compilerScopeSeqs).toEqual([1, 2, 4]);
+      expect(consumerFocusedEvidenceWasComplete).toBe(true);
       expect(narrationCitationWasGrounded).toBe(true);
       expect(narrationRemainedInEvidence).toBe(true);
       expect(parameterAdvisorCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
@@ -546,11 +619,12 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('writes an exact bounded terminal result for a pre-journal host failure', async () => {
+  it('falls back to the complete detector scope after an ordinary triage failure', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);
       const hostMessage = `pre-journal fixture failure: ${'x'.repeat(1_200)}`;
       const expectedMessage = hostMessage.slice(0, 1_000);
+      let detectorRequestSeqs: number[] = [];
 
       const terminal = await runFreshMasterTeach(
         {
@@ -562,6 +636,10 @@ describe('fresh foreground master controller end to end', () => {
         {
           runId: () => 'run-e2e-pre-journal-failure',
           prepareSession: () => {
+            throw new Error('fixture triage schema failure');
+          },
+          detectToolCandidates: async (session) => {
+            detectorRequestSeqs = session.requests.map(({ seq }) => seq);
             throw new Error(hostMessage);
           },
         },
@@ -575,9 +653,58 @@ describe('fresh foreground master controller end to end', () => {
         message: expectedMessage,
       });
       expect(terminal.message).toHaveLength(1_000);
+      expect(detectorRequestSeqs).toEqual([1, 2]);
       expect(['active', 'paused']).not.toContain(terminal.status);
       expect(existsSync(join(terminal.runRoot, 'journal'))).toBe(false);
       expect(readJson(join(terminal.runRoot, 'terminal.json'))).toEqual(terminal);
+    });
+  });
+
+  it('propagates triage cancellation, deadline, and provider-control failures', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const failures = [
+        {
+          id: 'cancelled',
+          error: new DOMException('fixture cancellation', 'AbortError'),
+          status: 'cancelled',
+        },
+        {
+          id: 'deadline',
+          error: new ProviderDeadlineError(Date.now() + 1_000),
+          status: 'failed',
+        },
+        {
+          id: 'provider',
+          error: new ProviderUnavailableError(new Error('fixture unavailable')),
+          status: 'provider_unavailable',
+        },
+      ] as const;
+
+      for (const failure of failures) {
+        let detectorCalled = false;
+        const terminal = await runFreshMasterTeach(
+          {
+            site: SITE,
+            fromSession: recordingPath,
+            noInteractive: true,
+            provider: 'codex-cli',
+          },
+          {
+            runId: () => `run-e2e-triage-${failure.id}`,
+            prepareSession: () => {
+              throw failure.error;
+            },
+            detectToolCandidates: async () => {
+              detectorCalled = true;
+              throw new Error('detector must not run after a provider-control failure');
+            },
+          },
+        );
+
+        expect(terminal.status).toBe(failure.status);
+        expect(detectorCalled).toBe(false);
+      }
     });
   });
 });

@@ -26,9 +26,7 @@ for (let i = 1; i <= runs; i++) {
       { provider: 'claude-cli' },
       { trustSessionScope: true },
     );
-    const tools = det.candidates.map(
-      (c) => `${c.toolName}${c.primary ? '*' : ''}[${c.requestSeqs.join(',')}]`,
-    );
+    const tools = det.candidates.map((c) => `${c.toolName}[${c.requestSeqs.join(',')}]`);
     summary.push({
       run: i,
       count: det.candidates.length,

@@ -10,10 +10,18 @@ Treat the serialized `recordingIndex` as the authority for which request and
 event sequence numbers exist; reason from the supplied evidence and proposals
 without inventing additional facts.
 
-Discovery evidence reuses a content-complete, mechanically chunked copy of the
-detector's compact narration, events, and requests, including operations not
-claimed by a proposed candidate;
+Discovery evidence contains a mechanically chunked index of every valid
+XHR/Fetch request in the complete redacted recording, including requests that
+advisory detector triage or a telemetry heuristic may not have selected and
+operations not claimed
+by a proposed candidate;
 candidate ownership does not limit what tools you may add, merge, or split.
+The boundary index intentionally uses exact digests and lengths instead of
+repeating large headers and wire bodies. This keeps every request visible and
+leaves interpretation of exact wire content to focused planning. After you
+choose a boundary, its focused planner receives the full redacted request
+evidence. Do not reject an otherwise credible operation merely because its
+full wire body is deferred to focused planning.
 Focused evidence keeps a summary for every owned/dependency request and bounded
 detail for representative requests and dependencies. Read every entry
 and its `prompt_evidence_omissions` counts. Omitted detail is not evidence for a

@@ -14,6 +14,7 @@ export const PromptToolIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,127}$/);
 const PromptMechanismSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
 const PromptCheckSchema = z.enum(['contract', 'replay', 'live', 'chain']);
 const PromptCheckStatusSchema = z.enum(['passed', 'failed', 'not_applicable', 'not_checked']);
+const PROMPT_EVIDENCE_QUOTE_MAX_BYTES = 750_000;
 export function utf8Text(minBytes: number, maxBytes: number) {
   return z.string().refine((value) => {
     const bytes = Buffer.byteLength(value, 'utf8');
@@ -148,7 +149,7 @@ const PromptEvidencePayloadSchema = strictObject({
           'artifact_excerpt',
           'check_history',
         ]),
-        quote: utf8Text(1, 4_000),
+        quote: utf8Text(1, PROMPT_EVIDENCE_QUOTE_MAX_BYTES),
       }),
     ]),
   ),
