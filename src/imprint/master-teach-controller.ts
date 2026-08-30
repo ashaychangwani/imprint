@@ -1099,10 +1099,91 @@ export async function apiReplayFacts(input: {
 interface FocusedPlannerBundle {
   evidence: PromptEvidenceProjection;
   output: FocusedPlan;
+  authoredCompileInputsSha256: string;
 }
 
 interface HostedPlannerBundle extends FocusedPlannerBundle {
   proposal: ReturnType<typeof FocusedPlannerProposalSchema.parse>;
+}
+
+function effectiveFocusedProposalEdges(
+  currentEdges: readonly ChainEdge[],
+  bundles: readonly FocusedPlannerBundle[],
+  indexes: readonly number[],
+): ChainEdge[] {
+  const proposedConsumerIds = new Set(
+    indexes.flatMap((index) => {
+      const bundle = bundles[index];
+      return bundle ? [bundle.output.tool.id] : [];
+    }),
+  );
+  return [
+    ...currentEdges.filter(({ consumerToolId }) => !proposedConsumerIds.has(consumerToolId)),
+    ...indexes.flatMap((index) => bundles[index]?.output.chainEdges ?? []),
+  ];
+}
+
+function downstreamFirstFocusedPlannerIndexes(
+  currentEdges: readonly ChainEdge[],
+  bundles: readonly FocusedPlannerBundle[],
+): number[] {
+  const indexes = bundles.map((_, index) => index);
+  const indexByToolId = new Map(bundles.map((bundle, index) => [bundle.output.tool.id, index]));
+  const dependencies = new Map(indexes.map((index) => [index, new Set<number>()]));
+  for (const edge of effectiveFocusedProposalEdges(currentEdges, bundles, indexes)) {
+    const producerIndex = indexByToolId.get(edge.producerToolId);
+    const consumerIndex = indexByToolId.get(edge.consumerToolId);
+    if (producerIndex === undefined || consumerIndex === undefined) continue;
+    dependencies.get(consumerIndex)?.add(producerIndex);
+  }
+  const remaining = new Set(indexes);
+  const waves: number[][] = [];
+  while (remaining.size > 0) {
+    const wave = [...remaining].filter((index) =>
+      [...(dependencies.get(index) ?? [])].every((producer) => !remaining.has(producer)),
+    );
+    const selected = wave.length > 0 ? wave : [...remaining];
+    selected.sort((left, right) =>
+      (bundles[left]?.output.tool.id ?? '').localeCompare(bundles[right]?.output.tool.id ?? ''),
+    );
+    waves.push(selected);
+    for (const index of selected) remaining.delete(index);
+  }
+  return waves.reverse().flat();
+}
+
+export function compatibleFocusedPlannerIndexes(
+  currentEdges: readonly ChainEdge[],
+  bundles: readonly FocusedPlannerBundle[],
+): number[] {
+  const retained = new Set<number>();
+  const downstreamFirst = downstreamFirstFocusedPlannerIndexes(currentEdges, bundles);
+  let added = true;
+  while (added) {
+    added = false;
+    // Consider consumers before producers, including dependencies newly
+    // proposed by planners that originally started in the same build wave.
+    for (const index of downstreamFirst) {
+      if (retained.has(index)) continue;
+      const candidate = [...retained, index].sort((left, right) => left - right);
+      const effectiveEdges = effectiveFocusedProposalEdges(currentEdges, bundles, candidate);
+      const mutuallyCompatible = candidate.every((candidateIndex) => {
+        const bundle = bundles[candidateIndex];
+        return (
+          bundle !== undefined &&
+          bundle.authoredCompileInputsSha256 ===
+            teachingToolCompileInputsSha256(bundle.output.tool, effectiveEdges)
+        );
+      });
+      if (!mutuallyCompatible) continue;
+      retained.add(index);
+      added = true;
+    }
+  }
+  if (retained.size === 0 && bundles.length > 0) {
+    throw new Error('a focused planner proposal does not match the compile inputs it received');
+  }
+  return [...retained].sort((left, right) => left - right);
 }
 
 function desiredPart(plan: EditableTeachingPlan): DesiredTeachingPlan {
@@ -1210,9 +1291,15 @@ async function requestFocusedPlannerBundles(input: {
         ),
         evidence,
       };
+      const output = await input.deps.requestFocusedPlan(plannerInput, input.agent);
+      const authoredEdges = [
+        ...input.plan.chainEdges.filter(({ consumerToolId }) => consumerToolId !== output.tool.id),
+        ...output.chainEdges,
+      ];
       return {
         evidence,
-        output: await input.deps.requestFocusedPlan(plannerInput, input.agent),
+        output,
+        authoredCompileInputsSha256: teachingToolCompileInputsSha256(output.tool, authoredEdges),
       } satisfies FocusedPlannerBundle;
     },
   });
@@ -1225,15 +1312,18 @@ async function requestFocusedPlannerBundles(input: {
   }
 
   const bundles = planned.completed.map(({ value }) => value);
-  const proposedConsumerIds = new Set(bundles.map(({ output }) => output.tool.id));
-  const effectiveEdges = [
-    ...input.plan.chainEdges.filter(
-      ({ consumerToolId }) => !proposedConsumerIds.has(consumerToolId),
-    ),
-    ...bundles.flatMap(({ output }) => output.chainEdges),
-  ];
+  const compatibleIndexes = compatibleFocusedPlannerIndexes(input.plan.chainEdges, bundles);
+  const compatibleBundles = compatibleIndexes.flatMap((index) => {
+    const bundle = bundles[index];
+    return bundle ? [bundle] : [];
+  });
+  const effectiveEdges = effectiveFocusedProposalEdges(
+    input.plan.chainEdges,
+    bundles,
+    compatibleIndexes,
+  );
 
-  return bundles.map((bundle) => {
+  return compatibleBundles.map((bundle) => {
     const compileInputsSha256 = teachingToolCompileInputsSha256(bundle.output.tool, effectiveEdges);
     const implementationObject = jsonRef(bundle.output.implementationPlan);
     const implementationContentRef = addBootstrap(input.seeds, implementationObject);

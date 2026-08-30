@@ -33,7 +33,6 @@ import {
   type EditableTeachingTool,
   type TeachingCandidateEvidence,
   teachingPlanContentSha256 as digest,
-  proposeDependencyBuildWaves,
   teachingCandidateIssues,
   teachingToolCompileInputsSha256,
   unresolvedCandidateCoverage,
@@ -169,14 +168,14 @@ function validateFocusedPlannerEdges(
     tuples.add(tuple);
   });
 }
-function validateFocusedPlannerTool(
+function validateToolLocalFields(
   tool: EditableTeachingTool,
-  input: FocusedPlannerInput,
+  index: RecordingIndex,
   ctx: z.RefinementCtx,
   path: Array<string | number>,
 ): void {
-  const knownRequests = new Set(input.recordingIndex.requestSeqs);
-  const knownEvents = new Set(input.recordingIndex.eventSeqs);
+  const knownRequests = new Set(index.requestSeqs);
+  const knownEvents = new Set(index.eventSeqs);
   for (const field of ['requestSeqs', 'representativeSeqs', 'dependencySeqs'] as const)
     checkSeqs(tool.candidate[field], knownRequests, ctx, [...path, 'candidate', field]);
   checkSeqs(tool.candidate.eventSeqs, knownEvents, ctx, [...path, 'candidate', 'eventSeqs']);
@@ -191,6 +190,14 @@ function validateFocusedPlannerTool(
   });
   if (new Set(tool.candidate.dependsOnTools).size !== tool.candidate.dependsOnTools.length)
     issue(ctx, [...path, 'candidate', 'dependsOnTools'], 'duplicate dependency');
+  tool.candidate.dependsOnTools.forEach((dependencyName, dependencyIndex) => {
+    if (dependencyName === tool.candidate.toolName)
+      issue(
+        ctx,
+        [...path, 'candidate', 'dependsOnTools', dependencyIndex],
+        `tool "${tool.candidate.toolName}" cannot depend on itself`,
+      );
+  });
   const parameterNames = tool.candidate.likelyParams.map(({ name }) => name);
   if (new Set(parameterNames).size !== parameterNames.length)
     issue(ctx, [...path, 'candidate', 'likelyParams'], 'duplicate parameter');
@@ -204,6 +211,14 @@ function validateFocusedPlannerTool(
     'compileContext',
     'authRequestSeqs',
   ]);
+}
+function validateFocusedPlannerTool(
+  tool: EditableTeachingTool,
+  input: FocusedPlannerInput,
+  ctx: z.RefinementCtx,
+  path: Array<string | number>,
+): void {
+  validateToolLocalFields(tool, input.recordingIndex, ctx, path);
 }
 const FocusedPlannerInputValidationSchema = FocusedPlannerInputSchema.superRefine((input, ctx) => {
   if (input.run.recordingSha256 !== input.recordingIndex.recordingSha256)
@@ -440,6 +455,20 @@ export function mechanicalProofFailures(
 function masterDecisionBinding(input: MasterDecisionInput) {
   return input.current?.run ?? input.discovery.run;
 }
+function withoutStaleImplementationPlan(
+  tool: EditableTeachingTool,
+  chainEdges: readonly ChainEdge[],
+): EditableTeachingTool {
+  if (
+    !tool.implementationPlan ||
+    tool.implementationPlan.basedOnCompileInputsSha256 ===
+      teachingToolCompileInputsSha256(tool, chainEdges)
+  ) {
+    return tool;
+  }
+  const { implementationPlan: _stale, ...unplannedTool } = tool;
+  return unplannedTool;
+}
 function completionBinding(input: CompletionReviewInput) {
   return input.run;
 }
@@ -631,7 +660,13 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
       );
   }
   const proposalIds = new Set<string>();
-  const tools = new Map((input.current?.plan.payload.tools ?? []).map((tool) => [tool.id, tool]));
+  // Every focused planner was shown the current plan, not its concurrently
+  // running siblings' replies. Validate names against that authored view so a
+  // sibling rename remains advice for the master to arbitrate.
+  const authoredTools =
+    input.current?.plan.payload.tools ?? input.plannerProposals.map(({ payload }) => payload.tool);
+  const authoredToolsById = new Map(authoredTools.map((tool) => [tool.id, tool]));
+  const authoredToolsByName = new Map(authoredTools.map((tool) => [tool.candidate.toolName, tool]));
   const proposedConsumerIds = new Set(input.plannerProposals.map(({ payload }) => payload.tool.id));
   const proposalEdges = input.plannerProposals.flatMap(({ payload }) => payload.chainEdges);
   const effectiveProposalEdges = [
@@ -642,6 +677,7 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
   ];
   input.plannerProposals.forEach((proposal, index) => {
     const { binding, tool, chainEdges, implementationPlan } = proposal.payload;
+    const toolPath: Array<string | number> = ['plannerProposals', index, 'payload', 'tool'];
     // The compiler contract includes every incident edge. Incoming edges name
     // consumer parameters; outgoing edges name result paths this producer must
     // preserve. The focused reply proposes only its incoming edges, so the
@@ -649,6 +685,9 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
     const compileInputsSha256 = teachingToolCompileInputsSha256(tool, effectiveProposalEdges);
     if (proposalIds.has(tool.id))
       issue(ctx, ['plannerProposals', index], 'duplicate proposal tool');
+    if (input.current && !authoredToolsById.has(tool.id))
+      issue(ctx, toolPath, 'proposal tool is absent from the current plan');
+    validateToolLocalFields(tool, input.discovery.recordingIndex, ctx, toolPath);
     if (
       binding.runId !== input.discovery.run.runId ||
       binding.site !== input.discovery.run.site ||
@@ -657,14 +696,54 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
       binding.compileInputsSha256 !== compileInputsSha256
     )
       issue(ctx, ['plannerProposals', index, 'payload', 'binding'], 'stale planner proposal');
+    const edgeIds = new Set<string>();
+    const edgeTuples = new Set<string>();
     chainEdges.forEach((edge, edgeIndex) => {
+      const edgePath: Array<string | number> = [
+        'plannerProposals',
+        index,
+        'payload',
+        'chainEdges',
+        edgeIndex,
+      ];
       if (edge.consumerToolId !== tool.id)
         issue(
           ctx,
-          ['plannerProposals', index, 'payload', 'chainEdges', edgeIndex, 'consumerToolId'],
+          [...edgePath, 'consumerToolId'],
           'proposal chain edges must target the proposed tool',
         );
+      if (edgeIds.has(edge.id)) issue(ctx, [...edgePath, 'id'], 'duplicate proposal chain edge id');
+      const tuple = digest([
+        edge.producerToolId,
+        edge.producerResultPath,
+        edge.consumerToolId,
+        edge.consumerParameter,
+      ]);
+      if (edgeTuples.has(tuple)) issue(ctx, edgePath, 'duplicate proposal chain edge');
+      const producer = authoredToolsById.get(edge.producerToolId);
+      if (!producer) issue(ctx, [...edgePath, 'producerToolId'], 'unknown proposal producer tool');
+      if (!tool.candidate.likelyParams.some(({ name }) => name === edge.consumerParameter))
+        issue(ctx, [...edgePath, 'consumerParameter'], 'unknown proposal consumer parameter');
+      if (producer && !tool.candidate.dependsOnTools.includes(producer.candidate.toolName))
+        issue(ctx, edgePath, 'proposal edge is absent from the proposed tool dependency');
+      edgeIds.add(edge.id);
+      edgeTuples.add(tuple);
     });
+    for (const dependencyName of tool.candidate.dependsOnTools) {
+      const dependency = authoredToolsByName.get(dependencyName);
+      if (!dependency)
+        issue(
+          ctx,
+          [...toolPath, 'candidate', 'dependsOnTools'],
+          `unknown proposal dependency tool "${dependencyName}"`,
+        );
+      else if (dependency.id === tool.id)
+        issue(
+          ctx,
+          [...toolPath, 'candidate', 'dependsOnTools'],
+          `tool "${tool.candidate.toolName}" cannot depend on itself`,
+        );
+    }
     if (
       !tool.implementationPlan ||
       !same(tool.implementationPlan, implementationPlan.ref) ||
@@ -690,32 +769,7 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
       );
     }
     proposalIds.add(tool.id);
-    tools.set(tool.id, tool);
   });
-  if (input.plannerProposals.length) {
-    const proposalTools = [...tools.values()];
-    try {
-      validatePlan(
-        {
-          site: input.discovery.run.site,
-          recordingSha256: input.discovery.run.recordingSha256,
-          tools: proposalTools,
-          candidateCoverage: proposalTools.map((tool) => ({
-            discoveryCandidateName: tool.candidate.toolName,
-            plannedToolIds: [tool.id],
-            unresolvedReason: null,
-          })),
-          buildWaves: proposeDependencyBuildWaves(proposalTools),
-          chainEdges: effectiveProposalEdges,
-        },
-        input.discovery.recordingIndex,
-        ctx,
-        ['plannerProposals'],
-      );
-    } catch (error) {
-      issue(ctx, ['plannerProposals'], error instanceof Error ? error.message : String(error));
-    }
-  }
   const seenAdvice = new Set<string>();
   input.parameterAdvice.forEach((submission, index) => {
     if (!input.current?.snapshot)
@@ -752,19 +806,13 @@ function masterOutputSchema(input: MasterDecisionInput) {
   );
   return MasterDecisionOutputSchema.transform((output) => {
     const tools = output.desiredPlan.tools.map((tool): EditableTeachingTool => {
-      if (
-        !tool.implementationPlan ||
-        !suppliedPlans.has(digest(tool.implementationPlan)) ||
-        tool.implementationPlan.basedOnCompileInputsSha256 ===
-          teachingToolCompileInputsSha256(tool, output.desiredPlan.chainEdges)
-      ) {
+      if (!tool.implementationPlan || !suppliedPlans.has(digest(tool.implementationPlan))) {
         return tool;
       }
       // A revision may change compile inputs while accidentally echoing the
       // old hosted plan. Invalidate that mechanically unusable plan and let a
       // fresh focused planner rebuild it instead of rejecting the revision.
-      const { implementationPlan: _stale, ...revisedTool } = tool;
-      return revisedTool;
+      return withoutStaleImplementationPlan(tool, output.desiredPlan.chainEdges);
     });
     return {
       ...output,

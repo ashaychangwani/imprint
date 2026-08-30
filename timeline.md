@@ -1547,3 +1547,76 @@ circular-dependency checks. The full repository run passed 1,754 of 1,755
 tests; one unrelated recorder browser test hit its 30-second test limit, then
 passed alone in 4.1 seconds. A real child-process regression also proves that
 request-stage facts survive the probe process without copying parameter values.
+
+## 2026-08-30 00:30 PDT — Fresh Hotels run proves editable discovery, then finds a revision bug
+
+A new, unsteered Google Hotels teach started as run
+`3458b787-c69d-4c4d-9326-cd0b8ee87ffc`. It used the newly rebuilt latest
+combined recording, made from all four current Hotels recordings. This run
+ended failed and will never be resumed.
+
+The original shipped candidate detector again proposed a useful starting set.
+It found four operations: destination suggestions, hotel search, destination
+map boundaries, and hotel details. The master kept all four as API tools and
+put them into dependency waves. It never switched to a browser playbook.
+
+The run also proved that the proposal was editable. Destination suggestions
+passed. A map compiler proposed removing latitude and longitude after one live
+comparison suggested they were fixed transport values, but the master rejected
+that mismatch and kept all three recorded inputs pending stronger proof.
+Search checking found that changing a city name and identifier inside a
+recorded Chicago request was not enough. The master therefore changed the plan
+so search chooses a complete recorded Denver or Tahoe City destination
+structure instead of patching isolated fields inside the Chicago structure.
+Hotel details matched all four recorded requests and worked directly, but its
+required fresh search-to-details check could not pass because search still
+returned no usable hotel rows. These decisions came from agent review of exact
+request and result facts, not from new runtime rules.
+
+The command ultimately stopped for an internal revision-order bug. A fresh
+details proposal changed what it expected from search. That correctly made the
+old search build plan obsolete, but the host rejected the obsolete plan before
+the master had a chance to remove and rebuild it. The terminal honestly
+reported `0 ready, 4 failed` and named the stale search plan.
+
+The general fix is deliberately small. While combining a focused proposal with
+the current plan, the host now removes only build plans whose inputs have just
+become obsolete. It still gives the complete proposed change to the master,
+and the existing repair loop then asks fresh focused agents to rebuild every
+affected tool. When several focused planners run together, the host also keeps
+the exact inputs each planner actually saw. If one planner changes a link that
+another planner had already used, that second answer is deferred to the next
+fresh planning pass instead of being relabeled as current. Proposed links,
+including a dependency first discovered between two same-wave tools, determine
+which consumer answer is kept first. Independently valid suggestions may still
+conflict with each other, such as choosing the same link name. Those conflicts
+now reach the master to resolve instead of stopping before the master runs; the
+master's final plan must still pass every complete plan check. Unknown or
+forged individual plans remain rejected. Regressions cover changed and removed
+links: the new consumer plan is accepted and the old producer plan is cleared.
+Three-tool, new-dependency, and conflicting-suggestion regressions also prove
+that compatible work is retained instead of being needlessly repeated. An
+independent full-controller probe confirmed that the deferred producer receives
+the changed link on its next fresh planning pass.
+
+## 2026-08-30 01:05 PDT — Preserve each planner's actual starting point
+
+Two reviews found small holes in the first version of this fix. Individual
+suggestions still need to reject made-up recording request numbers, duplicate
+inputs, and a tool depending on itself even while disagreements between
+different suggestions are left for the master. Those checks were restored
+without restoring the all-or-nothing combined check. A second issue appeared
+when one planner renamed a producer while its consumer still used the old name
+from the plan they had both received. Suggestions are now checked against that
+starting plan, not against sibling answers that arrived concurrently. The
+master therefore sees both opinions and decides whether to accept the rename.
+
+The focused agent and controller suite now passes all 100 tests. An independent
+review also passed 150 broader planning, controller, end-to-end, and plan tests,
+plus type checking, lint, and the changed-file integrity check. Dead-code and
+circular-dependency checks pass. One earlier full run passed 1,765 of 1,766
+tests; a recorder browser test reached its 30-second limit and then passed alone
+in 4.2 seconds. After the final rename fix, the exact current tree passed 1,766
+of 1,767 tests; a different recorder browser test reached the same 30-second
+limit and then passed alone in 5.2 seconds. All teach tests passed in both full
+runs. The independent reviews found no remaining issue in this change.

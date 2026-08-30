@@ -1375,6 +1375,169 @@ describe('canonical planning and immutable execution', () => {
     expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(unchangedDetailPlan);
   });
 
+  it('lets a consumer proposal invalidate and replan an affected producer', () => {
+    const changedEdges = structuredClone(edges);
+    at(changedEdges, 0).producerResultPath = '[0].canonical_item_id';
+    const detailInput = {
+      ...focusedInput(detailTool),
+      incomingChainEdges: changedEdges,
+    };
+    const detailProposal = hostedProposal(
+      focusedOutput(detailInput),
+      'runs/run-fixture-1/proposals/revised-detail.json',
+    );
+    const input: MasterDecisionInput = {
+      ...revisionMasterInput(),
+      plannerProposals: [detailProposal],
+    };
+    const output = revisionMasterOutput(input);
+    output.desiredPlan.chainEdges = changedEdges;
+    output.desiredPlan.tools[1] = detailProposal.payload.tool;
+
+    const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
+    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
+    expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(
+      detailProposal.payload.implementationPlan.ref,
+    );
+  });
+
+  it('lets a consumer proposal remove an edge without preserving the producer plan', () => {
+    const detailInput = {
+      ...focusedInput(detailTool),
+      incomingChainEdges: [],
+    };
+    const detailProposal = hostedProposal(
+      focusedOutput(detailInput),
+      'runs/run-fixture-1/proposals/unlinked-detail.json',
+    );
+    const input: MasterDecisionInput = {
+      ...revisionMasterInput(),
+      plannerProposals: [detailProposal],
+    };
+    const output = revisionMasterOutput(input);
+    output.desiredPlan.chainEdges = [];
+    output.desiredPlan.tools[1] = detailProposal.payload.tool;
+
+    const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
+    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
+    expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(
+      detailProposal.payload.implementationPlan.ref,
+    );
+  });
+
+  it('lets the master resolve conflicts between independently valid proposals', () => {
+    const { implementationPlan: _searchPlan, ...unplannedSearch } = structuredClone(searchTool);
+    unplannedSearch.candidate.dependsOnTools = [detailTool.candidate.toolName];
+    const { implementationPlan: _detailPlan, ...unplannedDetail } = structuredClone(detailTool);
+    const sharedId = 'shared-proposal-edge';
+    const searchEdge = {
+      id: sharedId,
+      producerToolId: detailTool.id,
+      producerResultPath: 'item_id',
+      consumerToolId: searchTool.id,
+      consumerParameter: 'query',
+    };
+    const detailEdge = {
+      id: sharedId,
+      producerToolId: searchTool.id,
+      producerResultPath: '[0].item_id',
+      consumerToolId: detailTool.id,
+      consumerParameter: 'item_id',
+    };
+    const proposals = [
+      hostedProposal(
+        FocusedPlannerOutputSchema.parse({
+          binding: { ...runIdentity, toolId: searchTool.id },
+          tool: unplannedSearch,
+          chainEdges: [searchEdge],
+          implementationPlan: implementationPayload(unplannedSearch),
+          reason: 'Search independently proposes an incoming detail edge.',
+        }),
+        'runs/run-fixture-1/proposals/conflicting-search.json',
+      ),
+      hostedProposal(
+        FocusedPlannerOutputSchema.parse({
+          binding: { ...runIdentity, toolId: detailTool.id },
+          tool: unplannedDetail,
+          chainEdges: [detailEdge],
+          implementationPlan: implementationPayload(unplannedDetail),
+          reason: 'Detail independently proposes an incoming search edge.',
+        }),
+        'runs/run-fixture-1/proposals/conflicting-detail.json',
+      ),
+    ].map((source) => {
+      const proposal = structuredClone(source);
+      const compileInputsSha256 = teachingToolCompileInputsSha256(proposal.payload.tool, [
+        searchEdge,
+        detailEdge,
+      ]);
+      const toolImplementationPlan = proposal.payload.tool.implementationPlan;
+      if (!toolImplementationPlan) throw new Error('conflict fixture is missing its hosted plan');
+      proposal.payload.binding.compileInputsSha256 = compileInputsSha256;
+      toolImplementationPlan.basedOnCompileInputsSha256 = compileInputsSha256;
+      proposal.payload.implementationPlan.ref.basedOnCompileInputsSha256 = compileInputsSha256;
+      return FocusedPlannerProposalSchema.parse(rehash(proposal));
+    });
+    const input: MasterDecisionInput = {
+      ...revisionMasterInput(),
+      plannerProposals: proposals,
+    };
+
+    const parsed = parseMasterDecisionOutput(JSON.stringify(revisionMasterOutput(input)), input);
+    expect(parsed.desiredPlan.chainEdges).toEqual(edges);
+    expect(parsed.desiredPlan.tools.map(({ implementationPlan }) => implementationPlan)).toEqual([
+      searchTool.implementationPlan,
+      detailTool.implementationPlan,
+    ]);
+  });
+
+  it('lets the master arbitrate a producer rename proposed beside its unchanged consumer', () => {
+    const { implementationPlan: _searchPlan, ...renamedSearch } = structuredClone(searchTool);
+    renamedSearch.candidate.toolName = 'find_catalog';
+    const { implementationPlan: _detailPlan, ...unchangedDetail } = structuredClone(detailTool);
+    const proposals = [
+      hostedProposal(
+        FocusedPlannerOutputSchema.parse({
+          binding: { ...runIdentity, toolId: searchTool.id },
+          tool: renamedSearch,
+          chainEdges: [],
+          implementationPlan: implementationPayload(renamedSearch),
+          reason: 'The producer independently proposes a clearer public name.',
+        }),
+        'runs/run-fixture-1/proposals/renamed-search.json',
+      ),
+      hostedProposal(
+        FocusedPlannerOutputSchema.parse({
+          binding: { ...runIdentity, toolId: detailTool.id },
+          tool: unchangedDetail,
+          chainEdges: edges,
+          implementationPlan: implementationPayload(unchangedDetail),
+          reason: 'The consumer retains the producer name from the current plan it was shown.',
+        }),
+        'runs/run-fixture-1/proposals/unchanged-detail.json',
+      ),
+    ].map((source) => {
+      const proposal = structuredClone(source);
+      const compileInputsSha256 = teachingToolCompileInputsSha256(proposal.payload.tool, edges);
+      const toolImplementationPlan = proposal.payload.tool.implementationPlan;
+      if (!toolImplementationPlan) throw new Error('rename fixture is missing its hosted plan');
+      proposal.payload.binding.compileInputsSha256 = compileInputsSha256;
+      toolImplementationPlan.basedOnCompileInputsSha256 = compileInputsSha256;
+      proposal.payload.implementationPlan.ref.basedOnCompileInputsSha256 = compileInputsSha256;
+      return FocusedPlannerProposalSchema.parse(rehash(proposal));
+    });
+    const input: MasterDecisionInput = {
+      ...revisionMasterInput(),
+      plannerProposals: proposals,
+    };
+
+    const parsed = parseMasterDecisionOutput(JSON.stringify(revisionMasterOutput(input)), input);
+    expect(parsed.desiredPlan.tools.map(({ candidate }) => candidate.toolName)).toEqual([
+      searchTool.candidate.toolName,
+      detailTool.candidate.toolName,
+    ]);
+  });
+
   it('hash-binds the hosted request map to both the plan payload and execution binding', () => {
     const proposal = hostedProposal();
     const changedPayload = structuredClone(proposal);
@@ -1413,6 +1576,65 @@ describe('canonical planning and immutable execution', () => {
         plannerProposals: [stale],
       }),
     ).toThrow('stale planner proposal');
+  });
+
+  it('rejects a rebound proposal that cites recording data outside the run', () => {
+    const cases = [
+      (proposal: ReturnType<typeof hostedProposal>) => {
+        proposal.payload.tool.candidate.requestSeqs = [999];
+        proposal.payload.tool.candidate.representativeSeqs = [999];
+      },
+      (proposal: ReturnType<typeof hostedProposal>) => {
+        proposal.payload.tool.candidate.eventSeqs = [999];
+      },
+      (proposal: ReturnType<typeof hostedProposal>) => {
+        proposal.payload.tool.compileContext.authRequestSeqs = [999];
+      },
+    ];
+    for (const mutate of cases) {
+      const proposal = structuredClone(hostedProposal());
+      mutate(proposal);
+      const compileInputsSha256 = teachingToolCompileInputsSha256(
+        proposal.payload.tool,
+        proposal.payload.chainEdges,
+      );
+      const toolImplementationPlan = proposal.payload.tool.implementationPlan;
+      if (!toolImplementationPlan) throw new Error('forged proposal fixture is missing its plan');
+      proposal.payload.binding.compileInputsSha256 = compileInputsSha256;
+      toolImplementationPlan.basedOnCompileInputsSha256 = compileInputsSha256;
+      proposal.payload.implementationPlan.ref.basedOnCompileInputsSha256 = compileInputsSha256;
+      rehash(proposal);
+      const input: MasterDecisionInput = {
+        ...initialMasterInput(),
+        plannerProposals: [proposal],
+      };
+      expect(() =>
+        parseMasterDecisionOutput(JSON.stringify(initialMasterOutput(input)), input),
+      ).toThrow('unknown recording seq 999');
+    }
+  });
+
+  it('rejects a rebound proposal that makes a tool depend on itself', () => {
+    const proposal = structuredClone(hostedProposal());
+    proposal.payload.tool.candidate.dependsOnTools = [proposal.payload.tool.candidate.toolName];
+    const compileInputsSha256 = teachingToolCompileInputsSha256(
+      proposal.payload.tool,
+      proposal.payload.chainEdges,
+    );
+    const toolImplementationPlan = proposal.payload.tool.implementationPlan;
+    if (!toolImplementationPlan) throw new Error('forged proposal fixture is missing its plan');
+    proposal.payload.binding.compileInputsSha256 = compileInputsSha256;
+    toolImplementationPlan.basedOnCompileInputsSha256 = compileInputsSha256;
+    proposal.payload.implementationPlan.ref.basedOnCompileInputsSha256 = compileInputsSha256;
+    rehash(proposal);
+
+    const input: MasterDecisionInput = {
+      ...initialMasterInput(),
+      plannerProposals: [proposal],
+    };
+    expect(() =>
+      parseMasterDecisionOutput(JSON.stringify(initialMasterOutput(input)), input),
+    ).toThrow('cannot depend on itself');
   });
 
   it('rejects proposal edges owned by another consumer tool', () => {

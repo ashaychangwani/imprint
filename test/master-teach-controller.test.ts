@@ -5,6 +5,7 @@ import { join as pathJoin } from 'node:path';
 import { triageRequests } from '../src/imprint/compile.ts';
 import {
   apiReplayFacts,
+  compatibleFocusedPlannerIndexes,
   compileEveryToolInBuildWaves,
   focusedPlanningFailureMessage,
   implementationPlanRepairToolIds,
@@ -752,5 +753,131 @@ describe('master repair revisions', () => {
     };
 
     expect(implementationPlanRepairToolIds(plan)).toEqual([stale.id, missing.id]);
+  });
+
+  it('defers a producer plan when a concurrent consumer changes its output obligation', () => {
+    const producer = focusedTool(1);
+    const consumer = focusedTool(2, [producer.candidate.toolName]);
+    consumer.candidate.likelyParams = [
+      { name: 'item_id', type: 'string', description: 'Identifier from the producer.' },
+    ];
+    const oldEdge = {
+      id: 'producer-item',
+      producerToolId: producer.id,
+      producerResultPath: '[0].item_id',
+      consumerToolId: consumer.id,
+      consumerParameter: 'item_id',
+    };
+    const newEdge = { ...oldEdge, producerResultPath: '[0].canonical_item_id' };
+    const bundles = [
+      {
+        evidence: {} as never,
+        output: { tool: producer, chainEdges: [] } as never,
+        authoredCompileInputsSha256: teachingToolCompileInputsSha256(producer, [oldEdge]),
+      },
+      {
+        evidence: {} as never,
+        output: { tool: consumer, chainEdges: [newEdge] } as never,
+        authoredCompileInputsSha256: teachingToolCompileInputsSha256(consumer, [newEdge]),
+      },
+    ];
+
+    expect(compatibleFocusedPlannerIndexes([oldEdge], bundles)).toEqual([1]);
+    const producerBundle = bundles[0];
+    if (!producerBundle) throw new Error('missing producer planner fixture');
+    expect(
+      compatibleFocusedPlannerIndexes(
+        [newEdge],
+        [
+          {
+            ...producerBundle,
+            authoredCompileInputsSha256: teachingToolCompileInputsSha256(producer, [newEdge]),
+          },
+        ],
+      ),
+    ).toEqual([0]);
+  });
+
+  it('keeps compatible upstream work when two downstream links change', () => {
+    const first = focusedTool(1);
+    const second = focusedTool(2, [first.candidate.toolName]);
+    const third = focusedTool(3, [second.candidate.toolName]);
+    second.candidate.likelyParams = [
+      { name: 'first_id', type: 'string', description: 'Identifier from the first tool.' },
+    ];
+    third.candidate.likelyParams = [
+      { name: 'second_id', type: 'string', description: 'Identifier from the second tool.' },
+    ];
+    const oldFirstEdge = {
+      id: 'first-to-second',
+      producerToolId: first.id,
+      producerResultPath: '[0].first_id',
+      consumerToolId: second.id,
+      consumerParameter: 'first_id',
+    };
+    const oldSecondEdge = {
+      id: 'second-to-third',
+      producerToolId: second.id,
+      producerResultPath: '[0].second_id',
+      consumerToolId: third.id,
+      consumerParameter: 'second_id',
+    };
+    const newFirstEdge = { ...oldFirstEdge, producerResultPath: '[0].canonical_first_id' };
+    const newSecondEdge = { ...oldSecondEdge, producerResultPath: '[0].canonical_second_id' };
+    const currentEdges = [oldFirstEdge, oldSecondEdge];
+    const bundles = [
+      {
+        evidence: {} as never,
+        output: { tool: first, chainEdges: [] } as never,
+        authoredCompileInputsSha256: teachingToolCompileInputsSha256(first, currentEdges),
+      },
+      {
+        evidence: {} as never,
+        output: { tool: second, chainEdges: [newFirstEdge] } as never,
+        authoredCompileInputsSha256: teachingToolCompileInputsSha256(second, [
+          newFirstEdge,
+          oldSecondEdge,
+        ]),
+      },
+      {
+        evidence: {} as never,
+        output: { tool: third, chainEdges: [newSecondEdge] } as never,
+        authoredCompileInputsSha256: teachingToolCompileInputsSha256(third, [
+          oldFirstEdge,
+          newSecondEdge,
+        ]),
+      },
+    ];
+
+    expect(compatibleFocusedPlannerIndexes(currentEdges, bundles)).toEqual([0, 2]);
+  });
+
+  it('keeps a same-wave consumer that proposes a new producer dependency', () => {
+    const producer = focusedTool(1);
+    const consumer = focusedTool(2, [producer.candidate.toolName]);
+    consumer.candidate.likelyParams = [
+      { name: 'item_id', type: 'string', description: 'Identifier from the producer.' },
+    ];
+    const newEdge = {
+      id: 'new-producer-item',
+      producerToolId: producer.id,
+      producerResultPath: '[0].item_id',
+      consumerToolId: consumer.id,
+      consumerParameter: 'item_id',
+    };
+    const bundles = [
+      {
+        evidence: {} as never,
+        output: { tool: consumer, chainEdges: [newEdge] } as never,
+        authoredCompileInputsSha256: teachingToolCompileInputsSha256(consumer, [newEdge]),
+      },
+      {
+        evidence: {} as never,
+        output: { tool: producer, chainEdges: [] } as never,
+        authoredCompileInputsSha256: teachingToolCompileInputsSha256(producer, []),
+      },
+    ];
+
+    expect(compatibleFocusedPlannerIndexes([], bundles)).toEqual([0]);
   });
 });
