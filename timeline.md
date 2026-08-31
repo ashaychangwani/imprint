@@ -1727,3 +1727,49 @@ explicit `--provider` still wins, and the plain command without either flag
 still uses automatic provider selection. The trace and CLI help now report this
 choice honestly. Focused provider and help tests pass, along with type checking.
 The next Hotels validation will be another new run.
+
+## 2026-08-31 16:55 PDT — Hotels ships four MVPs; audit identifies later finesse work
+
+A new, unsteered Google Hotels teach started as run
+`8f674ad2-aaed-4ea4-8967-da7ce029d20e` from the same current four-recording
+combined file. Codex triage selected 61 of 140 eligible requests. The shipped
+candidate detector proposed four operations, and the master kept all four as
+API tools in three waves: location suggestions, hotel search, then hotel
+details and booking options in parallel. No browser playbook was chosen.
+
+The new delivery order worked as intended. Location suggestions first had a
+159-versus-165-byte replay mismatch. The master started a fresh compiler, fixed
+it, installed the tool, and immediately started search while optional parameter
+work ran separately. Search's first broad 15-parameter design hit a live parser
+error. The master reduced the core contract to the two grounded inputs,
+`location` and `currency`; a fresh build passed replay, live, and the real
+suggestion-to-search chain and was installed. Details and booking then compiled
+together. Details was installed after its core and search-chain checks passed.
+Booking had a two-byte replay mismatch, was rebuilt in a fresh compiler, then
+passed replay, live, four search-chain bindings, and core review.
+
+The command ended successfully with `4 ready, 0 failed`. Each producer was
+installed before its consumers started, and successful upstream work remained
+installed through later repairs. Three optional finesse reports finished before
+the foreground run ended; booking finesse was saved as deferred rather than
+holding completion open. The suggestion and search finesse reports approved
+their small parameter sets. The details finesse report correctly found that
+property identity could mix incompatible sources and that currency only echoed
+without changing useful data.
+
+The ordinary Codex audit then tested five tools because the site directory also
+contains the older `get_hotel_web_links` browser tool, which this fresh teach did
+not build or remove. The overall audit scored 62.96%: 17 correct, 10 broken, and
+2 infrastructure cases. The fresh suggestion and search tools worked across
+all tested variations. Details returned useful records, but changing
+`property_token` was a no-op. Booking returned an empty list across nine
+realistic future stays and producer-selected properties, so the auditor marked
+those calls broken. The two infrastructure cases were repeated click timeouts
+in the retained browser web-links tool.
+
+This proves the MVP-first lifecycle now ships usable work instead of losing the
+whole run, but it does not yet meet the roughly 80% audit target. The remaining
+problems are specific generated-artifact and parameter-quality findings, not
+evidence for a Hotels runtime rule. We will run the same unsteered flow on
+Google Flights before deciding whether any general prompt or finesse workflow
+change is justified.
