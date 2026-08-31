@@ -377,6 +377,68 @@ describe('master-owned focused build waves', () => {
     expect(maximumActive).toBeLessThanOrEqual(3);
   });
 
+  it('accepts a producer MVP before starting its dependent compile', async () => {
+    const producer = focusedTool(1);
+    const consumer = focusedTool(2, [producer.candidate.toolName]);
+    const events: string[] = [];
+    let producerAccepted = false;
+
+    const result = await compileEveryToolInBuildWaves(
+      {
+        tools: [producer, consumer],
+        buildWaves: [[producer.id], [consumer.id]],
+      },
+      {
+        compileTool: async (tool) => {
+          events.push(`compile:${tool.id}`);
+          if (tool.id === consumer.id) expect(producerAccepted).toBe(true);
+          return tool.id;
+        },
+        acceptCompiledTool: async (tool) => {
+          events.push(`accept:${tool.id}`);
+          await Promise.resolve();
+          if (tool.id === producer.id) producerAccepted = true;
+        },
+      },
+    );
+
+    expect(result.failures).toEqual([]);
+    expect(result.completed.map(({ tool }) => tool.id)).toEqual([producer.id, consumer.id]);
+    expect(events).toEqual([
+      `compile:${producer.id}`,
+      `accept:${producer.id}`,
+      `compile:${consumer.id}`,
+      `accept:${consumer.id}`,
+    ]);
+  });
+
+  it('still attempts later MVP compiles when accepting an earlier artifact fails', async () => {
+    const tools = [focusedTool(1), focusedTool(2), focusedTool(3)];
+    const attempted: string[] = [];
+    const result = await compileEveryToolInBuildWaves(
+      {
+        tools,
+        buildWaves: tools.map(({ id }) => [id]),
+      },
+      {
+        compileTool: async (tool) => {
+          attempted.push(tool.id);
+          return tool.id;
+        },
+        acceptCompiledTool: (tool) => {
+          if (tool.id === tools[0]?.id) throw new Error('fixture MVP contract failed');
+        },
+      },
+    );
+
+    expect(attempted).toEqual(tools.map(({ id }) => id));
+    expect(result.completed.map(({ tool }) => tool.id)).toEqual(tools.slice(1).map(({ id }) => id));
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toEqual(
+      expect.objectContaining({ toolId: tools[0]?.id, stage: 'contract' }),
+    );
+  });
+
   it('settles every tool before returning an honest failed terminal status', async () => {
     const tools = Array.from({ length: 45 }, (_, index) => focusedTool(index));
     const plan = {

@@ -4,6 +4,11 @@ Items deferred from the v0.1 design + eng review. Not blocking the 2-week sprint
 
 ## Current master-teach follow-ups
 
+- Add an explicit `finesse` command that reads the build-bound suggestions now
+  saved under a teach run's `finesse/` directory. It should show the master the
+  still-current advice, let the master accept or reject it, and freshly rebuild
+  only the affected tool and its consumers. The normal teach command already
+  ships the usable MVP without waiting for this optional pass.
 - A request-free browser fallback passes its direct teach check, but the normal
   automatic runtime ladder currently tries the empty API shell first and stops
   before playbook. Route an explicitly accepted request-free fallback directly

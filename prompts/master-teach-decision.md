@@ -134,8 +134,11 @@ be the empty string when the detector explicitly does not know it.
 Choose the build hierarchy yourself in `buildWaves`. Put every planned tool ID
 in exactly one wave. A tool must be in a later wave than every tool named in its
 `dependsOnTools`; independent tools may share a wave or be placed in different
-waves when your hierarchy calls for it. The runtime validates this schedule and
-executes it; it does not choose or rewrite the grouping.
+waves when your hierarchy calls for it. The runtime validates and executes this
+schedule; it does not choose or rewrite the grouping. Each wave is a barrier.
+Put an important producer in an earlier, narrow wave when finishing it should
+unblock several consumers; do not make those consumers wait behind unrelated
+work merely because it is also independent.
 
 Represent each producer-to-consumer parameter flow explicitly in `chainEdges`:
 producer tool ID and public result path, then consumer tool ID and parameter.

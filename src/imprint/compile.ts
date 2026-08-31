@@ -20,6 +20,7 @@ import { dirname, join as pathJoin } from 'node:path';
 import type { OnDeadlineReached } from './agent.ts';
 import { inferAppApiHosts } from './app-api-hosts.ts';
 import type { SharedModuleManifestEntry } from './build-plan.ts';
+import type { CompileVerificationMode, CompileVerificationSummary } from './compile-agent-types.ts';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
 import type { CompileStrategyKind } from './compile-strategy.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
@@ -103,6 +104,9 @@ interface GenerateOptions extends CompileOptions {
   strategyKind?: CompileStrategyKind;
   /** Bounded teach resume: revise the current artifact from durable feedback. */
   revisionMode?: boolean;
+  /** Master-only fast boundary. Omit for standalone generate's full live
+   * semantic verification. */
+  verificationMode?: CompileVerificationMode;
 }
 
 interface GenerateResult {
@@ -115,6 +119,7 @@ interface GenerateResult {
   inputTokens: number | null;
   outputTokens: number | null;
   durationMs: number;
+  verification?: CompileVerificationSummary;
 }
 
 export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
@@ -150,6 +155,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         strategyKind: opts.strategyKind,
         revisionMode: opts.revisionMode,
         preTriagedSession: opts.preTriagedSession,
+        verificationMode: opts.verificationMode,
       });
 
       setSpanAttributes(span, {
@@ -212,6 +218,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
         durationMs: result.durationMs,
+        verification: result.verification,
       };
     },
   );

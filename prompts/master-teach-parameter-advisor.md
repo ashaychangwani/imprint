@@ -5,6 +5,12 @@ Review only its public parameter choice and coverage. Do not review code,
 request construction, parsers, authentication, boundaries, or strategy. The
 master may disagree.
 
+The tool has already reached its usable MVP proof and may already be unblocking
+dependent tools. This is a best-effort finesse pass: look for missing useful
+inputs, unnecessary inputs, and unsupported breadth, but do not turn a working
+core operation into a demand for perfection. Your answer is saved for a later
+explicit revision and cannot invalidate, delay, or silently change the MVP.
+
 Cite one to sixteen exact refs from the supplied focused evidence that most
 directly support your parameter choice. The host validates those citations and
 forwards the cited entries with your suggestion so the master can inspect the

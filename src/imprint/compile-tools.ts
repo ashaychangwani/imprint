@@ -2780,6 +2780,13 @@ export async function externalVerification(
     /** Agentic compile path only: let the independent verifier run the live
      *  suite and judge its factual outputs. No source-shape inspection occurs. */
     deferLiveIntegrationToSemanticAgent?: boolean;
+    /** Master-accepted public contract. Supplied only by the master MVP path;
+     * standalone generation continues to let its compile agent choose the
+     * final parameter surface. */
+    expectedPublicParameters?: readonly {
+      name: string;
+      type?: 'string' | 'number' | 'boolean';
+    }[];
   } = {},
 ): Promise<{
   failures: string[];
@@ -2813,6 +2820,28 @@ export async function externalVerification(
         failures.push(
           `workflow.toolName "${parsedWorkflow.toolName}" does not match selected candidate "${opts.expectedToolName}"`,
         );
+      }
+      if (opts.expectedPublicParameters) {
+        const unresolved = opts.expectedPublicParameters
+          .filter(({ type }) => type === undefined)
+          .map(({ name }) => name);
+        if (unresolved.length > 0) {
+          failures.push(
+            `master public parameter contract has unresolved type(s): ${unresolved.join(', ')}`,
+          );
+        } else {
+          const expected = opts.expectedPublicParameters
+            .map(({ name, type }) => ({ name, type }))
+            .sort((left, right) => left.name.localeCompare(right.name));
+          const actual = parsedWorkflow.parameters
+            .map(({ name, type }) => ({ name, type }))
+            .sort((left, right) => left.name.localeCompare(right.name));
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            failures.push(
+              `workflow parameters do not match the master's accepted public contract (expected: ${expected.map(({ name, type }) => `${name}:${type}`).join(', ') || 'none'}; actual: ${actual.map(({ name, type }) => `${name}:${type}`).join(', ') || 'none'})`,
+            );
+          }
+        }
       }
       const wfStr = JSON.stringify(raw);
       const allowedCredentialNames = new Set([

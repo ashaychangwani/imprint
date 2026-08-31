@@ -35,8 +35,14 @@ import type {
   AuthCheckpoint,
   CompileAgentProgress,
   CompileAgentResult,
+  CompileVerificationMode,
 } from './compile-agent-types.ts';
-import { formatCandidateContext, formatToolPlan } from './compile-agent-types.ts';
+import {
+  formatCandidateContext,
+  formatCompileVerificationMode,
+  formatToolPlan,
+} from './compile-agent-types.ts';
+import { parseCompileDoneSentinel } from './compile-done-sentinel.ts';
 import {
   type CompileProviderControl,
   compileProviderInterruptionError,
@@ -119,6 +125,8 @@ interface CompileViaClaudeCliOptions {
   strategyKind?: CompileStrategyKind;
   /** Revise existing generated artifacts from durable verification feedback. */
   revisionMode?: boolean;
+  /** Master-only deterministic MVP boundary. */
+  verificationMode?: CompileVerificationMode;
   /** Shared triage result for irreversible-effect propagation in the MCP server. */
   sharedTriageSelection?: SharedTriageSelection;
   /** Present → drive an auth compile rather than a data compile. */
@@ -324,6 +332,7 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
       ...(opts.sharedModules ? ['--shared-modules-json', JSON.stringify(opts.sharedModules)] : []),
       ...(opts.strategyKind ? ['--strategy-kind', opts.strategyKind] : []),
       ...(opts.revisionMode ? ['--revision-mode'] : []),
+      ...(opts.verificationMode ? ['--verification-mode', opts.verificationMode] : []),
       ...(opts.sharedTriageSelection
         ? ['--shared-triage-json', JSON.stringify(opts.sharedTriageSelection)]
         : []),
@@ -355,6 +364,7 @@ You will write artifacts into the tool directory.
 ${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModules)}
 ${formatToolPlan(opts.toolPlan)}
 ${formatRevisionMode(opts.revisionMode)}
+${formatCompileVerificationMode(opts.verificationMode)}
 
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
   }
@@ -765,33 +775,30 @@ async function driveStreamJson(
   }
 
   if (existsSync(doneSentinel)) {
-    let payload: {
-      summary?: string;
-      verification?: string;
-      cycles?: number;
-      failures?: string[];
-    } = {};
+    let raw = '';
     try {
-      const raw = readFileSync(doneSentinel, 'utf8').trim();
-      if (raw) payload = JSON.parse(raw);
+      raw = readFileSync(doneSentinel, 'utf8').trim();
     } catch (err) {
-      log(`failed to parse done sentinel: ${errMsg(err)}`);
+      log(`failed to read done sentinel: ${errMsg(err)}`);
     }
-    if (payload.verification === 'mechanical_passed' || payload.verification === 'not_applicable') {
+    const parsed = parseCompileDoneSentinel(raw, {
+      toolDir: opts.absoluteToolDir,
+      expectedMode: opts.verificationMode,
+      authMode: Boolean(opts.authMode),
+    });
+    if (parsed.ok) {
       return {
         success: true,
         outcome: 'done',
-        message:
-          payload.verification === 'not_applicable'
-            ? `${payload.summary ?? 'Task completed'} (live verification: N/A)`
-            : (payload.summary ?? 'Task completed'),
+        message: parsed.message,
+        ...(parsed.verification ? { verification: parsed.verification } : {}),
         ...baseResult,
       };
     }
     return {
       success: false,
       outcome: 'error',
-      message: `Verification failed after ${payload.cycles ?? '?'} cycles. Final failures:\n${(payload.failures ?? []).join('\n')}`,
+      message: parsed.message,
       ...baseResult,
     };
   }

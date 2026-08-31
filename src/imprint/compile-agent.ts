@@ -22,9 +22,11 @@ import { compileViaCodexCli } from './codex-cli-compile.ts';
 import {
   type CompileAgentProgress,
   type CompileAgentResult,
+  type CompileVerificationMode,
   advanceIncompleteSemanticVerificationRuns,
   advanceSemanticVerificationCycle,
   formatCandidateContext,
+  formatCompileVerificationMode,
   formatToolPlan,
 } from './compile-agent-types.ts';
 import { runCompileWithProviderRecovery } from './compile-provider-recovery.ts';
@@ -146,6 +148,10 @@ interface CompileAgentOptions {
   revisionMode?: boolean;
   /** Shared triage decision propagated into all compile transports. */
   preTriagedSession?: SharedTriageSelection;
+  /** Master-led teaches use a deterministic MVP boundary so dependent tools
+   * are not held behind live semantic breadth work. Standalone generation
+   * keeps the full verifier by default. */
+  verificationMode?: CompileVerificationMode;
 }
 
 function formatRevisionMode(enabled: boolean | undefined): string {
@@ -267,6 +273,7 @@ You will write artifacts into the tool directory.
 ${formatCandidateContext(opts.candidate, opts.sharedContext, assignedSharedModules)}
 ${formatToolPlan(opts.toolPlan)}
 ${formatRevisionMode(opts.revisionMode)}
+${formatCompileVerificationMode(opts.verificationMode)}
 
 Begin by calling read_session_summary to orient yourself, then proceed per the system prompt.`;
 
@@ -318,6 +325,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
             toolPlan: opts.toolPlan,
             strategyKind: opts.strategyKind,
             revisionMode: opts.revisionMode,
+            verificationMode: opts.verificationMode,
             resume,
             model: opts.llmConfig?.model,
             sharedTriageSelection: opts.preTriagedSession
@@ -326,7 +334,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
           }),
       });
       if (!result.success) return result;
-      if (!opts.keepTest) {
+      if (!opts.keepTest && opts.verificationMode !== 'master_mvp') {
         removeEphemeralTests(absoluteToolDir);
       }
       return result;
@@ -359,6 +367,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
   let incompleteVerifierRuns = 0;
   let result: AgentResult | null = null;
   let currentInitialMessage = initialUserMessage;
+  let verificationSemantic: 'approved' | 'not_run' | 'not_applicable' | undefined;
 
   while (true) {
     const currentSemanticCycle = Math.min(semanticVerificationCycles + 1, MAX_VERIFICATION_CYCLES);
@@ -418,6 +427,8 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         credentialNames: opts.sharedContext?.credentialNames,
         strategyKind: opts.strategyKind,
         deferLiveIntegrationToSemanticAgent: true,
+        expectedPublicParameters:
+          opts.verificationMode === 'master_mvp' ? opts.candidate?.likelyParams : undefined,
       });
 
     if (warnings.length > 0) {
@@ -430,23 +441,34 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
         JSON.parse(readFileSync(pathJoin(absoluteToolDir, 'workflow.json'), 'utf8')),
       );
     }
-    if (failures.length === 0 && workflow && opts.strategyKind === 'playbook_fallback') {
+    if (
+      failures.length === 0 &&
+      workflow &&
+      opts.strategyKind === 'playbook_fallback' &&
+      opts.verificationMode === 'master_mvp'
+    ) {
+      verificationSemantic = 'not_run';
       message = result.doneSummary ?? 'Browser artifact contract passed';
       message += '\n\nLive playbook verification is owned by the master.';
       if (warnings.length > 0) message += `\n\nWarnings:\n${warnings.join('\n')}`;
       if (!opts.keepTest) removeEphemeralTests(absoluteToolDir);
       break;
     }
-    if (workflow && workflowHasIrreversibleEffect(workflow)) {
+    if (failures.length === 0 && workflow && workflowHasIrreversibleEffect(workflow)) {
       warnings.push(...applyIrreversibleVerificationWaiver(absoluteToolDir, workflow));
-      if (failures.length === 0) {
-        message = `${result.doneSummary ?? 'Task completed'}\n\nLive verification: N/A (irreversible workflow).`;
-        if (warnings.length > 0) message += `\n\nWarnings:\n${warnings.join('\n')}`;
-        if (!opts.keepTest) removeEphemeralTests(absoluteToolDir);
-      }
-      if (failures.length === 0) {
-        break;
-      }
+      message = `${result.doneSummary ?? 'Task completed'}\n\nLive verification: N/A (irreversible workflow).`;
+      if (warnings.length > 0) message += `\n\nWarnings:\n${warnings.join('\n')}`;
+      if (!opts.keepTest) removeEphemeralTests(absoluteToolDir);
+      verificationSemantic = 'not_applicable';
+      break;
+    }
+
+    if (failures.length === 0 && opts.verificationMode === 'master_mvp') {
+      verificationSemantic = 'not_run';
+      message = result.doneSummary ?? 'Minimum viable artifact completed';
+      message += '\n\nIndependent live semantic verification: deferred to the master.';
+      if (warnings.length > 0) message += `\n\nWarnings:\n${warnings.join('\n')}`;
+      break;
     }
 
     let semanticReviewCompleted = false;
@@ -488,6 +510,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
           message += `\n\nWarnings:\n${allWarnings.join('\n')}`;
         }
         if (!opts.keepTest) removeEphemeralTests(absoluteToolDir);
+        verificationSemantic = 'approved';
         if (failures.length === 0) break;
       }
     }
@@ -541,6 +564,19 @@ Resume your work. Read the files you wrote (${repairFiles}), fix the issues, re-
   return {
     success: outcome === 'done',
     outcome,
+    ...(outcome === 'done'
+      ? {
+          verification: {
+            mode: opts.verificationMode ?? 'full',
+            deterministic: 'passed' as const,
+            semantic: verificationSemantic ?? 'approved',
+            ...(verificationSemantic === 'approved' &&
+            existsSync(pathJoin(absoluteToolDir, '.live-verification.json'))
+              ? { reportPath: pathJoin(absoluteToolDir, '.live-verification.json') }
+              : {}),
+          },
+        }
+      : {}),
     workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
     parserPath: existsSync(parserPath) ? parserPath : undefined,
     // parserTestPath only set if it survived (--keep-test); otherwise undefined.

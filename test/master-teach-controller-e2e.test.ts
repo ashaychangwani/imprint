@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TriageResult } from '../src/imprint/compile.ts';
 import {
+  type BaselineMvpReviewInput,
+  BaselineMvpReviewOutputSchema,
   CompletionReviewOutputSchema,
   type FocusedPlannerInput,
   FocusedPlannerOutputSchema,
@@ -30,10 +32,45 @@ import { type Session, SessionSchema, WorkflowSchema } from '../src/imprint/type
 const SITE = 'foreground-e2e-fixture';
 const PRODUCER_ID = 'search_items_tool';
 const CONSUMER_ID = 'get_item_tool';
+const LEAF_ID = 'render_item_tool';
 const PRODUCER_NAME = 'search_items';
 const CONSUMER_NAME = 'get_item';
+const LEAF_NAME = 'render_item';
 const EDGE_ID = 'search-item-id';
+const LEAF_EDGE_ID = 'get-rendered-item-id';
 const FIXED_NOW = new Date('2026-08-29T12:00:00.000Z');
+
+function baselineMvpReview(
+  input: BaselineMvpReviewInput,
+  status: 'credible' | 'revision_required',
+) {
+  const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === input.toolId);
+  const liveReceipt = proof?.receipts.find(
+    ({ check, status }) => check === 'live' && status === 'passed',
+  );
+  if (!proof || !liveReceipt) throw new Error('fixture expected current live MVP proof');
+  return BaselineMvpReviewOutputSchema.parse({
+    binding: {
+      ...input.run,
+      toolId: input.toolId,
+      compileInputsSha256: proof.executionBinding.compileInputsSha256,
+      currentBuildRef: proof.currentBuildRef,
+      executionBindingSha256: proof.executionBindingSha256,
+      liveReceiptRef: liveReceipt.ref,
+      resultEvidenceRef: input.resultEvidence.ref,
+    },
+    status,
+    reason:
+      status === 'credible'
+        ? 'The current default result demonstrates the fixture operation.'
+        : 'The current default result does not demonstrate the fixture operation.',
+    evidenceRefs: [input.resultEvidence.ref],
+  });
+}
+
+function credibleBaselineMvpReview(input: BaselineMvpReviewInput) {
+  return baselineMvpReview(input, 'credible');
+}
 
 const sharedContext = {
   loginRequestSeqs: [],
@@ -74,11 +111,35 @@ const consumerCandidate = {
   dependsOnTools: [PRODUCER_NAME],
 };
 
+const leafCandidate = {
+  toolName: LEAF_NAME,
+  description: 'Render one fixture item summary by identifier.',
+  rationale: 'Request 5 consumes the identifier returned by request 2.',
+  confidence: 1,
+  requestSeqs: [5],
+  representativeSeqs: [5],
+  eventSeqs: [],
+  expectedOutput: 'The rendered item summary.',
+  likelyParams: [
+    { name: 'item_id', type: 'string' as const, description: 'Identifier from item detail.' },
+  ],
+  dependencySeqs: [2],
+  dependsOnTools: [CONSUMER_NAME],
+};
+
 const chainEdge = {
   id: EDGE_ID,
   producerToolId: PRODUCER_ID,
   producerResultPath: 'items[0].id',
   consumerToolId: CONSUMER_ID,
+  consumerParameter: 'item_id',
+};
+
+const leafChainEdge = {
+  id: LEAF_EDGE_ID,
+  producerToolId: CONSUMER_ID,
+  producerResultPath: 'id',
+  consumerToolId: LEAF_ID,
   consumerParameter: 'item_id',
 };
 
@@ -147,6 +208,27 @@ function syntheticSessionPath(root: string, includeTelemetryShapedRequest = fals
   return path;
 }
 
+function threeToolSyntheticSessionPath(root: string): string {
+  const path = syntheticSessionPath(root);
+  const session = SessionSchema.parse(readJson(path));
+  session.requests.push({
+    seq: 5,
+    timestamp: 300,
+    method: 'GET',
+    url: 'https://fixture.invalid/api/render/item-1',
+    headers: { accept: 'application/json' },
+    resourceType: 'Fetch',
+    response: {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      mimeType: 'application/json',
+      body: JSON.stringify({ rendered: 'item-1' }),
+    },
+  });
+  writeFileSync(path, `${JSON.stringify(SessionSchema.parse(session))}\n`);
+  return path;
+}
+
 function preparedSession(
   session: Session,
   selectedSeqs = session.requests.map(({ seq }) => seq),
@@ -186,6 +268,7 @@ async function withTemporaryImprintHome<T>(run: (root: string, home: string) => 
 function toolId(name: string): string {
   if (name === PRODUCER_NAME) return PRODUCER_ID;
   if (name === CONSUMER_NAME) return CONSUMER_ID;
+  if (name === LEAF_NAME) return LEAF_ID;
   throw new Error(`unexpected fixture tool ${name}`);
 }
 
@@ -228,6 +311,24 @@ function initialDesiredPlan(input: MasterDecisionInput): DesiredTeachingPlan {
     buildWaves: [[PRODUCER_ID], [CONSUMER_ID]],
     chainEdges: [chainEdge],
   };
+}
+
+function initialThreeToolDesiredPlan(input: MasterDecisionInput): DesiredTeachingPlan {
+  const desired = initialDesiredPlan(input);
+  const candidate = input.discovery.discoveryCandidates.find(
+    ({ toolName }) => toolName === LEAF_NAME,
+  );
+  if (!candidate) throw new Error('missing discovery candidate render_item');
+  desired.tools.push({
+    id: LEAF_ID,
+    candidate,
+    compileContext: input.discovery.detectorSharedContext,
+    evidenceRefs: [input.discovery.evidence.ref],
+    strategy: { kind: 'api', reason: 'The recording contains one replayable request.' },
+  });
+  desired.buildWaves = [[PRODUCER_ID], [CONSUMER_ID], [LEAF_ID]];
+  desired.chainEdges = [chainEdge, leafChainEdge];
+  return desired;
 }
 
 function proposalDesiredPlan(input: MasterDecisionInput): DesiredTeachingPlan {
@@ -335,9 +436,167 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+type FreshTeachOverrides = NonNullable<Parameters<typeof runFreshMasterTeach>[1]>;
+
+function lifecycleFailureFixture(input: {
+  runId: string;
+  events: string[];
+  promotionBatches: string[][];
+  requestBaselineMvpReview: (
+    reviewInput: BaselineMvpReviewInput,
+  ) => ReturnType<typeof credibleBaselineMvpReview>;
+  failCompileToolId?: string;
+  installedTools?: Set<string>;
+}): FreshTeachOverrides {
+  return {
+    now: () => FIXED_NOW,
+    runId: () => input.runId,
+    prepareSession: async (session) => preparedSession(session),
+    detectToolCandidates: async () => ({
+      ...validateToolCandidateDetection({
+        sharedContext,
+        candidates: [producerCandidate, consumerCandidate],
+      }),
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: 0,
+    }),
+    observeIndependentExecution: async () => ({
+      status: 'unavailable',
+      requests: [],
+      unmatchedRecordingRequestSeqs: [],
+      message: 'The deterministic fixture does not run an independent browser replay.',
+    }),
+    requestToolSelectionAdvice: async (advisorInput) =>
+      ToolSelectionAdvisorOutputSchema.parse({
+        binding: advisorInput.run,
+        boundaries: advisorInput.discoveryCandidates.map(
+          ({ likelyParams: _likelyParams, ...candidate }) => candidate,
+        ),
+        concerns: [],
+        reason: 'Both fixture requests have explicit operation boundaries.',
+      }),
+    requestMasterDecision: async (decisionInput) => {
+      if (decisionInput.verificationFindings) {
+        throw new ProviderUnavailableError(new Error('fixture stops after the lifecycle failure'));
+      }
+      const desiredPlan =
+        decisionInput.phase === 'discovery'
+          ? initialDesiredPlan(decisionInput)
+          : decisionInput.plannerProposals.length > 0
+            ? proposalDesiredPlan(decisionInput)
+            : desiredFromCurrent(decisionInput);
+      const output = MasterDecisionOutputSchema.parse({
+        binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+        outcome: 'accepted',
+        reason: 'The complete dependency-ordered fixture plan remains supported.',
+        desiredPlan,
+      });
+      return requestValidatedMasterDecision(decisionInput, {
+        analyzer: {
+          async analyze() {
+            return { text: JSON.stringify(output) };
+          },
+        },
+      });
+    },
+    requestFocusedPlan: async (plannerInput) =>
+      FocusedPlannerOutputSchema.parse({
+        binding: {
+          runId: plannerInput.run.runId,
+          site: plannerInput.run.site,
+          recordingSha256: plannerInput.run.recordingSha256,
+          toolId: plannerInput.tool.id,
+        },
+        tool: {
+          ...plannerInput.tool,
+          strategy: {
+            kind: 'api',
+            reason: 'The focused recording contains one replayable API request.',
+          },
+        },
+        chainEdges: plannerInput.incomingChainEdges,
+        implementationPlan: focusedImplementation(plannerInput),
+        reason: 'The focused request and expected result are explicit.',
+      }),
+    compileFocusedTool: async ({ tool, stagingDir }) => {
+      input.events.push(`compile:${tool.id}`);
+      if (tool.id === input.failCompileToolId) {
+        throw new ProviderUnavailableError(
+          new Error(`fixture compiler unavailable for ${tool.id}`),
+        );
+      }
+      mkdirSync(stagingDir, { recursive: true });
+      const workflow = WorkflowSchema.parse({
+        toolName: tool.candidate.toolName,
+        intent: { description: tool.candidate.description },
+        parameters: tool.candidate.likelyParams.map(({ name, type, description }) => ({
+          name,
+          type,
+          description,
+        })),
+        requests: [
+          {
+            recordingRequestSeq: tool.candidate.requestSeqs[0],
+            method: 'GET',
+            url:
+              tool.id === PRODUCER_ID
+                ? 'https://fixture.invalid/api/items'
+                : tool.id === CONSUMER_ID
+                  ? 'https://fixture.invalid/api/items/${param.item_id}'
+                  : 'https://fixture.invalid/api/render/${param.item_id}',
+            headers: { accept: 'application/json' },
+          },
+        ],
+        site: SITE,
+      });
+      const workflowPath = join(stagingDir, 'workflow.json');
+      writeFileSync(workflowPath, `${JSON.stringify(workflow)}\n`);
+      return { workflow, workflowPath, toolDir: stagingDir };
+    },
+    runApiTool: async ({ workflowPath, parameters }) => {
+      const producer = workflowPath.includes(`/${PRODUCER_ID}/`);
+      const leaf = workflowPath.includes(`/${LEAF_ID}/`);
+      return {
+        result: producer
+          ? { ok: true as const, data: { items: [{ id: 'item-1' }] } }
+          : leaf
+            ? { ok: true as const, data: { rendered: parameters.item_id } }
+            : { ok: true as const, data: { id: parameters.item_id, name: 'Fixture item' } },
+        executionMechanism: 'fixture-api',
+      };
+    },
+    requestBaselineMvpReview: async (reviewInput) => {
+      input.events.push(`review:${reviewInput.toolId}`);
+      return input.requestBaselineMvpReview(reviewInput);
+    },
+    requestParameterSelectionAdvice: async () => {
+      throw new Error('Optional fixture parameter advice is unavailable.');
+    },
+    runLiveFinesse: async ({ provider }) => ({
+      status: 'inconclusive',
+      provider,
+      attempts: 0,
+      completedReview: false,
+      artifacts: {},
+      message: 'Optional fixture live finesse is unavailable.',
+      durationMs: 1,
+    }),
+    requestCompletionReview: async () => {
+      throw new Error('fixture must stop before completion review');
+    },
+    promote: async ({ tools }) => {
+      const names = tools.map(({ workflow }) => workflow.toolName);
+      input.events.push(`promote:${names.join(',')}`);
+      input.promotionBatches.push(names);
+      for (const name of names) input.installedTools?.add(name);
+    },
+  };
+}
+
 describe('fresh foreground master controller end to end', () => {
   it('settles both dependency waves, every check, completion review, and promotion', async () => {
-    await withTemporaryImprintHome(async (root) => {
+    await withTemporaryImprintHome(async (root, home) => {
       const recordingPath = syntheticSessionPath(root, true);
       const events: string[] = [];
       let checksSeenByReviewer = new Map<string, string[]>();
@@ -345,6 +604,7 @@ describe('fresh foreground master controller end to end', () => {
       let statusDuringPromotion: string | undefined;
       let reviewWasRecordedDuringPromotion = false;
       let promotedTools: string[] = [];
+      const promotionBatches: string[][] = [];
       let discoveryTrustedPreparedScope: boolean | undefined;
       let detectorReusedControllerPayload = false;
       let detectorRequestSeqs: number[] = [];
@@ -358,9 +618,15 @@ describe('fresh foreground master controller end to end', () => {
       let narrationCitationWasGrounded = false;
       let narrationRemainedInEvidence = false;
       const parameterAdvisorCalls: string[] = [];
+      const liveFinesseCalls: string[] = [];
+      const parameterAdvisorChecks = new Map<string, string[]>();
+      const pendingParameterAdvice: Array<() => void> = [];
+      let parameterAdviceHadToBeReleased = false;
+      let parameterAdviceGuard: ReturnType<typeof setTimeout> | undefined;
       const plannerGuidance: string[] = [];
       let focusedProposalDecisions = 0;
       let revisedProducerWasReplanned = false;
+      let producerBuildVisibleWhenConsumerCompileStarted = false;
       const revisedProducerDescription = 'Search the revised fixture item catalog.';
 
       const terminal = await runFreshMasterTeach(
@@ -502,6 +768,15 @@ describe('fresh foreground master controller end to end', () => {
           },
           compileFocusedTool: async ({ tool, triage, sessionPath, stagingDir }) => {
             events.push(`compile:${tool.id}`);
+            if (tool.id === CONSUMER_ID) {
+              const state = FreshTeachJournalStateSchema.parse(
+                readJson(
+                  join(home, SITE, '.teach-runs', 'run-e2e-completed', 'journal', 'current.json'),
+                ),
+              );
+              producerBuildVisibleWhenConsumerCompileStarted =
+                state.tools.find(({ toolId }) => toolId === PRODUCER_ID)?.buildRef !== undefined;
+            }
             compilerScopeSeqs = triage.selectedSeqs;
             compilerRequestSeqs = SessionSchema.parse(readJson(sessionPath)).requests.map(
               ({ seq }) => seq,
@@ -545,9 +820,40 @@ describe('fresh foreground master controller end to end', () => {
               executionMechanism: 'fixture-api',
             };
           },
+          requestBaselineMvpReview: async (input) => credibleBaselineMvpReview(input),
           requestParameterSelectionAdvice: async (input: ParameterSelectionAdvisorInput) => {
+            parameterAdviceGuard ??= setTimeout(() => {
+              parameterAdviceHadToBeReleased = true;
+              for (const reject of pendingParameterAdvice) reject();
+            }, 1_000);
             parameterAdvisorCalls.push(input.toolId);
-            throw new Error('optional fixture parameter advice is unavailable');
+            events.push(`finesse:${input.toolId}`);
+            parameterAdvisorChecks.set(
+              input.toolId,
+              input.snapshot.payload.tools
+                .find(({ toolId }) => toolId === input.toolId)
+                ?.receipts.map(({ check, status }) => `${check}:${status}`) ?? [],
+            );
+            return await new Promise<never>((_resolve, reject) => {
+              const rejectAdvice = () => reject(new Error('optional fixture advice stopped'));
+              pendingParameterAdvice.push(rejectAdvice);
+              if (parameterAdviceHadToBeReleased) rejectAdvice();
+            });
+          },
+          runLiveFinesse: async ({ provider, toolDir }) => {
+            const toolId = toolDir.includes(`/${PRODUCER_ID}`) ? PRODUCER_ID : CONSUMER_ID;
+            liveFinesseCalls.push(toolId);
+            events.push(`finesse-live:${toolId}`);
+            return {
+              status: 'completed',
+              provider,
+              model: 'fixture',
+              attempts: 1,
+              completedReview: true,
+              artifacts: {},
+              message: 'Fixture breadth review completed.',
+              durationMs: 1,
+            };
           },
           requestCompletionReview: async (input) => {
             events.push('completion-review');
@@ -580,6 +886,7 @@ describe('fresh foreground master controller end to end', () => {
           promote: async ({ runRoot, tools }) => {
             events.push('promotion');
             promotedTools = tools.map(({ workflow }) => workflow.toolName);
+            promotionBatches.push(promotedTools);
             const state = FreshTeachJournalStateSchema.parse(
               readJson(join(runRoot, 'journal', 'current.json')),
             );
@@ -588,11 +895,14 @@ describe('fresh foreground master controller end to end', () => {
           },
         },
       );
+      if (parameterAdviceGuard) clearTimeout(parameterAdviceGuard);
 
       expect(terminal.status).toBe('completed');
       expect(['active', 'paused']).not.toContain(terminal.status);
       expect(terminal.readyTools).toBe(2);
       expect(terminal.failedTools).toBe(0);
+      expect(terminal.message).toContain('usable MVP');
+      expect(terminal.message).toContain('unfinished finesse can be retried later');
       expect(readJson(join(terminal.runRoot, 'terminal.json'))).toEqual(terminal);
 
       const state = FreshTeachJournalStateSchema.parse(
@@ -605,12 +915,14 @@ describe('fresh foreground master controller end to end', () => {
       expect(plan.tools.map(({ id }) => id)).toEqual([PRODUCER_ID, CONSUMER_ID]);
       expect(plan.tools[0]?.candidate.description).toBe(revisedProducerDescription);
       expect(revisedProducerWasReplanned).toBe(true);
+      expect(producerBuildVisibleWhenConsumerCompileStarted).toBe(true);
       expect(plan.buildWaves).toEqual([[PRODUCER_ID], [CONSUMER_ID]]);
       expect(state.tools.every(({ buildRef }) => buildRef !== undefined)).toBe(true);
       expect(state.status).toBe('completed');
       expect(statusDuringPromotion).toBe('active');
-      expect(reviewWasRecordedDuringPromotion).toBe(true);
-      expect(promotedTools).toEqual([PRODUCER_NAME, CONSUMER_NAME]);
+      expect(reviewWasRecordedDuringPromotion).toBe(false);
+      expect(promotedTools).toEqual([CONSUMER_NAME]);
+      expect(promotionBatches).toEqual([[PRODUCER_NAME], [CONSUMER_NAME]]);
 
       expect(checksSeenByReviewer.get(PRODUCER_ID)).toEqual([
         'contract:passed',
@@ -636,7 +948,21 @@ describe('fresh foreground master controller end to end', () => {
       expect(consumerFocusedEvidenceWasComplete).toBe(true);
       expect(narrationCitationWasGrounded).toBe(true);
       expect(narrationRemainedInEvidence).toBe(true);
-      expect(parameterAdvisorCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
+      expect(parameterAdviceHadToBeReleased).toBe(false);
+      expect(parameterAdvisorCalls).toEqual([PRODUCER_ID]);
+      expect(liveFinesseCalls).toEqual([PRODUCER_ID]);
+      expect(events.indexOf(`finesse:${PRODUCER_ID}`)).toBeLessThan(
+        events.indexOf(`compile:${CONSUMER_ID}`),
+      );
+      expect(events.indexOf(`finesse-live:${PRODUCER_ID}`)).toBeLessThan(
+        events.indexOf(`compile:${CONSUMER_ID}`),
+      );
+      expect(parameterAdvisorChecks.get(PRODUCER_ID)).toEqual([
+        'contract:passed',
+        'replay:passed',
+        'live:passed',
+      ]);
+      expect(parameterAdvisorChecks.has(CONSUMER_ID)).toBe(false);
       expect(plannerGuidance).toEqual([
         'The complete dependency-ordered plan remains supported.',
         'The complete dependency-ordered plan remains supported.',
@@ -649,8 +975,279 @@ describe('fresh foreground master controller end to end', () => {
         `compile:${PRODUCER_ID}`,
         `compile:${CONSUMER_ID}`,
       ]);
-      expect(events.indexOf('completion-review')).toBeLessThan(events.indexOf('promotion'));
-      expect(events.at(-1)).toBe('promotion');
+      expect(events.indexOf('promotion')).toBeLessThan(events.indexOf(`compile:${CONSUMER_ID}`));
+      expect(events.lastIndexOf('promotion')).toBeLessThan(events.lastIndexOf('completion-review'));
+      expect(events.at(-1)).toBe('completion-review');
+
+      const buildsAtCompletion = state.tools.map(({ toolId, buildRef }) => ({ toolId, buildRef }));
+      for (const { toolId, buildRef } of buildsAtCompletion) {
+        if (!buildRef) throw new Error(`missing MVP build for ${toolId}`);
+        const finesseRecord = readJson(
+          join(
+            terminal.runRoot,
+            'finesse',
+            toolId,
+            `${buildRef.sha256.slice('sha256:'.length)}.json`,
+          ),
+        );
+        expect(finesseRecord).toEqual(
+          expect.objectContaining({
+            toolId,
+            buildRef,
+            status: 'deferred',
+          }),
+        );
+        if (toolId === PRODUCER_ID) {
+          expect(finesseRecord).toEqual(
+            expect.objectContaining({
+              liveFinesse: expect.objectContaining({
+                status: 'completed',
+                completedReview: true,
+              }),
+            }),
+          );
+        }
+      }
+      for (const reject of pendingParameterAdvice) reject();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const afterAdviceFailure = FreshTeachJournalStateSchema.parse(
+        readJson(join(terminal.runRoot, 'journal', 'current.json')),
+      );
+      expect(afterAdviceFailure.status).toBe('completed');
+      expect(
+        afterAdviceFailure.tools.map(({ toolId, buildRef }) => ({ toolId, buildRef })),
+      ).toEqual(buildsAtCompletion);
+    });
+  });
+
+  it('does not publish or unblock a dependent after the same MVP build needs revision', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const reviewAttempts = new Map<string, number>();
+      const recordingPath = syntheticSessionPath(root);
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        lifecycleFailureFixture({
+          runId: 'run-e2e-rejected-mvp',
+          events,
+          promotionBatches,
+          requestBaselineMvpReview: (reviewInput) => {
+            const proof = reviewInput.snapshot.payload.tools.find(
+              ({ toolId }) => toolId === reviewInput.toolId,
+            );
+            if (!proof) throw new Error('fixture expected a current MVP build');
+            const key = `${reviewInput.toolId}:${proof.currentBuildRef.sha256}`;
+            const attempt = (reviewAttempts.get(key) ?? 0) + 1;
+            reviewAttempts.set(key, attempt);
+            return baselineMvpReview(
+              reviewInput,
+              reviewInput.toolId === PRODUCER_ID && attempt === 1
+                ? 'revision_required'
+                : 'credible',
+            );
+          },
+        }),
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(terminal.readyTools).toBe(0);
+      expect(promotionBatches).toEqual([]);
+      expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(1);
+      expect(events).not.toContain(`compile:${CONSUMER_ID}`);
+      expect([...reviewAttempts.values()]).toEqual([1]);
+
+      const state = FreshTeachJournalStateSchema.parse(
+        readJson(join(terminal.runRoot, 'journal', 'current.json')),
+      );
+      const producerBuild = state.tools.find(({ toolId }) => toolId === PRODUCER_ID)?.buildRef;
+      if (!producerBuild) throw new Error('fixture expected the rejected producer build');
+      expect(
+        readJson(
+          join(
+            terminal.runRoot,
+            'mvp-reviews',
+            PRODUCER_ID,
+            `${producerBuild.sha256.slice('sha256:'.length)}.json`,
+          ),
+        ),
+      ).toEqual(
+        expect.objectContaining({
+          review: expect.objectContaining({ status: 'revision_required' }),
+        }),
+      );
+    });
+  });
+
+  it('keeps a published producer MVP when its dependent compiler loses the provider', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const installedTools = new Set<string>();
+      const recordingPath = syntheticSessionPath(root);
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        lifecycleFailureFixture({
+          runId: 'run-e2e-dependent-provider-failure',
+          events,
+          promotionBatches,
+          installedTools,
+          failCompileToolId: CONSUMER_ID,
+          requestBaselineMvpReview: credibleBaselineMvpReview,
+        }),
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(terminal.readyTools).toBe(1);
+      expect(terminal.failedTools).toBe(1);
+      expect(promotionBatches).toEqual([[PRODUCER_NAME]]);
+      expect(installedTools).toEqual(new Set([PRODUCER_NAME]));
+      expect(events.indexOf(`review:${PRODUCER_ID}`)).toBeLessThan(
+        events.indexOf(`promote:${PRODUCER_NAME}`),
+      );
+      expect(events.indexOf(`promote:${PRODUCER_NAME}`)).toBeLessThan(
+        events.indexOf(`compile:${CONSUMER_ID}`),
+      );
+      expect(readJson(join(terminal.runRoot, 'terminal.json'))).toEqual(terminal);
+    });
+  });
+
+  it('does not republish a retained consumer or unblock its leaf after a rebound producer is rejected', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const producerReviewStatuses: Array<'credible' | 'revision_required'> = [];
+      let repairDecisions = 0;
+      const recordingPath = threeToolSyntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-rebound-producer-rejected',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: (reviewInput) => {
+          const status =
+            reviewInput.toolId === PRODUCER_ID && producerReviewStatuses.length > 0
+              ? 'revision_required'
+              : 'credible';
+          if (reviewInput.toolId === PRODUCER_ID) producerReviewStatuses.push(status);
+          return baselineMvpReview(reviewInput, status);
+        },
+      });
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate, consumerCandidate, leafCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          requestMasterDecision: async (decisionInput) => {
+            const repairingWithoutPlans =
+              decisionInput.verificationFindings && decisionInput.plannerProposals.length === 0;
+            if (repairingWithoutPlans) {
+              repairDecisions += 1;
+              if (repairDecisions > 1) {
+                throw new ProviderUnavailableError(
+                  new Error('fixture stops after the rebound producer rejection'),
+                );
+              }
+            }
+            const desiredPlan =
+              decisionInput.phase === 'discovery'
+                ? initialThreeToolDesiredPlan(decisionInput)
+                : decisionInput.plannerProposals.length > 0
+                  ? proposalDesiredPlan(decisionInput)
+                  : desiredFromCurrent(decisionInput);
+            if (repairingWithoutPlans) {
+              const producer = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+              if (!producer) throw new Error('fixture expected the producer plan');
+              producer.compileContext.sharedHelperNotes =
+                'Recompile the producer while retaining its downstream tool designs.';
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome: repairingWithoutPlans ? 'revised' : 'accepted',
+              reason: repairingWithoutPlans
+                ? 'Recompile only the producer and recheck retained downstream tools.'
+                : 'The dependency-ordered fixture plan remains supported.',
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          runApiTool: async ({ workflowPath, parameters }) => {
+            if (workflowPath.includes(`/${PRODUCER_ID}/`)) {
+              return {
+                result: { ok: true as const, data: { items: [{ id: 'item-1' }] } },
+                executionMechanism: 'fixture-api',
+              };
+            }
+            if (workflowPath.includes(`/${LEAF_ID}/`)) {
+              return {
+                result: {
+                  ok: false as const,
+                  error: 'BAD_RESPONSE' as const,
+                  message: 'Fixture leaf requests a producer revision.',
+                },
+                executionMechanism: 'fixture-api',
+              };
+            }
+            return {
+              result: {
+                ok: true as const,
+                data: { id: parameters.item_id, name: 'Fixture item' },
+              },
+              executionMechanism: 'fixture-api',
+            };
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(repairDecisions).toBe(2);
+      expect(producerReviewStatuses).toEqual(['credible', 'revision_required']);
+      expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(2);
+      expect(events.filter((event) => event === `compile:${CONSUMER_ID}`)).toHaveLength(1);
+      expect(events.filter((event) => event === `compile:${LEAF_ID}`)).toHaveLength(1);
+      expect(events.filter((event) => event === `review:${CONSUMER_ID}`)).toHaveLength(1);
+      expect(events).not.toContain(`review:${LEAF_ID}`);
+      expect(promotionBatches).toEqual([[PRODUCER_NAME], [CONSUMER_NAME]]);
+
+      const state = FreshTeachJournalStateSchema.parse(
+        readJson(join(terminal.runRoot, 'journal', 'current.json')),
+      );
+      expect(state.tools.find(({ toolId }) => toolId === CONSUMER_ID)?.buildRef).toBeUndefined();
+      expect(state.tools.find(({ toolId }) => toolId === LEAF_ID)?.buildRef).toBeUndefined();
     });
   });
 
@@ -828,9 +1425,19 @@ describe('fresh foreground master controller end to end', () => {
               executionMechanism: 'fixture-playbook',
             };
           },
+          requestBaselineMvpReview: async (input) => credibleBaselineMvpReview(input),
           requestParameterSelectionAdvice: async () => {
             throw new Error('Optional fixture parameter advice is unavailable.');
           },
+          runLiveFinesse: async ({ provider }) => ({
+            status: 'inconclusive',
+            provider,
+            attempts: 0,
+            completedReview: false,
+            artifacts: {},
+            message: 'Fixture live finesse is intentionally unavailable.',
+            durationMs: 1,
+          }),
           requestCompletionReview: async (input) =>
             CompletionReviewOutputSchema.parse({
               binding: input.run,

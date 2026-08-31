@@ -11,6 +11,33 @@ import { type AssignedSharedModule, describeAssignedModules } from './build-plan
 import type { ProviderReportedError } from './provider-retry.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 
+/** How far a data-tool compiler must verify before returning its artifact.
+ *
+ * `full` preserves the standalone `imprint generate` behavior: deterministic
+ * artifact checks are followed by an independent live semantic review.
+ * `master_mvp` is reserved for the master-led teach flow. It returns as soon
+ * as the deterministic artifact contract passes so dependent tools can be
+ * compiled without waiting for breadth/perfection work. */
+export type CompileVerificationMode = 'full' | 'master_mvp';
+
+export interface CompileVerificationSummary {
+  mode: CompileVerificationMode;
+  deterministic: 'passed';
+  semantic: 'approved' | 'not_run' | 'not_applicable';
+  /** Durable independent-review report when a full semantic review ran. */
+  reportPath?: string;
+}
+
+/** Extra task framing shared verbatim by the in-process, Claude CLI, and Codex
+ * CLI compiler paths. The selected candidate is the master's accepted public
+ * contract in MVP mode, rather than the shipped detector's initial proposal. */
+export function formatCompileVerificationMode(mode: CompileVerificationMode | undefined): string {
+  if (mode !== 'master_mvp') return '';
+  return `
+
+MASTER MVP COMPILE MODE — return the smallest useful implementation that satisfies the accepted artifact contract and deterministic checks. The selected candidate's tool name and public parameter names/types are the master's current contract: never add, remove, rename, or retype them in this compile. Ground the request construction and parser in the supplied recording, write meaningful offline tests, and provide one simple baseline integration case for later review. Do not spend this compile broadening result fields or trying to prove every parameter live. If exact recording evidence proves that any accepted parameter cannot be implemented honestly, do not weaken or rewrite the contract: call give_up with the exact parameter, request sequence/path, and contradiction so the master can revise the plan in a fresh compile. After deterministic verification passes, the host will return the artifact to the master; separate best-effort agents own live parameter testing and breadth improvements.`;
+}
+
 /** Only an independent semantic-verifier result consumes the bounded review
  * budget. Deterministic preflight failures remain deadline-bounded but do not
  * spend a compiler↔reviewer iteration. */
@@ -135,6 +162,8 @@ export interface CompileAgentResult {
   providerInterruption?: 'capacity_or_overload' | 'transient_safety_filter';
   /** Full provider-owned terminal facts; never populated from tool/site text. */
   providerError?: ProviderReportedError;
+  /** Factual verification boundary reached by a successful compile. */
+  verification?: CompileVerificationSummary;
   /** Path to workflow.json if written. */
   workflowPath?: string;
   /** Path to parser.ts if written. */

@@ -1620,3 +1620,85 @@ in 4.2 seconds. After the final rename fix, the exact current tree passed 1,766
 of 1,767 tests; a different recorder browser test reached the same 30-second
 limit and then passed alone in 5.2 seconds. All teach tests passed in both full
 runs. The independent reviews found no remaining issue in this change.
+
+## 2026-08-31 09:10 PDT — A fresh Hotels run proved one tool, then repeated too much work
+
+A new, unsteered Google Hotels teach started as run
+`3ef1c91d-dd9e-488a-b2b2-9f79f8c54ded` from the latest combined recording. It
+ended failed and will not be resumed. The run planned destination suggestions,
+hotel search, and hotel details. Destination suggestions reached a ready build
+and passed its recorded replay and live check. Search and details did not
+become usable, and the failed run promoted nothing.
+
+The run exposed a general sequencing mistake. After a compiler had produced a
+valid tool, it immediately launched a second agent to test the live meaning of
+every parameter. A negative answer was fed back into the same compiler up to
+five times before the master saw anything. This made one tool consume a large
+part of the run, encouraged repeated corrections inside one stale conversation,
+and delayed useful progress on the remaining tools. The final visible error was
+an old master binding, but that was the last symptom rather than the main
+source of the wasted time.
+
+This was not a Google Hotels problem and did not justify a Hotels rule. It
+showed that core delivery and optional breadth work had been incorrectly tied
+together.
+
+## 2026-08-31 14:47 PDT — Ship a usable core first; finesse breadth separately
+
+The master compiler now has a narrow MVP mode. It still has to produce valid
+files, match the master's current tool name and public parameter contract, pass
+its parser and request tests, type-check, and stay grounded in the recording.
+It no longer starts the exhaustive live parameter reviewer or keeps the same
+compiler alive for five semantic repair rounds. Direct `imprint generate`
+keeps its existing full review; only the master-led teach path uses MVP mode.
+
+Each dependency wave is now built and checked before the next wave starts. A
+producer is saved to the run journal immediately after its files pass, then it
+must pass recorded replay, one real live baseline, any declared chain checks,
+and one small result review. That review asks only whether the default result
+actually demonstrates the promised core operation. It does not test every
+parameter or demand broad coverage. The exact tool is installed as soon as
+that core proof passes, before its consumers compile. A rejected producer does
+not unlock its consumers, while unrelated tools can still proceed. If a later
+consumer fails, the installed producer remains available.
+
+After installation, two optional jobs start while the next wave compiles. One
+agent reviews the public parameter choices. The existing full live verifier
+runs against a disposable copy of the tool to test parameter behavior and
+breadth without changing the installed MVP. These jobs run one tool at a time,
+and their reports are saved under `finesse/<tool>/<build>.json`. A plan change
+marks an old answer stale. Teach cancels unfinished finesse work when all MVPs
+are done; completed partial reports are still saved. Finesse cannot edit the
+plan, discard an installed tool, hold the command open for semantic work, or
+turn a finished MVP back into a failure.
+
+The final independent reviewer still checks the complete tool list, factual
+history, exclusions, and core results. It does not repeat parameter breadth
+testing. Because every tool has already been installed, final completion now
+records that review without copying all tools again. A failure in redundant
+final copying therefore cannot undo an otherwise finished teach.
+
+Regression tests prove that a producer is reviewed and installed before its
+consumer starts; rejected producers are reviewed once, install nothing, and do
+not unlock consumers; a later provider failure reports the already-installed
+producer as ready; parameter advice and live finesse overlap later compilation;
+and a stuck optional job cannot delay completion or erase a completed partial
+report. The compiler receipt is also fail-closed: a full compile needs durable
+live-review proof, while master MVP mode must explicitly say that live breadth
+was deferred. No site-specific runtime classification or policy was added.
+The next validation will be a completely fresh teach run, never a resume of the
+failed Hotels run above.
+
+One final independent review found a dependency gap in the first version. A
+tool kept from an earlier pass could still be checked and installed even when
+the current version of the tool it depended on had failed the small MVP review.
+Kept tools now pass through the same producer-ready gate as newly built tools,
+so a rejected producer cannot be bypassed by reusing an older consumer.
+A three-tool test rebuilds and rejects a producer after its consumer was kept;
+it proves that neither that consumer nor its downstream tool is installed from
+the now-invalid chain.
+
+All 145 focused MVP, compiler-receipt, controller, and finesse tests pass. Type
+checking, lint, unused-code checks, and circular-dependency checks also pass.
+The full repository run passed 1,785 of 1,786 tests; one existing recorder
+browser test reached its 30-second limit, then passed alone in 2.9 seconds.

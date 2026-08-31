@@ -31,6 +31,7 @@ import {
 } from './auth-compile-tools.ts';
 import type { AuthToolPlan, SharedModuleManifestEntry } from './build-plan.ts';
 import {
+  type CompileVerificationMode,
   advanceIncompleteSemanticVerificationRuns,
   advanceSemanticVerificationCycle,
 } from './compile-agent-types.ts';
@@ -65,7 +66,7 @@ import {
 import { detectPageMintedHeaders, redactSession } from './redact.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type SharedTriageSelection, applySharedTriageSelection } from './triage-selection.ts';
-import { type Session, SessionSchema, WorkflowSchema } from './types.ts';
+import { type Session, SessionSchema, type Workflow, WorkflowSchema } from './types.ts';
 
 const log = createLog('mcp-compile');
 
@@ -96,6 +97,8 @@ interface RunCompileMcpServerOptions {
   provider?: ProviderName;
   /** Bounded resume of an already-generated data tool. */
   revisionMode?: boolean;
+  /** Master-only deterministic MVP boundary. */
+  verificationMode?: CompileVerificationMode;
   /** Shared triage result from teach. Applied before compile tools and done()
    *  verification so CLI-backed compilers see irreversible effects. */
   sharedTriageSelection?: SharedTriageSelection;
@@ -112,6 +115,16 @@ const VERIFICATION_STATE_SENTINEL = '.compile-verification-state.json';
  *  agent STOPS; the orchestrator (teach) performs the action and resumes the
  *  agent (`claude --resume`) with the result. One pending checkpoint per segment. */
 const CHECKPOINT_SENTINEL = '.compile-checkpoint.json';
+
+/** An irreversible workflow may skip live execution only after every
+ * deterministic artifact check passed. Keep this conjunction explicit: the
+ * waiver changes only live applicability, never deterministic correctness. */
+export function canWaiveIrreversibleLiveVerification(
+  failures: readonly string[],
+  workflow: Workflow | undefined,
+): workflow is Workflow {
+  return failures.length === 0 && workflow !== undefined && workflowHasIrreversibleEffect(workflow);
+}
 
 export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Promise<void> {
   const providerControl = inheritedCompileProviderControl();
@@ -419,6 +432,8 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
             credentialNames: opts.sharedContext?.credentialNames,
             strategyKind: opts.strategyKind,
             deferLiveIntegrationToSemanticAgent: true,
+            expectedPublicParameters:
+              opts.verificationMode === 'master_mvp' ? opts.candidate?.likelyParams : undefined,
           });
         if (warnings.length > 0) {
           log(`verification warnings (non-blocking):\n${warnings.join('\n')}`);
@@ -429,7 +444,12 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
             JSON.parse(readFileSync(pathJoin(opts.toolDir, 'workflow.json'), 'utf8')),
           );
         }
-        if (failures.length === 0 && workflow && opts.strategyKind === 'playbook_fallback') {
+        if (
+          failures.length === 0 &&
+          workflow &&
+          opts.strategyKind === 'playbook_fallback' &&
+          opts.verificationMode === 'master_mvp'
+        ) {
           const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
           writeFileSync(
             sentinel,
@@ -437,8 +457,10 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
               {
                 summary,
                 verification: 'mechanical_passed',
+                verificationMode: opts.verificationMode ?? 'full',
                 liveVerified: false,
                 liveVerificationOwner: 'master',
+                semanticVerification: { status: 'not_run' },
                 warnings,
                 timestamp: Date.now(),
               },
@@ -457,7 +479,7 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
             ],
           };
         }
-        if (workflow && workflowHasIrreversibleEffect(workflow)) {
+        if (canWaiveIrreversibleLiveVerification(failures, workflow)) {
           const allWarnings = [
             ...warnings,
             ...applyIrreversibleVerificationWaiver(opts.toolDir, workflow),
@@ -469,8 +491,10 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
               {
                 summary,
                 verification: 'not_applicable',
+                verificationMode: opts.verificationMode ?? 'full',
                 liveVerified: false,
                 safetyWaiver: 'irreversible',
+                semanticVerification: { status: 'not_applicable' },
                 warnings: allWarnings,
                 timestamp: Date.now(),
               },
@@ -484,6 +508,35 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
               {
                 type: 'text',
                 text: 'DONE_LIVE_NA — deterministic checks passed; live verification is not applicable because the workflow is irreversible.',
+              },
+            ],
+          };
+        }
+        if (failures.length === 0 && opts.verificationMode === 'master_mvp') {
+          const sentinel = pathJoin(opts.toolDir, DONE_SENTINEL);
+          writeFileSync(
+            sentinel,
+            JSON.stringify(
+              {
+                summary,
+                verification: 'mechanical_passed',
+                verificationMode: 'master_mvp',
+                liveVerified: false,
+                semanticVerification: { status: 'not_run' },
+                warnings,
+                timestamp: Date.now(),
+              },
+              null,
+              2,
+            ),
+            'utf8',
+          );
+          log(`minimum viable artifact verification passed; wrote ${sentinel}`);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'DONE — deterministic artifact checks passed. Live semantic verification is deferred to the master. Do not call any more tools.',
               },
             ],
           };
@@ -550,8 +603,11 @@ Fix the issues in workflow.json, re-test with run_verification, and call done ag
                   {
                     summary,
                     verification: 'mechanical_passed',
+                    verificationMode: 'full',
+                    liveVerified: true,
                     semanticVerification: {
                       status: semantic.report.status,
+                      completed: semantic.completedReview,
                       provider: semantic.provider,
                       model: semantic.model,
                       attempts: semantic.attempts,

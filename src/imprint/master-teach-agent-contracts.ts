@@ -1,4 +1,4 @@
-/** Strict wire contracts for five bounded, one-shot semantic roles. */
+/** Strict wire contracts for bounded, one-shot semantic roles. */
 import { z } from 'zod';
 import {
   ChainEdgeSchema,
@@ -289,6 +289,49 @@ export const CompletionToolResultEvidenceSchema = contentProjection(
   CompletionToolResultEvidencePayloadSchema,
 );
 export type CompletionToolResultEvidence = z.infer<typeof CompletionToolResultEvidenceSchema>;
+/**
+ * Host-current input for the small semantic gate that decides whether one
+ * mechanically verified build is a credible usable MVP. The richer host view
+ * is validated before the analyzer receives the focused projection below.
+ */
+export const BaselineMvpReviewInputSchema = strictObject({
+  run: CurrentPlanBindingSchema,
+  recordingIndex: RecordingIndexSchema,
+  currentPlan: CurrentPlanProjectionSchema,
+  snapshot: CurrentExecutionSnapshotSchema,
+  toolId: PromptToolIdSchema,
+  resultEvidence: CompletionToolResultEvidenceSchema,
+});
+export type BaselineMvpReviewInput = z.infer<typeof BaselineMvpReviewInputSchema>;
+const BaselineMvpReviewBindingSchema = CurrentPlanBindingSchema.extend({
+  toolId: PromptToolIdSchema,
+  compileInputsSha256: PromptShaSchema,
+  currentBuildRef: ContentAddressedRefSchema,
+  executionBindingSha256: PromptShaSchema,
+  liveReceiptRef: ContentAddressedRefSchema,
+  resultEvidenceRef: ContentAddressedRefSchema,
+}).strict();
+export const BaselineMvpReviewerPromptInputSchema = strictObject({
+  binding: BaselineMvpReviewBindingSchema,
+  intendedOperation: strictObject({
+    toolName: SemanticToolCandidateSchema.shape.toolName,
+    description: SemanticToolCandidateSchema.shape.description,
+    expectedOutput: SemanticToolCandidateSchema.shape.expectedOutput,
+  }),
+  baseline: strictObject({
+    verificationCaseId: PromptIdSchema,
+    expectedResult: utf8Text(1, 2_000),
+    actualResult: CompletionActualResultSchema,
+    resultEvidenceRef: ContentAddressedRefSchema,
+    liveReceiptRef: ContentAddressedRefSchema,
+  }),
+});
+export const BaselineMvpReviewOutputSchema = strictObject({
+  binding: BaselineMvpReviewBindingSchema,
+  status: z.enum(['credible', 'revision_required']),
+  reason: Short,
+  evidenceRefs: z.array(ContentAddressedRefSchema).min(1).max(4),
+});
 export const CompletionReviewInputSchema = strictObject({
   terminalIntent: z.enum(['completed', 'blocked']),
   run: CurrentPlanBindingSchema,

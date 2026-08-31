@@ -2,6 +2,8 @@ import { describe, expect, it, spyOn } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  type BaselineMvpReviewInput,
+  BaselineMvpReviewOutputSchema,
   type CompletionReviewInput,
   CompletionReviewInputSchema,
   CompletionReviewOutputSchema,
@@ -17,11 +19,13 @@ import {
   SemanticToolCandidateSchema,
   ToolSelectionAdvisorOutputSchema,
   mechanicalProofFailures,
+  parseBaselineMvpReviewOutput,
   parseCompletionReviewOutput,
   parseFocusedPlannerOutput,
   parseMasterDecisionOutput,
   parseParameterSelectionAdvisorOutput,
   parseToolSelectionAdvisorOutput,
+  requestBaselineMvpReview,
   requestCompletionReview,
   requestFocusedPlan,
   requestMasterDecision,
@@ -618,6 +622,47 @@ function completionInput() {
   };
   return input;
 }
+function baselineMvpInput(): BaselineMvpReviewInput {
+  return {
+    run: currentRun,
+    recordingIndex,
+    currentPlan,
+    snapshot,
+    toolId: searchTool.id,
+    resultEvidence: completionResultEvidence(searchTool, searchProof, {
+      preview: '[{"item_id":"item-1","name":"Example"}]',
+      shape: 'array<object{item_id,name}>',
+      count: 1,
+    }),
+  };
+}
+function baselineMvpBinding(input: BaselineMvpReviewInput) {
+  const proof = matching(input.snapshot.payload.tools, ({ toolId }) => toolId === input.toolId);
+  const liveReceipt = matching(proof.receipts, ({ check }) => check === 'live');
+  return {
+    ...input.run,
+    toolId: input.toolId,
+    compileInputsSha256: proof.executionBinding.compileInputsSha256,
+    currentBuildRef: proof.currentBuildRef,
+    executionBindingSha256: proof.executionBindingSha256,
+    liveReceiptRef: liveReceipt.ref,
+    resultEvidenceRef: input.resultEvidence.ref,
+  };
+}
+function baselineMvpOutput(
+  input = baselineMvpInput(),
+  status: 'credible' | 'revision_required' = 'credible',
+) {
+  return BaselineMvpReviewOutputSchema.parse({
+    binding: baselineMvpBinding(input),
+    status,
+    reason:
+      status === 'credible'
+        ? 'The observed catalog records demonstrate the promised search result.'
+        : 'Expected catalog records, but the observed result shape was an empty object.',
+    evidenceRefs: [input.resultEvidence.ref],
+  });
+}
 const completionOutput = (
   input: CompletionReviewInput = completionInput(),
   verdict: 'passed' | 'failed' = 'passed',
@@ -826,6 +871,7 @@ describe('prompts and pre-plan discovery', () => {
     ['master-teach-tool-advisor.md', ToolSelectionAdvisorOutputSchema],
     ['master-teach-focused-planner.md', FocusedPlannerOutputSchema],
     ['master-teach-decision.md', MasterDecisionOutputSchema],
+    ['master-teach-baseline-mvp-review.md', BaselineMvpReviewOutputSchema],
     ['master-teach-parameter-advisor.md', ParameterSelectionAdvisorOutputSchema],
     ['master-teach-completion-review.md', CompletionReviewOutputSchema],
   ] as const;
@@ -858,6 +904,56 @@ describe('prompts and pre-plan discovery', () => {
     expect(focusedPrompt).toContain('`validationContext.authorizedEvidenceRefs`');
     expect(focusedPrompt).toContain('Do not copy the');
     expect(focusedPrompt).toContain('`input.evidence.payload.entries[].ref`');
+  });
+
+  it('keeps baseline MVP review focused on one bounded result and exact current binding', async () => {
+    const input = baselineMvpInput();
+    const output = baselineMvpOutput(input);
+    const seen: unknown[] = [];
+    const analyzer: MasterTeachAnalyzer = {
+      async analyze(system, payload) {
+        expect(system).toContain('not parameter testing or breadth review');
+        seen.push(payload);
+        return { text: JSON.stringify(output) };
+      },
+    };
+
+    expect(await requestBaselineMvpReview(input, { analyzer })).toEqual(output);
+    const requestPayload = seen[0] as {
+      input: Record<string, unknown>;
+      validationContext: Record<string, unknown>;
+    };
+    expect(Object.keys(requestPayload.input).sort()).toEqual([
+      'baseline',
+      'binding',
+      'intendedOperation',
+    ]);
+    expect(requestPayload.input).not.toHaveProperty('currentPlan');
+    expect(requestPayload.input).not.toHaveProperty('snapshot');
+    expect(requestPayload.validationContext.binding).toEqual(baselineMvpBinding(input));
+  });
+
+  it('fails closed on stale baseline evidence while preserving a bounded repair reason', () => {
+    const input = baselineMvpInput();
+    const revision = baselineMvpOutput(input, 'revision_required');
+    expect(parseBaselineMvpReviewOutput(JSON.stringify(revision), input)).toEqual(revision);
+
+    const staleOutput = structuredClone(revision);
+    staleOutput.binding.executionBindingSha256 = sha('9');
+    expect(() => parseBaselineMvpReviewOutput(JSON.stringify(staleOutput), input)).toThrow(
+      'stale baseline-MVP binding',
+    );
+
+    const staleInput = structuredClone(input);
+    staleInput.resultEvidence.payload.liveReceiptRef = ref('runs/stale/live.json', '8');
+    staleInput.resultEvidence.ref = {
+      ...staleInput.resultEvidence.ref,
+      sha256: digest(staleInput.resultEvidence.payload),
+    };
+    expect(() => parseBaselineMvpReviewOutput(JSON.stringify(revision), staleInput)).toThrow(
+      'another live receipt',
+    );
+    expect(Buffer.byteLength(revision.reason, 'utf8')).toBeLessThanOrEqual(1_000);
   });
 
   it('keeps API repair and response-produced state decisions agent-owned and evidence-backed', () => {

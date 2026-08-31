@@ -5,6 +5,10 @@ import type { z } from 'zod';
 import { abortSignalError } from './concurrency.ts';
 import { type LLMOptions, type ProviderName, resolveProvider } from './llm.ts';
 import {
+  type BaselineMvpReviewInput,
+  BaselineMvpReviewInputSchema,
+  BaselineMvpReviewOutputSchema,
+  BaselineMvpReviewerPromptInputSchema,
   type CompletionReviewInput,
   CompletionReviewInputSchema,
   CompletionReviewOutputSchema,
@@ -472,6 +476,20 @@ function withoutStaleImplementationPlan(
 function completionBinding(input: CompletionReviewInput) {
   return input.run;
 }
+function baselineMvpBinding(input: BaselineMvpReviewInput) {
+  const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === input.toolId);
+  const liveReceipt = proof?.receipts.find(({ check }) => check === 'live');
+  if (!proof || !liveReceipt) return undefined;
+  return {
+    ...input.run,
+    toolId: input.toolId,
+    compileInputsSha256: proof.executionBinding.compileInputsSha256,
+    currentBuildRef: proof.currentBuildRef,
+    executionBindingSha256: proof.executionBindingSha256,
+    liveReceiptRef: liveReceipt.ref,
+    resultEvidenceRef: input.resultEvidence.ref,
+  };
+}
 function parameterBinding(input: ParameterSelectionAdvisorInput) {
   const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === input.toolId);
   const tool = input.currentPlan.payload.tools.find(({ id }) => id === input.toolId);
@@ -501,6 +519,75 @@ const ParameterInputSchema = ParameterSelectionAdvisorInputSchema.superRefine((i
   ))
     issue(ctx, ['snapshot'], failure);
 });
+const BaselineMvpInputSchema = BaselineMvpReviewInputSchema.superRefine((input, ctx) => {
+  validateCurrent(input.run, input.currentPlan, input.recordingIndex, ctx, ['currentPlan']);
+  validateSnapshot(input.snapshot, input.run, input.currentPlan, input.recordingIndex, ctx, [
+    'snapshot',
+  ]);
+  const tool = input.currentPlan.payload.tools.find(({ id }) => id === input.toolId);
+  const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === input.toolId);
+  if (!tool) {
+    issue(ctx, ['toolId'], 'unknown current tool');
+    return;
+  }
+  if (!proof) {
+    issue(ctx, ['snapshot'], 'missing current execution proof');
+    return;
+  }
+  for (const failure of mechanicalProofFailures(
+    input.currentPlan.payload,
+    input.snapshot,
+    input.toolId,
+  ))
+    issue(ctx, ['snapshot'], failure);
+  const result = input.resultEvidence.payload;
+  if (result.toolId !== tool.id)
+    issue(ctx, ['resultEvidence', 'payload', 'toolId'], 'result evidence belongs to another tool');
+  if (result.toolName !== tool.candidate.toolName)
+    issue(ctx, ['resultEvidence', 'payload', 'toolName'], 'result evidence tool name is stale');
+  if (!tool.implementationPlan || !same(result.implementationPlanRef, tool.implementationPlan))
+    issue(
+      ctx,
+      ['resultEvidence', 'payload', 'implementationPlanRef'],
+      'result evidence belongs to another implementation plan',
+    );
+  const liveReceipt = proof.receipts.find(({ check }) => check === 'live');
+  if (!liveReceipt || liveReceipt.status !== 'passed')
+    issue(ctx, ['snapshot'], 'baseline MVP review requires a passed current live receipt');
+  else if (!same(result.liveReceiptRef, liveReceipt.ref))
+    issue(
+      ctx,
+      ['resultEvidence', 'payload', 'liveReceiptRef'],
+      'result evidence cites another live receipt',
+    );
+  if (!result.actualResult.observed)
+    issue(
+      ctx,
+      ['resultEvidence', 'payload', 'actualResult', 'observed'],
+      'live result was not observed',
+    );
+});
+function baselineMvpOutputSchema(input: BaselineMvpReviewInput) {
+  return BaselineMvpReviewOutputSchema.superRefine((output, ctx) => {
+    if (!same(output.binding, baselineMvpBinding(input)))
+      issue(ctx, ['binding'], 'stale baseline-MVP binding');
+    const liveReceipt = input.snapshot.payload.tools
+      .find(({ toolId }) => toolId === input.toolId)
+      ?.receipts.find(({ check }) => check === 'live');
+    const authorized = new Set(
+      [input.resultEvidence.ref, ...(liveReceipt ? [liveReceipt.ref] : [])].map(refKey),
+    );
+    const cited = new Set(output.evidenceRefs.map(refKey));
+    if (!cited.has(refKey(input.resultEvidence.ref)))
+      issue(ctx, ['evidenceRefs'], 'baseline MVP review must cite the supplied result evidence');
+    output.evidenceRefs.forEach((ref, index) => {
+      if (!authorized.has(refKey(ref)))
+        issue(ctx, ['evidenceRefs', index], 'baseline MVP review cites unsupplied evidence');
+    });
+    if (cited.size !== output.evidenceRefs.length)
+      issue(ctx, ['evidenceRefs'], 'duplicate evidence citation');
+  });
+}
 function parameterOutputSchema(input: ParameterSelectionAdvisorInput) {
   return ParameterSelectionAdvisorOutputSchema.superRefine((output, ctx) => {
     if (!same(output.binding, parameterBinding(input)))
@@ -547,6 +634,26 @@ function parameterAdvisorPromptInput(input: ParameterSelectionAdvisorInput) {
     incomingChainEdges,
     producers,
     evidence: input.evidence,
+  });
+}
+function baselineMvpReviewerPromptInput(input: BaselineMvpReviewInput) {
+  const tool = input.currentPlan.payload.tools.find(({ id }) => id === input.toolId);
+  const binding = baselineMvpBinding(input);
+  if (!tool || !binding) throw new Error('validated baseline MVP target is unavailable');
+  return BaselineMvpReviewerPromptInputSchema.parse({
+    binding,
+    intendedOperation: {
+      toolName: tool.candidate.toolName,
+      description: tool.candidate.description,
+      expectedOutput: tool.candidate.expectedOutput,
+    },
+    baseline: {
+      verificationCaseId: input.resultEvidence.payload.verificationCaseId,
+      expectedResult: input.resultEvidence.payload.expectedResult,
+      actualResult: input.resultEvidence.payload.actualResult,
+      resultEvidenceRef: input.resultEvidence.ref,
+      liveReceiptRef: input.resultEvidence.payload.liveReceiptRef,
+    },
   });
 }
 
@@ -1057,6 +1164,7 @@ type Role =
   | 'tool advisor'
   | 'focused planner'
   | 'master decision'
+  | 'baseline MVP reviewer'
   | 'parameter advisor'
   | 'completion reviewer';
 export interface MasterTeachAgentOptions {
@@ -1135,6 +1243,10 @@ export function parseParameterSelectionAdvisorOutput(
 ) {
   const checked = ParameterInputSchema.parse(input);
   return parse('parameter advisor', text, parameterOutputSchema(checked));
+}
+export function parseBaselineMvpReviewOutput(text: string, input: BaselineMvpReviewInput) {
+  const checked = BaselineMvpInputSchema.parse(input);
+  return parse('baseline MVP reviewer', text, baselineMvpOutputSchema(checked));
 }
 export function parseCompletionReviewOutput(text: string, input: CompletionReviewInput) {
   const checked = CompletionInputSchema.parse(input);
@@ -1378,6 +1490,20 @@ export async function requestParameterSelectionAdvice(
     input: parameterAdvisorPromptInput(checked),
     validation: { binding: parameterBinding(checked) },
     schema: parameterOutputSchema(checked),
+    agent,
+  });
+}
+export async function requestBaselineMvpReview(
+  input: BaselineMvpReviewInput,
+  agent: MasterTeachAgentOptions = {},
+) {
+  const checked = BaselineMvpInputSchema.parse(input);
+  return request({
+    role: 'baseline MVP reviewer',
+    prompt: 'master-teach-baseline-mvp-review.md',
+    input: baselineMvpReviewerPromptInput(checked),
+    validation: { binding: baselineMvpBinding(checked) },
+    schema: baselineMvpOutputSchema(checked),
     agent,
   });
 }

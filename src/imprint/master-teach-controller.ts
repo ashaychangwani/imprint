@@ -29,6 +29,7 @@ import {
 import { TimeoutError, abortSignalError } from './concurrency.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import { emit } from './emit.ts';
+import { type LiveFinesseResult, runBestEffortLiveFinesse } from './live-finesse-runner.ts';
 import { type LLMOptions, type ProviderName, detectTeachProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import {
@@ -45,6 +46,7 @@ import {
 import {
   type MasterTeachAgentOptions,
   mechanicalProofFailures,
+  requestBaselineMvpReview,
   requestCompletionReview,
   requestFocusedPlan,
   requestMasterDecision,
@@ -69,7 +71,6 @@ import {
   createEditableTeachingPlan,
   groundDetectorCandidateForMaster,
   normalizeDetectorCompileContextForMaster,
-  teachingPlanContentSha256,
   teachingToolCompileInputsSha256,
   unresolvedCandidateCoverage,
 } from './master-teach-plan.ts';
@@ -167,6 +168,12 @@ interface BuildWaveResult<Value> {
 
 interface BuildWaveDependencies<Value> {
   compileTool: (tool: EditableTeachingTool, waveIndex: number) => Promise<Value>;
+  /** Persist the smallest usable build before a dependent wave may start. */
+  acceptCompiledTool?: (
+    tool: EditableTeachingTool,
+    waveIndex: number,
+    value: Value,
+  ) => Promise<void> | void;
   concurrency?: number;
 }
 
@@ -213,6 +220,18 @@ export async function compileEveryToolInBuildWaves<Value>(
         }
         try {
           const value = await dependencies.compileTool(tool, waveIndex);
+          try {
+            await dependencies.acceptCompiledTool?.(tool, waveIndex, value);
+          } catch (error) {
+            failures.push({
+              toolId: tool.id,
+              toolName: tool.candidate.toolName,
+              waveIndex,
+              stage: 'contract',
+              error,
+            });
+            continue;
+          }
           completed.push({ tool, waveIndex, value });
         } catch (error) {
           failures.push({
@@ -308,8 +327,10 @@ interface FreshTeachControllerDependencies {
   requestToolSelectionAdvice: typeof requestToolSelectionAdvice;
   requestFocusedPlan: typeof requestFocusedPlan;
   requestMasterDecision: typeof requestMasterDecision;
+  requestBaselineMvpReview: typeof requestBaselineMvpReview;
   requestParameterSelectionAdvice: typeof requestParameterSelectionAdvice;
   requestCompletionReview: typeof requestCompletionReview;
+  runLiveFinesse: typeof runBestEffortLiveFinesse;
   compileFocusedTool: (input: {
     tool: EditableTeachingTool;
     implementationPlan: ImplementationPlanPayload;
@@ -356,8 +377,10 @@ const defaultDependencies: FreshTeachControllerDependencies = {
   requestToolSelectionAdvice,
   requestFocusedPlan,
   requestMasterDecision,
+  requestBaselineMvpReview,
   requestParameterSelectionAdvice,
   requestCompletionReview,
+  runLiveFinesse: runBestEffortLiveFinesse,
   compileFocusedTool: compileFocusedToolWithShippedAgent,
   runApiTool: async ({ workflowPath, parameters, signal }) => {
     const run = await runWorkflowWithLadder({
@@ -485,6 +508,13 @@ function writeJson(path: string, value: unknown): void {
     encoding: 'utf8',
     mode: 0o600,
   });
+}
+
+function writeJsonAtomic(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  writeJson(temporary, value);
+  renameSync(temporary, path);
 }
 
 /** Keep every master revision in a clean module namespace. */
@@ -976,7 +1006,9 @@ async function compileFocusedToolWithShippedAgent(input: {
     deadlineMs: input.runDeadline.deadlineMs,
     runDeadline: input.runDeadline,
     signal: input.signal,
-    keepTest: input.keepTest,
+    // Finesse runs against this staging directory after the MVP is published.
+    // Production promotion still copies only the allowed runtime artifacts.
+    keepTest: true,
     onProgress: input.onProgress,
     toolPlan: JSON.stringify(
       {
@@ -988,6 +1020,7 @@ async function compileFocusedToolWithShippedAgent(input: {
       2,
     ),
     strategyKind: input.implementationPlan.strategyKind,
+    verificationMode: 'master_mvp',
   });
   return {
     workflow: result.workflow,
@@ -1184,17 +1217,6 @@ export function compatibleFocusedPlannerIndexes(
     throw new Error('a focused planner proposal does not match the compile inputs it received');
   }
   return [...retained].sort((left, right) => left - right);
-}
-
-function desiredPart(plan: EditableTeachingPlan): DesiredTeachingPlan {
-  return {
-    site: plan.site,
-    recordingSha256: plan.recordingSha256,
-    tools: plan.tools,
-    candidateCoverage: plan.candidateCoverage,
-    buildWaves: plan.buildWaves,
-    chainEdges: plan.chainEdges,
-  };
 }
 
 function planDecision(
@@ -1700,6 +1722,17 @@ async function compileAndCheckCurrentPlan(input: {
   report?: (message: string) => void;
   priorCompiled?: Map<string, CompiledFocusedTool>;
   priorLive?: Map<string, LiveCheckResult>;
+  /** Install an independently usable MVP before optional breadth work. */
+  publishMvp?: (tool: EditableTeachingTool, compiled: CompiledFocusedTool) => Promise<void>;
+  /** Review only the default result's fitness for the core operation. */
+  approveMvp?: (
+    tool: EditableTeachingTool,
+    resultEvidence: CompletionToolResultEvidence,
+  ) => Promise<void>;
+  /** True only for the exact build already installed as a usable MVP. */
+  isMvpPublished?: (toolId: string, buildRef: ContentAddressedRef) => boolean;
+  /** Starts advisory breadth work after the factual MVP proof is complete. */
+  onMvpReady?: (toolId: string, compiled: CompiledFocusedTool) => void;
 }): Promise<CheckedBuilds> {
   const plan = input.journal.currentPlan();
   const initialState = input.journal.readState();
@@ -1711,12 +1744,13 @@ async function compileAndCheckCurrentPlan(input: {
       .filter(({ id }) => !initialState.tools.find(({ toolId }) => toolId === id)?.buildRef)
       .map(({ id }) => id),
   );
-  const compilePlan = {
-    tools: plan.tools.filter(({ id }) => needsCompile.has(id)),
-    buildWaves: plan.buildWaves
-      .map((wave) => wave.filter((toolId) => needsCompile.has(toolId)))
-      .filter((wave) => wave.length > 0),
-  };
+  const compileTools = plan.tools.filter(({ id }) => needsCompile.has(id));
+  const compileWaves = plan.buildWaves
+    .map((wave, waveIndex) => ({
+      waveIndex,
+      toolIds: wave.filter((toolId) => needsCompile.has(toolId)),
+    }))
+    .filter(({ toolIds }) => toolIds.length > 0);
   const currentToolIds = new Set(plan.tools.map(({ id }) => id));
   const compiledByToolId = new Map(
     [...(input.priorCompiled ?? [])].filter(([toolId]) => currentToolIds.has(toolId)),
@@ -1731,83 +1765,57 @@ async function compileAndCheckCurrentPlan(input: {
     compiledByToolId.delete(toolId);
     liveByToolId.delete(toolId);
   }
-  const compiled = await compileEveryToolInBuildWaves(compilePlan, {
-    concurrency: FOCUSED_COMPILE_CONCURRENCY,
-    compileTool: async (tool, waveIndex) => {
-      if (!tool.implementationPlan || !tool.strategy) {
-        throw new Error(`master plan tool "${tool.id}" is missing a focused implementation plan`);
-      }
-      const implementation = input.journal.readJson(
-        tool.implementationPlan,
-      ) as ImplementationPlanPayload;
-      // A master revision gets new bytes at a new module path. This keeps a
-      // failed parser or transform from leaking into the next compile and also
-      // avoids Bun's local TypeScript module cache returning the prior build.
-      const stagingDir = revisionStagingDir(input.stagingRoot, plan.revision, tool.id);
-      input.report?.(
-        `wave ${waveIndex + 1}/${plan.buildWaves.length}: compiling ${tool.candidate.toolName}`,
-      );
-      let lastActivity = '';
-      return await input.deps.compileFocusedTool({
-        tool,
-        implementationPlan: implementation,
-        incidentChainEdges: plan.chainEdges.filter(
-          (edge) => edge.producerToolId === tool.id || edge.consumerToolId === tool.id,
-        ),
-        triage: input.triage,
-        sessionPath: input.sessionPath,
-        stagingDir,
-        llmConfig: input.llmConfig,
-        runDeadline: input.runDeadline,
-        signal: input.signal,
-        keepTest: input.keepTest,
-        onProgress: (progress) => {
-          const activity = describeAgentActivity(progress);
-          if (activity === lastActivity) return;
-          lastActivity = activity;
-          input.report?.(
-            `${tool.candidate.toolName}: ${formatElapsed(progress.elapsedMs)} ${activity}`,
-          );
-        },
-      });
-    },
-  });
-  const failures = [...compiled.failures];
-  const order = new Map(
-    plan.buildWaves.flatMap((wave, waveIndex) =>
-      wave.map(
-        (toolId, position) => [toolId, waveIndex * (plan.tools.length + 1) + position] as const,
-      ),
-    ),
-  );
-  compiled.completed.sort(
-    (left, right) => (order.get(left.tool.id) ?? 0) - (order.get(right.tool.id) ?? 0),
-  );
-  const verifiedToolIds = new Set<string>();
-
-  for (const { tool, waveIndex, value: focused } of compiled.completed) {
-    input.report?.(`checking ${tool.candidate.toolName}`);
-    compiledByToolId.set(tool.id, focused);
+  const compileTool = async (
+    tool: EditableTeachingTool,
+    waveIndex: number,
+  ): Promise<CompiledFocusedTool> => {
     if (!tool.implementationPlan || !tool.strategy) {
-      failures.push(
-        checkFailure(tool, waveIndex, 'compile', new Error('focused plan is incomplete')),
-      );
-      continue;
+      throw new Error(`master plan tool "${tool.id}" is missing a focused implementation plan`);
     }
     const implementation = input.journal.readJson(
       tool.implementationPlan,
     ) as ImplementationPlanPayload;
-    try {
-      input.journal.issueBuild({
-        toolId: tool.id,
-        workflow: focused.workflow,
-        artifacts: storeLocalArtifacts(input.journal, focused.toolDir),
-      });
-    } catch (error) {
-      failures.push(checkFailure(tool, waveIndex, 'contract', error));
-      continue;
-    }
-
+    // A master revision gets new bytes at a new module path. This keeps a
+    // failed parser or transform from leaking into the next compile and also
+    // avoids Bun's local TypeScript module cache returning the prior build.
+    const stagingDir = revisionStagingDir(input.stagingRoot, plan.revision, tool.id);
+    input.report?.(
+      `wave ${waveIndex + 1}/${plan.buildWaves.length}: compiling ${tool.candidate.toolName}`,
+    );
+    let lastActivity = '';
+    return await input.deps.compileFocusedTool({
+      tool,
+      implementationPlan: implementation,
+      incidentChainEdges: plan.chainEdges.filter(
+        (edge) => edge.producerToolId === tool.id || edge.consumerToolId === tool.id,
+      ),
+      triage: input.triage,
+      sessionPath: input.sessionPath,
+      stagingDir,
+      llmConfig: input.llmConfig,
+      runDeadline: input.runDeadline,
+      signal: input.signal,
+      keepTest: input.keepTest,
+      onProgress: (progress) => {
+        const activity = describeAgentActivity(progress);
+        if (activity === lastActivity) return;
+        lastActivity = activity;
+        input.report?.(
+          `${tool.candidate.toolName}: ${formatElapsed(progress.elapsedMs)} ${activity}`,
+        );
+      },
+    });
+  };
+  const acceptCompiledTool = (
+    tool: EditableTeachingTool,
+    _waveIndex: number,
+    focused: CompiledFocusedTool,
+  ): void => {
+    input.journal.issueBuild({
+      toolId: tool.id,
+      workflow: focused.workflow,
+      artifacts: storeLocalArtifacts(input.journal, focused.toolDir),
+    });
     const contract = invocationOutcomeCheck({
       subject: 'contract',
       invocationIndex: 0,
@@ -1819,6 +1827,111 @@ async function compileAndCheckCurrentPlan(input: {
       check: 'contract',
       facts: contract.facts,
     });
+    compiledByToolId.set(tool.id, focused);
+  };
+  const compiled: BuildWaveResult<CompiledFocusedTool> = { completed: [], failures: [] };
+  const failures: BuildWaveFailure[] = [];
+  const order = new Map(
+    plan.buildWaves.flatMap((wave, waveIndex) =>
+      wave.map(
+        (toolId, position) => [toolId, waveIndex * (plan.tools.length + 1) + position] as const,
+      ),
+    ),
+  );
+  const toolIdByName = new Map(
+    plan.tools.map((tool) => [tool.candidate.toolName, tool.id] as const),
+  );
+  const declaredProducerIdsFor = (tool: EditableTeachingTool): string[] => [
+    ...tool.candidate.dependsOnTools.flatMap((name) => toolIdByName.get(name) ?? []),
+    ...plan.chainEdges
+      .filter(({ consumerToolId }) => consumerToolId === tool.id)
+      .map(({ producerToolId }) => producerToolId),
+  ];
+  const verifiedToolIds = new Set<string>();
+  const attemptedMvpToolIds = new Set<string>();
+  const approvedMvpToolIds = new Set<string>();
+  const dependencyBlockedToolIds = new Set<string>();
+  const hasUsableProducer = (toolId: string): boolean => {
+    if (approvedMvpToolIds.has(toolId)) return true;
+    const buildRef = input.journal
+      .readState()
+      .tools.find(({ toolId: currentToolId }) => currentToolId === toolId)?.buildRef;
+    return Boolean(buildRef && input.isMvpPublished?.(toolId, buildRef));
+  };
+
+  const approveAndPublishMvp = async (
+    tool: EditableTeachingTool,
+    waveIndex: number,
+    focused: CompiledFocusedTool,
+  ): Promise<void> => {
+    if (attemptedMvpToolIds.has(tool.id)) {
+      if (approvedMvpToolIds.has(tool.id)) verifiedToolIds.add(tool.id);
+      return;
+    }
+    attemptedMvpToolIds.add(tool.id);
+    try {
+      const live = liveByToolId.get(tool.id);
+      if (!live?.result.ok) throw new Error(`MVP tool "${tool.id}" has no retained live result`);
+      await input.approveMvp?.(tool, completionToolResultEvidenceFor(input.journal, tool, live));
+      await input.publishMvp?.(tool, focused);
+      approvedMvpToolIds.add(tool.id);
+      verifiedToolIds.add(tool.id);
+      input.onMvpReady?.(tool.id, focused);
+    } catch (error) {
+      failures.push(checkFailure(tool, waveIndex, 'proof', error));
+    }
+  };
+
+  const ensureUsableProducer = async (toolId: string): Promise<boolean> => {
+    if (hasUsableProducer(toolId)) return true;
+    const tool = plan.tools.find(({ id }) => id === toolId);
+    const focused = compiledByToolId.get(toolId);
+    const live = liveByToolId.get(toolId);
+    const buildRef = input.journal
+      .readState()
+      .tools.find(({ toolId: currentToolId }) => currentToolId === toolId)?.buildRef;
+    if (
+      !tool ||
+      !focused ||
+      !live?.result.ok ||
+      !buildRef ||
+      live.buildRef.path !== buildRef.path ||
+      live.buildRef.sha256 !== buildRef.sha256 ||
+      mechanicalProofFailures(plan, input.journal.currentExecutionSnapshot(), toolId).length > 0
+    ) {
+      return false;
+    }
+    await approveAndPublishMvp(
+      tool,
+      plan.buildWaves.findIndex((wave) => wave.includes(toolId)),
+      focused,
+    );
+    return hasUsableProducer(toolId);
+  };
+
+  const unavailableProducerIdsFor = async (tool: EditableTeachingTool): Promise<string[]> => {
+    const unavailable: string[] = [];
+    for (const producerToolId of new Set(declaredProducerIdsFor(tool))) {
+      if (!(await ensureUsableProducer(producerToolId))) unavailable.push(producerToolId);
+    }
+    return unavailable;
+  };
+
+  const checkNewlyCompiledTool = async ({
+    tool,
+    waveIndex,
+    value: focused,
+  }: BuildWaveResult<CompiledFocusedTool>['completed'][number]): Promise<void> => {
+    input.report?.(`checking ${tool.candidate.toolName}`);
+    if (!tool.implementationPlan || !tool.strategy) {
+      failures.push(
+        checkFailure(tool, waveIndex, 'compile', new Error('focused plan is incomplete')),
+      );
+      return;
+    }
+    const implementation = input.journal.readJson(
+      tool.implementationPlan,
+    ) as ImplementationPlanPayload;
 
     try {
       if (tool.strategy.kind === 'playbook_fallback') {
@@ -1975,10 +2088,57 @@ async function compileAndCheckCurrentPlan(input: {
       input.journal.currentExecutionSnapshot(),
       tool.id,
     );
-    if (proofFailures.length === 0) verifiedToolIds.add(tool.id);
-    else {
+    if (proofFailures.length === 0) {
+      await approveAndPublishMvp(tool, waveIndex, focused);
+    } else {
       failures.push(checkFailure(tool, waveIndex, 'proof', new Error(proofFailures.join('; '))));
     }
+  };
+
+  // Check each wave before starting the next. Tools that reach factual MVP
+  // proof start advisory finesse without being awaited while the next wave
+  // compiles. Unrelated tools still proceed after a failure; a declared
+  // consumer waits until its exact producer build is a published MVP.
+  for (const { waveIndex, toolIds } of compileWaves) {
+    const runnableToolIds: string[] = [];
+    for (const toolId of toolIds) {
+      const tool = plan.tools.find(({ id }) => id === toolId);
+      if (!tool) continue;
+      const unavailableProducers = await unavailableProducerIdsFor(tool);
+      if (unavailableProducers.length === 0) {
+        runnableToolIds.push(toolId);
+        continue;
+      }
+      dependencyBlockedToolIds.add(tool.id);
+      failures.push(
+        checkFailure(
+          tool,
+          waveIndex,
+          'proof',
+          new Error(
+            `waiting for usable producer MVP: ${[...new Set(unavailableProducers)].join(', ')}`,
+          ),
+        ),
+      );
+    }
+    if (runnableToolIds.length === 0) continue;
+    const waveResult = await compileEveryToolInBuildWaves(
+      { tools: compileTools, buildWaves: [runnableToolIds] },
+      {
+        concurrency: FOCUSED_COMPILE_CONCURRENCY,
+        compileTool: async (tool) => await compileTool(tool, waveIndex),
+        acceptCompiledTool: (tool, _localWaveIndex, focused) =>
+          acceptCompiledTool(tool, waveIndex, focused),
+      },
+    );
+    const completed = waveResult.completed
+      .map((entry) => ({ ...entry, waveIndex }))
+      .sort((left, right) => (order.get(left.tool.id) ?? 0) - (order.get(right.tool.id) ?? 0));
+    const waveFailures = waveResult.failures.map((failure) => ({ ...failure, waveIndex }));
+    compiled.completed.push(...completed);
+    compiled.failures.push(...waveFailures);
+    failures.push(...waveFailures);
+    for (const entry of completed) await checkNewlyCompiledTool(entry);
   }
 
   const waveByToolId = new Map(
@@ -2091,7 +2251,21 @@ async function compileAndCheckCurrentPlan(input: {
       if (builtThisPass.has(toolId)) continue;
       const tool = plan.tools.find(({ id }) => id === toolId);
       if (!tool) continue;
+      if (dependencyBlockedToolIds.has(tool.id)) continue;
       const waveIndex = waveByToolId.get(tool.id) ?? 0;
+      const unavailableProducers = await unavailableProducerIdsFor(tool);
+      if (unavailableProducers.length > 0) {
+        dependencyBlockedToolIds.add(tool.id);
+        failures.push(
+          checkFailure(
+            tool,
+            waveIndex,
+            'proof',
+            new Error(`waiting for usable producer MVP: ${unavailableProducers.join(', ')}`),
+          ),
+        );
+        continue;
+      }
       const currentRef = currentBuildRef(tool.id);
       const retainedLive = liveByToolId.get(tool.id);
       const hasCurrentLiveResult =
@@ -2301,9 +2475,23 @@ async function compileAndCheckCurrentPlan(input: {
   const finalSnapshot = input.journal.currentExecutionSnapshot();
   verifiedToolIds.clear();
   for (const tool of plan.tools) {
+    if (dependencyBlockedToolIds.has(tool.id)) continue;
     const proofFailures = mechanicalProofFailures(plan, finalSnapshot, tool.id);
-    if (proofFailures.length === 0) verifiedToolIds.add(tool.id);
-    else if (!failures.some(({ toolId }) => toolId === tool.id)) {
+    if (proofFailures.length === 0) {
+      const focused = compiledByToolId.get(tool.id);
+      if (!focused) {
+        failures.push(
+          checkFailure(
+            tool,
+            waveByToolId.get(tool.id) ?? 0,
+            'proof',
+            new Error(`verified tool "${tool.id}" has no staged artifact to publish`),
+          ),
+        );
+        continue;
+      }
+      await approveAndPublishMvp(tool, waveByToolId.get(tool.id) ?? 0, focused);
+    } else if (!failures.some(({ toolId }) => toolId === tool.id)) {
       failures.push(
         checkFailure(
           tool,
@@ -2460,123 +2648,264 @@ async function ensureCurrentImplementationPlans(
   }
 }
 
-async function adviseParametersAndRevise(input: {
+type ParameterFinesseStatus = 'running' | 'suggested' | 'failed' | 'deferred' | 'stale';
+
+interface ParameterFinesseRecord {
+  version: 1;
+  run: ReturnType<typeof currentPlanProjection>['binding'];
+  currentPlanRef: ContentAddressedRef;
+  toolId: string;
+  toolName: string;
+  buildRef: ContentAddressedRef;
+  executionBindingSha256: string;
+  status: ParameterFinesseStatus;
+  startedAt: string;
+  finishedAt?: string;
+  message?: string;
+  advice?: Awaited<ReturnType<typeof requestParameterSelectionAdvice>>;
+  liveFinesse?: LiveFinesseResult;
+}
+
+interface ParameterFinesseLane {
+  start: (toolId: string, toolDir: string) => void;
+  stop: (reason: string) => Promise<Record<ParameterFinesseStatus, number>>;
+}
+
+/**
+ * Parameter breadth is intentionally outside the authoritative teach state.
+ * Each suggestion is bound to one exact MVP build and can be considered by a
+ * later finesse pass, but it cannot revise, delay, or invalidate that MVP.
+ */
+function createParameterFinesseLane(input: {
+  runRoot: string;
   journal: FreshTeachJournal;
   discoveryInput: ToolSelectionAdvisorInput;
   discoveryEvidence: PromptEvidenceProjection;
   focusedEvidence: Map<string, PromptEvidenceProjection>;
-  toolAdvice: ToolAdvice;
-  triagedSession: Session;
-  independent: IndependentExecutionObservation;
   agent: MasterTeachAgentOptions;
   deps: FreshTeachControllerDependencies;
-  now: Date;
-}): Promise<{ needsWork: boolean }> {
-  const current = currentPlanProjection(input.journal);
-  const snapshot = input.journal.currentExecutionSnapshot();
-  const adviceRun = await compileEveryToolInBuildWaves(current.plan, {
-    concurrency: FOCUSED_COMPILE_CONCURRENCY,
-    compileTool: async (tool) => {
-      const evidence = input.focusedEvidence.get(tool.id) ?? input.discoveryEvidence;
-      const advisorInput: ParameterSelectionAdvisorInput = {
-        run: current.binding,
-        recordingIndex: input.discoveryInput.recordingIndex,
-        currentPlan: current.projection,
-        snapshot,
-        toolId: tool.id,
-        evidence,
-      };
-      return {
-        toolId: tool.id,
-        evidence,
-        advice: await input.deps.requestParameterSelectionAdvice(advisorInput, input.agent),
-      };
-    },
-  });
-  if (adviceRun.failures.length > 0) {
-    // Parameter reviewers only suggest public parameter choices. Provider
-    // cancellation/unavailability remains terminal, but an invalid individual
-    // suggestion is simply absent and cannot discard already verified tools.
-    throwTerminalFanoutFailure(adviceRun.failures, input.agent.signal);
-  }
-  const submissions = adviceRun.completed.map(({ value }) => value);
-  if (submissions.length === 0) return { needsWork: false };
-  const adviceRefs = submissions.map(({ advice }) => input.journal.storeJson(advice));
-  const evidenceRefs = uniqueRefs([
-    ...focusedEvidenceRefs(input.discoveryEvidence),
-    ...submissions.flatMap(({ evidence }) => focusedEvidenceRefs(evidence)),
-  ]);
-  const decisionInput: MasterDecisionInput = {
-    phase: 'revision',
-    discovery: input.discoveryInput,
-    current: { run: current.binding, plan: current.projection, snapshot },
-    toolSelectionAdvice: input.toolAdvice,
-    plannerProposals: [],
-    parameterAdvice: submissions,
+  report?: (message: string) => void;
+}): ParameterFinesseLane {
+  const records = new Map<string, ParameterFinesseRecord>();
+  const jobs = new Map<
+    string,
+    { controller: AbortController; promise: Promise<void>; detachParent: () => void }
+  >();
+  let queue: Promise<unknown> = Promise.resolve();
+  const recordPath = (record: ParameterFinesseRecord): string =>
+    pathJoin(
+      input.runRoot,
+      'finesse',
+      record.toolId,
+      `${record.buildRef.sha256.slice('sha256:'.length)}.json`,
+    );
+  const persist = (key: string, record: ParameterFinesseRecord): void => {
+    records.set(key, record);
+    try {
+      writeJsonAtomic(recordPath(record), record);
+    } catch (error) {
+      input.report?.(
+        `optional finesse result could not be saved: ${boundedTerminalMessage(error)}`,
+      );
+    }
   };
-  const decision = await input.deps.requestMasterDecision(decisionInput, input.agent);
-  const decisionRef = input.journal.storeJson(decision);
-  const revision = input.journal.revisePlan(decision.desiredPlan, {
-    expectedRevision: current.plan.revision,
-    decision: planDecision(
-      input.now,
-      decision.outcome,
-      decision.reason,
-      [...adviceRefs, decisionRef],
-      evidenceRefs,
-    ),
-  });
-  if (revision.replanToolIds.length === 0) {
-    return {
-      needsWork: revision.recompileToolIds.length > 0 || revision.reverifyToolIds.length > 0,
+  const counts = (): Record<ParameterFinesseStatus, number> => {
+    const result: Record<ParameterFinesseStatus, number> = {
+      running: 0,
+      suggested: 0,
+      failed: 0,
+      deferred: 0,
+      stale: 0,
     };
-  }
-
-  const replanningCurrent = currentPlanProjection(input.journal);
-  const seeds = new Map<string, FreshTeachBootstrapObject>();
-  const planners = await requestFocusedPlannerBundles({
-    plan: replanningCurrent.plan,
-    discoveryRun: input.discoveryInput.run,
-    recordingIndex: input.discoveryInput.recordingIndex,
-    triagedSession: input.triagedSession,
-    independent: input.independent,
-    seeds,
-    agent: input.agent,
-    deps: input.deps,
-    toolIds: new Set(revision.replanToolIds),
-  });
-  persistSeeds(input.journal, seeds);
-  for (const planner of planners)
-    input.focusedEvidence.set(planner.output.tool.id, planner.evidence);
-  const replanningSnapshot = input.journal.currentExecutionSnapshot();
-  const replanningEvidence = allEvidenceRefs(input.discoveryEvidence, planners);
-  const replanDecisionEvidenceRefs = uniqueRefs([...evidenceRefs, ...replanningEvidence]);
-  const replanInput: MasterDecisionInput = {
-    phase: 'revision',
-    discovery: input.discoveryInput,
-    current: {
-      run: replanningCurrent.binding,
-      plan: replanningCurrent.projection,
-      snapshot: replanningSnapshot,
-    },
-    toolSelectionAdvice: input.toolAdvice,
-    plannerProposals: planners.map(({ proposal }) => proposal),
-    parameterAdvice: [],
+    for (const record of records.values()) result[record.status] += 1;
+    return result;
   };
-  const replannedDecision = await input.deps.requestMasterDecision(replanInput, input.agent);
-  const replannedDecisionRef = input.journal.storeJson(replannedDecision);
-  const replanned = input.journal.revisePlan(replannedDecision.desiredPlan, {
-    expectedRevision: replanningCurrent.plan.revision,
-    decision: planDecision(
-      input.now,
-      replannedDecision.outcome,
-      replannedDecision.reason,
-      [...planners.map(({ proposal }) => proposal.ref), replannedDecisionRef],
-      replanDecisionEvidenceRefs,
-    ),
-  });
+
   return {
-    needsWork: replanned.recompileToolIds.length > 0 || replanned.reverifyToolIds.length > 0,
+    start: (toolId, toolDir) => {
+      try {
+        const current = currentPlanProjection(input.journal);
+        const snapshot = input.journal.currentExecutionSnapshot();
+        if (mechanicalProofFailures(current.plan, snapshot, toolId).length > 0) return;
+        const tool = current.plan.tools.find(({ id }) => id === toolId);
+        const proof = snapshot.payload.tools.find((candidate) => candidate.toolId === toolId);
+        if (!tool || !proof) return;
+        const key = `${toolId}:${proof.currentBuildRef.sha256}`;
+        if (records.has(key)) return;
+        const record: ParameterFinesseRecord = {
+          version: 1,
+          run: current.binding,
+          currentPlanRef: snapshot.payload.currentPlanRef,
+          toolId,
+          toolName: tool.candidate.toolName,
+          buildRef: proof.currentBuildRef,
+          executionBindingSha256: proof.executionBindingSha256,
+          status: 'running',
+          startedAt: new Date().toISOString(),
+        };
+        persist(key, record);
+        input.report?.(`finessing parameter breadth for ${record.toolName} in the background`);
+
+        const controller = new AbortController();
+        const abortFromParent = (): void =>
+          controller.abort(
+            input.agent.signal
+              ? abortSignalError(input.agent.signal)
+              : new DOMException('Parameter finesse cancelled', 'AbortError'),
+          );
+        if (input.agent.signal?.aborted) abortFromParent();
+        else input.agent.signal?.addEventListener('abort', abortFromParent, { once: true });
+        const detachParent = (): void =>
+          input.agent.signal?.removeEventListener('abort', abortFromParent);
+        const evidence = input.focusedEvidence.get(toolId) ?? input.discoveryEvidence;
+        const advisorInput: ParameterSelectionAdvisorInput = {
+          run: current.binding,
+          recordingIndex: input.discoveryInput.recordingIndex,
+          currentPlan: current.projection,
+          snapshot,
+          toolId,
+          evidence,
+        };
+        const promise = queue
+          .then(async () => {
+            const latest = input.journal.currentExecutionSnapshot().payload;
+            const latestProof = latest.tools.find((candidate) => candidate.toolId === toolId);
+            const stillCurrent =
+              latest.currentPlanRef.path === record.currentPlanRef.path &&
+              latest.currentPlanRef.sha256 === record.currentPlanRef.sha256 &&
+              latestProof?.currentBuildRef.path === record.buildRef.path &&
+              latestProof.currentBuildRef.sha256 === record.buildRef.sha256;
+            if (!stillCurrent) {
+              persist(key, {
+                ...record,
+                status: 'stale',
+                finishedAt: new Date().toISOString(),
+                message: 'The plan or MVP build changed before this finesse pass started.',
+              });
+              return;
+            }
+
+            const [adviceAttempt, liveAttempt] = await Promise.all([
+              input.deps
+                .requestParameterSelectionAdvice(advisorInput, {
+                  ...input.agent,
+                  signal: controller.signal,
+                })
+                .then(
+                  (value) => {
+                    persist(key, { ...(records.get(key) ?? record), advice: value });
+                    return { ok: true as const, value };
+                  },
+                  (error: unknown) => ({ ok: false as const, error }),
+                ),
+              input.deps
+                .runLiveFinesse({
+                  provider: input.agent.provider ?? detectTeachProvider(),
+                  toolDir,
+                  deadlineMs: input.agent.deadlineMs,
+                  runDeadline: input.agent.runDeadline,
+                  signal: controller.signal,
+                })
+                .then(
+                  (value) => {
+                    persist(key, { ...(records.get(key) ?? record), liveFinesse: value });
+                    return { ok: true as const, value };
+                  },
+                  (error: unknown) => ({ ok: false as const, error }),
+                ),
+            ]);
+
+            const after = input.journal.currentExecutionSnapshot().payload;
+            const afterProof = after.tools.find((candidate) => candidate.toolId === toolId);
+            const remainsCurrent =
+              after.currentPlanRef.path === record.currentPlanRef.path &&
+              after.currentPlanRef.sha256 === record.currentPlanRef.sha256 &&
+              afterProof?.currentBuildRef.path === record.buildRef.path &&
+              afterProof.currentBuildRef.sha256 === record.buildRef.sha256;
+            const deferred = controller.signal.aborted;
+            const hasAdvice = adviceAttempt.ok;
+            const hasCompletedLiveReview =
+              liveAttempt.ok && liveAttempt.value.completedReview === true;
+            const failed = !hasAdvice && !hasCompletedLiveReview;
+            const available = [
+              ...(hasAdvice ? ['parameter advice'] : []),
+              ...(hasCompletedLiveReview ? ['live breadth results'] : []),
+            ];
+            const unavailable = [
+              ...(!adviceAttempt.ok
+                ? [`parameter advisor: ${boundedTerminalMessage(adviceAttempt.error)}`]
+                : []),
+              ...(liveAttempt.ok && !hasCompletedLiveReview
+                ? [`live finesse ${liveAttempt.value.status}: ${liveAttempt.value.message}`]
+                : !liveAttempt.ok
+                  ? [`live finesse: ${boundedTerminalMessage(liveAttempt.error)}`]
+                  : []),
+            ];
+            persist(key, {
+              ...(records.get(key) ?? record),
+              status: deferred
+                ? 'deferred'
+                : remainsCurrent
+                  ? failed
+                    ? 'failed'
+                    : 'suggested'
+                  : 'stale',
+              finishedAt: new Date().toISOString(),
+              message: deferred
+                ? 'The MVP completed before this optional finesse pass; it can be retried later.'
+                : !remainsCurrent
+                  ? 'The plan or MVP build changed before this suggestion returned.'
+                  : failed
+                    ? unavailable.join('; ')
+                    : `${available.join(' and ')} available for a later finesse pass${unavailable.length > 0 ? `; ${unavailable.join('; ')}` : '.'}`,
+              ...(adviceAttempt.ok ? { advice: adviceAttempt.value } : {}),
+              ...(liveAttempt.ok ? { liveFinesse: liveAttempt.value } : {}),
+            });
+          })
+          .catch((error) => {
+            const deferred = controller.signal.aborted;
+            persist(key, {
+              ...(records.get(key) ?? record),
+              status: deferred ? 'deferred' : 'failed',
+              finishedAt: new Date().toISOString(),
+              message: deferred
+                ? 'The MVP completed before this optional finesse pass; it can be retried later.'
+                : boundedTerminalMessage(error),
+            });
+          })
+          .finally(() => {
+            detachParent();
+            jobs.delete(key);
+          });
+        queue = promise.catch(() => undefined);
+        jobs.set(key, { controller, promise, detachParent });
+      } catch (error) {
+        input.report?.(`parameter finesse could not start: ${boundedTerminalMessage(error)}`);
+      }
+    },
+    stop: async (reason) => {
+      const pending = [...jobs.entries()];
+      for (const [key, job] of pending) {
+        const record = records.get(key);
+        if (record?.status === 'running') {
+          persist(key, {
+            ...record,
+            status: 'deferred',
+            finishedAt: new Date().toISOString(),
+            message: reason,
+          });
+        }
+        job.controller.abort(new DOMException(reason, 'AbortError'));
+        job.detachParent();
+      }
+      if (pending.length > 0) {
+        await Promise.race([
+          Promise.allSettled(pending.map(([, job]) => job.promise)),
+          new Promise<void>((resolve) => setTimeout(resolve, 250)),
+        ]);
+      }
+      return counts();
+    },
   };
 }
 
@@ -2656,40 +2985,49 @@ function completionToolResultEvidence(
   plan: EditableTeachingPlan,
   liveByToolId: ReadonlyMap<string, LiveCheckResult>,
 ): CompletionToolResultEvidence[] {
-  const snapshot = journal.currentExecutionSnapshot();
   return plan.tools.map((tool) => {
-    if (!tool.implementationPlan) throw new Error(`tool "${tool.id}" has no implementation plan`);
-    const implementation = journal.readJson(tool.implementationPlan) as ImplementationPlanPayload;
-    const verification = implementation.verificationCases.find(({ check }) => check === 'live');
-    if (!verification) throw new Error(`tool "${tool.id}" has no live verification case`);
-    const liveReceipt = snapshot.payload.tools
-      .find(({ toolId }) => toolId === tool.id)
-      ?.receipts.find(({ check, status }) => check === 'live' && status === 'passed');
     const live = liveByToolId.get(tool.id);
-    if (!liveReceipt || !live?.result.ok) {
-      throw new Error(`tool "${tool.id}" has no retained successful live result`);
-    }
-    const serialized = JSON.stringify(live.result.data) ?? 'null';
-    const preview = utf8Prefix(serialized, 2_000);
-    const shape = utf8Prefix(structuralResultShape(live.result.data), 512) || 'unknown';
-    const payload = {
-      toolId: tool.id,
-      toolName: tool.candidate.toolName,
-      implementationPlanRef: tool.implementationPlan,
-      verificationCaseId: verification.id,
-      expectedResult: verification.expectedResult,
-      liveReceiptRef: liveReceipt.ref,
-      actualResult: {
-        observed: true,
-        preview,
-        shape,
-        count: Array.isArray(live.result.data) ? live.result.data.length : 1,
-        truncated: Buffer.byteLength(serialized, 'utf8') > Buffer.byteLength(preview, 'utf8'),
-      },
-    };
-    const ref = journal.storeJson(payload);
-    return CompletionToolResultEvidenceSchema.parse({ ref, payload });
+    if (!live?.result.ok) throw new Error(`tool "${tool.id}" has no retained live result`);
+    return completionToolResultEvidenceFor(journal, tool, live);
   });
+}
+
+function completionToolResultEvidenceFor(
+  journal: FreshTeachJournal,
+  tool: EditableTeachingTool,
+  live: LiveCheckResult,
+): CompletionToolResultEvidence {
+  if (!tool.implementationPlan) throw new Error(`tool "${tool.id}" has no implementation plan`);
+  const implementation = journal.readJson(tool.implementationPlan) as ImplementationPlanPayload;
+  const verification = implementation.verificationCases.find(({ check }) => check === 'live');
+  if (!verification) throw new Error(`tool "${tool.id}" has no live verification case`);
+  const liveReceipt = journal
+    .currentExecutionSnapshot()
+    .payload.tools.find(({ toolId }) => toolId === tool.id)
+    ?.receipts.find(({ check, status }) => check === 'live' && status === 'passed');
+  if (!liveReceipt || !live.result.ok) {
+    throw new Error(`tool "${tool.id}" has no retained successful live result`);
+  }
+  const serialized = JSON.stringify(live.result.data) ?? 'null';
+  const preview = utf8Prefix(serialized, 2_000);
+  const shape = utf8Prefix(structuralResultShape(live.result.data), 512) || 'unknown';
+  const payload = {
+    toolId: tool.id,
+    toolName: tool.candidate.toolName,
+    implementationPlanRef: tool.implementationPlan,
+    verificationCaseId: verification.id,
+    expectedResult: verification.expectedResult,
+    liveReceiptRef: liveReceipt.ref,
+    actualResult: {
+      observed: true,
+      preview,
+      shape,
+      count: Array.isArray(live.result.data) ? live.result.data.length : 1,
+      truncated: Buffer.byteLength(serialized, 'utf8') > Buffer.byteLength(preview, 'utf8'),
+    },
+  };
+  const ref = journal.storeJson(payload);
+  return CompletionToolResultEvidenceSchema.parse({ ref, payload });
 }
 
 async function requestIndependentReview(input: {
@@ -2722,7 +3060,8 @@ async function promoteCompletedTools(input: {
   }> = [];
   for (const compiled of input.tools) {
     const toolName = compiled.workflow.toolName;
-    const source = pathJoin(promotionRoot, toolName);
+    const promotionId = randomUUID();
+    const source = pathJoin(promotionRoot, 'prepared', toolName, promotionId);
     mkdirSync(source, { recursive: true, mode: 0o700 });
     for (const name of PROMOTED_FILES) {
       const from = pathJoin(compiled.toolDir, name);
@@ -2736,16 +3075,14 @@ async function promoteCompletedTools(input: {
       toolName,
       source,
       target: localToolDir(input.site, toolName),
-      backup: pathJoin(localSiteDir(input.site), `.${toolName}.before-${input.runId}`),
+      backup: pathJoin(promotionRoot, 'backups', toolName, promotionId),
     });
   }
 
   const promoted: typeof prepared = [];
   try {
     for (const item of prepared) {
-      if (existsSync(item.backup)) {
-        throw new Error(`promotion backup already exists: ${item.backup}`);
-      }
+      mkdirSync(dirname(item.backup), { recursive: true, mode: 0o700 });
       if (existsSync(item.target)) renameSync(item.target, item.backup);
       try {
         renameSync(item.source, item.target);
@@ -2758,7 +3095,8 @@ async function promoteCompletedTools(input: {
     }
   } catch (error) {
     for (const item of [...promoted].reverse()) {
-      const failedCopy = `${item.target}.failed-${input.runId}`;
+      const failedCopy = pathJoin(promotionRoot, 'failed', item.toolName, randomUUID());
+      mkdirSync(dirname(failedCopy), { recursive: true, mode: 0o700 });
       if (existsSync(item.target)) renameSync(item.target, failedCopy);
       if (existsSync(item.backup)) renameSync(item.backup, item.target);
     }
@@ -2774,6 +3112,7 @@ function writeTerminalResult(result: FreshTeachTerminalResult): FreshTeachTermin
 function currentTerminalCounts(
   journal: FreshTeachJournal | undefined,
   fallback: { planned: number; ready: number },
+  publishedBuilds?: ReadonlySet<string>,
 ): { readyTools: number; failedTools: number } {
   if (!journal) {
     return {
@@ -2783,10 +3122,16 @@ function currentTerminalCounts(
   }
   try {
     const plan = journal.currentPlan();
-    const snapshot = journal.currentExecutionSnapshot();
-    const readyTools = plan.tools.filter(
-      (tool) => mechanicalProofFailures(plan, snapshot, tool.id).length === 0,
-    ).length;
+    const state = journal.readState();
+    const readyTools = publishedBuilds
+      ? plan.tools.filter((tool) => {
+          const buildRef = state.tools.find(({ toolId }) => toolId === tool.id)?.buildRef;
+          return Boolean(buildRef && publishedBuilds.has(`${tool.id}:${buildRef.sha256}`));
+        }).length
+      : plan.tools.filter(
+          (tool) =>
+            mechanicalProofFailures(plan, journal.currentExecutionSnapshot(), tool.id).length === 0,
+        ).length;
     return {
       readyTools,
       failedTools: plan.tools.length - readyTools + unresolvedCandidateCoverage(plan).length,
@@ -2825,8 +3170,10 @@ export async function runFreshMasterTeach(
   const deadline = new RunDeadline(Date.now() + (opts.maxDurationMs ?? 12 * 60 * 60_000));
   const agents = agentOptions(opts, deadline);
   let journal: FreshTeachJournal | undefined;
+  let finesse: ParameterFinesseLane | undefined;
   let plannedTools = 0;
   let readyTools = 0;
+  const publishedMvpBuilds = new Set<string>();
 
   try {
     reportProgress(opts, 'resolving the latest recording');
@@ -2923,10 +3270,26 @@ export async function runFreshMasterTeach(
       bootstrap: [...seeds.values()],
     });
     journal = activeJournal;
+    finesse = createParameterFinesseLane({
+      runRoot,
+      journal: activeJournal,
+      discoveryInput: planned.discoveryInput,
+      discoveryEvidence: planned.discoveryEvidence,
+      focusedEvidence: planned.focusedEvidence,
+      agent: agents,
+      deps,
+      report: (message) => reportProgress(opts, message),
+    });
 
     let compiledByToolId = new Map<string, CompiledFocusedTool>();
     let liveByToolId = new Map<string, LiveCheckResult>();
-    const parameterAdvisedPlans = new Set<string>();
+    const mvpDispositionByResult = new Map<
+      string,
+      Pick<
+        Awaited<ReturnType<typeof requestBaselineMvpReview>>,
+        'status' | 'reason' | 'evidenceRefs'
+      >
+    >();
     const revisionContext = (): MasterRevisionContext => ({
       journal: activeJournal,
       discoveryInput: planned.discoveryInput,
@@ -2970,6 +3333,7 @@ export async function runFreshMasterTeach(
         }
         if (reviewed.review.verdict === 'passed') {
           activeJournal.finishWithReview('blocked', reviewed.reviewInput, reviewed.review);
+          await finesse.stop('No MVP tool was available; optional finesse was deferred.');
           return writeTerminalResult({
             status: 'blocked',
             readyTools: 0,
@@ -2999,6 +3363,66 @@ export async function runFreshMasterTeach(
           report: (message) => reportProgress(opts, message),
           priorCompiled: compiledByToolId,
           priorLive: liveByToolId,
+          isMvpPublished: (toolId, buildRef) =>
+            publishedMvpBuilds.has(`${toolId}:${buildRef.sha256}`),
+          approveMvp: async (tool, resultEvidence) => {
+            const key = `${tool.id}:${resultEvidence.ref.sha256}`;
+            // The disposition is bound to the content-addressed implementation,
+            // live receipt, and result. Reuse only those semantic facts across
+            // explanation-only plan revisions; never reuse the old plan binding.
+            let disposition = mvpDispositionByResult.get(key);
+            if (!disposition) {
+              reportProgress(opts, `reviewing the core result for ${tool.candidate.toolName}`);
+              const current = currentPlanProjection(activeJournal);
+              const review = await deps.requestBaselineMvpReview(
+                {
+                  run: current.binding,
+                  recordingIndex: planned.discoveryInput.recordingIndex,
+                  currentPlan: current.projection,
+                  snapshot: activeJournal.currentExecutionSnapshot(),
+                  toolId: tool.id,
+                  resultEvidence,
+                },
+                agents,
+              );
+              disposition = {
+                status: review.status,
+                reason: review.reason,
+                evidenceRefs: review.evidenceRefs,
+              };
+              mvpDispositionByResult.set(key, disposition);
+              const reviewRef = activeJournal.storeJson(review);
+              writeJsonAtomic(
+                pathJoin(
+                  runRoot,
+                  'mvp-reviews',
+                  tool.id,
+                  `${review.binding.currentBuildRef.sha256.slice('sha256:'.length)}.json`,
+                ),
+                { resultEvidence, reviewRef, review },
+              );
+            }
+            if (disposition.status !== 'credible') {
+              const refs = disposition.evidenceRefs
+                .map(({ path, sha256 }) => `${path} (${sha256})`)
+                .join(', ');
+              throw new Error(
+                `core result requires a fresh revision: ${disposition.reason}; evidence: ${refs}`,
+              );
+            }
+          },
+          publishMvp: async (tool, compiled) => {
+            const buildRef = activeJournal
+              .readState()
+              .tools.find(({ toolId }) => toolId === tool.id)?.buildRef;
+            if (!buildRef) throw new Error(`MVP tool "${tool.id}" has no current build`);
+            const key = `${tool.id}:${buildRef.sha256}`;
+            if (publishedMvpBuilds.has(key)) return;
+            reportProgress(opts, `publishing usable MVP ${tool.candidate.toolName}`);
+            await deps.promote({ site, runId, runRoot, tools: [compiled] });
+            publishedMvpBuilds.add(key);
+          },
+          onMvpReady: (toolId, compiled) => finesse?.start(toolId, compiled.toolDir),
         });
       } catch (error) {
         const status = terminalStatusForError(error, opts.signal);
@@ -3017,32 +3441,6 @@ export async function runFreshMasterTeach(
         );
         if (terminal) throw terminal.error;
         await repair(verificationFailureProjection(activeJournal, checked.failures));
-        continue;
-      }
-
-      const advisedPlanHash = teachingPlanContentSha256(desiredPart(activeJournal.currentPlan()));
-      if (!parameterAdvisedPlans.has(advisedPlanHash)) {
-        reportProgress(opts, 'reviewing public parameter choices');
-        try {
-          await adviseParametersAndRevise({
-            journal: activeJournal,
-            discoveryInput: planned.discoveryInput,
-            discoveryEvidence: planned.discoveryEvidence,
-            focusedEvidence: planned.focusedEvidence,
-            toolAdvice: planned.toolAdvice,
-            triagedSession: fullScope.session,
-            independent,
-            agent: agents,
-            deps,
-            now: deps.now(),
-          });
-          await ensureCurrentImplementationPlans(revisionContext());
-        } catch (error) {
-          const status = terminalStatusForError(error, opts.signal);
-          if (status === 'cancelled' || status === 'provider_unavailable') throw error;
-          reportProgress(opts, 'parameter advice was unavailable; keeping the verified plan');
-        }
-        parameterAdvisedPlans.add(advisedPlanHash);
         continue;
       }
 
@@ -3098,39 +3496,68 @@ export async function runFreshMasterTeach(
         await repair(completionFailureProjection(activeJournal, reviewed.review));
         continue;
       }
-      const finalCompiled = finalPlan.tools.map((tool) => {
+      const finalState = activeJournal.readState();
+      const missingPublishedTools = finalPlan.tools.filter((tool) => {
+        const buildRef = finalState.tools.find(({ toolId }) => toolId === tool.id)?.buildRef;
+        if (!buildRef) throw new Error(`completed tool "${tool.id}" has no current build`);
+        return !publishedMvpBuilds.has(`${tool.id}:${buildRef.sha256}`);
+      });
+      const missingCompiled = missingPublishedTools.map((tool) => {
         const compiled = compiledByToolId.get(tool.id);
         if (!compiled) throw new Error(`completed tool "${tool.id}" has no staged artifact`);
         return compiled;
       });
-      reportProgress(opts, `promoting ${finalCompiled.length} verified tool(s)`);
+      reportProgress(
+        opts,
+        missingCompiled.length > 0
+          ? `publishing ${missingCompiled.length} remaining MVP tool(s)`
+          : 'recording completion for the already-published MVP tools',
+      );
       await promoteReviewedCompletion({
         journal: activeJournal,
         reviewInput: reviewed.reviewInput,
         review: reviewed.review,
-        promote: async () => await deps.promote({ site, runId, runRoot, tools: finalCompiled }),
+        promote: async () => {
+          if (missingCompiled.length === 0) return;
+          await deps.promote({ site, runId, runRoot, tools: missingCompiled });
+          const state = activeJournal.readState();
+          for (const tool of missingPublishedTools) {
+            const buildRef = state.tools.find(({ toolId }) => toolId === tool.id)?.buildRef;
+            if (!buildRef) throw new Error(`published tool "${tool.id}" lost its current build`);
+            publishedMvpBuilds.add(`${tool.id}:${buildRef.sha256}`);
+          }
+        },
       });
       readyTools = finalPlan.tools.length;
+      const finesseCounts = await finesse.stop(
+        'The MVP was promoted before this optional finesse pass finished; it can be retried later.',
+      );
+      const availableFinesse = finesseCounts.suggested;
       return writeTerminalResult({
         status: 'completed',
         readyTools,
         failedTools: 0,
         runRoot,
-        message: `Every one of ${readyTools} planned tool(s) passed verification and was promoted.`,
+        message: `Every one of ${readyTools} planned tool(s) reached a usable MVP and was promoted. ${availableFinesse} optional finesse suggestion(s) are saved under ${pathJoin(runRoot, 'finesse')}; unfinished finesse can be retried later.`,
       });
     }
   } catch (error) {
     const status = terminalStatusForError(error, opts.signal);
+    await finesse?.stop('The teach run ended before this optional finesse pass finished.');
     try {
       if (journal?.readState().status === 'active') journal.finish(status, { hostError: error });
     } catch {
       // The terminal result remains authoritative for the foreground command;
       // immutable run files are retained for diagnosis if journal finalization failed.
     }
-    const counts = currentTerminalCounts(journal, {
-      planned: plannedTools,
-      ready: readyTools,
-    });
+    const counts = currentTerminalCounts(
+      journal,
+      {
+        planned: plannedTools,
+        ready: readyTools,
+      },
+      publishedMvpBuilds,
+    );
     return writeTerminalResult({
       status,
       ...counts,

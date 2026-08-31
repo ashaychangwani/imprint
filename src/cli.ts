@@ -1514,6 +1514,7 @@ async function main(argv: string[]): Promise<number> {
           'strategy-kind': { type: 'string' },
           'auth-plan-json': { type: 'string' },
           'revision-mode': { type: 'boolean' },
+          'verification-mode': { type: 'string' },
           provider: { type: 'string' },
           site: { type: 'string' },
           'shared-triage-json': { type: 'string' },
@@ -1554,6 +1555,15 @@ async function main(argv: string[]): Promise<number> {
       const strategyKind = values['strategy-kind']
         ? CompileStrategyKindSchema.parse(values['strategy-kind'])
         : undefined;
+      const verificationMode = values['verification-mode'];
+      if (
+        verificationMode !== undefined &&
+        verificationMode !== 'full' &&
+        verificationMode !== 'master_mvp'
+      ) {
+        console.error('error: __mcp-compile-server --verification-mode must be full or master_mvp');
+        return 2;
+      }
       await runCompileMcpServer({
         sessionPath: values['session-path'],
         toolDir,
@@ -1564,6 +1574,7 @@ async function main(argv: string[]): Promise<number> {
         strategyKind,
         authToolPlan: authToolPlan ?? undefined,
         revisionMode: values['revision-mode'],
+        verificationMode,
         provider: values.provider as
           | 'anthropic-api'
           | 'claude-cli'
