@@ -1702,3 +1702,28 @@ All 145 focused MVP, compiler-receipt, controller, and finesse tests pass. Type
 checking, lint, unused-code checks, and circular-dependency checks also pass.
 The full repository run passed 1,785 of 1,786 tests; one existing recorder
 browser test reached its 30-second limit, then passed alone in 2.9 seconds.
+
+## 2026-08-31 15:51 PDT — Fresh Hotels attempt exposed mixed provider routing
+
+A new, unsteered Google Hotels teach started as run
+`0c2a1ec0-f845-4168-b21b-69f18ff6620e`. It selected the latest combined
+recording, `sessions/combined-2026-08-29T22-59-08-951Z.json`, whose SHA-256 is
+`85ceb6570b12c69d095ef288873659d9f293c4ddeb38251396e9cca630d07241`.
+The selected source and the run's redacted copy both contain 328 events, 611
+requests, and 24 narration records. This run ended before candidate discovery
+and will not be resumed.
+
+The command used `--agent codex`, but that flag only selected the master-shaped
+flow while provider auto-detection separately chose the installed Claude CLI.
+Claude access is disabled for this organization. Request triage correctly fell
+back to the complete recording, but candidate detection then made the same
+Claude call and the run ended with `0 ready, 0 failed`. No candidate, plan, or
+tool build had started.
+
+This was misleading command behavior, not a recording or website failure.
+`--agent codex` now defaults every teaching role to `codex-cli`, including
+triage, discovery, planning, compilation, review, and optional finesse. An
+explicit `--provider` still wins, and the plain command without either flag
+still uses automatic provider selection. The trace and CLI help now report this
+choice honestly. Focused provider and help tests pass, along with type checking.
+The next Hotels validation will be another new run.

@@ -12,6 +12,7 @@ import {
   prepareFullSessionForTeach,
   prepareSessionForTeach,
   promoteReviewedCompletion,
+  providerForFreshTeach,
   revisionStagingDir,
   runFocusedWaveOrchestration,
   runPlaybookInvocationWithDeadline,
@@ -27,6 +28,18 @@ import { ProviderUnavailableError, RunDeadline } from '../src/imprint/provider-r
 import type { Session, Workflow } from '../src/imprint/types.ts';
 
 const SHA = `sha256:${'a'.repeat(64)}`;
+
+describe('fresh teach provider selection', () => {
+  it('uses Codex end to end when --agent codex is explicit', () => {
+    expect(providerForFreshTeach({ agent: 'codex' })).toBe('codex-cli');
+  });
+
+  it('lets an explicit provider override --agent codex', () => {
+    expect(providerForFreshTeach({ agent: 'codex', provider: 'anthropic-api' })).toBe(
+      'anthropic-api',
+    );
+  });
+});
 
 function replaySession(request: Session['requests'][number]): Session {
   return {

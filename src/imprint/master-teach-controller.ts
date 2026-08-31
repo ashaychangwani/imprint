@@ -133,7 +133,8 @@ export interface FreshTeachOptions {
   maxDurationMs?: number;
   fromSession?: string;
   keepTest?: boolean;
-  /** Optional explicit spelling for the same master-led flow. */
+  /** Optional explicit spelling for the same master-led flow. When no
+   * provider is supplied, this also selects the Codex provider end to end. */
   agent?: 'codex';
   /** Foreground-only human progress. It never affects orchestration. */
   onProgress?: (message: string) => void;
@@ -951,8 +952,12 @@ function currentPlanProjection(journal: FreshTeachJournal) {
   };
 }
 
+export function providerForFreshTeach(opts: FreshTeachOptions): ProviderName {
+  return opts.provider ?? (opts.agent === 'codex' ? 'codex-cli' : detectTeachProvider());
+}
+
 function llmOptions(opts: FreshTeachOptions): LLMOptions {
-  const provider = opts.provider ?? detectTeachProvider();
+  const provider = providerForFreshTeach(opts);
   return { provider, ...(opts.model ? { model: opts.model } : {}) };
 }
 
@@ -962,7 +967,7 @@ function agentOptions(
   deps?: Partial<MasterTeachAgentOptions>,
 ): MasterTeachAgentOptions {
   return {
-    provider: opts.provider ?? detectTeachProvider(),
+    provider: providerForFreshTeach(opts),
     ...(opts.model ? { model: opts.model } : {}),
     deadlineMs: deadline.deadlineMs,
     runDeadline: deadline,

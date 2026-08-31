@@ -127,7 +127,8 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       },
       {
         name: '--agent codex',
-        description: 'Select the master-agent flow explicitly. This never narrows the tool set.',
+        description:
+          'Select the master-agent flow explicitly and default every teaching agent to codex-cli. This never narrows the tool set; --provider still overrides it.',
       },
       {
         name: '--provider <name>',
@@ -1450,7 +1451,8 @@ async function main(argv: string[]): Promise<number> {
             'imprint.site': site,
             'imprint.url': values.url,
             'imprint.from_session': values['from-session'],
-            'imprint.provider': values.provider ?? 'auto',
+            'imprint.provider':
+              values.provider ?? (values.agent === 'codex' ? 'codex-cli' : 'auto'),
             'imprint.model': values.model ?? 'auto',
             'imprint.timeout_ms': teachTimeoutMs ?? 'default',
             'imprint.agent': values.agent ?? 'master',

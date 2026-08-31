@@ -62,6 +62,7 @@ describe('teach help', () => {
     const flags = teach?.flags ?? [];
     expect(teach?.summary).toContain('every supported tool');
     expect(flags.map(({ name }) => name)).toContain('--agent codex');
+    expect(flags.find(({ name }) => name === '--agent codex')?.description).toContain('codex-cli');
     expect(flags.find(({ name }) => name === '--timeout <duration>')?.description).toContain(
       'Foreground teach deadline',
     );
