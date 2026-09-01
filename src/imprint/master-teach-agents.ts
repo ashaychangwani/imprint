@@ -30,6 +30,7 @@ import {
   ToolSelectionAdvisorPromptInputSchema,
   schemaIssue as issue,
 } from './master-teach-agent-contracts.ts';
+import { apiReplayProofSatisfied } from './master-teach-checks.ts';
 import {
   type ChainEdge,
   type ContentAddressedRef,
@@ -433,14 +434,19 @@ export function mechanicalProofFailures(
       failures.push(`${tool.id}: missing current execution proof`);
       continue;
     }
-    const expected = [
+    for (const [check, status] of [
       ['contract', 'passed'],
       ['live', 'passed'],
-      ['replay', tool.strategy.kind === 'api' ? 'passed' : 'not_applicable'],
-    ] as const;
-    for (const [check, status] of expected) {
+    ] as const) {
       if (!proof.receipts.some((receipt) => receipt.check === check && receipt.status === status))
         failures.push(`${tool.id}: ${check} must be ${status}`);
+    }
+    const replay = proof.receipts.find(({ check }) => check === 'replay');
+    if (tool.strategy.kind === 'api') {
+      if (!replay || !apiReplayProofSatisfied(replay.facts))
+        failures.push(`${tool.id}: replay must be passed or cleanly not_checked`);
+    } else if (replay?.status !== 'not_applicable') {
+      failures.push(`${tool.id}: replay must be not_applicable`);
     }
     for (const edge of plan.chainEdges.filter(({ consumerToolId }) => consumerToolId === tool.id)) {
       if (

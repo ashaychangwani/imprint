@@ -6,6 +6,7 @@ import {
   type CompletionReviewInput,
   CompletionToolResultEvidenceSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
+import { acceptedRequestNotCheckedCheck } from '../src/imprint/master-teach-checks.ts';
 import {
   type ChainEdge,
   type ContentAddressedRef,
@@ -534,5 +535,33 @@ describe('small fresh teach journal', () => {
       'completed',
     );
     expect(() => journal.storeJson({ tooLate: true })).toThrow('terminal');
+  });
+
+  it('finishes when an API replay baseline is explicitly unavailable', () => {
+    const { journal } = fixture();
+    acceptImplementations(journal);
+    issueBuild(journal, 'search-id');
+    journal.issueReceipt({
+      toolId: 'search-id',
+      check: 'contract',
+      facts: [passedInvocation('contract')],
+    });
+    journal.issueReceipt({
+      toolId: 'search-id',
+      check: 'replay',
+      facts: acceptedRequestNotCheckedCheck({
+        provenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 1 }],
+      }).facts,
+    });
+    journal.issueReceipt({
+      toolId: 'search-id',
+      check: 'live',
+      facts: [passedInvocation('live')],
+    });
+    const input = completionInput(journal);
+
+    expect(journal.finishWithReview('completed', input, passedCompletionOutput(input)).status).toBe(
+      'completed',
+    );
   });
 });

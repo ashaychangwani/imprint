@@ -21,10 +21,14 @@ Judge only the supplied intended operation, expected result, and bounded actual
 result. Do not review code, request construction, authentication, strategy,
 tool boundaries, or public parameter breadth. Do not propose a repair.
 
-The host has already required current contract, replay/live, and incoming-chain
-receipts before calling you. Copy `validationContext.binding` exactly. Cite the
-supplied `baseline.resultEvidenceRef`; you may additionally cite the supplied
-live receipt ref. The host rejects stale bindings and unsupplied citations.
+The host has already required current contract, live, and incoming-chain
+passes before calling you. API replay either passed or is cleanly not checked
+because the accepted plan explicitly marked its exact recorded parameter
+baseline unavailable; a replay mismatch or host/render failure remains
+blocking. Playbook replay is not applicable. Copy `validationContext.binding`
+exactly. Cite the supplied `baseline.resultEvidenceRef`; you may additionally
+cite the supplied live receipt ref. The host rejects stale bindings and
+unsupplied citations.
 
 Exact output schema (all objects reject extra fields):
 

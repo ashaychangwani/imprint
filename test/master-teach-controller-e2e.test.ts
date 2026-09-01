@@ -426,6 +426,22 @@ function focusedImplementation(input: FocusedPlannerInput) {
   });
 }
 
+function unavailableReplayImplementation(input: FocusedPlannerInput) {
+  const implementation = focusedImplementation(input);
+  return ImplementationPlanPayloadSchema.parse({
+    ...implementation,
+    verificationCases: implementation.verificationCases.map((verificationCase) =>
+      verificationCase.check === 'replay'
+        ? {
+            ...verificationCase,
+            parameterValueOrigin: 'unavailable',
+            parameterValues: [],
+          }
+        : verificationCase,
+    ),
+  });
+}
+
 function browserFocusedImplementation(input: FocusedPlannerInput) {
   const parameterValues = input.tool.candidate.likelyParams.map(({ name, type }) => ({
     parameterName: name,
@@ -791,7 +807,10 @@ describe('fresh foreground master controller end to end', () => {
                 },
               },
               chainEdges: input.incomingChainEdges,
-              implementationPlan: focusedImplementation(input),
+              implementationPlan:
+                input.tool.id === CONSUMER_ID
+                  ? unavailableReplayImplementation(input)
+                  : focusedImplementation(input),
               reason: 'The focused request and expected result are explicit.',
             });
           },
@@ -960,7 +979,7 @@ describe('fresh foreground master controller end to end', () => {
       ]);
       expect(checksSeenByReviewer.get(CONSUMER_ID)).toEqual([
         'contract:passed',
-        'replay:passed',
+        'replay:not_checked',
         'live:passed',
         'chain:passed',
       ]);
@@ -993,7 +1012,7 @@ describe('fresh foreground master controller end to end', () => {
       ]);
       expect(parameterAdvisorChecks.get(CONSUMER_ID)).toEqual([
         'contract:passed',
-        'replay:passed',
+        'replay:not_checked',
         'live:passed',
         'chain:passed',
       ]);

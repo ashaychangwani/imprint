@@ -141,6 +141,23 @@ export function acceptedRequestNotCheckedCheck(input: {
   return { status: summarizeFacts(facts), facts };
 }
 
+/**
+ * API replay is sufficient either when its factual check passed, or when every
+ * accepted request is explicitly unchecked because the exact recorded public
+ * parameter baseline was unavailable. Host and comparison failures are never
+ * accepted by this gate.
+ */
+export function apiReplayProofSatisfied(facts: readonly ReceiptFact[]): boolean {
+  const passed =
+    facts.every(({ status }) => status === 'passed' || status === 'not_applicable') &&
+    facts.some(({ status }) => status === 'passed');
+  if (passed) return true;
+  return (
+    facts.length > 0 &&
+    facts.every(({ kind, status }) => kind === 'request_comparison' && status === 'not_checked')
+  );
+}
+
 function preflightAcceptedRequests(
   provenance: readonly ArtifactRequestProvenance[],
   artifactRequests: readonly ArtifactComparableRequest[],

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   acceptedRequestComparisonCheck,
   acceptedRequestNotCheckedCheck,
+  apiReplayProofSatisfied,
   bindProducerResultToConsumer,
   browserReplayNotApplicableCheck,
   extractJsonResultPath,
@@ -81,6 +82,7 @@ describe('accepted request comparison facts', () => {
       'not_checked',
     ]);
     expect(check.facts.every(({ kind }) => kind === 'request_comparison')).toBe(true);
+    expect(apiReplayProofSatisfied(check.facts)).toBe(true);
   });
 
   it('keeps render failure distinct from unchecked request bytes', () => {
@@ -97,6 +99,26 @@ describe('accepted request comparison facts', () => {
       'failed',
     ]);
     expect(check.facts.at(-1)).toMatchObject({ kind: 'host_error' });
+    expect(apiReplayProofSatisfied(check.facts)).toBe(false);
+  });
+
+  it('does not accept a partial or mismatched replay as an unavailable baseline', () => {
+    const partial = acceptedRequestComparisonCheck({
+      provenance,
+      recordedRequests,
+      artifactRequests,
+      hostError: { artifactRequestIndex: 1, error: new Error('render stopped') },
+    });
+    const mismatch = acceptedRequestComparisonCheck({
+      provenance,
+      recordedRequests,
+      artifactRequests: artifactRequests.map((request, index) =>
+        index === 0 ? { ...request, method: 'DELETE' } : request,
+      ),
+    });
+
+    expect(apiReplayProofSatisfied(partial.facts)).toBe(false);
+    expect(apiReplayProofSatisfied(mismatch.facts)).toBe(false);
   });
 
   it('projects passing exact provenance as value-free facts', () => {

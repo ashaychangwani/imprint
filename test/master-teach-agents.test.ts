@@ -908,6 +908,18 @@ describe('prompts and pre-plan discovery', () => {
     expect(focusedPrompt).toContain('never erase a distinct user-facing operation');
   });
 
+  it('tells every proof reviewer that unavailable API replay is not a failure', () => {
+    for (const name of [
+      'master-teach-baseline-mvp-review.md',
+      'master-teach-parameter-advisor.md',
+      'master-teach-completion-review.md',
+    ]) {
+      const reviewerPrompt = prompt(name);
+      expect(reviewerPrompt).toContain('cleanly not checked');
+      expect(reviewerPrompt).toContain('baseline unavailable');
+    }
+  });
+
   it('explains the complete boundary index and deferred wire detail to discovery agents', () => {
     for (const name of ['master-teach-decision.md', 'master-teach-tool-advisor.md']) {
       const discoveryPrompt = prompt(name);
@@ -2541,17 +2553,33 @@ describe('completion history and factual pass gate', () => {
     ).toThrow('receipt id appears in current and history');
   });
 
-  it('mechanically rejects completion on failed/not-checked/API-N-A facts', () => {
-    for (const status of ['failed', 'not_checked'] as const) {
-      const input = structuredClone(completionInput());
-      const tool = at(input.snapshot.payload.tools, 0);
-      const replay = matching(tool.receipts, ({ check }) => check === 'replay');
-      replay.status = status;
-      replay.facts = replayFacts([12], [status]);
-      rehash(input.snapshot);
-      const output = completionOutput(input);
-      expect(() => parseCompletionReviewOutput(JSON.stringify(output), input)).toThrow('must be');
-    }
+  it('allows clean unavailable API replay to reach completion review', () => {
+    const input = structuredClone(completionInput());
+    const replay = matching(
+      at(input.snapshot.payload.tools, 0).receipts,
+      ({ check }) => check === 'replay',
+    );
+    replay.status = 'not_checked';
+    replay.facts = replayFacts([12], ['not_checked']);
+    rehash(input.snapshot);
+    const output = completionOutput(input);
+
+    expect(parseCompletionReviewOutput(JSON.stringify(output), input)).toEqual(output);
+  });
+
+  it('mechanically rejects completion on failed or API-N-A replay facts', () => {
+    const failed = structuredClone(completionInput());
+    const failedReplay = matching(
+      at(failed.snapshot.payload.tools, 0).receipts,
+      ({ check }) => check === 'replay',
+    );
+    failedReplay.status = 'failed';
+    failedReplay.facts = replayFacts([12], ['failed']);
+    rehash(failed.snapshot);
+    expect(() =>
+      parseCompletionReviewOutput(JSON.stringify(completionOutput(failed)), failed),
+    ).toThrow('must be');
+
     const input = structuredClone(completionInput());
     const replay = matching(
       at(input.snapshot.payload.tools, 0).receipts,

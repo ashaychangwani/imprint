@@ -56,6 +56,7 @@ import {
 import {
   acceptedRequestComparisonCheck,
   acceptedRequestNotCheckedCheck,
+  apiReplayProofSatisfied,
   bindProducerResultToConsumer,
   invocationOutcomeCheck,
 } from './master-teach-checks.ts';
@@ -1949,7 +1950,7 @@ async function compileAndCheckCurrentPlan(input: {
           credentialNames: tool.compileContext.credentialNames,
         });
         input.journal.issueReceipt({ toolId: tool.id, check: 'replay', facts });
-        if (!receiptPassed(facts)) {
+        if (!apiReplayProofSatisfied(facts)) {
           failures.push(
             checkFailure(
               tool,
@@ -2168,6 +2169,10 @@ async function compileAndCheckCurrentPlan(input: {
         receipt.status === status &&
         (check !== 'chain' || receipt.chainEdgeId === chainEdgeId),
     ) === true;
+  const hasApiReplayProof = (toolId: string): boolean =>
+    proofFor(toolId)?.receipts.some(
+      (receipt) => receipt.check === 'replay' && apiReplayProofSatisfied(receipt.facts),
+    ) === true;
 
   const runExistingLive = async (
     tool: EditableTeachingTool,
@@ -2366,8 +2371,11 @@ async function compileAndCheckCurrentPlan(input: {
         }
       }
 
-      const replayStatus = tool.strategy.kind === 'playbook_fallback' ? 'not_applicable' : 'passed';
-      if (!hasReceipt(tool.id, 'replay', replayStatus)) {
+      const hasReplayProof =
+        tool.strategy.kind === 'playbook_fallback'
+          ? hasReceipt(tool.id, 'replay', 'not_applicable')
+          : hasApiReplayProof(tool.id);
+      if (!hasReplayProof) {
         try {
           if (tool.strategy.kind === 'playbook_fallback') {
             input.journal.issueReceipt({ toolId: tool.id, check: 'replay' });
@@ -2383,7 +2391,7 @@ async function compileAndCheckCurrentPlan(input: {
               check: 'replay',
               facts,
             });
-            if (!receiptPassed(facts)) {
+            if (!apiReplayProofSatisfied(facts)) {
               failures.push(
                 checkFailure(
                   tool,

@@ -12,9 +12,12 @@ The history includes its immutable root, every superseded receipt, and
 newest-first ordinals. Current receipts are separate. Earlier
 failures may be superseded by a current receipt for the exact current tool
 execution. For `completed`, the host admits this review only after contract and
-live pass for every tool, API replay passes, playbook replay is not applicable,
-every current chain edge passes against exact builds, and the plan contains at
-least one tool. Every original discovery row in `candidateCoverage` must either
+live pass for every tool. API replay either passes or is cleanly not checked
+because the accepted plan explicitly marked its exact recorded parameter
+baseline unavailable; a replay mismatch or host/render failure remains
+blocking. Playbook replay is not applicable. Every current chain edge passes
+against exact builds, and the plan contains at least one tool. Every original
+discovery row in `candidateCoverage` must either
 resolve to a current tool or carry an explicit exclusion reason. Each exclusion
 is supplied as an `exclusion` claim: compare it with the discovery evidence and
 mark it supported only when the detector proposal is genuinely duplicate,

@@ -116,7 +116,9 @@ recovered from the bounded recording evidence, use
 declared type for every public parameter. If even one value is redacted or
 cannot be recovered exactly, use `parameterValueOrigin:"unavailable"` and an
 empty `parameterValues` array; the runtime will report replay as not checked.
-Never substitute a plausible or synthetic value into a recorded replay case.
+That factual deferral does not waive contract, live, or chain checks. A request
+mismatch or replay host/render error still fails. Never substitute a plausible
+or synthetic value into a recorded replay case.
 The replay request sequences must equal the plan's ordered
 `requestProvenance`.
 
