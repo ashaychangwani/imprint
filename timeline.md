@@ -1897,3 +1897,42 @@ The focused suite passes 106 tests, including a regression in which the master
 omits the derived replay field and the host restores it from the selected saved
 plan. Type checking, lint, and whitespace checks pass. The failed run will not
 be resumed; the next validation will be another fresh, unsteered Flights teach.
+
+## 2026-08-31 19:07 PDT — Fresh Flights reached compilation, then factual labels sent repair backward
+
+Fresh run `e86bc50e-e2bb-43e3-b09d-326d19cb9c4f` used the correct recording and
+passed the plan-reference handoff that stopped the previous run. Independent
+observation captured 409 requests. The master kept four API tools and arranged
+them in three dependency waves: resolve a location; then calendar prices and
+flight search in parallel; then booking options. The first versions were small
+MVPs. For example, search covered one recorded one-way request and explicitly
+left broader shopping variants for later finesse.
+
+The location resolver compiled in about two minutes. Its contract passed and a
+live check returned one result. Exact replay correctly found a two-byte request
+difference at byte 45: the recording encoded the space in `san fran` as `%20`,
+while the generated form used `+`. The artifact could not be published, so its
+dependent waves correctly stayed blocked.
+
+The run then exposed a generic factual-label bug. The low-level comparison knew
+that the recording was 148 bytes and the rendered artifact was 146 bytes, but
+the saved receipt called the rendered size `expectedBytes` and the recorded size
+`actualBytes`. The master naturally read those names in the usual direction. It
+therefore rejected focused plans that targeted the correct 148-byte recording
+and repeatedly asked for the wrong 146-byte body.
+
+Revisions 2 through 5 repeated the same decision with different wording. The
+focused-planning no-progress guard included that free-form wording in its
+fingerprint, so each paraphrase looked like new progress even though the tool,
+evidence, requested repair, and compile inputs were unchanged. The default
+deadline would have allowed this to continue for up to 12 hours. After the
+fourth identical direction proved the loop, the run was manually cancelled. It
+ended honestly as cancelled with zero ready and four failed; no dependent tool
+compiled and no finesse job started. The run will not be resumed.
+
+Two small, site-neutral repairs are next. Replay receipts will use the ordinary
+meaning: expected bytes are the accepted recording and actual bytes are the
+rendered artifact, with the prompt stating that explicitly. The planning guard
+will bound retries by the mechanical tool/proposal/input state rather than by a
+changing explanation, while still allowing a changed tool, dependency, proof,
+or compile input to start fresh work.
