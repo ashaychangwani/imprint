@@ -1189,8 +1189,8 @@ async function compileFocusedToolWithShippedAgent(input: {
           ? {
               revision: {
                 instruction: input.priorToolDir
-                  ? 'Preserve the compatible working artifact and make the smallest change required by the current master plan.'
-                  : 'No compatible working artifact can be seeded. Follow the current failure facts and accepted strategy without copying executable files from another strategy.',
+                  ? 'Use the compatible prior artifact as a starting point and make the smallest change required by the current master plan. Re-check it; the prior artifact may be a rejected draft or a previously working build.'
+                  : 'No compatible prior artifact can be seeded. Follow the current failure facts and accepted strategy without copying executable files from another strategy.',
                 masterGuidance: input.revisionGuidance,
               },
             }

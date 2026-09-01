@@ -163,6 +163,24 @@ Put an important producer in an earlier, narrow wave when finishing it should
 unblock several consumers; do not make those consumers wait behind unrelated
 work merely because it is also independent.
 
+Keep tool names and stable tool IDs as two separate namespaces:
+
+- Every `candidate.dependsOnTools` entry must exactly match another current
+  `desiredPlan.tools[].candidate.toolName`. Never put a stable tool ID, an old
+  detector name, a removed name, or a conceptual alias in this list.
+- `buildWaves`, `candidateCoverage.plannedToolIds`, and the producer/consumer
+  fields in `chainEdges` use stable tool IDs, not candidate tool names.
+- If you rename, merge, split, add, or remove a tool, update every affected
+  `dependsOnTools`, `buildWaves`, and `chainEdges` reference before returning.
+
+Before returning, separately check that every name reference and every stable
+ID reference points to a tool in the same complete `desiredPlan`.
+
+For example, if a producer has stable `id: "catalog_search"` and
+`candidate.toolName: "search_catalog"`, its consumer uses
+`dependsOnTools: ["search_catalog"]`; a build wave and chain edge refer to the
+producer as `"catalog_search"`.
+
 Represent each producer-to-consumer parameter flow explicitly in `chainEdges`:
 producer tool ID and public result path, then consumer tool ID and parameter.
 Do not ask the runtime to infer this meaning. Example:

@@ -974,6 +974,24 @@ describe('prompts and pre-plan discovery', () => {
     }
   });
 
+  it('documents exact dependency-name and stable-ID namespaces for planning roles', () => {
+    const masterPrompt = prompt('master-teach-decision.md');
+    expect(masterPrompt).toContain('`candidate.dependsOnTools` entry must exactly match');
+    expect(masterPrompt).toContain('`desiredPlan.tools[].candidate.toolName`');
+    expect(masterPrompt).toContain(
+      'producer/consumer\n  fields in `chainEdges` use stable tool IDs',
+    );
+    expect(masterPrompt).toContain('use stable tool');
+    expect(masterPrompt).toContain('`candidateCoverage.plannedToolIds`');
+    expect(masterPrompt).toContain('`id: "catalog_search"`');
+    expect(masterPrompt).toContain('`dependsOnTools: ["search_catalog"]`');
+
+    const advisorPrompt = prompt('master-teach-tool-advisor.md');
+    expect(advisorPrompt).toContain('`dependsOnTools` entry must exactly match');
+    expect(advisorPrompt).toContain("boundary's current\n`toolName`");
+    expect(advisorPrompt).toContain('update every affected dependency');
+  });
+
   it('tells the focused planner exactly which evidence refs it may copy', () => {
     const focusedPrompt = prompt('master-teach-focused-planner.md');
     expect(focusedPrompt).toContain('`validationContext.authorizedEvidenceRefs`');
@@ -2953,11 +2971,16 @@ describe('strict repair and one real deadline', () => {
     const input = toolInput();
     const invalid = toolOutput();
     at(invalid.boundaries, 0).requestSeqs = [999];
-    const calls: Array<{ payload: unknown; signal?: AbortSignal; timeoutMs?: number }> = [];
+    const calls: Array<{
+      prompt: string;
+      payload: unknown;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+    }> = [];
     let callbackSignal: AbortSignal | undefined;
     const analyzer: MasterTeachAnalyzer = {
-      async analyze(_prompt, payload, options) {
-        calls.push({ payload, signal: options?.signal, timeoutMs: options?.timeoutMs });
+      async analyze(prompt, payload, options) {
+        calls.push({ prompt, payload, signal: options?.signal, timeoutMs: options?.timeoutMs });
         if (calls.length === 1) {
           await Bun.sleep(5);
           return { text: JSON.stringify(invalid) };
@@ -2984,6 +3007,58 @@ describe('strict repair and one real deadline', () => {
     expect(repair.originalInput).not.toEqual(input);
     expect(repair.validationContext).toBeTruthy();
     expect(repair.parseErrors).toBeTruthy();
+    expect(repair.priorResponse).toBe(JSON.stringify(invalid));
+    expect(calls[1]?.prompt).toContain('priorResponse is your complete previous answer');
+    expect(calls[1]?.prompt).toContain('Return one complete replacement object');
+  });
+
+  it('gives a master repair the complete long output, exact field path, and namespace rule', async () => {
+    const input = initialMasterInput();
+    const valid = initialMasterOutput(input);
+    const invalid = structuredClone(valid);
+    const brokenDetail = plannedTool(
+      { ...detail, dependsOnTools: ['renamed_search_that_does_not_exist'] },
+      'catalog_detail',
+    );
+    invalid.desiredPlan.tools.push(brokenDetail);
+    invalid.desiredPlan.candidateCoverage = [
+      {
+        discoveryCandidateName: search.toolName,
+        plannedToolIds: ['catalog_search'],
+        unresolvedReason: null,
+      },
+      {
+        discoveryCandidateName: detail.toolName,
+        plannedToolIds: ['catalog_detail'],
+        unresolvedReason: null,
+      },
+    ];
+    invalid.desiredPlan.buildWaves = [['catalog_search'], ['catalog_detail']];
+    const longInvalid = `${' '.repeat(13_000)}${JSON.stringify(invalid)}`;
+    const calls: Array<{ prompt: string; payload: unknown }> = [];
+    const analyzer: MasterTeachAnalyzer = {
+      async analyze(prompt, payload) {
+        calls.push({ prompt, payload });
+        return { text: calls.length === 1 ? longInvalid : JSON.stringify(valid) };
+      },
+    };
+
+    expect(await requestMasterDecision(input, { analyzer })).toEqual(valid);
+    const repair = calls[1]?.payload as {
+      priorResponse: string;
+      parseErrors: string[];
+    };
+    expect(Buffer.byteLength(longInvalid)).toBeGreaterThan(12_000);
+    expect(repair.priorResponse).toBe(longInvalid);
+    expect(repair.parseErrors.join(' ')).toContain(
+      'depends on missing tool "renamed_search_that_does_not_exist"',
+    );
+    expect(repair.parseErrors.join(' ')).toContain(
+      'desiredPlan.tools.1.candidate.dependsOnTools.0',
+    );
+    expect(calls[1]?.prompt).toContain(
+      'must exactly match another current desiredPlan.tools[].candidate.toolName',
+    );
   });
 
   it('aborts a retry callback at the one absolute deadline', async () => {

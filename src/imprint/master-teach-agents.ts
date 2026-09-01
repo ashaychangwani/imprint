@@ -292,6 +292,19 @@ function validatePlan(
   path: Array<string | number>,
   discoveryCandidateNames?: readonly string[],
 ): void {
+  for (const problem of teachingCandidateIssues(
+    plan.tools.map(({ candidate }) => candidate),
+    new Set(index.requestSeqs),
+  )) {
+    const [toolIndex, ...candidatePath] = problem.path;
+    issue(
+      ctx,
+      typeof toolIndex === 'number'
+        ? [...path, 'tools', toolIndex, 'candidate', ...candidatePath]
+        : [...path, 'tools', ...problem.path],
+      problem.message,
+    );
+  }
   try {
     validateDesiredTeachingPlan(
       {
@@ -1329,12 +1342,12 @@ export function parseCompletionReviewOutput(text: string, input: CompletionRevie
   const checked = CompletionInputSchema.parse(input);
   return parse('completion reviewer', text, completionOutputSchema(checked));
 }
-function utf8Prefix(value: string, maxBytes: number): string {
-  const bytes = Buffer.from(value);
-  if (bytes.length <= maxBytes) return value;
-  let end = maxBytes;
-  while (end > 0 && (bytes[end] ?? 0) >> 6 === 2) end -= 1;
-  return bytes.subarray(0, end).toString();
+function semanticRepairPrompt(system: string, role: Role): string {
+  const roleRule =
+    role === 'master decision'
+      ? '\nFor a master decision, every candidate.dependsOnTools value must exactly match another current desiredPlan.tools[].candidate.toolName. buildWaves and chainEdges use stable tool IDs. Propagate every rename through all affected references.'
+      : '';
+  return `${system}\n\n# Output repair\n\nThis is a repair of your previous output. originalInput is the authoritative original task, validationContext contains the exact allowed bindings and recording IDs, priorResponse is your complete previous answer, and parseErrors are factual validator diagnostics. Return one complete replacement object in the original schema, not a patch, wrapper, prose, or commentary. Preserve valid decisions and change what is needed to correct every listed issue.${roleRule}`;
 }
 
 function semanticRoleRequestPayload(input: unknown, validation: unknown) {
@@ -1449,10 +1462,10 @@ async function request<S extends z.ZodTypeAny>(options: {
     options.agent.onDeadlineReached,
   );
   const signal = active.signal ?? new AbortController().signal;
-  const analyze = (payload: unknown) =>
+  const analyze = (payload: unknown, prompt = system) =>
     invoke(
       () =>
-        analyzer.analyze(system, payload, {
+        analyzer.analyze(prompt, payload, {
           signal,
           timeoutMs:
             roleExpiresAt === undefined ? undefined : Math.max(0, roleExpiresAt - Date.now()),
@@ -1490,12 +1503,15 @@ async function request<S extends z.ZodTypeAny>(options: {
           active.waitForDeadlineDecision,
           `${options.role} retry callback`,
         );
-      const repaired = await analyze({
-        originalInput: options.input,
-        validationContext: options.validation,
-        priorResponse: utf8Prefix(first.text, 12_000),
-        parseErrors: error.parseErrors,
-      });
+      const repaired = await analyze(
+        {
+          originalInput: options.input,
+          validationContext: options.validation,
+          priorResponse: first.text,
+          parseErrors: error.parseErrors,
+        },
+        semanticRepairPrompt(system, options.role),
+      );
       return await invoke(
         () => Promise.resolve(parse(options.role, repaired.text, options.schema, 2)),
         signal,

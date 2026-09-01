@@ -2155,3 +2155,49 @@ each passed 1,804 of 1,806 tests and hit different pre-existing Mac process or
 Chromium timing flakes; every reported flaky case passed immediately when run
 alone. No teach-specific test failed. The next action is a Git checkpoint and a
 fresh, unsteered teach using the latest combined recording.
+
+## 2026-09-01 05:20 PDT — Started fresh, unsteered Google Flights validation
+
+After checkpoint `dfff549`, I started
+`bun run src/cli.ts teach google-flights --agent codex` with no resume flag, no
+site-specific prompt, and no steering. The automatic recording resolver selected
+the current combined Flights recording. Fresh run
+`50f8d201-001e-4ea7-a306-786756ebc460` began with 160 relevance candidates;
+triage retained 48 requests, and candidate discovery started beside the
+best-effort independent browser observation. This entry records only the start;
+the result will be added when the foreground command reaches a real terminal
+state.
+
+## 2026-09-01 05:40 PDT — Fresh Flights stopped before compilation because two tool-name formats were confused
+
+The fresh run ended honestly as failed before any tool compiler started. The
+discovery stage found four operations, but the master returned an internally
+inconsistent plan: a booking tool said it depended on `flight_search`. That was
+the producer's stable internal ID; the dependency field required the producer's
+public tool name, `search_flights`. The command therefore printed zero ready and
+zero failed tools because no valid plan or tool journal had yet been created.
+The failed run is read-only and will never be resumed.
+
+The runtime was right not to execute a plan containing a reference to a tool
+name that did not exist. It should not guess that an ID was intended or silently
+rewrite the master's decision. The setup around that factual check was wrong:
+the prompt did not plainly separate public tool names from stable IDs, its main
+example showed no dependency, the error was reported at the whole-plan level,
+and the repair call kept only the first 12,000 bytes of the previous answer.
+Real four-tool Flights and Hotels answers are already larger than that, so the
+repair agent could not see the later tool and dependency that needed changing.
+
+The fix remains site-neutral and small. The master and boundary-advisor prompts
+now say exactly which fields use public names and which use stable IDs, include
+a two-tool example, and require every rename to be propagated. Repair receives
+the complete previous answer and a short explanation of the repair envelope,
+including that it must return one complete replacement object. Candidate errors
+now retain their exact field path, so the repair sees the offending dependency
+instead of only “the plan is invalid.” The compiler seed wording was also made
+factual: prior files may be either a rejected draft or a known-good build, so the
+compiler is no longer falsely told that every supplied seed is working.
+
+The focused agent tests pass 92/92 and the controller tests pass 46/46. Type
+checking and lint are clean. After the remaining repository checks and a Git
+checkpoint, validation will start another fresh unsteered teach rather than
+resuming this failed run.

@@ -19,6 +19,11 @@ dependencies through `dependsOnTools` and `dependencySeqs`. Do not rank tools.
 Review the complete discovered set and keep every credible user-facing operation
 represented. Never output parameters or event timestamps.
 
+Every `dependsOnTools` entry must exactly match another boundary's current
+`toolName`. Never use an old detector name or a conceptual alias. If you rename,
+merge, split, add, or remove a boundary, update every affected dependency before
+returning the complete boundary list.
+
 Discovery evidence contains a mechanically chunked index of every valid
 XHR/Fetch request in the complete redacted recording, including requests that
 advisory detector triage or a telemetry heuristic may not have selected. The
