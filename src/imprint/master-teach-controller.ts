@@ -2696,7 +2696,6 @@ function createParameterFinesseLane(input: {
     string,
     { controller: AbortController; promise: Promise<void>; detachParent: () => void }
   >();
-  let queue: Promise<unknown> = Promise.resolve();
   const recordPath = (record: ParameterFinesseRecord): string =>
     pathJoin(
       input.runRoot,
@@ -2771,102 +2770,101 @@ function createParameterFinesseLane(input: {
           toolId,
           evidence,
         };
-        const promise = queue
-          .then(async () => {
-            const latest = input.journal.currentExecutionSnapshot().payload;
-            const latestProof = latest.tools.find((candidate) => candidate.toolId === toolId);
-            const stillCurrent =
-              latest.currentPlanRef.path === record.currentPlanRef.path &&
-              latest.currentPlanRef.sha256 === record.currentPlanRef.sha256 &&
-              latestProof?.currentBuildRef.path === record.buildRef.path &&
-              latestProof.currentBuildRef.sha256 === record.buildRef.sha256;
-            if (!stillCurrent) {
-              persist(key, {
-                ...record,
-                status: 'stale',
-                finishedAt: new Date().toISOString(),
-                message: 'The plan or MVP build changed before this finesse pass started.',
-              });
-              return;
-            }
-
-            const [adviceAttempt, liveAttempt] = await Promise.all([
-              input.deps
-                .requestParameterSelectionAdvice(advisorInput, {
-                  ...input.agent,
-                  signal: controller.signal,
-                })
-                .then(
-                  (value) => {
-                    persist(key, { ...(records.get(key) ?? record), advice: value });
-                    return { ok: true as const, value };
-                  },
-                  (error: unknown) => ({ ok: false as const, error }),
-                ),
-              input.deps
-                .runLiveFinesse({
-                  provider: input.agent.provider ?? detectTeachProvider(),
-                  toolDir,
-                  deadlineMs: input.agent.deadlineMs,
-                  runDeadline: input.agent.runDeadline,
-                  signal: controller.signal,
-                })
-                .then(
-                  (value) => {
-                    persist(key, { ...(records.get(key) ?? record), liveFinesse: value });
-                    return { ok: true as const, value };
-                  },
-                  (error: unknown) => ({ ok: false as const, error }),
-                ),
-            ]);
-
-            const after = input.journal.currentExecutionSnapshot().payload;
-            const afterProof = after.tools.find((candidate) => candidate.toolId === toolId);
-            const remainsCurrent =
-              after.currentPlanRef.path === record.currentPlanRef.path &&
-              after.currentPlanRef.sha256 === record.currentPlanRef.sha256 &&
-              afterProof?.currentBuildRef.path === record.buildRef.path &&
-              afterProof.currentBuildRef.sha256 === record.buildRef.sha256;
-            const deferred = controller.signal.aborted;
-            const hasAdvice = adviceAttempt.ok;
-            const hasCompletedLiveReview =
-              liveAttempt.ok && liveAttempt.value.completedReview === true;
-            const failed = !hasAdvice && !hasCompletedLiveReview;
-            const available = [
-              ...(hasAdvice ? ['parameter advice'] : []),
-              ...(hasCompletedLiveReview ? ['live breadth results'] : []),
-            ];
-            const unavailable = [
-              ...(!adviceAttempt.ok
-                ? [`parameter advisor: ${boundedTerminalMessage(adviceAttempt.error)}`]
-                : []),
-              ...(liveAttempt.ok && !hasCompletedLiveReview
-                ? [`live finesse ${liveAttempt.value.status}: ${liveAttempt.value.message}`]
-                : !liveAttempt.ok
-                  ? [`live finesse: ${boundedTerminalMessage(liveAttempt.error)}`]
-                  : []),
-            ];
+        const promise = (async () => {
+          const latest = input.journal.currentExecutionSnapshot().payload;
+          const latestProof = latest.tools.find((candidate) => candidate.toolId === toolId);
+          const stillCurrent =
+            latest.currentPlanRef.path === record.currentPlanRef.path &&
+            latest.currentPlanRef.sha256 === record.currentPlanRef.sha256 &&
+            latestProof?.currentBuildRef.path === record.buildRef.path &&
+            latestProof.currentBuildRef.sha256 === record.buildRef.sha256;
+          if (!stillCurrent) {
             persist(key, {
-              ...(records.get(key) ?? record),
-              status: deferred
-                ? 'deferred'
-                : remainsCurrent
-                  ? failed
-                    ? 'failed'
-                    : 'suggested'
-                  : 'stale',
+              ...record,
+              status: 'stale',
               finishedAt: new Date().toISOString(),
-              message: deferred
-                ? 'The MVP completed before this optional finesse pass; it can be retried later.'
-                : !remainsCurrent
-                  ? 'The plan or MVP build changed before this suggestion returned.'
-                  : failed
-                    ? unavailable.join('; ')
-                    : `${available.join(' and ')} available for a later finesse pass${unavailable.length > 0 ? `; ${unavailable.join('; ')}` : '.'}`,
-              ...(adviceAttempt.ok ? { advice: adviceAttempt.value } : {}),
-              ...(liveAttempt.ok ? { liveFinesse: liveAttempt.value } : {}),
+              message: 'The plan or MVP build changed before this finesse pass started.',
             });
-          })
+            return;
+          }
+
+          const [adviceAttempt, liveAttempt] = await Promise.all([
+            input.deps
+              .requestParameterSelectionAdvice(advisorInput, {
+                ...input.agent,
+                signal: controller.signal,
+              })
+              .then(
+                (value) => {
+                  persist(key, { ...(records.get(key) ?? record), advice: value });
+                  return { ok: true as const, value };
+                },
+                (error: unknown) => ({ ok: false as const, error }),
+              ),
+            input.deps
+              .runLiveFinesse({
+                provider: input.agent.provider ?? detectTeachProvider(),
+                toolDir,
+                deadlineMs: input.agent.deadlineMs,
+                runDeadline: input.agent.runDeadline,
+                signal: controller.signal,
+              })
+              .then(
+                (value) => {
+                  persist(key, { ...(records.get(key) ?? record), liveFinesse: value });
+                  return { ok: true as const, value };
+                },
+                (error: unknown) => ({ ok: false as const, error }),
+              ),
+          ]);
+
+          const after = input.journal.currentExecutionSnapshot().payload;
+          const afterProof = after.tools.find((candidate) => candidate.toolId === toolId);
+          const remainsCurrent =
+            after.currentPlanRef.path === record.currentPlanRef.path &&
+            after.currentPlanRef.sha256 === record.currentPlanRef.sha256 &&
+            afterProof?.currentBuildRef.path === record.buildRef.path &&
+            afterProof.currentBuildRef.sha256 === record.buildRef.sha256;
+          const deferred = controller.signal.aborted;
+          const hasAdvice = adviceAttempt.ok;
+          const hasCompletedLiveReview =
+            liveAttempt.ok && liveAttempt.value.completedReview === true;
+          const failed = !hasAdvice && !hasCompletedLiveReview;
+          const available = [
+            ...(hasAdvice ? ['parameter advice'] : []),
+            ...(hasCompletedLiveReview ? ['live breadth results'] : []),
+          ];
+          const unavailable = [
+            ...(!adviceAttempt.ok
+              ? [`parameter advisor: ${boundedTerminalMessage(adviceAttempt.error)}`]
+              : []),
+            ...(liveAttempt.ok && !hasCompletedLiveReview
+              ? [`live finesse ${liveAttempt.value.status}: ${liveAttempt.value.message}`]
+              : !liveAttempt.ok
+                ? [`live finesse: ${boundedTerminalMessage(liveAttempt.error)}`]
+                : []),
+          ];
+          persist(key, {
+            ...(records.get(key) ?? record),
+            status: deferred
+              ? 'deferred'
+              : remainsCurrent
+                ? failed
+                  ? 'failed'
+                  : 'suggested'
+                : 'stale',
+            finishedAt: new Date().toISOString(),
+            message: deferred
+              ? 'The MVP completed before this optional finesse pass; it can be retried later.'
+              : !remainsCurrent
+                ? 'The plan or MVP build changed before this suggestion returned.'
+                : failed
+                  ? unavailable.join('; ')
+                  : `${available.join(' and ')} available for a later finesse pass${unavailable.length > 0 ? `; ${unavailable.join('; ')}` : '.'}`,
+            ...(adviceAttempt.ok ? { advice: adviceAttempt.value } : {}),
+            ...(liveAttempt.ok ? { liveFinesse: liveAttempt.value } : {}),
+          });
+        })()
           .catch((error) => {
             const deferred = controller.signal.aborted;
             persist(key, {
@@ -2882,7 +2880,6 @@ function createParameterFinesseLane(input: {
             detachParent();
             jobs.delete(key);
           });
-        queue = promise.catch(() => undefined);
         jobs.set(key, { controller, promise, detachParent });
       } catch (error) {
         input.report?.(`parameter finesse could not start: ${boundedTerminalMessage(error)}`);

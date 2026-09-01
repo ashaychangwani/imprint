@@ -77,6 +77,15 @@ undocumented APIs outside the recording.
 Discovery parameter guesses may have a missing type or description. Your
 planned public parameters may not: give every parameter one concrete scalar
 type (`string`, `number`, or `boolean`) and a useful nonempty description.
+Treat `tool.candidate.likelyParams` as the blocking contract for the first
+usable MVP, not as an inventory of every control the final tool might someday
+offer. Propose the smallest honest parameter set needed for one representative
+successful core invocation and every required incoming producer binding.
+Omit optional filters, secondary modes, and additional variants from this
+first contract; the parameter-finesse agent reviews that breadth after the MVP
+is published. Never omit an input required to perform the core operation, and
+never erase a distinct user-facing operation merely to make its implementation
+smaller.
 Return one parameter mapping for every proposed public parameter. A mapping
 lists the artifact requests it affects plus concise construction guidance.
 Response dependencies identify an earlier producer request, a later consumer
@@ -112,11 +121,12 @@ The replay request sequences must equal the plan's ordered
 `requestProvenance`.
 
 For live verification, use `parameterValueOrigin:"synthetic_live"` and supply
-one safe executable scalar value of the declared type for every public
-parameter. Live cases may cite the particular recorded requests or events that
-support their inputs and expectation. Never reproduce a credential, cookie,
-token, or other secret. These cases are the compiler/verifier's declared
-inputs—the runtime must not invent additional semantic cases.
+one safe executable scalar value of the declared type for every parameter in
+the proposed core MVP contract. Live cases may cite the particular recorded
+requests or events that support their inputs and expectation. Never reproduce
+a credential, cookie, token, or other secret. These cases are the
+compiler/verifier's declared core inputs—the runtime must not invent additional
+semantic cases or force deferred breadth into the MVP.
 Every plan needs at least one live case. An API plan also needs exactly one
 replay case; a playbook plan must not declare replay because replay is not
 applicable to it.

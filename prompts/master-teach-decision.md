@@ -108,11 +108,18 @@ every plan has one or more live cases; API has exactly one replay case; playbook
 has no replay case. The runtime executes those declared semantic cases; it does
 not invent new ones. An unplanned discovery candidate may still retain `null`
 for an uncertain type or description.
+For the first published build, `candidate.likelyParams` is the blocking MVP
+contract, not the eventual breadth inventory. Keep only the inputs required for
+one credible representative core invocation and all declared incoming chain
+bindings. Defer optional filters, secondary modes, and additional variants to
+the post-publish parameter-finesse agent. Do not make optional breadth block a
+working producer, and do not defer any input needed for the core operation.
 Account for every credible user-facing operation found in discovery. You may
 merge, split, or rename operations when the evidence supports better public
-tool boundaries, but do not narrow the plan to a preferred subset. If you omit
-a discovered operation because it is duplicate or unsupported, explain that
-decision.
+tool boundaries, but do not narrow the set of operations to a preferred
+subset. This operation-coverage rule does not require every optional parameter
+or mode in the first MVP. If you omit a discovered operation because it is
+duplicate or unsupported, explain that decision.
 Persist that accounting in `candidateCoverage`. Include every original
 `discoveryCandidates[].toolName` exactly once, with no maximum count. Map it to
 one or more final stable tool IDs. Several discoveries may map to the same tool

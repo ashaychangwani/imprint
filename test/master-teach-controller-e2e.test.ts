@@ -949,8 +949,8 @@ describe('fresh foreground master controller end to end', () => {
       expect(narrationCitationWasGrounded).toBe(true);
       expect(narrationRemainedInEvidence).toBe(true);
       expect(parameterAdviceHadToBeReleased).toBe(false);
-      expect(parameterAdvisorCalls).toEqual([PRODUCER_ID]);
-      expect(liveFinesseCalls).toEqual([PRODUCER_ID]);
+      expect(parameterAdvisorCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
+      expect(liveFinesseCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
       expect(events.indexOf(`finesse:${PRODUCER_ID}`)).toBeLessThan(
         events.indexOf(`compile:${CONSUMER_ID}`),
       );
@@ -962,7 +962,15 @@ describe('fresh foreground master controller end to end', () => {
         'replay:passed',
         'live:passed',
       ]);
-      expect(parameterAdvisorChecks.has(CONSUMER_ID)).toBe(false);
+      expect(parameterAdvisorChecks.get(CONSUMER_ID)).toEqual([
+        'contract:passed',
+        'replay:passed',
+        'live:passed',
+        'chain:passed',
+      ]);
+      expect(events.indexOf(`finesse:${CONSUMER_ID}`)).toBeLessThan(
+        events.indexOf('completion-review'),
+      );
       expect(plannerGuidance).toEqual([
         'The complete dependency-ordered plan remains supported.',
         'The complete dependency-ordered plan remains supported.',
@@ -997,16 +1005,14 @@ describe('fresh foreground master controller end to end', () => {
             status: 'deferred',
           }),
         );
-        if (toolId === PRODUCER_ID) {
-          expect(finesseRecord).toEqual(
-            expect.objectContaining({
-              liveFinesse: expect.objectContaining({
-                status: 'completed',
-                completedReview: true,
-              }),
+        expect(finesseRecord).toEqual(
+          expect.objectContaining({
+            liveFinesse: expect.objectContaining({
+              status: 'completed',
+              completedReview: true,
             }),
-          );
-        }
+          }),
+        );
       }
       for (const reject of pendingParameterAdvice) reject();
       await new Promise((resolve) => setTimeout(resolve, 0));

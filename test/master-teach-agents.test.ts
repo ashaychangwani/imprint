@@ -890,6 +890,24 @@ describe('prompts and pre-plan discovery', () => {
     expect(masterPrompt).toContain('alone a reason to reject an API plan');
   });
 
+  it('keeps optional parameter breadth outside the blocking MVP contract', () => {
+    const masterPrompt = prompt('master-teach-decision.md');
+    const focusedPrompt = prompt('master-teach-focused-planner.md');
+    for (const rolePrompt of [masterPrompt, focusedPrompt]) {
+      expect(rolePrompt).toContain('blocking');
+      expect(rolePrompt).toContain('MVP');
+      expect(rolePrompt).toContain('contract');
+      expect(rolePrompt).toContain('representative');
+      expect(rolePrompt).toContain('incoming');
+      expect(rolePrompt).toContain('optional filters');
+      expect(rolePrompt).toContain('parameter-finesse');
+    }
+    expect(masterPrompt).toContain(
+      'operation-coverage rule does not require every optional parameter',
+    );
+    expect(focusedPrompt).toContain('never erase a distinct user-facing operation');
+  });
+
   it('explains the complete boundary index and deferred wire detail to discovery agents', () => {
     for (const name of ['master-teach-decision.md', 'master-teach-tool-advisor.md']) {
       const discoveryPrompt = prompt(name);
