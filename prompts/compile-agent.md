@@ -880,7 +880,11 @@ notes: Use only after the accepted plan establishes that no API execution rung i
 
 A producer-consumer relationship is an editable proposal until a live chain
 proves it. The valid plan field is `chainEdges`; `candidate_chain` is a human
-label, not an extra artifact field:
+label, not an extra artifact field. Optional `invocationGroup` is an exact
+agent-authored execution contract: omitted means this edge is checked alone;
+edges with the same consumer and group are checked together. Do not invent,
+remove, merge, or split groups in the generated artifact, and do not expect the
+runtime to infer correlated sibling bindings or alternative combinations:
 
 ```json
 {
@@ -890,15 +894,29 @@ label, not an extra artifact field:
       "producerToolId": "catalog_search",
       "producerResultPath": "items[0].id",
       "consumerToolId": "catalog_detail",
-      "consumerParameter": "item_id"
+      "consumerParameter": "item_id",
+      "invocationGroup": "catalog-detail-selection"
+    },
+    {
+      "id": "catalog-variant-to-detail",
+      "producerToolId": "catalog_search",
+      "producerResultPath": "items[0].variant_id",
+      "consumerToolId": "catalog_detail",
+      "consumerParameter": "variant_id",
+      "invocationGroup": "catalog-detail-selection"
     }
   ]
 }
 ```
 
-The producer must return the actual `items[0].id`; the consumer must apply that
-fresh value at its exact recorded parameter position. A similar name, a copied
-recorded constant, or a test of only one side is not chain proof.
+The producer must return the actual `items[0].id` and
+`items[0].variant_id`; the consumer must apply both fresh values at their exact
+recorded parameter positions in the declared shared invocation. A similar
+name, a copied recorded constant, or a test of only one side is not chain
+proof. Alternative bindings for the same consumer parameter belong in separate
+groups (or as separate ungrouped edges), never twice in one group. A binding
+shared by several alternative invocations appears as a distinct edge in each
+group; the runtime does not copy it across groups.
 
 ## WorkflowSchema Reference
 

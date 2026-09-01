@@ -36,6 +36,7 @@ import {
   type DesiredTeachingPlan,
   type EditableTeachingTool,
   type TeachingCandidateEvidence,
+  chainInvocationForEdge,
   teachingPlanContentSha256 as digest,
   teachingCandidateIssues,
   teachingToolCompileInputsSha256,
@@ -146,6 +147,7 @@ function validateFocusedPlannerEdges(
 ): void {
   const ids = new Set<string>();
   const tuples = new Set<string>();
+  const groupedConsumerParameters = new Set<string>();
   edges.forEach((edge, index) => {
     const base = [...path, index];
     if (ids.has(edge.id)) issue(ctx, [...base, 'id'], 'duplicate chain edge id');
@@ -154,6 +156,7 @@ function validateFocusedPlannerEdges(
       edge.producerResultPath,
       edge.consumerToolId,
       edge.consumerParameter,
+      edge.invocationGroup ?? null,
     ]);
     if (tuples.has(tuple)) issue(ctx, base, 'duplicate chain edge');
     const producer = producers.get(edge.producerToolId);
@@ -164,6 +167,20 @@ function validateFocusedPlannerEdges(
       issue(ctx, [...base, 'consumerParameter'], 'unknown focused consumer parameter');
     if (producer && !tool.candidate.dependsOnTools.includes(producer.toolName))
       issue(ctx, base, 'focused chain edge is absent from the proposed tool dependency');
+    if (edge.invocationGroup !== undefined) {
+      const groupedParameter = digest([
+        edge.consumerToolId,
+        edge.invocationGroup,
+        edge.consumerParameter,
+      ]);
+      if (groupedConsumerParameters.has(groupedParameter))
+        issue(
+          ctx,
+          [...base, 'consumerParameter'],
+          'focused chain invocation group binds this consumer parameter more than once',
+        );
+      groupedConsumerParameters.add(groupedParameter);
+    }
     ids.add(edge.id);
     tuples.add(tuple);
   });
@@ -359,6 +376,35 @@ function validateCurrent(
     issue(ctx, path, 'current plan binding is stale');
   validatePlan(plan.payload, index, ctx, [...path, 'payload']);
 }
+type ExecutionToolProof = CurrentExecutionSnapshot['payload']['tools'][number];
+function expectedChainDependencies(
+  plan: Pick<DesiredTeachingPlan, 'chainEdges'>,
+  edge: ChainEdge,
+  proofs: ReadonlyMap<string, ExecutionToolProof>,
+): ExecutionToolProof['receipts'][number]['dependencyBuilds'] | undefined {
+  const dependencies: ExecutionToolProof['receipts'][number]['dependencyBuilds'] = [];
+  const producerIds = [
+    ...new Set(
+      chainInvocationForEdge(plan.chainEdges, edge).edges.map(
+        ({ producerToolId }) => producerToolId,
+      ),
+    ),
+  ].sort();
+  for (const producerToolId of producerIds) {
+    const producer = proofs.get(producerToolId);
+    const producerLive = producer?.receipts.find(
+      ({ check, status }) => check === 'live' && status === 'passed',
+    );
+    if (!producer || !producerLive) return undefined;
+    dependencies.push({
+      toolId: producer.toolId,
+      buildRef: producer.currentBuildRef,
+      executionBindingSha256: producer.executionBindingSha256,
+      resultReceiptRef: producerLive.ref,
+    });
+  }
+  return dependencies.length > 0 ? dependencies : undefined;
+}
 function validateSnapshot(
   snapshot: CurrentExecutionSnapshot,
   run: CurrentPlanBinding,
@@ -408,27 +454,18 @@ function validateSnapshot(
       );
       if (receipt.check !== 'chain') return;
       const edge = plan.chainEdges.find(({ id }) => id === receipt.chainEdgeId);
-      const producer = edge ? proofs.get(edge.producerToolId) : undefined;
-      if (!edge || edge.consumerToolId !== tool.id || !producer)
+      if (!edge || edge.consumerToolId !== tool.id)
         return issue(ctx, [...base, 'receipts', receiptIndex], 'unknown current chain edge');
       if (receipt.chainEdgeSha256 !== digest(edge))
         issue(ctx, [...base, 'receipts', receiptIndex], 'chain receipt has stale edge content');
-      const producerLive = producer.receipts.find(
-        ({ check, status }) => check === 'live' && status === 'passed',
-      );
-      if (!producerLive)
+      const expected = expectedChainDependencies(plan, edge, proofs);
+      if (!expected)
         return issue(
           ctx,
           [...base, 'receipts', receiptIndex],
           'chain receipt has no current passed producer live result',
         );
-      const expected = {
-        toolId: producer.toolId,
-        buildRef: producer.currentBuildRef,
-        executionBindingSha256: producer.executionBindingSha256,
-        resultReceiptRef: producerLive.ref,
-      };
-      if (!same(receipt.dependencyBuilds, [expected]))
+      if (!same(receipt.dependencyBuilds, expected))
         issue(ctx, [...base, 'receipts', receiptIndex], 'chain receipt has stale producer result');
     });
   });
@@ -464,27 +501,15 @@ export function mechanicalProofFailures(
         failures.push(`${tool.id}: ${check} must be ${status}`);
     }
     for (const edge of plan.chainEdges.filter(({ consumerToolId }) => consumerToolId === tool.id)) {
-      const producer = proofs.get(edge.producerToolId);
-      const producerLive = producer?.receipts.find(
-        ({ check, status }) => check === 'live' && status === 'passed',
-      );
-      const expectedDependency =
-        producer && producerLive
-          ? {
-              toolId: producer.toolId,
-              buildRef: producer.currentBuildRef,
-              executionBindingSha256: producer.executionBindingSha256,
-              resultReceiptRef: producerLive.ref,
-            }
-          : undefined;
+      const expectedDependencies = expectedChainDependencies(plan, edge, proofs);
       if (
-        !expectedDependency ||
+        !expectedDependencies ||
         !proof.receipts.some(
           (receipt) =>
             receipt.check === 'chain' &&
             receipt.chainEdgeId === edge.id &&
             receipt.chainEdgeSha256 === digest(edge) &&
-            same(receipt.dependencyBuilds, [expectedDependency]) &&
+            same(receipt.dependencyBuilds, expectedDependencies) &&
             receipt.status === 'passed',
         )
       )
@@ -693,6 +718,12 @@ function baselineMvpReviewerPromptInput(input: BaselineMvpReviewInput) {
   const tool = input.currentPlan.payload.tools.find(({ id }) => id === input.toolId);
   const binding = baselineMvpBinding(input);
   if (!tool || !binding) throw new Error('validated baseline MVP target is unavailable');
+  const chainEdgeId = input.resultEvidence.payload.chainEdgeId;
+  const chainEdge = chainEdgeId
+    ? input.currentPlan.payload.chainEdges.find(({ id }) => id === chainEdgeId)
+    : undefined;
+  if (chainEdgeId && !chainEdge)
+    throw new Error('validated baseline MVP chain invocation is unavailable');
   return BaselineMvpReviewerPromptInputSchema.parse({
     binding,
     intendedOperation: {
@@ -706,8 +737,14 @@ function baselineMvpReviewerPromptInput(input: BaselineMvpReviewInput) {
       actualResult: input.resultEvidence.payload.actualResult,
       resultEvidenceRef: input.resultEvidence.ref,
       resultReceiptRef: input.resultEvidence.payload.resultReceiptRef,
-      ...(input.resultEvidence.payload.chainEdgeId
-        ? { chainEdgeId: input.resultEvidence.payload.chainEdgeId }
+      ...(chainEdge
+        ? {
+            chainEdgeId: chainEdge.id,
+            chainInvocationEdgeIds: chainInvocationForEdge(
+              input.currentPlan.payload.chainEdges,
+              chainEdge,
+            ).edges.map(({ id }) => id),
+          }
         : {}),
     },
   });
@@ -861,6 +898,7 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
       issue(ctx, ['plannerProposals', index, 'payload', 'binding'], 'stale planner proposal');
     const edgeIds = new Set<string>();
     const edgeTuples = new Set<string>();
+    const groupedConsumerParameters = new Set<string>();
     chainEdges.forEach((edge, edgeIndex) => {
       const edgePath: Array<string | number> = [
         'plannerProposals',
@@ -881,6 +919,7 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
         edge.producerResultPath,
         edge.consumerToolId,
         edge.consumerParameter,
+        edge.invocationGroup ?? null,
       ]);
       if (edgeTuples.has(tuple)) issue(ctx, edgePath, 'duplicate proposal chain edge');
       const producer = authoredToolsById.get(edge.producerToolId);
@@ -889,6 +928,20 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
         issue(ctx, [...edgePath, 'consumerParameter'], 'unknown proposal consumer parameter');
       if (producer && !tool.candidate.dependsOnTools.includes(producer.candidate.toolName))
         issue(ctx, edgePath, 'proposal edge is absent from the proposed tool dependency');
+      if (edge.invocationGroup !== undefined) {
+        const groupedParameter = digest([
+          edge.consumerToolId,
+          edge.invocationGroup,
+          edge.consumerParameter,
+        ]);
+        if (groupedConsumerParameters.has(groupedParameter))
+          issue(
+            ctx,
+            [...edgePath, 'consumerParameter'],
+            'proposal chain invocation group binds this consumer parameter more than once',
+          );
+        groupedConsumerParameters.add(groupedParameter);
+      }
       edgeIds.add(edge.id);
       edgeTuples.add(tuple);
     });
@@ -960,6 +1013,9 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
     ]);
 });
 function masterOutputSchema(input: MasterDecisionInput) {
+  const currentPlanByToolId = new Map(
+    (input.current?.plan.payload.tools ?? []).map((tool) => [tool.id, tool] as const),
+  );
   const suppliedPlanRefs = [
     ...(input.current?.plan.payload.tools ?? []),
     ...input.plannerProposals.map(({ payload }) => payload.tool),
@@ -976,9 +1032,13 @@ function masterOutputSchema(input: MasterDecisionInput) {
     suppliedPlanRefs.map((plan) => [selectionKey(plan), plan] as const),
   );
   return MasterDecisionOutputSchema.transform((output) => {
+    const recalledToolIds = new Set(output.recallToolIds);
     const tools = output.desiredPlan.tools.map((tool): EditableTeachingTool => {
-      if (!tool.implementationPlan) return tool;
-      const canonicalPlan = canonicalPlanBySelection.get(selectionKey(tool.implementationPlan));
+      if (recalledToolIds.has(tool.id)) return { ...tool, implementationPlan: undefined };
+      const selectedPlan =
+        tool.implementationPlan ?? currentPlanByToolId.get(tool.id)?.implementationPlan;
+      if (!selectedPlan) return tool;
+      const canonicalPlan = canonicalPlanBySelection.get(selectionKey(selectedPlan));
       if (!canonicalPlan) return tool;
       // A revision may change compile inputs while accidentally echoing the
       // old hosted plan. Invalidate that mechanically unusable plan and let a
@@ -1005,6 +1065,18 @@ function masterOutputSchema(input: MasterDecisionInput) {
       output.desiredPlan.recordingSha256 !== input.discovery.run.recordingSha256
     )
       issue(ctx, ['desiredPlan'], 'desired plan belongs to another recording');
+    if (new Set(output.recallToolIds).size !== output.recallToolIds.length)
+      issue(ctx, ['recallToolIds'], 'duplicate tool ID');
+    if (input.phase === 'discovery' && output.recallToolIds.length > 0)
+      issue(ctx, ['recallToolIds'], 'initial discovery cannot recall an existing tool');
+    const currentToolIds = new Set(input.current?.plan.payload.tools.map(({ id }) => id) ?? []);
+    const desiredToolIds = new Set(output.desiredPlan.tools.map(({ id }) => id));
+    output.recallToolIds.forEach((toolId, index) => {
+      if (!currentToolIds.has(toolId))
+        issue(ctx, ['recallToolIds', index], 'recall target is absent from current plan');
+      if (!desiredToolIds.has(toolId))
+        issue(ctx, ['recallToolIds', index], 'recall target is absent from desired plan');
+    });
     validatePlan(
       output.desiredPlan,
       input.discovery.recordingIndex,

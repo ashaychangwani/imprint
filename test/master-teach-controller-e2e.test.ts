@@ -543,6 +543,7 @@ function lifecycleFailureFixture(input: {
         binding: decisionInput.current?.run ?? decisionInput.discovery.run,
         outcome: 'accepted',
         reason: 'The complete dependency-ordered fixture plan remains supported.',
+        recallToolIds: [],
         desiredPlan,
       });
       return requestValidatedMasterDecision(decisionInput, {
@@ -786,6 +787,7 @@ describe('fresh foreground master controller end to end', () => {
                 : revisesWithStalePlan
                   ? 'Keep the semantic description revision and replan only its stale implementation.'
                   : 'The complete dependency-ordered plan remains supported.',
+              recallToolIds: revisesWithStalePlan ? [PRODUCER_ID] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(input, {
@@ -976,7 +978,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(terminal.status).toBe('completed');
       expect(['active', 'paused']).not.toContain(terminal.status);
       expect(terminal.readyTools).toBe(2);
-      expect(terminal.failedTools).toBe(0);
+      expect(terminal.nonReadyTools).toBe(0);
       expect(terminal.message).toContain('usable MVP');
       expect(terminal.message).toContain('unfinished work is recorded there as deferred');
       expect(readJson(join(terminal.runRoot, 'terminal.json'))).toEqual(terminal);
@@ -1092,6 +1094,403 @@ describe('fresh foreground master controller end to end', () => {
       expect(
         afterAdviceFailure.tools.map(({ toolId, buildRef }) => ({ toolId, buildRef })),
       ).toEqual(buildsAtCompletion);
+    });
+  });
+
+  it('binds correlated sibling values in one chain invocation and retains every edge receipt', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const consumerInvocations: Array<Record<string, string | number | boolean>> = [];
+      const reviewedChainEdgeIds: Array<string | undefined> = [];
+      const groupedIdEdge = {
+        ...chainEdge,
+        invocationGroup: 'item-selection',
+      };
+      const kindEdge = {
+        id: 'search-item-kind',
+        producerToolId: PRODUCER_ID,
+        producerResultPath: 'items[0].kind',
+        consumerToolId: CONSUMER_ID,
+        consumerParameter: 'item_kind',
+        invocationGroup: 'item-selection',
+      };
+      const siblingEdges = [groupedIdEdge, kindEdge];
+      const pairConsumerCandidate = {
+        ...consumerCandidate,
+        likelyParams: [
+          ...consumerCandidate.likelyParams,
+          {
+            name: 'item_kind',
+            type: 'string' as const,
+            description: 'Correlated item kind returned with the search identifier.',
+          },
+        ],
+      };
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-correlated-sibling-chain',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 30_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate, pairConsumerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          requestMasterDecision: async (decisionInput) => {
+            let desiredPlan: DesiredTeachingPlan;
+            if (decisionInput.phase === 'discovery') {
+              desiredPlan = initialDesiredPlan(decisionInput);
+              desiredPlan.chainEdges = siblingEdges;
+            } else if (decisionInput.plannerProposals.length > 0) {
+              desiredPlan = proposalDesiredPlan(decisionInput);
+            } else {
+              desiredPlan = desiredFromCurrent(decisionInput);
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome: 'accepted',
+              reason: 'Both correlated producer fields belong to one consumer invocation.',
+              recallToolIds: [],
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          runApiTool: async ({ workflowPath, parameters }) => {
+            if (workflowPath.includes(`/${PRODUCER_ID}/`)) {
+              return {
+                result: {
+                  ok: true as const,
+                  data: { items: [{ id: 'producer-id', kind: 'producer-kind' }] },
+                },
+                executionMechanism: 'fixture-api',
+              };
+            }
+            consumerInvocations.push({ ...parameters });
+            const standalone = parameters.item_id === 'item-1' && parameters.item_kind === 'item-1';
+            const correlated =
+              parameters.item_id === 'producer-id' && parameters.item_kind === 'producer-kind';
+            return {
+              result:
+                standalone || correlated
+                  ? {
+                      ok: true as const,
+                      data: { id: parameters.item_id, kind: parameters.item_kind },
+                    }
+                  : {
+                      ok: false as const,
+                      error: 'BAD_RESPONSE',
+                      message: 'fixture rejected a mixed default/producer parameter pair',
+                    },
+              executionMechanism: 'fixture-api',
+            };
+          },
+          requestBaselineMvpReview: async (reviewInput) => {
+            if (
+              reviewInput.toolId === CONSUMER_ID &&
+              reviewInput.resultEvidence.payload.chainEdgeId
+            ) {
+              reviewedChainEdgeIds.push(reviewInput.resultEvidence.payload.chainEdgeId);
+            }
+            return credibleBaselineMvpReview(reviewInput);
+          },
+          requestCompletionReview: async (input) =>
+            CompletionReviewOutputSchema.parse({
+              binding: input.run,
+              verdict: 'passed',
+              summary: 'Both fixture tools and the shared sibling chain are current.',
+              findings: [],
+              toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
+                status: 'credible',
+                reason: 'The current fixture result demonstrates the declared operation.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: input.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The fixture supplies the required proof.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            }),
+        },
+      );
+
+      expect(terminal.status).toBe('completed');
+      expect(consumerInvocations).toEqual([
+        { item_id: 'item-1', item_kind: 'item-1' },
+        { item_id: 'producer-id', item_kind: 'producer-kind' },
+      ]);
+      expect(reviewedChainEdgeIds).toEqual([EDGE_ID]);
+      const state = FreshTeachJournalStateSchema.parse(
+        readJson(join(terminal.runRoot, 'journal', 'current.json')),
+      );
+      expect(
+        state.tools
+          .find(({ toolId }) => toolId === CONSUMER_ID)
+          ?.currentReceiptRefs.filter(({ key }) => key.startsWith('chain:'))
+          .map(({ key }) => key),
+      ).toEqual([`chain:${EDGE_ID}`, `chain:${kindEdge.id}`]);
+    });
+  });
+
+  it('checks alternative paths separately while keeping every sibling parameter producer-backed', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const consumerInvocations: Array<Record<string, string | number | boolean>> = [];
+      const reviewedChainEdgeIds: Array<string | undefined> = [];
+      const routeAIdEdge = {
+        ...chainEdge,
+        invocationGroup: 'route-a',
+      };
+      const alternativeEdge = {
+        ...chainEdge,
+        id: 'search-alternative-item-id',
+        producerResultPath: 'items[0].alternative_id',
+        invocationGroup: 'route-b',
+      };
+      const kindProducerId = 'lookup_item_kind_tool';
+      const kindProducerName = 'lookup_item_kind';
+      const kindProducerCandidate = {
+        ...producerCandidate,
+        toolName: kindProducerName,
+        description: 'Look up the correlated fixture item kind.',
+        rationale: 'Request 1 also supplies the kind consumed by item detail.',
+        expectedOutput: 'The correlated item kind.',
+      };
+      const kindEdgeA = {
+        id: 'search-route-a-kind',
+        producerToolId: kindProducerId,
+        producerResultPath: 'items[0].kind',
+        consumerToolId: CONSUMER_ID,
+        consumerParameter: 'item_kind',
+        invocationGroup: 'route-a',
+      };
+      const kindEdgeB = {
+        ...kindEdgeA,
+        id: 'search-route-b-kind',
+        invocationGroup: 'route-b',
+      };
+      const alternativeEdges = [routeAIdEdge, kindEdgeA, alternativeEdge, kindEdgeB];
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-alternative-chain-paths',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseCompileFocusedTool = base.compileFocusedTool;
+      if (!baseCompileFocusedTool) throw new Error('fixture compiler is missing');
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 30_000,
+        },
+        {
+          ...base,
+          requestMasterDecision: async (decisionInput) => {
+            let desiredPlan: DesiredTeachingPlan;
+            if (decisionInput.phase === 'discovery') {
+              desiredPlan = initialDesiredPlan(decisionInput);
+              const consumer = desiredPlan.tools.find(({ id }) => id === CONSUMER_ID);
+              const producerCoverage = desiredPlan.candidateCoverage.find(
+                ({ discoveryCandidateName }) => discoveryCandidateName === PRODUCER_NAME,
+              );
+              if (!consumer || !producerCoverage)
+                throw new Error('fixture discovery plan is incomplete');
+              consumer.candidate = {
+                ...consumer.candidate,
+                likelyParams: [
+                  ...consumer.candidate.likelyParams,
+                  {
+                    name: 'item_kind',
+                    type: 'string',
+                    description: 'Correlated kind returned by the kind producer.',
+                  },
+                ],
+                dependencySeqs: [1],
+                dependsOnTools: [PRODUCER_NAME, kindProducerName],
+              };
+              desiredPlan.tools.splice(1, 0, {
+                id: kindProducerId,
+                candidate: kindProducerCandidate,
+                compileContext: decisionInput.discovery.detectorSharedContext,
+                evidenceRefs: [decisionInput.discovery.evidence.ref],
+                strategy: {
+                  kind: 'api',
+                  reason: 'The recording contains one replayable request.',
+                },
+              });
+              producerCoverage.plannedToolIds.push(kindProducerId);
+              desiredPlan.buildWaves = [[PRODUCER_ID, kindProducerId], [CONSUMER_ID]];
+              desiredPlan.chainEdges = alternativeEdges;
+            } else if (decisionInput.plannerProposals.length > 0) {
+              desiredPlan = proposalDesiredPlan(decisionInput);
+            } else {
+              desiredPlan = desiredFromCurrent(decisionInput);
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome: 'accepted',
+              reason: 'Both producer paths are explicit alternatives for the same parameter.',
+              recallToolIds: [],
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          compileFocusedTool: async (compileInput) => {
+            if (compileInput.tool.id !== kindProducerId) {
+              return await baseCompileFocusedTool(compileInput);
+            }
+            events.push(`compile:${kindProducerId}`);
+            mkdirSync(compileInput.stagingDir, { recursive: true });
+            const workflow = WorkflowSchema.parse({
+              toolName: kindProducerName,
+              intent: { description: compileInput.tool.candidate.description },
+              parameters: [],
+              requests: [
+                {
+                  recordingRequestSeq: 1,
+                  method: 'GET',
+                  url: 'https://fixture.invalid/api/item-kinds',
+                  headers: { accept: 'application/json' },
+                },
+              ],
+              site: SITE,
+            });
+            const workflowPath = join(compileInput.stagingDir, 'workflow.json');
+            writeFileSync(workflowPath, `${JSON.stringify(workflow)}\n`);
+            return { workflow, workflowPath, toolDir: compileInput.stagingDir };
+          },
+          runApiTool: async ({ workflowPath, parameters }) => {
+            if (workflowPath.includes(`/${PRODUCER_ID}/`)) {
+              return {
+                result: {
+                  ok: true as const,
+                  data: {
+                    items: [{ id: 'producer-id', alternative_id: 'producer-alternative-id' }],
+                  },
+                },
+                executionMechanism: 'fixture-api',
+              };
+            }
+            if (workflowPath.includes(`/${kindProducerId}/`)) {
+              return {
+                result: {
+                  ok: true as const,
+                  data: { items: [{ kind: 'producer-kind' }] },
+                },
+                executionMechanism: 'fixture-api',
+              };
+            }
+            consumerInvocations.push({ ...parameters });
+            const standalone = parameters.item_id === 'item-1' && parameters.item_kind === 'item-1';
+            const correlated =
+              parameters.item_kind === 'producer-kind' &&
+              ['producer-id', 'producer-alternative-id'].includes(String(parameters.item_id));
+            return {
+              result:
+                standalone || correlated
+                  ? {
+                      ok: true as const,
+                      data: { id: parameters.item_id, kind: parameters.item_kind },
+                    }
+                  : {
+                      ok: false as const,
+                      error: 'BAD_RESPONSE',
+                      message: 'fixture rejected a mixed default/producer parameter pair',
+                    },
+              executionMechanism: 'fixture-api',
+            };
+          },
+          requestBaselineMvpReview: async (reviewInput) => {
+            if (
+              reviewInput.toolId === CONSUMER_ID &&
+              reviewInput.resultEvidence.payload.chainEdgeId
+            ) {
+              reviewedChainEdgeIds.push(reviewInput.resultEvidence.payload.chainEdgeId);
+            }
+            return credibleBaselineMvpReview(reviewInput);
+          },
+          requestCompletionReview: async (input) =>
+            CompletionReviewOutputSchema.parse({
+              binding: input.run,
+              verdict: 'passed',
+              summary: 'Both alternative paths retain the correlated producer-backed kind.',
+              findings: [],
+              toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
+                status: 'credible',
+                reason: 'The current fixture result demonstrates the declared operation.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: input.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The fixture supplies the required proof.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            }),
+        },
+      );
+
+      expect(terminal.status).toBe('completed');
+      expect(consumerInvocations).toEqual([
+        { item_id: 'item-1', item_kind: 'item-1' },
+        { item_id: 'producer-id', item_kind: 'producer-kind' },
+        { item_id: 'producer-alternative-id', item_kind: 'producer-kind' },
+      ]);
+      expect(reviewedChainEdgeIds).toEqual([EDGE_ID, alternativeEdge.id]);
+      const state = FreshTeachJournalStateSchema.parse(
+        readJson(join(terminal.runRoot, 'journal', 'current.json')),
+      );
+      expect(
+        state.tools
+          .find(({ toolId }) => toolId === CONSUMER_ID)
+          ?.currentReceiptRefs.filter(({ key }) => key.startsWith('chain:'))
+          .map(({ key }) => key),
+      ).toEqual([
+        `chain:${EDGE_ID}`,
+        `chain:${kindEdgeA.id}`,
+        `chain:${alternativeEdge.id}`,
+        `chain:${kindEdgeB.id}`,
+      ]);
     });
   });
 
@@ -1351,6 +1750,7 @@ describe('fresh foreground master controller end to end', () => {
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
               outcome: 'accepted',
               reason: 'Retry the same current artifact once because the returned failure changed.',
+              recallToolIds: [],
               desiredPlan: desiredFromCurrent(decisionInput),
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -1551,7 +1951,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('recalls a fresh planner and compiler when the master omits a rejected implementation plan', async () => {
+  it('recalls a fresh planner and compiler when the master explicitly names the rejected tool', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];
       const promotionBatches: string[][] = [];
@@ -1615,7 +2015,8 @@ describe('fresh foreground master controller end to end', () => {
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
               outcome: 'accepted',
               reason:
-                'Keep the accepted tool contract, omit its rejected implementation plan, and recall a fresh focused compiler.',
+                'Keep the accepted tool contract and explicitly recall its rejected implementation.',
+              recallToolIds: decisionInput.verificationFindings ? [PRODUCER_ID] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -1653,14 +2054,14 @@ describe('fresh foreground master controller end to end', () => {
 
       expect(terminal.status).toBe('completed');
       expect(terminal.readyTools).toBe(1);
-      expect(terminal.failedTools).toBe(0);
+      expect(terminal.nonReadyTools).toBe(0);
       expect(repairAttempts).toBe(1);
       expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(2);
       expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(2);
       expect(plannerRevisionContext?.sourceBuildRef).toBeDefined();
       expect(plannerRevisionContext?.previousImplementationPlan?.payload.toolId).toBe(PRODUCER_ID);
       expect(JSON.stringify(plannerRevisionContext?.latestFailureFacts)).toContain(
-        'Factual result from the rejected older build',
+        'Factual result from the source build being reviewed',
       );
       expect(completionReviewCalls).toBe(1);
       expect(promotionBatches).toEqual([[PRODUCER_NAME]]);
@@ -1771,6 +2172,7 @@ describe('fresh foreground master controller end to end', () => {
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
               outcome,
               reason,
+              recallToolIds: decisionInput.verificationFindings ? [PRODUCER_ID] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -1806,7 +2208,7 @@ describe('fresh foreground master controller end to end', () => {
 
       expect(terminal.status).toBe('completed');
       expect(terminal.readyTools).toBe(1);
-      expect(terminal.failedTools).toBe(0);
+      expect(terminal.nonReadyTools).toBe(0);
       expect(sawBuildAFinding).toBe(true);
       expect(plannerReceivedRepairGuidance).toBe(true);
       expect(sawPlanBProposalWithoutStaleFinding).toBe(true);
@@ -1821,7 +2223,7 @@ describe('fresh foreground master controller end to end', () => {
         ),
       ).toBe(true);
       expect(JSON.stringify(plannerRevisionContext?.latestFailureFacts)).toContain(
-        'Factual result from the rejected older build',
+        'Factual result from the source build being reviewed',
       );
       expect(compilerRevisionContexts[1]).toEqual(plannerRevisionContext);
       expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(2);
@@ -1919,6 +2321,7 @@ describe('fresh foreground master controller end to end', () => {
               reason: decisionInput.verificationFindings
                 ? `Repair the producer from factual failure ${repairDecisions}.`
                 : 'Keep the current focused producer plan.',
+              recallToolIds: decisionInput.verificationFindings ? [PRODUCER_ID] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2050,6 +2453,7 @@ describe('fresh foreground master controller end to end', () => {
               reason: decisionInput.verificationFindings
                 ? 'Correct only the exact provenance defect in the rejected draft.'
                 : 'Keep the focused producer plan.',
+              recallToolIds: decisionInput.verificationFindings ? [PRODUCER_ID] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2183,6 +2587,7 @@ describe('fresh foreground master controller end to end', () => {
                   : outcome === 'rejected'
                     ? `Paraphrased guidance ${reviewedFocusedProposals}: keep the public tool unchanged and propose a corrected implementation.`
                     : 'The fixture plan remains supported.',
+              recallToolIds: outcome === 'revised' ? [PRODUCER_ID] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2199,7 +2604,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(terminal.status).toBe('failed');
       expect(terminal.message).toContain('focused planning stopped');
       expect(terminal.readyTools).toBe(0);
-      expect(terminal.failedTools).toBe(1);
+      expect(terminal.nonReadyTools).toBe(1);
       expect(repairDecisions).toBe(1);
       expect(repairPlannerCalls).toBe(3);
       expect(reviewedFocusedProposals).toBe(2);
@@ -2243,7 +2648,7 @@ describe('fresh foreground master controller end to end', () => {
 
       expect(terminal.status).toBe('provider_unavailable');
       expect(terminal.readyTools).toBe(1);
-      expect(terminal.failedTools).toBe(1);
+      expect(terminal.nonReadyTools).toBe(1);
       expect(promotionBatches).toEqual([[PRODUCER_NAME]]);
       expect(installedTools).toEqual(new Set([PRODUCER_NAME]));
       expect(events.indexOf(`review:${PRODUCER_ID}`)).toBeLessThan(
@@ -2332,9 +2737,7 @@ describe('fresh foreground master controller end to end', () => {
                   ? proposalDesiredPlan(decisionInput)
                   : desiredFromCurrent(decisionInput);
             if (repairingWithoutPlans) {
-              const producer = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
-              if (!producer) throw new Error('fixture expected the producer plan');
-              producer.implementationPlan = undefined;
+              for (const tool of desiredPlan.tools) tool.implementationPlan = undefined;
             }
             const output = MasterDecisionOutputSchema.parse({
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
@@ -2342,6 +2745,7 @@ describe('fresh foreground master controller end to end', () => {
               reason: repairingWithoutPlans
                 ? 'Recompile only the producer and recheck retained downstream tools.'
                 : 'The dependency-ordered fixture plan remains supported.',
+              recallToolIds: repairingWithoutPlans ? [PRODUCER_ID] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2495,6 +2899,7 @@ describe('fresh foreground master controller end to end', () => {
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
               outcome,
               reason,
+              recallToolIds: [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2676,6 +3081,7 @@ describe('fresh foreground master controller end to end', () => {
               binding: input.current?.run ?? input.discovery.run,
               outcome,
               reason,
+              recallToolIds: [],
               desiredPlan,
             });
             return await requestValidatedMasterDecision(input, {
@@ -2879,7 +3285,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(terminal).toEqual({
         status: 'failed',
         readyTools: 0,
-        failedTools: 0,
+        nonReadyTools: 0,
         runRoot: terminal.runRoot,
         message: expectedMessage,
       });

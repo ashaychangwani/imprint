@@ -187,6 +187,7 @@ const edges = [
     producerResultPath: '[0].item_id',
     consumerToolId: 'catalog_detail',
     consumerParameter: 'item_id',
+    invocationGroup: 'catalog-detail-selection',
   },
   {
     id: 'catalog-variant-id',
@@ -194,6 +195,7 @@ const edges = [
     producerResultPath: '[0].variant_id',
     consumerToolId: 'catalog_detail',
     consumerParameter: 'variant_id',
+    invocationGroup: 'catalog-detail-selection',
   },
 ];
 
@@ -663,14 +665,19 @@ function baselineMvpInput(): BaselineMvpReviewInput {
 }
 function baselineMvpBinding(input: BaselineMvpReviewInput) {
   const proof = matching(input.snapshot.payload.tools, ({ toolId }) => toolId === input.toolId);
-  const liveReceipt = matching(proof.receipts, ({ check }) => check === 'live');
+  const resultReceipt = matching(
+    proof.receipts,
+    ({ ref: receiptRef }) =>
+      receiptRef.path === input.resultEvidence.payload.resultReceiptRef.path &&
+      receiptRef.sha256 === input.resultEvidence.payload.resultReceiptRef.sha256,
+  );
   return {
     ...input.run,
     toolId: input.toolId,
     compileInputsSha256: proof.executionBinding.compileInputsSha256,
     currentBuildRef: proof.currentBuildRef,
     executionBindingSha256: proof.executionBindingSha256,
-    resultReceiptRef: liveReceipt.ref,
+    resultReceiptRef: resultReceipt.ref,
     resultEvidenceRef: input.resultEvidence.ref,
   };
 }
@@ -755,7 +762,7 @@ const initialDesired = {
   buildWaves: [['catalog_search']],
   chainEdges: [],
 };
-function focusedInput(tool: EditableTeachingTool = searchTool) {
+function focusedInput(tool: EditableTeachingTool = searchTool): FocusedPlannerInput {
   const { implementationPlan: _implementationPlan, ...focusedTool } = tool;
   const isDetail = tool.id === detailTool.id;
   return {
@@ -779,7 +786,7 @@ function focusedInput(tool: EditableTeachingTool = searchTool) {
     evidence,
   };
 }
-function focusedOutput(input = focusedInput()) {
+function focusedOutput(input: FocusedPlannerInput = focusedInput()) {
   const tool = {
     ...input.tool,
     strategy:
@@ -839,6 +846,7 @@ const initialMasterOutput = (input: MasterDecisionInput = initialMasterInput()) 
     binding: masterDecisionBinding(input),
     outcome: 'accepted',
     reason: 'The evidence supports one initial search tool.',
+    recallToolIds: [],
     desiredPlan: initialDesired,
   });
 const revisionMasterInput = () => ({
@@ -854,6 +862,7 @@ const revisionMasterOutput = (input: MasterDecisionInput = revisionMasterInput()
     binding: masterDecisionBinding(input),
     outcome: 'accepted',
     reason: 'The current producer-consumer plan remains supported.',
+    recallToolIds: [],
     desiredPlan: desiredFromEditable(),
   });
 
@@ -914,8 +923,9 @@ describe('prompts and pre-plan discovery', () => {
     const masterPrompt = prompt('master-teach-decision.md');
     expect(masterPrompt).toContain('optional diagnostic');
     expect(masterPrompt).toContain('does not by itself require browser');
-    expect(masterPrompt).toContain('omit its current `implementationPlan`');
-    expect(masterPrompt).toContain('explicit instruction to call a fresh focused planner');
+    expect(masterPrompt).toContain('top-level `recallToolIds`');
+    expect(masterPrompt).toContain('Omission of an `implementationPlan` is not a recall');
+    expect(masterPrompt).toContain('visible master command');
     expect(masterPrompt).toMatch(/do\s+not mutate an unrelated field/);
     expect(masterPrompt).toContain('A chain-only wiring failure is different');
     expect(masterPrompt).toContain('edit only the supported `chainEdges` fields');
@@ -998,6 +1008,23 @@ describe('prompts and pre-plan discovery', () => {
     expect(advisorPrompt).toContain('update every affected dependency');
   });
 
+  it('makes chain invocation grouping explicit instead of host-inferred', () => {
+    for (const name of [
+      'master-teach-decision.md',
+      'master-teach-focused-planner.md',
+      'compile-agent.md',
+    ]) {
+      const authorPrompt = prompt(name);
+      expect(authorPrompt).toContain('`invocationGroup`');
+      expect(authorPrompt).toMatch(/without (?:it|a group).*runs?\s+alone|omitted means.*alone/is);
+      expect(authorPrompt).toMatch(
+        /same consumer.*(?:same (?:explicit )?group|and group).*together/is,
+      );
+      expect(authorPrompt).toMatch(/does\s+not\s+infer|never\s+rely\s+on\s+the\s+host/is);
+      expect(authorPrompt).toMatch(/alternative/is);
+    }
+  });
+
   it('tells the focused planner exactly which evidence refs it may copy', () => {
     const focusedPrompt = prompt('master-teach-focused-planner.md');
     expect(focusedPrompt).toContain('`validationContext.authorizedEvidenceRefs`');
@@ -1034,6 +1061,47 @@ describe('prompts and pre-plan discovery', () => {
     expect(requestPayload.input).not.toHaveProperty('currentPlan');
     expect(requestPayload.input).not.toHaveProperty('snapshot');
     expect(requestPayload.validationContext.binding).toEqual(baselineMvpBinding(input));
+  });
+
+  it('shows the baseline reviewer every member of the exact grouped chain call', async () => {
+    const firstEdge = at(edges, 0);
+    const input: BaselineMvpReviewInput = {
+      run: currentRun,
+      recordingIndex,
+      currentPlan,
+      snapshot,
+      toolId: detailTool.id,
+      resultEvidence: completionResultEvidence(
+        detailTool,
+        detailProof,
+        {
+          preview: '{"item_id":"item-1","variant_id":"variant-1"}',
+          shape: 'object{item_id:string,variant_id:string}',
+          count: null,
+        },
+        'Return the selected item and variant.',
+        firstEdge.id,
+      ),
+    };
+    const output = baselineMvpOutput(input);
+    let requestPayload: unknown;
+    await requestBaselineMvpReview(input, {
+      analyzer: {
+        async analyze(_system, payload) {
+          requestPayload = payload;
+          return { text: JSON.stringify(output) };
+        },
+      },
+    });
+    expect(
+      (requestPayload as { input: { baseline: { chainInvocationEdgeIds: string[] } } }).input
+        .baseline.chainInvocationEdgeIds,
+    ).toEqual(edges.map(({ id }) => id).sort());
+    const reviewerPrompt = prompt('master-teach-baseline-mvp-review.md');
+    expect(reviewerPrompt).toContain('`chainInvocationEdgeIds`');
+    expect(reviewerPrompt).toContain('complete group');
+    expect(reviewerPrompt).toContain('another group');
+    expect(reviewerPrompt).toContain('has not\ninferred');
   });
 
   it('fails closed on stale baseline evidence while preserving a bounded repair reason', () => {
@@ -1271,6 +1339,20 @@ describe('prompts and pre-plan discovery', () => {
       parseFocusedPlannerOutput(JSON.stringify(focusedOutput()), foreignOutgoing),
     ).toThrow('outgoing edge belongs to another producer');
 
+    const duplicateGroupedParameter = structuredClone(valid);
+    at(duplicateGroupedParameter.chainEdges, 1).consumerParameter = 'item_id';
+    expect(() =>
+      parseFocusedPlannerOutput(JSON.stringify(duplicateGroupedParameter), detailInput),
+    ).toThrow('invocation group binds this consumer parameter more than once');
+
+    const separateAlternatives = structuredClone(valid);
+    at(separateAlternatives.chainEdges, 1).consumerParameter = 'item_id';
+    at(separateAlternatives.chainEdges, 1).producerResultPath = '[0].item_id';
+    at(separateAlternatives.chainEdges, 1).invocationGroup = 'catalog-detail-alternative';
+    expect(parseFocusedPlannerOutput(JSON.stringify(separateAlternatives), detailInput)).toEqual(
+      separateAlternatives,
+    );
+
     const missingParameter = structuredClone(valid);
     missingParameter.implementationPlan.parameterMappings.pop();
     expect(() => parseFocusedPlannerOutput(JSON.stringify(missingParameter), detailInput)).toThrow(
@@ -1489,6 +1571,7 @@ describe('prompts and pre-plan discovery', () => {
       binding: masterDecisionBinding(masterInput),
       outcome: 'accepted',
       reason: 'Every credible discovered operation remains in the plan.',
+      recallToolIds: [],
       desiredPlan: {
         site: runIdentity.site,
         recordingSha256: runIdentity.recordingSha256,
@@ -1641,6 +1724,61 @@ describe('canonical planning and immutable execution', () => {
     const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
     expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
     expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(unchangedDetailPlan);
+  });
+
+  it('carries omitted current plans except for tools the master explicitly recalls', () => {
+    const input = revisionMasterInput();
+    const output = revisionMasterOutput(input);
+    const search = at(output.desiredPlan.tools, 0);
+    const detail = at(output.desiredPlan.tools, 1);
+    const searchPlan = search.implementationPlan;
+    const detailPlan = detail.implementationPlan;
+    search.implementationPlan = undefined;
+    detail.implementationPlan = undefined;
+    output.recallToolIds = [search.id];
+
+    const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
+    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
+    expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(detailPlan);
+    expect(searchPlan).toBeDefined();
+  });
+
+  it('lets an explicit recall override an echoed old implementation plan', () => {
+    const input = revisionMasterInput();
+    const output = revisionMasterOutput(input);
+    const recalled = at(output.desiredPlan.tools, 0);
+    expect(recalled.implementationPlan).toBeDefined();
+    output.recallToolIds = [recalled.id];
+
+    const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
+    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
+  });
+
+  it('rejects duplicate or non-current recall targets', () => {
+    const input = revisionMasterInput();
+    const duplicate = revisionMasterOutput(input);
+    duplicate.recallToolIds = [
+      at(duplicate.desiredPlan.tools, 0).id,
+      at(duplicate.desiredPlan.tools, 0).id,
+    ];
+    expect(() => parseMasterDecisionOutput(JSON.stringify(duplicate), input)).toThrow(
+      'duplicate tool ID',
+    );
+
+    const unknown = revisionMasterOutput(input);
+    unknown.recallToolIds = ['unknown_tool'];
+    expect(() => parseMasterDecisionOutput(JSON.stringify(unknown), input)).toThrow(
+      'recall target is absent from current plan',
+    );
+  });
+
+  it('rejects recall commands during initial discovery', () => {
+    const input = initialMasterInput();
+    const output = initialMasterOutput(input);
+    output.recallToolIds = [at(output.desiredPlan.tools, 0).id];
+    expect(() => parseMasterDecisionOutput(JSON.stringify(output), input)).toThrow(
+      'initial discovery cannot recall an existing tool',
+    );
   });
 
   it('lets a consumer proposal change wiring while retaining the producer plan', () => {

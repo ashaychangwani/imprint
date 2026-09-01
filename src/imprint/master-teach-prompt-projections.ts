@@ -218,8 +218,8 @@ export const ExecutionReceiptSchema = strictObject({
     issue(ctx, ['chainEdgeId'], 'chain receipts alone require an edge id');
   if ((receipt.check === 'chain') !== Boolean(receipt.chainEdgeSha256))
     issue(ctx, ['chainEdgeSha256'], 'chain receipts alone require an exact edge hash');
-  if (receipt.check === 'chain' && receipt.dependencyBuilds.length !== 1)
-    issue(ctx, ['dependencyBuilds'], 'chain receipts require exactly one producer result');
+  if (receipt.check === 'chain' && receipt.dependencyBuilds.length === 0)
+    issue(ctx, ['dependencyBuilds'], 'chain receipts require at least one producer result');
   if (receipt.check !== 'chain' && receipt.dependencyBuilds.length > 0)
     issue(ctx, ['dependencyBuilds'], 'non-chain receipts cannot claim dependency builds');
   if (receipt.status !== summarizedStatus(receipt.facts))

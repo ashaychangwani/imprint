@@ -16,7 +16,7 @@ import {
 } from './master-teach-agent-contracts.ts';
 import { mechanicalProofFailures, parseCompletionReviewOutput } from './master-teach-agents.ts';
 // biome-ignore format: these are the complete plan mechanics owned by this journal
-import { type ContentAddressedRef, ContentAddressedRefSchema, type DesiredTeachingPlan, type EditableTeachingPlan, type ImplementationPlanPayload, ImplementationPlanPayloadSchema, type TeachingPlanDecision, type TeachingPlanRevisionResult, type TeachingPlanValidation, TeachingPlanValidationError, bindImplementationPlanRef, canonicalTeachingPlanJson, reviseEditableTeachingPlan, teachingPlanContentSha256, teachingToolCompileInputsSha256, validateBuildWorkflowProvenance, validateEditableTeachingPlan, validateImplementationPlanForTool } from './master-teach-plan.ts';
+import { type ContentAddressedRef, ContentAddressedRefSchema, type DesiredTeachingPlan, type EditableTeachingPlan, type ImplementationPlanPayload, ImplementationPlanPayloadSchema, type TeachingPlanDecision, type TeachingPlanRevisionResult, type TeachingPlanValidation, TeachingPlanValidationError, bindImplementationPlanRef, canonicalTeachingPlanJson, chainInvocationForEdge, reviseEditableTeachingPlan, teachingPlanContentSha256, teachingToolCompileInputsSha256, validateBuildWorkflowProvenance, validateEditableTeachingPlan, validateImplementationPlanForTool } from './master-teach-plan.ts';
 // biome-ignore format: these are the complete factual receipt/projection mechanics
 import { type CurrentExecutionSnapshot, CurrentExecutionSnapshotSchema, ExecutionReceiptSchema, type ReceiptFact, ReceiptHistoryProjectionSchema, RunIdentitySchema, ToolExecutionBindingSchema, ToolVerificationPayloadSchema } from './master-teach-prompt-projections.ts';
 import { WorkflowSchema } from './types.ts';
@@ -423,19 +423,13 @@ export class FreshTeachJournal {
   ) {
     state.supersededReceiptRefs.push(...pointers.map(({ ref }) => ref));
   }
-  #invalidateChainsUsingResult(
-    state: FreshTeachJournalState,
-    producerToolId: string,
-    resultReceiptRef: ContentAddressedRef,
-  ): void {
+  #invalidateChainsUsingProducer(state: FreshTeachJournalState, producerToolId: string): void {
     for (const current of state.tools) {
       if (current.toolId === producerToolId) continue;
       const stale = current.currentReceiptRefs.filter((pointer) => {
         if (!pointer.key.startsWith('chain:')) return false;
         return this.readReceipt(pointer.ref).dependencyBuilds.some(
-          (dependency) =>
-            dependency.toolId === producerToolId &&
-            sameRef(dependency.resultReceiptRef, resultReceiptRef),
+          (dependency) => dependency.toolId === producerToolId,
         );
       });
       this.#archive(state, stale);
@@ -458,8 +452,21 @@ export class FreshTeachJournal {
     const nextPlanRef = this.#putJson(result.plan);
     const prior = new Map(state.tools.map((tool) => [tool.toolId, tool]));
     const recompile = new Set(result.recompileToolIds);
-    const changedChainEdges = new Set(result.changedChainEdgeIds);
     const invalidatedProducerIds = new Set([...result.recompileToolIds, ...result.removedToolIds]);
+    const priorEdges = new Map(priorPlan.chainEdges.map((edge) => [edge.id, edge] as const));
+    const nextEdges = new Map(result.plan.chainEdges.map((edge) => [edge.id, edge] as const));
+    const invocationKey = (edge: (typeof priorPlan.chainEdges)[number]) =>
+      canonicalTeachingPlanJson([
+        edge.consumerToolId,
+        edge.invocationGroup === undefined ? { edgeId: edge.id } : { group: edge.invocationGroup },
+      ]);
+    const invalidatedInvocationKeys = new Set<string>();
+    for (const edgeId of result.changedChainEdgeIds) {
+      const priorEdge = priorEdges.get(edgeId);
+      const nextEdge = nextEdges.get(edgeId);
+      if (priorEdge) invalidatedInvocationKeys.add(invocationKey(priorEdge));
+      if (nextEdge) invalidatedInvocationKeys.add(invocationKey(nextEdge));
+    }
     for (const id of result.removedToolIds)
       this.#archive(state, prior.get(id)?.currentReceiptRefs ?? []);
     state.tools = result.plan.tools.map(({ id }) => {
@@ -468,15 +475,14 @@ export class FreshTeachJournal {
       const obsoleteReceipts = rebuild
         ? old.currentReceiptRefs
         : old.currentReceiptRefs.filter((pointer) => {
-            if (pointer.key.startsWith('chain:')) {
-              const edgeId = pointer.key.slice('chain:'.length);
-              if (changedChainEdges.has(edgeId)) return true;
-              const receipt = this.readReceipt(pointer.ref);
-              return receipt.dependencyBuilds.some(({ toolId }) =>
-                invalidatedProducerIds.has(toolId),
-              );
-            }
-            return false;
+            if (!pointer.key.startsWith('chain:')) return false;
+            const receipt = this.readReceipt(pointer.ref);
+            const edge = receipt.chainEdgeId ? priorEdges.get(receipt.chainEdgeId) : undefined;
+            return (
+              !edge ||
+              invalidatedInvocationKeys.has(invocationKey(edge)) ||
+              receipt.dependencyBuilds.some(({ toolId }) => invalidatedProducerIds.has(toolId))
+            );
           });
       this.#archive(state, obsoleteReceipts);
       return {
@@ -632,21 +638,7 @@ export class FreshTeachJournal {
     const priorBuildRef = toolState.buildRef;
     this.#archive(state, toolState.currentReceiptRefs);
     toolState.currentReceiptRefs = [];
-    if (priorBuildRef)
-      for (const current of state.tools) {
-        if (current.toolId === tool.id) continue;
-        const staleChainReceipts = current.currentReceiptRefs.filter((pointer) => {
-          if (!pointer.key.startsWith('chain:')) return false;
-          return this.readReceipt(pointer.ref).dependencyBuilds.some(
-            (dependency) =>
-              dependency.toolId === tool.id && sameRef(dependency.buildRef, priorBuildRef),
-          );
-        });
-        this.#archive(state, staleChainReceipts);
-        current.currentReceiptRefs = current.currentReceiptRefs.filter(
-          ({ ref: currentRef }) => !staleChainReceipts.some(({ ref }) => sameRef(ref, currentRef)),
-        );
-      }
+    if (priorBuildRef) this.#invalidateChainsUsingProducer(state, tool.id);
     toolState.buildRef = ref;
     this.#clearReview(state);
     this.#commit(state);
@@ -672,36 +664,45 @@ export class FreshTeachJournal {
     const toolState = state.tools.find(({ toolId }) => toolId === input.toolId);
     if (!toolState?.buildRef) throw journalFailure('tool_plan_missing');
     const build = this.readBuild(toolState.buildRef);
-    let chainDependency: ExecutionReceipt['dependencyBuilds'][number] | undefined;
+    const chainDependencies: ExecutionReceipt['dependencyBuilds'] = [];
     let chainEdgeSha256: string | undefined;
     if (input.check === 'chain') {
       const edge = plan.chainEdges.find(({ id }) => id === input.chainEdgeId);
       if (!edge || edge.consumerToolId !== input.toolId)
         throw journalFailure('chain_edge_mismatch');
       chainEdgeSha256 = teachingPlanContentSha256(edge);
-      const producerState = state.tools.find(({ toolId }) => toolId === edge.producerToolId);
-      if (!producerState?.buildRef) throw journalFailure('chain_producer_missing');
-      const producerBuild = this.readBuild(producerState.buildRef);
-      const producerLivePointer = producerState.currentReceiptRefs.find(
-        ({ key }) => key === 'live',
-      );
-      const producerLive = producerLivePointer
-        ? this.readReceipt(producerLivePointer.ref)
-        : undefined;
-      if (
-        producerLive?.check !== 'live' ||
-        producerLive.status !== 'passed' ||
-        !sameRef(producerLive.buildRef, producerState.buildRef) ||
-        producerLive.executionBindingSha256 !== producerBuild.executionBindingSha256
-      ) {
-        throw journalFailure('chain_producer_missing');
+      const producerIds = [
+        ...new Set(
+          chainInvocationForEdge(plan.chainEdges, edge).edges.map(
+            ({ producerToolId }) => producerToolId,
+          ),
+        ),
+      ].sort();
+      for (const producerToolId of producerIds) {
+        const producerState = state.tools.find(({ toolId }) => toolId === producerToolId);
+        if (!producerState?.buildRef) throw journalFailure('chain_producer_missing');
+        const producerBuild = this.readBuild(producerState.buildRef);
+        const producerLivePointer = producerState.currentReceiptRefs.find(
+          ({ key }) => key === 'live',
+        );
+        const producerLive = producerLivePointer
+          ? this.readReceipt(producerLivePointer.ref)
+          : undefined;
+        if (
+          producerLive?.check !== 'live' ||
+          producerLive.status !== 'passed' ||
+          !sameRef(producerLive.buildRef, producerState.buildRef) ||
+          producerLive.executionBindingSha256 !== producerBuild.executionBindingSha256
+        ) {
+          throw journalFailure('chain_producer_missing');
+        }
+        chainDependencies.push({
+          toolId: producerToolId,
+          buildRef: producerState.buildRef,
+          executionBindingSha256: producerBuild.executionBindingSha256,
+          resultReceiptRef: producerLive.ref,
+        });
       }
-      chainDependency = {
-        toolId: edge.producerToolId,
-        buildRef: producerState.buildRef,
-        executionBindingSha256: producerBuild.executionBindingSha256,
-        resultReceiptRef: producerLive.ref,
-      };
     }
     const facts: ReceiptFact[] = [...(input.facts ?? [])];
     if (input.hostError !== undefined)
@@ -722,7 +723,7 @@ export class FreshTeachJournal {
       status: receiptStatus(facts),
       buildRef: toolState.buildRef,
       executionBindingSha256: build.executionBindingSha256,
-      dependencyBuilds: chainDependency ? [chainDependency] : [],
+      dependencyBuilds: chainDependencies,
       facts,
     };
     const ref = this.#objectRef('json', Buffer.from(canonicalTeachingPlanJson(body), 'utf8'));
@@ -752,7 +753,7 @@ export class FreshTeachJournal {
     this.#putJson(body);
     if (previous) this.#archive(state, [previous]);
     if (input.check === 'live' && previous)
-      this.#invalidateChainsUsingResult(state, input.toolId, previous.ref);
+      this.#invalidateChainsUsingProducer(state, input.toolId);
     toolState.currentReceiptRefs = [...retained, { key, ref }];
     state.nextReceiptOrdinal += 1;
     this.#clearReview(state);

@@ -106,27 +106,42 @@ fallback.
 
 When the accepted tool contract is still right but its current artifact needs
 repair, keep the tool ID, candidate, compile context, strategy, and dependencies
-but omit its current `implementationPlan` from `desiredPlan`. That is the
-explicit instruction to call a fresh focused planner and compiler. The host
-will seed the compatible prior files and latest source-bound failure facts; do
-not mutate an unrelated field merely to force recompilation. Retaining the
-same `implementationPlan` means retaining the same artifact, so it cannot
-repair that artifact's standalone result after the result is marked
-`revision_required`. A chain-only wiring failure is different: keep both
-working implementation plans, edit only the supported `chainEdges` fields, and
-let the host rerun the changed chain check. Recall a producer or consumer only
-when the evidence says its artifact—not merely the old edge—needs revision.
+and put its ID in top-level `recallToolIds`. That visible master command calls a
+fresh focused planner and compiler. The host seeds the compatible prior files
+and latest source-bound failure facts; do not mutate an unrelated field merely
+to force recompilation. Omission of an `implementationPlan` is not a recall
+command: for an unchanged, unlisted tool, the host mechanically carries its
+current plan forward. A chain-only wiring failure is different: keep both
+working artifacts, edit only the supported `chainEdges` fields, leave both IDs
+out of `recallToolIds`, and let the host rerun the changed chain check. Recall a
+producer or consumer only when the evidence says its artifact—not merely the
+old edge—needs revision.
+
+Treat `current.snapshot` and `verificationFindings` as the authoritative current
+facts. The snapshot contains mechanical receipts for the current builds;
+`verificationFindings` contains the latest execution or semantic blockers.
+Candidate rationales, strategy reasons, and earlier decision prose may describe
+older attempts. A mechanically passing invocation may still have a semantically
+rejected result, but old prose is not a current failure. Before returning JSON,
+make a plain retain/recall checklist for every current tool: retain means leave
+its ID out of `recallToolIds`; recall means include it and cite the current
+reason. Dependency waiting by itself means retain. When accepting fresh focused
+planner proposals, return `recallToolIds: []` unless you deliberately want
+another fresh planning pass.
 
 Return canonical `DesiredTeachingPlan` fields directly. Do not add version,
 revision, or decision metadata. You may select an `implementationPlan` only from
 a supplied current tool or focused planner proposal whose complete compile-input
 binding still matches. A retained tool keeps its stable ID. Added, split, or
 merged tools use new IDs. Never author `eventTimeRange`.
-Whenever you change a tool's parameters, evidence, compile context, or strategy,
-omit its old `implementationPlan`; the host will send the changed tool to a
-fresh focused planner. A chain-edge-only edit may retain both tool plans: the
-host will test the new wiring and request a tool revision only if the retained
-artifacts cannot satisfy it. Do not copy an implementation plan whose
+Whenever you change a tool's parameters, evidence, compile context, or strategy
+without selecting a matching supplied focused-planner proposal, put its ID in
+`recallToolIds`. If you select a supplied proposal whose complete compile-input
+binding matches the changed tool, leave it out so that plan can compile now.
+The host also mechanically discards a plan whose compile-input binding no longer
+matches. A chain-edge-only edit may retain both tool plans: the host will test
+the new wiring and request a tool revision only if the retained artifacts cannot
+satisfy it. Do not copy an implementation plan whose
 `basedOnCompileInputsSha256` describes the pre-change tool.
 An implementation plan may be accepted only when every public parameter has a
 concrete scalar type and a useful nonempty description. Its agent-authored,
@@ -196,8 +211,18 @@ producer as `"catalog_search"`.
 
 Represent each producer-to-consumer parameter flow explicitly in `chainEdges`:
 producer tool ID and public result path, then consumer tool ID and parameter.
-Do not ask the runtime to infer this meaning. Example:
-`{"id":"catalog-item","producerToolId":"catalog_search","producerResultPath":"[0].item_id","consumerToolId":"catalog_detail","consumerParameter":"item_id"}`.
+Do not ask the runtime to infer this meaning or which bindings belong in one
+consumer invocation. `invocationGroup` is optional. An edge without it runs
+alone. Edges with the same consumer tool ID and the same explicit group run
+together in one invocation, so use one group for correlated sibling values
+that the consumer must receive as a set. One group cannot bind the same
+consumer parameter twice. Put alternative bindings in different groups (or
+omit the group when each alternative should run alone); never rely on the host
+to construct combinations. If one binding participates in several alternative
+invocations, repeat that binding with a distinct edge ID in each group. Example:
+`{"id":"catalog-item","producerToolId":"catalog_search","producerResultPath":"[0].item_id","consumerToolId":"catalog_detail","consumerParameter":"item_id","invocationGroup":"selected-item"}`
+and a sibling edge for `variant_id` may use that same `selected-item` group. An
+alternative `item_id` binding uses a different group or omits the field.
 
 Exact output schema (all objects reject extra fields):
 
@@ -205,6 +230,7 @@ Exact output schema (all objects reject extra fields):
 {
   binding: { runId, site, recordingSha256, planRevision?, planSha256? },
   outcome: "accepted" | "rejected" | "revised", reason: string,
+  recallToolIds: Array<current tool ID>,
   desiredPlan: {
     site: string, recordingSha256: sha256,
     candidateCoverage: Array<{
@@ -236,7 +262,10 @@ Exact output schema (all objects reject extra fields):
       }
     }>,
     buildWaves: Array<Array<tool ID>>,
-    chainEdges: Array<{ id, producerToolId, producerResultPath, consumerToolId, consumerParameter }>
+    chainEdges: Array<{
+      id, producerToolId, producerResultPath, consumerToolId, consumerParameter,
+      invocationGroup?: string
+    }>
   }
 }
 ```
@@ -250,6 +279,7 @@ Exact output schema (all objects reject extra fields):
   },
   "outcome": "accepted",
   "reason": "The discovery evidence supports one search tool.",
+  "recallToolIds": [],
   "desiredPlan": {
     "site": "fixture.invalid",
     "recordingSha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",

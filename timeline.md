@@ -2357,3 +2357,113 @@ repeatedly in isolation earlier (five recorder repetitions and sixty hostile
 cleanup repetitions). No changed file implements recording or process cleanup.
 After the Git checkpoint, the next action is a completely fresh, unsteered
 Flights teach.
+
+## 2026-09-01 09:01 PDT — Fresh Flights found five API tools and exposed two small control bugs
+
+After checkpoint `38203d5`, I started a completely fresh, unsteered
+`google-flights` teach. Run `23c7c9de-6c5c-46d2-8f39-2f8306b2c1f1`
+automatically selected the latest combined recording with hash
+`fb2f07e27379817a10eb1e96702bd29fab63836f0656cc36d59ad0011a8c53af`.
+It was not resumed from an older run and received no site-specific direction.
+
+Discovery found five useful API operations: airport lookup, airport details,
+calendar prices, flight search, and booking options. The master kept all five,
+put their dependencies into waves, and did not choose browser fallback. Airport
+lookup passed and was published. Airport details also worked by itself. Calendar
+reached its recorded API shape but its current page bootstrap did not produce a
+declared build value. Flight search reached the live endpoint but received HTTP
+400. Booking correctly waited for flight search instead of compiling against a
+failed producer.
+
+The airport-details dependency test then revealed a host-checker mistake. The
+producer returned the correlated pair `location_id=/m/013110` and
+`location_type=1`. The checker made two separate calls, pairing each producer
+value with the other parameter's default. It therefore tested `/m/013110, 0`
+and `SJC, 1`, but never tested the real pair `/m/013110, 1`. The master was given
+a misleading failed result and reasonably asked for a new details artifact.
+
+An earlier master response exposed a separate control ambiguity. Its written
+reason said to retain the working details and booking implementations and recall
+three other tools, but its JSON accidentally omitted the implementation plan
+from all five tools. The host had overloaded omission to mean “recall,” so it
+discarded all five plans despite the master's stated intent. This was not a
+compiler failure and not a reason to add more semantic runtime policy.
+
+I cancelled the diagnostic at revision 6 after about 51 minutes so these host
+bugs could be corrected before another validation. The command said `1 ready, 4
+failed`, which was inaccurate: one tool was ready, three were being repaired,
+and booking was waiting. This run is now read-only and will never be resumed.
+
+## 2026-09-01 09:30 PDT — Made recall explicit and tested correlated producer values together
+
+The master now has one visible, documented command, `recallToolIds`, for asking
+fresh focused planners and compilers to repair selected tools. Leaving a plan
+out by accident no longer discards a working artifact; unchanged tools are
+carried forward unless the master explicitly recalls them. A real change to a
+tool's inputs still makes an incompatible old plan unusable, because an old
+artifact cannot truthfully claim it implements a new contract. There is no tool
+count cap on recall. The repair compiler receives the prior files, the master's
+reason, and the latest facts relevant to that tool rather than an unrelated
+site-wide failure dump.
+
+The chain checker now sends all declared producer-backed fields to the consumer
+in one call, including fields supplied by different producers. It keeps one
+factual receipt per declared connection. Multiple possible source paths for the
+same consumer parameter remain separate calls, while every other declared
+field stays producer-backed in those calls. If any incoming connection changes,
+only that consumer's old chain receipts are cleared and rerun; its artifact,
+standalone checks, and unrelated consumers remain intact. This is a general
+dependency fix, not a Flights rule.
+
+The failed state captures do not justify another compile-time classifier. The
+calendar and search artifacts both declared bootstrap capture recipes, and the
+existing structural checks correctly accepted those recipes. Only a live page
+can prove that an old recorded pattern still produces a value today. Structural
+checks therefore remain responsible for whether a recipe can work; live checks
+remain responsible for whether it actually works now.
+
+Cancelled or provider-interrupted commands now label remaining tools as
+`unfinished`, not `failed`. Focused master/controller tests, type checking,
+lint, dead-code checking, circular-dependency checking, and whitespace checks
+are clean. The next validation will be a new Flights run after this checkpoint,
+never a resume of the cancelled run.
+
+## 2026-09-01 10:01 PDT — Removed the checker's last guess about dependency combinations
+
+Review found that the first correlated-value fix still made a runtime guess. It
+paired the first source for each parameter, then swapped in alternatives one at
+a time. With two real alternative pairs, that could test mixed pairs that the
+master never intended and miss a valid pair. It could also mark connections as
+failed before it had actually checked them and clear proof for an unrelated
+alternative.
+
+The plan now has one small, optional field named `invocationGroup`. The master
+or focused planner uses the same group name on values that must be passed to a
+consumer together. Different alternatives use different group names. Leaving
+the field out means that connection is tested alone. The runtime does not infer
+groups from request names, producer names, parameter names, or array order; it
+executes exactly the groups the agents chose. The detailed prompts explain this
+with current schemas and examples.
+
+Receipts now name every producer result actually used by a grouped call. If a
+value cannot be bound, only that exact connection receives the failure receipt.
+If the consumer call itself fails, the repair fact names the whole group. A
+producer change clears only groups that used that producer, and a group edit
+clears only the old and new versions of that group. The consumer artifact and
+its standalone proof stay in place; the master still explicitly decides whether
+an artifact needs a fresh compiler through `recallToolIds`.
+
+The terminal result and saved `terminal.json` now call the count
+`nonReadyTools`. The displayed word depends on the real outcome: failed,
+blocked, or unfinished. This removes the last internal label that called
+cancelled or provider-interrupted work a failure.
+
+The final baseline reviewer also receives the exact connections used in a
+grouped call, so it judges what was actually checked instead of silently
+assuming a one-value call. Independent contract and runtime reviews are clean.
+The changed-path suite passes 293/293; type checking, lint, dead-code,
+circular-dependency, and
+whitespace checks pass. The repository-wide suite passed 1,823 of 1,824 tests;
+the only failure was the unchanged Mac Chromium-exit timing test, which passed
+immediately when rerun alone. The next validation remains a completely fresh,
+unsteered Flights teach after a Git checkpoint.

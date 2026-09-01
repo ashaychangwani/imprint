@@ -519,12 +519,43 @@ export const ChainEdgeSchema = z
     producerResultPath: canonicalText(1, 512),
     consumerToolId: ToolIdSchema,
     consumerParameter: canonicalText(1, 128),
+    invocationGroup: z
+      .string()
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/)
+      .optional(),
   })
   .strict()
   .refine((edge) => edge.producerToolId !== edge.consumerToolId, {
     message: 'chain edge cannot be self-referential',
   });
 export type ChainEdge = z.infer<typeof ChainEdgeSchema>;
+
+interface ChainInvocation {
+  edges: ChainEdge[];
+  sha256: string;
+}
+
+/**
+ * Resolve the exact agent-declared invocation containing one chain edge.
+ * An ungrouped edge is always its own invocation. An explicit group combines
+ * only edges with the same consumer and group label. The plan validator keeps
+ * each resulting parameter binding unambiguous.
+ */
+export function chainInvocationForEdge(
+  chainEdges: readonly ChainEdge[],
+  targetEdge: ChainEdge,
+): ChainInvocation {
+  const edges = (
+    targetEdge.invocationGroup === undefined
+      ? [targetEdge]
+      : chainEdges.filter(
+          (edge) =>
+            edge.consumerToolId === targetEdge.consumerToolId &&
+            edge.invocationGroup === targetEdge.invocationGroup,
+        )
+  ).sort((left, right) => left.id.localeCompare(right.id));
+  return { edges, sha256: teachingPlanContentSha256(edges) };
+}
 
 export const TeachingPlanDecisionSchema = z
   .object({
@@ -820,12 +851,14 @@ function validateChainEdges(plan: DesiredTeachingPlan): void {
   const tools = new Map(plan.tools.map((tool) => [tool.id, tool]));
   const ids = new Set<string>();
   const tuples = new Set<string>();
+  const groupedConsumerParameters = new Set<string>();
   for (const edge of plan.chainEdges) {
     const tuple = canonicalTeachingPlanJson([
       edge.producerToolId,
       edge.producerResultPath,
       edge.consumerToolId,
       edge.consumerParameter,
+      edge.invocationGroup ?? null,
     ]);
     if (ids.has(edge.id) || tuples.has(tuple)) {
       throw new TeachingPlanValidationError(`duplicate chain edge "${edge.id}"`);
@@ -844,6 +877,19 @@ function validateChainEdges(plan: DesiredTeachingPlan): void {
       throw new TeachingPlanValidationError(
         `chain edge "${edge.id}" is absent from the explicit tool dependency`,
       );
+    }
+    if (edge.invocationGroup !== undefined) {
+      const groupedParameter = canonicalTeachingPlanJson([
+        edge.consumerToolId,
+        edge.invocationGroup,
+        edge.consumerParameter,
+      ]);
+      if (groupedConsumerParameters.has(groupedParameter)) {
+        throw new TeachingPlanValidationError(
+          `chain invocation group "${edge.invocationGroup}" binds consumer parameter "${edge.consumerParameter}" more than once`,
+        );
+      }
+      groupedConsumerParameters.add(groupedParameter);
     }
     ids.add(edge.id);
     tuples.add(tuple);

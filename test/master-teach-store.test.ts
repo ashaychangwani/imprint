@@ -657,6 +657,202 @@ describe('small fresh teach journal', () => {
     expect(replacementChain.dependencyBuilds[0]?.resultReceiptRef).toEqual(replacementLive.ref);
   });
 
+  it('invalidates one explicit invocation group when any grouped edge is removed', () => {
+    const producerA = tool('producer-a-id', 'producer_a', 1);
+    const producerB = tool('producer-b-id', 'producer_b', 2);
+    const consumer = tool('consumer-id', 'consumer', 3, ['producer_a', 'producer_b']);
+    consumer.candidate.likelyParams = [
+      { name: 'item_id', type: 'string', description: 'Identifier from producer A.' },
+      { name: 'item_kind', type: 'string', description: 'Kind from producer B.' },
+    ];
+    const otherConsumer = tool('other-consumer-id', 'other_consumer', 4, ['producer_a']);
+    otherConsumer.candidate.likelyParams = [
+      { name: 'item_id', type: 'string', description: 'Identifier from producer A.' },
+    ];
+    const idEdge: ChainEdge = {
+      id: 'producer-a-to-consumer',
+      producerToolId: producerA.id,
+      producerResultPath: '[0].id',
+      consumerToolId: consumer.id,
+      consumerParameter: 'item_id',
+      invocationGroup: 'consumer-selection',
+    };
+    const kindEdge: ChainEdge = {
+      id: 'producer-b-to-consumer',
+      producerToolId: producerB.id,
+      producerResultPath: '[0].kind',
+      consumerToolId: consumer.id,
+      consumerParameter: 'item_kind',
+      invocationGroup: 'consumer-selection',
+    };
+    const unrelatedEdge: ChainEdge = {
+      id: 'producer-a-to-other-consumer',
+      producerToolId: producerA.id,
+      producerResultPath: '[0].id',
+      consumerToolId: otherConsumer.id,
+      consumerParameter: 'item_id',
+    };
+    const { journal } = fixture(
+      [producerA, producerB, consumer, otherConsumer],
+      [idEdge, kindEdge, unrelatedEdge],
+    );
+    const desired = desiredFrom(journal.currentPlan());
+    for (const plannedTool of desired.tools) {
+      const payload = implementation(plannedTool);
+      payload.parameterMappings = plannedTool.candidate.likelyParams.map(({ name }) => ({
+        parameterName: name,
+        artifactRequestIndices: [0],
+        guidance: 'Apply the producer value.',
+      }));
+      for (const verificationCase of payload.verificationCases) {
+        verificationCase.parameterValues = plannedTool.candidate.likelyParams.map(
+          ({ name: parameterName }) => ({ parameterName, value: 'fixture-value' }),
+        );
+      }
+      plannedTool.implementationPlan = journal.storeImplementationPlan(
+        payload,
+        teachingToolCompileInputsSha256(plannedTool, desired.chainEdges),
+      );
+    }
+    journal.revisePlan(desired, {
+      expectedRevision: journal.currentPlan().revision,
+      decision: decision(),
+    });
+    for (const plannedTool of desired.tools) {
+      issueBuild(journal, plannedTool.id);
+      passRequiredChecks(journal, plannedTool.id, plannedTool.candidate.requestSeqs);
+    }
+    const idReceipt = journal.issueReceipt({
+      toolId: consumer.id,
+      check: 'chain',
+      chainEdgeId: idEdge.id,
+      facts: [passedInvocation('shared-chain')],
+    });
+    const kindReceipt = journal.issueReceipt({
+      toolId: consumer.id,
+      check: 'chain',
+      chainEdgeId: kindEdge.id,
+      facts: [passedInvocation('shared-chain')],
+    });
+    expect(idReceipt.dependencyBuilds.map(({ toolId }) => toolId)).toEqual([
+      producerA.id,
+      producerB.id,
+    ]);
+    expect(kindReceipt.dependencyBuilds).toEqual(idReceipt.dependencyBuilds);
+    const unrelatedReceipt = journal.issueReceipt({
+      toolId: otherConsumer.id,
+      check: 'chain',
+      chainEdgeId: unrelatedEdge.id,
+      facts: [passedInvocation('unrelated-chain')],
+    });
+    const buildsBefore = new Map(
+      journal.readState().tools.map(({ toolId, buildRef }) => [toolId, buildRef] as const),
+    );
+
+    const revised = desiredFrom(journal.currentPlan());
+    revised.chainEdges = revised.chainEdges.filter(({ id }) => id !== kindEdge.id);
+    journal.revisePlan(revised, {
+      expectedRevision: journal.currentPlan().revision,
+      decision: decision(),
+    });
+
+    const state = journal.readState();
+    expect(state.tools.map(({ toolId, buildRef }) => [toolId, buildRef] as const)).toEqual([
+      ...buildsBefore,
+    ]);
+    expect(
+      state.tools
+        .find(({ toolId }) => toolId === consumer.id)
+        ?.currentReceiptRefs.map(({ key }) => key),
+    ).toEqual(['contract', 'replay', 'live']);
+    expect(
+      state.tools
+        .find(({ toolId }) => toolId === otherConsumer.id)
+        ?.currentReceiptRefs.map(({ key }) => key),
+    ).toEqual(['contract', 'replay', 'live', `chain:${unrelatedEdge.id}`]);
+    expect(state.supersededReceiptRefs).toEqual(
+      expect.arrayContaining([idReceipt.ref, kindReceipt.ref]),
+    );
+    expect(state.supersededReceiptRefs).not.toContainEqual(unrelatedReceipt.ref);
+  });
+
+  it('keeps an independent alternative invocation when another producer result changes', () => {
+    const producerA = tool('producer-a-id', 'producer_a', 1);
+    const producerB = tool('producer-b-id', 'producer_b', 2);
+    const consumer = tool('consumer-id', 'consumer', 3, ['producer_a', 'producer_b']);
+    consumer.candidate.likelyParams = [
+      { name: 'item_id', type: 'string', description: 'Identifier from either producer.' },
+    ];
+    const routeA: ChainEdge = {
+      id: 'producer-a-route',
+      producerToolId: producerA.id,
+      producerResultPath: '[0].id',
+      consumerToolId: consumer.id,
+      consumerParameter: 'item_id',
+      invocationGroup: 'route-a',
+    };
+    const routeB: ChainEdge = {
+      ...routeA,
+      id: 'producer-b-route',
+      producerToolId: producerB.id,
+      invocationGroup: 'route-b',
+    };
+    const { journal } = fixture([producerA, producerB, consumer], [routeA, routeB]);
+    const desired = desiredFrom(journal.currentPlan());
+    for (const plannedTool of desired.tools) {
+      const payload = implementation(plannedTool);
+      payload.parameterMappings = plannedTool.candidate.likelyParams.map(({ name }) => ({
+        parameterName: name,
+        artifactRequestIndices: [0],
+        guidance: 'Apply the selected producer value.',
+      }));
+      for (const verificationCase of payload.verificationCases) {
+        verificationCase.parameterValues = plannedTool.candidate.likelyParams.map(
+          ({ name: parameterName }) => ({ parameterName, value: 'fixture-value' }),
+        );
+      }
+      plannedTool.implementationPlan = journal.storeImplementationPlan(
+        payload,
+        teachingToolCompileInputsSha256(plannedTool, desired.chainEdges),
+      );
+    }
+    journal.revisePlan(desired, {
+      expectedRevision: journal.currentPlan().revision,
+      decision: decision(),
+    });
+    for (const plannedTool of desired.tools) {
+      issueBuild(journal, plannedTool.id);
+      passRequiredChecks(journal, plannedTool.id, plannedTool.candidate.requestSeqs);
+    }
+    const routeAReceipt = journal.issueReceipt({
+      toolId: consumer.id,
+      check: 'chain',
+      chainEdgeId: routeA.id,
+      facts: [passedInvocation('route-a')],
+    });
+    const routeBReceipt = journal.issueReceipt({
+      toolId: consumer.id,
+      check: 'chain',
+      chainEdgeId: routeB.id,
+      facts: [passedInvocation('route-b')],
+    });
+
+    journal.issueReceipt({
+      toolId: producerA.id,
+      check: 'live',
+      facts: [passedInvocation('producer-a-retry')],
+    });
+
+    const state = journal.readState();
+    expect(
+      state.tools
+        .find(({ toolId }) => toolId === consumer.id)
+        ?.currentReceiptRefs.map(({ key }) => key),
+    ).toEqual(['contract', 'replay', 'live', `chain:${routeB.id}`]);
+    expect(state.supersededReceiptRefs).toContainEqual(routeAReceipt.ref);
+    expect(state.supersededReceiptRefs).not.toContainEqual(routeBReceipt.ref);
+  });
+
   it('keeps a consumer artifact and standalone proof when its producer build changes', () => {
     const edge: ChainEdge = {
       id: 'producer-to-consumer',

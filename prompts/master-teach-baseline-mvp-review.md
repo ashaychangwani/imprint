@@ -23,8 +23,11 @@ tool boundaries, or public parameter breadth. Do not propose a repair.
 
 The host has already required a current contract, a successful standalone live
 result, and the exact successful result receipt you are reviewing. When
-`chainEdgeId` is present, review that one producer-to-consumer invocation; do
-not treat it as the standalone invocation or as proof about another edge. A
+`chainEdgeId` is present, it identifies one member of the exact agent-declared
+consumer invocation listed in `chainInvocationEdgeIds`. Review the bounded
+result as one call using that complete group. Do not treat it as the standalone
+invocation or extrapolate it to an edge in another group. The runtime has not
+inferred or mixed these members. A
 recorded-request comparison, when present, is
 diagnostic evidence rather than a runtime veto. Copy `validationContext.binding`
 exactly. Cite the supplied `baseline.resultEvidenceRef`; you may additionally

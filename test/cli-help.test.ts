@@ -11,6 +11,7 @@ import { resolve as pathResolve } from 'node:path';
 import {
   VERB_HELP,
   closestVerb,
+  formatFreshTeachSummary,
   inferPlaybookSiteForSmokeCommand,
   tryParseParamKV,
 } from '../src/cli.ts';
@@ -66,6 +67,20 @@ describe('teach help', () => {
     expect(flags.find(({ name }) => name === '--timeout <duration>')?.description).toContain(
       'Foreground teach deadline',
     );
+  });
+
+  it('labels interrupted work as unfinished instead of failed', () => {
+    const summary = (status: 'cancelled' | 'provider_unavailable' | 'failed' | 'blocked') =>
+      formatFreshTeachSummary({
+        status,
+        readyTools: 1,
+        nonReadyTools: 4,
+        runRoot: '/tmp/fixture-run',
+      });
+    expect(summary('cancelled')).toContain('4 unfinished');
+    expect(summary('provider_unavailable')).toContain('4 unfinished');
+    expect(summary('failed')).toContain('4 failed');
+    expect(summary('blocked')).toContain('4 blocked');
   });
 
   it('does not expose retired selection or resume flags', () => {

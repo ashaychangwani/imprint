@@ -220,6 +220,8 @@ export const MasterDecisionOutputSchema = strictObject({
   binding: MasterDecisionBindingSchema,
   outcome: z.enum(['accepted', 'rejected', 'revised']),
   reason: Reason,
+  /** Master-owned command to recall a fresh focused planner/compiler. */
+  recallToolIds: z.array(PromptToolIdSchema),
   desiredPlan: DesiredTeachingPlanSchema,
 });
 export const ParameterSelectionAdvisorInputSchema = strictObject({
@@ -348,7 +350,27 @@ export const BaselineMvpReviewerPromptInputSchema = strictObject({
     resultEvidenceRef: ContentAddressedRefSchema,
     resultReceiptRef: ContentAddressedRefSchema,
     chainEdgeId: PromptIdSchema.optional(),
+    /** Exact members of the one agent-declared chain invocation. */
+    chainInvocationEdgeIds: z.array(PromptIdSchema).min(1).optional(),
   }),
+}).superRefine((input, ctx) => {
+  const { chainEdgeId, chainInvocationEdgeIds } = input.baseline;
+  if (Boolean(chainEdgeId) !== Boolean(chainInvocationEdgeIds))
+    schemaIssue(
+      ctx,
+      ['baseline', 'chainInvocationEdgeIds'],
+      'chain invocation members are required exactly when a chain edge is present',
+    );
+  if (
+    chainInvocationEdgeIds &&
+    (new Set(chainInvocationEdgeIds).size !== chainInvocationEdgeIds.length ||
+      (chainEdgeId !== undefined && !chainInvocationEdgeIds.includes(chainEdgeId)))
+  )
+    schemaIssue(
+      ctx,
+      ['baseline', 'chainInvocationEdgeIds'],
+      'chain invocation members must be unique and include the receipt edge',
+    );
 });
 export const BaselineMvpReviewOutputSchema = strictObject({
   binding: BaselineMvpReviewBindingSchema,

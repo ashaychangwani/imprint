@@ -76,6 +76,32 @@ describe('failure receipt freshness', () => {
       }),
     ).toContain('no longer current');
   });
+
+  it('accepts a group-level failure only for a receipt from that exact invocation', () => {
+    const chainReceipt = { ...receipt, check: 'chain', chainEdgeId: 'route-b-kind' };
+    expect(
+      failureReceiptBindingError({
+        receipt: chainReceipt,
+        failure: {
+          toolId: 'search',
+          stage: 'chain',
+          chainEdgeIds: ['route-b-id', 'route-b-kind'],
+        },
+        currentToolState: current,
+      }),
+    ).toBeUndefined();
+    expect(
+      failureReceiptBindingError({
+        receipt: chainReceipt,
+        failure: {
+          toolId: 'search',
+          stage: 'chain',
+          chainEdgeIds: ['route-a-id', 'route-a-kind'],
+        },
+        currentToolState: current,
+      }),
+    ).toContain('does not match');
+  });
 });
 
 describe('fresh teach provider selection', () => {
@@ -630,7 +656,7 @@ describe('master-owned focused build waves', () => {
     expect(result.terminal).toEqual({
       status: 'failed',
       readyTools: 43,
-      failedTools: 2,
+      nonReadyTools: 2,
       runRoot: '/tmp/fresh-master-run',
       message: '2 planned focused build(s) failed.',
     });

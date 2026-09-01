@@ -67,6 +67,7 @@ import {
   type ImplementationPlanPayload,
   bindImplementationPlanRef,
   canonicalTeachingPlanJson,
+  chainInvocationForEdge,
   createEditableTeachingPlan,
   groundDetectorCandidateForMaster,
   normalizeDetectorCompileContextForMaster,
@@ -157,7 +158,8 @@ export type FreshTeachTerminalStatus = Exclude<FreshTeachRunStatus, 'active'>;
 export interface FreshTeachTerminalResult {
   status: FreshTeachTerminalStatus;
   readyTools: number;
-  failedTools: number;
+  /** Every planned or unresolved operation that did not reach a ready MVP. */
+  nonReadyTools: number;
   runRoot: string;
   message: string;
 }
@@ -171,6 +173,8 @@ interface BuildWaveFailure {
   receiptRef?: ContentAddressedRef;
   buildRef?: ContentAddressedRef;
   chainEdgeId?: string;
+  /** Exact invocation members when a shared consumer call failed as a whole. */
+  chainEdgeIds?: string[];
 }
 
 interface BuildWaveResult<Value> {
@@ -324,7 +328,7 @@ export async function runFocusedWaveOrchestration<Value>(
     terminal: {
       status: builds.failures.length === 0 ? 'completed' : 'failed',
       readyTools: plan.tools.length - failedIds.size,
-      failedTools: failedIds.size,
+      nonReadyTools: failedIds.size,
       runRoot,
       message:
         builds.failures.length === 0
@@ -363,9 +367,16 @@ interface LiveCheckResult {
   parameters: Record<string, string | number | boolean>;
   buildRef: ContentAddressedRef;
   resultReceiptRef: ContentAddressedRef;
+  /** Exact chain mappings bound together for this invocation. */
+  chainInvocationSha256?: string;
 }
 
 type UnboundLiveCheckResult = Omit<LiveCheckResult, 'buildRef' | 'resultReceiptRef'>;
+
+interface ChainInvocation {
+  edges: ChainEdge[];
+  sha256: string;
+}
 
 type ToolAdvice = Awaited<ReturnType<typeof requestToolSelectionAdvice>>;
 type FocusedPlan = Awaited<ReturnType<typeof requestFocusedPlan>>;
@@ -933,6 +944,7 @@ function verificationFailureProjection(
         state.tools.find(({ toolId }) => toolId === failure.toolId)?.buildRef ??
         null,
       chainEdgeId: failure.chainEdgeId ?? null,
+      chainEdgeIds: failure.chainEdgeIds ?? [],
       message: utf8Prefix(
         failure.error instanceof Error ? failure.error.message : String(failure.error),
         12_000,
@@ -1006,6 +1018,7 @@ export function failureReceiptBindingError(input: {
     toolId: string;
     stage: BuildWaveFailure['stage'];
     chainEdgeId?: string;
+    chainEdgeIds?: readonly string[];
     buildRef?: ContentAddressedRef;
   };
   currentToolState?: {
@@ -1017,7 +1030,9 @@ export function failureReceiptBindingError(input: {
   if (
     receipt.toolId !== failure.toolId ||
     (receipt.check !== failure.stage && failure.stage !== 'proof') ||
-    receipt.chainEdgeId !== failure.chainEdgeId
+    (failure.chainEdgeIds
+      ? !failure.chainEdgeIds.includes(receipt.chainEdgeId ?? '')
+      : receipt.chainEdgeId !== failure.chainEdgeId)
   ) {
     return `failure receipt does not match ${failure.toolId}/${failure.stage}`;
   }
@@ -1131,12 +1146,35 @@ function stableFindings(findings: PromptEvidenceProjection): unknown {
 }
 
 function failureEntryBelongsToTool(
+  journal: FreshTeachJournal,
+  plan: EditableTeachingPlan,
   entry: PromptEvidenceProjection['payload']['entries'][number],
   toolId: string,
 ): boolean {
-  if (entry.kind === 'mechanical_fact') return entry.toolId === toolId;
+  const connectedToolIds = new Set([toolId]);
+  const connectedEdgeIds = new Set<string>();
+  for (const edge of plan.chainEdges) {
+    if (edge.producerToolId !== toolId && edge.consumerToolId !== toolId) continue;
+    connectedToolIds.add(edge.producerToolId);
+    connectedToolIds.add(edge.consumerToolId);
+    connectedEdgeIds.add(edge.id);
+  }
+  if (entry.kind === 'mechanical_fact') {
+    const chainEdgeId = entry.check === 'chain' ? journal.readReceipt(entry.ref).chainEdgeId : null;
+    return (
+      (entry.toolId !== undefined && connectedToolIds.has(entry.toolId)) ||
+      (chainEdgeId !== null && chainEdgeId !== undefined && connectedEdgeIds.has(chainEdgeId))
+    );
+  }
   try {
-    return (JSON.parse(entry.quote) as { toolId?: unknown }).toolId === toolId;
+    const coordinates = JSON.parse(entry.quote) as {
+      toolId?: unknown;
+      chainEdgeId?: unknown;
+    };
+    return (
+      (typeof coordinates.toolId === 'string' && connectedToolIds.has(coordinates.toolId)) ||
+      (typeof coordinates.chainEdgeId === 'string' && connectedEdgeIds.has(coordinates.chainEdgeId))
+    );
   } catch {
     return false;
   }
@@ -1154,11 +1192,12 @@ function focusedRepairContexts(
   const contexts = new Map<string, FocusedPlannerRevisionContext>();
   for (const tool of current.plan.tools) {
     const relevant = findings.payload.entries.filter((entry) =>
-      failureEntryBelongsToTool(entry, tool.id),
+      failureEntryBelongsToTool(journal, current.plan, entry, tool.id),
     );
-    // Direct failures stay focused. When the master elects to recall a
-    // different tool (for example, a producer after a chain failure), it gets
-    // the complete current repair package that motivated that explicit choice.
+    // Keep a focused agent focused. If the master recalls a different tool
+    // (for example, a producer implicated by a consumer failure), its explicit
+    // decision reason supplies the direction and this fallback supplies the
+    // factual batch that motivated it.
     const contextualEntries = relevant.length > 0 ? relevant : findings.payload.entries;
     if (contextualEntries.length === 0) continue;
     const previousImplementationPlan = tool.implementationPlan
@@ -1765,7 +1804,7 @@ function rejectedResultError(reason: string, evidence: CompletionToolResultEvide
     utf8Prefix(
       [
         reason,
-        `Factual result from the rejected older build: ${canonicalTeachingPlanJson({
+        `Factual result from the source build being reviewed: ${canonicalTeachingPlanJson({
           expectedResult: evidence.payload.expectedResult,
           actualResult: evidence.payload.actualResult,
           resultReceiptRef: evidence.payload.resultReceiptRef,
@@ -1782,7 +1821,7 @@ function checkFailure(
   waveIndex: number,
   stage: BuildWaveFailure['stage'],
   error: unknown,
-  identity: Pick<BuildWaveFailure, 'receiptRef' | 'buildRef' | 'chainEdgeId'> = {},
+  identity: Pick<BuildWaveFailure, 'receiptRef' | 'buildRef' | 'chainEdgeId' | 'chainEdgeIds'> = {},
 ): BuildWaveFailure {
   return {
     toolId: tool.id,
@@ -2371,14 +2410,34 @@ async function compileAndCheckCurrentPlan(input: {
     return live;
   };
 
+  const incomingChainInvocationsFor = (toolId: string): ChainInvocation[] => {
+    const incoming = plan.chainEdges.filter(({ consumerToolId }) => consumerToolId === toolId);
+    const visited = new Set<string>();
+    const invocations: ChainInvocation[] = [];
+    for (const edge of incoming) {
+      if (visited.has(edge.id)) continue;
+      const invocation = chainInvocationForEdge(incoming, edge);
+      for (const grouped of invocation.edges) visited.add(grouped.id);
+      invocations.push(invocation);
+    }
+    return invocations;
+  };
+
   const runChainCheck = async (
     tool: EditableTeachingTool,
     focused: CompiledFocusedTool,
     implementation: ImplementationPlanPayload,
-    edge: ChainEdge,
+    invocation: ChainInvocation,
     waveIndex: number,
   ): Promise<LiveCheckResult | undefined> => {
-    input.report?.(`checking chain ${edge.id}`);
+    const { edges } = invocation;
+    const firstEdge = edges[0];
+    if (!firstEdge) throw new Error(`chain check for "${tool.id}" has no edges`);
+    if (edges.some(({ consumerToolId }) => consumerToolId !== firstEdge.consumerToolId))
+      throw new Error(`chain check for "${tool.id}" mixed consumers`);
+    if (new Set(edges.map(({ consumerParameter }) => consumerParameter)).size !== edges.length)
+      throw new Error(`chain check for "${tool.id}" repeated a consumer parameter`);
+    input.report?.(`checking chain ${edges.map(({ id }) => id).join(', ')}`);
     let outcome:
       | {
           kind: 'returned';
@@ -2389,54 +2448,68 @@ async function compileAndCheckCurrentPlan(input: {
         }
       | { kind: 'artifact_error'; error: Error }
       | { kind: 'host_error'; error: unknown };
-    const producer = liveByToolId.get(edge.producerToolId);
-    if (!producer?.result.ok) {
-      outcome = {
-        kind: 'artifact_error',
-        error: new Error(`producer "${edge.producerToolId}" has no successful live result`),
-      };
-    } else {
+    let parameters = liveVerificationParameters(implementation);
+    let bindingFailure: { edge: ChainEdge; error: Error } | undefined;
+    for (const edge of edges) {
+      const producer = liveByToolId.get(edge.producerToolId);
+      if (!producer?.result.ok) {
+        bindingFailure = {
+          edge,
+          error: new Error(
+            `producer "${edge.producerToolId}" has no successful live result for chain "${edge.id}"`,
+          ),
+        };
+        break;
+      }
       const binding = bindProducerResultToConsumer({
         edge,
         producerResult: producer.result.data,
         consumerParameterDeclarations: concreteParameterDeclarations(tool),
-        consumerParameters: liveVerificationParameters(implementation),
+        consumerParameters: parameters,
       });
       if (!binding.ok) {
-        outcome = {
-          kind: 'artifact_error',
-          error: new Error(`chain binding failed: ${binding.reason}`),
+        bindingFailure = {
+          edge,
+          error: new Error(`chain binding "${edge.id}" failed: ${binding.reason}`),
         };
-      } else {
-        try {
-          const startedAt = Date.now();
-          const chained =
-            tool.strategy?.kind === 'playbook_fallback'
-              ? await runPlaybookToolCheck({
-                  deps: input.deps,
-                  playbookPath: pathJoin(focused.toolDir, 'playbook.yaml'),
-                  site: focused.workflow.site,
-                  parameters: binding.parameters,
-                  runDeadline: input.runDeadline,
-                  signal: input.signal,
-                  maxDurationMs: input.maxDurationMs,
-                  label: `chain check "${edge.id}"`,
-                })
-              : await input.deps.runApiTool({
-                  workflowPath: focused.workflowPath,
-                  parameters: binding.parameters,
-                  signal: input.signal,
-                });
-          outcome = {
-            kind: 'returned',
-            result: chained.result,
-            durationMs: Date.now() - startedAt,
-            mechanism: chained.executionMechanism,
-            parameters: binding.parameters,
-          };
-        } catch (error) {
-          outcome = { kind: 'host_error', error };
-        }
+        break;
+      }
+      parameters = binding.parameters;
+    }
+    if (bindingFailure) {
+      outcome = {
+        kind: 'artifact_error',
+        error: bindingFailure.error,
+      };
+    } else {
+      try {
+        const startedAt = Date.now();
+        const chained =
+          tool.strategy?.kind === 'playbook_fallback'
+            ? await runPlaybookToolCheck({
+                deps: input.deps,
+                playbookPath: pathJoin(focused.toolDir, 'playbook.yaml'),
+                site: focused.workflow.site,
+                parameters,
+                runDeadline: input.runDeadline,
+                signal: input.signal,
+                maxDurationMs: input.maxDurationMs,
+                label: `chain check "${edges.map(({ id }) => id).join(', ')}"`,
+              })
+            : await input.deps.runApiTool({
+                workflowPath: focused.workflowPath,
+                parameters,
+                signal: input.signal,
+              });
+        outcome = {
+          kind: 'returned',
+          result: chained.result,
+          durationMs: Date.now() - startedAt,
+          mechanism: chained.executionMechanism,
+          parameters,
+        };
+      } catch (error) {
+        outcome = { kind: 'host_error', error };
       }
     }
 
@@ -2460,49 +2533,67 @@ async function compileAndCheckCurrentPlan(input: {
         ? { durationMs: outcome.durationMs, executionMechanism: outcome.mechanism }
         : { executionMechanism: outcome.kind === 'artifact_error' ? 'binding' : 'host' }),
     });
-    const receipt = input.journal.issueReceipt({
-      toolId: tool.id,
-      check: 'chain',
-      chainEdgeId: edge.id,
-      facts: check.facts,
-    });
+    // A binding failure proves only the exact edge that failed. Once every
+    // binding succeeds, the consumer call factually exercises the whole group.
+    const checkedEdges = bindingFailure ? [bindingFailure.edge] : edges;
+    const receipts = checkedEdges.map((edge) => ({
+      edge,
+      receipt: input.journal.issueReceipt({
+        toolId: tool.id,
+        check: 'chain',
+        chainEdgeId: edge.id,
+        facts: check.facts,
+      }),
+    }));
+    const primary = receipts[0];
+    if (!primary) throw new Error(`chain check for "${tool.id}" issued no receipts`);
+    const { receipt: primaryReceipt } = primary;
     if (!receiptPassed(check.facts)) {
       const error =
         outcome.kind === 'host_error' || outcome.kind === 'artifact_error'
           ? outcome.error
           : outcome.result.ok
-            ? new Error(`chain check "${edge.id}" failed`)
-            : returnedToolFailure(`chain check "${edge.id}"`, outcome.result);
+            ? new Error(`chain check "${edges.map(({ id }) => id).join(', ')}" failed`)
+            : returnedToolFailure(
+                `chain check "${edges.map(({ id }) => id).join(', ')}"`,
+                outcome.result,
+              );
       failures.push(
         checkFailure(tool, waveIndex, 'chain', error, {
-          receiptRef: receipt.ref,
-          chainEdgeId: edge.id,
+          receiptRef: primaryReceipt.ref,
+          ...(bindingFailure
+            ? { chainEdgeId: bindingFailure.edge.id }
+            : { chainEdgeIds: edges.map(({ id }) => id) }),
         }),
       );
-      chainByEdgeId.delete(edge.id);
+      for (const edge of edges) chainByEdgeId.delete(edge.id);
       return undefined;
     }
     if (outcome.kind !== 'returned') return undefined;
     const buildRef = currentBuildRef(tool.id);
     if (!buildRef) throw new Error(`chain check lost current build for "${tool.id}"`);
-    const live = {
+    const shared = {
       result: outcome.result,
       durationMs: outcome.durationMs,
       executionMechanism: outcome.mechanism,
       parameters: outcome.parameters,
       buildRef,
-      resultReceiptRef: receipt.ref,
+      chainInvocationSha256: invocation.sha256,
     };
-    chainByEdgeId.set(edge.id, live);
-    return live;
+    for (const { edge, receipt } of receipts) {
+      chainByEdgeId.set(edge.id, { ...shared, resultReceiptRef: receipt.ref });
+    }
+    return { ...shared, resultReceiptRef: primaryReceipt.ref };
   };
 
   const reviewChainResult = async (
     tool: EditableTeachingTool,
-    edge: ChainEdge,
+    invocation: ChainInvocation,
     result: LiveCheckResult,
     waveIndex: number,
   ): Promise<boolean> => {
+    const edge = invocation.edges[0];
+    if (!edge) throw new Error(`chain result review for "${tool.id}" has no edges`);
     const resultEvidence = completionToolResultEvidenceFor(input.journal, tool, result, edge);
     const disposition = input.approveMvp
       ? await input.approveMvp(tool, resultEvidence)
@@ -2517,10 +2608,13 @@ async function compileAndCheckCurrentPlan(input: {
         tool,
         waveIndex,
         'proof',
-        rejectedResultError(disposition.reason, resultEvidence),
+        rejectedResultError(
+          `Chain invocation [${invocation.edges.map(({ id }) => id).join(', ')}] was rejected: ${disposition.reason}`,
+          resultEvidence,
+        ),
         {
           receiptRef: result.resultReceiptRef,
-          chainEdgeId: edge.id,
+          chainEdgeIds: invocation.edges.map(({ id }) => id),
         },
       ),
     );
@@ -2546,10 +2640,12 @@ async function compileAndCheckCurrentPlan(input: {
     const live = await runStandaloneLive(tool, focused, implementation, waveIndex);
     const standaloneApproved = live ? await approveAndPublishMvp(tool, waveIndex, focused) : false;
     let chainReviewFailed = false;
-    for (const edge of plan.chainEdges.filter(({ consumerToolId }) => consumerToolId === tool.id)) {
-      const chained = await runChainCheck(tool, focused, implementation, edge, waveIndex);
+    for (const invocation of incomingChainInvocationsFor(tool.id)) {
+      const chained = await runChainCheck(tool, focused, implementation, invocation, waveIndex);
       if (!chained) continue;
-      if (!(await reviewChainResult(tool, edge, chained, waveIndex))) chainReviewFailed = true;
+      if (!(await reviewChainResult(tool, invocation, chained, waveIndex))) {
+        chainReviewFailed = true;
+      }
     }
 
     const proofFailures = mechanicalProofFailures(
@@ -2742,16 +2838,30 @@ async function compileAndCheckCurrentPlan(input: {
         ? hasUsableProducer(tool.id) || (await approveAndPublishMvp(tool, waveIndex, focused))
         : false;
       let chainReviewFailed = false;
-      for (const edge of plan.chainEdges.filter(
-        ({ consumerToolId }) => consumerToolId === tool.id,
-      )) {
-        let chained = chainByEdgeId.get(edge.id);
-        if (!hasReceipt(tool.id, 'chain', edge.id) || !chained?.result.ok) {
-          await ensureProducerLive(edge.producerToolId);
-          chained = await runChainCheck(tool, focused, implementation, edge, waveIndex);
+      for (const invocation of incomingChainInvocationsFor(tool.id)) {
+        const retained = invocation.edges.map((edge) => chainByEdgeId.get(edge.id));
+        let chained = retained[0];
+        if (
+          invocation.edges.some((edge, index) => {
+            const result = retained[index];
+            return (
+              !hasReceipt(tool.id, 'chain', edge.id) ||
+              !result?.result.ok ||
+              result.chainInvocationSha256 !== invocation.sha256
+            );
+          })
+        ) {
+          for (const producerToolId of new Set(
+            invocation.edges.map(({ producerToolId }) => producerToolId),
+          )) {
+            await ensureProducerLive(producerToolId);
+          }
+          chained = await runChainCheck(tool, focused, implementation, invocation, waveIndex);
         }
         if (!chained) continue;
-        if (!(await reviewChainResult(tool, edge, chained, waveIndex))) chainReviewFailed = true;
+        if (!(await reviewChainResult(tool, invocation, chained, waveIndex))) {
+          chainReviewFailed = true;
+        }
       }
       if (
         live?.result.ok &&
@@ -3587,11 +3697,11 @@ function currentTerminalCounts(
   journal: FreshTeachJournal | undefined,
   fallback: { planned: number; ready: number },
   publishedBuilds?: ReadonlySet<string>,
-): { readyTools: number; failedTools: number } {
+): { readyTools: number; nonReadyTools: number } {
   if (!journal) {
     return {
       readyTools: fallback.ready,
-      failedTools: Math.max(0, fallback.planned - fallback.ready),
+      nonReadyTools: Math.max(0, fallback.planned - fallback.ready),
     };
   }
   try {
@@ -3608,12 +3718,12 @@ function currentTerminalCounts(
         ).length;
     return {
       readyTools,
-      failedTools: plan.tools.length - readyTools + unresolvedCandidateCoverage(plan).length,
+      nonReadyTools: plan.tools.length - readyTools + unresolvedCandidateCoverage(plan).length,
     };
   } catch {
     return {
       readyTools: fallback.ready,
-      failedTools: Math.max(0, fallback.planned - fallback.ready),
+      nonReadyTools: Math.max(0, fallback.planned - fallback.ready),
     };
   }
 }
@@ -3827,7 +3937,7 @@ export async function runFreshMasterTeach(
           return writeTerminalResult({
             status: 'blocked',
             readyTools: 0,
-            failedTools: 0,
+            nonReadyTools: 0,
             runRoot,
             message: 'No discovered operation currently has an evidence-backed tool plan.',
           });
@@ -4026,7 +4136,7 @@ export async function runFreshMasterTeach(
       return writeTerminalResult({
         status: 'completed',
         readyTools,
-        failedTools: 0,
+        nonReadyTools: 0,
         runRoot,
         message: `Every one of ${readyTools} planned tool(s) reached a usable MVP and was promoted. ${availableFinesse} optional finesse suggestion(s) are saved under ${pathJoin(runRoot, 'finesse')}; unfinished work is recorded there as deferred and did not delay the MVP.`,
       });

@@ -10,6 +10,7 @@ import {
   type TeachingPlanDecision,
   type TeachingToolCandidate,
   canonicalTeachingPlanJson,
+  chainInvocationForEdge,
   createEditableTeachingPlan,
   groundDetectorCandidateForMaster,
   implementationPlanRequestProvenanceSha256,
@@ -611,6 +612,70 @@ describe('editable master teaching plan', () => {
       producerResultPath: 'results[0].alternative_token',
     });
     expect(create(duplicateTarget).chainEdges).toHaveLength(plan.chainEdges.length + 1);
+  });
+
+  it('uses only explicit chain invocation groups and rejects two bindings for one parameter', () => {
+    const producerA = tool('producer-a-id', 'producer_a');
+    const producerB = tool('producer-b-id', 'producer_b', { seq: 2 });
+    const consumer = tool('consumer-id', 'consumer', {
+      seq: 3,
+      dependencies: ['producer_a', 'producer_b'],
+      params: [
+        { name: 'item_id', type: 'string', description: 'Produced item identifier.' },
+        { name: 'item_kind', type: 'string', description: 'Produced item kind.' },
+      ],
+    });
+    const groupedEdges: ChainEdge[] = [
+      {
+        id: 'kind-edge',
+        producerToolId: producerB.id,
+        producerResultPath: 'results[0].kind',
+        consumerToolId: consumer.id,
+        consumerParameter: 'item_kind',
+        invocationGroup: 'selected-item',
+      },
+      {
+        id: 'id-edge',
+        producerToolId: producerA.id,
+        producerResultPath: 'results[0].id',
+        consumerToolId: consumer.id,
+        consumerParameter: 'item_id',
+        invocationGroup: 'selected-item',
+      },
+      {
+        id: 'alternative-id-edge',
+        producerToolId: producerB.id,
+        producerResultPath: 'results[0].alternative_id',
+        consumerToolId: consumer.id,
+        consumerParameter: 'item_id',
+      },
+    ];
+    const plan = desired([producerA, producerB, consumer], groupedEdges);
+    expect(create(plan).chainEdges).toEqual(groupedEdges);
+
+    const grouped = chainInvocationForEdge(groupedEdges, groupedEdges[0] as ChainEdge);
+    expect(grouped.edges.map(({ id }) => id)).toEqual(['id-edge', 'kind-edge']);
+    expect(grouped.sha256).toBe(teachingPlanContentSha256(grouped.edges));
+    const ungrouped = chainInvocationForEdge(groupedEdges, groupedEdges[2] as ChainEdge);
+    expect(ungrouped.edges.map(({ id }) => id)).toEqual(['alternative-id-edge']);
+
+    const duplicateParameter = structuredClone(plan);
+    const duplicate = duplicateParameter.chainEdges.find(({ id }) => id === 'kind-edge');
+    if (!duplicate) throw new Error('test plan has no grouped kind edge');
+    duplicate.consumerParameter = 'item_id';
+    expect(() => create(duplicateParameter)).toThrow(
+      'invocation group "selected-item" binds consumer parameter "item_id" more than once',
+    );
+
+    const groupedAlternative = structuredClone(plan);
+    const alternative = groupedAlternative.chainEdges.find(
+      ({ id }) => id === 'alternative-id-edge',
+    );
+    if (!alternative) throw new Error('test plan has no alternative edge');
+    alternative.producerToolId = producerA.id;
+    alternative.producerResultPath = 'results[0].id';
+    alternative.invocationGroup = 'alternative-selected-item';
+    expect(create(groupedAlternative).chainEdges).toEqual(groupedAlternative.chainEdges);
   });
 
   it('treats candidate metadata-only changes as no compile work', () => {

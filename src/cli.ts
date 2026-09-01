@@ -7,6 +7,7 @@ import { parseArgs } from 'node:util';
 import { IS_COMPILED_BINARY } from './imprint/is-compiled.ts';
 import type { ProviderName } from './imprint/llm.ts';
 import { isDebug } from './imprint/log.ts';
+import type { FreshTeachTerminalResult } from './imprint/master-teach-controller.ts';
 import { shutdownTracing, traced } from './imprint/tracing.ts';
 import { VERSION } from './imprint/version.ts';
 
@@ -38,6 +39,18 @@ export function parseDuration(dur: string): number | null {
   if (unit === 'm') return num * 60 * 1000;
   if (unit === 's') return num * 1000;
   return num;
+}
+
+export function formatFreshTeachSummary(
+  result: Pick<FreshTeachTerminalResult, 'status' | 'readyTools' | 'nonReadyTools' | 'runRoot'>,
+): string {
+  const nonReadyLabel =
+    result.status === 'cancelled' || result.status === 'provider_unavailable'
+      ? 'unfinished'
+      : result.status === 'blocked'
+        ? 'blocked'
+        : 'failed';
+  return `[imprint] teach ${result.status}: ${result.readyTools} ready, ${result.nonReadyTools} ${nonReadyLabel} — ${result.runRoot}`;
 }
 
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
@@ -1474,7 +1487,7 @@ async function main(argv: string[]): Promise<number> {
               onProgress: (message) => console.error(`[imprint teach] ${message}`),
             }),
         );
-        const summary = `[imprint] teach ${result.status}: ${result.readyTools} ready, ${result.failedTools} failed — ${result.runRoot}`;
+        const summary = formatFreshTeachSummary(result);
         if (result.status === 'completed') {
           console.log(summary);
           console.log(`[imprint] ${result.message}`);
