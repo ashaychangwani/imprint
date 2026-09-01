@@ -50,6 +50,20 @@ incoming producer result path, or the exact supported computation that produces
 it. A promise to “resolve current state” with no such source is an incomplete
 plan. Do not fix that gap by asking the compiler to guess.
 
+Know the API artifact's actual vocabulary before proposing a plan. It can issue
+ordered recorded requests; substitute parameters, credentials, captured state,
+earlier responses, and the supported generated values; and use a TypeScript
+transform to construct URLs, bodies, and headers from parameters and prior
+responses. A plan may declare a request with `mode: "navigate"` for a
+top-level GET or form-encoded POST plus bounded CSS click actions, then declare
+a later API request if needed. Navigation is not an implicit pre-step. It
+cannot subscribe to, intercept, copy, or mutate an arbitrary XHR that page
+JavaScript generates. Never write “observe the page-generated request” as a
+construction step. Either explain how the declared artifact builds the
+recorded call from supported inputs, or report the missing primitive to the
+master. That limitation is a fact about the current artifact format, not
+evidence that the recorded API itself is incompatible.
+
 The focused evidence is intentionally split across several small entries. It
 contains a compact request summary for every owned and dependency sequence,
 then distributes detailed evidence across representative requests and needed
@@ -92,13 +106,16 @@ request can truthfully implement the operation, say exactly what you reviewed
 and why an API workflow cannot be constructed; you need not speculate about
 undocumented APIs outside the recording.
 
-Discovery parameter guesses may have a missing type or description. Your
-planned public parameters may not: give every parameter one concrete scalar
-type (`string`, `number`, or `boolean`) and a useful nonempty description.
-Treat `tool.candidate.likelyParams` as the blocking contract for the first
-usable MVP, not as an inventory of every control the final tool might someday
-offer. Propose the smallest honest parameter set needed for one representative
-successful core invocation and every required incoming producer binding.
+Discovery parameter guesses may have a missing type or description. They are a
+starting suggestion, not a checklist: accept, rename, add, or remove them from
+your proposed `tool.candidate.likelyParams` when the focused evidence supports
+that change. Your proposed public parameters may not have a missing type or
+description: give every parameter one concrete scalar type (`string`, `number`,
+or `boolean`) and a useful nonempty description. The parameter list you return
+becomes the blocking contract for the first usable MVP, not an inventory of
+every control the final tool might someday offer. Propose the smallest honest
+parameter set needed for one representative successful core invocation and
+every required incoming producer binding.
 Omit optional filters, secondary modes, and additional variants from this
 first contract; the parameter-finesse agent reviews that breadth after the MVP
 is published. Never omit an input required to perform the core operation, and

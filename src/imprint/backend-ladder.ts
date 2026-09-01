@@ -64,16 +64,24 @@ import type {
 
 type UsedBackend = ConcreteBackend;
 
+export interface BackendAttemptFact {
+  backend: UsedBackend;
+  outcome: 'ok' | 'escalate' | 'failed' | 'unavailable';
+  detail: string;
+  durationMs: number;
+}
+
 interface LadderResult {
   result: ToolResult;
   usedBackend: UsedBackend;
   /** One entry per rung that was tried. */
-  attempts: Array<{
-    backend: UsedBackend;
-    outcome: 'ok' | 'escalate' | 'failed' | 'unavailable';
-    detail: string;
-    durationMs: number;
-  }>;
+  attempts: BackendAttemptFact[];
+}
+
+const BACKEND_ATTEMPT_DETAIL_LIMIT = 500;
+
+function backendAttemptDetail(result: Exclude<ToolResult, { ok: true }>): string {
+  return `${result.error}: ${result.message.slice(0, BACKEND_ATTEMPT_DETAIL_LIMIT)}`;
 }
 
 const log = createLog('backend');
@@ -365,7 +373,7 @@ export async function runWithLadder(
   }
   const baseLadder = options?.skipBootstrapSplice
     ? permittedLadder
-    : effectiveAutoLadder(permittedLadder, tool.workflow);
+    : effectiveAutoLadder(permittedLadder);
 
   // Runtime winner memo. Once a backend has served this tool in THIS session,
   // start there next time instead of re-walking the doomed early rungs (southwest
@@ -501,7 +509,7 @@ export async function runWithLadder(
       attempts.push({
         backend,
         outcome: 'escalate',
-        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        detail: backendAttemptDetail(result),
         durationMs,
       });
       log(`${backend}: FORBIDDEN in ${durationMs}ms — escalating`);
@@ -514,7 +522,7 @@ export async function runWithLadder(
         attempts.push({
           backend,
           outcome: 'escalate',
-          detail: `${result.error}: ${result.message.slice(0, 120)}`,
+          detail: backendAttemptDetail(result),
           durationMs,
         });
         log(`${backend}: STATE_MISSING in ${durationMs}ms — escalating to ${next}`);
@@ -533,7 +541,7 @@ export async function runWithLadder(
       attempts.push({
         backend,
         outcome: 'escalate',
-        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        detail: backendAttemptDetail(result),
         durationMs,
       });
       log(`${backend}: NETWORK in ${durationMs}ms — escalating to next rung`);
@@ -554,7 +562,7 @@ export async function runWithLadder(
       attempts.push({
         backend,
         outcome: 'escalate',
-        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        detail: backendAttemptDetail(result),
         durationMs,
       });
       log(
@@ -573,7 +581,7 @@ export async function runWithLadder(
       attempts.push({
         backend,
         outcome: 'escalate',
-        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        detail: backendAttemptDetail(result),
         durationMs,
       });
       log(
@@ -587,7 +595,7 @@ export async function runWithLadder(
     attempts.push({
       backend,
       outcome: 'failed',
-      detail: `${result.error}: ${result.message.slice(0, 120)}`,
+      detail: backendAttemptDetail(result),
       durationMs,
     });
     log(`${backend}: ${result.error} in ${durationMs}ms — non-escalatable, returning`);
@@ -623,10 +631,7 @@ export async function runWithLadder(
   };
 }
 
-export function effectiveAutoLadder(
-  ladder: ConcreteBackend[],
-  workflow: Workflow,
-): ConcreteBackend[] {
+export function effectiveAutoLadder(ladder: ConcreteBackend[]): ConcreteBackend[] {
   if (ladder.length <= 1) return ladder;
   const next = [...ladder];
   // Splice fetch-bootstrap right after `fetch`. It is the plain-fetch API
@@ -660,42 +665,7 @@ export function effectiveAutoLadder(
     const fbIdx = next.indexOf('fetch-bootstrap');
     if (fbIdx !== -1) next.splice(fbIdx + 1, 0, 'cdp-replay');
   }
-  // For a MULTI-step state-changing anti-bot workflow, plain-fetch rungs are not
-  // just doomed — their tarpitted .act attempts BURN the per-IP rate budget
-  // before cdp-replay even runs, which can flag the IP and make cdp-replay tarpit
-  // too. Front-load cdp-replay for these so the live browser handles every
-  // protected POST from a clean slate.
-  if (prefersCdpReplayFirst(workflow)) {
-    const i = next.indexOf('cdp-replay');
-    if (i > 0) {
-      next.splice(i, 1);
-      next.unshift('cdp-replay');
-    }
-  }
   return next;
-}
-
-/** A multi-step, state-changing, anti-bot workflow: ≥2 mutating requests AND an
- *  anti-bot signal (a bootstrap block, or requests that depend on captured
- *  `${state.X}` tokens). Plain-fetch replay can't sustain its sequence of
- *  protected POSTs (each self-invalidates `_abck`); only the live-browser
- *  cdp-replay rung can — and it should run FIRST so the doomed fetch /
- *  fetch-bootstrap attempts don't pre-burn the per-IP .act budget. A plain
- *  multi-POST REST API (no bootstrap, no `${state.X}`) is NOT matched, so it
- *  keeps the cheap fetch-first order. */
-export function prefersCdpReplayFirst(workflow: Workflow): boolean {
-  const mutating = workflow.requests.filter((r) => {
-    const m = (r.method ?? 'GET').toUpperCase();
-    return r.effect === 'unsafe' || m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE';
-  });
-  if (mutating.length < 2) return false;
-  const hasStateRefs = workflow.requests.some(
-    (r) =>
-      /\$\{state\./.test(r.url ?? '') ||
-      /\$\{state\./.test(r.body ?? '') ||
-      Object.values(r.headers ?? {}).some((v) => /\$\{state\./.test(v)),
-  );
-  return Boolean(workflow.bootstrap) || hasStateRefs;
 }
 
 function nextStateMissingBackend(
@@ -1769,6 +1739,28 @@ export async function runWorkflowWithLadder(opts: {
           : `${b}: ${r.error} — ${r.message.slice(0, 200)} (${durationMs}ms)`;
       });
 
+      const probeAttempts: BackendAttemptFact[] = settled.map((entry, index) => {
+        const backend = probeBackends[index];
+        if (!backend) throw new Error(`parallel probe lost backend at index ${index}`);
+        if (entry.status === 'rejected') {
+          return {
+            backend,
+            outcome: 'unavailable',
+            detail: entry.reason instanceof Error ? entry.reason.message : String(entry.reason),
+            durationMs: 0,
+          };
+        }
+        const recorded = entry.value.result.attempts.at(-1);
+        if (recorded) return recorded;
+        const result = entry.value.result.result;
+        return {
+          backend,
+          outcome: result.ok ? 'ok' : 'unavailable',
+          detail: result.ok ? 'OK' : backendAttemptDetail(result),
+          durationMs: entry.value.durationMs,
+        };
+      });
+
       type ProbeEntry = { backend: ConcreteBackend; result: LadderResult; durationMs: number };
       const winners = settled
         .filter(
@@ -1783,7 +1775,7 @@ export async function runWorkflowWithLadder(opts: {
         log(
           `parallel probe: winner=${best.backend} (${best.durationMs}ms)\n  ${digest.join('\n  ')}`,
         );
-        return best.result;
+        return { ...best.result, attempts: probeAttempts };
       }
 
       log(
@@ -1798,7 +1790,10 @@ export async function runWorkflowWithLadder(opts: {
       if (probeReachable(seqResult.result)) {
         compileWinningBackend.set(memoKey, seqResult.usedBackend);
       }
-      return seqResult;
+      return {
+        ...seqResult,
+        attempts: [...probeAttempts, ...seqResult.attempts],
+      };
     }
 
     // ── Memo hit: start at the memoized winner, keep all later rungs ─────
@@ -1901,11 +1896,11 @@ export interface RenderedRequestLookup {
 }
 
 /**
- * Render a workflow's outgoing requests OFFLINE — no network, no browser. Runs
- * the real `executeWorkflow` (so `${param}`/`${state}` substitution, captures,
- * and any `requestTransformModule` all execute) but with a `fetchImpl` that
- * returns the matching RECORDED response for each request and CAPTURES the final
- * outgoing request before returning it.
+ * Render a workflow's outgoing requests OFFLINE — no network and no live
+ * browser. Runs the real `executeWorkflow` (so `${param}`/`${state}`
+ * substitution, captures, and any `requestTransformModule` all execute) with
+ * synthetic fetch/navigation transports that return the matching RECORDED
+ * response and capture each prepared outgoing request.
  *
  * Purpose: verify a parameter actually reaches its field by diffing renders
  * across param overrides — WITHOUT firing a live `.act` per parameter (the burst
@@ -1941,21 +1936,19 @@ export async function renderWorkflowRequests(opts: {
 }): Promise<{ requests: RenderedRequest[]; result: ToolResult }> {
   const captured: RenderedRequest[] = [];
   let preparedArtifactRequestIndex: number | undefined;
-  const fetchImpl: typeof fetch = (async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const url =
-      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-    const method = (init?.method ?? 'GET').toUpperCase();
+  const capturePreparedRequest = (
+    method: string,
+    url: string,
+    inputHeaders: RequestInit['headers'],
+    body: string | null,
+  ): Response => {
     const headers: Record<string, string> = {};
-    if (init?.headers) {
-      const h = new Headers(init.headers as Record<string, string>);
+    if (inputHeaders) {
+      const h = new Headers(inputHeaders);
       h.forEach((v, k) => {
         headers[k] = v;
       });
     }
-    const body = typeof init?.body === 'string' ? init.body : init?.body ? String(init.body) : null;
     const requestOrdinal = captured.length;
     const artifactRequestIndex = preparedArtifactRequestIndex ?? requestOrdinal;
     preparedArtifactRequestIndex = undefined;
@@ -1971,7 +1964,27 @@ export async function renderWorkflowRequests(opts: {
       status: rec?.status ?? 200,
       headers: new Headers(rec?.headers ?? {}),
     });
+  };
+  const fetchImpl: typeof fetch = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const body = typeof init?.body === 'string' ? init.body : init?.body ? String(init.body) : null;
+    return capturePreparedRequest(method, url, init?.headers, body);
   }) as typeof fetch;
+  const browser: BrowserNavigationTransport = {
+    navigate: async (url, options = {}) =>
+      capturePreparedRequest(
+        (options.method ?? 'GET').toUpperCase(),
+        url,
+        options.headers,
+        options.body ?? null,
+      ),
+    snapshotCookies: async () => [],
+  };
 
   const result = await executeWorkflow({
     workflow: opts.workflow,
@@ -1988,6 +2001,7 @@ export async function renderWorkflowRequests(opts: {
     workflowPath: opts.workflowPath,
     initialState: opts.initialState,
     fetchImpl,
+    browser,
     persistAuthState: false,
     onPreparedRequest: (requestIndex) => {
       preparedArtifactRequestIndex = requestIndex;

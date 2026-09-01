@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
-import { runWorkflowWithLadder } from './backend-ladder.ts';
+import { type BackendAttemptFact, runWorkflowWithLadder } from './backend-ladder.ts';
 import type { CompileAgentProgress } from './compile-agent-types.ts';
 import type { CompileStrategyKind } from './compile-strategy.ts';
 import {
@@ -364,6 +364,8 @@ interface LiveCheckResult {
   result: ToolResult<unknown>;
   durationMs: number;
   executionMechanism: string;
+  /** Mechanical outcomes from every backend the runtime actually tried. */
+  backendAttempts?: BackendAttemptFact[];
   parameters: Record<string, string | number | boolean>;
   buildRef: ContentAddressedRef;
   resultReceiptRef: ContentAddressedRef;
@@ -422,7 +424,11 @@ interface FreshTeachControllerDependencies {
     workflowPath: string;
     parameters: Record<string, string | number | boolean>;
     signal?: AbortSignal;
-  }) => Promise<{ result: ToolResult<unknown>; executionMechanism: string }>;
+  }) => Promise<{
+    result: ToolResult<unknown>;
+    executionMechanism: string;
+    backendAttempts?: BackendAttemptFact[];
+  }>;
   runPlaybookTool: (input: {
     playbookPath: string;
     site: string;
@@ -462,7 +468,11 @@ const defaultDependencies: FreshTeachControllerDependencies = {
       params: parameters,
       signal,
     });
-    return { result: run.result, executionMechanism: run.usedBackend };
+    return {
+      result: run.result,
+      executionMechanism: run.usedBackend,
+      backendAttempts: run.attempts,
+    };
   },
   runPlaybookTool: async ({ playbookPath, site, parameters, maxDurationMs, signal }) => ({
     result: await runPlaybook({
@@ -1836,6 +1846,7 @@ function checkFailure(
 function returnedToolFailure(
   label: string,
   result: Extract<ToolResult<unknown>, { ok: false }>,
+  backendAttempts: readonly BackendAttemptFact[] = [],
 ): Error {
   const bounded = (value: string, bytes: number): string =>
     utf8Prefix(redactFreeformText(value).redacted, bytes);
@@ -1848,7 +1859,18 @@ function returnedToolFailure(
       `Request stages${omitted > 0 ? ` (${omitted} earlier omitted)` : ''}: ${JSON.stringify(shown)}`,
     );
   }
-  details.push(`Message: ${bounded(result.message, 600)}`);
+  if (backendAttempts.length) {
+    details.push(
+      [
+        'Backend attempts:',
+        ...backendAttempts.map(
+          ({ backend, outcome, durationMs, detail }) =>
+            `- ${backend}: ${outcome} in ${durationMs}ms — ${bounded(detail, 350)}`,
+        ),
+      ].join('\n'),
+    );
+  }
+  details.push(`Message: ${bounded(result.message, 700)}`);
   if (result.nextAction) details.push(`Next action: ${bounded(result.nextAction, 200)}`);
   if (result.missing?.length) {
     const shown = result.missing.slice(0, 8).map((item) => ({
@@ -1981,7 +2003,11 @@ async function runPlaybookToolCheck(input: {
   signal?: AbortSignal;
   maxDurationMs?: number;
   label: string;
-}): Promise<{ result: ToolResult<unknown>; executionMechanism: string }> {
+}): Promise<{
+  result: ToolResult<unknown>;
+  executionMechanism: string;
+  backendAttempts?: BackendAttemptFact[];
+}> {
   const remainingRunMs = input.runDeadline.deadlineMs - Date.now();
   if (remainingRunMs <= 0) throw new TimeoutError(input.label, 0);
   const timeoutMs = Math.min(
@@ -2396,7 +2422,11 @@ async function compileAndCheckCurrentPlan(input: {
           'live',
           observed.result.ok
             ? new Error(`live check failed for "${tool.id}"`)
-            : returnedToolFailure(`live check for "${tool.id}"`, observed.result),
+            : returnedToolFailure(
+                `live check for "${tool.id}"`,
+                observed.result,
+                observed.backendAttempts,
+              ),
           { receiptRef: receipt.ref },
         ),
       );
@@ -2444,6 +2474,7 @@ async function compileAndCheckCurrentPlan(input: {
           result: ToolResult<unknown>;
           durationMs: number;
           mechanism: string;
+          backendAttempts?: BackendAttemptFact[];
           parameters: Record<string, string | number | boolean>;
         }
       | { kind: 'artifact_error'; error: Error }
@@ -2506,6 +2537,7 @@ async function compileAndCheckCurrentPlan(input: {
           result: chained.result,
           durationMs: Date.now() - startedAt,
           mechanism: chained.executionMechanism,
+          backendAttempts: chained.backendAttempts,
           parameters,
         };
       } catch (error) {
@@ -2557,6 +2589,7 @@ async function compileAndCheckCurrentPlan(input: {
             : returnedToolFailure(
                 `chain check "${edges.map(({ id }) => id).join(', ')}"`,
                 outcome.result,
+                outcome.backendAttempts,
               );
       failures.push(
         checkFailure(tool, waveIndex, 'chain', error, {
@@ -2956,7 +2989,6 @@ interface MasterRevisionContext {
   independent: IndependentExecutionObservation;
   agent: MasterTeachAgentOptions;
   deps: FreshTeachControllerDependencies;
-  now: Date;
   runDeadline: RunDeadlineRef;
   revisionContextByToolId: ReadonlyMap<string, FocusedPlannerRevisionContext>;
 }
@@ -3040,7 +3072,7 @@ async function requestRepairRevision(
   const revision = context.journal.revisePlan(decision.desiredPlan, {
     expectedRevision: current.plan.revision,
     decision: planDecision(
-      context.now,
+      context.deps.now(),
       decision.outcome,
       decision.reason,
       [decisionRef],
@@ -3109,7 +3141,7 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
     context.journal.revisePlan(decision.desiredPlan, {
       expectedRevision: current.plan.revision,
       decision: planDecision(
-        context.now,
+        context.deps.now(),
         decision.outcome,
         decision.reason,
         [...planners.map(({ proposal }) => proposal.ref), decisionRef],
@@ -3890,7 +3922,6 @@ export async function runFreshMasterTeach(
       independent,
       agent: agents,
       deps,
-      now: deps.now(),
       runDeadline: deadline,
       revisionContextByToolId: repairContextByToolId,
     });

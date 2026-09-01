@@ -510,7 +510,18 @@ export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string):
 
 const CLI_STDERR_TAIL_LIMIT = 2000;
 
-function cliExitError(provider: ProviderName, exitCode: number, stderr: string): Error {
+export function cliExitError(provider: ProviderName, exitCode: number, stderr: string): Error {
+  if (provider === 'codex-cli' && exitCode === 101 && stderr.trim().length === 0) {
+    return new ProviderReportedError(
+      provider,
+      {
+        codes: ['cli_exit_101'],
+        messages: [`${provider} process exited 101 without a diagnostic`],
+      },
+      undefined,
+      'provider_process_interrupted',
+    );
+  }
   return new Error(
     `${provider} exited ${exitCode}${stderr ? `: ${cliStderrTail(stderr)}` : ' without provider diagnostics'}`,
   );

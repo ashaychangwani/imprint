@@ -82,6 +82,27 @@ const CLI_PATH = pathJoin(REPO_ROOT, 'src', 'cli.ts');
 const MCP_SERVER_NAME = 'imprint-compile';
 const MAX_VERIFICATION_CYCLES = 5;
 
+/** Data-compile tools exposed to claude-cli. Keep this list in one exported
+ * place so tests catch prompt/tool drift before a real teach run does. */
+export const DATA_COMPILE_TOOL_NAMES = [
+  'read_session_summary',
+  'search_requests',
+  'read_request',
+  'read_event',
+  'diff_request_for_event',
+  'inspect_body_structure',
+  'read_response_body',
+  'search_response_body',
+  'compare_rendered_requests',
+  'read_file',
+  'write_file',
+  'run_bash',
+  'run_tests',
+  'read_build_plan',
+  'done',
+  'give_up',
+] as const;
+
 function formatRevisionMode(enabled: boolean | undefined): string {
   return enabled
     ? 'REVISION MODE: inspect read_session_summary.revisionContext and the listed existing artifacts/diagnostics first. Preserve proven behavior; repair or honestly narrow only what evidence contradicts.'
@@ -337,20 +358,7 @@ async function runClaudeCliAttempt(opts: CompileViaClaudeCliOptions): Promise<Co
         ? ['--shared-triage-json', JSON.stringify(opts.sharedTriageSelection)]
         : []),
     ];
-    allowedToolNames = [
-      'read_session_summary',
-      'read_request',
-      'inspect_body_structure',
-      'read_response_body',
-      'search_response_body',
-      'read_file',
-      'write_file',
-      'run_bash',
-      'run_tests',
-      'read_build_plan',
-      'done',
-      'give_up',
-    ];
+    allowedToolNames = [...DATA_COMPILE_TOOL_NAMES];
     const { assignedSharedModules } = resolvePlanSliceFromFile(
       opts.buildPlanPath,
       opts.candidate?.toolName,

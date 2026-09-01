@@ -38,10 +38,14 @@ import {
   spawnOwnedProcess,
   terminateCompilerProcessTree,
 } from './compiler-process.ts';
-import { preferredAgentModel } from './llm.ts';
+import { cliExitError, preferredAgentModel } from './llm.ts';
 import { createLog } from './log.ts';
 import { COMPILE_SENTINELS } from './mcp-compile-server.ts';
-import { type RunDeadlineRef, resolvedRunDeadline } from './provider-retry.ts';
+import {
+  ProviderReportedError,
+  type RunDeadlineRef,
+  resolvedRunDeadline,
+} from './provider-retry.ts';
 import { ProviderTerminalAccumulator } from './provider-terminal.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
@@ -905,6 +909,17 @@ async function driveJsonl(
   }
 
   const errorTail = processErrorMessage || stderrBuf.trim().slice(-500);
+  const exitError = cliExitError('codex-cli', exitCode, errorTail);
+  if (exitError instanceof ProviderReportedError) {
+    return {
+      success: false,
+      outcome: 'error',
+      message: exitError.message,
+      providerInterruption: exitError.interruption,
+      providerError: exitError,
+      ...baseResult,
+    };
+  }
   return {
     success: false,
     outcome: 'error',

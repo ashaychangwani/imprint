@@ -6,7 +6,10 @@ export interface ProviderRetryEvent {
   reason: ProviderInterruptionReason;
 }
 
-export type ProviderInterruptionReason = 'capacity_or_overload' | 'transient_safety_filter';
+export type ProviderInterruptionReason =
+  | 'capacity_or_overload'
+  | 'transient_safety_filter'
+  | 'provider_process_interrupted';
 
 export interface ProviderRetryOptions {
   runDeadline?: RunDeadlineRef;

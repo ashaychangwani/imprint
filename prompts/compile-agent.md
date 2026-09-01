@@ -65,9 +65,14 @@ Follow these steps to compile the session:
    `read_session_summary` to see the site, narration, selected candidate scope,
    shared dependency context, and list of load-bearing requests. Read the
    accepted implementation plan in the initial task before writing files. For
-   `playbook_fallback`, inspect the exact event/request evidence named by the
-   plan, write the two browser artifacts above, run any useful schema checks,
-   and call `done`; steps 3 through 11 below are the API compile path.
+   `playbook_fallback`, call `read_event` for every cited browser event you use.
+   When an event carries element/DOM detail, ground the corresponding action
+   and locator in that detail.
+   Do not invent a control, click a fixed/default state that the recording never
+   changed, or infer a locator from network timing. If no cited event supports
+   an action, omit it or report the evidence gap to the master. Then write the
+   two browser artifacts, run useful schema checks, and call `done`; steps 3
+   through 11 below are the API compile path.
    - If the summary contains `revisionContext`, this is a bounded revision of an existing tool in a fresh agent context. Read `toolPlan.revision.masterGuidance` and, when present, `toolPlan.revision.priorAttempt`. The latter contains the complete previous accepted implementation plan, identifies the older source plan/build being revised, and contains only the latest factual repair package. Those facts may describe this tool directly or a dependency failure for which the master explicitly chose to recall this tool. They are history, not a verdict on this fresh artifact. Preserve supported decisions and carry each still-relevant repair requirement forward; explicitly reject one only when current evidence contradicts it. Then read every relative path listed under `existingArtifacts.entries`, `durableDiagnostics.entries`, and `feedbackNotes.entries` before re-deriving behavior from focused recording bodies. Respect each inventory's omission and scan metadata: `feedbackNotes.state: "not_checked"` means more entries may exist beyond the bounded scan. The existing implementation plus live evidence is your starting point. Preserve proven branches; make the smallest evidence-backed repair. Treat the guidance as factual context to investigate, not permission to invent a fix.
 
    If the summary includes `selectedCandidate`, compile only that candidate. Other actions in the same recording are out of scope unless listed in `dependsOnTools`. Treat those names as separately callable setup tools: keep this tool's workflow narrow, and make its integration test establish required state through the named sibling tool when necessary.
@@ -142,6 +147,18 @@ Follow these steps to compile the session:
      Use `inspect_body_structure` when a request or response mixes form fields, JSON, or JSON documents encoded inside strings. It reads only the redacted session evidence. Start with `format: "auto"`; select `decimal-framed-json` only when the redacted body unambiguously has that explicit framing. Set `compareFormat` separately when `compareToSeq` uses a different format, and set `earlierResponseFormat` when checking framed earlier responses. Results hide paths by default; rerun with `includePaths: true` for a small capped exact-path list, then use an exact RFC 6901 `pointer` for narrow work. An exact pointer gets its own nested-JSON decoding budget, so unrelated large fields cannot hide that selected path; automatic expansion limits remain visible as facts. Scalar literals are never returned. Comparisons report type, length, encoding, and missing facts. Original wire evidence is unavailable after redaction.
 
      `compare_rendered_requests` is an on-demand diagnostic, not a publication gate. Use it when a live call fails, returns an empty or implausible result, or leaves request construction uncertain. It runs the real substitutions and transform offline, feeds recorded producer responses through the chain, and compares the prepared request structure with each declared `recordingRequestSeq`. It never contacts the site or runs `integration.test.ts`. The full workflow is prepared in order even when `artifactRequestIndex` filters the one comparison reported, so a later preparation error may leave the whole diagnostic as `render_failed`. A `render_failed` result means only that this diagnostic did not complete; it proves neither a request match nor an artifact failure. Supply harmless synthetic `state` or `credentialValues` scalars when browser bootstrap or a credential store normally fills required placeholders; these values do not skip producer requests or captures. Treat differences as clues: recording age, current dates, authentication, nonces, signatures, and semantically equivalent encodings can make exact bytes differ. Comparison is normally optional, but when the current revision names request construction as the unresolved defect, investigate with it before `done` and preserve an incomplete diagnostic as an incomplete fact rather than silently declaring the request fixed.
+
+     The current API artifact cannot subscribe to, intercept, copy, or mutate an
+     arbitrary XHR generated by page JavaScript. A request transform receives
+     only the declared method, URL, prior responses, and public parameters. A
+     workflow request with `mode: "navigate"` may perform top-level GET or
+     form-encoded POST navigation and bounded CSS click actions; a later API
+     call must be another declared request. Navigation is not an implicit
+     pre-step, and the transform is never handed a page-generated XHR. If the
+     plan asks for that unsupported operation, do not pretend to have
+     implemented it: use supported evidence to construct the recorded request,
+     or call `give_up` with the exact plan contradiction so the master can
+     revise it.
 
    **Choose body placeholder encoding; do not delegate the decision to runtime.** Every request whose `body` contains `${param.X}`, `${credential.X}`, `${state.X}`, `${response[N].X}`, or `${generated.X}` MUST declare `bodyPlaceholderEncoding`:
    - `"json-string"` — the placeholder is inside a JSON string literal; runtime applies the complete JSON string escaping algorithm but the template owns the surrounding quotes.
@@ -548,13 +565,17 @@ baseline integration case, then call `done` for the mode-specific handoff.
 |---|---|
 | `read_session_summary` | Returns a hard-bounded redacted summary with site, candidate, narration, omission metadata, neutral inventory counts, bounded revision-file paths, and load-bearing seq/method/host/path/status/size facts; use the read tools for full bodies |
 | `read_build_plan` | (multi-tool runs only) Returns reusable module proposals and advisory parameter, auth, required-input, and producer-consumer suggestions; inspect exact evidence before accepting or revising them |
+| `search_requests` | Finds exact recorded request sequence IDs by method, type, URL, status, or sequence range |
+| `read_event` | Returns one exact recorded browser event and its redacted detail; element/DOM detail is present only when that event type recorded it |
 | `read_request` | Full request including request body for a given seq (values may be redacted/placeholdered) |
 | `inspect_body_structure` | Bounded structural inspection of a redacted request/response body; paths hidden by default, capped path disclosure, value-free pointer facts, subtree comparison, and on-demand equality within the host-redaction representation |
 | `diff_request_for_event` | Bounded request alternatives around one event, or value-free comparison of one exact agent-selected request pair |
+| `compare_rendered_requests` | Optional offline diagnostic that prepares the real workflow against recorded responses and reports factual request differences without gating publication |
 | `read_response_body` | Response body for a given seq (paginated for large bodies via offset/length) |
 | `search_response_body` | Find substrings in a response body and return matching offsets+context (essential for anchoring on known values inside opaque JSPB) |
 | `write_file` | Write the files allowed by the accepted strategy: API artifacts for `api`, or workflow.json + playbook.yaml for `playbook_fallback`; notes/*.md are also allowed |
 | `read_file` | Read a file by relative path (e.g. `parser.ts`, `workflow.json`) |
+| `run_bash` | Run a bounded local diagnostic command in the tool directory |
 | `run_tests` | Run parser.test.ts and/or request.test.ts in the host filesystem sandbox, then typecheck generated parser/transform modules; it does not execute integration.test.ts, and network is disabled for irreversible workflows |
 | `done` | Claim the artifact handoff is complete; in master MVP mode this runs deterministic checks only, while standalone full mode continues into independent live verification |
 | `give_up` | Give up with a documented reason (heavily discouraged, see constraints above) |

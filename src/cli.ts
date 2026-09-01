@@ -49,7 +49,9 @@ export function formatFreshTeachSummary(
       ? 'unfinished'
       : result.status === 'blocked'
         ? 'blocked'
-        : 'failed';
+        : result.status === 'failed'
+          ? 'not ready'
+          : 'failed';
   return `[imprint] teach ${result.status}: ${result.readyTools} ready, ${result.nonReadyTools} ${nonReadyLabel} — ${result.runRoot}`;
 }
 

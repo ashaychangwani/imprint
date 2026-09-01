@@ -747,20 +747,16 @@ describe('runtime backend learning', () => {
 });
 
 describe('probeCandidateBackendsForWorkflow', () => {
-  it('includes cdp-replay for multi-step state-changing workflows with captured state refs', () => {
+  it('includes browser-backed API probes for an explicitly declared navigation request', () => {
     const workflow = WorkflowSchema.parse({
       toolName: 'stateful_checkout',
       intent: { description: 'x' },
       parameters: [],
       requests: [
         {
-          method: 'POST',
+          method: 'GET',
+          mode: 'navigate',
           url: 'https://example.com/start',
-          headers: { 'X-Csrf': '${state.csrf}' },
-        },
-        {
-          method: 'POST',
-          url: 'https://example.com/confirm',
           headers: {},
         },
       ],

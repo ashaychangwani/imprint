@@ -1698,6 +1698,90 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
+  it('gives the master every backend failure instead of only the last one', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      let repairQuote = '';
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-backend-attempt-facts',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseMasterDecision = base.requestMasterDecision;
+      if (!baseMasterDecision) throw new Error('fixture master decision is missing');
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          requestMasterDecision: async (decisionInput) => {
+            if (!decisionInput.verificationFindings) return await baseMasterDecision(decisionInput);
+            repairQuote = decisionInput.verificationFindings.payload.entries
+              .filter((entry) => entry.kind === 'untrusted_redacted_quote')
+              .map(({ quote }) => quote)
+              .join('\n');
+            throw new ProviderUnavailableError(
+              new Error('fixture stops after backend facts reach the master'),
+            );
+          },
+          runApiTool: async () => ({
+            result: {
+              ok: false as const,
+              error: 'BAD_RESPONSE' as const,
+              message: 'The last backend refused top-level navigation.',
+            },
+            executionMechanism: 'stealth-fetch',
+            backendAttempts: [
+              {
+                backend: 'fetch' as const,
+                outcome: 'escalate' as const,
+                detail: `NETWORK: ${'slow bootstrap '.repeat(60)}`,
+                durationMs: 1_000,
+              },
+              {
+                backend: 'cdp-replay' as const,
+                outcome: 'escalate' as const,
+                detail: 'BAD_RESPONSE: request 1 reached the server and returned HTTP 400',
+                durationMs: 2_000,
+              },
+              {
+                backend: 'stealth-fetch' as const,
+                outcome: 'failed' as const,
+                detail: 'BAD_RESPONSE: request 0 refused top-level navigation',
+                durationMs: 3_000,
+              },
+            ],
+          }),
+        },
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(repairQuote).toContain('Backend attempts:');
+      expect(repairQuote).toContain('cdp-replay: escalate');
+      expect(repairQuote).toContain('request 1 reached the server and returned HTTP 400');
+      expect(repairQuote).toContain('stealth-fetch: failed');
+      expect(repairQuote).toContain('request 0 refused top-level navigation');
+    });
+  });
+
   it('lets the master review two distinct returned failures on the same build', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];

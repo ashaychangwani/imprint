@@ -8,7 +8,7 @@
 
 import type { AgentProgress } from './agent.ts';
 import { type AssignedSharedModule, describeAssignedModules } from './build-plan.ts';
-import type { ProviderReportedError } from './provider-retry.ts';
+import type { ProviderInterruptionReason, ProviderReportedError } from './provider-retry.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 
 /** How far a data-tool compiler must verify before returning its artifact.
@@ -159,7 +159,7 @@ export interface CompileAgentResult {
    *  compile. This is intentionally narrow: ordinary policy/content failures
    *  remain deterministic errors unless an adapter identifies its provider's
    *  known transient false-positive response. */
-  providerInterruption?: 'capacity_or_overload' | 'transient_safety_filter';
+  providerInterruption?: ProviderInterruptionReason;
   /** Full provider-owned terminal facts; never populated from tool/site text. */
   providerError?: ProviderReportedError;
   /** Factual verification boundary reached by a successful compile. */

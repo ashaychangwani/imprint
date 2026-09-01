@@ -13,7 +13,7 @@ import {
   loadBackendsCache,
   loadBackendsCacheStatus,
 } from './backend-cache.ts';
-import { prefersCdpReplayFirst, runWithLadder } from './backend-ladder.ts';
+import { runWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { workflowHasIrreversibleEffect } from './effects.ts';
 import { createLog } from './log.ts';
@@ -446,18 +446,20 @@ function preferredBackendMaxMs(): number {
 
 function workflowNeedsBootstrap(workflow: ResolvedTool['workflow']): boolean {
   if (workflow.bootstrap) return true;
-  return workflow.requests.some((request) =>
-    (request.captures ?? []).some(
-      (capture) =>
-        capture.capability === 'browser_bootstrap' || capture.capability === 'stealth_bootstrap',
-    ),
+  return workflow.requests.some(
+    (request) =>
+      request.mode === 'navigate' ||
+      (request.captures ?? []).some(
+        (capture) =>
+          capture.capability === 'browser_bootstrap' || capture.capability === 'stealth_bootstrap',
+      ),
   );
 }
 
 export function probeCandidateBackendsForWorkflow(
   workflow: ResolvedTool['workflow'],
 ): ConcreteBackend[] {
-  return workflowNeedsBootstrap(workflow) || prefersCdpReplayFirst(workflow)
+  return workflowNeedsBootstrap(workflow)
     ? ['fetch', 'cdp-replay', 'fetch-bootstrap', 'stealth-fetch', 'playbook']
     : ['fetch', 'stealth-fetch', 'playbook'];
 }
@@ -468,10 +470,19 @@ function workflowHash(workflow: ResolvedTool['workflow']): string {
     .digest('hex');
 }
 
+function workflowUsesStatePlaceholders(workflow: ResolvedTool['workflow']): boolean {
+  return workflow.requests.some(
+    (request) =>
+      /\$\{state\./.test(request.url) ||
+      /\$\{state\./.test(request.body ?? '') ||
+      Object.values(request.headers).some((value) => /\$\{state\./.test(value)),
+  );
+}
+
 export function workflowCapabilityHash(workflow: ResolvedTool['workflow']): string {
   const caps = {
     bootstrap: Boolean(workflow.bootstrap),
-    prefersCdpReplayFirst: prefersCdpReplayFirst(workflow),
+    statePlaceholders: workflowUsesStatePlaceholders(workflow),
     requestModes: normalizedUnique(workflow.requests.map((request) => request.mode ?? 'fetch')),
     captures: normalizedUnique([
       ...(workflow.bootstrap?.captures ?? []).map(

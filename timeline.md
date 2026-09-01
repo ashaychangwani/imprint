@@ -2467,3 +2467,160 @@ whitespace checks pass. The repository-wide suite passed 1,823 of 1,824 tests;
 the only failure was the unchanged Mac Chromium-exit timing test, which passed
 immediately when rerun alone. The next validation remains a completely fresh,
 unsteered Flights teach after a Git checkpoint.
+
+## 2026-09-01 10:58 PDT — Fresh Flights kept one MVP but exposed misleading backend feedback
+
+After checkpoint `1bb6aa0`, I started a completely fresh, unsteered
+`google-flights` teach. Run `397a57aa-406d-4592-b618-ebac9be40f6e`
+automatically selected the latest combined recording with hash
+`fb2f07e27379817a10eb1e96702bd29fab63836f0656cc36d59ad0011a8c53af`.
+It was never resumed and received no site-specific advice.
+
+Discovery proposed four API operations: location lookup, calendar prices,
+flight search, and booking options. The master kept all four and placed them in
+three dependency waves. Location lookup passed its contract and live check and
+was published immediately. Its parameter review then ran in the background
+while calendar and search compiled in parallel. This proved that the foreground
+command stayed attached, one working MVP could ship before the whole teach was
+perfect, and a published producer survived later repair revisions.
+
+Calendar and search both passed their file/schema checks but their generated
+API requests received HTTP 400 from the current service. Their repair compilers
+read the previous files and the new failure evidence rather than starting
+without context. The calendar compiler reported that it needed to intercept a
+page-generated request, then gave up after two API repair attempts. Later
+review showed that this conclusion was not proven: the generated request was
+also malformed, and the compiler had never completed the available offline
+comparison. The master later chose the playbook fallback; that playbook timed
+out on its second click and did not become ready. Search made several API
+repairs and did obtain a fresh page session ID, but its generated request was
+still malformed and returned 400. Booking correctly stayed behind its failed
+search producer.
+
+The run exposed a generic feedback bug. The parallel backend probe recorded
+that CDP reached search request 1 and received HTTP 400. The later sequential
+ladder returned only its last `stealth-fetch` error, which said request 0 needed
+top-level browser navigation. Only that last message reached the master. The
+master therefore incorrectly concluded that the API request had never run and
+recalled search again. The runtime must preserve all attempted backend outcomes
+as facts instead of choosing a misleading final one.
+
+The command finally ended after about 47 minutes with `1 ready, 3 failed` and
+the message `codex-cli exited 101 without provider diagnostics` during the next
+master decision. Because the exit contained no structured provider fact, the
+ordinary provider retry wrapper did not retry it. This run is now read-only and
+will never be resumed. The next work is limited to generic fixes for preserving
+backend outcomes and retrying a diagnostic-free Codex process interruption;
+there will be no Flights-specific runtime rule.
+
+## 2026-09-01 11:20 PDT — Kept failure facts intact and fixed agent information gaps
+
+The request-byte comparison remains an optional investigation tool, not a
+runtime pass/fail gate. Exact bytes are useful for finding construction mistakes
+such as `+` versus `%20`, but they cannot be a universal definition of a good
+request because dates, login state, one-time values, signatures, and even two
+equivalent encodings can legitimately differ. The removed
+`replayParameterValueOrigin` field has not been restored. The master is never
+required to echo hidden runtime bookkeeping.
+
+The fresh Flights run showed that the runtime tried several execution methods
+but told the master only about the last failure. One browser-backed attempt had
+actually reached the main request and received HTTP 400; a later method failed
+earlier during page navigation. The runtime now carries the short factual
+history of every attempt separately and puts it near the top of the master's
+failure report. It does not interpret which failure matters. Tests prove that a
+long first error cannot hide the HTTP 400 or the final navigation failure.
+
+A Codex process that exits with code 101 and no diagnostic is now treated as a
+provider interruption. The existing capped backoff retries the same logical
+call. Other exit codes, a 101 with a real diagnostic, and normal schema or
+request failures are still returned immediately rather than retried.
+
+The agent setup also had two concrete information gaps. The planner had
+proposed intercepting a request generated inside the page even though the
+current artifact format cannot do that. The master, planner, and compiler now
+receive the same short list of what the artifact can actually express, and are
+told to reject an impossible plan without treating that plan defect as proof
+that the API is unusable. Separately, the browser compiler could see event IDs
+but could not read their exact recorded element details. It now has a simple
+`read_event` tool and must ground every browser action and locator in those
+details instead of inventing controls.
+
+The parameter wording is now unambiguous: detector parameters are suggestions.
+The planner and master may add, remove, or rename them. Only the smaller list
+the master finally accepts becomes the first MVP contract. A fixed/default mode
+does not require a public parameter or an extra browser click merely because
+discovery guessed one.
+
+Optional event IDs remain nonblocking. The discovery prompt clearly separates
+request, narration, and event number spaces, and Codex discovery defaults to
+`gpt-5.6-sol`. If an agent still cites the wrong optional event ID, the host
+drops only that citation and preserves the proposed operation. Plan decisions
+now also ask for a fresh timestamp on every recorded revision. Finally, a
+failed terminal summary says tools are `not ready` instead of claiming every
+unbuilt dependent tool personally failed.
+
+## 2026-09-01 11:38 PDT — Closed the remaining feedback gaps and removed one hidden strategy guess
+
+Independent review found that the first provider fix covered master and planner
+calls but not the focused Codex compiler. A diagnostic-free Codex exit 101 from
+inside a compile is now the same temporary provider interruption: when Codex
+returned a conversation ID, Imprint backs off and resumes that exact compile;
+when no ID exists, the run reports provider unavailability instead of blaming
+the artifact. Tests exercise both cases.
+
+The backend history also had one remaining hole. When parallel probes selected
+a result such as `AUTH_EXPIRED` or `RATE_LIMITED`, the return path kept only the
+selected backend even though every probe had run. Every parallel outcome now
+travels with the selected result, whether it passed or failed. The master still
+decides which fact matters.
+
+Review also identified an older runtime heuristic that called some
+multi-request shapes “anti-bot” and silently moved CDP to the front. That is the
+kind of semantic strategy guess this rebuild is meant to remove. The heuristic
+and its special ordering are gone. The API ladder has one fixed order and does
+not inspect request meaning. Probe eligibility uses only explicit artifact
+facts: a declared navigation request, a bootstrap, or a declared browser
+capture. A separate value-free hash still notices `${state.*}` placeholders so
+an old backend cache cannot be reused after the artifact's mechanical needs
+change.
+
+The compiler's prompt and callable tools are now checked against each other.
+Claude can call exact event lookup, request search, the optional offline request
+comparison, and local diagnostics, and the prompt table documents each one.
+Offline comparison can now feed a recorded response through a declared
+navigation request and inspect a later API request without launching Chrome.
+If navigation preparation fails or is skipped, the result says `not checked`
+instead of the misleading `N/A`. Event lookup promises exact redacted event
+detail, and promises DOM detail only for event types that actually recorded it.
+
+Focused tests, type checking, lint, dead-code checks, circular-dependency checks,
+and whitespace checks pass. A repository-wide run before the last small test
+wording correction had only the unchanged detached-process timing flake plus
+one expectation intentionally made stale by the new all-attempt history. A
+clean full-suite rerun is the next checkpoint step.
+
+## 2026-09-01 11:47 PDT — Final review and repository-wide validation
+
+Three independent reviews covered the agent/runtime contract, stale-plan and
+producer handling, provider recovery, backend history, and the general change
+set. They found no remaining code defect. One reviewer found stale architecture
+text that still described the deleted semantic CDP-first heuristic. That text
+now describes the fixed initial ladder and the later reordering based only on
+observed successful runs.
+
+The first repository-wide test attempt filled the disk because 543 abandoned
+Imprint Chrome test profiles occupied 3.5 GB in the system temporary directory.
+That caused the recorder test to time out and later tests to fail while creating
+temporary files. No live process used those profiles, so only the generated
+`imprint-chrome-*` temporary directories were removed. Recordings, generated
+tools, source files, and normal browser profiles were untouched. The recorder
+suite then passed 8 of 8 tests.
+
+The clean repository-wide rerun passed 1,830 tests. Two process-teardown timing
+tests failed only when the entire suite ran concurrently; each passed
+immediately on its own (one recorder Chromium-exit test and one hostile
+grandchild-reaping stress test). The focused tests for this change passed in
+all three independent reviews, and the previously cascading compile, store,
+and verifier tests passed 80 of 80 when rerun directly. These two timing flakes
+are environmental and are not being turned into teach-runtime policy.

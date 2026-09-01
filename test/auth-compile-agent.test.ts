@@ -219,6 +219,8 @@ afterEach(() => {
   process.env.FAKE_CODEX_COOLDOWN_CHECKPOINT = undefined;
   process.env.FAKE_CODEX_INSPECT_CHECKPOINT = undefined;
   process.env.FAKE_CODEX_STDIN_LOG = undefined;
+  process.env.FAKE_CODEX_EXIT_101_ONCE = undefined;
+  process.env.FAKE_CODEX_EXIT_101_NO_SESSION = undefined;
   process.env.FAKE_CLAUDE_ARGS_LOG = undefined;
   process.env.FAKE_CLAUDE_TOOL_DIR = undefined;
   process.env.FAKE_CLAUDE_TERMINAL_ERROR = undefined;
@@ -898,6 +900,12 @@ const prompt = await Bun.stdin.text();
 if (process.env.FAKE_CODEX_STDIN_LOG) {
   writeFileSync(process.env.FAKE_CODEX_STDIN_LOG, prompt + '\\n---\\n', { flag: 'a' });
 }
+if (process.env.FAKE_CODEX_EXIT_101_ONCE && !resumed) {
+  if (!process.env.FAKE_CODEX_EXIT_101_NO_SESSION) {
+    console.log(JSON.stringify({ type: 'thread.started', thread_id: 'fixture-thread' }));
+  }
+  process.exit(101);
+}
 if (process.env.FAKE_CODEX_INSPECT_CHECKPOINT && !resumed) {
   writeFileSync(join(toolDir, 'workflow.json'), ${JSON.stringify(workflow)});
   writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'run_verification', action: 'finish', parameters: { answer: 'fixture-otp' } }));
@@ -1024,6 +1032,86 @@ describe('compile CLI launch errors', () => {
 });
 
 describe('compileAuthAgent with Codex', () => {
+  it('backs off and resumes the same compile after a diagnostic-free exit 101', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-codex-exit-101-'));
+    try {
+      const bin = pathJoin(root, 'bin');
+      const home = pathJoin(root, 'home');
+      mkdirSync(bin);
+      mkdirSync(home);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      process.env.IMPRINT_HOME = home;
+      process.env.FAKE_CODEX_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
+      process.env.FAKE_CODEX_ARGS_LOG = pathJoin(root, 'args.log');
+      process.env.FAKE_CODEX_EXIT_101_ONCE = '1';
+      installFakeCodex(bin);
+      const { sessionPath } = writeSessionPair(root);
+
+      const result = await compileAuthAgent({
+        site: 'fixture-site',
+        session: session(),
+        sessionPath,
+        authToolPlan: plan(),
+        teachCredentials: {
+          site: 'fixture-site',
+          values: { username: 'fixture-user', password: 'fixture-pass' },
+        },
+        llmConfig: { provider: 'codex-cli', model: 'gpt-5.6-terra' },
+        maxDurationMs: 30_000,
+      });
+
+      expect(result).toMatchObject({
+        success: true,
+        outcome: 'done',
+        sessionId: 'fixture-thread',
+      });
+      const commands = readFileSync(process.env.FAKE_CODEX_ARGS_LOG, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => line.split('\u0000'));
+      expect(commands).toHaveLength(2);
+      expect(commands[1]).toContain('resume');
+      expect(commands[1]).toContain('fixture-thread');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports exit 101 without a session as provider unavailability', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-codex-exit-101-no-session-'));
+    try {
+      const bin = pathJoin(root, 'bin');
+      const home = pathJoin(root, 'home');
+      mkdirSync(bin);
+      mkdirSync(home);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      process.env.IMPRINT_HOME = home;
+      process.env.FAKE_CODEX_TOOL_DIR = pathJoin(home, 'fixture-site', 'authenticate_fixture');
+      process.env.FAKE_CODEX_EXIT_101_ONCE = '1';
+      process.env.FAKE_CODEX_EXIT_101_NO_SESSION = '1';
+      installFakeCodex(bin);
+      const { sessionPath } = writeSessionPair(root);
+
+      const compile = compileAuthAgent({
+        site: 'fixture-site',
+        session: session(),
+        sessionPath,
+        authToolPlan: plan(),
+        teachCredentials: {
+          site: 'fixture-site',
+          values: { username: 'fixture-user', password: 'fixture-pass' },
+        },
+        llmConfig: { provider: 'codex-cli', model: 'gpt-5.6-terra' },
+        maxDurationMs: 30_000,
+      });
+
+      await expect(compile).rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(compile).rejects.toThrow('artifact was not treated as the cause');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('lets Codex inspect the existing verification page through a checkpoint', async () => {
     const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-codex-inspect-'));
     try {

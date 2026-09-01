@@ -954,6 +954,25 @@ describe('prompts and pre-plan discovery', () => {
       'operation-coverage rule does not require every optional parameter',
     );
     expect(focusedPrompt).toContain('never erase a distinct user-facing operation');
+    expect(masterPrompt).toContain('starting suggestions, not a frozen checklist');
+    expect(focusedPrompt).toContain('starting suggestion, not a checklist');
+    expect(masterPrompt).toContain('fixed/default mode does not need a public parameter');
+  });
+
+  it('describes the real API artifact boundary instead of promising XHR interception', () => {
+    for (const name of [
+      'master-teach-decision.md',
+      'master-teach-focused-planner.md',
+      'compile-agent.md',
+    ]) {
+      const rolePrompt = prompt(name);
+      expect(rolePrompt.toLowerCase()).toMatch(/cannot subscribe to, intercept, copy, or\s+mutate/);
+      expect(rolePrompt.toLowerCase()).toMatch(/page\s+javascript/);
+      expect(rolePrompt.toLowerCase()).toMatch(/navigation is not an implicit\s+pre-step/);
+    }
+    expect(prompt('compile-agent.md')).toContain('`read_event`');
+    expect(prompt('compile-agent.md')).toContain('event carries element/DOM detail');
+    expect(prompt('compile-agent.md')).toContain('ground the corresponding action');
   });
 
   it('tells every proof reviewer that request comparison is advisory', () => {

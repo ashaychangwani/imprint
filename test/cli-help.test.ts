@@ -79,7 +79,7 @@ describe('teach help', () => {
       });
     expect(summary('cancelled')).toContain('4 unfinished');
     expect(summary('provider_unavailable')).toContain('4 unfinished');
-    expect(summary('failed')).toContain('4 failed');
+    expect(summary('failed')).toContain('4 not ready');
     expect(summary('blocked')).toContain('4 blocked');
   });
 

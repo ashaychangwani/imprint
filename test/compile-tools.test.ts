@@ -2983,6 +2983,18 @@ describe('inspect_body_structure compile tool', () => {
         JSON.parse(exactPaths?.result ?? '{}').earlierResponseEqualities.facts[0],
       ).toMatchObject({ responsePath: '/echoed', responseSeq: 1 });
 
+      const readEvent = buildCompileTools(hostRedactedSession, dir, sessionPath).find(
+        (tool) => tool.name === 'read_event',
+      );
+      expect(readEvent?.description).toContain('ground playbook actions and locators');
+      expect(JSON.parse((await readEvent?.handler({ seq: 2 }))?.result ?? '{}')).toEqual({
+        seq: 2,
+        timestamp: 2,
+        type: 'click',
+        detail: JSON.stringify({ text: 'recorded selection' }),
+      });
+      expect((await readEvent?.handler({ seq: 999 }))?.isError).toBe(true);
+
       const diffEvent = buildCompileTools(hostRedactedSession, dir, sessionPath).find(
         (tool) => tool.name === 'diff_request_for_event',
       );
@@ -3128,6 +3140,75 @@ describe('inspect_body_structure compile tool', () => {
 });
 
 describe('compare_rendered_requests compile tool', () => {
+  it('reports a skipped navigation comparison as not checked rather than N/A', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-rendered-navigation-skip-'));
+    const session: Session = {
+      site: 'fixture',
+      startedAt: '2026-08-29T00:00:00.000Z',
+      url: 'https://example.test/',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 7,
+          timestamp: 1,
+          method: 'GET',
+          url: 'https://example.test/page',
+          headers: {},
+          resourceType: 'Document',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+            mimeType: 'text/html',
+            body: '<html></html>',
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    writeFileSync(
+      pathJoin(dir, 'workflow.json'),
+      JSON.stringify({
+        toolName: 'navigation_skip_fixture',
+        intent: { description: 'Exercise an intentionally skipped navigation.' },
+        site: 'fixture',
+        parameters: [],
+        requestTransformModule: './request-transform.ts',
+        requests: [
+          {
+            method: 'GET',
+            mode: 'navigate',
+            url: 'https://example.test/page',
+            headers: {},
+            recordingRequestSeq: 7,
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      pathJoin(dir, 'request-transform.ts'),
+      'export function transform() { return { skip: true }; }',
+    );
+
+    try {
+      const compare = buildCompileTools(session, dir, pathJoin(dir, 'session.json')).find(
+        (tool) => tool.name === 'compare_rendered_requests',
+      );
+      const result = await compare?.handler({ artifactRequestIndex: 0 });
+      expect(JSON.parse(result?.result ?? '{}').comparisons).toEqual([
+        {
+          artifactRequestIndex: 0,
+          state: 'not_checked',
+          reason: 'workflow completed without capturing an outgoing request for this request index',
+        },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('compares the real transformed body with recording provenance and keeps partial facts', async () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-rendered-request-'));
     const recordedBody = `f.req=${encodeURIComponent(
@@ -3337,7 +3418,7 @@ describe('compare_rendered_requests compile tool', () => {
         {
           artifactRequestIndex: 1,
           state: 'not_checked',
-          reason: 'no outgoing fetch was captured before workflow execution failed',
+          reason: 'no outgoing request was captured before workflow execution failed',
         },
       ]);
     } finally {

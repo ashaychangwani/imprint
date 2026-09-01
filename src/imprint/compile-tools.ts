@@ -131,6 +131,7 @@ export function buildCompileTools(
     buildInspectBodyStructureTool(session),
     buildCompareRenderedRequestsTool(session, toolDir, context),
     buildSearchRequestsTool(session),
+    buildReadEventTool(session),
     buildDiffRequestForEventTool(session),
     buildReadResponseBodyTool(session),
     buildSearchResponseBodyTool(session),
@@ -170,6 +171,43 @@ export interface CompileToolContext {
    *  existing artifact and durable verifier/audit feedback to the agent so it
    *  preserves proven behavior instead of re-deriving the tool from raw capture. */
   revisionMode?: boolean;
+}
+
+// ─── Tool: read_event ────────────────────────────────────────────────────────
+
+function buildReadEventTool(session: Session): AgentTool {
+  return {
+    name: 'read_event',
+    description:
+      'Read one exact recorded browser event and its redacted detail. When that event carries element/DOM detail, use it to ground playbook actions and locators; event/request timing alone does not describe an element.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        seq: { type: 'number', description: 'Event sequence number' },
+      },
+      required: ['seq'],
+    },
+    handler: async (input: unknown) => {
+      const seq = (input as { seq?: unknown }).seq;
+      if (typeof seq !== 'number' || !Number.isInteger(seq)) {
+        return { result: 'Event seq must be an integer', isError: true };
+      }
+      const event = session.events.find((entry) => entry.seq === seq);
+      if (!event) return { result: `Event seq ${seq} not found`, isError: true };
+      return {
+        result: JSON.stringify(
+          {
+            seq: event.seq,
+            timestamp: event.timestamp,
+            type: event.type,
+            detail: event.detail,
+          },
+          null,
+          2,
+        ),
+      };
+    },
+  };
 }
 
 // ─── Tool: read_build_plan ───────────────────────────────────────────────────
@@ -1410,19 +1448,13 @@ function buildCompareRenderedRequestsTool(
 
       const missingRequested =
         artifactRequestIndex !== undefined && comparisons.length === 0
-          ? workflow.requests[artifactRequestIndex]?.mode === 'navigate'
-            ? {
-                artifactRequestIndex,
-                state: 'not_applicable',
-                reason: 'browser navigation is not an offline fetch comparison',
-              }
-            : {
-                artifactRequestIndex,
-                state: 'not_checked',
-                reason: rendered.result.ok
-                  ? 'workflow completed without capturing an outgoing fetch for this request'
-                  : 'no outgoing fetch was captured before workflow execution failed',
-              }
+          ? {
+              artifactRequestIndex,
+              state: 'not_checked',
+              reason: rendered.result.ok
+                ? 'workflow completed without capturing an outgoing request for this request index'
+                : 'no outgoing request was captured before workflow execution failed',
+            }
           : undefined;
       const execution = rendered.result.ok
         ? { ok: true }

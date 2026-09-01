@@ -10,6 +10,7 @@ import { runOwnedCli } from '../src/imprint/compiler-process.ts';
 import {
   DEFAULT_VERIFICATION_PROVIDER,
   availableModelsForProvider,
+  cliExitError,
   cliStderrTail,
   codexAnalyzeArgs,
   detectProvider,
@@ -25,6 +26,7 @@ import {
 import {
   ProviderReportedError,
   isTransientProviderCapacityError,
+  retryTransientProviderFailure,
 } from '../src/imprint/provider-retry.ts';
 import {
   parseClaudeTerminalOutput,
@@ -94,6 +96,39 @@ describe('normalizeCliAnalyzeOutput', () => {
 });
 
 describe('structured CLI provider failures', () => {
+  it('retries a diagnostic-free Codex process exit without guessing about artifact failure', () => {
+    const interruption = cliExitError('codex-cli', 101, '');
+    expect(interruption).toBeInstanceOf(ProviderReportedError);
+    expect(isTransientProviderCapacityError(interruption)).toBe(true);
+    expect((interruption as ProviderReportedError).codes).toEqual(['cli_exit_101']);
+    expect((interruption as ProviderReportedError).interruption).toBe(
+      'provider_process_interrupted',
+    );
+
+    expect(isTransientProviderCapacityError(cliExitError('codex-cli', 1, ''))).toBe(false);
+    expect(isTransientProviderCapacityError(cliExitError('codex-cli', 101, 'panic'))).toBe(false);
+  });
+
+  it('backs off and reruns the same call after a diagnostic-free Codex exit 101', async () => {
+    let calls = 0;
+    const retries: string[] = [];
+    const result = await retryTransientProviderFailure(
+      async () => {
+        calls++;
+        if (calls === 1) throw cliExitError('codex-cli', 101, '');
+        return 'recovered';
+      },
+      {
+        sleep: async () => {},
+        onRetry: ({ reason }) => retries.push(reason),
+      },
+    );
+
+    expect(result).toBe('recovered');
+    expect(calls).toBe(2);
+    expect(retries).toEqual(['provider_process_interrupted']);
+  });
+
   it('surfaces Claude errors-only output before missing-result or exit reduction', () => {
     const error = parseClaudeTerminalOutput(
       JSON.stringify({ type: 'result', is_error: true, errors: ['529 provider overloaded'] }),
