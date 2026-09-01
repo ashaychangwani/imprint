@@ -66,6 +66,25 @@ const AvailableProducerSchema = strictObject({
   toolName: SemanticToolCandidateSchema.shape.toolName,
   expectedOutput: SemanticToolCandidateSchema.shape.expectedOutput,
 });
+export const FocusedPlannerRevisionContextSchema = strictObject({
+  /** The exact older plan/build being revised. The failure facts are the
+   * latest reason the master recalled this tool and may describe a direct
+   * failure or a dependency failure involving it. */
+  sourcePlanRevision: z.number().int().positive(),
+  sourcePlanRef: ContentAddressedRefSchema,
+  sourceBuildRef: ContentAddressedRefSchema.optional(),
+  previousImplementationPlan: strictObject({
+    ref: ImplementationPlanRefSchema,
+    payload: ImplementationPlanPayloadSchema,
+  })
+    .superRefine((implementation, ctx) => {
+      if (digest(implementation.payload) !== implementation.ref.sha256)
+        schemaIssue(ctx, ['ref', 'sha256'], 'previous implementation plan hash mismatch');
+    })
+    .optional(),
+  latestFailureFacts: PromptEvidenceProjectionSchema,
+});
+export type FocusedPlannerRevisionContext = z.infer<typeof FocusedPlannerRevisionContextSchema>;
 export const FocusedPlannerInputSchema = strictObject({
   run: RunIdentitySchema,
   recordingIndex: RecordingIndexSchema,
@@ -76,6 +95,9 @@ export const FocusedPlannerInputSchema = strictObject({
   incomingChainEdges: z.array(ChainEdgeSchema),
   outgoingChainEdges: z.array(ChainEdgeSchema),
   evidence: PromptEvidenceProjectionSchema,
+  /** Optional input-only handoff from the immediately preceding failed
+   * attempt. The planner never echoes this object. */
+  revisionContext: FocusedPlannerRevisionContextSchema.optional(),
 });
 export type FocusedPlannerInput = z.infer<typeof FocusedPlannerInputSchema>;
 export const FocusedPlannerOutputSchema = strictObject({

@@ -683,6 +683,7 @@ describe('fresh foreground master controller end to end', () => {
       let revisedProducerWasReplanned = false;
       let producerBuildVisibleWhenConsumerCompileStarted = false;
       let consumerMvpPreview = '';
+      let consumerMvpCount: number | null | undefined;
       const revisedProducerDescription = 'Search the revised fixture item catalog.';
 
       const terminal = await runFreshMasterTeach(
@@ -888,6 +889,7 @@ describe('fresh foreground master controller end to end', () => {
           requestBaselineMvpReview: async (input) => {
             if (input.toolId === CONSUMER_ID) {
               consumerMvpPreview = input.resultEvidence.payload.actualResult.preview;
+              consumerMvpCount = input.resultEvidence.payload.actualResult.count;
             }
             return credibleBaselineMvpReview(input);
           },
@@ -991,6 +993,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(revisedProducerWasReplanned).toBe(true);
       expect(producerBuildVisibleWhenConsumerCompileStarted).toBe(true);
       expect(consumerMvpPreview).toContain('item-1');
+      expect(consumerMvpCount).toBeNull();
       expect(events.filter((event) => event === `live:${CONSUMER_ID}`)).toHaveLength(2);
       expect(plan.buildWaves).toEqual([[PRODUCER_ID], [CONSUMER_ID]]);
       expect(state.tools.every(({ buildRef }) => buildRef !== undefined)).toBe(true);
@@ -1548,20 +1551,29 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('does not publish a retained leaf whose cached MVP review requires revision', async () => {
+  it('recalls a fresh planner and compiler when the master omits a rejected implementation plan', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];
       const promotionBatches: string[][] = [];
       let repairAttempts = 0;
       let completionReviewCalls = 0;
+      let baselineReviews = 0;
+      let plannerRevisionContext: FocusedPlannerInput['revisionContext'];
       const recordingPath = syntheticSessionPath(root);
       const base = lifecycleFailureFixture({
         runId: 'run-e2e-retained-leaf-rejected',
         events,
         promotionBatches,
-        requestBaselineMvpReview: (reviewInput) =>
-          baselineMvpReview(reviewInput, 'revision_required'),
+        requestBaselineMvpReview: (reviewInput) => {
+          baselineReviews += 1;
+          return baselineMvpReview(
+            reviewInput,
+            baselineReviews === 1 ? 'revision_required' : 'credible',
+          );
+        },
       });
+      const baseRequestFocusedPlan = base.requestFocusedPlan;
+      if (!baseRequestFocusedPlan) throw new Error('fixture focused planner is missing');
 
       const terminal = await runFreshMasterTeach(
         {
@@ -1573,6 +1585,10 @@ describe('fresh foreground master controller end to end', () => {
         },
         {
           ...base,
+          requestFocusedPlan: async (plannerInput) => {
+            if (plannerInput.revisionContext) plannerRevisionContext = plannerInput.revisionContext;
+            return await baseRequestFocusedPlan(plannerInput);
+          },
           detectToolCandidates: async () => ({
             ...validateToolCandidateDetection({
               sharedContext,
@@ -1583,19 +1599,23 @@ describe('fresh foreground master controller end to end', () => {
             durationMs: 0,
           }),
           requestMasterDecision: async (decisionInput) => {
-            if (decisionInput.verificationFindings) {
-              repairAttempts += 1;
-            }
             const desiredPlan =
               decisionInput.phase === 'discovery'
                 ? initialSingleToolDesiredPlan(decisionInput)
                 : decisionInput.plannerProposals.length > 0
                   ? proposalDesiredPlan(decisionInput)
                   : desiredFromCurrent(decisionInput);
+            if (decisionInput.verificationFindings) {
+              repairAttempts += 1;
+              const rejectedTool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+              if (!rejectedTool) throw new Error('fixture expected the rejected tool');
+              rejectedTool.implementationPlan = undefined;
+            }
             const output = MasterDecisionOutputSchema.parse({
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
               outcome: 'accepted',
-              reason: 'Keep the exact retained leaf build while considering the factual finding.',
+              reason:
+                'Keep the accepted tool contract, omit its rejected implementation plan, and recall a fresh focused compiler.',
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -1631,15 +1651,19 @@ describe('fresh foreground master controller end to end', () => {
         },
       );
 
-      expect(terminal.status).toBe('failed');
-      expect(terminal.readyTools).toBe(0);
-      expect(terminal.failedTools).toBe(1);
-      expect(terminal.message).toContain('same unresolved tool plan');
+      expect(terminal.status).toBe('completed');
+      expect(terminal.readyTools).toBe(1);
+      expect(terminal.failedTools).toBe(0);
       expect(repairAttempts).toBe(1);
-      expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(1);
-      expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(1);
-      expect(completionReviewCalls).toBe(0);
-      expect(promotionBatches).toEqual([]);
+      expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(2);
+      expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(2);
+      expect(plannerRevisionContext?.sourceBuildRef).toBeDefined();
+      expect(plannerRevisionContext?.previousImplementationPlan?.payload.toolId).toBe(PRODUCER_ID);
+      expect(JSON.stringify(plannerRevisionContext?.latestFailureFacts)).toContain(
+        'Factual result from the rejected older build',
+      );
+      expect(completionReviewCalls).toBe(1);
+      expect(promotionBatches).toEqual([[PRODUCER_NAME]]);
     });
   });
 
@@ -1652,6 +1676,8 @@ describe('fresh foreground master controller end to end', () => {
         'Build A returned the wrong core result; compile and verify a fresh Build B plan.';
       const reviewStatuses: Array<'credible' | 'revision_required'> = [];
       const compilerRevisionGuidance: Array<string | undefined> = [];
+      const compilerRevisionContexts: Array<FocusedPlannerInput['revisionContext']> = [];
+      let plannerRevisionContext: FocusedPlannerInput['revisionContext'];
       let sawBuildAFinding = false;
       let plannerReceivedRepairGuidance = false;
       let sawPlanBProposalWithoutStaleFinding = false;
@@ -1679,6 +1705,7 @@ describe('fresh foreground master controller end to end', () => {
           ...base,
           compileFocusedTool: async (compileInput) => {
             compilerRevisionGuidance.push(compileInput.revisionGuidance);
+            compilerRevisionContexts.push(compileInput.revisionContext);
             return await baseCompileFocusedTool(compileInput);
           },
           detectToolCandidates: async () => ({
@@ -1693,6 +1720,7 @@ describe('fresh foreground master controller end to end', () => {
           requestFocusedPlan: async (plannerInput) => {
             if (plannerInput.masterGuidance === repairReason) {
               plannerReceivedRepairGuidance = true;
+              plannerRevisionContext = plannerInput.revisionContext;
             }
             return FocusedPlannerOutputSchema.parse({
               binding: {
@@ -1725,7 +1753,7 @@ describe('fresh foreground master controller end to end', () => {
               desiredPlan = desiredFromCurrent(decisionInput);
               const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
               if (!tool) throw new Error('fixture expected the producer plan');
-              tool.compileContext.sharedHelperNotes = 'Build B must repair the rejected result.';
+              tool.implementationPlan = undefined;
               outcome = 'revised';
               reason = repairReason;
             } else {
@@ -1783,8 +1811,19 @@ describe('fresh foreground master controller end to end', () => {
       expect(plannerReceivedRepairGuidance).toBe(true);
       expect(sawPlanBProposalWithoutStaleFinding).toBe(true);
       expect(reviewStatuses).toEqual(['revision_required', 'credible']);
-      expect(compilerRevisionGuidance[1]).toContain(repairReason);
-      expect(compilerRevisionGuidance[1]).toContain('Exact prior failure facts for this tool');
+      expect(compilerRevisionGuidance[1]).toBe(repairReason);
+      expect(plannerRevisionContext?.sourcePlanRevision).toBeGreaterThan(0);
+      expect(plannerRevisionContext?.sourceBuildRef).toBeDefined();
+      expect(plannerRevisionContext?.previousImplementationPlan?.payload.toolId).toBe(PRODUCER_ID);
+      expect(
+        plannerRevisionContext?.latestFailureFacts.payload.entries.some(
+          (entry) => entry.kind === 'mechanical_fact' && entry.toolId === PRODUCER_ID,
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(plannerRevisionContext?.latestFailureFacts)).toContain(
+        'Factual result from the rejected older build',
+      );
+      expect(compilerRevisionContexts[1]).toEqual(plannerRevisionContext);
       expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(2);
       expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(2);
       expect(promotionBatches).toEqual([[PRODUCER_NAME]]);
@@ -1800,6 +1839,7 @@ describe('fresh foreground master controller end to end', () => {
         stagingDir: string;
         priorToolDir?: string;
         revisionGuidance?: string;
+        revisionContext?: FocusedPlannerInput['revisionContext'];
       }> = [];
       let repairDecisions = 0;
       let baselineReviews = 0;
@@ -1842,6 +1882,7 @@ describe('fresh foreground master controller end to end', () => {
               stagingDir: compileInput.stagingDir,
               priorToolDir: compileInput.priorToolDir,
               revisionGuidance: compileInput.revisionGuidance,
+              revisionContext: compileInput.revisionContext,
             });
             if (compileAttempts.length === 3)
               throw new ProviderUnavailableError(
@@ -1923,8 +1964,14 @@ describe('fresh foreground master controller end to end', () => {
       expect(compileAttempts[0]?.priorToolDir).toBeUndefined();
       expect(compileAttempts[1]?.priorToolDir).toBe(compileAttempts[0]?.stagingDir);
       expect(compileAttempts[2]?.priorToolDir).toBe(compileAttempts[0]?.stagingDir);
-      expect(compileAttempts[2]?.revisionGuidance).toContain(
+      expect(JSON.stringify(compileAttempts[2]?.revisionContext?.latestFailureFacts)).toContain(
         'workflow request provenance does not match the accepted plan',
+      );
+      expect(JSON.stringify(compileAttempts[2]?.revisionContext?.latestFailureFacts)).not.toContain(
+        'does not demonstrate the fixture operation',
+      );
+      expect(compileAttempts[2]?.revisionContext?.sourcePlanRevision).toBeGreaterThan(
+        compileAttempts[1]?.revisionContext?.sourcePlanRevision ?? 0,
       );
     });
   });
@@ -2218,6 +2265,7 @@ describe('fresh foreground master controller end to end', () => {
         stagingDir: string;
         priorToolDir?: string;
         revisionGuidance?: string;
+        revisionContext?: FocusedPlannerInput['revisionContext'];
       }> = [];
       let repairDecisions = 0;
       const recordingPath = threeToolSyntheticSessionPath(root);
@@ -2253,6 +2301,7 @@ describe('fresh foreground master controller end to end', () => {
                 stagingDir: compileInput.stagingDir,
                 priorToolDir: compileInput.priorToolDir,
                 revisionGuidance: compileInput.revisionGuidance,
+                revisionContext: compileInput.revisionContext,
               });
             return await baseCompileFocusedTool(compileInput);
           },
@@ -2285,8 +2334,7 @@ describe('fresh foreground master controller end to end', () => {
             if (repairingWithoutPlans) {
               const producer = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
               if (!producer) throw new Error('fixture expected the producer plan');
-              producer.compileContext.sharedHelperNotes =
-                'Recompile the producer while retaining its downstream tool designs.';
+              producer.implementationPlan = undefined;
             }
             const output = MasterDecisionOutputSchema.parse({
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
@@ -2342,6 +2390,12 @@ describe('fresh foreground master controller end to end', () => {
         producerCompileRevisions[0]?.stagingDir,
       );
       expect(producerCompileRevisions[1]?.revisionGuidance).toBeTruthy();
+      expect(
+        producerCompileRevisions[1]?.revisionContext?.previousImplementationPlan?.payload.toolId,
+      ).toBe(PRODUCER_ID);
+      expect(
+        JSON.stringify(producerCompileRevisions[1]?.revisionContext?.latestFailureFacts),
+      ).toContain('Fixture leaf requests a producer revision.');
       expect(events.filter((event) => event === `compile:${CONSUMER_ID}`)).toHaveLength(1);
       expect(events.filter((event) => event === `compile:${LEAF_ID}`)).toHaveLength(1);
       expect(events.filter((event) => event === `review:${CONSUMER_ID}`)).toHaveLength(2);

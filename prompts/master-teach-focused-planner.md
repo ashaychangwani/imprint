@@ -21,6 +21,19 @@ earlier proposal, change the proposal or strengthen its evidence-based
 explanation instead of returning the same answer without engaging with the
 rejection.
 
+On a repair, the input may also contain `revisionContext`. This is input-only;
+do not echo it in your output. `previousImplementationPlan` is the complete
+last accepted plan, while `latestFailureFacts` describes only the explicitly
+named latest repair. `sourcePlanRevision` and optional `sourceBuildRef` identify
+the older plan and artifact being revised. The facts may be a direct tool
+failure or a dependency failure that caused the master to recall this tool.
+Preserve every supported construction decision from the previous plan. For
+each unresolved repair, either carry its exact requirement into the replacement
+plan or explain why current evidence makes it inapplicable. Never treat an
+older build's failure as proof that the fresh proposal has already failed, and
+never accumulate failures from still earlier attempts: this object contains
+only the latest handoff.
+
 Use only the serialized `recordingIndex` as sequence authority. For an API
 plan, `requestProvenance` is the exact future workflow request order. Indices
 start at zero with no gaps. Every workflow request must map to one known

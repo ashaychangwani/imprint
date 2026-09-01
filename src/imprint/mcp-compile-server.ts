@@ -126,6 +126,12 @@ export function canWaiveIrreversibleLiveVerification(
   return failures.length === 0 && workflow !== undefined && workflowHasIrreversibleEffect(workflow);
 }
 
+export function compileDoneToolDescription(mode?: CompileVerificationMode): string {
+  return mode === 'master_mvp'
+    ? 'Call this after completing the artifact and its offline tests. Validates deterministic artifact, schema, test, and type facts, then hands the artifact back to the master for live verification. Fix any returned deterministic failures and call done again.'
+    : 'Call this when you have successfully completed the task. Continues through independent external verification of the artifacts. If verification fails, the result will list the issues and you should fix them and call done again.';
+}
+
 export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Promise<void> {
   const providerControl = inheritedCompileProviderControl();
   const lifetime = new AbortController();
@@ -203,8 +209,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     // The custom done/give_up tools live alongside in MCP space.
     const doneTool: Tool = {
       name: 'done',
-      description:
-        'Call this when you have successfully completed the task. Triggers external verification of the artifacts. If verification fails, the result will list the issues and you should fix them and call done again.',
+      description: compileDoneToolDescription(opts.verificationMode),
       inputSchema: {
         type: 'object',
         properties: {

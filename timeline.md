@@ -2201,3 +2201,159 @@ The focused agent tests pass 92/92 and the controller tests pass 46/46. Type
 checking and lint are clean. After the remaining repository checks and a Git
 checkpoint, validation will start another fresh unsteered teach rather than
 resuming this failed run.
+
+## 2026-09-01 07:18 PDT — Fresh Flights proved planning and early publishing, then exposed a repair handoff loop
+
+Checkpoint `d991899` fixed the plan-name failure, and a completely fresh,
+unsteered Flights run `2e90eb09-9f8e-4087-96d4-f82771320937` selected the latest
+combined recording. Discovery again found four operations. This time the master
+returned a valid four-tool plan in two waves on its first attempt, so the naming
+and repair-context fix worked.
+
+The airport lookup reached a useful minimum, passed its contract and live check,
+and was published immediately. Plain fetch won its first live race in about 0.46
+seconds. Its optional parameter review continued in the background while the
+other tools compiled. Later revisions preserved this working producer and both
+of its factual receipts.
+
+Calendar and flight search did not reach useful results. Calendar moved through
+several different real defects: a malformed request, an empty result, a genuine
+RPC error, and then missing page-produced state. One draft briefly fixed the HTTP
+request but still returned no useful fares. Search repeatedly reached the live
+API through plain fetch, often in well under one second, but seven successive
+core reviews saw an empty normalized result. Booking correctly remained waiting
+for its producer instead of compiling against an unproved search result.
+
+Every repair used a fresh planner and compiler, and the runtime kept the working
+airport tool. The remaining loop was an information handoff failure. The raw
+focused evidence contained the needed request details, but a requirement learned
+in one plan disappeared from the next plan. Fresh compilers saw prior files but
+not a durable checklist of unresolved repair facts. For search, they saw only
+the empty parsed result—not enough of the prepared live request, captured state,
+raw response, and parser input to tell whether the request or parser was wrong.
+They therefore kept making new guesses that passed their own local tests.
+
+After eight independent calendar/search draft cycles produced the same practical
+outcome, I cancelled the diagnostic rather than let its default 12-hour deadline
+consume the day. The terminal honestly reported `1 ready, 3 failed`. The airport
+MVP remains installed. This run is read-only and will never be resumed.
+
+The next fix will stay small and site-neutral: carry the prior implementation
+plan and unresolved repair facts into the next fresh context as history, clearly
+label old failures as belonging to the old build, and supply one bounded factual
+live diagnostic. The compile prompt will explain its state-capture choices and
+say to use the existing request comparison only after a request-construction or
+implausible-response failure. There will be no runtime byte-equality gate,
+automatic request rewrite, semantic classifier, or Google rule.
+
+## 2026-09-01 07:39 PDT — Kept repair intelligence in the agents instead of adding another runtime gate
+
+The 146-byte versus 148-byte request example clarified the boundary. Exact
+request comparison is useful for diagnosing construction mistakes, such as one
+encoding spelling a space differently, but it cannot be made universally
+authoritative. Dates, old recordings, authentication state, nonces, signatures,
+header order, and equivalent encodings can all produce legitimate differences.
+The runtime therefore still does not require replay or byte equality. The
+compiler can use the existing offline comparison after a failed, empty, or
+implausible live result, and its prompt now explains that a failed comparison is
+only an incomplete diagnostic—not a verdict on the artifact.
+
+The fresh Flights loop did not justify adding request tracing throughout every
+HTTP and browser backend. That would have enlarged the runtime and recreated
+the same policy problem. Instead, the handoff now carries one small, documented,
+input-only repair object: the complete previous implementation plan and only
+the latest failure facts, bound to the exact older plan and build that produced
+them. A fresh planner and compiler may preserve, revise, or reject those older
+decisions. The facts are overwritten on the next failure and cleared after
+success; they are never accumulated into a growing theory of the site. A
+rejected semantic result also includes its bounded expected result, actual
+parsed preview, shape, count, and receipt reference, so the next agent is not
+left with only “result rejected.”
+
+The compile instructions had a separate factual bug. They said `done` would run
+live verification and return failures to the same compiler, but master MVP mode
+actually returns after deterministic checks and the master performs live work
+later. The prompt and MCP tool description now say this plainly. They also
+document the real `mode: "navigate"` switch, explain that transform navigation
+options cannot turn a fetch into navigation, and explain the capture capability
+labels as descriptions rather than backend commands. This addresses the failed
+Flights drafts without choosing a browser strategy in runtime.
+
+Optional event citations remain non-blocking. The earlier wrong IDs came from
+confusing three neighboring number spaces—requests, narration, and top-level
+events. The discovery prompt now names those spaces, the payload presents them
+separately, and the handoff keeps only IDs found in the real top-level event
+list. This is a prompt/setup correction, not a semantic runtime rejection.
+Codex discovery and all other Codex teaching roles already default to
+`gpt-5.6-sol` unless the user explicitly chooses another model.
+
+Dependency bookkeeping remains only where it records factual proof. Editing a
+chain path does not rebuild or discard either artifact; it invalidates only the
+old chain receipt that names the old path or producer result. Existing plan,
+journal, and full-controller tests prove that a working producer and its
+standalone contract/live receipts remain intact. Removing that last receipt
+invalidation would let the terminal claim a new dependency passed using an old
+dependency result, so it is retained as truth bookkeeping rather than a
+teaching decision.
+
+The focused repair, prompt, compile-tool, and master-controller tests pass
+178/178. Lint, type checking, dead-code, circular-dependency, and whitespace
+checks are clean. The full repository suite passed 1,809 of 1,810 tests; one
+unrelated Chromium shutdown stress test timed out under whole-suite load and
+then passed in about two seconds when run alone. Earlier recorder and hostile
+process-cleanup flakes also passed repeatedly in isolation. None of the changed
+files implement recording or process cleanup, so this repair does not add teach
+logic for those timing flakes. The next validation will be another fresh,
+unsteered teach; the cancelled Flights run will not be resumed.
+
+## 2026-09-01 08:03 PDT — Closed the last repair-handoff gaps before another fresh teach
+
+Independent review found that the earlier patch still did not tell the master
+how to request a new artifact when the public tool design was already correct.
+The answer is now explicit and simple: keep the tool and its public contract,
+but leave out its old implementation plan. That calls a fresh focused planner
+and compiler, gives them the compatible prior files, and avoids changing an
+unrelated field merely to trick the runtime into rebuilding. A full controller
+test now proves that this produces a second build and can complete successfully.
+
+The failure handoff had two smaller bookkeeping bugs. First, a long failure was
+converted to JSON and then cut in the middle, which could make it unreadable and
+cause the next agent to lose the expected-versus-actual result. Check-history
+JSON is now kept complete within its existing bounded fields. Second, a receipt
+was checked for the right tool and check name but not for the exact current
+build. The handoff now rejects an old build or superseded receipt instead of
+attaching it to the new plan.
+
+When the master deliberately recalls a producer because a consumer or chain
+failed, that producer now receives the current failure package as well as its
+own prior plan and files. This is not an automatic dependency theory: the
+runtime sends the cross-tool context only after the master has explicitly
+chosen that producer for recompilation. Tests prove that downstream artifacts
+remain in place while the selected producer is rebuilt.
+
+The compile instructions now use one consistent meaning for `done`: in the
+master MVP flow it hands the artifact back to the master for live checking; in
+standalone mode it continues to the independent verifier. The request
+comparison instructions no longer promise partial output when a later request
+preparation fails. Capture capability labels are described accurately as the
+minimum mechanism able to obtain missing state, while the agent still decides
+what that state means and which teaching strategy to use.
+
+A final review tightened three more factual details. A chain-only wiring repair
+now explicitly keeps both working artifacts and changes only the edge; it does
+not use the artifact-recompile instruction. If an asynchronous check tries to
+hand off a receipt that has already been replaced or belongs to an old build,
+the controller prints an internal diagnostic, ignores that stale failure, and
+re-reads current state instead of ending the teach. Finally, a top-level object
+result no longer invents `count: 1`; only top-level arrays receive an automatic
+count, while object results use `null` and leave their real nested counts in the
+bounded result preview.
+
+The expanded focused suite passes 208/208. Lint, type checking, dead-code, and
+circular-dependency checks pass. The final full-suite run passed 1,811 of 1,812
+tests. The only failure was the same unrelated Mac Chromium-exit stress flake;
+the hostile-process test passed this time. Those exact stress tests passed
+repeatedly in isolation earlier (five recorder repetitions and sixty hostile
+cleanup repetitions). No changed file implements recording or process cleanup.
+After the Git checkpoint, the next action is a completely fresh, unsteered
+Flights teach.

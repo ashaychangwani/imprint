@@ -1110,7 +1110,7 @@ function buildCompareRenderedRequestsTool(
   return {
     name: 'compare_rendered_requests',
     description:
-      'On-demand request-construction diagnostic. Render the current workflow offline with its real substitutions and request transform, feed its accepted recorded responses through request chains, and compare each prepared request with its recordingRequestSeq. Returns factual header, URL, and body comparisons with bounded structural differences, without making a semantic judgment or gating publication. Use when a live failure, empty or implausible result, or uncertain construction makes recorded comparison useful; exact bytes can legitimately differ as recordings age or dynamic values change.',
+      'On-demand request-construction diagnostic. Render the current workflow offline with its real substitutions and request transform, feed its accepted recorded responses through request chains, and compare each prepared request with its recordingRequestSeq. Never contacts the site or runs integration.test.ts. A render failure means this diagnostic did not complete; it is not an artifact verdict. Returns factual header, URL, and body comparisons with bounded structural differences, without making a semantic judgment or gating publication. Use when a live failure, empty or implausible result, or uncertain construction makes recorded comparison useful; exact bytes can legitimately differ as recordings age or dynamic values change.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1125,7 +1125,7 @@ function buildCompareRenderedRequestsTool(
         state: {
           type: 'object',
           description:
-            'Optional synthetic scalar capture state for an offline render when the workflow normally obtains it during bootstrap.',
+            'Optional synthetic scalar capture state for an offline render when the workflow normally obtains it during bootstrap. It does not skip workflow requests or captures.',
           additionalProperties: {
             oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
           },
@@ -1138,7 +1138,8 @@ function buildCompareRenderedRequestsTool(
         },
         artifactRequestIndex: {
           type: 'number',
-          description: 'Optional zero-based workflow request index to report.',
+          description:
+            'Optional zero-based workflow request index to report. Preceding workflow requests are still prepared in order.',
         },
         recordedFormat: {
           type: 'string',
@@ -2057,7 +2058,7 @@ export function buildRunTestsTool(
   return {
     name: 'run_tests',
     description:
-      'Run the agent-written parser.test.ts and/or request.test.ts plus strict TypeScript checks for generated parser/request-transform artifacts, then report pass/fail counts.',
+      'Run the agent-written parser.test.ts and/or request.test.ts plus strict TypeScript checks for generated parser/request-transform artifacts, then report pass/fail counts. Does not execute integration.test.ts.',
     input_schema: {
       type: 'object',
       properties: {},

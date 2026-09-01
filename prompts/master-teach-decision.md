@@ -104,6 +104,19 @@ dates, rotating state, authentication, nonces, and signatures. A difference is
 evidence for the master to interpret; it does not by itself require browser
 fallback.
 
+When the accepted tool contract is still right but its current artifact needs
+repair, keep the tool ID, candidate, compile context, strategy, and dependencies
+but omit its current `implementationPlan` from `desiredPlan`. That is the
+explicit instruction to call a fresh focused planner and compiler. The host
+will seed the compatible prior files and latest source-bound failure facts; do
+not mutate an unrelated field merely to force recompilation. Retaining the
+same `implementationPlan` means retaining the same artifact, so it cannot
+repair that artifact's standalone result after the result is marked
+`revision_required`. A chain-only wiring failure is different: keep both
+working implementation plans, edit only the supported `chainEdges` fields, and
+let the host rerun the changed chain check. Recall a producer or consumer only
+when the evidence says its artifact—not merely the old edge—needs revision.
+
 Return canonical `DesiredTeachingPlan` fields directly. Do not add version,
 revision, or decision metadata. You may select an `implementationPlan` only from
 a supplied current tool or focused planner proposal whose complete compile-input

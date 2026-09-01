@@ -222,6 +222,21 @@ const FocusedPlannerInputValidationSchema = FocusedPlannerInputSchema.superRefin
   if (input.run.recordingSha256 !== input.recordingIndex.recordingSha256)
     issue(ctx, ['run'], 'focused planner recording binding is stale');
   validateEvidence(input.evidence, input.recordingIndex, ctx, ['evidence']);
+  if (input.revisionContext) {
+    validateEvidence(input.revisionContext.latestFailureFacts, input.recordingIndex, ctx, [
+      'revisionContext',
+      'latestFailureFacts',
+    ]);
+    if (
+      input.revisionContext.previousImplementationPlan?.payload.toolId !== undefined &&
+      input.revisionContext.previousImplementationPlan.payload.toolId !== input.tool.id
+    )
+      issue(
+        ctx,
+        ['revisionContext', 'previousImplementationPlan', 'payload', 'toolId'],
+        'previous implementation plan belongs to another tool',
+      );
+  }
   validateFocusedPlannerTool(input.tool as EditableTeachingTool, input, ctx, ['tool']);
   const producerIds = new Set<string>();
   const producerNames = new Set<string>();

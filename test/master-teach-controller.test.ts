@@ -4,6 +4,7 @@ import {
   ParameterAdvisorLane,
   compatibleFocusedPlannerIndexes,
   compileEveryToolInBuildWaves,
+  failureReceiptBindingError,
   focusedPlanningFailureMessage,
   focusedPlanningStateSha256,
   implementationPlanRepairToolIds,
@@ -28,6 +29,54 @@ import { ProviderUnavailableError, RunDeadline } from '../src/imprint/provider-r
 import type { Session } from '../src/imprint/types.ts';
 
 const SHA = `sha256:${'a'.repeat(64)}`;
+
+describe('failure receipt freshness', () => {
+  const currentBuildRef = { path: 'builds/current.json', sha256: SHA };
+  const currentReceiptRef = {
+    path: 'receipts/current.json',
+    sha256: `sha256:${'b'.repeat(64)}`,
+  };
+  const current = {
+    buildRef: currentBuildRef,
+    currentReceiptRefs: [{ ref: currentReceiptRef }],
+  };
+  const failure = { toolId: 'search', stage: 'live' as const };
+  const receipt = {
+    ref: currentReceiptRef,
+    toolId: 'search',
+    check: 'live',
+    buildRef: currentBuildRef,
+  };
+
+  it('accepts only an exact current build receipt', () => {
+    expect(
+      failureReceiptBindingError({ receipt, failure, currentToolState: current }),
+    ).toBeUndefined();
+  });
+
+  it('rejects a historical build or superseded receipt before repair handoff', () => {
+    expect(
+      failureReceiptBindingError({
+        receipt: {
+          ...receipt,
+          buildRef: { path: 'builds/old.json', sha256: `sha256:${'c'.repeat(64)}` },
+        },
+        failure,
+        currentToolState: current,
+      }),
+    ).toContain('older build');
+    expect(
+      failureReceiptBindingError({
+        receipt: {
+          ...receipt,
+          ref: { path: 'receipts/old.json', sha256: `sha256:${'d'.repeat(64)}` },
+        },
+        failure,
+        currentToolState: current,
+      }),
+    ).toContain('no longer current');
+  });
+});
 
 describe('fresh teach provider selection', () => {
   it('uses Codex end to end when --agent codex is explicit', () => {

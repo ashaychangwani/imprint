@@ -3213,6 +3213,23 @@ describe('compare_rendered_requests compile tool', () => {
         (tool) => tool.name === 'compare_rendered_requests',
       );
       expect(compare?.description).toContain('real substitutions and request transform');
+      expect(compare?.description).toContain('Never contacts the site');
+      expect(compare?.description).toContain(
+        'A render failure means this diagnostic did not complete',
+      );
+      const compareProperties = compare?.input_schema.properties as
+        | Record<string, { description?: string }>
+        | undefined;
+      expect(compareProperties?.artifactRequestIndex?.description).toContain(
+        'Preceding workflow requests are still prepared',
+      );
+      expect(compareProperties?.state?.description).toContain(
+        'does not skip workflow requests or captures',
+      );
+      const runTests = buildCompileTools(session, dir, pathJoin(dir, 'session.json')).find(
+        (tool) => tool.name === 'run_tests',
+      );
+      expect(runTests?.description).toContain('Does not execute integration.test.ts');
       const result = await compare?.handler({
         params: { query: 'fresh destination' },
         recordedFormat: 'form-urlencoded',

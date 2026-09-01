@@ -92,12 +92,28 @@ test('the pinned contract states applicability, edit invalidation, and playbook 
   );
   expect(prompt).toContain('`compare_rendered_requests` is an on-demand diagnostic');
   expect(prompt).toContain('not a publication gate');
-  expect(prompt).toContain('partial facts to distinguish the request that was actually sent');
+  expect(prompt).toContain('a later preparation error may leave the whole diagnostic');
   expect(prompt).toContain('semantically equivalent encodings can make exact bytes differ');
   expect(prompt).toContain('Exact recorded bytes are an on-demand diagnostic');
   expect(prompt).toContain('it does not require universal byte equality');
   expect(prompt).toContain('`toolPlan.revision.masterGuidance`');
-  expect(prompt).toContain('exact prior failure facts available for this tool');
+  expect(prompt).toContain('`toolPlan.revision.priorAttempt`');
+  expect(prompt).toContain('identifies the older source plan/build being revised');
+  expect(prompt).toContain('It never contacts the site or runs `integration.test.ts`');
+  expect(prompt).toContain(
+    'A `render_failed` result means only that this diagnostic did not complete',
+  );
+  expect(prompt).toContain('`mode` chooses transport');
+  expect(prompt).toContain('it cannot switch a fetch request into browser mode');
+  expect(prompt).toContain('`capability` declares the minimum mechanism');
+  expect(prompt).toContain('affects which existing runtime transports are eligible');
+  expect(prompt).toMatch(/does\s+not infer the capture's meaning/);
+  expect(prompt).toContain('rotating or dynamic data alone is not evidence');
+  expect(prompt).toContain('`run_tests` never executes `integration.test.ts`');
+  expect(prompt).toContain('the master runs the live call afterward');
+  expect(prompt).not.toContain('When parser tests pass, call `done`');
+  expect(prompt).not.toContain('Get parser tests passing first, then call `done`');
+  expect(prompt).toContain('Write integration.test.ts with the accepted baseline case');
 });
 
 test('the playbook compiler remains site-neutral and follows the accepted auth and fallback plans', () => {

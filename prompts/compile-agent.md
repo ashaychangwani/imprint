@@ -68,7 +68,7 @@ Follow these steps to compile the session:
    `playbook_fallback`, inspect the exact event/request evidence named by the
    plan, write the two browser artifacts above, run any useful schema checks,
    and call `done`; steps 3 through 11 below are the API compile path.
-   - If the summary contains `revisionContext`, this is a bounded revision of an existing tool in a fresh agent context. Read `toolPlan.revision.masterGuidance`; it contains the master's direction and the exact prior failure facts available for this tool. Then read every relative path listed under `existingArtifacts.entries`, `durableDiagnostics.entries`, and `feedbackNotes.entries` before re-deriving behavior from focused recording bodies. Respect each inventory's omission and scan metadata: `feedbackNotes.state: "not_checked"` means more entries may exist beyond the bounded scan. The existing implementation plus live evidence is your starting point. Preserve proven branches; make the smallest evidence-backed repair. Treat the guidance as factual context to investigate, not permission to invent a fix.
+   - If the summary contains `revisionContext`, this is a bounded revision of an existing tool in a fresh agent context. Read `toolPlan.revision.masterGuidance` and, when present, `toolPlan.revision.priorAttempt`. The latter contains the complete previous accepted implementation plan, identifies the older source plan/build being revised, and contains only the latest factual repair package. Those facts may describe this tool directly or a dependency failure for which the master explicitly chose to recall this tool. They are history, not a verdict on this fresh artifact. Preserve supported decisions and carry each still-relevant repair requirement forward; explicitly reject one only when current evidence contradicts it. Then read every relative path listed under `existingArtifacts.entries`, `durableDiagnostics.entries`, and `feedbackNotes.entries` before re-deriving behavior from focused recording bodies. Respect each inventory's omission and scan metadata: `feedbackNotes.state: "not_checked"` means more entries may exist beyond the bounded scan. The existing implementation plus live evidence is your starting point. Preserve proven branches; make the smallest evidence-backed repair. Treat the guidance as factual context to investigate, not permission to invent a fix.
 
    If the summary includes `selectedCandidate`, compile only that candidate. Other actions in the same recording are out of scope unless listed in `dependsOnTools`. Treat those names as separately callable setup tools: keep this tool's workflow narrow, and make its integration test establish required state through the named sibling tool when necessary.
 
@@ -141,7 +141,7 @@ Follow these steps to compile the session:
 
      Use `inspect_body_structure` when a request or response mixes form fields, JSON, or JSON documents encoded inside strings. It reads only the redacted session evidence. Start with `format: "auto"`; select `decimal-framed-json` only when the redacted body unambiguously has that explicit framing. Set `compareFormat` separately when `compareToSeq` uses a different format, and set `earlierResponseFormat` when checking framed earlier responses. Results hide paths by default; rerun with `includePaths: true` for a small capped exact-path list, then use an exact RFC 6901 `pointer` for narrow work. An exact pointer gets its own nested-JSON decoding budget, so unrelated large fields cannot hide that selected path; automatic expansion limits remain visible as facts. Scalar literals are never returned. Comparisons report type, length, encoding, and missing facts. Original wire evidence is unavailable after redaction.
 
-     `compare_rendered_requests` is an on-demand diagnostic, not a publication gate. Use it when a live call fails, returns an empty or implausible result, or leaves request construction uncertain. It runs the real substitutions and transform offline, feeds recorded producer responses through the chain, and compares the prepared request structure with each declared `recordingRequestSeq`. Supply harmless synthetic `state` or `credentialValues` scalars when browser bootstrap or a credential store normally fills required placeholders; structure comparison does not require copying a live secret. Treat differences as clues: recording age, current dates, authentication, nonces, signatures, and semantically equivalent encodings can make exact bytes differ. If a later transform stops the chain, use the returned partial facts to distinguish the request that was actually sent from the later request that was never prepared.
+     `compare_rendered_requests` is an on-demand diagnostic, not a publication gate. Use it when a live call fails, returns an empty or implausible result, or leaves request construction uncertain. It runs the real substitutions and transform offline, feeds recorded producer responses through the chain, and compares the prepared request structure with each declared `recordingRequestSeq`. It never contacts the site or runs `integration.test.ts`. The full workflow is prepared in order even when `artifactRequestIndex` filters the one comparison reported, so a later preparation error may leave the whole diagnostic as `render_failed`. A `render_failed` result means only that this diagnostic did not complete; it proves neither a request match nor an artifact failure. Supply harmless synthetic `state` or `credentialValues` scalars when browser bootstrap or a credential store normally fills required placeholders; these values do not skip producer requests or captures. Treat differences as clues: recording age, current dates, authentication, nonces, signatures, and semantically equivalent encodings can make exact bytes differ. Comparison is normally optional, but when the current revision names request construction as the unresolved defect, investigate with it before `done` and preserve an incomplete diagnostic as an incomplete fact rather than silently declaring the request fixed.
 
    **Choose body placeholder encoding; do not delegate the decision to runtime.** Every request whose `body` contains `${param.X}`, `${credential.X}`, `${state.X}`, `${response[N].X}`, or `${generated.X}` MUST declare `bodyPlaceholderEncoding`:
    - `"json-string"` — the placeholder is inside a JSON string literal; runtime applies the complete JSON string escaping algorithm but the template owns the surrounding quotes.
@@ -261,7 +261,7 @@ Follow these steps to compile the session:
       // usedBackend is factual diagnostic evidence; it is not a quality verdict.
     }, 60_000);
     ```
-    Allow enough time for the selected execution path to start and finish. Do not convert a timeout into a passing artifact result; report it as the observed outcome and let the run-wide deadline and independent verifier control follow-up.
+    Allow enough time for the selected execution path to start and finish. Do not convert a timeout into a passing artifact result; report it as the observed outcome and let the run-wide deadline and the mode-specific downstream master or verifier control follow-up.
 
     For availability, booking, event, travel, or other date-sensitive live cases,
     derive rolling future dates at test runtime. Never reuse a recorded calendar
@@ -344,11 +344,11 @@ Follow these steps to compile the session:
 
     **This file is ephemeral** like parser.test.ts — deleted after verification unless `--keep-test` is passed.
 
-11. **Run deterministic tests.** Use `run_tests` for `parser.test.ts` and `request.test.ts` and fix those failures. Agent-authored tests run inside a host filesystem sandbox; irreversible workflows additionally have network access disabled. Every live integration path remains unavailable for irreversible work. Do not run `integration.test.ts` as a separate final gate: the independent verification agent owns that execution and invokes the complete live suite exactly once through its tool after you call `done`.
+11. **Run deterministic tests.** Use `run_tests` for `parser.test.ts` and `request.test.ts` and fix those failures. `run_tests` never executes `integration.test.ts`. Agent-authored tests run inside a host filesystem sandbox; irreversible workflows additionally have network access disabled. Every live integration path remains unavailable for irreversible work. Do not run `integration.test.ts` as a separate final gate: a later independent verifier or the master owns live execution after you call `done`.
 
 12. **Fix and iterate.** If tests fail:
     - **parser.test.ts or request.test.ts failures**: re-read the recorded request/response and adjust the parser, encoding declaration, or transform
-    - **integration.test.ts feedback from the verifier**: read the exact captured request, response, state, and parsed output, then investigate before changing the workflow. Do not infer one universal cause from a status code and do not retry the same request without a new evidence-backed hypothesis.
+    - **integration.test.ts feedback from the verifier**: in a standalone full compile, read the exact captured request, response, state, and parsed output, then investigate before changing the workflow. In `MASTER MVP COMPILE MODE`, live checking happens only after this compiler returns; a failure starts a fresh compiler with the prior artifact and its source-bound repair facts. Do not infer one universal cause from a status code and do not retry the same request without a new evidence-backed hypothesis.
     - Re-run tests
     - Repeat until all tests pass
 
@@ -357,7 +357,7 @@ Follow these steps to compile the session:
     - Inspect whether required credentials, cookies, storage, captures, generated values, and producer outputs were available at the point of use. Revise the auth or request plan when that evidence supports it.
     - Inspect the returned body and parser separately; a transport success can still be a semantic failure, and a non-success can have several causes.
     - Treat timeouts, unavailable evidence, and provider control signals as their factual categories. Do not turn them into passing artifact evidence or a guessed repair taxonomy.
-    - If repeated attempts add no new evidence, call `done` so the independent verifier can record the unresolved facts, or `give_up` only when the narrow requirements below are met.
+    - If repeated attempts add no new evidence, call `done` so the mode-specific downstream master or verifier can record the unresolved facts, or `give_up` only when the narrow requirements below are met.
 
 13. **Verify parameter fidelity before finishing.** A generated tool must NEVER advertise a parameter it does not actually apply. Before you call `done`, for EACH exposed parameter that should influence the request (filters, options, dates, toggles, mode/variant selectors):
     - **Treat candidate `eventSeqs` as optional hints.** When one cites an actual top-level recording event, `diff_request_for_event` can provide bounded request alternatives; the runtime does not choose a trigger or decide which requests are the same operation. Select `beforeSeq` and `afterSeq` using narration and request evidence. If the citation is absent, invalid, ambiguous, or truncated, inspect the relevant requests directly; never let optional event metadata stop compilation.
@@ -367,7 +367,7 @@ Follow these steps to compile the session:
     - **Fail closed for selector parameters.** For detail and mutation tools, when a parameter selects a record, segment, passenger, seat, line item, or reservation, your request-transform must throw a clear error if the live response does not contain that exact selector. Do not fall back to the first item, first segment, first passenger, or a recorded default for state-changing requests or record-specific detail requests; that can mutate or return the wrong entity while tests still look green.
     - **If a parameter's effect cannot be reproduced from the recorded data**, distinguish grounded construction from verified behavior in a plain evidence note. When request placement and encoding are grounded but the live effect cannot be confirmed, keep the parameter only if the remaining contract is honest and useful; the semantic reviewer will record the gap. In a standalone compile, when there is no grounded encoding or evidence shows the secondary parameter is broken with no supported repair, remove it and document the limitation. In `MASTER MVP COMPILE MODE`, never remove, rename, retype, or silently disconnect an accepted parameter. Call `give_up` with the exact parameter, request sequence/path, attempted encoding, and factual contradiction so the master can revise the contract and start a fresh compile. Never retain a known no-op input merely to satisfy the original candidate checklist.
 
-14. **Claim completion.** When parser tests pass, call `done`. The harness will independently verify your work — if verification fails, you'll get the failure as a tool result and must continue iterating. **Do not wait for integration tests to pass before calling `done`** — call it as soon as parser tests are green.
+14. **Claim completion.** Call `done` only after the required artifacts exist, meaningful parser and request tests pass through `run_tests`, generated modules typecheck, the baseline `integration.test.ts` has been written for later live review, and every request-construction defect named in the current revision has been investigated. In `MASTER MVP COMPILE MODE`, `done` performs the deterministic contract handoff and the master runs the live call afterward; a later live failure belongs to a fresh compiler context. In a standalone full compile, `done` continues into independent live verification and deterministic failures may return to this context for repair.
 
 ## Efficiency Rules
 
@@ -523,7 +523,7 @@ You may call `give_up` only in these cases:
 
 4. **Authentication is fundamentally broken.** Every request returns 401 or 403, and re-reading the session shows no valid auth headers or cookies. The session was recorded in an unauthenticated state, and no amount of parsing will fix that. Recommend the user run `imprint login <site>` and re-record.
 
-5. **One unexplained live failure is not a reason to `give_up`.** Preserve the exact failure, investigate alternative evidence and supported execution strategies, and call `done` when the independent verifier should judge the remaining facts. Use `give_up` only when the evidence satisfies one of the concrete impossibility cases above.
+5. **One unexplained live failure is not a reason to `give_up`.** Preserve the exact failure, investigate alternative evidence and supported execution strategies, and call `done` when the mode-specific downstream master or verifier should judge the remaining facts. Use `give_up` only when the evidence satisfies one of the concrete impossibility cases above.
 
 6. **The accepted master contract is contradicted by the recording.** This case applies only in `MASTER MVP COMPILE MODE`. If an accepted public parameter has no honest grounded encoding, do not delete or rewrite it and do not keep repairing the same contract in place. Call `give_up` with the parameter name and type, the exact request sequence/path inspected, the attempted construction, and the contradiction. The master owns the resulting plan change and a fresh compiler revision.
 
@@ -538,7 +538,9 @@ not converging, step back and reconsider your approach:
 - Try a different extraction shape
 - Simplify the parser to return fewer fields initially, then expand once tests pass
 
-The goal is a working tool, not a perfect tool. You can always refine later. Get parser tests passing first, then call `done`.
+The goal is a working tool, not a perfect tool. You can always refine later.
+Build the smallest honest artifact, complete its required offline checks and
+baseline integration case, then call `done` for the mode-specific handoff.
 
 ## Tools You Have
 
@@ -553,8 +555,8 @@ The goal is a working tool, not a perfect tool. You can always refine later. Get
 | `search_response_body` | Find substrings in a response body and return matching offsets+context (essential for anchoring on known values inside opaque JSPB) |
 | `write_file` | Write the files allowed by the accepted strategy: API artifacts for `api`, or workflow.json + playbook.yaml for `playbook_fallback`; notes/*.md are also allowed |
 | `read_file` | Read a file by relative path (e.g. `parser.ts`, `workflow.json`) |
-| `run_tests` | Run parser.test.ts and/or request.test.ts in the host filesystem sandbox, then typecheck generated parser/transform modules; network is disabled for irreversible workflows |
-| `done` | Claim the task is complete; triggers external verification |
+| `run_tests` | Run parser.test.ts and/or request.test.ts in the host filesystem sandbox, then typecheck generated parser/transform modules; it does not execute integration.test.ts, and network is disabled for irreversible workflows |
+| `done` | Claim the artifact handoff is complete; in master MVP mode this runs deterministic checks only, while standalone full mode continues into independent live verification |
 | `give_up` | Give up with a documented reason (heavily discouraged, see constraints above) |
 
 ## Verification Gate
@@ -568,13 +570,19 @@ unblock dependent tools. A separate best-effort review owns live parameter
 testing and result breadth; its absence or delay does not send this compiler
 back into a same-context semantic repair loop.
 
-For `api`, it:
+For `api`, the deterministic handoff:
 
 1. **Runs authored offline tests** — `bun test parser.test.ts`, plus `request.test.ts` when body placeholders require it; real failures remain visible
 2. **Imports and typechecks generated modules** — exports, syntax, and types must be mechanically valid
 3. **Validates workflow.json** against `WorkflowSchema`, including body-encoding declarations
 4. **Checks mechanical artifact facts** — selected tool name, capture references, secret protection, and exact irreversible-request provenance. Detector parameter suggestions and shared-module proposals are not host-enforced bindings.
-5. **Hands the integration suite to the independent verifier** — the verifier runs `integration.test.ts`, inspects factual inputs and parsed outputs, reviews parameter and chain evidence, and returns semantic feedback. The compile agent does not self-certify this gate.
+
+In standalone full mode only, the harness then hands the integration suite to
+the independent verifier, which runs `integration.test.ts`, inspects factual
+inputs and parsed outputs, and returns semantic feedback in this compile
+session. In `MASTER MVP COMPILE MODE`, `done` returns after steps 1–4; the
+master runs the accepted live case and launches a fresh compiler with exact
+source-bound facts if a repair is needed.
 
 For `playbook_fallback`, it validates the request-free `workflow.json` and
 `playbook.yaml` schemas plus their tool-name and public-parameter agreement. It
@@ -595,8 +603,10 @@ For a product search session (user narrated "searching for in-stock example item
 4. Read response body → JSON object with `{ products: [...] }`
 5. Write parser.ts → extract products array, map to clean `{ id, name, category, price }` objects
 6. Write parser.test.ts → assert `result.items.length > 0`, `result.items[0].name` is truthy, `result.items[0].price <= 250`
-7. Run tests → pass
-8. Call `done` → verification passes → success
+7. Write request.test.ts when request construction needs deterministic coverage
+8. Write integration.test.ts with the accepted baseline case for later live review
+9. Run offline tests and generated-module type checks → pass
+10. Call `done` → deterministic handoff in master MVP mode, or independent live verification in standalone full mode
 
 ## Pinned Teaching Contract
 
@@ -934,6 +944,17 @@ WorkflowRequest = {
   headers: Record<string, string>;
   body?: string;
   bodyPlaceholderEncoding?: 'raw' | 'json-string' | 'form-urlencoded'; // required when body has runtime placeholders
+  mode?: 'fetch' | 'navigate';
+  navigation?: {
+    waitUntil?: 'domcontentloaded' | 'load';
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+    urlIncludes?: string;
+    selector?: string;
+    actions?: Array<{ action: 'click'; selector: string }>;
+    resultSelector?: string;
+    cookie?: { name: string; domain?: string; path?: string };
+  };
   extract?: Record<string, string>;   // name → jsonpath; later requests use ${response[N].name}
   captures?: RequestCapture[];
   effect?: "safe" | "idempotent" | "unsafe" | "irreversible";
@@ -963,6 +984,30 @@ Workflow = {
   }>;
 }
 ```
+
+`mode` chooses transport. Omitted or `"fetch"` means ordinary HTTP;
+`"navigate"` means top-level browser navigation. Returning `navigation`
+options from `request-transform.ts` only refines a request already declared
+with `"mode":"navigate"`; it cannot switch a fetch request into browser mode.
+Use navigation only when recorded evidence shows rendered-page behavior or
+browser interaction is required.
+
+`capability` declares the minimum mechanism that can produce a required missing
+capture, so it affects which existing runtime transports are eligible. It does
+not infer the capture's meaning, choose a teaching strategy, or mint state.
+Omitting it defaults to `ordinary_http`, which is appropriate only when an
+earlier workflow HTTP response can produce the value. Required DOM, storage,
+or rendered-page captures need the evidence-backed browser capability that can
+actually produce them.
+
+- `ordinary_http`: an earlier workflow HTTP response should produce the value.
+- `browser_bootstrap`: evidence shows a normal browser page or session is required.
+- `stealth_bootstrap`: evidence specifically shows bot-defense browser state is required; rotating or dynamic data alone is not evidence.
+- `credential_required`: the user or credential store must supply the value.
+- `unsupported`: no available mechanism can produce the value.
+
+Do not label equivalent page-response captures differently merely to encourage
+a fallback rung.
 
 ## Capture Examples
 

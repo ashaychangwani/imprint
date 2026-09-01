@@ -8,6 +8,7 @@ import {
   CompletionReviewInputSchema,
   CompletionReviewOutputSchema,
   CompletionToolResultEvidenceSchema,
+  type FocusedPlannerInput,
   FocusedPlannerOutputSchema,
   FocusedPlannerProposalSchema,
   type MasterDecisionInput,
@@ -913,6 +914,11 @@ describe('prompts and pre-plan discovery', () => {
     const masterPrompt = prompt('master-teach-decision.md');
     expect(masterPrompt).toContain('optional diagnostic');
     expect(masterPrompt).toContain('does not by itself require browser');
+    expect(masterPrompt).toContain('omit its current `implementationPlan`');
+    expect(masterPrompt).toContain('explicit instruction to call a fresh focused planner');
+    expect(masterPrompt).toMatch(/do\s+not mutate an unrelated field/);
+    expect(masterPrompt).toContain('A chain-only wiring failure is different');
+    expect(masterPrompt).toContain('edit only the supported `chainEdges` fields');
     expect(masterPrompt).not.toContain('replayParameterValueOrigin');
   });
 
@@ -997,6 +1003,10 @@ describe('prompts and pre-plan discovery', () => {
     expect(focusedPrompt).toContain('`validationContext.authorizedEvidenceRefs`');
     expect(focusedPrompt).toContain('Do not copy the');
     expect(focusedPrompt).toContain('`input.evidence.payload.entries[].ref`');
+    expect(focusedPrompt).toContain('`revisionContext`');
+    expect(focusedPrompt).toContain('input-only');
+    expect(focusedPrompt).toContain('`sourcePlanRevision` and optional `sourceBuildRef`');
+    expect(focusedPrompt).toMatch(/Never treat an\s+older build's failure as/);
   });
 
   it('keeps baseline MVP review focused on one bounded result and exact current binding', async () => {
@@ -1141,6 +1151,39 @@ describe('prompts and pre-plan discovery', () => {
       (seen[0] as { validationContext: { authorizedEvidenceRefs: ContentAddressedRef[] } })
         .validationContext.authorizedEvidenceRefs,
     ).toEqual(input.tool.evidenceRefs);
+  });
+
+  it('hands the latest failed attempt to a fresh planner without requiring it in output', async () => {
+    const base = focusedInput();
+    const previousPayload = implementationPayload(searchTool);
+    if (!searchTool.implementationPlan) throw new Error('fixture needs a previous plan ref');
+    const input: FocusedPlannerInput = {
+      ...base,
+      revisionContext: {
+        sourcePlanRevision: editablePlan.revision,
+        sourcePlanRef: currentPlan.ref,
+        sourceBuildRef: ref('runs/run-fixture-1/builds/catalog-search.json', '6'),
+        previousImplementationPlan: {
+          ref: { ...searchTool.implementationPlan, sha256: digest(previousPayload) },
+          payload: previousPayload,
+        },
+        latestFailureFacts: evidence,
+      },
+    };
+    const output = focusedOutput(input);
+    let sent: FocusedPlannerInput | undefined;
+    expect(
+      await requestFocusedPlan(input, {
+        analyzer: {
+          async analyze(_system, payload) {
+            sent = (payload as { input: FocusedPlannerInput }).input;
+            return { text: JSON.stringify(output) };
+          },
+        },
+      }),
+    ).toEqual(output);
+    expect(sent?.revisionContext).toEqual(input.revisionContext);
+    expect(output).not.toHaveProperty('revisionContext');
   });
 
   it('repairs an evidence-entry ref using the one authorized focused bundle ref', async () => {

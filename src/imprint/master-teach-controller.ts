@@ -41,6 +41,8 @@ import {
   CurrentPlanProjectionSchema,
   type FocusedPlannerInput,
   FocusedPlannerProposalSchema,
+  type FocusedPlannerRevisionContext,
+  FocusedPlannerRevisionContextSchema,
   type MasterDecisionInput,
   type ParameterSelectionAdvisorInput,
   type ToolSelectionAdvisorInput,
@@ -398,6 +400,7 @@ interface FreshTeachControllerDependencies {
     stagingDir: string;
     priorToolDir?: string;
     revisionGuidance?: string;
+    revisionContext?: FocusedPlannerRevisionContext;
     llmConfig: LLMOptions;
     runDeadline: RunDeadlineRef;
     signal?: AbortSignal;
@@ -893,13 +896,13 @@ function verificationFailureProjection(
   const seenReceipts = new Set<string>();
   for (const failure of failures) {
     const receipt = failure.receiptRef ? journal.readReceipt(failure.receiptRef) : undefined;
-    if (
-      receipt &&
-      (receipt.toolId !== failure.toolId ||
-        (receipt.check !== failure.stage && failure.stage !== 'proof') ||
-        receipt.chainEdgeId !== failure.chainEdgeId)
-    ) {
-      throw new Error(`failure receipt does not match ${failure.toolId}/${failure.stage}`);
+    const currentToolState = state.tools.find(({ toolId }) => toolId === failure.toolId);
+    const receiptBindingError = receipt
+      ? failureReceiptBindingError({ receipt, failure, currentToolState })
+      : undefined;
+    if (receiptBindingError) {
+      console.warn(`[imprint] ignored stale check failure: ${receiptBindingError}`);
+      continue;
     }
     if (receipt && !seenReceipts.has(receipt.ref.sha256)) {
       const tool = plan.tools.find(({ id }) => id === failure.toolId);
@@ -932,7 +935,7 @@ function verificationFailureProjection(
       chainEdgeId: failure.chainEdgeId ?? null,
       message: utf8Prefix(
         failure.error instanceof Error ? failure.error.message : String(failure.error),
-        4_000,
+        12_000,
       ),
     };
     const ref = journal.storeJson(fact);
@@ -940,7 +943,7 @@ function verificationFailureProjection(
       kind: 'untrusted_redacted_quote',
       ref,
       provenance: 'check_history',
-      quote: utf8Prefix(JSON.stringify(fact), 4_000),
+      quote: JSON.stringify(fact),
     });
   }
   return storedEvidenceProjection(journal, entries);
@@ -976,10 +979,61 @@ function completionFailureProjection(
         kind: 'untrusted_redacted_quote',
         ref,
         provenance: 'check_history',
-        quote: utf8Prefix(JSON.stringify(fact), 4_000),
+        quote: JSON.stringify(fact),
       };
     }),
   );
+}
+
+function sameContentRef(
+  left: ContentAddressedRef | undefined,
+  right: ContentAddressedRef | undefined,
+): boolean {
+  return Boolean(left && right && left.path === right.path && left.sha256 === right.sha256);
+}
+
+/** Receipts are useful repair facts only while they still describe the exact
+ * current build and remain one of that build's current receipts. */
+export function failureReceiptBindingError(input: {
+  receipt: {
+    ref: ContentAddressedRef;
+    toolId: string;
+    check: string;
+    chainEdgeId?: string;
+    buildRef: ContentAddressedRef;
+  };
+  failure: {
+    toolId: string;
+    stage: BuildWaveFailure['stage'];
+    chainEdgeId?: string;
+    buildRef?: ContentAddressedRef;
+  };
+  currentToolState?: {
+    buildRef?: ContentAddressedRef;
+    currentReceiptRefs: readonly { ref: ContentAddressedRef }[];
+  };
+}): string | undefined {
+  const { receipt, failure, currentToolState } = input;
+  if (
+    receipt.toolId !== failure.toolId ||
+    (receipt.check !== failure.stage && failure.stage !== 'proof') ||
+    receipt.chainEdgeId !== failure.chainEdgeId
+  ) {
+    return `failure receipt does not match ${failure.toolId}/${failure.stage}`;
+  }
+  if (!currentToolState?.buildRef) {
+    return `failure receipt for ${failure.toolId}/${failure.stage} has no current build`;
+  }
+  if (failure.buildRef && !sameContentRef(failure.buildRef, currentToolState.buildRef)) {
+    return `failure build does not match the current build for ${failure.toolId}/${failure.stage}`;
+  }
+  if (!sameContentRef(receipt.buildRef, currentToolState.buildRef)) {
+    return `failure receipt belongs to an older build for ${failure.toolId}/${failure.stage}`;
+  }
+  if (!currentToolState.currentReceiptRefs.some(({ ref }) => sameContentRef(ref, receipt.ref))) {
+    return `failure receipt is no longer current for ${failure.toolId}/${failure.stage}`;
+  }
+  return undefined;
 }
 
 function evidenceRefsForProjection(projection: PromptEvidenceProjection): ContentAddressedRef[] {
@@ -1076,28 +1130,57 @@ function stableFindings(findings: PromptEvidenceProjection): unknown {
   });
 }
 
-function compilerRepairGuidance(
+function failureEntryBelongsToTool(
+  entry: PromptEvidenceProjection['payload']['entries'][number],
   toolId: string,
-  masterReason: string,
+): boolean {
+  if (entry.kind === 'mechanical_fact') return entry.toolId === toolId;
+  try {
+    return (JSON.parse(entry.quote) as { toolId?: unknown }).toolId === toolId;
+  } catch {
+    return false;
+  }
+}
+
+/** Give a fresh planner/compiler the latest failed attempt as explicitly old
+ * history. This is an agent handoff only: it neither validates nor rejects the
+ * replacement plan. */
+function focusedRepairContexts(
+  journal: FreshTeachJournal,
   findings: PromptEvidenceProjection,
-): string {
-  const relevant = findings.payload.entries.filter((entry) => {
-    if (entry.kind === 'mechanical_fact') return entry.toolId === toolId;
-    try {
-      return (JSON.parse(entry.quote) as { toolId?: unknown }).toolId === toolId;
-    } catch {
-      return false;
-    }
-  });
-  return utf8Prefix(
-    [
-      `Master repair direction: ${masterReason}`,
-      relevant.length
-        ? `Exact prior failure facts for this tool: ${canonicalTeachingPlanJson(relevant)}`
-        : 'No tool-specific host failure fact was supplied; follow the master direction and current implementation plan.',
-    ].join('\n\n'),
-    12_000,
-  );
+): Map<string, FocusedPlannerRevisionContext> {
+  const current = currentPlanProjection(journal);
+  const toolState = new Map(current.state.tools.map((tool) => [tool.toolId, tool]));
+  const contexts = new Map<string, FocusedPlannerRevisionContext>();
+  for (const tool of current.plan.tools) {
+    const relevant = findings.payload.entries.filter((entry) =>
+      failureEntryBelongsToTool(entry, tool.id),
+    );
+    // Direct failures stay focused. When the master elects to recall a
+    // different tool (for example, a producer after a chain failure), it gets
+    // the complete current repair package that motivated that explicit choice.
+    const contextualEntries = relevant.length > 0 ? relevant : findings.payload.entries;
+    if (contextualEntries.length === 0) continue;
+    const previousImplementationPlan = tool.implementationPlan
+      ? {
+          ref: tool.implementationPlan,
+          payload: journal.readJson(tool.implementationPlan) as ImplementationPlanPayload,
+        }
+      : undefined;
+    const latestFailureFacts = storedEvidenceProjection(journal, contextualEntries);
+    const sourceBuildRef = toolState.get(tool.id)?.buildRef;
+    contexts.set(
+      tool.id,
+      FocusedPlannerRevisionContextSchema.parse({
+        sourcePlanRevision: current.plan.revision,
+        sourcePlanRef: current.state.currentPlanRef,
+        ...(sourceBuildRef ? { sourceBuildRef } : {}),
+        ...(previousImplementationPlan ? { previousImplementationPlan } : {}),
+        latestFailureFacts,
+      }),
+    );
+  }
+  return contexts;
 }
 
 function repairStateSha256(journal: FreshTeachJournal, findings: PromptEvidenceProjection): string {
@@ -1153,6 +1236,7 @@ async function compileFocusedToolWithShippedAgent(input: {
   stagingDir: string;
   priorToolDir?: string;
   revisionGuidance?: string;
+  revisionContext?: FocusedPlannerRevisionContext;
   llmConfig: LLMOptions;
   runDeadline: RunDeadlineRef;
   signal?: AbortSignal;
@@ -1185,13 +1269,16 @@ async function compileFocusedToolWithShippedAgent(input: {
       {
         tool: input.tool,
         implementationPlan: input.implementationPlan,
-        ...(input.revisionGuidance
+        ...(input.revisionGuidance || input.revisionContext
           ? {
               revision: {
                 instruction: input.priorToolDir
                   ? 'Use the compatible prior artifact as a starting point and make the smallest change required by the current master plan. Re-check it; the prior artifact may be a rejected draft or a previously working build.'
                   : 'No compatible prior artifact can be seeded. Follow the current failure facts and accepted strategy without copying executable files from another strategy.',
-                masterGuidance: input.revisionGuidance,
+                masterGuidance:
+                  input.revisionGuidance ??
+                  'Investigate the immediately preceding failed attempt and preserve every behavior that remains supported.',
+                ...(input.revisionContext ? { priorAttempt: input.revisionContext } : {}),
               },
             }
           : {}),
@@ -1200,7 +1287,7 @@ async function compileFocusedToolWithShippedAgent(input: {
       2,
     ),
     strategyKind: input.implementationPlan.strategyKind,
-    revisionMode: Boolean(input.revisionGuidance),
+    revisionMode: Boolean(input.revisionGuidance || input.revisionContext || input.priorToolDir),
     verificationMode: 'master_mvp',
   });
   return {
@@ -1358,6 +1445,7 @@ async function requestFocusedPlannerBundles(input: {
   agent: MasterTeachAgentOptions;
   deps: FreshTeachControllerDependencies;
   toolIds?: ReadonlySet<string>;
+  revisionContextByToolId?: ReadonlyMap<string, FocusedPlannerRevisionContext>;
 }): Promise<HostedPlannerBundle[]> {
   const available = input.plan.tools.map((tool) => ({
     toolId: tool.id,
@@ -1408,6 +1496,7 @@ async function requestFocusedPlannerBundles(input: {
         // verification case.
         evidenceRefs: [evidence.ref],
       };
+      const revisionContext = input.revisionContextByToolId?.get(sourceTool.id);
       const plannerInput: FocusedPlannerInput = {
         run: input.discoveryRun,
         recordingIndex: input.recordingIndex,
@@ -1421,6 +1510,7 @@ async function requestFocusedPlannerBundles(input: {
           ({ producerToolId }) => producerToolId === sourceTool.id,
         ),
         evidence,
+        ...(revisionContext ? { revisionContext } : {}),
       };
       const output = await input.deps.requestFocusedPlan(plannerInput, input.agent);
       const authoredEdges = [
@@ -1670,6 +1760,23 @@ interface ResultDisposition {
   evidenceRefs: ContentAddressedRef[];
 }
 
+function rejectedResultError(reason: string, evidence: CompletionToolResultEvidence): Error {
+  return new Error(
+    utf8Prefix(
+      [
+        reason,
+        `Factual result from the rejected older build: ${canonicalTeachingPlanJson({
+          expectedResult: evidence.payload.expectedResult,
+          actualResult: evidence.payload.actualResult,
+          resultReceiptRef: evidence.payload.resultReceiptRef,
+          ...(evidence.payload.chainEdgeId ? { chainEdgeId: evidence.payload.chainEdgeId } : {}),
+        })}`,
+      ].join('\n'),
+      12_000,
+    ),
+  );
+}
+
 function checkFailure(
   tool: EditableTeachingTool,
   waveIndex: number,
@@ -1886,6 +1993,7 @@ async function compileAndCheckCurrentPlan(input: {
   priorLive?: Map<string, LiveCheckResult>;
   priorChain?: Map<string, LiveCheckResult>;
   revisionGuidanceByToolId?: ReadonlyMap<string, string>;
+  revisionContextByToolId?: ReadonlyMap<string, FocusedPlannerRevisionContext>;
   /** Install an independently usable MVP before optional breadth work. */
   publishMvp?: (tool: EditableTeachingTool, compiled: CompiledFocusedTool) => Promise<void>;
   /** Review only the default result's fitness for the core operation. */
@@ -2005,6 +2113,7 @@ async function compileAndCheckCurrentPlan(input: {
           ? revisionSourceByToolId.get(tool.id)?.toolDir
           : draftSourceByToolStrategy.get(draftSourceKey(tool.id, tool.strategy.kind))?.toolDir,
       revisionGuidance: input.revisionGuidanceByToolId?.get(tool.id),
+      revisionContext: input.revisionContextByToolId?.get(tool.id),
       llmConfig: input.llmConfig,
       runDeadline: input.runDeadline,
       signal: input.signal,
@@ -2125,8 +2234,9 @@ async function compileAndCheckCurrentPlan(input: {
     attemptedMvpToolIds.add(tool.id);
     const live = liveByToolId.get(tool.id);
     if (!live?.result.ok) throw new Error(`MVP tool "${tool.id}" has no retained live result`);
+    const resultEvidence = completionToolResultEvidenceFor(input.journal, tool, live);
     const disposition = input.approveMvp
-      ? await input.approveMvp(tool, completionToolResultEvidenceFor(input.journal, tool, live))
+      ? await input.approveMvp(tool, resultEvidence)
       : ({
           status: 'credible',
           reason: 'semantic review is not configured',
@@ -2135,9 +2245,15 @@ async function compileAndCheckCurrentPlan(input: {
     if (disposition.status !== 'credible') {
       rejectedMvpToolIds.add(tool.id);
       failures.push(
-        checkFailure(tool, waveIndex, 'proof', new Error(disposition.reason), {
-          receiptRef: live.resultReceiptRef,
-        }),
+        checkFailure(
+          tool,
+          waveIndex,
+          'proof',
+          rejectedResultError(disposition.reason, resultEvidence),
+          {
+            receiptRef: live.resultReceiptRef,
+          },
+        ),
       );
       return false;
     }
@@ -2387,11 +2503,9 @@ async function compileAndCheckCurrentPlan(input: {
     result: LiveCheckResult,
     waveIndex: number,
   ): Promise<boolean> => {
+    const resultEvidence = completionToolResultEvidenceFor(input.journal, tool, result, edge);
     const disposition = input.approveMvp
-      ? await input.approveMvp(
-          tool,
-          completionToolResultEvidenceFor(input.journal, tool, result, edge),
-        )
+      ? await input.approveMvp(tool, resultEvidence)
       : ({
           status: 'credible',
           reason: 'semantic review is not configured',
@@ -2399,10 +2513,16 @@ async function compileAndCheckCurrentPlan(input: {
         } as const);
     if (disposition.status === 'credible') return true;
     failures.push(
-      checkFailure(tool, waveIndex, 'proof', new Error(disposition.reason), {
-        receiptRef: result.resultReceiptRef,
-        chainEdgeId: edge.id,
-      }),
+      checkFailure(
+        tool,
+        waveIndex,
+        'proof',
+        rejectedResultError(disposition.reason, resultEvidence),
+        {
+          receiptRef: result.resultReceiptRef,
+          chainEdgeId: edge.id,
+        },
+      ),
     );
     return false;
   };
@@ -2728,6 +2848,7 @@ interface MasterRevisionContext {
   deps: FreshTeachControllerDependencies;
   now: Date;
   runDeadline: RunDeadlineRef;
+  revisionContextByToolId: ReadonlyMap<string, FocusedPlannerRevisionContext>;
 }
 
 function canonicalOrder(left: unknown, right: unknown): number {
@@ -2806,7 +2927,7 @@ async function requestRepairRevision(
   };
   const decision = await context.deps.requestMasterDecision(decisionInput, context.agent);
   const decisionRef = context.journal.storeJson(decision);
-  context.journal.revisePlan(decision.desiredPlan, {
+  const revision = context.journal.revisePlan(decision.desiredPlan, {
     expectedRevision: current.plan.revision,
     decision: planDecision(
       context.now,
@@ -2816,7 +2937,7 @@ async function requestRepairRevision(
       evidenceRefs,
     ),
   });
-  return decision;
+  return { decision, revision };
 }
 
 async function ensureCurrentImplementationPlans(context: MasterRevisionContext): Promise<void> {
@@ -2840,6 +2961,7 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
       agent: context.agent,
       deps: context.deps,
       toolIds: new Set(missingToolIds),
+      revisionContextByToolId: context.revisionContextByToolId,
     });
     const proposalStateSha256 = focusedPlanningStateSha256(
       current.plan,
@@ -3373,7 +3495,7 @@ function completionToolResultEvidenceFor(
       observed: true,
       preview,
       shape,
-      count: Array.isArray(live.result.data) ? live.result.data.length : 1,
+      count: Array.isArray(live.result.data) ? live.result.data.length : null,
       truncated: Buffer.byteLength(serialized, 'utf8') > Buffer.byteLength(preview, 'utf8'),
     },
   };
@@ -3639,6 +3761,7 @@ export async function runFreshMasterTeach(
     let liveByToolId = new Map<string, LiveCheckResult>();
     let chainByEdgeId = new Map<string, LiveCheckResult>();
     const revisionGuidanceByToolId = new Map<string, string>();
+    const repairContextByToolId = new Map<string, FocusedPlannerRevisionContext>();
     const mvpDispositionByResult = new Map<
       string,
       Pick<
@@ -3659,6 +3782,7 @@ export async function runFreshMasterTeach(
       deps,
       now: deps.now(),
       runDeadline: deadline,
+      revisionContextByToolId: repairContextByToolId,
     });
     const repair = async (findings: PromptEvidenceProjection): Promise<void> => {
       const stateSha256 = repairStateSha256(activeJournal, findings);
@@ -3669,13 +3793,17 @@ export async function runFreshMasterTeach(
       }
       attemptedRepairStates.add(stateSha256);
       reportProgress(opts, 'master is revising the plan from factual failures');
+      const latestRepairContexts = focusedRepairContexts(activeJournal, findings);
       const context = revisionContext();
-      const repairDecision = await requestRepairRevision(context, findings);
-      for (const tool of repairDecision.desiredPlan.tools) {
-        revisionGuidanceByToolId.set(
-          tool.id,
-          compilerRepairGuidance(tool.id, repairDecision.reason, findings),
-        );
+      const { decision: repairDecision, revision } = await requestRepairRevision(context, findings);
+      repairContextByToolId.clear();
+      for (const toolId of revision.recompileToolIds) {
+        const repairContext = latestRepairContexts.get(toolId);
+        if (repairContext) repairContextByToolId.set(toolId, repairContext);
+      }
+      revisionGuidanceByToolId.clear();
+      for (const toolId of revision.recompileToolIds) {
+        revisionGuidanceByToolId.set(toolId, repairDecision.reason);
       }
       await ensureCurrentImplementationPlans(revisionContext());
       plannedTools = activeJournal.currentPlan().tools.length;
@@ -3729,6 +3857,7 @@ export async function runFreshMasterTeach(
           priorLive: liveByToolId,
           priorChain: chainByEdgeId,
           revisionGuidanceByToolId,
+          revisionContextByToolId: repairContextByToolId,
           isMvpPublished: (toolId, buildRef) =>
             publishedMvpBuilds.has(`${toolId}:${buildRef.sha256}`),
           resultDisposition: (toolId, resultReceiptRef) =>
@@ -3795,14 +3924,9 @@ export async function runFreshMasterTeach(
       draftSourceByToolStrategy = checked.draftSourceByToolStrategy;
       liveByToolId = checked.liveByToolId;
       chainByEdgeId = checked.chainByEdgeId;
-      const stateAfterChecks = activeJournal.readState();
-      for (const toolId of revisionGuidanceByToolId.keys()) {
-        if (
-          stateAfterChecks.tools.find(({ toolId: id }) => id === toolId)?.buildRef &&
-          compiledByToolId.has(toolId)
-        ) {
-          revisionGuidanceByToolId.delete(toolId);
-        }
+      for (const toolId of checked.verifiedToolIds) {
+        revisionGuidanceByToolId.delete(toolId);
+        repairContextByToolId.delete(toolId);
       }
       readyTools = checked.verifiedToolIds.size;
       if (checked.failures.length > 0) {
@@ -3812,7 +3936,8 @@ export async function runFreshMasterTeach(
           ),
         );
         if (terminal) throw terminal.error;
-        await repair(verificationFailureProjection(activeJournal, checked.failures));
+        const currentFailures = verificationFailureProjection(activeJournal, checked.failures);
+        if (currentFailures.payload.entries.length > 0) await repair(currentFailures);
         continue;
       }
 
