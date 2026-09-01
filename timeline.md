@@ -1773,3 +1773,98 @@ problems are specific generated-artifact and parameter-quality findings, not
 evidence for a Hotels runtime rule. We will run the same unsteered flow on
 Google Flights before deciding whether any general prompt or finesse workflow
 change is justified.
+
+## 2026-08-31 18:05 PDT — Fresh Flights baseline preserves one MVP, then repeats unchanged failures
+
+A new, unsteered Google Flights teach started as run
+`b0d5c955-6148-4023-9d81-74e749669708`. It selected the correct latest combined
+recording, `sessions/combined-2026-08-30T02-48-09-040Z.json`, whose SHA-256 is
+`fb2f07e27379817a10eb1e96702bd29fab63836f0656cc36d59ad0011a8c53af`.
+The shipped detector found four API operations: resolve a location, get calendar
+prices, search flights, and get booking options. No browser playbook was chosen.
+
+The location resolver worked. Its final build passed its file checks, matched
+the recorded request exactly, and returned 11 live results in 263 ms on a warm
+connection. It was published before the later tools ran and remained available
+through the rest of the attempt.
+
+The run then exposed three general delivery problems. First, the master rejected
+a compact four-request search MVP only because it did not yet include every
+optional filter. It expanded the first delivery to 15 requests and 23 public
+parameters, which took nearly seven minutes to compile. Second, the resulting
+search build passed its live and producer-consumer checks, but the recording did
+not contain usable baseline values for exact replay. All 15 comparisons were
+honestly marked `not_checked`; the controller treated that known absence as a
+failure instead of an unavailable check. Third, the current calendar build
+passed its mechanical checks but returned no live prices, so the small MVP
+review correctly rejected it.
+
+After those facts were recorded, revisions 6 through 10 made no real change to
+the plan, files, or proof. The master kept changing only its explanation. It
+claimed the calendar result was nonempty and later claimed the rejection
+belonged to an older build, even though the saved review names the current build
+and current live result. With revision labels and explanations removed, all five
+plans have the same SHA-256,
+`0ec82652ee683e9f2c97252575e7a4f9ad2afcebcfbef519e6b6f4fb5d7631e3`.
+The normal deadline is 12 hours, so the command would have continued repeating.
+It was manually cancelled after 1 hour 8 minutes at revision 10. The honest
+terminal result was `1 ready, 3 failed`; booking never started because search
+never became a published producer. No provider-capacity failure occurred.
+
+The baseline worktree was left unchanged throughout this run. General fixes
+were built and tested in a separate worktree so the live prompt could not change
+under the running agent:
+
+- `f7b7f92` makes the first public parameter contract cover one credible core
+  use case plus required chain inputs. Optional filters and variants move to the
+  already separate best-effort finesse jobs, which now start independently as
+  soon as each MVP is published.
+- `e84ac6b` prevents an explanation-only plan revision from overriding a saved
+  rejection of the exact same build and live result.
+- `9a3452c` lets an API MVP proceed when every accepted request comparison is
+  explicitly `not_checked` because no replay baseline exists. Any mismatch,
+  partial comparison, or host failure still fails.
+
+These changes contain no Flights- or Hotels-specific conditions. The focused
+MVP tests, type checking, and lint pass. The full repository run passed 1,794 of
+1,795 tests; the one recorder browser test hit its 30-second limit under the
+full load, then its complete test file passed alone with 8 of 8 tests.
+
+## 2026-08-31 18:15 PDT — Bound the fallback honestly and stop identical repair loops
+
+Review of the Flights evidence found three small host-side gaps. They were fixed
+without adding any site knowledge or deciding what a flight or hotel parameter
+means.
+
+An unchecked API replay is now accepted only when the exact saved implementation
+plan says that recorded parameter values were unavailable. That statement is
+stored as value-free metadata beside the content-addressed plan. A tool cannot
+skip a replay that its plan said was possible, while an honest unavailable
+baseline no longer blocks a useful live-tested MVP.
+
+The controller now recognizes a repeated failed state by hashing the actual tool
+plan, builds, dependency bindings, check facts, and failure. Revision numbers,
+explanations, receipt numbers, and timing are deliberately ignored. The master
+gets one opportunity to revise and one real retry. If the same facts return with
+no real change, the run ends as failed instead of calling the master until the
+12-hour deadline. Any changed plan, artifact, proof, or failure remains free to
+continue. Published MVPs stay installed and are counted as ready in the terminal
+result. The focused planning loop has the same protection when the master keeps
+rejecting a proposal without changing the missing plan.
+
+Optional breadth work remains outside the delivery path. Its live verifier keeps
+its existing one-at-a-time queue, and parameter-advisor calls now use a separate
+two-at-a-time lane so a large recording cannot flood the provider while core
+tools compile. Both kinds of optional work start only after the exact MVP is
+published. Finesse freshness follows the target build and its dependency-bound
+execution hash, not the whole plan revision, so an unrelated downstream repair
+does not discard valid advice.
+
+The combined focused suite passes 149 tests with no failures. Type checking,
+lint, and whitespace checks pass. The full repository suite passed 1,798 of
+1,799 tests; one recorder browser test reached its 30-second limit under full
+load, then the complete recorder file passed 8 of 8 by itself. A separate review
+found two first-pass issues in the loop fingerprint, both now fixed: new master
+guidance gets a fresh focused-planner attempt, while paraphrased failure prose or
+volatile host-error text cannot disguise an otherwise identical failed state.
+The final re-review found no remaining high- or medium-priority issue.
