@@ -1868,3 +1868,32 @@ found two first-pass issues in the loop fingerprint, both now fixed: new master
 guidance gets a fresh focused-planner attempt, while paraphrased failure prose or
 volatile host-error text cannot disguise an otherwise identical failed state.
 The final re-review found no remaining high- or medium-priority issue.
+
+## 2026-08-31 18:42 PDT — Fresh Flights run found a plan handoff bug before compilation
+
+A new, unsteered Google Flights teach started as run
+`55b6b81d-baba-492c-8aa5-be7057e1b58d`. It selected the same correct latest
+combined recording. Independent observation captured 412 requests, and the
+shipped detector proposed five operations. The master selected three tools, but
+the run failed before creating its journal or compiling any tool.
+
+The failure was a generic handoff mistake introduced with the honest replay
+fallback. The runtime added one derived replay field to each saved
+implementation-plan reference, then required the master to copy that runtime
+bookkeeping field exactly. The master copied the stable content identity but
+omitted the new derived field on all three selected plans. One automatic repair
+made the same omission, so the command ended honestly as failed with zero ready.
+This was not a candidate, replay, browser, compiler, or Flights-specific
+failure.
+
+The master now selects a supplied plan by its stable content-addressed identity.
+The runtime restores its own derived replay metadata from that exact supplied
+plan before doing the full integrity check. A made-up path, content hash,
+compile-input hash, or request-provenance hash is still rejected. The prompt
+also documents the optional replay field so the agent has the complete shape,
+without making runtime bookkeeping part of its judgment.
+
+The focused suite passes 106 tests, including a regression in which the master
+omits the derived replay field and the host restores it from the selected saved
+plan. Type checking, lint, and whitespace checks pass. The failed run will not
+be resumed; the next validation will be another fresh, unsteered Flights teach.

@@ -888,6 +888,7 @@ describe('prompts and pre-plan discovery', () => {
     const masterPrompt = prompt('master-teach-decision.md');
     expect(masterPrompt).toContain('An unavailable replay case instead has an empty');
     expect(masterPrompt).toContain('alone a reason to reject an API plan');
+    expect(masterPrompt).toContain('replayParameterValueOrigin?');
   });
 
   it('keeps optional parameter breadth outside the blocking MVP contract', () => {
@@ -1459,6 +1460,36 @@ describe('canonical planning and immutable execution', () => {
     supplied.desiredPlan.tools[0] = proposal.payload.tool;
     expect(
       parseMasterDecisionOutput(JSON.stringify(supplied), withProposal).desiredPlan.tools[0]
+        ?.implementationPlan,
+    ).toEqual(proposal.payload.implementationPlan.ref);
+  });
+
+  it('restores host-derived plan metadata after the master selects its stable identity', () => {
+    const planned = focusedOutput();
+    const replayCase = matching(
+      planned.implementationPlan.verificationCases,
+      ({ check }) => check === 'replay',
+    );
+    replayCase.parameterValueOrigin = 'recorded_baseline';
+    const proposal = hostedProposal(
+      planned,
+      'runs/run-fixture-1/proposals/search-with-recorded-replay.json',
+    );
+    expect(proposal.payload.implementationPlan.ref.replayParameterValueOrigin).toBe(
+      'recorded_baseline',
+    );
+    const input: MasterDecisionInput = {
+      ...initialMasterInput(),
+      plannerProposals: [proposal],
+    };
+    const output = initialMasterOutput(input);
+    const selectedTool = structuredClone(proposal.payload.tool);
+    if (!selectedTool.implementationPlan) throw new Error('fixture needs a hosted plan ref');
+    selectedTool.implementationPlan.replayParameterValueOrigin = undefined;
+    output.desiredPlan.tools[0] = selectedTool;
+
+    expect(
+      parseMasterDecisionOutput(JSON.stringify(output), input).desiredPlan.tools[0]
         ?.implementationPlan,
     ).toEqual(proposal.payload.implementationPlan.ref);
   });

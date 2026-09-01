@@ -185,7 +185,8 @@ Exact output schema (all objects reject extra fields):
       evidenceRefs: content-addressed refs[],
       strategy?: { kind: "api" | "playbook_fallback", reason: string },
       implementationPlan?: {
-        path, sha256, basedOnCompileInputsSha256, requestProvenanceSha256
+        path, sha256, basedOnCompileInputsSha256, requestProvenanceSha256,
+        replayParameterValueOrigin?: "recorded_baseline" | "unavailable"
       }
     }>,
     buildWaves: Array<Array<tool ID>>,

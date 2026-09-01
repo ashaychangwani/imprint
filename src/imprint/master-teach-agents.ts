@@ -919,21 +919,35 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
     ]);
 });
 function masterOutputSchema(input: MasterDecisionInput) {
-  const suppliedPlans = new Set(
-    [
-      ...(input.current?.plan.payload.tools ?? []),
-      ...input.plannerProposals.map(({ payload }) => payload.tool),
-    ].flatMap(({ implementationPlan }) => (implementationPlan ? [digest(implementationPlan)] : [])),
+  const suppliedPlanRefs = [
+    ...(input.current?.plan.payload.tools ?? []),
+    ...input.plannerProposals.map(({ payload }) => payload.tool),
+  ].flatMap(({ implementationPlan }) => (implementationPlan ? [implementationPlan] : []));
+  const suppliedPlans = new Set(suppliedPlanRefs.map(digest));
+  const selectionKey = (plan: (typeof suppliedPlanRefs)[number]): string =>
+    digest({
+      path: plan.path,
+      sha256: plan.sha256,
+      basedOnCompileInputsSha256: plan.basedOnCompileInputsSha256,
+      requestProvenanceSha256: plan.requestProvenanceSha256,
+    });
+  const canonicalPlanBySelection = new Map(
+    suppliedPlanRefs.map((plan) => [selectionKey(plan), plan] as const),
   );
   return MasterDecisionOutputSchema.transform((output) => {
     const tools = output.desiredPlan.tools.map((tool): EditableTeachingTool => {
-      if (!tool.implementationPlan || !suppliedPlans.has(digest(tool.implementationPlan))) {
-        return tool;
-      }
+      if (!tool.implementationPlan) return tool;
+      const canonicalPlan = canonicalPlanBySelection.get(selectionKey(tool.implementationPlan));
+      if (!canonicalPlan) return tool;
       // A revision may change compile inputs while accidentally echoing the
       // old hosted plan. Invalidate that mechanically unusable plan and let a
       // fresh focused planner rebuild it instead of rejecting the revision.
-      return withoutStaleImplementationPlan(tool, output.desiredPlan.chainEdges);
+      // Host-derived metadata is restored from the supplied reference so the
+      // master only has to select the stable content-addressed identity.
+      return withoutStaleImplementationPlan(
+        { ...tool, implementationPlan: canonicalPlan },
+        output.desiredPlan.chainEdges,
+      );
     });
     return {
       ...output,
