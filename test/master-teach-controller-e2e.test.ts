@@ -331,6 +331,35 @@ function initialThreeToolDesiredPlan(input: MasterDecisionInput): DesiredTeachin
   return desired;
 }
 
+function initialSingleToolDesiredPlan(input: MasterDecisionInput): DesiredTeachingPlan {
+  const candidate = input.discovery.discoveryCandidates.find(
+    ({ toolName }) => toolName === PRODUCER_NAME,
+  );
+  if (!candidate) throw new Error('missing discovery candidate search_items');
+  return {
+    site: input.discovery.run.site,
+    recordingSha256: input.discovery.run.recordingSha256,
+    tools: [
+      {
+        id: PRODUCER_ID,
+        candidate,
+        compileContext: input.discovery.detectorSharedContext,
+        evidenceRefs: [input.discovery.evidence.ref],
+        strategy: { kind: 'api', reason: 'The recording contains one replayable request.' },
+      },
+    ],
+    candidateCoverage: [
+      {
+        discoveryCandidateName: candidate.toolName,
+        plannedToolIds: [PRODUCER_ID],
+        unresolvedReason: null,
+      },
+    ],
+    buildWaves: [[PRODUCER_ID]],
+    chainEdges: [],
+  };
+}
+
 function proposalDesiredPlan(input: MasterDecisionInput): DesiredTeachingPlan {
   const proposals = new Map(
     input.plannerProposals.map((proposal) => [proposal.payload.tool.id, proposal.payload.tool]),
@@ -1089,6 +1118,104 @@ describe('fresh foreground master controller end to end', () => {
           review: expect.objectContaining({ status: 'revision_required' }),
         }),
       );
+    });
+  });
+
+  it('does not publish a retained leaf whose cached MVP review requires revision', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      let repairAttempts = 0;
+      let completionReviewCalls = 0;
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-retained-leaf-rejected',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: (reviewInput) =>
+          baselineMvpReview(reviewInput, 'revision_required'),
+      });
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          requestMasterDecision: async (decisionInput) => {
+            if (decisionInput.verificationFindings) {
+              repairAttempts += 1;
+              if (repairAttempts > 1) {
+                throw new ProviderUnavailableError(
+                  new Error('fixture stops after the cached MVP rejection is enforced again'),
+                );
+              }
+            }
+            const desiredPlan =
+              decisionInput.phase === 'discovery'
+                ? initialSingleToolDesiredPlan(decisionInput)
+                : decisionInput.plannerProposals.length > 0
+                  ? proposalDesiredPlan(decisionInput)
+                  : desiredFromCurrent(decisionInput);
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome: 'accepted',
+              reason: 'Keep the exact retained leaf build while considering the factual finding.',
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          requestCompletionReview: async (reviewInput) => {
+            completionReviewCalls += 1;
+            return CompletionReviewOutputSchema.parse({
+              binding: reviewInput.run,
+              verdict: 'passed',
+              summary: 'The retained mechanical result looks credible in this independent review.',
+              findings: [],
+              toolResultReviews: (reviewInput.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                status: 'credible',
+                reason: 'The bounded result has the expected fixture shape.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: reviewInput.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The supplied evidence supports the claim.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            });
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(terminal.readyTools).toBe(0);
+      expect(terminal.failedTools).toBe(1);
+      expect(repairAttempts).toBe(2);
+      expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(1);
+      expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(1);
+      expect(completionReviewCalls).toBe(0);
+      expect(promotionBatches).toEqual([]);
     });
   });
 

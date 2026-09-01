@@ -2272,6 +2272,7 @@ async function compileAndCheckCurrentPlan(input: {
         continue;
       }
       const currentRef = currentBuildRef(tool.id);
+      const focused = compiledByToolId.get(tool.id);
       const retainedLive = liveByToolId.get(tool.id);
       const hasCurrentLiveResult =
         retainedLive?.result.ok === true &&
@@ -2282,7 +2283,18 @@ async function compileAndCheckCurrentPlan(input: {
         mechanicalProofFailures(plan, input.journal.currentExecutionSnapshot(), tool.id).length ===
           0
       ) {
-        verifiedToolIds.add(tool.id);
+        if (hasUsableProducer(tool.id)) {
+          verifiedToolIds.add(tool.id);
+        } else if (!focused) {
+          failures.push(
+            checkFailure(tool, waveIndex, 'compile', new Error('focused artifact is unavailable')),
+          );
+        } else {
+          // Mechanical receipts do not prove that this exact retained build
+          // passed the semantic MVP gate. A prior revision_required result or
+          // failed promotion must stay fail-closed on later plan passes.
+          await approveAndPublishMvp(tool, waveIndex, focused);
+        }
         continue;
       }
       if (!tool.implementationPlan || !tool.strategy) {
@@ -2291,7 +2303,6 @@ async function compileAndCheckCurrentPlan(input: {
         );
         continue;
       }
-      const focused = compiledByToolId.get(tool.id);
       if (!focused) {
         failures.push(
           checkFailure(tool, waveIndex, 'compile', new Error('focused artifact is unavailable')),
