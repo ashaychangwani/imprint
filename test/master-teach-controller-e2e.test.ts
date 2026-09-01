@@ -660,7 +660,8 @@ describe('fresh foreground master controller end to end', () => {
       let compilerRequestSeqs: number[] = [];
       let compilerScopeSeqs: number[] = [];
       let consumerFocusedEvidenceWasComplete = false;
-      let narrationCitationWasGrounded = false;
+      let detectorEventCitationsWereGrounded = false;
+      let groundedCandidateRemainedAdvisory = false;
       let narrationRemainedInEvidence = false;
       const parameterAdvisorCalls: string[] = [];
       const liveFinesseCalls: string[] = [];
@@ -695,7 +696,7 @@ describe('fresh foreground master controller end to end', () => {
             return {
               ...validateToolCandidateDetection({
                 sharedContext,
-                candidates: [{ ...producerCandidate, eventSeqs: [3] }],
+                candidates: [{ ...producerCandidate, eventSeqs: [1, 3, 999] }],
               }),
               inputTokens: 0,
               outputTokens: 0,
@@ -719,7 +720,13 @@ describe('fresh foreground master controller end to end', () => {
             masterEvidenceIncludedTelemetryShapedRequest = JSON.stringify(input.evidence).includes(
               'telemetry.invalid/collect',
             );
-            narrationCitationWasGrounded = input.discoveryCandidates[0]?.eventSeqs.length === 0;
+            const groundedCandidate = input.discoveryCandidates[0];
+            detectorEventCitationsWereGrounded = groundedCandidate?.eventSeqs.length === 0;
+            groundedCandidateRemainedAdvisory =
+              groundedCandidate?.toolName === producerCandidate.toolName &&
+              JSON.stringify(groundedCandidate.requestSeqs) ===
+                JSON.stringify(producerCandidate.requestSeqs) &&
+              groundedCandidate.rationale === producerCandidate.rationale;
             narrationRemainedInEvidence = JSON.stringify(input.evidence).includes(
               'Fixture narration remains visible.',
             );
@@ -994,7 +1001,8 @@ describe('fresh foreground master controller end to end', () => {
       expect(compilerRequestSeqs).toEqual([1, 2, 4]);
       expect(compilerScopeSeqs).toEqual([1, 2, 4]);
       expect(consumerFocusedEvidenceWasComplete).toBe(true);
-      expect(narrationCitationWasGrounded).toBe(true);
+      expect(detectorEventCitationsWereGrounded).toBe(true);
+      expect(groundedCandidateRemainedAdvisory).toBe(true);
       expect(narrationRemainedInEvidence).toBe(true);
       expect(parameterAdviceHadToBeReleased).toBe(false);
       // Optional provider work is bounded independently from the core path,

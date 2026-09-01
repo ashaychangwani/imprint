@@ -1258,6 +1258,18 @@ describe('prompts and pre-plan discovery', () => {
     expect(() =>
       parseToolSelectionAdvisorOutput(JSON.stringify(toolOutput(invented)), invented),
     ).toThrow('unknown recording seq');
+
+    const invalidBoundary = toolOutput();
+    at(invalidBoundary.boundaries, 0).eventSeqs = [999];
+    expect(() =>
+      parseToolSelectionAdvisorOutput(JSON.stringify(invalidBoundary), toolInput()),
+    ).toThrow('unknown recording seq');
+
+    const invalidMaster = initialMasterOutput();
+    at(invalidMaster.desiredPlan.tools, 0).candidate.eventSeqs = [999];
+    expect(() =>
+      parseMasterDecisionOutput(JSON.stringify(invalidMaster), initialMasterInput()),
+    ).toThrow('unknown recording seq');
   });
 
   it('rejects oversized detector boundaries and duplicate detector or master sequence lists', () => {

@@ -187,25 +187,21 @@ export function normalizeDetectorCandidateForMaster(value: unknown): TeachingToo
 }
 
 /**
- * The shipped detector proposes semantics; this handoff only removes a known
- * namespace mix-up where a model copies `narration[].seq` into `eventSeqs`.
- * The master still receives the complete discovery evidence and may revise
- * every candidate boundary. Every other invalid or unknown sequence remains
- * intact so the normal strict validation rejects it.
+ * The shipped detector proposes semantics; this handoff grounds its optional
+ * event citations in the recording before an advisor sees them. The candidate
+ * and every other field remain intact so the master can revise its boundary.
+ * Advisor and master output still goes through the normal strict validation.
  */
 export function groundDetectorCandidateForMaster(
   value: unknown,
   recording: {
     eventSeqs: ReadonlySet<number>;
-    narrationSeqs: ReadonlySet<number>;
   },
 ): TeachingToolCandidate {
   const candidate = normalizeDetectorCandidateForMaster(value);
   return TeachingToolCandidateSchema.parse({
     ...candidate,
-    eventSeqs: candidate.eventSeqs.filter(
-      (seq) => recording.eventSeqs.has(seq) || !recording.narrationSeqs.has(seq),
-    ),
+    eventSeqs: candidate.eventSeqs.filter((seq) => recording.eventSeqs.has(seq)),
   });
 }
 

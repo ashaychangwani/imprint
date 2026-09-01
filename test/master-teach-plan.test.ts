@@ -374,17 +374,16 @@ describe('editable master teaching plan', () => {
     expect(() => normalizeDetectorCandidateForMaster({ ...value, injected: true })).toThrow();
   });
 
-  it('drops impossible detector citations without changing its semantic proposal', () => {
+  it('grounds raw detector event citations without changing its semantic proposal', () => {
     const value = candidate('search');
     value.requestSeqs = [1];
     value.representativeSeqs = [1];
-    value.eventSeqs = [4, 327];
+    value.eventSeqs = [4, 1, 327, 999];
     value.dependencySeqs = [2];
 
     expect(
       groundDetectorCandidateForMaster(value, {
         eventSeqs: new Set([4]),
-        narrationSeqs: new Set([43, 327, 652]),
       }),
     ).toEqual({
       ...value,
@@ -394,27 +393,17 @@ describe('editable master teaching plan', () => {
       dependencySeqs: [2],
     });
 
-    const invented = structuredClone(value);
-    invented.eventSeqs = [4, 999];
-    expect(
-      groundDetectorCandidateForMaster(invented, {
-        eventSeqs: new Set([4]),
-        narrationSeqs: new Set([43, 327, 652]),
-      }).eventSeqs,
-    ).toEqual([4, 999]);
-
-    const narrationOnly = structuredClone(value);
-    narrationOnly.requestSeqs = [];
-    narrationOnly.representativeSeqs = [];
-    narrationOnly.dependencySeqs = [];
-    narrationOnly.eventSeqs = [327];
-    const groundedNarrationOnly = groundDetectorCandidateForMaster(narrationOnly, {
+    const invalidEventsOnly = structuredClone(value);
+    invalidEventsOnly.requestSeqs = [];
+    invalidEventsOnly.representativeSeqs = [];
+    invalidEventsOnly.dependencySeqs = [];
+    invalidEventsOnly.eventSeqs = [1, 327, 999];
+    const grounded = groundDetectorCandidateForMaster(invalidEventsOnly, {
       eventSeqs: new Set([4]),
-      narrationSeqs: new Set([327]),
     });
-    expect(groundedNarrationOnly.eventSeqs).toEqual([]);
-    expect(groundedNarrationOnly.toolName).toBe(narrationOnly.toolName);
-    expect(groundedNarrationOnly.rationale).toBe(narrationOnly.rationale);
+    expect(grounded.eventSeqs).toEqual([]);
+    expect(grounded.toolName).toBe(invalidEventsOnly.toolName);
+    expect(grounded.rationale).toBe(invalidEventsOnly.rationale);
   });
 
   it('preserves explicit unknown metadata and permits an honest empty output description', () => {

@@ -1494,7 +1494,6 @@ async function discoverAndPlan(input: {
   const recordingIndex = recordingIndexFromSession(input.triage.session, input.recordingSha256);
   const recordingSeqs = {
     eventSeqs: new Set(recordingIndex.eventSeqs),
-    narrationSeqs: new Set(input.triage.session.narration.map(({ seq }) => seq)),
   };
   const discoveryCandidates = input.detection.candidates.map((candidate) =>
     groundDetectorCandidateForMaster(candidate, recordingSeqs),
