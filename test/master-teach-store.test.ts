@@ -203,12 +203,22 @@ function implementation(toolValue: EditableTeachingTool): ImplementationPlanPayl
   };
 }
 
-function acceptImplementations(journal: FreshTeachJournal): EditableTeachingPlan {
+function acceptImplementations(
+  journal: FreshTeachJournal,
+  unavailableReplayToolIds: ReadonlySet<string> = new Set(),
+): EditableTeachingPlan {
   const current = journal.currentPlan();
   const desired = desiredFrom(current);
   for (const plannedTool of desired.tools) {
+    const payload = implementation(plannedTool);
+    if (unavailableReplayToolIds.has(plannedTool.id)) {
+      const replayCase = payload.verificationCases.find(({ check }) => check === 'replay');
+      if (!replayCase) throw new Error('unavailable API fixture needs a replay case');
+      replayCase.parameterValueOrigin = 'unavailable';
+      replayCase.parameterValues = [];
+    }
     plannedTool.implementationPlan = journal.storeImplementationPlan(
-      implementation(plannedTool),
+      payload,
       teachingToolCompileInputsSha256(plannedTool, desired.chainEdges),
     );
   }
@@ -539,7 +549,7 @@ describe('small fresh teach journal', () => {
 
   it('finishes when an API replay baseline is explicitly unavailable', () => {
     const { journal } = fixture();
-    acceptImplementations(journal);
+    acceptImplementations(journal, new Set(['search-id']));
     issueBuild(journal, 'search-id');
     journal.issueReceipt({
       toolId: 'search-id',
@@ -563,5 +573,33 @@ describe('small fresh teach journal', () => {
     expect(journal.finishWithReview('completed', input, passedCompletionOutput(input)).status).toBe(
       'completed',
     );
+  });
+
+  it('does not waive an unchecked API replay when the implementation omitted its origin', () => {
+    const { journal } = fixture();
+    acceptImplementations(journal);
+    issueBuild(journal, 'search-id');
+    journal.issueReceipt({
+      toolId: 'search-id',
+      check: 'contract',
+      facts: [passedInvocation('contract')],
+    });
+    journal.issueReceipt({
+      toolId: 'search-id',
+      check: 'replay',
+      facts: acceptedRequestNotCheckedCheck({
+        provenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 1 }],
+      }).facts,
+    });
+    journal.issueReceipt({
+      toolId: 'search-id',
+      check: 'live',
+      facts: [passedInvocation('live')],
+    });
+    const input = completionInput(journal);
+
+    expect(() =>
+      journal.finishWithReview('completed', input, passedCompletionOutput(input)),
+    ).toThrow('explicitly marks the parameter baseline unavailable');
   });
 });

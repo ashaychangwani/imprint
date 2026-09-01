@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { triageRequests } from '../src/imprint/compile.ts';
 import {
+  ParameterAdvisorLane,
   apiReplayFacts,
   compatibleFocusedPlannerIndexes,
   compileEveryToolInBuildWaves,
@@ -16,6 +17,7 @@ import {
   revisionStagingDir,
   runFocusedWaveOrchestration,
   runPlaybookInvocationWithDeadline,
+  sameFinesseTarget,
   terminalStatusForError,
 } from '../src/imprint/master-teach-controller.ts';
 import {
@@ -38,6 +40,56 @@ describe('fresh teach provider selection', () => {
     expect(providerForFreshTeach({ agent: 'codex', provider: 'anthropic-api' })).toBe(
       'anthropic-api',
     );
+  });
+});
+
+describe('optional finesse freshness', () => {
+  const buildRef = { path: 'objects/json/build.json', sha256: SHA };
+  const target = { buildRef, executionBindingSha256: `sha256:${'b'.repeat(64)}` };
+
+  it('stays current across unrelated plan revisions', () => {
+    expect(
+      sameFinesseTarget(target, {
+        currentBuildRef: { ...buildRef },
+        executionBindingSha256: target.executionBindingSha256,
+      }),
+    ).toBe(true);
+  });
+
+  it('becomes stale when the tool build or its dependency-bound execution changes', () => {
+    expect(
+      sameFinesseTarget(target, {
+        currentBuildRef: { ...buildRef, sha256: `sha256:${'c'.repeat(64)}` },
+        executionBindingSha256: target.executionBindingSha256,
+      }),
+    ).toBe(false);
+    expect(
+      sameFinesseTarget(target, {
+        currentBuildRef: { ...buildRef },
+        executionBindingSha256: `sha256:${'d'.repeat(64)}`,
+      }),
+    ).toBe(false);
+    expect(sameFinesseTarget(target, undefined)).toBe(false);
+  });
+
+  it('caps optional parameter advisors at the core compile width', async () => {
+    const lane = new ParameterAdvisorLane();
+    const started: number[] = [];
+    const releases: Array<() => void> = [];
+    const run = (id: number) =>
+      lane.run(new AbortController().signal, async () => {
+        started.push(id);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return id;
+      });
+    const attempts = [run(1), run(2), run(3)];
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(started).toEqual([1, 2]);
+    releases.shift()?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(started).toEqual([1, 2, 3]);
+    for (const release of releases) release();
+    expect(await Promise.all(attempts)).toEqual([1, 2, 3]);
   });
 });
 

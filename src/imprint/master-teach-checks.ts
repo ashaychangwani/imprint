@@ -158,6 +158,22 @@ export function apiReplayProofSatisfied(facts: readonly ReceiptFact[]): boolean 
   );
 }
 
+/**
+ * Publication gate for an API replay. An unchecked replay is acceptable only
+ * when the bound implementation plan explicitly records that its baseline
+ * parameter values were unavailable.
+ */
+export function implementationBoundApiReplayProofSatisfied(
+  facts: readonly ReceiptFact[],
+  replayParameterValueOrigin: 'recorded_baseline' | 'unavailable' | undefined,
+): boolean {
+  const passed =
+    facts.every(({ status }) => status === 'passed' || status === 'not_applicable') &&
+    facts.some(({ status }) => status === 'passed');
+  if (passed) return true;
+  return replayParameterValueOrigin === 'unavailable' && apiReplayProofSatisfied(facts);
+}
+
 function preflightAcceptedRequests(
   provenance: readonly ArtifactRequestProvenance[],
   artifactRequests: readonly ArtifactComparableRequest[],

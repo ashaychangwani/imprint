@@ -950,7 +950,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(terminal.readyTools).toBe(2);
       expect(terminal.failedTools).toBe(0);
       expect(terminal.message).toContain('usable MVP');
-      expect(terminal.message).toContain('unfinished finesse can be retried later');
+      expect(terminal.message).toContain('unfinished work is recorded there as deferred');
       expect(readJson(join(terminal.runRoot, 'terminal.json'))).toEqual(terminal);
 
       const state = FreshTeachJournalStateSchema.parse(
@@ -997,6 +997,8 @@ describe('fresh foreground master controller end to end', () => {
       expect(narrationCitationWasGrounded).toBe(true);
       expect(narrationRemainedInEvidence).toBe(true);
       expect(parameterAdviceHadToBeReleased).toBe(false);
+      // Optional provider work is bounded independently from the core path,
+      // while both tools can still begin their post-publication review.
       expect(parameterAdvisorCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
       expect(liveFinesseCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
       expect(events.indexOf(`finesse:${PRODUCER_ID}`)).toBeLessThan(
@@ -1177,11 +1179,6 @@ describe('fresh foreground master controller end to end', () => {
           requestMasterDecision: async (decisionInput) => {
             if (decisionInput.verificationFindings) {
               repairAttempts += 1;
-              if (repairAttempts > 1) {
-                throw new ProviderUnavailableError(
-                  new Error('fixture stops after the cached MVP rejection is enforced again'),
-                );
-              }
             }
             const desiredPlan =
               decisionInput.phase === 'discovery'
@@ -1227,13 +1224,130 @@ describe('fresh foreground master controller end to end', () => {
         },
       );
 
-      expect(terminal.status).toBe('provider_unavailable');
+      expect(terminal.status).toBe('failed');
       expect(terminal.readyTools).toBe(0);
       expect(terminal.failedTools).toBe(1);
-      expect(repairAttempts).toBe(2);
+      expect(terminal.message).toContain('same unresolved tool plan');
+      expect(repairAttempts).toBe(1);
       expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(1);
       expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(1);
       expect(completionReviewCalls).toBe(0);
+      expect(promotionBatches).toEqual([]);
+    });
+  });
+
+  it('stops when focused planning returns to the same missing-plan state', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      const revisedDescription = 'Search the revised fixture catalog.';
+      let repairDecisions = 0;
+      let refusedFocusedProposals = 0;
+      let revisedFocusedPlans = 0;
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-focused-plan-no-progress',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: (reviewInput) =>
+          baselineMvpReview(reviewInput, 'revision_required'),
+      });
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          requestFocusedPlan: async (plannerInput) => {
+            if (plannerInput.tool.candidate.description === revisedDescription) {
+              revisedFocusedPlans += 1;
+            }
+            return FocusedPlannerOutputSchema.parse({
+              binding: {
+                runId: plannerInput.run.runId,
+                site: plannerInput.run.site,
+                recordingSha256: plannerInput.run.recordingSha256,
+                toolId: plannerInput.tool.id,
+              },
+              tool: {
+                ...plannerInput.tool,
+                strategy: {
+                  kind: 'api',
+                  reason: 'The focused recording contains one replayable API request.',
+                },
+              },
+              chainEdges: plannerInput.incomingChainEdges,
+              implementationPlan: focusedImplementation(plannerInput),
+              reason: 'The focused request and expected result are explicit.',
+            });
+          },
+          requestMasterDecision: async (decisionInput) => {
+            let desiredPlan: DesiredTeachingPlan;
+            let outcome: 'accepted' | 'rejected' | 'revised' = 'accepted';
+            if (decisionInput.phase === 'discovery') {
+              desiredPlan = initialSingleToolDesiredPlan(decisionInput);
+            } else if (decisionInput.verificationFindings) {
+              desiredPlan = desiredFromCurrent(decisionInput);
+              if (decisionInput.plannerProposals.length === 0) {
+                repairDecisions += 1;
+                outcome = 'revised';
+                const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+                if (!tool) throw new Error('fixture expected the producer plan');
+                tool.candidate.description = revisedDescription;
+              } else {
+                refusedFocusedProposals += 1;
+                outcome = 'rejected';
+              }
+            } else {
+              desiredPlan =
+                decisionInput.plannerProposals.length > 0
+                  ? proposalDesiredPlan(decisionInput)
+                  : desiredFromCurrent(decisionInput);
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome,
+              reason:
+                outcome === 'revised'
+                  ? 'Revise the tool description and request a fresh focused plan.'
+                  : outcome === 'rejected'
+                    ? 'Keep the same missing implementation plan after reviewing the proposal.'
+                    : 'The fixture plan remains supported.',
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('failed');
+      expect(terminal.message).toContain('focused planning stopped');
+      expect(terminal.readyTools).toBe(0);
+      expect(terminal.failedTools).toBe(1);
+      expect(repairDecisions).toBe(1);
+      expect(refusedFocusedProposals).toBe(2);
+      expect(revisedFocusedPlans).toBe(2);
+      expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(1);
       expect(promotionBatches).toEqual([]);
     });
   });

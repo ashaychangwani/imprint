@@ -30,7 +30,7 @@ import {
   ToolSelectionAdvisorPromptInputSchema,
   schemaIssue as issue,
 } from './master-teach-agent-contracts.ts';
-import { apiReplayProofSatisfied } from './master-teach-checks.ts';
+import { implementationBoundApiReplayProofSatisfied } from './master-teach-checks.ts';
 import {
   type ChainEdge,
   type ContentAddressedRef,
@@ -443,8 +443,16 @@ export function mechanicalProofFailures(
     }
     const replay = proof.receipts.find(({ check }) => check === 'replay');
     if (tool.strategy.kind === 'api') {
-      if (!replay || !apiReplayProofSatisfied(replay.facts))
-        failures.push(`${tool.id}: replay must be passed or cleanly not_checked`);
+      if (
+        !replay ||
+        !implementationBoundApiReplayProofSatisfied(
+          replay.facts,
+          tool.implementationPlan?.replayParameterValueOrigin,
+        )
+      )
+        failures.push(
+          `${tool.id}: replay must pass unless its implementation plan explicitly marks the parameter baseline unavailable`,
+        );
     } else if (replay?.status !== 'not_applicable') {
       failures.push(`${tool.id}: replay must be not_applicable`);
     }

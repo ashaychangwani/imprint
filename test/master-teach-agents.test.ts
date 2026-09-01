@@ -2228,7 +2228,7 @@ describe('host-current snapshots and structural chains', () => {
           JSON.stringify(parameterOutput()),
           parameterInput({ snapshot: current }) as never,
         ),
-      ).toThrow('must be passed');
+      ).toThrow(remove === 'replay' ? 'replay must pass' : 'must be passed');
     }
   });
 
@@ -2553,7 +2553,7 @@ describe('completion history and factual pass gate', () => {
     ).toThrow('receipt id appears in current and history');
   });
 
-  it('allows clean unavailable API replay to reach completion review', () => {
+  it('allows clean unavailable API replay only when the implementation explicitly declares it', () => {
     const input = structuredClone(completionInput());
     const replay = matching(
       at(input.snapshot.payload.tools, 0).receipts,
@@ -2562,8 +2562,48 @@ describe('completion history and factual pass gate', () => {
     replay.status = 'not_checked';
     replay.facts = replayFacts([12], ['not_checked']);
     rehash(input.snapshot);
+
+    expect(() =>
+      parseCompletionReviewOutput(JSON.stringify(completionOutput(input)), input),
+    ).toThrow('explicitly marks the parameter baseline unavailable');
+
+    const tool = at(input.currentPlan.payload.tools, 0);
+    if (!tool.implementationPlan) throw new Error('fixture tool needs an implementation plan');
+    const unavailablePayload = implementationPayload(tool);
+    const replayCase = matching(
+      unavailablePayload.verificationCases,
+      ({ check }) => check === 'replay',
+    );
+    replayCase.parameterValueOrigin = 'unavailable';
+    replayCase.parameterValues = [];
+    const unavailablePlanRef = {
+      ...tool.implementationPlan,
+      sha256: digest(unavailablePayload),
+      replayParameterValueOrigin: 'unavailable' as const,
+    };
+    tool.implementationPlan = unavailablePlanRef;
+    rehash(input.currentPlan);
+    input.run.planSha256 = input.currentPlan.ref.sha256;
+    const proof = at(input.snapshot.payload.tools, 0);
+    proof.executionBinding.implementationPlan = unavailablePlanRef;
+    rebindVerification(proof);
+    const consumerProof = at(input.snapshot.payload.tools, 1);
+    for (const dependency of consumerProof.executionBinding.dependencies)
+      if (dependency.toolId === proof.toolId)
+        dependency.executionBindingSha256 = proof.executionBindingSha256;
+    for (const receipt of consumerProof.receipts)
+      for (const dependency of receipt.dependencyBuilds)
+        if (dependency.toolId === proof.toolId)
+          dependency.executionBindingSha256 = proof.executionBindingSha256;
+    rebindVerification(consumerProof);
+    input.snapshot.payload.currentPlanRef = input.currentPlan.ref;
+    rehash(input.snapshot);
+    const resultEvidence = at(input.toolResultEvidence ?? [], 0);
+    resultEvidence.payload.implementationPlanRef = unavailablePlanRef;
+    rehash(resultEvidence);
     const output = completionOutput(input);
 
+    expect(CompletionReviewInputSchema.safeParse(input).success).toBe(true);
     expect(parseCompletionReviewOutput(JSON.stringify(output), input)).toEqual(output);
   });
 
@@ -2578,7 +2618,7 @@ describe('completion history and factual pass gate', () => {
     rehash(failed.snapshot);
     expect(() =>
       parseCompletionReviewOutput(JSON.stringify(completionOutput(failed)), failed),
-    ).toThrow('must be');
+    ).toThrow('replay must pass');
 
     const input = structuredClone(completionInput());
     const replay = matching(

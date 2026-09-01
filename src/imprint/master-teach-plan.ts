@@ -268,9 +268,9 @@ const ImplementationVerificationCaseSchema = z
     check: z.enum(['replay', 'live']),
     /**
      * Replay bytes are meaningful only with the inputs represented by the
-     * recording. Kept optional so existing stored plans remain readable; a
-     * missing origin is treated as unavailable, never as permission to compare
-     * agent-invented values to recorded bytes.
+     * recording. Kept optional so existing stored plans remain readable, but a
+     * missing origin is not an explicit unavailable declaration and cannot
+     * waive replay proof.
      */
     parameterValueOrigin: z.enum(['recorded_baseline', 'synthetic_live', 'unavailable']).optional(),
     parameterValues: z
@@ -516,6 +516,18 @@ export const ImplementationPlanPayloadSchema = z
   });
 export type ImplementationPlanPayload = z.infer<typeof ImplementationPlanPayloadSchema>;
 
+export type ReplayParameterValueOrigin = 'recorded_baseline' | 'unavailable';
+
+/** Value-free replay-baseline metadata carried beside the content-addressed plan. */
+export function implementationPlanReplayParameterValueOrigin(
+  value: ImplementationPlanPayload,
+): ReplayParameterValueOrigin | undefined {
+  const origin = value.verificationCases.find(
+    ({ check }) => check === 'replay',
+  )?.parameterValueOrigin;
+  return origin === 'recorded_baseline' || origin === 'unavailable' ? origin : undefined;
+}
+
 export function implementationPlanRequestProvenanceSha256(
   value: ImplementationPlanPayload | readonly ArtifactRequestProvenance[],
 ): string {
@@ -526,6 +538,7 @@ export function implementationPlanRequestProvenanceSha256(
 export const ImplementationPlanRefSchema = ContentAddressedRefSchema.extend({
   basedOnCompileInputsSha256: Sha256Schema,
   requestProvenanceSha256: Sha256Schema,
+  replayParameterValueOrigin: z.enum(['recorded_baseline', 'unavailable']).optional(),
 }).strict();
 type ImplementationPlanRef = z.infer<typeof ImplementationPlanRefSchema>;
 
@@ -1025,6 +1038,15 @@ export function validateImplementationPlanForTool(
   if (!tool.strategy || plan.strategyKind !== tool.strategy.kind) {
     throw new TeachingPlanValidationError('implementation plan strategy does not match the tool');
   }
+  if (
+    tool.implementationPlan &&
+    tool.implementationPlan.replayParameterValueOrigin !==
+      implementationPlanReplayParameterValueOrigin(plan)
+  ) {
+    throw new TeachingPlanValidationError(
+      'implementation plan replay parameter origin does not match its reference',
+    );
+  }
   assertConcretePublicParameters(tool);
   for (const request of plan.requestProvenance) {
     if (!knownRecordingRequestSeqs.has(request.recordingRequestSeq)) {
@@ -1142,10 +1164,12 @@ export function bindImplementationPlanRef(
   if (contentRef.sha256 !== teachingPlanContentSha256(payload)) {
     throw new TeachingPlanValidationError('implementation plan content ref hash mismatch');
   }
+  const replayParameterValueOrigin = implementationPlanReplayParameterValueOrigin(payload);
   return ImplementationPlanRefSchema.parse({
     ...contentRef,
     basedOnCompileInputsSha256,
     requestProvenanceSha256: implementationPlanRequestProvenanceSha256(payload),
+    ...(replayParameterValueOrigin ? { replayParameterValueOrigin } : {}),
   });
 }
 

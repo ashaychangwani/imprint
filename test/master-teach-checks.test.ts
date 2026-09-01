@@ -6,6 +6,7 @@ import {
   bindProducerResultToConsumer,
   browserReplayNotApplicableCheck,
   extractJsonResultPath,
+  implementationBoundApiReplayProofSatisfied,
   invocationOutcomeCheck,
 } from '../src/imprint/master-teach-checks.ts';
 import { ReceiptFactSchema } from '../src/imprint/master-teach-prompt-projections.ts';
@@ -83,6 +84,11 @@ describe('accepted request comparison facts', () => {
     ]);
     expect(check.facts.every(({ kind }) => kind === 'request_comparison')).toBe(true);
     expect(apiReplayProofSatisfied(check.facts)).toBe(true);
+    expect(implementationBoundApiReplayProofSatisfied(check.facts, undefined)).toBe(false);
+    expect(implementationBoundApiReplayProofSatisfied(check.facts, 'recorded_baseline')).toBe(
+      false,
+    );
+    expect(implementationBoundApiReplayProofSatisfied(check.facts, 'unavailable')).toBe(true);
   });
 
   it('keeps render failure distinct from unchecked request bytes', () => {
@@ -131,6 +137,7 @@ describe('accepted request comparison facts', () => {
     expect(check.status).toBe('passed');
     expect(check.facts.map(({ status }) => status)).toEqual(['passed', 'passed', 'passed']);
     expect(check.facts.map((fact) => ReceiptFactSchema.parse(fact))).toEqual(check.facts);
+    expect(implementationBoundApiReplayProofSatisfied(check.facts, undefined)).toBe(true);
     expect(check.facts).toMatchObject([
       { artifactRequestIndex: 0, recordingSeq: 11, remainingComparisons: 2 },
       { artifactRequestIndex: 1, recordingSeq: 22, remainingComparisons: 1 },

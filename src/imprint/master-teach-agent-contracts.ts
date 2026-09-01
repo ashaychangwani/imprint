@@ -14,6 +14,7 @@ import {
   TeachingToolCandidateSchema,
   TeachingToolStrategySchema,
   teachingPlanContentSha256 as digest,
+  implementationPlanReplayParameterValueOrigin,
   implementationPlanRequestProvenanceSha256,
 } from './master-teach-plan.ts';
 import {
@@ -96,6 +97,15 @@ const HostedImplementationPlanSchema = strictObject({
     implementation.ref.requestProvenanceSha256
   )
     schemaIssue(ctx, ['ref', 'requestProvenanceSha256'], 'request provenance hash mismatch');
+  if (
+    implementationPlanReplayParameterValueOrigin(implementation.payload) !==
+    implementation.ref.replayParameterValueOrigin
+  )
+    schemaIssue(
+      ctx,
+      ['ref', 'replayParameterValueOrigin'],
+      'replay parameter origin does not match implementation plan payload',
+    );
 });
 const FocusedPlannerProposalPayloadSchema = strictObject({
   binding: PlannerProposalBindingSchema,

@@ -56,8 +56,8 @@ import {
 import {
   acceptedRequestComparisonCheck,
   acceptedRequestNotCheckedCheck,
-  apiReplayProofSatisfied,
   bindProducerResultToConsumer,
+  implementationBoundApiReplayProofSatisfied,
   invocationOutcomeCheck,
 } from './master-teach-checks.ts';
 import {
@@ -72,10 +72,12 @@ import {
   createEditableTeachingPlan,
   groundDetectorCandidateForMaster,
   normalizeDetectorCompileContextForMaster,
+  teachingPlanContentSha256,
   teachingToolCompileInputsSha256,
   unresolvedCandidateCoverage,
 } from './master-teach-plan.ts';
 import {
+  type CurrentExecutionSnapshot,
   type PromptEvidenceProjection,
   PromptEvidenceProjectionSchema,
   type ReceiptFact,
@@ -951,6 +953,80 @@ function currentPlanProjection(journal: FreshTeachJournal) {
       planSha256: state.currentPlanRef.sha256,
     },
   };
+}
+
+function stableReceiptFact(fact: ReceiptFact): unknown {
+  if (fact.kind === 'invocation') {
+    const { durationMs: _durationMs, ...stable } = fact;
+    return stable;
+  }
+  if (fact.kind === 'host_error') {
+    const { hostError: _hostError, ...stable } = fact;
+    return { ...stable, hostErrorPresent: true };
+  }
+  return fact;
+}
+
+/**
+ * Identify executable teach state without revision bookkeeping or volatile
+ * receipt identities. Every strategy choice and factual check result remains
+ * in the digest; only values that change while retaining the same work are
+ * removed.
+ */
+export function mechanicalTeachStateSha256(
+  plan: EditableTeachingPlan,
+  snapshot: CurrentExecutionSnapshot,
+): string {
+  const { version: _version, revision: _revision, decision: _decision, ...desiredPlan } = plan;
+  const { currentPlanRef: _currentPlanRef, tools, ...execution } = snapshot.payload;
+  return teachingPlanContentSha256({
+    desiredPlan,
+    execution: {
+      ...execution,
+      tools: tools.map(({ receipts, ...tool }) => ({
+        ...tool,
+        receipts: receipts.map(({ id: _id, ref: _ref, facts, ...receipt }) => ({
+          ...receipt,
+          facts: facts.map(stableReceiptFact),
+        })),
+      })),
+    },
+  });
+}
+
+function stableFindings(findings: PromptEvidenceProjection): unknown {
+  const stableQuoteCoordinates = (quote: string): unknown => {
+    try {
+      const parsed = JSON.parse(quote) as Record<string, unknown>;
+      return Object.fromEntries(
+        ['stage', 'toolId', 'waveIndex', 'verdict', 'severity', 'status', 'evidenceRefs'].flatMap(
+          (key) => (parsed[key] === undefined ? [] : [[key, parsed[key]]]),
+        ),
+      );
+    } catch {
+      return { structuredCoordinatesUnavailable: true };
+    }
+  };
+  return findings.payload.entries.map(({ ref: _ref, ...entry }) => {
+    if (entry.kind === 'mechanical_fact') {
+      return entry.facts ? { ...entry, facts: entry.facts.map(stableReceiptFact) } : entry;
+    }
+    return {
+      kind: entry.kind,
+      provenance: entry.provenance,
+      coordinates: stableQuoteCoordinates(entry.quote),
+    };
+  });
+}
+
+function repairStateSha256(journal: FreshTeachJournal, findings: PromptEvidenceProjection): string {
+  return teachingPlanContentSha256({
+    mechanicalStateSha256: mechanicalTeachStateSha256(
+      journal.currentPlan(),
+      journal.currentExecutionSnapshot(),
+    ),
+    findings: stableFindings(findings),
+  });
 }
 
 export function providerForFreshTeach(opts: FreshTeachOptions): ProviderName {
@@ -1950,7 +2026,12 @@ async function compileAndCheckCurrentPlan(input: {
           credentialNames: tool.compileContext.credentialNames,
         });
         input.journal.issueReceipt({ toolId: tool.id, check: 'replay', facts });
-        if (!apiReplayProofSatisfied(facts)) {
+        if (
+          !implementationBoundApiReplayProofSatisfied(
+            facts,
+            tool.implementationPlan.replayParameterValueOrigin,
+          )
+        ) {
           failures.push(
             checkFailure(
               tool,
@@ -2169,10 +2250,17 @@ async function compileAndCheckCurrentPlan(input: {
         receipt.status === status &&
         (check !== 'chain' || receipt.chainEdgeId === chainEdgeId),
     ) === true;
-  const hasApiReplayProof = (toolId: string): boolean =>
-    proofFor(toolId)?.receipts.some(
-      (receipt) => receipt.check === 'replay' && apiReplayProofSatisfied(receipt.facts),
-    ) === true;
+  const hasApiReplayProof = (toolId: string): boolean => {
+    const replayOrigin = plan.tools.find(({ id }) => id === toolId)?.implementationPlan
+      ?.replayParameterValueOrigin;
+    return (
+      proofFor(toolId)?.receipts.some(
+        (receipt) =>
+          receipt.check === 'replay' &&
+          implementationBoundApiReplayProofSatisfied(receipt.facts, replayOrigin),
+      ) === true
+    );
+  };
 
   const runExistingLive = async (
     tool: EditableTeachingTool,
@@ -2391,7 +2479,12 @@ async function compileAndCheckCurrentPlan(input: {
               check: 'replay',
               facts,
             });
-            if (!apiReplayProofSatisfied(facts)) {
+            if (
+              !implementationBoundApiReplayProofSatisfied(
+                facts,
+                tool.implementationPlan.replayParameterValueOrigin,
+              )
+            ) {
               failures.push(
                 checkFailure(
                   tool,
@@ -2616,6 +2709,7 @@ async function ensureCurrentImplementationPlans(
   context: MasterRevisionContext,
   findings?: PromptEvidenceProjection,
 ): Promise<void> {
+  const attemptedStates = new Set<string>();
   for (;;) {
     if (Date.now() >= context.runDeadline.deadlineMs) {
       throw new Error('focused implementation-plan repair reached the run deadline');
@@ -2623,6 +2717,22 @@ async function ensureCurrentImplementationPlans(
     const current = currentPlanProjection(context.journal);
     const missingToolIds = implementationPlanRepairToolIds(current.plan);
     if (missingToolIds.length === 0 || current.plan.tools.length === 0) return;
+    const stateSha256 = teachingPlanContentSha256({
+      mechanicalStateSha256: mechanicalTeachStateSha256(
+        current.plan,
+        context.journal.currentExecutionSnapshot(),
+      ),
+      missingToolIds: [...missingToolIds].sort(),
+      // Unlike the outer execution loop, a focused planner consumes this text.
+      // Let genuinely new master guidance get one fresh planning attempt.
+      masterGuidance: current.plan.decision.reason,
+    });
+    if (attemptedStates.has(stateSha256)) {
+      throw new Error(
+        'focused planning stopped because the same tool plan still lacks the same implementation plans after the master reviewed a focused proposal',
+      );
+    }
+    attemptedStates.add(stateSha256);
 
     const seeds = new Map<string, FreshTeachBootstrapObject>();
     const planners = await requestFocusedPlannerBundles({
@@ -2695,6 +2805,85 @@ interface ParameterFinesseLane {
   stop: (reason: string) => Promise<Record<ParameterFinesseStatus, number>>;
 }
 
+/** Keep at most two optional parameter advisors beside the core teach work.
+ * Live finesse has its own queue, so it is deliberately not routed here. */
+export class ParameterAdvisorLane {
+  private active = 0;
+  private readonly waiters: Array<{
+    signal: AbortSignal;
+    resolve: () => void;
+    reject: (error: Error) => void;
+    abort: () => void;
+  }> = [];
+
+  private acquire(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) {
+      return Promise.reject(abortSignalError(signal, 'Optional parameter advice cancelled'));
+    }
+    if (this.active < FOCUSED_COMPILE_CONCURRENCY) {
+      this.active += 1;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const waiter = {
+        signal,
+        resolve,
+        reject,
+        abort: (): void => {
+          const index = this.waiters.indexOf(waiter);
+          if (index >= 0) this.waiters.splice(index, 1);
+          signal.removeEventListener('abort', waiter.abort);
+          reject(abortSignalError(signal, 'Optional parameter advice cancelled'));
+        },
+      };
+      signal.addEventListener('abort', waiter.abort, { once: true });
+      this.waiters.push(waiter);
+    });
+  }
+
+  private release(): void {
+    this.active -= 1;
+    while (this.waiters.length > 0) {
+      const waiter = this.waiters.shift();
+      if (!waiter) return;
+      waiter.signal.removeEventListener('abort', waiter.abort);
+      if (waiter.signal.aborted) {
+        waiter.reject(abortSignalError(waiter.signal, 'Optional parameter advice cancelled'));
+        continue;
+      }
+      this.active += 1;
+      waiter.resolve();
+      return;
+    }
+  }
+
+  async run<Value>(signal: AbortSignal, work: () => Promise<Value>): Promise<Value> {
+    await this.acquire(signal);
+    try {
+      if (signal.aborted) throw abortSignalError(signal, 'Optional parameter advice cancelled');
+      return await work();
+    } finally {
+      this.release();
+    }
+  }
+}
+
+export function sameFinesseTarget(
+  record: { buildRef: ContentAddressedRef; executionBindingSha256: string },
+  proof:
+    | Pick<
+        CurrentExecutionSnapshot['payload']['tools'][number],
+        'currentBuildRef' | 'executionBindingSha256'
+      >
+    | undefined,
+): boolean {
+  return (
+    proof?.currentBuildRef.path === record.buildRef.path &&
+    proof.currentBuildRef.sha256 === record.buildRef.sha256 &&
+    proof.executionBindingSha256 === record.executionBindingSha256
+  );
+}
+
 /**
  * Parameter breadth is intentionally outside the authoritative teach state.
  * Each suggestion is bound to one exact MVP build and can be considered by a
@@ -2711,6 +2900,7 @@ function createParameterFinesseLane(input: {
   report?: (message: string) => void;
 }): ParameterFinesseLane {
   const records = new Map<string, ParameterFinesseRecord>();
+  const advisorLane = new ParameterAdvisorLane();
   const jobs = new Map<
     string,
     { controller: AbortController; promise: Promise<void>; detachParent: () => void }
@@ -2792,11 +2982,7 @@ function createParameterFinesseLane(input: {
         const promise = (async () => {
           const latest = input.journal.currentExecutionSnapshot().payload;
           const latestProof = latest.tools.find((candidate) => candidate.toolId === toolId);
-          const stillCurrent =
-            latest.currentPlanRef.path === record.currentPlanRef.path &&
-            latest.currentPlanRef.sha256 === record.currentPlanRef.sha256 &&
-            latestProof?.currentBuildRef.path === record.buildRef.path &&
-            latestProof.currentBuildRef.sha256 === record.buildRef.sha256;
+          const stillCurrent = sameFinesseTarget(record, latestProof);
           if (!stillCurrent) {
             persist(key, {
               ...record,
@@ -2808,10 +2994,20 @@ function createParameterFinesseLane(input: {
           }
 
           const [adviceAttempt, liveAttempt] = await Promise.all([
-            input.deps
-              .requestParameterSelectionAdvice(advisorInput, {
-                ...input.agent,
-                signal: controller.signal,
+            advisorLane
+              .run(controller.signal, async () => {
+                const queuedProof = input.journal
+                  .currentExecutionSnapshot()
+                  .payload.tools.find((candidate) => candidate.toolId === toolId);
+                if (!sameFinesseTarget(record, queuedProof)) {
+                  throw new Error(
+                    'The plan, MVP build, or dependency changed before optional parameter advice started.',
+                  );
+                }
+                return await input.deps.requestParameterSelectionAdvice(advisorInput, {
+                  ...input.agent,
+                  signal: controller.signal,
+                });
               })
               .then(
                 (value) => {
@@ -2839,11 +3035,7 @@ function createParameterFinesseLane(input: {
 
           const after = input.journal.currentExecutionSnapshot().payload;
           const afterProof = after.tools.find((candidate) => candidate.toolId === toolId);
-          const remainsCurrent =
-            after.currentPlanRef.path === record.currentPlanRef.path &&
-            after.currentPlanRef.sha256 === record.currentPlanRef.sha256 &&
-            afterProof?.currentBuildRef.path === record.buildRef.path &&
-            afterProof.currentBuildRef.sha256 === record.buildRef.sha256;
+          const remainsCurrent = sameFinesseTarget(record, afterProof);
           const deferred = controller.signal.aborted;
           const hasAdvice = adviceAttempt.ok;
           const hasCompletedLiveReview =
@@ -2874,7 +3066,7 @@ function createParameterFinesseLane(input: {
                 : 'stale',
             finishedAt: new Date().toISOString(),
             message: deferred
-              ? 'The MVP completed before this optional finesse pass; it can be retried later.'
+              ? 'The MVP completed before this optional finesse pass; its state is saved as deferred.'
               : !remainsCurrent
                 ? 'The plan or MVP build changed before this suggestion returned.'
                 : failed
@@ -2891,7 +3083,7 @@ function createParameterFinesseLane(input: {
               status: deferred ? 'deferred' : 'failed',
               finishedAt: new Date().toISOString(),
               message: deferred
-                ? 'The MVP completed before this optional finesse pass; it can be retried later.'
+                ? 'The MVP completed before this optional finesse pass; its state is saved as deferred.'
                 : boundedTerminalMessage(error),
             });
           })
@@ -3311,6 +3503,7 @@ export async function runFreshMasterTeach(
         'status' | 'reason' | 'evidenceRefs'
       >
     >();
+    const attemptedRepairStates = new Set<string>();
     const revisionContext = (): MasterRevisionContext => ({
       journal: activeJournal,
       discoveryInput: planned.discoveryInput,
@@ -3325,6 +3518,13 @@ export async function runFreshMasterTeach(
       runDeadline: deadline,
     });
     const repair = async (findings: PromptEvidenceProjection): Promise<void> => {
+      const stateSha256 = repairStateSha256(activeJournal, findings);
+      if (attemptedRepairStates.has(stateSha256)) {
+        throw new Error(
+          'teach stopped because the same unresolved tool plan, artifacts, check facts, and failure recurred after the master already reviewed them; published MVP tools remain installed',
+        );
+      }
+      attemptedRepairStates.add(stateSha256);
       reportProgress(opts, 'master is revising the plan from factual failures');
       const context = revisionContext();
       await requestRepairRevision(context, findings);
@@ -3551,7 +3751,7 @@ export async function runFreshMasterTeach(
       });
       readyTools = finalPlan.tools.length;
       const finesseCounts = await finesse.stop(
-        'The MVP was promoted before this optional finesse pass finished; it can be retried later.',
+        'The MVP was promoted before this optional finesse pass finished; its state is saved as deferred.',
       );
       const availableFinesse = finesseCounts.suggested;
       return writeTerminalResult({
@@ -3559,7 +3759,7 @@ export async function runFreshMasterTeach(
         readyTools,
         failedTools: 0,
         runRoot,
-        message: `Every one of ${readyTools} planned tool(s) reached a usable MVP and was promoted. ${availableFinesse} optional finesse suggestion(s) are saved under ${pathJoin(runRoot, 'finesse')}; unfinished finesse can be retried later.`,
+        message: `Every one of ${readyTools} planned tool(s) reached a usable MVP and was promoted. ${availableFinesse} optional finesse suggestion(s) are saved under ${pathJoin(runRoot, 'finesse')}; unfinished work is recorded there as deferred and did not delay the MVP.`,
       });
     }
   } catch (error) {
