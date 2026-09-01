@@ -633,6 +633,9 @@ Route failures by the fact that failed:
 - Replay: inspect the exact request number, recorded sequence, byte lengths,
   first mismatch, and unchecked remainder. Repair construction, not the
   meaning of the site, then rerun contract and replay.
+  `expectedBytes` is the recorded request baseline, `actualBytes` is the
+  request rendered by the current artifact, and `firstMismatchByte` is their
+  zero-based first differing byte.
 - Live: inspect the actual request, response, state, credentials, and parser
   output. Try evidence-supported repairs and compatible API rungs before
   proposing browser fallback.

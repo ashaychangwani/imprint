@@ -891,6 +891,13 @@ describe('prompts and pre-plan discovery', () => {
     expect(masterPrompt).toContain('replayParameterValueOrigin?');
   });
 
+  it('defines replay byte lengths from baseline to rendered request', () => {
+    const masterPrompt = prompt('master-teach-decision.md');
+    expect(masterPrompt).toContain('`expectedBytes` is the recorded request');
+    expect(masterPrompt).toContain('`actualBytes` is the request rendered');
+    expect(masterPrompt).toContain('zero-based first differing byte');
+  });
+
   it('keeps optional parameter breadth outside the blocking MVP contract', () => {
     const masterPrompt = prompt('master-teach-decision.md');
     const focusedPrompt = prompt('master-teach-focused-planner.md');

@@ -92,6 +92,9 @@ test('the pinned contract states applicability, edit invalidation, and playbook 
   );
   expect(prompt).toContain('call `compare_rendered_requests`');
   expect(prompt).toContain('partial facts to distinguish the request that was actually sent');
+  expect(prompt).toContain('`expectedBytes` is the recorded request baseline');
+  expect(prompt).toContain('`actualBytes` is the');
+  expect(prompt).toContain('request rendered by the current artifact');
 });
 
 test('the playbook compiler remains site-neutral and follows the accepted auth and fallback plans', () => {

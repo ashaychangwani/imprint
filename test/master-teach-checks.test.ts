@@ -143,6 +143,32 @@ describe('accepted request comparison facts', () => {
       { artifactRequestIndex: 1, recordingSeq: 22, remainingComparisons: 1 },
       { artifactRequestIndex: 2, recordingSeq: 33, remainingComparisons: 0 },
     ]);
+    const expectedBytes = Buffer.byteLength(
+      JSON.stringify({
+        method: 'POST',
+        url: recordedRequests[0].url,
+        headers: [
+          ['content-type', 'application/json'],
+          ['x-session', privateSession],
+        ],
+        body: recordedRequests[0].body,
+      }),
+      'utf8',
+    );
+    const actualBytes = Buffer.byteLength(
+      JSON.stringify({
+        method: 'POST',
+        url: artifactRequests[0].url,
+        headers: [
+          ['content-type', 'application/json'],
+          ['x-session', '${state.session}'],
+        ],
+        body: artifactRequests[0].body,
+      }),
+      'utf8',
+    );
+    expect(expectedBytes).not.toBe(actualBytes);
+    expect(check.facts[0]).toMatchObject({ expectedBytes, actualBytes });
 
     const serialized = JSON.stringify(check);
     expect(serialized).not.toContain(privateQuery);
@@ -169,6 +195,8 @@ describe('accepted request comparison facts', () => {
       artifactRequestIndex: 1,
       recordingSeq: 22,
       remainingComparisons: 1,
+      expectedBytes: Buffer.byteLength('GET', 'utf8'),
+      actualBytes: Buffer.byteLength('POST', 'utf8'),
       firstMismatchByte: 0,
     });
     expect(check.facts[2]).not.toHaveProperty('expectedBytes');

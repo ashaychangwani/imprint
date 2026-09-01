@@ -107,6 +107,26 @@ function replaySession(request: Session['requests'][number]): Session {
   };
 }
 
+function replayReceiptBytes(request: {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: string;
+}): number {
+  const headers = Object.entries(request.headers)
+    .map(([name, value]) => [name.toLowerCase(), value] as const)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return Buffer.byteLength(
+    JSON.stringify({
+      method: request.method.toUpperCase(),
+      url: request.url,
+      headers,
+      body: request.body ?? '',
+    }),
+    'utf8',
+  );
+}
+
 function replayImplementation(
   parameterValueOrigin: 'recorded_baseline' | 'synthetic_live' | 'unavailable' | undefined,
   parameterValues: ImplementationPlanPayload['verificationCases'][number]['parameterValues'],
@@ -653,6 +673,8 @@ describe('master API replay facts', () => {
       expect(facts[0]).toMatchObject({
         kind: 'request_comparison',
         status: 'failed',
+        expectedBytes: Buffer.byteLength('https://fixture.invalid/search?q=recorded', 'utf8'),
+        actualBytes: Buffer.byteLength('https://fixture.invalid/search?q=wrong', 'utf8'),
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -740,7 +762,23 @@ describe('master API replay facts', () => {
     });
 
     expect(facts).toHaveLength(1);
-    expect(facts[0]).toMatchObject({ kind: 'request_comparison', status: 'passed' });
+    const expectedBytes = replayReceiptBytes({
+      method: 'GET',
+      url: 'https://fixture.invalid/private',
+      headers: { 'x-api-key': '[REDACTED:v3:id=1:len=12]' },
+    });
+    const actualBytes = replayReceiptBytes({
+      method: 'GET',
+      url: 'https://fixture.invalid/private',
+      headers: { 'x-api-key': '${credential.api_key}' },
+    });
+    expect(expectedBytes).not.toBe(actualBytes);
+    expect(facts[0]).toMatchObject({
+      kind: 'request_comparison',
+      status: 'passed',
+      expectedBytes,
+      actualBytes,
+    });
   });
 });
 

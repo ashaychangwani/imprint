@@ -276,8 +276,8 @@ export function acceptedRequestComparisonCheck(
       }
       facts.push(
         comparisonFact(accepted, 'failed', remainingComparisons, {
-          expectedBytes: mismatch.workflowBytes,
-          actualBytes: mismatch.recordedBytes,
+          expectedBytes: mismatch.recordedBytes,
+          actualBytes: mismatch.workflowBytes,
           firstMismatchByte: mismatch.firstMismatchByte,
         }),
       );
@@ -286,8 +286,8 @@ export function acceptedRequestComparisonCheck(
     }
     facts.push(
       comparisonFact(accepted, 'passed', remainingComparisons, {
-        expectedBytes: checkedRequestBytes(artifact),
-        actualBytes: checkedRequestBytes(artifact, recorded),
+        expectedBytes: checkedRequestBytes(artifact, recorded),
+        actualBytes: checkedRequestBytes(artifact),
       }),
     );
   }

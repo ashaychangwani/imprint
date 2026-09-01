@@ -88,6 +88,10 @@ any untested construction remains. Do not cite the failed compiler's conclusion
 as the sole fallback evidence. The master may choose fallback only after the
 evidence itself closes those API repair paths.
 
+In replay request-comparison facts, `expectedBytes` is the recorded request
+baseline, `actualBytes` is the request rendered by the current artifact, and
+`firstMismatchByte` is their zero-based first differing byte.
+
 Return canonical `DesiredTeachingPlan` fields directly. Do not add version,
 revision, or decision metadata. You may select an `implementationPlan` only from
 a supplied current tool or focused planner proposal whose complete compile-input
