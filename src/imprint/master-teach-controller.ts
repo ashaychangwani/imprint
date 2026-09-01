@@ -730,8 +730,8 @@ async function resolveRecordingForFreshRun(
   };
 }
 
-/** Apply the shipped credential extractor before ordinary redaction so both
- * teaching agents and the optional independent execution retain named inputs. */
+/** Apply the shipped credential extractor before ordinary redaction so
+ * teaching and later live verification retain named inputs. */
 export function prepareRedactedTeachingSession(session: Session): Omit<RedactedRecording, 'path'> {
   const extracted = extractCredentials(session);
   const redacted = redactSession(session, { replacements: extracted.replacements }).session;
@@ -3852,31 +3852,23 @@ export async function runFreshMasterTeach(
     const masterPayload = buildToolCandidatePayload(redacted.session, {
       trustSessionScope: true,
     });
-    reportProgress(opts, 'discovering operations while observing an independent execution');
-    const [detection, independent] = await Promise.all([
-      deps.detectToolCandidates(detectorScope.session, llmOptions(opts), {
-        trustSessionScope: true,
-        candidatePayload: detectorPayload,
-        signal: opts.signal,
-        deadlineMs: deadline.deadlineMs,
-        runDeadline: deadline,
-      }),
-      deps
-        .observeIndependentExecution({
-          session: redacted.session,
-          site,
-          credentials: redacted.credentialValues,
-          replacements: redacted.credentialReplacements,
-        })
-        .catch(
-          (error): IndependentExecutionObservation => ({
-            status: 'unavailable',
-            requests: [],
-            unmatchedRecordingRequestSeqs: [],
-            message: utf8Prefix(error instanceof Error ? error.message : String(error), 1_000),
-          }),
-        ),
-    ]);
+    reportProgress(opts, 'discovering operations');
+    const detection = await deps.detectToolCandidates(detectorScope.session, llmOptions(opts), {
+      trustSessionScope: true,
+      candidatePayload: detectorPayload,
+      signal: opts.signal,
+      deadlineMs: deadline.deadlineMs,
+      runDeadline: deadline,
+    });
+    // The recording is the teaching evidence. Replaying the entire session in
+    // Chrome before planning duplicated that evidence and put a multi-minute
+    // browser startup on the critical path. A compiler can still choose a live
+    // browser later when the recorded operation actually requires one.
+    const independent: IndependentExecutionObservation = {
+      status: 'not_requested',
+      requests: [],
+      unmatchedRecordingRequestSeqs: [],
+    };
     const seeds = new Map<string, FreshTeachBootstrapObject>();
     reportProgress(opts, `reviewing ${detection.candidates.length} discovered operation(s)`);
     const planned = await discoverAndPlan({

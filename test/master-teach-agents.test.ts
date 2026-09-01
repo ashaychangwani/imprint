@@ -1189,6 +1189,37 @@ describe('prompts and pre-plan discovery', () => {
     expect(conversationKeys).toEqual(['tool-selection', 'master']);
   });
 
+  it('sends retained Codex master turns as small conversational updates', async () => {
+    const initial = initialMasterInput();
+    const revision = revisionMasterInput();
+    const seen: unknown[] = [];
+    let calls = 0;
+    const analyzer: MasterTeachAnalyzer = {
+      async analyze(_prompt, payload) {
+        seen.push(payload);
+        calls += 1;
+        return {
+          text: JSON.stringify(
+            calls === 1 ? initialMasterOutput(initial) : revisionMasterOutput(revision),
+          ),
+        };
+      },
+    };
+
+    await requestMasterDecision(initial, { provider: 'codex-cli', analyzer });
+    await requestMasterDecision(revision, { provider: 'codex-cli', analyzer });
+
+    const first = seen[0] as { input: Record<string, unknown> };
+    const second = seen[1] as { input: Record<string, unknown> };
+    expect(JSON.stringify(first).length).toBeLessThan(50_000);
+    expect(first.input).toHaveProperty('discovery');
+    expect(JSON.stringify(first.input)).not.toContain('"quote":');
+    expect(second.input).not.toHaveProperty('discovery');
+    expect(second.input).not.toHaveProperty('toolSelectionAdvice');
+    expect(second.input).toHaveProperty('current');
+    expect(JSON.stringify(second).length).toBeLessThan(20_000);
+  });
+
   it('runs one strict focused planner on only one tool and repairs invalid JSON once', async () => {
     const input = focusedInput();
     const output = focusedOutput(input);
@@ -3208,6 +3239,27 @@ describe('strict repair and one real deadline', () => {
     expect(repair.priorResponse).toBe(JSON.stringify(invalid));
     expect(calls[1]?.prompt).toContain('priorResponse is your complete previous answer');
     expect(calls[1]?.prompt).toContain('Return one complete replacement object');
+  });
+
+  it('repairs a retained Codex turn without repeating its original payload', async () => {
+    const input = toolInput();
+    const invalid = toolOutput();
+    at(invalid.boundaries, 0).requestSeqs = [999];
+    const calls: unknown[] = [];
+    const analyzer: MasterTeachAnalyzer = {
+      async analyze(_prompt, payload) {
+        calls.push(payload);
+        return {
+          text: calls.length === 1 ? JSON.stringify(invalid) : JSON.stringify(toolOutput(input)),
+        };
+      },
+    };
+    await requestToolSelectionAdvice(input, { provider: 'codex-cli', analyzer });
+    const repair = calls[1] as Record<string, unknown>;
+    expect(repair).not.toHaveProperty('originalInput');
+    expect(repair).not.toHaveProperty('validationContext');
+    expect(repair.priorResponse).toBe(JSON.stringify(invalid));
+    expect(repair.parseErrors).toBeTruthy();
   });
 
   it('gives a master repair the complete long output, exact field path, and namespace rule', async () => {

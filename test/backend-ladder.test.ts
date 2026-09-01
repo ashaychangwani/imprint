@@ -12,18 +12,15 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
-  __drainPendingProbeRunsForTest,
   __resetCompileCdpPoolForTest,
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
   __setCdpJarMinterForTest,
   __setPlaybookRunnerForTest,
-  __setProbeTimeoutMsForTest,
   cdpReplayPoolKey,
   effectiveAutoLadder,
   evaluateBootstrapCapture,
   pickBaseUrl,
-  pickProbeWinner,
   renderWorkflowRequests,
   resolveLadder,
   runWithLadder,
@@ -71,18 +68,13 @@ beforeEach(() => {
   }));
   // Disable the compile-path .act rate gate so tests don't sleep between calls.
   process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '0';
-  // Shorten the parallel probe deadline so its setTimeout doesn't keep bun's
-  // event loop alive past the default 5s test timeout.
-  __setProbeTimeoutMsForTest(1_000);
 });
 
 afterEach(async () => {
-  await __drainPendingProbeRunsForTest();
   rmSync(root, { recursive: true, force: true });
   __setCdpJarMinterForTest(null);
   __setCdpBrowserFetchFactoryForTest(null);
   __setPlaybookRunnerForTest(null);
-  __setProbeTimeoutMsForTest(null);
   // The compile CDP pool is now process-global — reset it so a pooled browser /
   // armed idle timer can't leak across tests.
   __resetCompileCdpPoolForTest();
@@ -178,34 +170,6 @@ describe('resolveLadder', () => {
 
   it('ignores the cached order when an explicit backend is named', () => {
     expect(resolveLadder('fetch', ['stealth-fetch', 'playbook'])).toEqual(['fetch']);
-  });
-});
-
-describe('pickProbeWinner (cdp-replay preferred over stealth-fetch)', () => {
-  it('prefers cdp-replay over a FASTER stealth-fetch — its cold start amortizes via the pool', () => {
-    const w = pickProbeWinner([
-      { backend: 'stealth-fetch' as const, durationMs: 1300 },
-      { backend: 'cdp-replay' as const, durationMs: 33000 },
-    ]);
-    expect(w?.backend).toBe('cdp-replay');
-  });
-
-  it('prefers fetch when it succeeded (cheapest, no browser)', () => {
-    const w = pickProbeWinner([
-      { backend: 'cdp-replay' as const, durationMs: 33000 },
-      { backend: 'fetch' as const, durationMs: 300 },
-      { backend: 'stealth-fetch' as const, durationMs: 1300 },
-    ]);
-    expect(w?.backend).toBe('fetch');
-  });
-
-  it('falls back to stealth-fetch when it is the only winner', () => {
-    const w = pickProbeWinner([{ backend: 'stealth-fetch' as const, durationMs: 1300 }]);
-    expect(w?.backend).toBe('stealth-fetch');
-  });
-
-  it('returns undefined when there are no winners', () => {
-    expect(pickProbeWinner([])).toBeUndefined();
   });
 });
 
@@ -1009,8 +973,7 @@ describe('runWorkflowWithLadder', () => {
       });
       expect(result.ok).toBe(true);
       expect(usedBackend).toBe('fetch');
-      // All parallel attempts remain visible even though fetch won.
-      expect(attempts.map((a) => a.backend)).toEqual(['fetch', 'cdp-replay', 'stealth-fetch']);
+      expect(attempts.map((a) => a.backend)).toEqual(['fetch']);
     } finally {
       server.stop(true);
     }
@@ -1018,7 +981,6 @@ describe('runWorkflowWithLadder', () => {
 
   it('uses a valid sibling backends.json before probing', async () => {
     __resetCompileWinningBackendForTest();
-    __setProbeTimeoutMsForTest(2_000);
     const server = Bun.serve({
       port: 0,
       fetch: () =>
@@ -1066,9 +1028,8 @@ describe('runWorkflowWithLadder', () => {
     }
   });
 
-  it('keeps every parallel attempt when the selected probe result is still a failure', async () => {
+  it('stops on a non-transport failure without trying unrelated backends', async () => {
     __resetCompileWinningBackendForTest();
-    __setProbeTimeoutMsForTest(2_000);
     const server = Bun.serve({
       port: 0,
       fetch: () => new Response('expired', { status: 401 }),
@@ -1099,14 +1060,7 @@ describe('runWorkflowWithLadder', () => {
 
       expect(run.result).toMatchObject({ ok: false, error: 'AUTH_EXPIRED' });
       expect(run.usedBackend).toBe('fetch');
-      expect(run.attempts.map(({ backend }) => backend)).toEqual([
-        'fetch',
-        'cdp-replay',
-        'stealth-fetch',
-      ]);
-      expect(run.attempts.find(({ backend }) => backend === 'cdp-replay')?.detail).toContain(
-        'cdp-replay disabled in tests',
-      );
+      expect(run.attempts.map(({ backend }) => backend)).toEqual(['fetch']);
     } finally {
       server.stop(true);
       __resetCompileWinningBackendForTest();
@@ -1115,7 +1069,6 @@ describe('runWorkflowWithLadder', () => {
 
   it('memoizes the winning backend across calls without breaking the fetch path', async () => {
     __resetCompileWinningBackendForTest();
-    __setProbeTimeoutMsForTest(250);
     let hits = 0;
     const server = Bun.serve({
       port: 0,
@@ -1146,18 +1099,13 @@ describe('runWorkflowWithLadder', () => {
         sensorHeaders: {},
         bootstrappedAt: Date.now(),
       });
-      // First call: parallel probe — fetch wins (fastest). Second call:
-      // memo=fetch, sequential from the memoized winner.
+      // First call stops at fetch. The second call starts at the memoized winner.
       const startedAt = Date.now();
       const a = await runWorkflowWithLadder({ workflowPath, params: {} });
       const b = await runWorkflowWithLadder({ workflowPath, params: {} });
       expect(a.usedBackend).toBe('fetch');
       expect(b.usedBackend).toBe('fetch');
-      expect(a.attempts.slice(0, 3).map(({ backend }) => backend)).toEqual([
-        'fetch',
-        'cdp-replay',
-        'stealth-fetch',
-      ]);
+      expect(a.attempts.map(({ backend }) => backend)).toEqual(['fetch']);
       expect(
         a.attempts.some(({ backend, outcome }) => backend === 'fetch' && outcome === 'ok'),
       ).toBe(true);

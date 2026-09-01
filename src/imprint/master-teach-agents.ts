@@ -822,6 +822,40 @@ function masterDecisionPromptInput(input: MasterDecisionInput) {
   }
   return promptInput;
 }
+
+/** The Codex master is one retained conversation. The first turn establishes
+ * discovery; later turns carry only what changed. Host validation continues to
+ * use the complete MasterDecisionInput and is intentionally not weakened. */
+function masterDecisionConversationInput(input: MasterDecisionInput) {
+  const parameterAdvice = input.parameterAdvice.map(({ evidence, ...submission }) => ({
+    ...submission,
+    evidenceSummary: evidenceCoverage(evidence, submission.advice.evidenceRefs),
+  }));
+  if (input.phase === 'discovery') {
+    return {
+      phase: input.phase,
+      run: input.discovery.run,
+      discovery: {
+        detectorSharedContext: input.discovery.detectorSharedContext,
+        discoveryCandidates: input.discovery.discoveryCandidates,
+        evidenceSummary: evidenceCoverage(input.discovery.evidence, []),
+      },
+      toolSelectionAdvice: input.toolSelectionAdvice,
+    };
+  }
+  return {
+    phase: input.phase,
+    current: input.current
+      ? {
+          run: input.current.run,
+          planRef: input.current.plan.ref,
+        }
+      : undefined,
+    ...(input.plannerProposals.length ? { plannerProposals: input.plannerProposals } : {}),
+    ...(parameterAdvice.length ? { parameterAdvice } : {}),
+    ...(input.verificationFindings ? { verificationFindings: input.verificationFindings } : {}),
+  };
+}
 const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => {
   validateDiscovery(input.discovery, ctx);
   if (input.toolSelectionAdvice) {
@@ -1426,7 +1460,7 @@ function semanticRepairPrompt(system: string, role: Role): string {
     role === 'master decision'
       ? '\nFor a master decision, use the public candidate.toolName everywhere. Each wire-format tool id must equal that public name, including buildWaves and chainEdges. Propagate every rename through all affected references.'
       : '';
-  return `${system}\n\n# Output repair\n\nThis is a repair of your previous output. originalInput is the authoritative original task, validationContext contains the exact allowed bindings and recording IDs, priorResponse is your complete previous answer, and parseErrors are factual validator diagnostics. Return one complete replacement object in the original schema, not a patch, wrapper, prose, or commentary. Preserve valid decisions and change what is needed to correct every listed issue.${roleRule}`;
+  return `${system}\n\n# Output repair\n\nThis is a repair of your previous output. The preceding conversation contains the authoritative task. When supplied, originalInput and validationContext restate that task and its exact allowed bindings. priorResponse is your complete previous answer, and parseErrors are factual validator diagnostics. Return one complete replacement object in the original schema, not a patch, wrapper, prose, or commentary. Preserve valid decisions and change what is needed to correct every listed issue.${roleRule}`;
 }
 
 function semanticRoleRequestPayload(input: unknown, validation: unknown) {
@@ -1542,6 +1576,7 @@ async function request<S extends z.ZodTypeAny>(options: {
     options.agent.onDeadlineReached,
   );
   const signal = active.signal ?? new AbortController().signal;
+  const retainedCodexConversation = options.agent.provider === 'codex-cli';
   const analyze = (payload: unknown, prompt = system) =>
     invoke(
       () =>
@@ -1585,12 +1620,17 @@ async function request<S extends z.ZodTypeAny>(options: {
           `${options.role} retry callback`,
         );
       const repaired = await analyze(
-        {
-          originalInput: options.input,
-          validationContext: options.validation,
-          priorResponse: first.text,
-          parseErrors: error.parseErrors,
-        },
+        retainedCodexConversation
+          ? {
+              priorResponse: first.text,
+              parseErrors: error.parseErrors,
+            }
+          : {
+              originalInput: options.input,
+              validationContext: options.validation,
+              priorResponse: first.text,
+              parseErrors: error.parseErrors,
+            },
         semanticRepairPrompt(system, options.role),
       );
       return await invoke(
@@ -1647,7 +1687,10 @@ export async function requestMasterDecision(
     role: 'master decision',
     conversationKey: 'master',
     prompt: 'master-teach-decision.md',
-    input: masterDecisionPromptInput(checked),
+    input:
+      agent.provider === 'codex-cli'
+        ? masterDecisionConversationInput(checked)
+        : masterDecisionPromptInput(checked),
     validation: {
       binding: masterDecisionBinding(checked),
       recordingIndex: checked.discovery.recordingIndex,

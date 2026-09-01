@@ -66,6 +66,11 @@ export type IndependentExecutionObservation =
       unmatchedRecordingRequestSeqs: number[];
     }
   | {
+      status: 'not_requested';
+      requests: [];
+      unmatchedRecordingRequestSeqs: [];
+    }
+  | {
       status: 'unavailable';
       requests: [];
       unmatchedRecordingRequestSeqs: [];

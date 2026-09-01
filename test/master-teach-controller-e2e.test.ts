@@ -666,7 +666,7 @@ describe('fresh foreground master controller end to end', () => {
       let masterRequestSeqs: number[] = [];
       let masterEvidenceIncludedSecondRequest = false;
       let masterEvidenceIncludedTelemetryShapedRequest = false;
-      let independentRequestSeqs: number[] = [];
+      let independentExecutionCalled = false;
       let compilerRequestSeqs: number[] = [];
       let compilerScopeSeqs: number[] = [];
       let consumerFocusedEvidenceWasComplete = false;
@@ -715,8 +715,8 @@ describe('fresh foreground master controller end to end', () => {
               durationMs: 0,
             };
           },
-          observeIndependentExecution: async ({ session }) => {
-            independentRequestSeqs = session.requests.map(({ seq }) => seq);
+          observeIndependentExecution: async () => {
+            independentExecutionCalled = true;
             return {
               status: 'unavailable',
               requests: [],
@@ -1019,7 +1019,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(masterRequestSeqs).toEqual([1, 2, 4]);
       expect(masterEvidenceIncludedSecondRequest).toBe(true);
       expect(masterEvidenceIncludedTelemetryShapedRequest).toBe(true);
-      expect(independentRequestSeqs).toEqual([1, 2, 4]);
+      expect(independentExecutionCalled).toBe(false);
       expect(compilerRequestSeqs).toEqual([1, 2, 4]);
       expect(compilerScopeSeqs).toEqual([1, 2, 4]);
       expect(consumerFocusedEvidenceWasComplete).toBe(true);

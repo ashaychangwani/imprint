@@ -418,7 +418,11 @@ class CodexCliProvider implements LLMProvider {
 
   constructor({ model }: { model: string }) {
     this.model = model;
-    this.codex = new Codex();
+    this.codex = new Codex({
+      // Codex owns retained-history compaction. Imprint only asks it to compact
+      // early enough that the next ordinary agent message still fits.
+      config: { model_auto_compact_token_limit: 100_000 },
+    });
   }
 
   async analyze(

@@ -294,7 +294,9 @@ The public teaching path is one fresh foreground controller:
 
 1. It resolves the requested recording, or records a new one, then redacts it.
    The complete redacted recording remains authoritative for the master,
-   focused planning, compilation, replay checks, and independent execution.
+   focused planning, compilation, and replay checks. Teach does not replay the
+   whole session in a browser before planning; live execution happens only when
+   a compiled candidate is checked.
 2. The relevance pass from shipped semantic triage gives only the candidate
    detector a narrower advisory view; the discarded effect-classification
    passes are not run here. An ordinary relevance-triage failure falls back to

@@ -116,38 +116,6 @@ export function __resetCompileWinningBackendForTest(): void {
   compileWinningBackend.clear();
 }
 
-let probeTimeoutMsForTest: number | null = null;
-export function __setProbeTimeoutMsForTest(ms: number | null): void {
-  probeTimeoutMsForTest = ms;
-}
-
-/** Backend preference for the compile parallel-probe winner, LOWER = preferred.
- *  `fetch` first (cheapest, no browser). Among the browser-backed rungs prefer
- *  `cdp-replay` over `stealth-fetch`: cdp-replay's cold start is a one-time cost
- *  (the pool keeps Chrome warm so later calls are ~2-5s) and it is the more
- *  anti-bot-robust path (real Chrome re-validating its sensor between calls), so
- *  it shouldn't lose the probe just because stealth's FIRST call clocked faster. */
-const BACKEND_PROBE_RANK: Record<string, number> = {
-  fetch: 0,
-  'cdp-replay': 1,
-  'stealth-fetch': 2,
-};
-
-/** Pick the parallel-probe winner among backends that returned real data: prefer
- *  by `BACKEND_PROBE_RANK` (fetch < cdp-replay < stealth-fetch), with first-call
- *  duration only as a tiebreak — so when both browser backends succeed, the
- *  warm-poolable cdp-replay wins instead of stealth's faster cold call. Pure +
- *  exported for unit testing. */
-export function pickProbeWinner<T extends { backend: ConcreteBackend; durationMs: number }>(
-  winners: T[],
-): T | undefined {
-  return [...winners].sort((a, b) => {
-    const ra = BACKEND_PROBE_RANK[a.backend] ?? 9;
-    const rb = BACKEND_PROBE_RANK[b.backend] ?? 9;
-    return ra !== rb ? ra - rb : a.durationMs - b.durationMs;
-  })[0];
-}
-
 /** Process-global CDP pool for the compile/test path (`runWorkflowWithLadder`).
  *  cdp-replay stores its live Chrome here on success so subsequent calls within
  *  the same `bun test` process reuse it (~2-5s vs ~33s cold start) — the same
@@ -215,38 +183,6 @@ function compileActSpacingMs(): number {
 const compileLastRequestAt = new Map<string, number>();
 function sleepMs(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-async function settleProbeWithDeadline<T>(
-  inner: Promise<T>,
-  timeoutMs: number,
-  timeoutValue: T,
-): Promise<T> {
-  type Observed = { status: 'fulfilled'; value: T } | { status: 'rejected'; reason: unknown };
-  const observed: Promise<Observed> = inner.then(
-    (value) => ({ status: 'fulfilled', value }),
-    (reason) => ({ status: 'rejected', reason }),
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<'deadline'>((resolve) => {
-    timer = setTimeout(() => resolve('deadline'), timeoutMs);
-  });
-  const first = await Promise.race([observed, deadline]);
-  if (timer) clearTimeout(timer);
-  if (first === 'deadline') {
-    const pending = observed.then(() => undefined);
-    pendingProbeRuns.add(pending);
-    void pending.finally(() => pendingProbeRuns.delete(pending));
-    return timeoutValue;
-  }
-  if (first.status === 'rejected') throw first.reason;
-  return first.value;
-}
-
-const pendingProbeRuns = new Set<Promise<void>>();
-
-export async function __drainPendingProbeRunsForTest(): Promise<void> {
-  await Promise.allSettled([...pendingProbeRuns]);
 }
 
 function playbookBackendTimeoutMs(): number {
@@ -615,10 +551,8 @@ export async function runWithLadder(
     };
   }
   const lastBackend = lastResultBackend ?? effectiveLadder[effectiveLadder.length - 1] ?? 'fetch';
-  // Be accurate about ladder size: the parallel probe calls this with SINGLE-rung
-  // ladders, so "every backend escalated" was misleading (it described one rung,
-  // e.g. fetch-only, as if the whole ladder gave up — and fooled the integration
-  // classifier). Only say "all rungs" when there really was more than one.
+  // Be accurate about ladder size: pinned callers use a single-rung ladder, so
+  // only say "all rungs" when there really was more than one.
   log(
     effectiveLadder.length === 1
       ? `${lastBackend}: exhausted (no fallback rung in this ladder); returning its error`
@@ -1572,8 +1506,8 @@ export async function runWorkflowWithLadder(opts: {
    *  it. AuthVerifier uses this to preserve one browser across action
    *  checkpoints. */
   cdpPool?: Map<string, CdpBrowserFetch>;
-  /** Pin execution to a single rung, bypassing the parallel probe AND the winner
-   *  memo. AuthVerifier pins `cdp-replay` so all actions share one browser. */
+  /** Pin execution to a single rung, bypassing the winner memo. AuthVerifier
+   *  pins `cdp-replay` so all actions share one browser. */
   forceBackend?: ConcreteBackend;
   /** Caller cancellation for bounded verification work. */
   signal?: AbortSignal;
@@ -1676,124 +1610,21 @@ export async function runWorkflowWithLadder(opts: {
       }
     }
 
-    // ── First call: parallel probe (45s deadline) ───────────────────────────
-    // Race non-overlapping backends so a tarpitted rung doesn't block a
-    // faster one. fetch-bootstrap is excluded: it launches Chrome to the
-    // same origin as cdp-replay, and two simultaneous Chromes trip Akamai's
-    // concurrent-session detection. cdp-replay is strictly better when both
-    // need Chrome; if fetch wins, fetch-bootstrap is unnecessary anyway.
-    //
-    // Uses Promise.allSettled (NOT Promise.any) deliberately: a fast OK from
-    // a lower rung (e.g. fetch returning a cached/stale 200) may not be the
-    // best result — we need all backends to settle so we can pick the
-    // fastest *correct* one. The tradeoff is wall-clock: the probe blocks
-    // until the slowest backend resolves (or hits the deadline). cdp-replay
-    // is slow on its first cold start (~33s) but subsequent calls reuse the
-    // CDP pool and complete in ~2-5s — so the first probe pays the cost but
-    // all later calls benefit from having discovered the right rung.
-    //
-    // The compile agent's integration tests MUST use a timeout >= 60s (the
-    // compile-agent.md prompt recommends this) so the test process survives
-    // the full probe duration. A 30s test timeout kills the probe before
-    // cdp-replay can finish its cold start.
-    //
-    // Each bun-test subprocess is a fresh process (memo empty), so the
-    // compile agent's iteration loop re-probes after every workflow change —
-    // no premature lock-in.
+    // First call: use the ordinary fixed ladder and stop at the first usable
+    // result. The former parallel probe waited for a cold Chrome even when
+    // plain fetch had already succeeded. It did not establish semantic
+    // correctness; it only repeated the same invocation over more transports.
+    // Preserve the facts for rungs that were actually needed and memoize the
+    // winner for the next call.
     if (!memoWinner) {
-      const PROBE_TIMEOUT_MS = probeTimeoutMsForTest ?? 45_000;
-      const probeBackends: ConcreteBackend[] = ['fetch', 'cdp-replay', 'stealth-fetch'];
-
-      const settled = await Promise.allSettled(
-        probeBackends.map(async (b) => {
-          const t0 = Date.now();
-          const inner = runWithLadder([b], tool, opts.params, assetRoot, stealthCache, {
-            skipBootstrapSplice: true,
-            cdpPool,
-            initialState: opts.initialState,
-            credentials: opts.credentials,
-            signal: opts.signal,
-          });
-          const r = await settleProbeWithDeadline(inner, PROBE_TIMEOUT_MS, {
-            result: { ok: false, error: 'NETWORK', message: 'probe deadline exceeded' },
-            usedBackend: b,
-            attempts: [],
-          });
-          return { backend: b, result: r, durationMs: Date.now() - t0 };
-        }),
-      );
-
-      const probeReachable = isProbeReachable;
-      const digest = settled.map((s, i) => {
-        const b = probeBackends[i];
-        if (s.status === 'rejected')
-          return `${b}: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`.slice(
-            0,
-            120,
-          );
-        const { result: lr, durationMs } = s.value;
-        const r = lr.result;
-        if (r.ok) return `${b}: OK in ${durationMs}ms`;
-        return probeReachable(r)
-          ? `${b}: ${r.error} in ${durationMs}ms`
-          : `${b}: ${r.error} — ${r.message.slice(0, 200)} (${durationMs}ms)`;
-      });
-
-      const probeAttempts: BackendAttemptFact[] = settled.map((entry, index) => {
-        const backend = probeBackends[index];
-        if (!backend) throw new Error(`parallel probe lost backend at index ${index}`);
-        if (entry.status === 'rejected') {
-          return {
-            backend,
-            outcome: 'unavailable',
-            detail: entry.reason instanceof Error ? entry.reason.message : String(entry.reason),
-            durationMs: 0,
-          };
-        }
-        const recorded = entry.value.result.attempts.at(-1);
-        if (recorded) return recorded;
-        const result = entry.value.result.result;
-        return {
-          backend,
-          outcome: result.ok ? 'ok' : 'unavailable',
-          detail: result.ok ? 'OK' : backendAttemptDetail(result),
-          durationMs: entry.value.durationMs,
-        };
-      });
-
-      type ProbeEntry = { backend: ConcreteBackend; result: LadderResult; durationMs: number };
-      const winners = settled
-        .filter(
-          (s): s is PromiseFulfilledResult<ProbeEntry> =>
-            s.status === 'fulfilled' && probeReachable(s.value.result.result),
-        )
-        .map((s) => s.value);
-
-      const best = pickProbeWinner(winners);
-      if (best) {
-        compileWinningBackend.set(memoKey, best.backend);
-        log(
-          `parallel probe: winner=${best.backend} (${best.durationMs}ms)\n  ${digest.join('\n  ')}`,
-        );
-        return { ...best.result, attempts: probeAttempts };
-      }
-
-      log(
-        `parallel probe: all backends failed — falling through to sequential ladder\n  ${digest.join('\n  ')}`,
-      );
-      const seqResult = await runWithLadder(ladder, tool, opts.params, assetRoot, stealthCache, {
+      const result = await runWithLadder(ladder, tool, opts.params, assetRoot, stealthCache, {
         cdpPool,
         initialState: opts.initialState,
         credentials: opts.credentials,
         signal: opts.signal,
       });
-      if (probeReachable(seqResult.result)) {
-        compileWinningBackend.set(memoKey, seqResult.usedBackend);
-      }
-      return {
-        ...seqResult,
-        attempts: [...probeAttempts, ...seqResult.attempts],
-      };
+      if (isProbeReachable(result.result)) compileWinningBackend.set(memoKey, result.usedBackend);
+      return result;
     }
 
     // ── Memo hit: start at the memoized winner, keep all later rungs ─────

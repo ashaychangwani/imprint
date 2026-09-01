@@ -2670,3 +2670,39 @@ and circular-dependency checks. The full run passed 1,830 tests and hit the same
 known process-teardown timing flake recorded at 11:47; that single hostile
 grandchild test passed immediately on its own. No teach policy was added for
 the environmental flake.
+
+## 2026-09-01 16:17 PDT — The fresh Flights run exposed two avoidable delays
+
+Fresh run `f4ae1732-c754-4d95-9aeb-9b4d1763a4be` used the latest combined
+Google Flights recording and found five operations. It published a working
+`resolve_flight_location` MVP, but ended with one ready tool and four not ready.
+This was a useful clean failure: it showed that retained conversations alone
+were not enough because Imprint was still treating each turn like a stateless
+request.
+
+Compilation did not begin until about minute 18. Roughly six minutes were spent
+replaying the entire recording in Chrome to produce an optional second copy of
+network evidence. Planning then repeatedly sent the master the same discovery
+bundle. The four master inputs were about 592 KB, 624 KB, 680 KB, and 683 KB.
+Most of every input was the same 546 KB discovery evidence. The retained thread
+consumed about 696,000 cumulative input tokens. Codex compacted earlier history,
+but the next oversized full snapshot filled the window again and ended the run.
+
+Teach no longer replays the whole session in Chrome before planning. The saved
+recording remains authoritative; a browser is used later only if an actual
+compiled candidate needs that transport. The retained Codex master now receives
+discovery once. Later messages contain only the new planner proposals,
+verification failure, or parameter advice. Output validation still uses the
+complete host state, so reducing the prompt does not weaken schema or binding
+checks. Output-repair turns likewise send the prior answer and exact errors
+without repeating the original task. Codex's own automatic compaction is set to
+run at 100,000 tokens; Imprint does not write its own conversation summary.
+
+Verification also no longer starts fetch, stealth, and a cold Chrome together
+and waits for all three after fetch has already succeeded. It walks the fixed
+generic ladder and stops at the first usable result, preserving facts for every
+rung that was actually attempted. This removes the observed 30-second Chrome
+wait from ordinary Google Flights API checks without adding site-specific
+rules. Focused agent, controller, backend, and SDK tests pass, as do type
+checking, lint, and whitespace checks. A fresh teach after the final full test
+and commit is the next validation; the failed pre-change run will not resume.
