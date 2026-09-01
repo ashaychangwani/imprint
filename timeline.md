@@ -1936,3 +1936,32 @@ rendered artifact, with the prompt stating that explicitly. The planning guard
 will bound retries by the mechanical tool/proposal/input state rather than by a
 changing explanation, while still allowing a changed tool, dependency, proof,
 or compile input to start fresh work.
+
+## 2026-08-31 19:31 PDT — Corrected replay direction and bounded repeated proposal review
+
+Replay receipts now use their ordinary meaning: `expectedBytes` is the accepted
+recording baseline and `actualBytes` is the request rendered by the current
+artifact. The compile and master prompts state the same definition. The schema
+did not change, so old receipts remain readable; only the previously reversed
+assignment was corrected. Tests cover both mismatches and successful comparisons
+whose sanitized recording and template artifact have different serialized
+lengths.
+
+The focused-planning guard now lets new master guidance reach the focused
+planner, then compares the concrete proposal before asking the master to review
+it again. It tracks only the sorted compile inputs of tools still missing plans
+and path-free hashes of their executable proposals. A changed public tool,
+dependency, request plan, response plan, or derived request metadata remains new
+work. Rephrased explanations, confidence scores, rationale text, equivalent
+array ordering, and content-reference paths do not count as progress.
+
+The first draft of this guard was not merged because it ignored all master
+guidance. A second draft was also held back because full-plan prose and ordering
+could still evade it. The merged version preserves agent editability while
+stopping only an executable proposal the master has already reviewed. An
+independent re-review found no remaining high- or medium-priority issue.
+
+The combined focused suite passes 157 tests with no failures. Type checking,
+lint, and whitespace checks pass. The fixes are commits `1590baa` and
+`eca7a67`. The next validation will again start as a fresh, unsteered Flights
+teach from the latest combined recording.
