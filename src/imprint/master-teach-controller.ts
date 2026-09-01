@@ -2661,6 +2661,50 @@ interface MasterRevisionContext {
   runDeadline: RunDeadlineRef;
 }
 
+function canonicalOrder(left: unknown, right: unknown): number {
+  return canonicalTeachingPlanJson(left).localeCompare(canonicalTeachingPlanJson(right));
+}
+
+/** Receipts cannot change inside this synchronous planner/master loop; the
+ * outer repair guard handles new execution facts. Keep this digest limited to
+ * missing compile inputs and the executable proposal the master reviews. */
+export function focusedPlanningStateSha256(
+  plan: EditableTeachingPlan,
+  missingToolIds: readonly string[],
+  proposals: readonly ReturnType<typeof FocusedPlannerProposalSchema.parse>[],
+): string {
+  const toolById = new Map(plan.tools.map((tool) => [tool.id, tool]));
+  const missingTools = [...new Set(missingToolIds)]
+    .map((toolId) => {
+      const tool = toolById.get(toolId);
+      if (!tool) throw new Error(`focused planning references missing tool "${toolId}"`);
+      return {
+        toolId,
+        compileInputsSha256: teachingToolCompileInputsSha256(tool, plan.chainEdges),
+      };
+    })
+    .sort((left, right) => left.toolId.localeCompare(right.toolId));
+  const executableProposals = proposals
+    .map((proposal) => {
+      const { path: _implementationPath, ...implementationPlanRef } =
+        proposal.payload.implementationPlan.ref;
+      return {
+        toolId: proposal.payload.tool.id,
+        compileInputsSha256: proposal.payload.binding.compileInputsSha256,
+        chainEdges: [...proposal.payload.chainEdges].sort(canonicalOrder),
+        implementationPlanRef,
+        implementationPlanContentSha256: teachingPlanContentSha256(
+          proposal.payload.implementationPlan.payload,
+        ),
+      };
+    })
+    .sort((left, right) => left.toolId.localeCompare(right.toolId));
+  return teachingPlanContentSha256({
+    missingTools,
+    proposals: executableProposals,
+  });
+}
+
 function revisionEvidenceRefs(
   context: MasterRevisionContext,
   findings?: PromptEvidenceProjection,
@@ -2709,7 +2753,7 @@ async function ensureCurrentImplementationPlans(
   context: MasterRevisionContext,
   findings?: PromptEvidenceProjection,
 ): Promise<void> {
-  const attemptedStates = new Set<string>();
+  const reviewedProposalStates = new Set<string>();
   for (;;) {
     if (Date.now() >= context.runDeadline.deadlineMs) {
       throw new Error('focused implementation-plan repair reached the run deadline');
@@ -2717,22 +2761,6 @@ async function ensureCurrentImplementationPlans(
     const current = currentPlanProjection(context.journal);
     const missingToolIds = implementationPlanRepairToolIds(current.plan);
     if (missingToolIds.length === 0 || current.plan.tools.length === 0) return;
-    const stateSha256 = teachingPlanContentSha256({
-      mechanicalStateSha256: mechanicalTeachStateSha256(
-        current.plan,
-        context.journal.currentExecutionSnapshot(),
-      ),
-      missingToolIds: [...missingToolIds].sort(),
-      // Unlike the outer execution loop, a focused planner consumes this text.
-      // Let genuinely new master guidance get one fresh planning attempt.
-      masterGuidance: current.plan.decision.reason,
-    });
-    if (attemptedStates.has(stateSha256)) {
-      throw new Error(
-        'focused planning stopped because the same tool plan still lacks the same implementation plans after the master reviewed a focused proposal',
-      );
-    }
-    attemptedStates.add(stateSha256);
 
     const seeds = new Map<string, FreshTeachBootstrapObject>();
     const planners = await requestFocusedPlannerBundles({
@@ -2746,6 +2774,17 @@ async function ensureCurrentImplementationPlans(
       deps: context.deps,
       toolIds: new Set(missingToolIds),
     });
+    const proposalStateSha256 = focusedPlanningStateSha256(
+      current.plan,
+      missingToolIds,
+      planners.map(({ proposal }) => proposal),
+    );
+    if (reviewedProposalStates.has(proposalStateSha256)) {
+      throw new Error(
+        'focused planning stopped because the same executable focused proposal recurred after the master already reviewed it',
+      );
+    }
+    reviewedProposalStates.add(proposalStateSha256);
     persistSeeds(context.journal, seeds);
     for (const planner of planners) {
       context.focusedEvidence.set(planner.output.tool.id, planner.evidence);

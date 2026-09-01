@@ -9,6 +9,7 @@ import {
   compatibleFocusedPlannerIndexes,
   compileEveryToolInBuildWaves,
   focusedPlanningFailureMessage,
+  focusedPlanningStateSha256,
   implementationPlanRepairToolIds,
   prepareFullSessionForTeach,
   prepareSessionForTeach,
@@ -24,6 +25,7 @@ import {
   type EditableTeachingPlan,
   type EditableTeachingTool,
   type ImplementationPlanPayload,
+  teachingPlanContentSha256,
   teachingToolCompileInputsSha256,
 } from '../src/imprint/master-teach-plan.ts';
 import { ProviderUnavailableError, RunDeadline } from '../src/imprint/provider-retry.ts';
@@ -829,6 +831,108 @@ describe('reviewed promotion lifecycle', () => {
 });
 
 describe('master repair revisions', () => {
+  it('ignores prose, collection order, and ref paths in focused proposal state', () => {
+    const first = focusedTool(1);
+    const second = focusedTool(2);
+    const plan: EditableTeachingPlan = {
+      version: 1,
+      revision: 2,
+      site: 'fixture-site',
+      recordingSha256: SHA,
+      tools: [first, second],
+      candidateCoverage: [first, second].map((tool) => ({
+        discoveryCandidateName: tool.candidate.toolName,
+        plannedToolIds: [tool.id],
+        unresolvedReason: null,
+      })),
+      buildWaves: [[first.id], [second.id]],
+      chainEdges: [],
+      decision: {
+        timestamp: '2026-01-01T00:00:00.000Z',
+        outcome: 'revised',
+        reason: 'First explanation.',
+        advisorRefs: [],
+        evidenceRefs: [],
+      },
+    };
+    const compileInputsSha256 = teachingToolCompileInputsSha256(first, plan.chainEdges);
+    const implementationPayload = { toolId: first.id, requestPlan: 'stable executable plan' };
+    const implementationPlan = {
+      path: 'objects/json/implementation-a.json',
+      sha256: teachingPlanContentSha256(implementationPayload),
+      basedOnCompileInputsSha256: compileInputsSha256,
+      requestProvenanceSha256: SHA,
+    };
+    const proposal = {
+      ref: { path: 'objects/json/proposal-a.json', sha256: SHA },
+      payload: {
+        binding: { compileInputsSha256 },
+        tool: { ...first, implementationPlan },
+        chainEdges: [
+          {
+            id: 'edge-b',
+            producerToolId: second.id,
+            producerResultPath: '[0].alternate_id',
+            consumerToolId: first.id,
+            consumerParameter: 'alternate_id',
+          },
+          {
+            id: 'edge-a',
+            producerToolId: second.id,
+            producerResultPath: '[0].id',
+            consumerToolId: first.id,
+            consumerParameter: 'id',
+          },
+        ],
+        implementationPlan: { ref: implementationPlan, payload: implementationPayload },
+        reason: 'First proposal explanation.',
+      },
+    };
+    const original = focusedPlanningStateSha256(plan, [first.id], [proposal] as never);
+
+    const reorderedPlan = structuredClone(plan);
+    reorderedPlan.revision += 1;
+    reorderedPlan.decision.reason = 'A paraphrase that changes no executable input.';
+    for (const tool of reorderedPlan.tools) {
+      tool.candidate.rationale = `Paraphrased rationale for ${tool.id}.`;
+      tool.candidate.confidence = 0.51;
+    }
+    reorderedPlan.tools.reverse();
+    reorderedPlan.candidateCoverage.reverse();
+    reorderedPlan.buildWaves.reverse();
+    const pathChurnedProposal = structuredClone(proposal);
+    pathChurnedProposal.ref.path = 'objects/json/proposal-b.json';
+    pathChurnedProposal.payload.reason = 'A different proposal explanation.';
+    pathChurnedProposal.payload.chainEdges.reverse();
+    pathChurnedProposal.payload.implementationPlan.ref.path = 'objects/json/implementation-b.json';
+    pathChurnedProposal.payload.tool.implementationPlan.path = 'objects/json/implementation-b.json';
+
+    expect(
+      focusedPlanningStateSha256(reorderedPlan, [first.id], [pathChurnedProposal] as never),
+    ).toBe(original);
+
+    const changedCompileInputs = structuredClone(reorderedPlan);
+    const changedTool = changedCompileInputs.tools.find(({ id }) => id === first.id);
+    if (!changedTool) throw new Error('missing focused fixture tool');
+    changedTool.candidate.description = 'Materially changed compile input.';
+    expect(
+      focusedPlanningStateSha256(changedCompileInputs, [first.id], [proposal] as never),
+    ).not.toBe(original);
+
+    const changedImplementation = structuredClone(proposal);
+    changedImplementation.payload.implementationPlan.payload.requestPlan =
+      'materially changed executable plan';
+    expect(focusedPlanningStateSha256(plan, [first.id], [changedImplementation] as never)).not.toBe(
+      original,
+    );
+
+    const changedImplementationMetadata = structuredClone(proposal);
+    changedImplementationMetadata.payload.implementationPlan.ref.requestProvenanceSha256 = `sha256:${'b'.repeat(64)}`;
+    expect(
+      focusedPlanningStateSha256(plan, [first.id], [changedImplementationMetadata] as never),
+    ).not.toBe(original);
+  });
+
   it('gives every plan revision a clean tool directory', () => {
     expect(revisionStagingDir('/run/staging', 3, 'search_items')).toBe(
       '/run/staging/revision-3/search_items',

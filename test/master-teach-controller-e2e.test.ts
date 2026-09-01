@@ -1236,15 +1236,18 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('stops when focused planning returns to the same missing-plan state', async () => {
+  it('stops repeated executable proposals but reviews changed implementation plans', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];
       const promotionBatches: string[][] = [];
       const recordingPath = syntheticSessionPath(root);
       const revisedDescription = 'Search the revised fixture catalog.';
       let repairDecisions = 0;
-      let refusedFocusedProposals = 0;
-      let revisedFocusedPlans = 0;
+      let repairPlannerCalls = 0;
+      let reviewedFocusedProposals = 0;
+      const repairPlannerGuidance: string[] = [];
+      const repairPlanDescriptions: string[] = [];
+      const reviewedImplementationHashes: string[] = [];
       const base = lifecycleFailureFixture({
         runId: 'run-e2e-focused-plan-no-progress',
         events,
@@ -1273,8 +1276,17 @@ describe('fresh foreground master controller end to end', () => {
             durationMs: 0,
           }),
           requestFocusedPlan: async (plannerInput) => {
+            let implementationPlan = focusedImplementation(plannerInput);
             if (plannerInput.tool.candidate.description === revisedDescription) {
-              revisedFocusedPlans += 1;
+              repairPlannerCalls += 1;
+              repairPlannerGuidance.push(plannerInput.masterGuidance ?? '');
+              repairPlanDescriptions.push(plannerInput.tool.candidate.description);
+              if (repairPlannerCalls >= 2) {
+                implementationPlan = ImplementationPlanPayloadSchema.parse({
+                  ...implementationPlan,
+                  outputGuidance: 'Return the revised current fixture catalog result.',
+                });
+              }
             }
             return FocusedPlannerOutputSchema.parse({
               binding: {
@@ -1291,7 +1303,7 @@ describe('fresh foreground master controller end to end', () => {
                 },
               },
               chainEdges: plannerInput.incomingChainEdges,
-              implementationPlan: focusedImplementation(plannerInput),
+              implementationPlan,
               reason: 'The focused request and expected result are explicit.',
             });
           },
@@ -1309,7 +1321,14 @@ describe('fresh foreground master controller end to end', () => {
                 if (!tool) throw new Error('fixture expected the producer plan');
                 tool.candidate.description = revisedDescription;
               } else {
-                refusedFocusedProposals += 1;
+                reviewedFocusedProposals += 1;
+                const proposal = decisionInput.plannerProposals[0];
+                if (!proposal) throw new Error('fixture expected a focused proposal');
+                reviewedImplementationHashes.push(proposal.payload.implementationPlan.ref.sha256);
+                const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+                if (!tool) throw new Error('fixture expected the producer plan');
+                tool.candidate.rationale = `Paraphrased rationale ${reviewedFocusedProposals} with no compile-input change.`;
+                tool.candidate.confidence = reviewedFocusedProposals === 1 ? 0.61 : 0.62;
                 outcome = 'rejected';
               }
             } else {
@@ -1325,7 +1344,7 @@ describe('fresh foreground master controller end to end', () => {
                 outcome === 'revised'
                   ? 'Revise the tool description and request a fresh focused plan.'
                   : outcome === 'rejected'
-                    ? 'Keep the same missing implementation plan after reviewing the proposal.'
+                    ? `Paraphrased guidance ${reviewedFocusedProposals}: keep the public tool unchanged and propose a corrected implementation.`
                     : 'The fixture plan remains supported.',
               desiredPlan,
             });
@@ -1345,8 +1364,16 @@ describe('fresh foreground master controller end to end', () => {
       expect(terminal.readyTools).toBe(0);
       expect(terminal.failedTools).toBe(1);
       expect(repairDecisions).toBe(1);
-      expect(refusedFocusedProposals).toBe(2);
-      expect(revisedFocusedPlans).toBe(2);
+      expect(repairPlannerCalls).toBe(3);
+      expect(reviewedFocusedProposals).toBe(2);
+      expect(repairPlanDescriptions).toEqual([
+        revisedDescription,
+        revisedDescription,
+        revisedDescription,
+      ]);
+      expect(repairPlannerGuidance[1]).not.toBe(repairPlannerGuidance[2]);
+      expect(reviewedImplementationHashes).toHaveLength(2);
+      expect(reviewedImplementationHashes[0]).not.toBe(reviewedImplementationHashes[1]);
       expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(1);
       expect(promotionBatches).toEqual([]);
     });
