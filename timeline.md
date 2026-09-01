@@ -1965,3 +1965,27 @@ The combined focused suite passes 157 tests with no failures. Type checking,
 lint, and whitespace checks pass. The fixes are commits `1590baa` and
 `eca7a67`. The next validation will again start as a fresh, unsteered Flights
 teach from the latest combined recording.
+
+## 2026-08-31 19:36 PDT — Fresh Flights detector mixed request IDs into event evidence
+
+Fresh run `eeab1720-a017-4c8f-ae2f-4c1bd36dbcfc` again used the intended latest
+recording. Triage kept 50 requests and independent replay captured 413 requests.
+The shipped detector proposed four operations, but the run failed before the
+advisor, master, journal, or compiler started.
+
+One proposal put IDs `748` and `758` into its browser-event list. Both IDs are
+real successful `GetShoppingResults` requests in the recording, not events. The
+detector prompt already says these number spaces are distinct, but the model
+interleaved the requests with the click events that triggered them. The current
+master handoff removes narration IDs from an event list but leaves request IDs
+and invented IDs for a later strict check. That check rejected the whole
+discovery package, even though event citations are only optional hints and the
+complete evidence was still available.
+
+The general repair is to ground only the raw detector's event-hint list against
+the recording's real event IDs. Real events survive; request IDs, narration IDs,
+and invented IDs do not. The candidate itself and every request, parameter,
+dependency, and evidence document remain untouched for the advisor and master
+to judge. Later advisor and master outputs remain strictly validated. This is a
+mechanical detector-to-master handoff fix, not a Flights rule or a change to
+candidate selection semantics. The failed run will not be resumed.
