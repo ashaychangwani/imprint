@@ -2046,3 +2046,112 @@ replacement; retain a published producer across a chain-edge edit long enough
 to test whether its existing output already satisfies the new edge; and report
 previously installed MVPs honestly when a later revision becomes stale. After
 those changes, validation will start with another fresh run.
+
+## 2026-09-01 05:05 PDT — Removed replay policy and made repair facts belong to the exact failed work
+
+The earlier controller made recorded-request replay a required publication
+step. It added `replayParameterValueOrigin` only to remember whether the
+planner had supplied recorded parameter values or claimed they were
+unavailable. That let the runtime decide when an unchecked replay could be
+waived. It was not needed to run a generated tool, and copying that hidden
+host-added field back through the master output created a second undocumented
+contract. The field and the required replay gate are now gone.
+
+Recorded-request comparison remains available to the compiler as an on-demand
+diagnostic. It is useful when a live call fails, returns an empty or implausible
+result, or leaves request construction uncertain. It is not universal proof:
+`+` and `%20` can mean the same form value, JSON and headers can be serialized
+differently, and dates, authentication, nonces, signatures, and old recordings
+can legitimately change bytes. Contract and live execution are the required
+mechanical path. The agent prompt now says to use the comparison as a clue and
+to prove that each public parameter reaches the intended field, position, and
+type rather than demanding byte equality.
+
+Event IDs are also only hints now. The detector had copied nearby request IDs
+from an interleaved timeline into `eventSeqs`; those number spaces look alike
+but are unrelated. The handoff mechanically keeps only IDs that really occur in
+the recording's top-level event list, and later optional event citations cannot
+stop discovery or repair. The detector, advisor, planner, and master prompts
+all say to use an empty event list when uncertain and never copy request or
+narration IDs. Codex teaching and discovery default to `gpt-5.6-sol` unless the
+user explicitly selects another model.
+
+Old failures no longer leak into replacement work. A failed check now carries
+the exact receipt, build, tool, and chain edge that produced it. Those facts go
+once to the master repair decision. The fresh planner sees the master's new
+reason and current plan, not the old failure as if it had already happened to
+the new proposal. Returned API error codes and messages are included in the
+bounded repair facts, and two different failures on the same artifact are no
+longer mistaken for one repeated failure.
+
+The journal now distinguishes a generated artifact that violates the accepted
+schema or request map from a real file/journal failure. The first returns exact
+facts to the master for repair; the second stops as a host error instead of
+blaming the artifact. A prior artifact becomes a repair seed only after its
+contract, live result, small usefulness review, and publication succeed. A
+later artifact that merely parses but fails live or usefulness review cannot
+replace that last working seed. A fresh compiler context receives that working
+artifact plus the exact current repair guidance. If the master changes between
+API and browser strategy, incompatible executable files are not copied.
+
+Dependency edits no longer cause broad runtime recompilation. Changing one
+edge invalidates only that edge's receipt. Rebuilding a producer keeps consumer
+artifacts and their standalone checks, while invalidating only chain receipts
+that consumed the replaced producer build or exact live result. Standalone live
+results and per-edge chain results are stored separately, so a bad incoming
+edge cannot overwrite a working tool or poison an unrelated outgoing edge. The
+independent completion reviewer now sees the bounded result for every current
+chain edge as well as each tool's standalone result.
+
+The runtime intentionally checks explicit edges one at a time. It does not
+guess which incoming result should feed an outgoing edge when a tool has
+multiple parents; that graph meaning remains a master decision rather than a
+new runtime rule. No Google-specific rule or request classifier was added.
+
+Focused controller, journal, agent-contract, prompt, and end-to-end regression
+tests pass. The first full run exposed two unrelated process/Chromium stress
+test flakes; both passed immediately in isolation. A clean full rerun then
+passed all 1,810 tests. Type checking, lint, dead-code checks,
+circular-dependency checks, and whitespace checks are clean. A fresh unsteered
+teach is next; no pre-change run will be resumed.
+
+## 2026-09-01 05:20 PDT — Finished the KISS pass before the next fresh teach
+
+The first pass had removed replay from the controller but left old helper code
+that could still manufacture exact byte-comparison receipts. That code is now
+gone. The journal no longer invents `REPLAY N/A` for browser tools, and no
+current prompt or completion rule requires a replay receipt. Old receipt files
+can still be read for diagnosis. The compiler's `compare_rendered_requests`
+tool remains available when an agent wants to investigate request construction;
+it is not a publication gate.
+
+A failed first draft is now available to the next fresh compiler for the same
+tool and strategy. This avoids making the compiler rediscover everything after
+a small schema, provenance, live, or result defect. This is not a resumed agent
+session: the next compiler starts with a clean context, reads the prior files,
+and gets only the current plan and exact current failure. Once a build has
+actually passed and been installed, that known-good build always takes priority
+over later broken drafts. API files are never seeded into a browser compile or
+vice versa.
+
+Thrown completion-review and journal errors no longer go to the master as if a
+tool design were wrong. Parallel compile workers finish settling before one of
+those host errors is reported, preventing late journal writes after the command
+has already failed. Clear disk, quota, permission, and file-descriptor failures
+stop as host failures. A missing generated artifact remains an ordinary compile
+defect that the agent can fix.
+
+Returned API failures now tell the master the HTTP status, the last bounded
+request-stage facts, the bounded message and response preview, missing-state
+facts, remediation, and continuation field names without copying continuation
+values. Two failures with the same generic message but different HTTP or stage
+facts are therefore different repair evidence. The final reviewer is also
+proved able to reject one exact producer-consumer result even after the earlier
+small edge review accepted it.
+
+The focused controller tests pass 46/46. Type checking, lint, dead-code,
+circular-dependency, and whitespace checks are clean. Two full-suite attempts
+each passed 1,804 of 1,806 tests and hit different pre-existing Mac process or
+Chromium timing flakes; every reported flaky case passed immediately when run
+alone. No teach-specific test failed. The next action is a Git checkpoint and a
+fresh, unsteered teach using the latest combined recording.

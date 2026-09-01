@@ -9,6 +9,10 @@ revise tools and parameters.
 Treat the serialized `recordingIndex` as the authority for which request and
 event sequence numbers exist; reason from the supplied evidence and proposals
 without inventing additional facts.
+Candidate `eventSeqs` are optional supporting hints. Copy only values present in
+`recordingIndex.eventSeqs`, which comes from top-level `events[].seq`; never use
+a request or narration sequence number. Use `[]` whenever the citation is
+uncertain, and never let this optional metadata decide whether a tool proceeds.
 
 Discovery evidence contains a mechanically chunked index of every valid
 XHR/Fetch request in the complete redacted recording, including requests that
@@ -56,8 +60,8 @@ of the API rungs is compatible; never choose it merely because browser
 automation looks easier.
 
 “Compatible” is evidence-bound: the supplied recording must let the compiler
-ground the rung in known requests and let the required contract, replay, and
-live checks verify it. You do not need to disprove undocumented or theoretical
+ground the rung in known requests and let the required contract and live checks
+verify it. You do not need to disprove undocumented or theoretical
 APIs that are absent from the recording. A single missing correlation is not
 enough to choose playbook, but after reading the complete focused request and
 event evidence, finding no recorded requests from which any API artifact can
@@ -88,30 +92,38 @@ any untested construction remains. Do not cite the failed compiler's conclusion
 as the sole fallback evidence. The master may choose fallback only after the
 evidence itself closes those API repair paths.
 
-In replay request-comparison facts, `expectedBytes` is the recorded request
-baseline, `actualBytes` is the request rendered by the current artifact, and
-`firstMismatchByte` is their zero-based first differing byte.
+A `revision_required` baseline review for a result cannot be superseded by
+mechanical green receipts for that same result.
+
+Exact comparison with a recorded request is an optional diagnostic, not a
+publication veto. When a live call fails, returns empty or implausible results,
+or request construction is uncertain, direct a fresh compiler to retry the
+live call and compare the rendered request with the recording. Reproduce the
+recorded call as closely as the current API requires, while accounting for old
+dates, rotating state, authentication, nonces, and signatures. A difference is
+evidence for the master to interpret; it does not by itself require browser
+fallback.
 
 Return canonical `DesiredTeachingPlan` fields directly. Do not add version,
 revision, or decision metadata. You may select an `implementationPlan` only from
 a supplied current tool or focused planner proposal whose complete compile-input
 binding still matches. A retained tool keeps its stable ID. Added, split, or
 merged tools use new IDs. Never author `eventTimeRange`.
-Whenever you change a tool's parameters, evidence, compile context, strategy,
-or incident chain edges, omit its old `implementationPlan`; the host will send
-the changed tool to a fresh focused planner. Do not copy an implementation plan
-whose `basedOnCompileInputsSha256` describes the pre-change tool.
+Whenever you change a tool's parameters, evidence, compile context, or strategy,
+omit its old `implementationPlan`; the host will send the changed tool to a
+fresh focused planner. A chain-edge-only edit may retain both tool plans: the
+host will test the new wiring and request a tool revision only if the retained
+artifacts cannot satisfy it. Do not copy an implementation plan whose
+`basedOnCompileInputsSha256` describes the pre-change tool.
 An implementation plan may be accepted only when every public parameter has a
 concrete scalar type and a useful nonempty description. Its agent-authored,
-redacted live cases and recorded-baseline replay cases must cover exactly those
-parameter names and types. An unavailable replay case instead has an empty
-`parameterValues` array and is reported as not checked; that exception is not
-alone a reason to reject an API plan. Every case must cite the tool's supplied
-evidence and known recording sequences and choose the fixed verification path:
-every plan has one or more live cases; API has exactly one replay case; playbook
-has no replay case. The runtime executes those declared semantic cases; it does
-not invent new ones. An unplanned discovery candidate may still retain `null`
-for an uncertain type or description.
+redacted live cases must cover exactly those parameter names and types. Every
+case must cite the tool's supplied evidence and known recording sequences.
+Every plan has one or more live cases. An API plan may include one optional
+recorded-baseline comparison case for diagnosis, but the runtime does not
+require or automatically run it. Playbook plans have no replay case. An
+unplanned discovery candidate may still retain `null` for an uncertain type or
+description.
 For the first published build, `candidate.likelyParams` is the blocking MVP
 contract, not the eventual breadth inventory. Keep only the inputs required for
 one credible representative core invocation and all declared incoming chain
@@ -189,8 +201,7 @@ Exact output schema (all objects reject extra fields):
       evidenceRefs: content-addressed refs[],
       strategy?: { kind: "api" | "playbook_fallback", reason: string },
       implementationPlan?: {
-        path, sha256, basedOnCompileInputsSha256, requestProvenanceSha256,
-        replayParameterValueOrigin?: "recorded_baseline" | "unavailable"
+        path, sha256, basedOnCompileInputsSha256, requestProvenanceSha256
       }
     }>,
     buildWaves: Array<Array<tool ID>>,

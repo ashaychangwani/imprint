@@ -54,7 +54,8 @@ For an accepted **`playbook_fallback`** strategy, produce only:
 
 Do not add fake API requests, parser files, request tests, or an API integration
 test to satisfy API-only checks. After the browser artifact contract passes,
-the master runs the accepted live playbook case and records replay as `N/A`.
+the master runs the accepted live playbook case. A recording comparison is not
+applicable to a browser artifact.
 
 ## The Loop
 
@@ -67,7 +68,7 @@ Follow these steps to compile the session:
    `playbook_fallback`, inspect the exact event/request evidence named by the
    plan, write the two browser artifacts above, run any useful schema checks,
    and call `done`; steps 3 through 11 below are the API compile path.
-   - If the summary contains `revisionContext`, this is a bounded revision of an existing tool. Read every relative path listed under `existingArtifacts.entries`, `durableDiagnostics.entries`, and `feedbackNotes.entries` before re-deriving behavior from focused recording bodies. Respect each inventory's omission and scan metadata: `feedbackNotes.state: "not_checked"` means more entries may exist beyond the bounded scan. The existing implementation plus live evidence is your starting point. Preserve proven branches; make the smallest evidence-backed repair.
+   - If the summary contains `revisionContext`, this is a bounded revision of an existing tool in a fresh agent context. Read `toolPlan.revision.masterGuidance`; it contains the master's direction and the exact prior failure facts available for this tool. Then read every relative path listed under `existingArtifacts.entries`, `durableDiagnostics.entries`, and `feedbackNotes.entries` before re-deriving behavior from focused recording bodies. Respect each inventory's omission and scan metadata: `feedbackNotes.state: "not_checked"` means more entries may exist beyond the bounded scan. The existing implementation plus live evidence is your starting point. Preserve proven branches; make the smallest evidence-backed repair. Treat the guidance as factual context to investigate, not permission to invent a fix.
 
    If the summary includes `selectedCandidate`, compile only that candidate. Other actions in the same recording are out of scope unless listed in `dependsOnTools`. Treat those names as separately callable setup tools: keep this tool's workflow narrow, and make its integration test establish required state through the named sibling tool when necessary.
 
@@ -140,7 +141,7 @@ Follow these steps to compile the session:
 
      Use `inspect_body_structure` when a request or response mixes form fields, JSON, or JSON documents encoded inside strings. It reads only the redacted session evidence. Start with `format: "auto"`; select `decimal-framed-json` only when the redacted body unambiguously has that explicit framing. Set `compareFormat` separately when `compareToSeq` uses a different format, and set `earlierResponseFormat` when checking framed earlier responses. Results hide paths by default; rerun with `includePaths: true` for a small capped exact-path list, then use an exact RFC 6901 `pointer` for narrow work. An exact pointer gets its own nested-JSON decoding budget, so unrelated large fields cannot hide that selected path; automatic expansion limits remain visible as facts. Scalar literals are never returned. Comparisons report type, length, encoding, and missing facts. Original wire evidence is unavailable after redaction.
 
-     After writing or changing `workflow.json` or `request-transform.ts`, call `compare_rendered_requests`. It runs the real substitutions and transform offline, feeds recorded producer responses through the chain, and compares the prepared request structure with each declared `recordingRequestSeq`. Supply harmless synthetic `state` or `credentialValues` scalars when browser bootstrap or a credential store normally fills required placeholders; structure comparison does not require copying a live secret. Resolve every unexplained structural difference before treating the body as an exact reproduction. If a later transform stops the chain, use the returned partial facts to distinguish the request that was actually sent from the later request that was never prepared.
+     `compare_rendered_requests` is an on-demand diagnostic, not a publication gate. Use it when a live call fails, returns an empty or implausible result, or leaves request construction uncertain. It runs the real substitutions and transform offline, feeds recorded producer responses through the chain, and compares the prepared request structure with each declared `recordingRequestSeq`. Supply harmless synthetic `state` or `credentialValues` scalars when browser bootstrap or a credential store normally fills required placeholders; structure comparison does not require copying a live secret. Treat differences as clues: recording age, current dates, authentication, nonces, signatures, and semantically equivalent encodings can make exact bytes differ. If a later transform stops the chain, use the returned partial facts to distinguish the request that was actually sent from the later request that was never prepared.
 
    **Choose body placeholder encoding; do not delegate the decision to runtime.** Every request whose `body` contains `${param.X}`, `${credential.X}`, `${state.X}`, `${response[N].X}`, or `${generated.X}` MUST declare `bodyPlaceholderEncoding`:
    - `"json-string"` — the placeholder is inside a JSON string literal; runtime applies the complete JSON string escaping algorithm but the template owns the surrounding quotes.
@@ -359,8 +360,8 @@ Follow these steps to compile the session:
     - If repeated attempts add no new evidence, call `done` so the independent verifier can record the unresolved facts, or `give_up` only when the narrow requirements below are met.
 
 13. **Verify parameter fidelity before finishing.** A generated tool must NEVER advertise a parameter it does not actually apply. Before you call `done`, for EACH exposed parameter that should influence the request (filters, options, dates, toggles, mode/variant selectors):
-    - **Use the candidate's recorded `eventSeqs` as starting evidence.** Call `diff_request_for_event` with one event to get bounded request alternatives; the runtime does not choose a trigger or decide which requests are the same operation. Select the exact `beforeSeq` and `afterSeq` using narration and request evidence, then call it again with that pair. Its explicit state distinguishes changed, no change, not checked, invalid, and not found. Use `includePaths: true` only when you need a capped exact-path list. If alternatives or indexes are truncated, inspect requests directly rather than treating omitted evidence as no change.
-    - Locate at least one recorded request where that parameter has a non-default / distinguishing value. Set the parameter to that recorded value, construct the request, and confirm the constructed request reproduces the recorded request's encoding of that parameter — same field, same array position, same value/type. This is a **static check against the recorded session**, not a live API call: use `read_request`, `inspect_body_structure`, `read_response_body`, `search_response_body`, and `run_tests` to compare what you build against what the recording shows.
+    - **Treat candidate `eventSeqs` as optional hints.** When one cites an actual top-level recording event, `diff_request_for_event` can provide bounded request alternatives; the runtime does not choose a trigger or decide which requests are the same operation. Select `beforeSeq` and `afterSeq` using narration and request evidence. If the citation is absent, invalid, ambiguous, or truncated, inspect the relevant requests directly; never let optional event metadata stop compilation.
+    - Locate recorded evidence that the parameter affects the request. Construct a representative value and confirm it reaches the intended field, array position, and value type. This proves the parameter is wired; it does not require universal byte equality. When live behavior fails, is empty or implausible, or the wire construction is genuinely uncertain, use `compare_rendered_requests` and the request/body tools to diagnose it. Interpret exact differences in protocol context: semantically equivalent encodings can differ in bytes, while dates, authentication, nonces, signatures, and recording age can legitimately change values.
     - **When a shared request-transform (or any shared helper) constructs the request, pass parameters using the EXACT names and types that helper consumes.** Never assume the shapes line up — confirm against the helper's actual exported signature AND against the recording. When the tool's parameter names/types differ from the helper's expected input (e.g. snake_case vs camelCase; a comma-separated string vs an array; a string-encoded number vs a number), adapt them explicitly at the call site — split a comma list into an array, coerce the type, rename the key — so the value the helper receives matches what it expects. A mismatched name or type is silently dropped: the helper sees the wrong shape, skips the value, and the request goes out unfiltered while the tool claims to filter.
     - **Never hardcode a single recorded variant of the request when the tool exposes a parameter meant to vary it.** If a parameter selects among request variants (it changes the request shape or body), the parameter must actually drive the variation — wire it so each variant's value produces the request the recording shows for that variant. Do not bake one recorded variant into the body and leave the parameter disconnected; that variant would always win and the parameter would be inert.
     - **Fail closed for selector parameters.** For detail and mutation tools, when a parameter selects a record, segment, passenger, seat, line item, or reservation, your request-transform must throw a clear error if the live response does not contain that exact selector. Do not fall back to the first item, first segment, first passenger, or a recorded default for state-changing requests or record-specific detail requests; that can mutate or return the wrong entity while tests still look green.
@@ -506,7 +507,7 @@ Assertions should reference real values derived from narration, exact recording 
 
 8. **Own the parameter contract in standalone compiles.** Candidate suggestions are optional evidence pointers unless the initial task explicitly says `MASTER MVP COMPILE MODE`. In that mode the master owns the exact public parameter names/types and this compiler implements them or reports a factual contradiction. In ordinary standalone compiles, the final parameters must be supported by exact request evidence and useful verification, regardless of whether the detector proposed them.
 
-9. **Do not advertise a parameter you do not actually apply.** Every exposed parameter must be wired so the constructed request reproduces that parameter's effect exactly as the recording demonstrates — verified before `done` (see Loop step 13). Two failure modes are silent and must be ruled out: (a) passing a parameter to a shared helper under a different name or type than the helper consumes (snake_case vs camelCase, a comma-separated string where an array is expected, a string where a number is expected) — the helper drops it and the request goes out unfiltered; (b) hardcoding one recorded variant of the request when a parameter is meant to select among variants — the parameter becomes inert. In a standalone compile, remove an ungrounded parameter rather than ship it un-applied. In `MASTER MVP COMPILE MODE`, the accepted parameter contract is immutable inside this compiler: never remove or alter the parameter. If exact evidence contradicts it after honest investigation, call `give_up` with the factual contradiction for a fresh master revision.
+9. **Do not advertise a parameter you do not actually apply.** Every exposed parameter must be wired to the request field, position, and type supported by the recording, then exercised before `done` (see Loop step 13). Exact recorded bytes are an on-demand diagnostic, not the definition of parameter fidelity. Two failure modes are silent and must be ruled out: (a) passing a parameter to a shared helper under a different name or type than the helper consumes (snake_case vs camelCase, a comma-separated string where an array is expected, a string where a number is expected) — the helper drops it and the request goes out unfiltered; (b) hardcoding one recorded variant of the request when a parameter is meant to select among variants — the parameter becomes inert. In a standalone compile, remove an ungrounded parameter rather than ship it un-applied. In `MASTER MVP COMPILE MODE`, the accepted parameter contract is immutable inside this compiler: never remove or alter the parameter. If exact evidence contradicts it after honest investigation, call `give_up` with the factual contradiction for a fresh master revision.
 
 ## When `give_up` is Appropriate (Narrow)
 
@@ -615,8 +616,8 @@ fallback has a request-free `workflow.json`; its behavior lives in
 
 | Chosen implementation | Required order |
 | --- | --- |
-| API workflow | contract → replay → live |
-| Browser playbook fallback | contract → live; replay is `N/A` |
+| API workflow | contract → live |
+| Browser playbook fallback | contract → live |
 
 Run the contract check again after every artifact edit. All compatible API
 execution rungs have higher priority than the browser playbook. Choose the
@@ -630,15 +631,15 @@ Route failures by the fact that failed:
 
 - Schema or contract: repair the artifact shape or its accepted-plan mismatch,
   then rerun contract before any other check.
-- Replay: inspect the exact request number, recorded sequence, byte lengths,
-  first mismatch, and unchecked remainder. Repair construction, not the
-  meaning of the site, then rerun contract and replay.
-  `expectedBytes` is the recorded request baseline, `actualBytes` is the
-  request rendered by the current artifact, and `firstMismatchByte` is their
-  zero-based first differing byte.
 - Live: inspect the actual request, response, state, credentials, and parser
   output. Try evidence-supported repairs and compatible API rungs before
   proposing browser fallback.
+- Request construction uncertainty: retry a paced live call, inspect the actual
+  outgoing request and response, and use `compare_rendered_requests` when the
+  recording helps isolate the defect. Reproduce the recorded call as closely as
+  the current API requires, while accounting for recording age, current dates,
+  rotating state, authentication, nonces, and signatures. Exact equality is
+  evidence, not a universal pass/fail rule.
 - Chain: inspect the producer's actual result path and the consumer's exact
   parameter position. Revise the producer, consumer, or edge supported by the
   evidence; do not fabricate a connecting value.

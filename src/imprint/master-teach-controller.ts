@@ -17,8 +17,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
-import { type RenderedRequestLookup, runWorkflowWithLadder } from './backend-ladder.ts';
+import { runWorkflowWithLadder } from './backend-ladder.ts';
 import type { CompileAgentProgress } from './compile-agent-types.ts';
+import type { CompileStrategyKind } from './compile-strategy.ts';
 import {
   type TriageResult,
   findAuthAdjacentSeqs,
@@ -29,6 +30,7 @@ import {
 import { TimeoutError, abortSignalError } from './concurrency.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import { emit } from './emit.ts';
+import { redactFreeformText } from './freeform-redact.ts';
 import { type LiveFinesseResult, runBestEffortLiveFinesse } from './live-finesse-runner.ts';
 import { type LLMOptions, type ProviderName, detectTeachProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
@@ -53,13 +55,7 @@ import {
   requestParameterSelectionAdvice,
   requestToolSelectionAdvice,
 } from './master-teach-agents.ts';
-import {
-  acceptedRequestComparisonCheck,
-  acceptedRequestNotCheckedCheck,
-  bindProducerResultToConsumer,
-  implementationBoundApiReplayProofSatisfied,
-  invocationOutcomeCheck,
-} from './master-teach-checks.ts';
+import { bindProducerResultToConsumer, invocationOutcomeCheck } from './master-teach-checks.ts';
 import {
   type ChainEdge,
   type ContentAddressedRef,
@@ -87,6 +83,7 @@ import {
   type FreshTeachBootstrapObject,
   FreshTeachJournal,
   type FreshTeachRunStatus,
+  isRepairableBuildArtifactError,
 } from './master-teach-store.ts';
 import { localSiteDir, localToolDir } from './paths.ts';
 import { DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS, runPlaybook } from './playbook-runner.ts';
@@ -125,6 +122,16 @@ const PROMOTED_FILES = [
 ] as const;
 const JOURNALED_LOCAL_FILES = ['parser.ts', 'request-transform.ts', 'playbook.yaml'] as const;
 
+export function revisionSeedArtifactNames(
+  sourceStrategyKind: CompileStrategyKind,
+  targetStrategyKind: CompileStrategyKind = sourceStrategyKind,
+): readonly (typeof PROMOTED_FILES)[number][] {
+  if (sourceStrategyKind !== targetStrategyKind) return [];
+  return targetStrategyKind === 'playbook_fallback'
+    ? ['workflow.json', 'playbook.yaml']
+    : ['workflow.json', 'parser.ts', 'request-transform.ts'];
+}
+
 export interface FreshTeachOptions {
   site?: string;
   url?: string;
@@ -157,8 +164,11 @@ interface BuildWaveFailure {
   toolId: string;
   toolName: string;
   waveIndex: number;
-  stage: 'compile' | 'contract' | 'replay' | 'live' | 'chain' | 'proof';
+  stage: 'compile' | 'contract' | 'live' | 'chain' | 'proof';
   error: unknown;
+  receiptRef?: ContentAddressedRef;
+  buildRef?: ContentAddressedRef;
+  chainEdgeId?: string;
 }
 
 interface BuildWaveResult<Value> {
@@ -179,6 +189,32 @@ interface BuildWaveDependencies<Value> {
     value: Value,
   ) => Promise<void> | void;
   concurrency?: number;
+}
+
+class CompiledArtifactContractError extends Error {
+  override readonly cause: unknown;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'CompiledArtifactContractError';
+    this.cause = cause;
+  }
+}
+
+const TERMINAL_FILESYSTEM_ERROR_CODES = new Set([
+  'EACCES',
+  'EDQUOT',
+  'EIO',
+  'EMFILE',
+  'ENFILE',
+  'ENOMEM',
+  'ENOSPC',
+  'EPERM',
+  'EROFS',
+]);
+
+function isTerminalFilesystemError(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error)) return false;
+  return TERMINAL_FILESYSTEM_ERROR_CODES.has(String(error.code));
 }
 
 interface FocusedWaveOrchestrationResult<Value> {
@@ -222,22 +258,13 @@ export async function compileEveryToolInBuildWaves<Value>(
           });
           continue;
         }
+        let value: Value;
         try {
-          const value = await dependencies.compileTool(tool, waveIndex);
-          try {
-            await dependencies.acceptCompiledTool?.(tool, waveIndex, value);
-          } catch (error) {
-            failures.push({
-              toolId: tool.id,
-              toolName: tool.candidate.toolName,
-              waveIndex,
-              stage: 'contract',
-              error,
-            });
-            continue;
-          }
-          completed.push({ tool, waveIndex, value });
+          value = await dependencies.compileTool(tool, waveIndex);
         } catch (error) {
+          // A compiler can make a bad artifact, but it cannot repair the host's
+          // disk or permissions. Keep those failures out of master planning.
+          if (isTerminalFilesystemError(error)) throw error;
           failures.push({
             toolId: tool.id,
             toolName: tool.candidate.toolName,
@@ -245,10 +272,34 @@ export async function compileEveryToolInBuildWaves<Value>(
             stage: 'compile',
             error,
           });
+          continue;
         }
+        try {
+          await dependencies.acceptCompiledTool?.(tool, waveIndex, value);
+        } catch (error) {
+          // issueBuild also performs the artifact's schema/provenance contract.
+          // Only that typed, deterministic rejection belongs in master repair;
+          // journal and I/O failures remain terminal host errors.
+          if (!(error instanceof CompiledArtifactContractError)) throw error;
+          failures.push({
+            toolId: tool.id,
+            toolName: tool.candidate.toolName,
+            waveIndex,
+            stage: 'contract',
+            error: error.cause,
+          });
+          continue;
+        }
+        completed.push({ tool, waveIndex, value });
       }
     });
-    await Promise.all(workers);
+    // A terminal host failure must not let sibling workers keep mutating the
+    // journal after this function has already rejected.
+    const settled = await Promise.allSettled(workers);
+    const rejected = settled.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (rejected) throw rejected.reason;
   }
 
   return { completed, failures };
@@ -298,6 +349,9 @@ interface CompiledFocusedTool {
   workflow: Workflow;
   workflowPath: string;
   toolDir: string;
+  /** The strategy that authored these executable files. Older injected test
+   * fixtures may omit it; accepted builds are normalized before reuse. */
+  strategyKind?: CompileStrategyKind;
 }
 
 interface LiveCheckResult {
@@ -306,9 +360,10 @@ interface LiveCheckResult {
   executionMechanism: string;
   parameters: Record<string, string | number | boolean>;
   buildRef: ContentAddressedRef;
+  resultReceiptRef: ContentAddressedRef;
 }
 
-type UnboundLiveCheckResult = Omit<LiveCheckResult, 'buildRef'>;
+type UnboundLiveCheckResult = Omit<LiveCheckResult, 'buildRef' | 'resultReceiptRef'>;
 
 type ToolAdvice = Awaited<ReturnType<typeof requestToolSelectionAdvice>>;
 type FocusedPlan = Awaited<ReturnType<typeof requestFocusedPlan>>;
@@ -338,10 +393,11 @@ interface FreshTeachControllerDependencies {
   compileFocusedTool: (input: {
     tool: EditableTeachingTool;
     implementationPlan: ImplementationPlanPayload;
-    incidentChainEdges: readonly ChainEdge[];
     triage: TriageResult;
     sessionPath: string;
     stagingDir: string;
+    priorToolDir?: string;
+    revisionGuidance?: string;
     llmConfig: LLMOptions;
     runDeadline: RunDeadlineRef;
     signal?: AbortSignal;
@@ -832,37 +888,51 @@ function verificationFailureProjection(
   failures: readonly BuildWaveFailure[],
 ): PromptEvidenceProjection {
   const plan = journal.currentPlan();
-  const snapshot = journal.currentExecutionSnapshot();
+  const state = journal.readState();
   const entries: PromptEvidenceProjection['payload']['entries'] = [];
   const seenReceipts = new Set<string>();
   for (const failure of failures) {
-    const proof = snapshot.payload.tools.find(({ toolId }) => toolId === failure.toolId);
-    const receipt = proof?.receipts.find(
-      ({ check, status }) => check === failure.stage && status !== 'passed',
-    );
+    const receipt = failure.receiptRef ? journal.readReceipt(failure.receiptRef) : undefined;
+    if (
+      receipt &&
+      (receipt.toolId !== failure.toolId ||
+        (receipt.check !== failure.stage && failure.stage !== 'proof') ||
+        receipt.chainEdgeId !== failure.chainEdgeId)
+    ) {
+      throw new Error(`failure receipt does not match ${failure.toolId}/${failure.stage}`);
+    }
     if (receipt && !seenReceipts.has(receipt.ref.sha256)) {
       const tool = plan.tools.find(({ id }) => id === failure.toolId);
       entries.push({
         kind: 'mechanical_fact',
         ref: receipt.ref,
         requestSeqs: (tool?.candidate.requestSeqs ?? []).slice(0, 128),
-        eventSeqs: (tool?.candidate.eventSeqs ?? []).slice(0, 128),
+        // Optional event citations belong to the agent's editable rationale, not
+        // to a host-issued receipt. A bad citation must not poison a factual
+        // repair package for an otherwise valid check failure.
+        eventSeqs: [],
         toolId: failure.toolId,
         check: receipt.check,
         status: receipt.status,
         facts: receipt.facts.slice(0, 64),
       });
       seenReceipts.add(receipt.ref.sha256);
-      continue;
     }
     const fact = {
       stage: failure.stage,
       toolId: failure.toolId,
       toolName: failure.toolName,
       waveIndex: failure.waveIndex,
+      planRevision: plan.revision,
+      currentPlanRef: state.currentPlanRef,
+      buildRef:
+        failure.buildRef ??
+        state.tools.find(({ toolId }) => toolId === failure.toolId)?.buildRef ??
+        null,
+      chainEdgeId: failure.chainEdgeId ?? null,
       message: utf8Prefix(
         failure.error instanceof Error ? failure.error.message : String(failure.error),
-        1_000,
+        4_000,
       ),
     };
     const ref = journal.storeJson(fact);
@@ -912,26 +982,6 @@ function completionFailureProjection(
   );
 }
 
-function orchestrationFailureProjection(
-  journal: FreshTeachJournal,
-  stage: 'verification' | 'completion_review',
-  error: unknown,
-): PromptEvidenceProjection {
-  const fact = {
-    stage,
-    message: utf8Prefix(error instanceof Error ? error.message : String(error), 1_000),
-  };
-  const ref = journal.storeJson(fact);
-  return storedEvidenceProjection(journal, [
-    {
-      kind: 'untrusted_redacted_quote',
-      ref,
-      provenance: 'check_history',
-      quote: utf8Prefix(JSON.stringify(fact), 4_000),
-    },
-  ]);
-}
-
 function evidenceRefsForProjection(projection: PromptEvidenceProjection): ContentAddressedRef[] {
   return uniqueRefs([projection.ref, ...projection.payload.entries.map(({ ref }) => ref)]);
 }
@@ -961,8 +1011,8 @@ function stableReceiptFact(fact: ReceiptFact): unknown {
     return stable;
   }
   if (fact.kind === 'host_error') {
-    const { hostError: _hostError, ...stable } = fact;
-    return { ...stable, hostErrorPresent: true };
+    const { hostError, ...stable } = fact;
+    return { ...stable, hostError: utf8Prefix(hostError, 512) };
   }
   return fact;
 }
@@ -973,7 +1023,7 @@ function stableReceiptFact(fact: ReceiptFact): unknown {
  * in the digest; only values that change while retaining the same work are
  * removed.
  */
-export function mechanicalTeachStateSha256(
+function mechanicalTeachStateSha256(
   plan: EditableTeachingPlan,
   snapshot: CurrentExecutionSnapshot,
 ): string {
@@ -999,9 +1049,16 @@ function stableFindings(findings: PromptEvidenceProjection): unknown {
     try {
       const parsed = JSON.parse(quote) as Record<string, unknown>;
       return Object.fromEntries(
-        ['stage', 'toolId', 'waveIndex', 'verdict', 'severity', 'status', 'evidenceRefs'].flatMap(
-          (key) => (parsed[key] === undefined ? [] : [[key, parsed[key]]]),
-        ),
+        [
+          'stage',
+          'toolId',
+          'waveIndex',
+          'verdict',
+          'severity',
+          'status',
+          'message',
+          'evidenceRefs',
+        ].flatMap((key) => (parsed[key] === undefined ? [] : [[key, parsed[key]]])),
       );
     } catch {
       return { structuredCoordinatesUnavailable: true };
@@ -1017,6 +1074,30 @@ function stableFindings(findings: PromptEvidenceProjection): unknown {
       coordinates: stableQuoteCoordinates(entry.quote),
     };
   });
+}
+
+function compilerRepairGuidance(
+  toolId: string,
+  masterReason: string,
+  findings: PromptEvidenceProjection,
+): string {
+  const relevant = findings.payload.entries.filter((entry) => {
+    if (entry.kind === 'mechanical_fact') return entry.toolId === toolId;
+    try {
+      return (JSON.parse(entry.quote) as { toolId?: unknown }).toolId === toolId;
+    } catch {
+      return false;
+    }
+  });
+  return utf8Prefix(
+    [
+      `Master repair direction: ${masterReason}`,
+      relevant.length
+        ? `Exact prior failure facts for this tool: ${canonicalTeachingPlanJson(relevant)}`
+        : 'No tool-specific host failure fact was supplied; follow the master direction and current implementation plan.',
+    ].join('\n\n'),
+    12_000,
+  );
 }
 
 function repairStateSha256(journal: FreshTeachJournal, findings: PromptEvidenceProjection): string {
@@ -1067,10 +1148,11 @@ function toolCandidateForCompiler(tool: EditableTeachingTool): ToolCandidate {
 async function compileFocusedToolWithShippedAgent(input: {
   tool: EditableTeachingTool;
   implementationPlan: ImplementationPlanPayload;
-  incidentChainEdges: readonly ChainEdge[];
   triage: TriageResult;
   sessionPath: string;
   stagingDir: string;
+  priorToolDir?: string;
+  revisionGuidance?: string;
   llmConfig: LLMOptions;
   runDeadline: RunDeadlineRef;
   signal?: AbortSignal;
@@ -1078,6 +1160,13 @@ async function compileFocusedToolWithShippedAgent(input: {
   onProgress?: (progress: CompileAgentProgress) => void;
 }): Promise<CompiledFocusedTool> {
   mkdirSync(input.stagingDir, { recursive: true, mode: 0o700 });
+  if (input.priorToolDir) {
+    for (const name of revisionSeedArtifactNames(input.tool.strategy?.kind ?? 'api')) {
+      const prior = pathJoin(input.priorToolDir, name);
+      if (existsSync(prior) && statSync(prior).isFile())
+        copyFileSync(prior, pathJoin(input.stagingDir, name));
+    }
+  }
   const result = await generate({
     sessionPath: input.sessionPath,
     outDir: input.stagingDir,
@@ -1095,30 +1184,40 @@ async function compileFocusedToolWithShippedAgent(input: {
     toolPlan: JSON.stringify(
       {
         tool: input.tool,
-        incidentChainEdges: input.incidentChainEdges,
         implementationPlan: input.implementationPlan,
+        ...(input.revisionGuidance
+          ? {
+              revision: {
+                instruction: input.priorToolDir
+                  ? 'Preserve the compatible working artifact and make the smallest change required by the current master plan.'
+                  : 'No compatible working artifact can be seeded. Follow the current failure facts and accepted strategy without copying executable files from another strategy.',
+                masterGuidance: input.revisionGuidance,
+              },
+            }
+          : {}),
       },
       null,
       2,
     ),
     strategyKind: input.implementationPlan.strategyKind,
+    revisionMode: Boolean(input.revisionGuidance),
     verificationMode: 'master_mvp',
   });
   return {
     workflow: result.workflow,
     workflowPath: result.workflowPath,
     toolDir: dirname(result.workflowPath),
+    strategyKind: input.implementationPlan.strategyKind,
   };
 }
 
-function verificationParameters(
+function liveVerificationParameters(
   implementation: ImplementationPlanPayload,
-  check: 'replay' | 'live',
 ): Record<string, string | number | boolean> {
   const verification = implementation.verificationCases.find(
-    (candidate) => candidate.check === check,
+    (candidate) => candidate.check === 'live',
   );
-  if (!verification) throw new Error(`implementation plan has no ${check} verification case`);
+  if (!verification) throw new Error('implementation plan has no live verification case');
   return Object.fromEntries(
     verification.parameterValues.map(({ parameterName, value }) => [parameterName, value]),
   );
@@ -1137,78 +1236,6 @@ function storeLocalArtifacts(journal: FreshTeachJournal, toolDir: string) {
     if (!existsSync(absolute) || !statSync(absolute).isFile()) return [];
     return [{ path, artifactRef: journal.storeBytes(readFileSync(absolute)) }];
   });
-}
-
-function recordedResponseFor(session: Session) {
-  return (method: string, url: string, lookup: RenderedRequestLookup) => {
-    const acceptedSeq = lookup.provenance?.recordingRequestSeq;
-    const request =
-      acceptedSeq === undefined
-        ? session.requests.find(
-            (candidate) =>
-              candidate.method.toUpperCase() === method.toUpperCase() && candidate.url === url,
-          )
-        : session.requests.find((candidate) => candidate.seq === acceptedSeq);
-    return request?.response
-      ? {
-          status: request.response.status,
-          body: request.response.body ?? '{}',
-          headers: request.response.headers,
-        }
-      : undefined;
-  };
-}
-
-export async function apiReplayFacts(input: {
-  compiled: CompiledFocusedTool;
-  implementation: ImplementationPlanPayload;
-  session: Session;
-  credentialNames?: readonly string[];
-}): Promise<ReceiptFact[]> {
-  const replayCase = input.implementation.verificationCases.find(
-    (candidate) => candidate.check === 'replay',
-  );
-  if (!replayCase) throw new Error('implementation plan has no replay verification case');
-  const hasNoPublicParameters = input.compiled.workflow.parameters.length === 0;
-  if (
-    replayCase.parameterValueOrigin !== 'recorded_baseline' &&
-    !(replayCase.parameterValueOrigin === undefined && hasNoPublicParameters)
-  ) {
-    return acceptedRequestNotCheckedCheck({
-      provenance: input.implementation.requestProvenance,
-    }).facts;
-  }
-  const { renderWorkflowRequests } = await import('./backend-ladder.ts');
-  const rendered = await renderWorkflowRequests({
-    workflow: input.compiled.workflow,
-    workflowPath: input.compiled.workflowPath,
-    params: verificationParameters(input.implementation, 'replay'),
-    credentials: {
-      site: input.compiled.workflow.site,
-      cookies: [],
-      values: Object.fromEntries(
-        (input.credentialNames ?? []).map((name) => [name, `\${credential.${name}}`]),
-      ),
-      storage: [],
-    },
-    requestProvenance: input.implementation.requestProvenance,
-    recordedResponseFor: recordedResponseFor(input.session),
-  });
-  if (!rendered.result.ok) {
-    return acceptedRequestNotCheckedCheck({
-      provenance: input.implementation.requestProvenance,
-      hostError: new Error(`offline replay render failed: ${rendered.result.error}`),
-    }).facts;
-  }
-  return acceptedRequestComparisonCheck({
-    provenance: input.implementation.requestProvenance,
-    recordedRequests: input.session.requests,
-    artifactRequests: rendered.requests.map((request, index) => ({
-      ...request,
-      body: request.body ?? undefined,
-      recordingRequestSeq: input.implementation.requestProvenance[index]?.recordingRequestSeq,
-    })),
-  }).facts;
 }
 
 interface FocusedPlannerBundle {
@@ -1629,9 +1656,18 @@ async function discoverAndPlan(input: {
 
 interface CheckedBuilds {
   compiledByToolId: Map<string, CompiledFocusedTool>;
+  revisionSourceByToolId: Map<string, CompiledFocusedTool>;
+  draftSourceByToolStrategy: Map<string, CompiledFocusedTool>;
   liveByToolId: Map<string, LiveCheckResult>;
+  chainByEdgeId: Map<string, LiveCheckResult>;
   verifiedToolIds: Set<string>;
   failures: BuildWaveFailure[];
+}
+
+interface ResultDisposition {
+  status: 'credible' | 'revision_required';
+  reason: string;
+  evidenceRefs: ContentAddressedRef[];
 }
 
 function checkFailure(
@@ -1639,6 +1675,7 @@ function checkFailure(
   waveIndex: number,
   stage: BuildWaveFailure['stage'],
   error: unknown,
+  identity: Pick<BuildWaveFailure, 'receiptRef' | 'buildRef' | 'chainEdgeId'> = {},
 ): BuildWaveFailure {
   return {
     toolId: tool.id,
@@ -1646,7 +1683,49 @@ function checkFailure(
     waveIndex,
     stage,
     error,
+    ...identity,
   };
+}
+
+function returnedToolFailure(
+  label: string,
+  result: Extract<ToolResult<unknown>, { ok: false }>,
+): Error {
+  const bounded = (value: string, bytes: number): string =>
+    utf8Prefix(redactFreeformText(value).redacted, bytes);
+  const details = [`${label} returned ${result.error}`];
+  if (result.status !== undefined) details.push(`HTTP status: ${result.status}`);
+  if (result.requestStageFacts?.length) {
+    const shown = result.requestStageFacts.slice(-8);
+    const omitted = result.requestStageFacts.length - shown.length;
+    details.push(
+      `Request stages${omitted > 0 ? ` (${omitted} earlier omitted)` : ''}: ${JSON.stringify(shown)}`,
+    );
+  }
+  details.push(`Message: ${bounded(result.message, 600)}`);
+  if (result.nextAction) details.push(`Next action: ${bounded(result.nextAction, 200)}`);
+  if (result.missing?.length) {
+    const shown = result.missing.slice(0, 8).map((item) => ({
+      name: item.name,
+      source: item.source,
+      capability: item.capability,
+      required: item.required,
+      failure: item.failure,
+    }));
+    details.push(
+      `Missing state${result.missing.length > shown.length ? ` (${result.missing.length - shown.length} more omitted)` : ''}: ${JSON.stringify(shown)}`,
+    );
+  }
+  if (result.remediation) details.push(`Remediation: ${bounded(result.remediation, 500)}`);
+  if (result.responseBodyPreview)
+    details.push(`Response preview: ${bounded(result.responseBodyPreview, 500)}`);
+  if (result.continuation) {
+    const keys = Object.keys(result.continuation).sort();
+    details.push(
+      `Continuation fields (${keys.length}): ${keys.slice(0, 16).join(', ')}${keys.length > 16 ? ', …' : ''}`,
+    );
+  }
+  return new Error(utf8Prefix(details.join('\n'), 4_000));
 }
 
 async function runLiveCheck(input: {
@@ -1658,7 +1737,7 @@ async function runLiveCheck(input: {
   signal?: AbortSignal;
   maxDurationMs?: number;
 }): Promise<UnboundLiveCheckResult> {
-  const parameters = verificationParameters(input.implementation, 'live');
+  const parameters = liveVerificationParameters(input.implementation);
   const startedAt = Date.now();
   if (input.tool.strategy?.kind === 'playbook_fallback') {
     const playbookPath = pathJoin(input.compiled.toolDir, 'playbook.yaml');
@@ -1802,14 +1881,23 @@ async function compileAndCheckCurrentPlan(input: {
   maxDurationMs?: number;
   report?: (message: string) => void;
   priorCompiled?: Map<string, CompiledFocusedTool>;
+  priorRevisionSources?: Map<string, CompiledFocusedTool>;
+  priorDraftSources?: Map<string, CompiledFocusedTool>;
   priorLive?: Map<string, LiveCheckResult>;
+  priorChain?: Map<string, LiveCheckResult>;
+  revisionGuidanceByToolId?: ReadonlyMap<string, string>;
   /** Install an independently usable MVP before optional breadth work. */
   publishMvp?: (tool: EditableTeachingTool, compiled: CompiledFocusedTool) => Promise<void>;
   /** Review only the default result's fitness for the core operation. */
   approveMvp?: (
     tool: EditableTeachingTool,
     resultEvidence: CompletionToolResultEvidence,
-  ) => Promise<void>;
+  ) => Promise<ResultDisposition>;
+  /** Returns a prior disposition for an exact retained result receipt. */
+  resultDisposition?: (
+    toolId: string,
+    resultReceiptRef: ContentAddressedRef,
+  ) => ResultDisposition | undefined;
   /** True only for the exact build already installed as a usable MVP. */
   isMvpPublished?: (toolId: string, buildRef: ContentAddressedRef) => boolean;
   /** Starts advisory breadth work after the factual MVP proof is complete. */
@@ -1819,6 +1907,9 @@ async function compileAndCheckCurrentPlan(input: {
   const initialState = input.journal.readState();
   const initialBuildRefs = new Map(
     initialState.tools.flatMap(({ toolId, buildRef }) => (buildRef ? [[toolId, buildRef]] : [])),
+  );
+  const initialToolStateById = new Map(
+    initialState.tools.map((toolState) => [toolState.toolId, toolState] as const),
   );
   const needsCompile = new Set(
     plan.tools
@@ -1836,15 +1927,54 @@ async function compileAndCheckCurrentPlan(input: {
   const compiledByToolId = new Map(
     [...(input.priorCompiled ?? [])].filter(([toolId]) => currentToolIds.has(toolId)),
   );
+  const revisionSourceByToolId = new Map(input.priorRevisionSources ?? []);
+  const draftSourceByToolStrategy = new Map(input.priorDraftSources ?? []);
+  const draftSourceKey = (toolId: string, strategyKind: CompileStrategyKind): string =>
+    `${toolId}\u0000${strategyKind}`;
   const liveByToolId = new Map(
     [...(input.priorLive ?? [])].filter(([toolId, live]) => {
       const buildRef = initialBuildRefs.get(toolId);
-      return buildRef?.path === live.buildRef.path && buildRef.sha256 === live.buildRef.sha256;
+      const hasCurrentLiveReceipt = initialToolStateById
+        .get(toolId)
+        ?.currentReceiptRefs.some(({ key }) => key === 'live');
+      const hasCurrentResultReceipt = initialToolStateById
+        .get(toolId)
+        ?.currentReceiptRefs.some(
+          ({ ref }) =>
+            ref.path === live.resultReceiptRef.path && ref.sha256 === live.resultReceiptRef.sha256,
+        );
+      return (
+        hasCurrentLiveReceipt === true &&
+        hasCurrentResultReceipt === true &&
+        buildRef?.path === live.buildRef.path &&
+        buildRef.sha256 === live.buildRef.sha256
+      );
+    }),
+  );
+  const chainByEdgeId = new Map(
+    [...(input.priorChain ?? [])].filter(([edgeId, result]) => {
+      const edge = plan.chainEdges.find(({ id }) => id === edgeId);
+      if (!edge) return false;
+      const buildRef = initialBuildRefs.get(edge.consumerToolId);
+      const currentReceipt = initialToolStateById
+        .get(edge.consumerToolId)
+        ?.currentReceiptRefs.find(({ key }) => key === `chain:${edgeId}`)?.ref;
+      return (
+        currentReceipt?.path === result.resultReceiptRef.path &&
+        currentReceipt.sha256 === result.resultReceiptRef.sha256 &&
+        buildRef?.path === result.buildRef.path &&
+        buildRef.sha256 === result.buildRef.sha256
+      );
     }),
   );
   for (const toolId of needsCompile) {
     compiledByToolId.delete(toolId);
     liveByToolId.delete(toolId);
+  }
+  for (const edge of plan.chainEdges) {
+    if (needsCompile.has(edge.producerToolId) || needsCompile.has(edge.consumerToolId)) {
+      chainByEdgeId.delete(edge.id);
+    }
   }
   const compileTool = async (
     tool: EditableTeachingTool,
@@ -1867,12 +1997,14 @@ async function compileAndCheckCurrentPlan(input: {
     return await input.deps.compileFocusedTool({
       tool,
       implementationPlan: implementation,
-      incidentChainEdges: plan.chainEdges.filter(
-        (edge) => edge.producerToolId === tool.id || edge.consumerToolId === tool.id,
-      ),
       triage: input.triage,
       sessionPath: input.sessionPath,
       stagingDir,
+      priorToolDir:
+        revisionSourceByToolId.get(tool.id)?.strategyKind === tool.strategy.kind
+          ? revisionSourceByToolId.get(tool.id)?.toolDir
+          : draftSourceByToolStrategy.get(draftSourceKey(tool.id, tool.strategy.kind))?.toolDir,
+      revisionGuidance: input.revisionGuidanceByToolId?.get(tool.id),
       llmConfig: input.llmConfig,
       runDeadline: input.runDeadline,
       signal: input.signal,
@@ -1892,11 +2024,24 @@ async function compileAndCheckCurrentPlan(input: {
     _waveIndex: number,
     focused: CompiledFocusedTool,
   ): void => {
-    input.journal.issueBuild({
-      toolId: tool.id,
-      workflow: focused.workflow,
-      artifacts: storeLocalArtifacts(input.journal, focused.toolDir),
+    if (!tool.strategy) throw new Error(`tool "${tool.id}" has no accepted strategy`);
+    // Preserve the compiler's first concrete attempt for the next fresh
+    // same-strategy repair. A promoted known-good artifact still takes
+    // precedence and is never overwritten by this draft.
+    draftSourceByToolStrategy.set(draftSourceKey(tool.id, tool.strategy.kind), {
+      ...focused,
+      strategyKind: tool.strategy.kind,
     });
+    try {
+      input.journal.issueBuild({
+        toolId: tool.id,
+        workflow: focused.workflow,
+        artifacts: storeLocalArtifacts(input.journal, focused.toolDir),
+      });
+    } catch (error) {
+      if (isRepairableBuildArtifactError(error)) throw new CompiledArtifactContractError(error);
+      throw error;
+    }
     const contract = invocationOutcomeCheck({
       subject: 'contract',
       invocationIndex: 0,
@@ -1908,7 +2053,7 @@ async function compileAndCheckCurrentPlan(input: {
       check: 'contract',
       facts: contract.facts,
     });
-    compiledByToolId.set(tool.id, focused);
+    compiledByToolId.set(tool.id, { ...focused, strategyKind: tool.strategy.kind });
   };
   const compiled: BuildWaveResult<CompiledFocusedTool> = { completed: [], failures: [] };
   const failures: BuildWaveFailure[] = [];
@@ -1931,36 +2076,80 @@ async function compileAndCheckCurrentPlan(input: {
   const verifiedToolIds = new Set<string>();
   const attemptedMvpToolIds = new Set<string>();
   const approvedMvpToolIds = new Set<string>();
+  const rejectedMvpToolIds = new Set<string>();
+  const finesseStartedToolIds = new Set<string>();
   const dependencyBlockedToolIds = new Set<string>();
+  const currentBuildRef = (toolId: string): ContentAddressedRef | undefined =>
+    input.journal.readState().tools.find(({ toolId: id }) => id === toolId)?.buildRef;
+  const standaloneProofIsCurrent = (toolId: string): boolean => {
+    const proof = input.journal
+      .currentExecutionSnapshot()
+      .payload.tools.find(({ toolId: id }) => id === toolId);
+    return (
+      proof?.receipts.some(({ check, status }) => check === 'contract' && status === 'passed') ===
+        true && proof.receipts.some(({ check, status }) => check === 'live' && status === 'passed')
+    );
+  };
+  const markVerified = (tool: EditableTeachingTool, focused: CompiledFocusedTool): void => {
+    verifiedToolIds.add(tool.id);
+    if (finesseStartedToolIds.has(tool.id)) return;
+    finesseStartedToolIds.add(tool.id);
+    input.onMvpReady?.(tool.id, focused);
+  };
   const hasUsableProducer = (toolId: string): boolean => {
+    if (rejectedMvpToolIds.has(toolId)) return false;
+    if (!standaloneProofIsCurrent(toolId)) return false;
     if (approvedMvpToolIds.has(toolId)) return true;
     const buildRef = input.journal
       .readState()
       .tools.find(({ toolId: currentToolId }) => currentToolId === toolId)?.buildRef;
-    return Boolean(buildRef && input.isMvpPublished?.(toolId, buildRef));
+    const live = liveByToolId.get(toolId);
+    const disposition = live ? input.resultDisposition?.(toolId, live.resultReceiptRef) : undefined;
+    return Boolean(
+      buildRef &&
+        live?.result.ok &&
+        disposition?.status === 'credible' &&
+        input.isMvpPublished?.(toolId, buildRef),
+    );
   };
 
   const approveAndPublishMvp = async (
     tool: EditableTeachingTool,
     waveIndex: number,
     focused: CompiledFocusedTool,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
+    if (rejectedMvpToolIds.has(tool.id)) return false;
     if (attemptedMvpToolIds.has(tool.id)) {
-      if (approvedMvpToolIds.has(tool.id)) verifiedToolIds.add(tool.id);
-      return;
+      return approvedMvpToolIds.has(tool.id);
     }
     attemptedMvpToolIds.add(tool.id);
-    try {
-      const live = liveByToolId.get(tool.id);
-      if (!live?.result.ok) throw new Error(`MVP tool "${tool.id}" has no retained live result`);
-      await input.approveMvp?.(tool, completionToolResultEvidenceFor(input.journal, tool, live));
-      await input.publishMvp?.(tool, focused);
-      approvedMvpToolIds.add(tool.id);
-      verifiedToolIds.add(tool.id);
-      input.onMvpReady?.(tool.id, focused);
-    } catch (error) {
-      failures.push(checkFailure(tool, waveIndex, 'proof', error));
+    const live = liveByToolId.get(tool.id);
+    if (!live?.result.ok) throw new Error(`MVP tool "${tool.id}" has no retained live result`);
+    const disposition = input.approveMvp
+      ? await input.approveMvp(tool, completionToolResultEvidenceFor(input.journal, tool, live))
+      : ({
+          status: 'credible',
+          reason: 'semantic review is not configured',
+          evidenceRefs: [],
+        } as const);
+    if (disposition.status !== 'credible') {
+      rejectedMvpToolIds.add(tool.id);
+      failures.push(
+        checkFailure(tool, waveIndex, 'proof', new Error(disposition.reason), {
+          receiptRef: live.resultReceiptRef,
+        }),
+      );
+      return false;
     }
+    await input.publishMvp?.(tool, focused);
+    // A repair seed is promoted only after this exact build passes contract,
+    // live execution, semantic review, and publication. A merely parseable but
+    // broken repair can never replace the last known-good artifact.
+    revisionSourceByToolId.set(tool.id, { ...focused, strategyKind: tool.strategy?.kind });
+    if (tool.strategy)
+      draftSourceByToolStrategy.delete(draftSourceKey(tool.id, tool.strategy.kind));
+    approvedMvpToolIds.add(tool.id);
+    return true;
   };
 
   const ensureUsableProducer = async (toolId: string): Promise<boolean> => {
@@ -1978,7 +2167,7 @@ async function compileAndCheckCurrentPlan(input: {
       !buildRef ||
       live.buildRef.path !== buildRef.path ||
       live.buildRef.sha256 !== buildRef.sha256 ||
-      mechanicalProofFailures(plan, input.journal.currentExecutionSnapshot(), toolId).length > 0
+      !standaloneProofIsCurrent(toolId)
     ) {
       return false;
     }
@@ -1998,6 +2187,226 @@ async function compileAndCheckCurrentPlan(input: {
     return unavailable;
   };
 
+  const runStandaloneLive = async (
+    tool: EditableTeachingTool,
+    focused: CompiledFocusedTool,
+    implementation: ImplementationPlanPayload,
+    waveIndex: number,
+  ): Promise<LiveCheckResult | undefined> => {
+    let observed: UnboundLiveCheckResult;
+    try {
+      observed = await runLiveCheck({
+        tool,
+        compiled: focused,
+        implementation,
+        deps: input.deps,
+        runDeadline: input.runDeadline,
+        signal: input.signal,
+        maxDurationMs: input.maxDurationMs,
+      });
+    } catch (error) {
+      const check = invocationOutcomeCheck({
+        subject: 'live',
+        invocationIndex: 0,
+        outcome: { kind: 'host_error', error },
+        executionMechanism: 'host',
+      });
+      const receipt = input.journal.issueReceipt({
+        toolId: tool.id,
+        check: 'live',
+        facts: check.facts,
+      });
+      failures.push(checkFailure(tool, waveIndex, 'live', error, { receiptRef: receipt.ref }));
+      liveByToolId.delete(tool.id);
+      return undefined;
+    }
+
+    const check = invocationOutcomeCheck({
+      subject: 'live',
+      invocationIndex: 0,
+      outcome: { kind: 'returned', result: observed.result },
+      durationMs: observed.durationMs,
+      executionMechanism: observed.executionMechanism,
+    });
+    const receipt = input.journal.issueReceipt({
+      toolId: tool.id,
+      check: 'live',
+      facts: check.facts,
+    });
+    if (!receiptPassed(check.facts)) {
+      failures.push(
+        checkFailure(
+          tool,
+          waveIndex,
+          'live',
+          observed.result.ok
+            ? new Error(`live check failed for "${tool.id}"`)
+            : returnedToolFailure(`live check for "${tool.id}"`, observed.result),
+          { receiptRef: receipt.ref },
+        ),
+      );
+      liveByToolId.delete(tool.id);
+      return undefined;
+    }
+    const buildRef = currentBuildRef(tool.id);
+    if (!buildRef) throw new Error(`live check lost current build for "${tool.id}"`);
+    const live = { ...observed, buildRef, resultReceiptRef: receipt.ref };
+    liveByToolId.set(tool.id, live);
+    return live;
+  };
+
+  const runChainCheck = async (
+    tool: EditableTeachingTool,
+    focused: CompiledFocusedTool,
+    implementation: ImplementationPlanPayload,
+    edge: ChainEdge,
+    waveIndex: number,
+  ): Promise<LiveCheckResult | undefined> => {
+    input.report?.(`checking chain ${edge.id}`);
+    let outcome:
+      | {
+          kind: 'returned';
+          result: ToolResult<unknown>;
+          durationMs: number;
+          mechanism: string;
+          parameters: Record<string, string | number | boolean>;
+        }
+      | { kind: 'artifact_error'; error: Error }
+      | { kind: 'host_error'; error: unknown };
+    const producer = liveByToolId.get(edge.producerToolId);
+    if (!producer?.result.ok) {
+      outcome = {
+        kind: 'artifact_error',
+        error: new Error(`producer "${edge.producerToolId}" has no successful live result`),
+      };
+    } else {
+      const binding = bindProducerResultToConsumer({
+        edge,
+        producerResult: producer.result.data,
+        consumerParameterDeclarations: concreteParameterDeclarations(tool),
+        consumerParameters: liveVerificationParameters(implementation),
+      });
+      if (!binding.ok) {
+        outcome = {
+          kind: 'artifact_error',
+          error: new Error(`chain binding failed: ${binding.reason}`),
+        };
+      } else {
+        try {
+          const startedAt = Date.now();
+          const chained =
+            tool.strategy?.kind === 'playbook_fallback'
+              ? await runPlaybookToolCheck({
+                  deps: input.deps,
+                  playbookPath: pathJoin(focused.toolDir, 'playbook.yaml'),
+                  site: focused.workflow.site,
+                  parameters: binding.parameters,
+                  runDeadline: input.runDeadline,
+                  signal: input.signal,
+                  maxDurationMs: input.maxDurationMs,
+                  label: `chain check "${edge.id}"`,
+                })
+              : await input.deps.runApiTool({
+                  workflowPath: focused.workflowPath,
+                  parameters: binding.parameters,
+                  signal: input.signal,
+                });
+          outcome = {
+            kind: 'returned',
+            result: chained.result,
+            durationMs: Date.now() - startedAt,
+            mechanism: chained.executionMechanism,
+            parameters: binding.parameters,
+          };
+        } catch (error) {
+          outcome = { kind: 'host_error', error };
+        }
+      }
+    }
+
+    const check = invocationOutcomeCheck({
+      subject: 'chain',
+      invocationIndex: 0,
+      outcome:
+        outcome.kind === 'returned'
+          ? { kind: 'returned', result: outcome.result }
+          : outcome.kind === 'artifact_error'
+            ? {
+                kind: 'returned',
+                result: {
+                  ok: false,
+                  error: 'STATE_MISSING',
+                  message: outcome.error.message,
+                },
+              }
+            : { kind: 'host_error', error: outcome.error },
+      ...(outcome.kind === 'returned'
+        ? { durationMs: outcome.durationMs, executionMechanism: outcome.mechanism }
+        : { executionMechanism: outcome.kind === 'artifact_error' ? 'binding' : 'host' }),
+    });
+    const receipt = input.journal.issueReceipt({
+      toolId: tool.id,
+      check: 'chain',
+      chainEdgeId: edge.id,
+      facts: check.facts,
+    });
+    if (!receiptPassed(check.facts)) {
+      const error =
+        outcome.kind === 'host_error' || outcome.kind === 'artifact_error'
+          ? outcome.error
+          : outcome.result.ok
+            ? new Error(`chain check "${edge.id}" failed`)
+            : returnedToolFailure(`chain check "${edge.id}"`, outcome.result);
+      failures.push(
+        checkFailure(tool, waveIndex, 'chain', error, {
+          receiptRef: receipt.ref,
+          chainEdgeId: edge.id,
+        }),
+      );
+      chainByEdgeId.delete(edge.id);
+      return undefined;
+    }
+    if (outcome.kind !== 'returned') return undefined;
+    const buildRef = currentBuildRef(tool.id);
+    if (!buildRef) throw new Error(`chain check lost current build for "${tool.id}"`);
+    const live = {
+      result: outcome.result,
+      durationMs: outcome.durationMs,
+      executionMechanism: outcome.mechanism,
+      parameters: outcome.parameters,
+      buildRef,
+      resultReceiptRef: receipt.ref,
+    };
+    chainByEdgeId.set(edge.id, live);
+    return live;
+  };
+
+  const reviewChainResult = async (
+    tool: EditableTeachingTool,
+    edge: ChainEdge,
+    result: LiveCheckResult,
+    waveIndex: number,
+  ): Promise<boolean> => {
+    const disposition = input.approveMvp
+      ? await input.approveMvp(
+          tool,
+          completionToolResultEvidenceFor(input.journal, tool, result, edge),
+        )
+      : ({
+          status: 'credible',
+          reason: 'semantic review is not configured',
+          evidenceRefs: [],
+        } as const);
+    if (disposition.status === 'credible') return true;
+    failures.push(
+      checkFailure(tool, waveIndex, 'proof', new Error(disposition.reason), {
+        receiptRef: result.resultReceiptRef,
+        chainEdgeId: edge.id,
+      }),
+    );
+    return false;
+  };
+
   const checkNewlyCompiledTool = async ({
     tool,
     waveIndex,
@@ -2014,159 +2423,13 @@ async function compileAndCheckCurrentPlan(input: {
       tool.implementationPlan,
     ) as ImplementationPlanPayload;
 
-    try {
-      if (tool.strategy.kind === 'playbook_fallback') {
-        input.journal.issueReceipt({ toolId: tool.id, check: 'replay' });
-      } else {
-        const facts = await apiReplayFacts({
-          compiled: focused,
-          implementation,
-          session: input.triage.session,
-          credentialNames: tool.compileContext.credentialNames,
-        });
-        input.journal.issueReceipt({ toolId: tool.id, check: 'replay', facts });
-        if (
-          !implementationBoundApiReplayProofSatisfied(
-            facts,
-            tool.implementationPlan.replayParameterValueOrigin,
-          )
-        ) {
-          failures.push(
-            checkFailure(
-              tool,
-              waveIndex,
-              'replay',
-              new Error(`replay check failed for "${tool.id}"`),
-            ),
-          );
-        }
-      }
-    } catch (error) {
-      input.journal.issueReceipt({
-        toolId: tool.id,
-        check: 'replay',
-        facts: acceptedRequestNotCheckedCheck({
-          provenance: implementation.requestProvenance,
-          hostError: error,
-        }).facts,
-      });
-      failures.push(checkFailure(tool, waveIndex, 'replay', error));
-    }
-
-    let live: UnboundLiveCheckResult | undefined;
-    try {
-      live = await runLiveCheck({
-        tool,
-        compiled: focused,
-        implementation,
-        deps: input.deps,
-        runDeadline: input.runDeadline,
-        signal: input.signal,
-        maxDurationMs: input.maxDurationMs,
-      });
-      const check = invocationOutcomeCheck({
-        subject: 'live',
-        invocationIndex: 0,
-        outcome: { kind: 'returned', result: live.result },
-        durationMs: live.durationMs,
-        executionMechanism: live.executionMechanism,
-      });
-      input.journal.issueReceipt({
-        toolId: tool.id,
-        check: 'live',
-        facts: check.facts,
-      });
-      if (!receiptPassed(check.facts)) {
-        failures.push(
-          checkFailure(tool, waveIndex, 'live', new Error(`live check failed for "${tool.id}"`)),
-        );
-      } else {
-        const buildRef = input.journal
-          .readState()
-          .tools.find(({ toolId }) => toolId === tool.id)?.buildRef;
-        if (!buildRef) throw new Error(`live check lost current build for "${tool.id}"`);
-        liveByToolId.set(tool.id, { ...live, buildRef });
-      }
-    } catch (error) {
-      const check = invocationOutcomeCheck({
-        subject: 'live',
-        invocationIndex: 0,
-        outcome: { kind: 'host_error', error },
-        executionMechanism: 'host',
-      });
-      input.journal.issueReceipt({
-        toolId: tool.id,
-        check: 'live',
-        facts: check.facts,
-      });
-      failures.push(checkFailure(tool, waveIndex, 'live', error));
-    }
-
+    const live = await runStandaloneLive(tool, focused, implementation, waveIndex);
+    const standaloneApproved = live ? await approveAndPublishMvp(tool, waveIndex, focused) : false;
+    let chainReviewFailed = false;
     for (const edge of plan.chainEdges.filter(({ consumerToolId }) => consumerToolId === tool.id)) {
-      input.report?.(`checking chain ${edge.id}`);
-      try {
-        const producer = liveByToolId.get(edge.producerToolId);
-        if (!producer?.result.ok) {
-          throw new Error(`producer "${edge.producerToolId}" has no successful live result`);
-        }
-        const binding = bindProducerResultToConsumer({
-          edge,
-          producerResult: producer.result.data,
-          consumerParameterDeclarations: concreteParameterDeclarations(tool),
-          consumerParameters: live?.parameters ?? verificationParameters(implementation, 'live'),
-        });
-        if (!binding.ok) throw new Error(`chain binding failed: ${binding.reason}`);
-        const startedAt = Date.now();
-        const chained =
-          tool.strategy.kind === 'playbook_fallback'
-            ? await runPlaybookToolCheck({
-                deps: input.deps,
-                playbookPath: pathJoin(focused.toolDir, 'playbook.yaml'),
-                site: focused.workflow.site,
-                parameters: binding.parameters,
-                runDeadline: input.runDeadline,
-                signal: input.signal,
-                maxDurationMs: input.maxDurationMs,
-                label: `chain check "${edge.id}"`,
-              })
-            : await input.deps.runApiTool({
-                workflowPath: focused.workflowPath,
-                parameters: binding.parameters,
-                signal: input.signal,
-              });
-        const check = invocationOutcomeCheck({
-          subject: 'chain',
-          invocationIndex: 0,
-          outcome: { kind: 'returned', result: chained.result },
-          durationMs: Date.now() - startedAt,
-          executionMechanism: chained.executionMechanism,
-        });
-        input.journal.issueReceipt({
-          toolId: tool.id,
-          check: 'chain',
-          chainEdgeId: edge.id,
-          facts: check.facts,
-        });
-        if (!receiptPassed(check.facts)) {
-          failures.push(
-            checkFailure(tool, waveIndex, 'chain', new Error(`chain check "${edge.id}" failed`)),
-          );
-        }
-      } catch (error) {
-        const check = invocationOutcomeCheck({
-          subject: 'chain',
-          invocationIndex: 0,
-          outcome: { kind: 'host_error', error },
-          executionMechanism: 'host',
-        });
-        input.journal.issueReceipt({
-          toolId: tool.id,
-          check: 'chain',
-          chainEdgeId: edge.id,
-          facts: check.facts,
-        });
-        failures.push(checkFailure(tool, waveIndex, 'chain', error));
-      }
+      const chained = await runChainCheck(tool, focused, implementation, edge, waveIndex);
+      if (!chained) continue;
+      if (!(await reviewChainResult(tool, edge, chained, waveIndex))) chainReviewFailed = true;
     }
 
     const proofFailures = mechanicalProofFailures(
@@ -2174,9 +2437,9 @@ async function compileAndCheckCurrentPlan(input: {
       input.journal.currentExecutionSnapshot(),
       tool.id,
     );
-    if (proofFailures.length === 0) {
-      await approveAndPublishMvp(tool, waveIndex, focused);
-    } else {
+    if (proofFailures.length === 0 && !chainReviewFailed && standaloneApproved) {
+      markVerified(tool, focused);
+    } else if (!failures.some(({ toolId }) => toolId === tool.id)) {
       failures.push(checkFailure(tool, waveIndex, 'proof', new Error(proofFailures.join('; '))));
     }
   };
@@ -2233,91 +2496,34 @@ async function compileAndCheckCurrentPlan(input: {
     ),
   );
   const builtThisPass = new Set(compiled.completed.map(({ tool }) => tool.id));
-  const currentBuildRef = (toolId: string): ContentAddressedRef | undefined =>
-    input.journal.readState().tools.find(({ toolId: id }) => id === toolId)?.buildRef;
   const proofFor = (toolId: string) =>
     input.journal.currentExecutionSnapshot().payload.tools.find(({ toolId: id }) => id === toolId);
   const hasReceipt = (
     toolId: string,
-    check: 'contract' | 'replay' | 'live' | 'chain',
-    status: 'passed' | 'not_applicable',
+    check: 'contract' | 'live' | 'chain',
     chainEdgeId?: string,
-  ): boolean =>
-    proofFor(toolId)?.receipts.some(
-      (receipt) =>
-        receipt.check === check &&
-        receipt.status === status &&
-        (check !== 'chain' || receipt.chainEdgeId === chainEdgeId),
-    ) === true;
-  const hasApiReplayProof = (toolId: string): boolean => {
-    const replayOrigin = plan.tools.find(({ id }) => id === toolId)?.implementationPlan
-      ?.replayParameterValueOrigin;
+  ): boolean => {
+    const chainEdge =
+      check === 'chain' ? plan.chainEdges.find(({ id }) => id === chainEdgeId) : undefined;
     return (
       proofFor(toolId)?.receipts.some(
         (receipt) =>
-          receipt.check === 'replay' &&
-          implementationBoundApiReplayProofSatisfied(receipt.facts, replayOrigin),
+          receipt.check === check &&
+          receipt.status === 'passed' &&
+          (check !== 'chain' ||
+            (chainEdge !== undefined &&
+              receipt.chainEdgeId === chainEdgeId &&
+              receipt.chainEdgeSha256 === teachingPlanContentSha256(chainEdge))),
       ) === true
     );
   };
-
   const runExistingLive = async (
     tool: EditableTeachingTool,
     focused: CompiledFocusedTool,
     implementation: ImplementationPlanPayload,
   ): Promise<LiveCheckResult | undefined> => {
     const waveIndex = waveByToolId.get(tool.id) ?? 0;
-    try {
-      const observed = await runLiveCheck({
-        tool,
-        compiled: focused,
-        implementation,
-        deps: input.deps,
-        runDeadline: input.runDeadline,
-        signal: input.signal,
-        maxDurationMs: input.maxDurationMs,
-      });
-      const check = invocationOutcomeCheck({
-        subject: 'live',
-        invocationIndex: 0,
-        outcome: { kind: 'returned', result: observed.result },
-        durationMs: observed.durationMs,
-        executionMechanism: observed.executionMechanism,
-      });
-      input.journal.issueReceipt({
-        toolId: tool.id,
-        check: 'live',
-        facts: check.facts,
-      });
-      if (!receiptPassed(check.facts)) {
-        failures.push(
-          checkFailure(tool, waveIndex, 'live', new Error(`live check failed for "${tool.id}"`)),
-        );
-        return undefined;
-      }
-      const buildRef = currentBuildRef(tool.id);
-      if (!buildRef) throw new Error(`live check lost current build for "${tool.id}"`);
-      const live = { ...observed, buildRef };
-      liveByToolId.set(tool.id, live);
-      return live;
-    } catch (error) {
-      const check = invocationOutcomeCheck({
-        subject: 'live',
-        invocationIndex: 0,
-        outcome: { kind: 'host_error', error },
-        executionMechanism: 'host',
-      });
-      try {
-        input.journal.issueReceipt({
-          toolId: tool.id,
-          check: 'live',
-          facts: check.facts,
-        });
-      } catch {}
-      failures.push(checkFailure(tool, waveIndex, 'live', error));
-      liveByToolId.delete(tool.id);
-      return undefined;
-    }
+    return await runStandaloneLive(tool, focused, implementation, waveIndex);
   };
 
   const ensureProducerLive = async (
@@ -2332,7 +2538,7 @@ async function compileAndCheckCurrentPlan(input: {
     ) {
       return retained;
     }
-    if (!hasReceipt(producerToolId, 'live', 'passed')) return undefined;
+    if (!hasReceipt(producerToolId, 'live')) return undefined;
     const producer = plan.tools.find(({ id }) => id === producerToolId);
     const focused = compiledByToolId.get(producerToolId);
     if (!producer?.implementationPlan || !producer.strategy || !focused || !buildRef)
@@ -2370,25 +2576,6 @@ async function compileAndCheckCurrentPlan(input: {
         retainedLive?.result.ok === true &&
         currentRef?.path === retainedLive.buildRef.path &&
         currentRef.sha256 === retainedLive.buildRef.sha256;
-      if (
-        hasCurrentLiveResult &&
-        mechanicalProofFailures(plan, input.journal.currentExecutionSnapshot(), tool.id).length ===
-          0
-      ) {
-        if (hasUsableProducer(tool.id)) {
-          verifiedToolIds.add(tool.id);
-        } else if (!focused) {
-          failures.push(
-            checkFailure(tool, waveIndex, 'compile', new Error('focused artifact is unavailable')),
-          );
-        } else {
-          // Mechanical receipts do not prove that this exact retained build
-          // passed the semantic MVP gate. A prior revision_required result or
-          // failed promotion must stay fail-closed on later plan passes.
-          await approveAndPublishMvp(tool, waveIndex, focused);
-        }
-        continue;
-      }
       if (!tool.implementationPlan || !tool.strategy) {
         failures.push(
           checkFailure(tool, waveIndex, 'compile', new Error('focused plan is incomplete')),
@@ -2402,188 +2589,58 @@ async function compileAndCheckCurrentPlan(input: {
         continue;
       }
 
-      let buildRef = currentBuildRef(tool.id);
-      try {
-        if (!buildRef) {
-          const priorBuildRef = initialBuildRefs.get(tool.id);
-          if (!priorBuildRef) throw new Error('prior build is unavailable for verification');
-          input.journal.rebindBuild({ toolId: tool.id, priorBuildRef });
-          buildRef = currentBuildRef(tool.id);
-          liveByToolId.delete(tool.id);
-        } else {
-          const build = input.journal.readBuild(buildRef);
-          const current = input.journal.readState();
-          const dependenciesCurrent = build.executionBinding.dependencies.every((dependency) => {
-            const dependencyRef = current.tools.find(
-              ({ toolId: id }) => id === dependency.toolId,
-            )?.buildRef;
-            return (
-              dependencyRef?.path === dependency.buildRef.path &&
-              dependencyRef.sha256 === dependency.buildRef.sha256
-            );
-          });
-          if (!dependenciesCurrent) {
-            input.journal.rebindBuild({
-              toolId: tool.id,
-              priorBuildRef: buildRef,
-            });
-            buildRef = currentBuildRef(tool.id);
-            liveByToolId.delete(tool.id);
-          }
-        }
-      } catch (error) {
-        failures.push(checkFailure(tool, waveIndex, 'contract', error));
+      const buildRef = currentBuildRef(tool.id);
+      if (!buildRef) {
+        failures.push(
+          checkFailure(tool, waveIndex, 'contract', new Error('current build is unavailable')),
+        );
         continue;
       }
-      if (!buildRef) continue;
 
       const implementation = input.journal.readJson(
         tool.implementationPlan,
       ) as ImplementationPlanPayload;
-      if (!hasReceipt(tool.id, 'contract', 'passed')) {
-        try {
-          const contract = invocationOutcomeCheck({
-            subject: 'contract',
-            invocationIndex: 0,
-            outcome: { kind: 'returned', result: { ok: true, data: null } },
-            executionMechanism: 'schema',
-          });
-          input.journal.issueReceipt({
-            toolId: tool.id,
-            check: 'contract',
-            facts: contract.facts,
-          });
-        } catch (error) {
-          failures.push(checkFailure(tool, waveIndex, 'contract', error));
-        }
-      }
-
-      const hasReplayProof =
-        tool.strategy.kind === 'playbook_fallback'
-          ? hasReceipt(tool.id, 'replay', 'not_applicable')
-          : hasApiReplayProof(tool.id);
-      if (!hasReplayProof) {
-        try {
-          if (tool.strategy.kind === 'playbook_fallback') {
-            input.journal.issueReceipt({ toolId: tool.id, check: 'replay' });
-          } else {
-            const facts = await apiReplayFacts({
-              compiled: focused,
-              implementation,
-              session: input.triage.session,
-              credentialNames: tool.compileContext.credentialNames,
-            });
-            input.journal.issueReceipt({
-              toolId: tool.id,
-              check: 'replay',
-              facts,
-            });
-            if (
-              !implementationBoundApiReplayProofSatisfied(
-                facts,
-                tool.implementationPlan.replayParameterValueOrigin,
-              )
-            ) {
-              failures.push(
-                checkFailure(
-                  tool,
-                  waveIndex,
-                  'replay',
-                  new Error(`replay check failed for "${tool.id}"`),
-                ),
-              );
-            }
-          }
-        } catch (error) {
-          try {
-            input.journal.issueReceipt({
-              toolId: tool.id,
-              check: 'replay',
-              facts: acceptedRequestNotCheckedCheck({
-                provenance: implementation.requestProvenance,
-                hostError: error,
-              }).facts,
-            });
-          } catch {}
-          failures.push(checkFailure(tool, waveIndex, 'replay', error));
-        }
+      if (!hasReceipt(tool.id, 'contract')) {
+        const contract = invocationOutcomeCheck({
+          subject: 'contract',
+          invocationIndex: 0,
+          outcome: { kind: 'returned', result: { ok: true, data: null } },
+          executionMechanism: 'schema',
+        });
+        input.journal.issueReceipt({
+          toolId: tool.id,
+          check: 'contract',
+          facts: contract.facts,
+        });
       }
 
       let live = liveByToolId.get(tool.id);
-      if (!hasReceipt(tool.id, 'live', 'passed') || !hasCurrentLiveResult) {
+      if (!hasReceipt(tool.id, 'live') || !hasCurrentLiveResult) {
         live = await runExistingLive(tool, focused, implementation);
       }
-
+      const standaloneApproved = live?.result.ok
+        ? hasUsableProducer(tool.id) || (await approveAndPublishMvp(tool, waveIndex, focused))
+        : false;
+      let chainReviewFailed = false;
       for (const edge of plan.chainEdges.filter(
         ({ consumerToolId }) => consumerToolId === tool.id,
       )) {
-        if (hasReceipt(tool.id, 'chain', 'passed', edge.id)) continue;
-        input.report?.(`checking chain ${edge.id}`);
-        try {
-          const producer = await ensureProducerLive(edge.producerToolId);
-          if (!producer?.result.ok) {
-            throw new Error(`producer "${edge.producerToolId}" has no successful live result`);
-          }
-          const binding = bindProducerResultToConsumer({
-            edge,
-            producerResult: producer.result.data,
-            consumerParameterDeclarations: concreteParameterDeclarations(tool),
-            consumerParameters: live?.parameters ?? verificationParameters(implementation, 'live'),
-          });
-          if (!binding.ok) throw new Error(`chain binding failed: ${binding.reason}`);
-          const startedAt = Date.now();
-          const chained =
-            tool.strategy.kind === 'playbook_fallback'
-              ? await runPlaybookToolCheck({
-                  deps: input.deps,
-                  playbookPath: pathJoin(focused.toolDir, 'playbook.yaml'),
-                  site: focused.workflow.site,
-                  parameters: binding.parameters,
-                  runDeadline: input.runDeadline,
-                  signal: input.signal,
-                  maxDurationMs: input.maxDurationMs,
-                  label: `chain check "${edge.id}"`,
-                })
-              : await input.deps.runApiTool({
-                  workflowPath: focused.workflowPath,
-                  parameters: binding.parameters,
-                  signal: input.signal,
-                });
-          const check = invocationOutcomeCheck({
-            subject: 'chain',
-            invocationIndex: 0,
-            outcome: { kind: 'returned', result: chained.result },
-            durationMs: Date.now() - startedAt,
-            executionMechanism: chained.executionMechanism,
-          });
-          input.journal.issueReceipt({
-            toolId: tool.id,
-            check: 'chain',
-            chainEdgeId: edge.id,
-            facts: check.facts,
-          });
-          if (!receiptPassed(check.facts)) {
-            failures.push(
-              checkFailure(tool, waveIndex, 'chain', new Error(`chain check "${edge.id}" failed`)),
-            );
-          }
-        } catch (error) {
-          const check = invocationOutcomeCheck({
-            subject: 'chain',
-            invocationIndex: 0,
-            outcome: { kind: 'host_error', error },
-            executionMechanism: 'host',
-          });
-          try {
-            input.journal.issueReceipt({
-              toolId: tool.id,
-              check: 'chain',
-              chainEdgeId: edge.id,
-              facts: check.facts,
-            });
-          } catch {}
-          failures.push(checkFailure(tool, waveIndex, 'chain', error));
+        let chained = chainByEdgeId.get(edge.id);
+        if (!hasReceipt(tool.id, 'chain', edge.id) || !chained?.result.ok) {
+          await ensureProducerLive(edge.producerToolId);
+          chained = await runChainCheck(tool, focused, implementation, edge, waveIndex);
         }
+        if (!chained) continue;
+        if (!(await reviewChainResult(tool, edge, chained, waveIndex))) chainReviewFailed = true;
+      }
+      if (
+        live?.result.ok &&
+        standaloneApproved &&
+        !chainReviewFailed &&
+        mechanicalProofFailures(plan, input.journal.currentExecutionSnapshot(), tool.id).length ===
+          0
+      ) {
+        markVerified(tool, focused);
       }
     }
   }
@@ -2606,7 +2663,12 @@ async function compileAndCheckCurrentPlan(input: {
         );
         continue;
       }
-      await approveAndPublishMvp(tool, waveByToolId.get(tool.id) ?? 0, focused);
+      const standaloneApproved =
+        hasUsableProducer(tool.id) ||
+        (await approveAndPublishMvp(tool, waveByToolId.get(tool.id) ?? 0, focused));
+      if (standaloneApproved && !failures.some(({ toolId }) => toolId === tool.id)) {
+        markVerified(tool, focused);
+      }
     } else if (!failures.some(({ toolId }) => toolId === tool.id)) {
       failures.push(
         checkFailure(
@@ -2619,7 +2681,15 @@ async function compileAndCheckCurrentPlan(input: {
     }
   }
 
-  return { compiledByToolId, liveByToolId, verifiedToolIds, failures };
+  return {
+    compiledByToolId,
+    revisionSourceByToolId,
+    draftSourceByToolStrategy,
+    liveByToolId,
+    chainByEdgeId,
+    verifiedToolIds,
+    failures,
+  };
 }
 
 function persistSeeds(
@@ -2718,7 +2788,7 @@ function revisionEvidenceRefs(
 async function requestRepairRevision(
   context: MasterRevisionContext,
   findings: PromptEvidenceProjection,
-): Promise<void> {
+) {
   const current = currentPlanProjection(context.journal);
   const evidenceRefs = revisionEvidenceRefs(context, findings);
   const decisionInput: MasterDecisionInput = {
@@ -2746,12 +2816,10 @@ async function requestRepairRevision(
       evidenceRefs,
     ),
   });
+  return decision;
 }
 
-async function ensureCurrentImplementationPlans(
-  context: MasterRevisionContext,
-  findings?: PromptEvidenceProjection,
-): Promise<void> {
+async function ensureCurrentImplementationPlans(context: MasterRevisionContext): Promise<void> {
   const reviewedProposalStates = new Set<string>();
   for (;;) {
     if (Date.now() >= context.runDeadline.deadlineMs) {
@@ -2789,7 +2857,7 @@ async function ensureCurrentImplementationPlans(
       context.focusedEvidence.set(planner.output.tool.id, planner.evidence);
     }
     const evidenceRefs = uniqueRefs([
-      ...revisionEvidenceRefs(context, findings),
+      ...revisionEvidenceRefs(context),
       ...allEvidenceRefs(context.discoveryEvidence, planners),
     ]);
     const decisionInput: MasterDecisionInput = {
@@ -2803,7 +2871,6 @@ async function ensureCurrentImplementationPlans(
       toolSelectionAdvice: context.toolAdvice,
       plannerProposals: planners.map(({ proposal }) => proposal),
       parameterAdvice: [],
-      ...(findings ? { verificationFindings: findings } : {}),
     };
     const decision = await context.deps.requestMasterDecision(decisionInput, context.agent);
     const decisionRef = context.journal.storeJson(decision);
@@ -3166,6 +3233,7 @@ function completionInput(input: {
   evidence: PromptEvidenceProjection;
   terminalIntent: 'completed' | 'blocked';
   liveByToolId?: ReadonlyMap<string, LiveCheckResult>;
+  chainByEdgeId?: ReadonlyMap<string, LiveCheckResult>;
 }): CompletionReviewInput {
   const current = currentPlanProjection(input.journal);
   const exclusionClaims = current.plan.candidateCoverage.flatMap(
@@ -3197,7 +3265,17 @@ function completionInput(input: {
       : exclusionClaims;
   const toolResultEvidence =
     input.terminalIntent === 'completed'
-      ? completionToolResultEvidence(input.journal, current.plan, input.liveByToolId ?? new Map())
+      ? completionToolResultEvidence(
+          input.journal,
+          current.plan,
+          input.liveByToolId ?? new Map(),
+        ).concat(
+          completionChainResultEvidence(
+            input.journal,
+            current.plan,
+            input.chainByEdgeId ?? new Map(),
+          ),
+        )
       : undefined;
   return {
     terminalIntent: input.terminalIntent,
@@ -3243,21 +3321,42 @@ function completionToolResultEvidence(
   });
 }
 
+function completionChainResultEvidence(
+  journal: FreshTeachJournal,
+  plan: EditableTeachingPlan,
+  chainByEdgeId: ReadonlyMap<string, LiveCheckResult>,
+): CompletionToolResultEvidence[] {
+  const tools = new Map(plan.tools.map((tool) => [tool.id, tool] as const));
+  return plan.chainEdges.map((edge) => {
+    const tool = tools.get(edge.consumerToolId);
+    const live = chainByEdgeId.get(edge.id);
+    if (!tool || !live?.result.ok)
+      throw new Error(`chain "${edge.id}" has no retained successful result`);
+    return completionToolResultEvidenceFor(journal, tool, live, edge);
+  });
+}
+
 function completionToolResultEvidenceFor(
   journal: FreshTeachJournal,
   tool: EditableTeachingTool,
   live: LiveCheckResult,
+  chainEdge?: ChainEdge,
 ): CompletionToolResultEvidence {
   if (!tool.implementationPlan) throw new Error(`tool "${tool.id}" has no implementation plan`);
   const implementation = journal.readJson(tool.implementationPlan) as ImplementationPlanPayload;
   const verification = implementation.verificationCases.find(({ check }) => check === 'live');
   if (!verification) throw new Error(`tool "${tool.id}" has no live verification case`);
-  const liveReceipt = journal
+  const resultReceipt = journal
     .currentExecutionSnapshot()
     .payload.tools.find(({ toolId }) => toolId === tool.id)
-    ?.receipts.find(({ check, status }) => check === 'live' && status === 'passed');
-  if (!liveReceipt || !live.result.ok) {
-    throw new Error(`tool "${tool.id}" has no retained successful live result`);
+    ?.receipts.find(
+      ({ ref, status }) =>
+        status === 'passed' &&
+        ref.path === live.resultReceiptRef.path &&
+        ref.sha256 === live.resultReceiptRef.sha256,
+    );
+  if (!resultReceipt || !['live', 'chain'].includes(resultReceipt.check) || !live.result.ok) {
+    throw new Error(`tool "${tool.id}" has no retained successful result`);
   }
   const serialized = JSON.stringify(live.result.data) ?? 'null';
   const preview = utf8Prefix(serialized, 2_000);
@@ -3268,7 +3367,8 @@ function completionToolResultEvidenceFor(
     implementationPlanRef: tool.implementationPlan,
     verificationCaseId: verification.id,
     expectedResult: verification.expectedResult,
-    liveReceiptRef: liveReceipt.ref,
+    resultReceiptRef: resultReceipt.ref,
+    ...(chainEdge ? { chainEdgeId: chainEdge.id } : {}),
     actualResult: {
       observed: true,
       preview,
@@ -3287,6 +3387,7 @@ async function requestIndependentReview(input: {
   evidence: PromptEvidenceProjection;
   terminalIntent: 'completed' | 'blocked';
   liveByToolId?: ReadonlyMap<string, LiveCheckResult>;
+  chainByEdgeId?: ReadonlyMap<string, LiveCheckResult>;
   agent: MasterTeachAgentOptions;
   deps: FreshTeachControllerDependencies;
 }): Promise<{ reviewInput: CompletionReviewInput; review: CompletionReview }> {
@@ -3533,7 +3634,11 @@ export async function runFreshMasterTeach(
     });
 
     let compiledByToolId = new Map<string, CompiledFocusedTool>();
+    let revisionSourceByToolId = new Map<string, CompiledFocusedTool>();
+    let draftSourceByToolStrategy = new Map<string, CompiledFocusedTool>();
     let liveByToolId = new Map<string, LiveCheckResult>();
+    let chainByEdgeId = new Map<string, LiveCheckResult>();
+    const revisionGuidanceByToolId = new Map<string, string>();
     const mvpDispositionByResult = new Map<
       string,
       Pick<
@@ -3565,8 +3670,14 @@ export async function runFreshMasterTeach(
       attemptedRepairStates.add(stateSha256);
       reportProgress(opts, 'master is revising the plan from factual failures');
       const context = revisionContext();
-      await requestRepairRevision(context, findings);
-      await ensureCurrentImplementationPlans(revisionContext(), findings);
+      const repairDecision = await requestRepairRevision(context, findings);
+      for (const tool of repairDecision.desiredPlan.tools) {
+        revisionGuidanceByToolId.set(
+          tool.id,
+          compilerRepairGuidance(tool.id, repairDecision.reason, findings),
+        );
+      }
+      await ensureCurrentImplementationPlans(revisionContext());
       plannedTools = activeJournal.currentPlan().tools.length;
     };
 
@@ -3574,22 +3685,14 @@ export async function runFreshMasterTeach(
       const currentPlan = activeJournal.currentPlan();
       plannedTools = currentPlan.tools.length;
       if (plannedTools === 0) {
-        let reviewed: Awaited<ReturnType<typeof requestIndependentReview>>;
-        try {
-          reviewed = await requestIndependentReview({
-            journal: activeJournal,
-            discoveryInput: planned.discoveryInput,
-            evidence: planned.discoveryEvidence,
-            terminalIntent: 'blocked',
-            agent: agents,
-            deps,
-          });
-        } catch (error) {
-          const status = terminalStatusForError(error, opts.signal);
-          if (status === 'cancelled' || status === 'provider_unavailable') throw error;
-          await repair(orchestrationFailureProjection(activeJournal, 'completion_review', error));
-          continue;
-        }
+        const reviewed = await requestIndependentReview({
+          journal: activeJournal,
+          discoveryInput: planned.discoveryInput,
+          evidence: planned.discoveryEvidence,
+          terminalIntent: 'blocked',
+          agent: agents,
+          deps,
+        });
         if (reviewed.review.verdict === 'passed') {
           activeJournal.finishWithReview('blocked', reviewed.reviewInput, reviewed.review);
           await finesse.stop('No MVP tool was available; optional finesse was deferred.');
@@ -3621,11 +3724,17 @@ export async function runFreshMasterTeach(
           maxDurationMs: opts.maxDurationMs,
           report: (message) => reportProgress(opts, message),
           priorCompiled: compiledByToolId,
+          priorRevisionSources: revisionSourceByToolId,
+          priorDraftSources: draftSourceByToolStrategy,
           priorLive: liveByToolId,
+          priorChain: chainByEdgeId,
+          revisionGuidanceByToolId,
           isMvpPublished: (toolId, buildRef) =>
             publishedMvpBuilds.has(`${toolId}:${buildRef.sha256}`),
+          resultDisposition: (toolId, resultReceiptRef) =>
+            mvpDispositionByResult.get(`${toolId}:${resultReceiptRef.sha256}`),
           approveMvp: async (tool, resultEvidence) => {
-            const key = `${tool.id}:${resultEvidence.ref.sha256}`;
+            const key = `${tool.id}:${resultEvidence.payload.resultReceiptRef.sha256}`;
             // The disposition is bound to the content-addressed implementation,
             // live receipt, and result. Reuse only those semantic facts across
             // explanation-only plan revisions; never reuse the old plan binding.
@@ -3656,19 +3765,12 @@ export async function runFreshMasterTeach(
                   runRoot,
                   'mvp-reviews',
                   tool.id,
-                  `${review.binding.currentBuildRef.sha256.slice('sha256:'.length)}.json`,
+                  `${resultEvidence.payload.resultReceiptRef.sha256.slice('sha256:'.length)}.json`,
                 ),
                 { resultEvidence, reviewRef, review },
               );
             }
-            if (disposition.status !== 'credible') {
-              const refs = disposition.evidenceRefs
-                .map(({ path, sha256 }) => `${path} (${sha256})`)
-                .join(', ');
-              throw new Error(
-                `core result requires a fresh revision: ${disposition.reason}; evidence: ${refs}`,
-              );
-            }
+            return disposition;
           },
           publishMvp: async (tool, compiled) => {
             const buildRef = activeJournal
@@ -3686,11 +3788,22 @@ export async function runFreshMasterTeach(
       } catch (error) {
         const status = terminalStatusForError(error, opts.signal);
         if (status === 'cancelled' || status === 'provider_unavailable') throw error;
-        await repair(orchestrationFailureProjection(activeJournal, 'verification', error));
-        continue;
+        throw error;
       }
       compiledByToolId = checked.compiledByToolId;
+      revisionSourceByToolId = checked.revisionSourceByToolId;
+      draftSourceByToolStrategy = checked.draftSourceByToolStrategy;
       liveByToolId = checked.liveByToolId;
+      chainByEdgeId = checked.chainByEdgeId;
+      const stateAfterChecks = activeJournal.readState();
+      for (const toolId of revisionGuidanceByToolId.keys()) {
+        if (
+          stateAfterChecks.tools.find(({ toolId: id }) => id === toolId)?.buildRef &&
+          compiledByToolId.has(toolId)
+        ) {
+          revisionGuidanceByToolId.delete(toolId);
+        }
+      }
       readyTools = checked.verifiedToolIds.size;
       if (checked.failures.length > 0) {
         const terminal = checked.failures.find(({ error }) =>
@@ -3733,24 +3846,17 @@ export async function runFreshMasterTeach(
         continue;
       }
 
-      let reviewed: Awaited<ReturnType<typeof requestIndependentReview>>;
-      try {
-        reportProgress(opts, 'running independent completion review');
-        reviewed = await requestIndependentReview({
-          journal: activeJournal,
-          discoveryInput: planned.discoveryInput,
-          evidence: planned.discoveryEvidence,
-          terminalIntent: 'completed',
-          liveByToolId,
-          agent: agents,
-          deps,
-        });
-      } catch (error) {
-        const status = terminalStatusForError(error, opts.signal);
-        if (status === 'cancelled' || status === 'provider_unavailable') throw error;
-        await repair(orchestrationFailureProjection(activeJournal, 'completion_review', error));
-        continue;
-      }
+      reportProgress(opts, 'running independent completion review');
+      const reviewed = await requestIndependentReview({
+        journal: activeJournal,
+        discoveryInput: planned.discoveryInput,
+        evidence: planned.discoveryEvidence,
+        terminalIntent: 'completed',
+        liveByToolId,
+        chainByEdgeId,
+        agent: agents,
+        deps,
+      });
       if (reviewed.review.verdict !== 'passed') {
         await repair(completionFailureProjection(activeJournal, reviewed.review));
         continue;

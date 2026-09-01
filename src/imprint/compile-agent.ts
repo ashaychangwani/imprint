@@ -157,9 +157,9 @@ interface CompileAgentOptions {
 function formatRevisionMode(enabled: boolean | undefined): string {
   return enabled
     ? [
-        'REVISION MODE: this is a bounded resume of an existing generated tool, not a from-scratch compile.',
-        'Use read_session_summary.revisionContext, then read the listed current artifacts and durable verification feedback before inspecting raw response bodies.',
-        'Preserve proven behavior and make the smallest evidence-backed repair or contract reduction.',
+        'REVISION MODE: this is a fresh compiler context revising an existing generated tool, not a from-scratch compile and not a resumed prior agent session.',
+        'Use read_session_summary.revisionContext, then read any listed compatible artifacts and durable verification feedback before inspecting raw response bodies.',
+        'Read the supplied tool-plan revision guidance, preserve proven behavior when a compatible artifact exists, and make the smallest evidence-backed repair.',
       ].join(' ')
     : '';
 }

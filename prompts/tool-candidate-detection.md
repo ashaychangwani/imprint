@@ -118,7 +118,11 @@ Rules:
     supplied recording. `requestSeqs` may use only `requests[].seq` or a listed
     `requests[].repeatedSeqs` value, and `eventSeqs` may use only
     `events[].seq`. A `narration[].seq` is not an event sequence and must not be
-    copied into either field. Never invent sequence numbers.
+    copied into either field. `eventSeqs` are optional supporting hints: use an
+    empty array whenever you are unsure. Before returning, verify every value
+    in `eventSeqs` by finding that exact value under the top-level `events`
+    array; proximity in the interleaved timeline is not evidence that a request
+    or narration ID is an event ID. Never invent sequence numbers.
 19. When the same API endpoint (same URL path and method) is called multiple
     times with different parameter values — such as toggling filters, changing
     sort order, adjusting constraints, or paginating — treat those as parameter

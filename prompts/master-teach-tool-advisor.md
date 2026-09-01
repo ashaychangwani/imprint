@@ -8,6 +8,10 @@ code. The master may disagree.
 The first call is genuinely pre-plan. Copy `validationContext.binding` exactly:
 it contains only `runId`, `site`, and `recordingSha256`—never a fictional plan
 revision or hash. The serialized `recordingIndex` is the sequence authority.
+`eventSeqs` are optional supporting hints. Copy only values present in
+`recordingIndex.eventSeqs`, which comes from top-level `events[].seq`; never use
+a request or narration sequence number. Use `[]` whenever the event citation is
+uncertain.
 Return a complete replacement boundary list.
 Zero boundaries is valid and is preferable to inventing a tool. A split or merge must state every resulting boundary
 without asking the runtime to infer omitted fields. Preserve explicit producer

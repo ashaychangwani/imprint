@@ -590,7 +590,7 @@ describe('editable master teaching plan', () => {
     ).toThrow('dependency cycle');
   });
 
-  it('persists and validates explicit producer-consumer chain edges', () => {
+  it('persists explicit chain edges and permits independently tested alternatives', () => {
     const plan = chain();
     expect(create(plan).chainEdges).toEqual(plan.chainEdges);
     const badParameter = structuredClone(plan);
@@ -604,6 +604,13 @@ describe('editable master teaching plan', () => {
     if (!consumer) throw new Error('test plan has no consumer');
     consumer.candidate.dependsOnTools = [];
     expect(() => create(badDependency)).toThrow('absent from the explicit tool dependency');
+    const duplicateTarget = structuredClone(plan);
+    duplicateTarget.chainEdges.push({
+      ...firstEdge(duplicateTarget),
+      id: 'producer-consumer-alternative',
+      producerResultPath: 'results[0].alternative_token',
+    });
+    expect(create(duplicateTarget).chainEdges).toHaveLength(plan.chainEdges.length + 1);
   });
 
   it('treats candidate metadata-only changes as no compile work', () => {
@@ -625,7 +632,6 @@ describe('editable master teaching plan', () => {
     );
     expect(result.replanToolIds).toEqual([]);
     expect(result.recompileToolIds).toEqual([]);
-    expect(result.reverifyToolIds).toEqual([]);
   });
 
   it('records rejected advice as a new no-op revision', () => {
@@ -697,14 +703,9 @@ describe('editable master teaching plan', () => {
       throw new Error('test implementation needs replay and live cases');
     replayCase.parameterValueOrigin = 'recorded_baseline';
     liveCase.parameterValueOrigin = 'synthetic_live';
-    expect(
-      validateImplementationPlanForTool(
-        payload,
-        planned,
-        validation.requestSeqs,
-        validation.eventSeqs,
-      ),
-    ).toEqual(payload);
+    expect(validateImplementationPlanForTool(payload, planned, validation.requestSeqs)).toEqual(
+      payload,
+    );
 
     const unavailableBaseline = structuredClone(payload);
     const unavailableReplay = unavailableBaseline.verificationCases.find(
@@ -714,12 +715,7 @@ describe('editable master teaching plan', () => {
     unavailableReplay.parameterValueOrigin = 'unavailable';
     unavailableReplay.parameterValues = [];
     expect(
-      validateImplementationPlanForTool(
-        unavailableBaseline,
-        planned,
-        validation.requestSeqs,
-        validation.eventSeqs,
-      ),
+      validateImplementationPlanForTool(unavailableBaseline, planned, validation.requestSeqs),
     ).toEqual(unavailableBaseline);
 
     const syntheticReplay = structuredClone(payload);
@@ -735,12 +731,7 @@ describe('editable master teaching plan', () => {
     if (!wrongTypeCase) throw new Error('test implementation has no verification case');
     wrongTypeCase.parameterValues = [{ parameterName: 'query', value: 42 }];
     expect(() =>
-      validateImplementationPlanForTool(
-        wrongType,
-        planned,
-        validation.requestSeqs,
-        validation.eventSeqs,
-      ),
+      validateImplementationPlanForTool(wrongType, planned, validation.requestSeqs),
     ).toThrow('does not match its public scalar type');
 
     const foreignEvidence = structuredClone(payload);
@@ -748,29 +739,19 @@ describe('editable master teaching plan', () => {
     if (!foreignCase) throw new Error('test implementation has no verification case');
     foreignCase.provenance.evidenceRefs = [ref('foreign')];
     expect(() =>
-      validateImplementationPlanForTool(
-        foreignEvidence,
-        planned,
-        validation.requestSeqs,
-        validation.eventSeqs,
-      ),
+      validateImplementationPlanForTool(foreignEvidence, planned, validation.requestSeqs),
     ).toThrow('evidence outside tool.evidenceRefs');
 
     const unknownEvent = structuredClone(payload);
     const unknownEventCase = unknownEvent.verificationCases[0];
     if (!unknownEventCase) throw new Error('test implementation has no verification case');
     unknownEventCase.provenance.recordingEventSeqs = [999];
-    expect(() =>
-      validateImplementationPlanForTool(
-        unknownEvent,
-        planned,
-        validation.requestSeqs,
-        validation.eventSeqs,
-      ),
-    ).toThrow('unknown recording event seq 999');
+    expect(
+      validateImplementationPlanForTool(unknownEvent, planned, validation.requestSeqs),
+    ).toEqual(unknownEvent);
   });
 
-  it('requires the fixed API and playbook verification paths without inventing cases', () => {
+  it('requires live verification and keeps recording comparison optional', () => {
     const api = implementationPayload('api', [1]);
     expect(() =>
       ImplementationPlanPayloadSchema.parse({
@@ -778,12 +759,12 @@ describe('editable master teaching plan', () => {
         verificationCases: api.verificationCases.filter(({ check }) => check === 'replay'),
       }),
     ).toThrow('at least one live verification case');
-    expect(() =>
+    expect(
       ImplementationPlanPayloadSchema.parse({
         ...api,
         verificationCases: api.verificationCases.filter(({ check }) => check === 'live'),
-      }),
-    ).toThrow('exactly one replay verification case');
+      }).verificationCases.map(({ check }) => check),
+    ).toEqual(['live']);
     const replay = api.verificationCases.find(({ check }) => check === 'replay');
     if (!replay) throw new Error('test API implementation has no replay case');
     expect(() =>
@@ -791,7 +772,7 @@ describe('editable master teaching plan', () => {
         ...api,
         verificationCases: [...api.verificationCases, { ...replay, id: 'second_replay' }],
       }),
-    ).toThrow('exactly one replay verification case');
+    ).toThrow('at most one replay diagnostic case');
 
     const playbook = implementationPayload('playbook_fallback', []);
     expect(() =>
@@ -998,7 +979,6 @@ describe('editable master teaching plan', () => {
       );
       expect(result.replanToolIds).toEqual(replan ? ['search-id'] : []);
       expect(result.recompileToolIds).toEqual(['search-id']);
-      expect(result.reverifyToolIds).toEqual(['search-id']);
     }
   });
 
@@ -1040,7 +1020,7 @@ describe('editable master teaching plan', () => {
     expect(result.recompileToolIds).toEqual([]);
   });
 
-  it('invalidates only a tool and its consumers when its compile context changes', () => {
+  it('rebuilds only the tool whose compile context changes', () => {
     const original = chain();
     const changed = structuredClone(original);
     firstTool(changed).compileContext.sharedHelperNotes = 'A new focused compile instruction.';
@@ -1052,10 +1032,9 @@ describe('editable master teaching plan', () => {
     );
     expect(result.replanToolIds).toEqual(['producer-id']);
     expect(result.recompileToolIds).toEqual(['producer-id']);
-    expect(result.reverifyToolIds).toEqual(['consumer-id', 'leaf-id', 'producer-id']);
   });
 
-  it('recompiles both ends when the producer output obligation changes', () => {
+  it('retains both artifacts and tests a changed chain path again', () => {
     const original = chain();
     const changed = structuredClone(original);
     firstEdge(changed).producerResultPath = 'results[0].replacement_token';
@@ -1065,8 +1044,9 @@ describe('editable master teaching plan', () => {
       { expectedRevision: 1, decision: decision('revised') },
       validation,
     );
-    expect(result.recompileToolIds).toEqual(['consumer-id', 'producer-id']);
-    expect(result.reverifyToolIds).toEqual(['consumer-id', 'leaf-id', 'producer-id']);
+    expect(result.replanToolIds).toEqual([]);
+    expect(result.recompileToolIds).toEqual([]);
+    expect(result.changedChainEdgeIds).toEqual(['producer-consumer']);
   });
 
   it('does not make a producer compile depend on a consumer parameter name', () => {
@@ -1095,7 +1075,7 @@ describe('editable master teaching plan', () => {
     expect(result.recompileToolIds).toEqual(['consumer-id']);
   });
 
-  it('recompiles a changed producer and only reverifies its transitive consumers', () => {
+  it('recompiles a changed producer without discarding consumer artifacts', () => {
     const original = chain();
     const changed = structuredClone(original);
     firstTool(changed).candidate.requestSeqs = [5];
@@ -1107,7 +1087,6 @@ describe('editable master teaching plan', () => {
       validation,
     );
     expect(result.recompileToolIds).toEqual(['producer-id']);
-    expect(result.reverifyToolIds).toEqual(['consumer-id', 'leaf-id', 'producer-id']);
   });
 
   it('derives add, remove, merge, and split effects from complete desired state', () => {
@@ -1126,7 +1105,7 @@ describe('editable master teaching plan', () => {
     );
     expect(mergeResult.addedToolIds).toEqual(['combined-id']);
     expect(mergeResult.removedToolIds).toEqual(['consumer-id', 'producer-id']);
-    expect(mergeResult.recompileToolIds).toEqual(['combined-id', 'leaf-id']);
+    expect(mergeResult.recompileToolIds).toEqual(['combined-id']);
 
     const split = desired([
       tool('producer-a-id', 'produce_a', { seq: 1 }),
@@ -1144,7 +1123,7 @@ describe('editable master teaching plan', () => {
     expect(splitResult.removedToolIds).toEqual(['combined-id']);
   });
 
-  it('reverifies remaining consumers when a producer is removed', () => {
+  it('does not rebuild consumers merely because dependency scheduling changed', () => {
     const original = chain();
     const changed = desired([
       tool('consumer-id', 'consume_token', { seq: 2 }),
@@ -1158,8 +1137,8 @@ describe('editable master teaching plan', () => {
       validation,
     );
     expect(result.removedToolIds).toEqual(['producer-id']);
-    expect(result.recompileToolIds).toEqual(['consumer-id', 'leaf-id']);
-    expect(result.reverifyToolIds).toEqual(['consumer-id', 'leaf-id']);
+    expect(result.recompileToolIds).toEqual([]);
+    expect(result.changedChainEdgeIds).toEqual(['consumer-leaf', 'producer-consumer']);
   });
 
   it('rejects revision conflicts and changes to immutable recording identity', () => {

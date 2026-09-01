@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TriageResult } from '../src/imprint/compile.ts';
@@ -56,7 +64,7 @@ function baselineMvpReview(
       compileInputsSha256: proof.executionBinding.compileInputsSha256,
       currentBuildRef: proof.currentBuildRef,
       executionBindingSha256: proof.executionBindingSha256,
-      liveReceiptRef: liveReceipt.ref,
+      resultReceiptRef: liveReceipt.ref,
       resultEvidenceRef: input.resultEvidence.ref,
     },
     status,
@@ -646,6 +654,7 @@ describe('fresh foreground master controller end to end', () => {
       const events: string[] = [];
       let checksSeenByReviewer = new Map<string, string[]>();
       let resultEvidenceCount = 0;
+      let completionChainEdgeIds: Array<string | undefined> = [];
       let statusDuringPromotion: string | undefined;
       let reviewWasRecordedDuringPromotion = false;
       let promotedTools: string[] = [];
@@ -673,6 +682,7 @@ describe('fresh foreground master controller end to end', () => {
       let focusedProposalDecisions = 0;
       let revisedProducerWasReplanned = false;
       let producerBuildVisibleWhenConsumerCompileStarted = false;
+      let consumerMvpPreview = '';
       const revisedProducerDescription = 'Search the revised fixture item catalog.';
 
       const terminal = await runFreshMasterTeach(
@@ -875,7 +885,12 @@ describe('fresh foreground master controller end to end', () => {
               executionMechanism: 'fixture-api',
             };
           },
-          requestBaselineMvpReview: async (input) => credibleBaselineMvpReview(input),
+          requestBaselineMvpReview: async (input) => {
+            if (input.toolId === CONSUMER_ID) {
+              consumerMvpPreview = input.resultEvidence.payload.actualResult.preview;
+            }
+            return credibleBaselineMvpReview(input);
+          },
           requestParameterSelectionAdvice: async (input: ParameterSelectionAdvisorInput) => {
             parameterAdviceGuard ??= setTimeout(() => {
               parameterAdviceHadToBeReleased = true;
@@ -919,6 +934,9 @@ describe('fresh foreground master controller end to end', () => {
               ]),
             );
             resultEvidenceCount = input.toolResultEvidence?.length ?? 0;
+            completionChainEdgeIds = (input.toolResultEvidence ?? []).map(
+              ({ payload }) => payload.chainEdgeId,
+            );
             return CompletionReviewOutputSchema.parse({
               binding: input.run,
               verdict: 'passed',
@@ -926,6 +944,7 @@ describe('fresh foreground master controller end to end', () => {
               findings: [],
               toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
                 toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
                 status: 'credible',
                 reason: 'The current live result matches the focused expected result.',
                 evidenceRefs: [result.ref],
@@ -971,6 +990,8 @@ describe('fresh foreground master controller end to end', () => {
       expect(plan.tools[0]?.candidate.description).toBe(revisedProducerDescription);
       expect(revisedProducerWasReplanned).toBe(true);
       expect(producerBuildVisibleWhenConsumerCompileStarted).toBe(true);
+      expect(consumerMvpPreview).toContain('item-1');
+      expect(events.filter((event) => event === `live:${CONSUMER_ID}`)).toHaveLength(2);
       expect(plan.buildWaves).toEqual([[PRODUCER_ID], [CONSUMER_ID]]);
       expect(state.tools.every(({ buildRef }) => buildRef !== undefined)).toBe(true);
       expect(state.status).toBe('completed');
@@ -979,18 +1000,14 @@ describe('fresh foreground master controller end to end', () => {
       expect(promotedTools).toEqual([CONSUMER_NAME]);
       expect(promotionBatches).toEqual([[PRODUCER_NAME], [CONSUMER_NAME]]);
 
-      expect(checksSeenByReviewer.get(PRODUCER_ID)).toEqual([
-        'contract:passed',
-        'replay:passed',
-        'live:passed',
-      ]);
+      expect(checksSeenByReviewer.get(PRODUCER_ID)).toEqual(['contract:passed', 'live:passed']);
       expect(checksSeenByReviewer.get(CONSUMER_ID)).toEqual([
         'contract:passed',
-        'replay:not_checked',
         'live:passed',
         'chain:passed',
       ]);
-      expect(resultEvidenceCount).toBe(2);
+      expect(resultEvidenceCount).toBe(3);
+      expect(completionChainEdgeIds).toEqual([undefined, undefined, EDGE_ID]);
       expect(discoveryTrustedPreparedScope).toBe(true);
       expect(detectorReusedControllerPayload).toBe(true);
       expect(detectorRequestSeqs).toEqual([1]);
@@ -1015,14 +1032,9 @@ describe('fresh foreground master controller end to end', () => {
       expect(events.indexOf(`finesse-live:${PRODUCER_ID}`)).toBeLessThan(
         events.indexOf(`compile:${CONSUMER_ID}`),
       );
-      expect(parameterAdvisorChecks.get(PRODUCER_ID)).toEqual([
-        'contract:passed',
-        'replay:passed',
-        'live:passed',
-      ]);
+      expect(parameterAdvisorChecks.get(PRODUCER_ID)).toEqual(['contract:passed', 'live:passed']);
       expect(parameterAdvisorChecks.get(CONSUMER_ID)).toEqual([
         'contract:passed',
-        'replay:not_checked',
         'live:passed',
         'chain:passed',
       ]);
@@ -1048,14 +1060,10 @@ describe('fresh foreground master controller end to end', () => {
       const buildsAtCompletion = state.tools.map(({ toolId, buildRef }) => ({ toolId, buildRef }));
       for (const { toolId, buildRef } of buildsAtCompletion) {
         if (!buildRef) throw new Error(`missing MVP build for ${toolId}`);
-        const finesseRecord = readJson(
-          join(
-            terminal.runRoot,
-            'finesse',
-            toolId,
-            `${buildRef.sha256.slice('sha256:'.length)}.json`,
-          ),
-        );
+        const finesseDir = join(terminal.runRoot, 'finesse', toolId);
+        const finesseFile = readdirSync(finesseDir).find((name) => name.endsWith('.json'));
+        if (!finesseFile) throw new Error(`missing finesse record for ${toolId}`);
+        const finesseRecord = readJson(join(finesseDir, finesseFile));
         expect(finesseRecord).toEqual(
           expect.objectContaining({
             toolId,
@@ -1081,6 +1089,47 @@ describe('fresh foreground master controller end to end', () => {
       expect(
         afterAdviceFailure.tools.map(({ toolId, buildRef }) => ({ toolId, buildRef })),
       ).toEqual(buildsAtCompletion);
+    });
+  });
+
+  it('reports a thrown completion-review failure as a host failure instead of revising tools', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      let repairCalls = 0;
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-completion-review-host-failure',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseMasterDecision = base.requestMasterDecision;
+      if (!baseMasterDecision) throw new Error('fixture master decision is missing');
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestMasterDecision: async (input) => {
+            if (input.verificationFindings) repairCalls += 1;
+            return await baseMasterDecision(input);
+          },
+          requestCompletionReview: async () => {
+            throw new Error('fixture completion reviewer host failure');
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('failed');
+      expect(terminal.message).toContain('fixture completion reviewer host failure');
+      expect(repairCalls).toBe(0);
     });
   });
 
@@ -1131,20 +1180,369 @@ describe('fresh foreground master controller end to end', () => {
       const state = FreshTeachJournalStateSchema.parse(
         readJson(join(terminal.runRoot, 'journal', 'current.json')),
       );
-      const producerBuild = state.tools.find(({ toolId }) => toolId === PRODUCER_ID)?.buildRef;
-      if (!producerBuild) throw new Error('fixture expected the rejected producer build');
+      const producerState = state.tools.find(({ toolId }) => toolId === PRODUCER_ID);
+      const producerBuild = producerState?.buildRef;
+      const producerLiveReceipt = producerState?.currentReceiptRefs.find(
+        ({ key }) => key === 'live',
+      )?.ref;
+      if (!producerBuild || !producerLiveReceipt)
+        throw new Error('fixture expected the rejected producer build and live receipt');
       expect(
         readJson(
           join(
             terminal.runRoot,
             'mvp-reviews',
             PRODUCER_ID,
-            `${producerBuild.sha256.slice('sha256:'.length)}.json`,
+            `${producerLiveReceipt.sha256.slice('sha256:'.length)}.json`,
           ),
         ),
       ).toEqual(
         expect.objectContaining({
           review: expect.objectContaining({ status: 'revision_required' }),
+        }),
+      );
+    });
+  });
+
+  it('keeps an invalid optional event citation nonfatal through verification repair', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      let repairReached = false;
+      let repairedPlanEventSeqs: number[] | undefined;
+      let repairReceiptEvidence:
+        | Extract<
+            NonNullable<MasterDecisionInput['verificationFindings']>['payload']['entries'][number],
+            { kind: 'mechanical_fact' }
+          >
+        | undefined;
+      let repairFailureQuote = '';
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-invalid-optional-event-repair',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseMasterDecision = base.requestMasterDecision;
+      if (!baseMasterDecision) throw new Error('fixture master decision is missing');
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestMasterDecision: async (decisionInput) => {
+            if (decisionInput.verificationFindings) {
+              repairReached = true;
+              repairedPlanEventSeqs = decisionInput.current?.plan.payload.tools.find(
+                ({ id }) => id === PRODUCER_ID,
+              )?.candidate.eventSeqs;
+              repairReceiptEvidence = decisionInput.verificationFindings.payload.entries.find(
+                (entry): entry is NonNullable<typeof repairReceiptEvidence> =>
+                  entry.kind === 'mechanical_fact',
+              );
+              repairFailureQuote =
+                decisionInput.verificationFindings.payload.entries.find(
+                  (entry) => entry.kind === 'untrusted_redacted_quote',
+                )?.quote ?? '';
+              throw new ProviderUnavailableError(
+                new Error('fixture stops after reaching the valid repair master call'),
+              );
+            }
+
+            const output = await baseMasterDecision(decisionInput);
+            const producer = output.desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+            if (!producer) throw new Error('fixture expected the producer plan');
+            producer.candidate.eventSeqs = [999];
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          runApiTool: async () => ({
+            result: {
+              ok: false as const,
+              error: 'BAD_RESPONSE' as const,
+              message: 'The fixture live check failed before semantic review.',
+            },
+            executionMechanism: 'fixture-api',
+          }),
+        },
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(repairReached).toBe(true);
+      expect(repairedPlanEventSeqs).toEqual([999]);
+      expect(repairReceiptEvidence).toEqual(
+        expect.objectContaining({
+          requestSeqs: [1],
+          eventSeqs: [],
+          toolId: PRODUCER_ID,
+        }),
+      );
+      expect(repairFailureQuote).toContain('BAD_RESPONSE');
+      expect(repairFailureQuote).toContain('The fixture live check failed before semantic review.');
+      expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(0);
+      expect(promotionBatches).toEqual([]);
+    });
+  });
+
+  it('lets the master review two distinct returned failures on the same build', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      const repairQuotes: string[] = [];
+      let liveAttempts = 0;
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-distinct-live-failures',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseMasterDecision = base.requestMasterDecision;
+      if (!baseMasterDecision) throw new Error('fixture master decision is missing');
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          requestMasterDecision: async (decisionInput) => {
+            if (!decisionInput.verificationFindings) return await baseMasterDecision(decisionInput);
+            repairQuotes.push(
+              decisionInput.verificationFindings.payload.entries
+                .filter((entry) => entry.kind === 'untrusted_redacted_quote')
+                .map(({ quote }) => quote)
+                .join('\n'),
+            );
+            if (repairQuotes.length === 2) {
+              throw new ProviderUnavailableError(
+                new Error('fixture stops after the second distinct repair reached the master'),
+              );
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome: 'accepted',
+              reason: 'Retry the same current artifact once because the returned failure changed.',
+              desiredPlan: desiredFromCurrent(decisionInput),
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          runApiTool: async () => {
+            liveAttempts += 1;
+            return {
+              result: {
+                ok: false as const,
+                error: 'BAD_RESPONSE' as const,
+                message: 'The fixture returned the same top-level failure.',
+                status: liveAttempts === 1 ? 400 : 503,
+                requestStageFacts: [
+                  {
+                    requestIndex: 0,
+                    stage: liveAttempts === 1 ? ('preparation' as const) : ('send' as const),
+                    outcome: 'failed' as const,
+                    ...(liveAttempts === 2 ? { httpStatus: 503 } : {}),
+                  },
+                ],
+                responseBodyPreview:
+                  liveAttempts === 1 ? 'fixture-invalid-input' : 'fixture-upstream-unavailable',
+              },
+              executionMechanism: 'fixture-api',
+            };
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(repairQuotes).toHaveLength(2);
+      expect(repairQuotes[0]).toContain('HTTP status: 400');
+      expect(repairQuotes[0]).toContain('preparation');
+      expect(repairQuotes[0]).toContain('fixture-invalid-input');
+      expect(repairQuotes[1]).toContain('HTTP status: 503');
+      expect(repairQuotes[1]).toContain('send');
+      expect(repairQuotes[1]).toContain('fixture-upstream-unavailable');
+    });
+  });
+
+  it('keeps the standalone consumer result canonical and reviews its chain independently', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      let chainPreview = '';
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-empty-dependency-backed-result',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: (reviewInput) => {
+          if (reviewInput.toolId === CONSUMER_ID) {
+            if (!reviewInput.resultEvidence.payload.chainEdgeId)
+              return credibleBaselineMvpReview(reviewInput);
+            chainPreview = reviewInput.resultEvidence.payload.actualResult.preview;
+            return baselineMvpReview(reviewInput, 'revision_required');
+          }
+          return credibleBaselineMvpReview(reviewInput);
+        },
+      });
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          runApiTool: async ({ workflowPath }) => ({
+            result: workflowPath.includes(`/${PRODUCER_ID}/`)
+              ? { ok: true as const, data: { items: [{ id: 'item-1' }] } }
+              : { ok: true as const, data: [] },
+            executionMechanism: 'fixture-api',
+          }),
+        },
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(chainPreview).toBe('[]');
+      expect(events.filter((event) => event === `review:${CONSUMER_ID}`)).toHaveLength(2);
+      expect(events.filter((event) => event === `compile:${CONSUMER_ID}`)).toHaveLength(1);
+      expect(promotionBatches).toEqual([[PRODUCER_NAME], [CONSUMER_NAME]]);
+    });
+  });
+
+  it('hands a final chain-result rejection to the master after the edge review passed', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      let baselineChainEvidenceRef = '';
+      let completionChainEvidenceRef = '';
+      let repairFacts: Array<Record<string, unknown>> = [];
+      const rejection = 'The exact chained consumer result is not credible.';
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-completion-rejects-chain-result',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: (reviewInput) => {
+          if (reviewInput.resultEvidence.payload.chainEdgeId === EDGE_ID) {
+            baselineChainEvidenceRef = reviewInput.resultEvidence.ref.sha256;
+          }
+          return credibleBaselineMvpReview(reviewInput);
+        },
+      });
+      const baseMasterDecision = base.requestMasterDecision;
+      if (!baseMasterDecision) throw new Error('fixture master decision is missing');
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestMasterDecision: async (decisionInput) => {
+            if (!decisionInput.verificationFindings) return await baseMasterDecision(decisionInput);
+            repairFacts = decisionInput.verificationFindings.payload.entries.flatMap((entry) =>
+              entry.kind === 'untrusted_redacted_quote'
+                ? [JSON.parse(entry.quote) as Record<string, unknown>]
+                : [],
+            );
+            throw new ProviderUnavailableError(
+              new Error('fixture stops after the chain rejection reaches master repair'),
+            );
+          },
+          requestCompletionReview: async (reviewInput) => {
+            const chainResult = reviewInput.toolResultEvidence?.find(
+              ({ payload }) => payload.chainEdgeId === EDGE_ID,
+            );
+            if (!chainResult) throw new Error('fixture expected exact chain result evidence');
+            completionChainEvidenceRef = chainResult.ref.sha256;
+            return CompletionReviewOutputSchema.parse({
+              binding: reviewInput.run,
+              verdict: 'failed',
+              summary: 'The standalone results passed, but the exact chain result needs revision.',
+              findings: [
+                {
+                  severity: 'blocking',
+                  toolId: CONSUMER_ID,
+                  message: rejection,
+                  evidenceRefs: [chainResult.ref],
+                },
+              ],
+              toolResultReviews: (reviewInput.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
+                status: result.payload.chainEdgeId === EDGE_ID ? 'revision_required' : 'credible',
+                reason:
+                  result.payload.chainEdgeId === EDGE_ID
+                    ? rejection
+                    : 'The standalone result remains credible.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: reviewInput.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The supplied evidence supports this claim.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            });
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(baselineChainEvidenceRef).toBeTruthy();
+      expect(completionChainEvidenceRef).toBe(baselineChainEvidenceRef);
+      expect(repairFacts).toContainEqual(
+        expect.objectContaining({
+          stage: 'completion_review_finding',
+          toolId: CONSUMER_ID,
+          message: rejection,
+          evidenceRefs: [expect.objectContaining({ sha256: completionChainEvidenceRef })],
+        }),
+      );
+      expect(repairFacts).toContainEqual(
+        expect.objectContaining({
+          stage: 'completion_tool_result_review',
+          toolId: CONSUMER_ID,
+          chainEdgeId: EDGE_ID,
+          status: 'revision_required',
+          evidenceRefs: [expect.objectContaining({ sha256: completionChainEvidenceRef })],
         }),
       );
     });
@@ -1217,6 +1615,7 @@ describe('fresh foreground master controller end to end', () => {
               findings: [],
               toolResultReviews: (reviewInput.toolResultEvidence ?? []).map((result) => ({
                 toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
                 status: 'credible',
                 reason: 'The bounded result has the expected fixture shape.',
                 evidenceRefs: [result.ref],
@@ -1240,6 +1639,389 @@ describe('fresh foreground master controller end to end', () => {
       expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(1);
       expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(1);
       expect(completionReviewCalls).toBe(0);
+      expect(promotionBatches).toEqual([]);
+    });
+  });
+
+  it('tests a fresh repaired plan without attaching the prior build findings to its proposal', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      const repairReason =
+        'Build A returned the wrong core result; compile and verify a fresh Build B plan.';
+      const reviewStatuses: Array<'credible' | 'revision_required'> = [];
+      const compilerRevisionGuidance: Array<string | undefined> = [];
+      let sawBuildAFinding = false;
+      let plannerReceivedRepairGuidance = false;
+      let sawPlanBProposalWithoutStaleFinding = false;
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-fresh-plan-after-result-rejection',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: (reviewInput) => {
+          const status = reviewStatuses.length === 0 ? 'revision_required' : 'credible';
+          reviewStatuses.push(status);
+          return baselineMvpReview(reviewInput, status);
+        },
+      });
+      const baseCompileFocusedTool = base.compileFocusedTool;
+      if (!baseCompileFocusedTool) throw new Error('fixture compiler is missing');
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          compileFocusedTool: async (compileInput) => {
+            compilerRevisionGuidance.push(compileInput.revisionGuidance);
+            return await baseCompileFocusedTool(compileInput);
+          },
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          requestFocusedPlan: async (plannerInput) => {
+            if (plannerInput.masterGuidance === repairReason) {
+              plannerReceivedRepairGuidance = true;
+            }
+            return FocusedPlannerOutputSchema.parse({
+              binding: {
+                runId: plannerInput.run.runId,
+                site: plannerInput.run.site,
+                recordingSha256: plannerInput.run.recordingSha256,
+                toolId: plannerInput.tool.id,
+              },
+              tool: {
+                ...plannerInput.tool,
+                strategy: {
+                  kind: 'api',
+                  reason: 'The focused recording contains one replayable API request.',
+                },
+              },
+              chainEdges: plannerInput.incomingChainEdges,
+              implementationPlan: focusedImplementation(plannerInput),
+              reason: 'The focused request and expected result are explicit.',
+            });
+          },
+          requestMasterDecision: async (decisionInput) => {
+            let desiredPlan: DesiredTeachingPlan;
+            let outcome: 'accepted' | 'rejected' | 'revised' = 'accepted';
+            let reason = 'The current focused proposal is ready for compilation and verification.';
+            if (decisionInput.phase === 'discovery') {
+              desiredPlan = initialSingleToolDesiredPlan(decisionInput);
+            } else if (decisionInput.verificationFindings) {
+              expect(decisionInput.plannerProposals).toHaveLength(0);
+              sawBuildAFinding = true;
+              desiredPlan = desiredFromCurrent(decisionInput);
+              const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+              if (!tool) throw new Error('fixture expected the producer plan');
+              tool.compileContext.sharedHelperNotes = 'Build B must repair the rejected result.';
+              outcome = 'revised';
+              reason = repairReason;
+            } else {
+              desiredPlan =
+                decisionInput.plannerProposals.length > 0
+                  ? proposalDesiredPlan(decisionInput)
+                  : desiredFromCurrent(decisionInput);
+              if (sawBuildAFinding && decisionInput.plannerProposals.length > 0) {
+                expect(decisionInput.verificationFindings).toBeUndefined();
+                expect(decisionInput.current?.plan.payload.decision.reason).toBe(repairReason);
+                sawPlanBProposalWithoutStaleFinding = true;
+              }
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome,
+              reason,
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          requestCompletionReview: async (reviewInput) =>
+            CompletionReviewOutputSchema.parse({
+              binding: reviewInput.run,
+              verdict: 'passed',
+              summary: 'Build B passed its own checks and demonstrates the fixture operation.',
+              findings: [],
+              toolResultReviews: (reviewInput.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
+                status: 'credible',
+                reason: 'The fresh Build B result has the expected fixture shape.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: reviewInput.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The supplied evidence supports the claim.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            }),
+        },
+      );
+
+      expect(terminal.status).toBe('completed');
+      expect(terminal.readyTools).toBe(1);
+      expect(terminal.failedTools).toBe(0);
+      expect(sawBuildAFinding).toBe(true);
+      expect(plannerReceivedRepairGuidance).toBe(true);
+      expect(sawPlanBProposalWithoutStaleFinding).toBe(true);
+      expect(reviewStatuses).toEqual(['revision_required', 'credible']);
+      expect(compilerRevisionGuidance[1]).toContain(repairReason);
+      expect(compilerRevisionGuidance[1]).toContain('Exact prior failure facts for this tool');
+      expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(2);
+      expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(2);
+      expect(promotionBatches).toEqual([[PRODUCER_NAME]]);
+    });
+  });
+
+  it('keeps the last working artifact after a repair violates the accepted contract', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      const compileAttempts: Array<{
+        stagingDir: string;
+        priorToolDir?: string;
+        revisionGuidance?: string;
+      }> = [];
+      let repairDecisions = 0;
+      let baselineReviews = 0;
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-retain-seed-after-failed-repair',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: (reviewInput) => {
+          baselineReviews += 1;
+          return baselineMvpReview(
+            reviewInput,
+            baselineReviews === 1 ? 'credible' : 'revision_required',
+          );
+        },
+      });
+      const baseCompileFocusedTool = base.compileFocusedTool;
+      if (!baseCompileFocusedTool) throw new Error('fixture compiler is missing');
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          compileFocusedTool: async (compileInput) => {
+            compileAttempts.push({
+              stagingDir: compileInput.stagingDir,
+              priorToolDir: compileInput.priorToolDir,
+              revisionGuidance: compileInput.revisionGuidance,
+            });
+            if (compileAttempts.length === 3)
+              throw new ProviderUnavailableError(
+                new Error('fixture stops after checking the retained seed'),
+              );
+            const focused = await baseCompileFocusedTool(compileInput);
+            if (compileAttempts.length !== 2) return focused;
+            return {
+              ...focused,
+              workflow: WorkflowSchema.parse({
+                ...focused.workflow,
+                requests: focused.workflow.requests.map((request, index) =>
+                  index === 0 ? { ...request, recordingRequestSeq: 999 } : request,
+                ),
+              }),
+            };
+          },
+          requestMasterDecision: async (decisionInput) => {
+            const desiredPlan =
+              decisionInput.phase === 'discovery'
+                ? initialSingleToolDesiredPlan(decisionInput)
+                : decisionInput.plannerProposals.length > 0
+                  ? proposalDesiredPlan(decisionInput)
+                  : desiredFromCurrent(decisionInput);
+            if (decisionInput.verificationFindings) {
+              repairDecisions += 1;
+              const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+              if (!tool) throw new Error('fixture expected the producer plan');
+              tool.compileContext.sharedHelperNotes = `repair attempt ${repairDecisions}`;
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome: decisionInput.verificationFindings ? 'revised' : 'accepted',
+              reason: decisionInput.verificationFindings
+                ? `Repair the producer from factual failure ${repairDecisions}.`
+                : 'Keep the current focused producer plan.',
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          requestCompletionReview: async (reviewInput) =>
+            CompletionReviewOutputSchema.parse({
+              binding: reviewInput.run,
+              verdict: 'failed',
+              summary: 'Exercise a fresh repair after the first credible build.',
+              findings: [
+                {
+                  severity: 'blocking',
+                  message: 'Revise the fixture plan once before completion.',
+                  evidenceRefs: [reviewInput.evidence.ref],
+                },
+              ],
+              toolResultReviews: (reviewInput.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
+                status: 'credible',
+                reason: 'The first artifact is the last known-good repair seed.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: reviewInput.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The fixture retains supplied evidence.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            }),
+        },
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(repairDecisions).toBe(2);
+      expect(compileAttempts).toHaveLength(3);
+      expect(compileAttempts[0]?.priorToolDir).toBeUndefined();
+      expect(compileAttempts[1]?.priorToolDir).toBe(compileAttempts[0]?.stagingDir);
+      expect(compileAttempts[2]?.priorToolDir).toBe(compileAttempts[0]?.stagingDir);
+      expect(compileAttempts[2]?.revisionGuidance).toContain(
+        'workflow request provenance does not match the accepted plan',
+      );
+    });
+  });
+
+  it('gives the first rejected artifact to the next fresh same-strategy repair', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      const compileAttempts: Array<{ stagingDir: string; priorToolDir?: string }> = [];
+      let repairDecisions = 0;
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-seed-first-rejected-artifact',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseCompileFocusedTool = base.compileFocusedTool;
+      if (!baseCompileFocusedTool) throw new Error('fixture compiler is missing');
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          compileFocusedTool: async (compileInput) => {
+            compileAttempts.push({
+              stagingDir: compileInput.stagingDir,
+              priorToolDir: compileInput.priorToolDir,
+            });
+            if (compileAttempts.length === 2)
+              throw new ProviderUnavailableError(
+                new Error('fixture stops after observing the rejected draft seed'),
+              );
+            const focused = await baseCompileFocusedTool(compileInput);
+            return {
+              ...focused,
+              workflow: WorkflowSchema.parse({
+                ...focused.workflow,
+                requests: focused.workflow.requests.map((request, index) =>
+                  index === 0 ? { ...request, recordingRequestSeq: 999 } : request,
+                ),
+              }),
+            };
+          },
+          requestMasterDecision: async (decisionInput) => {
+            const desiredPlan =
+              decisionInput.phase === 'discovery'
+                ? initialSingleToolDesiredPlan(decisionInput)
+                : decisionInput.plannerProposals.length > 0
+                  ? proposalDesiredPlan(decisionInput)
+                  : desiredFromCurrent(decisionInput);
+            if (decisionInput.verificationFindings) {
+              repairDecisions += 1;
+              const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+              if (!tool) throw new Error('fixture expected the producer plan');
+              tool.compileContext.sharedHelperNotes = 'Repair the rejected first draft in place.';
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome: decisionInput.verificationFindings ? 'revised' : 'accepted',
+              reason: decisionInput.verificationFindings
+                ? 'Correct only the exact provenance defect in the rejected draft.'
+                : 'Keep the focused producer plan.',
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(repairDecisions).toBe(1);
+      expect(compileAttempts).toHaveLength(2);
+      expect(compileAttempts[0]?.priorToolDir).toBeUndefined();
+      expect(compileAttempts[1]?.priorToolDir).toBe(compileAttempts[0]?.stagingDir);
+      expect(events).not.toContain(`review:${PRODUCER_ID}`);
       expect(promotionBatches).toEqual([]);
     });
   });
@@ -1321,24 +2103,24 @@ describe('fresh foreground master controller end to end', () => {
             if (decisionInput.phase === 'discovery') {
               desiredPlan = initialSingleToolDesiredPlan(decisionInput);
             } else if (decisionInput.verificationFindings) {
+              expect(decisionInput.plannerProposals).toHaveLength(0);
               desiredPlan = desiredFromCurrent(decisionInput);
-              if (decisionInput.plannerProposals.length === 0) {
-                repairDecisions += 1;
-                outcome = 'revised';
-                const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
-                if (!tool) throw new Error('fixture expected the producer plan');
-                tool.candidate.description = revisedDescription;
-              } else {
-                reviewedFocusedProposals += 1;
-                const proposal = decisionInput.plannerProposals[0];
-                if (!proposal) throw new Error('fixture expected a focused proposal');
-                reviewedImplementationHashes.push(proposal.payload.implementationPlan.ref.sha256);
-                const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
-                if (!tool) throw new Error('fixture expected the producer plan');
-                tool.candidate.rationale = `Paraphrased rationale ${reviewedFocusedProposals} with no compile-input change.`;
-                tool.candidate.confidence = reviewedFocusedProposals === 1 ? 0.61 : 0.62;
-                outcome = 'rejected';
-              }
+              repairDecisions += 1;
+              outcome = 'revised';
+              const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+              if (!tool) throw new Error('fixture expected the producer plan');
+              tool.candidate.description = revisedDescription;
+            } else if (repairDecisions > 0 && decisionInput.plannerProposals.length > 0) {
+              desiredPlan = desiredFromCurrent(decisionInput);
+              reviewedFocusedProposals += 1;
+              const proposal = decisionInput.plannerProposals[0];
+              if (!proposal) throw new Error('fixture expected a focused proposal');
+              reviewedImplementationHashes.push(proposal.payload.implementationPlan.ref.sha256);
+              const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+              if (!tool) throw new Error('fixture expected the producer plan');
+              tool.candidate.rationale = `Paraphrased rationale ${reviewedFocusedProposals} with no compile-input change.`;
+              tool.candidate.confidence = reviewedFocusedProposals === 1 ? 0.61 : 0.62;
+              outcome = 'rejected';
             } else {
               desiredPlan =
                 decisionInput.plannerProposals.length > 0
@@ -1427,11 +2209,16 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('does not republish a retained consumer or unblock its leaf after a rebound producer is rejected', async () => {
+  it('retains downstream artifacts without republishing them after a revised producer is rejected', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];
       const promotionBatches: string[][] = [];
       const producerReviewStatuses: Array<'credible' | 'revision_required'> = [];
+      const producerCompileRevisions: Array<{
+        stagingDir: string;
+        priorToolDir?: string;
+        revisionGuidance?: string;
+      }> = [];
       let repairDecisions = 0;
       const recordingPath = threeToolSyntheticSessionPath(root);
       const base = lifecycleFailureFixture({
@@ -1447,6 +2234,8 @@ describe('fresh foreground master controller end to end', () => {
           return baselineMvpReview(reviewInput, status);
         },
       });
+      const baseCompileFocusedTool = base.compileFocusedTool;
+      if (!baseCompileFocusedTool) throw new Error('fixture compiler is missing');
 
       const terminal = await runFreshMasterTeach(
         {
@@ -1458,6 +2247,15 @@ describe('fresh foreground master controller end to end', () => {
         },
         {
           ...base,
+          compileFocusedTool: async (compileInput) => {
+            if (compileInput.tool.id === PRODUCER_ID)
+              producerCompileRevisions.push({
+                stagingDir: compileInput.stagingDir,
+                priorToolDir: compileInput.priorToolDir,
+                revisionGuidance: compileInput.revisionGuidance,
+              });
+            return await baseCompileFocusedTool(compileInput);
+          },
           detectToolCandidates: async () => ({
             ...validateToolCandidateDetection({
               sharedContext,
@@ -1538,21 +2336,225 @@ describe('fresh foreground master controller end to end', () => {
       expect(repairDecisions).toBe(2);
       expect(producerReviewStatuses).toEqual(['credible', 'revision_required']);
       expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(2);
+      expect(producerCompileRevisions).toHaveLength(2);
+      expect(producerCompileRevisions[0]?.priorToolDir).toBeUndefined();
+      expect(producerCompileRevisions[1]?.priorToolDir).toBe(
+        producerCompileRevisions[0]?.stagingDir,
+      );
+      expect(producerCompileRevisions[1]?.revisionGuidance).toBeTruthy();
       expect(events.filter((event) => event === `compile:${CONSUMER_ID}`)).toHaveLength(1);
       expect(events.filter((event) => event === `compile:${LEAF_ID}`)).toHaveLength(1);
-      expect(events.filter((event) => event === `review:${CONSUMER_ID}`)).toHaveLength(1);
+      expect(events.filter((event) => event === `review:${CONSUMER_ID}`)).toHaveLength(2);
       expect(events).not.toContain(`review:${LEAF_ID}`);
       expect(promotionBatches).toEqual([[PRODUCER_NAME], [CONSUMER_NAME]]);
 
       const state = FreshTeachJournalStateSchema.parse(
         readJson(join(terminal.runRoot, 'journal', 'current.json')),
       );
-      expect(state.tools.find(({ toolId }) => toolId === CONSUMER_ID)?.buildRef).toBeUndefined();
-      expect(state.tools.find(({ toolId }) => toolId === LEAF_ID)?.buildRef).toBeUndefined();
+      expect(state.tools.find(({ toolId }) => toolId === CONSUMER_ID)?.buildRef).toBeDefined();
+      expect(state.tools.find(({ toolId }) => toolId === LEAF_ID)?.buildRef).toBeDefined();
     });
   });
 
-  it('records a timed-out browser chain as a host error and continues after revision', async () => {
+  it('does not let one rejected incoming chain poison an independent downstream chain', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      let completionReviewCalls = 0;
+      let repairDecisions = 0;
+      let consumerChainReviews = 0;
+      let revisedConsumerPreview = '';
+      const recordingPath = threeToolSyntheticSessionPath(root);
+      const revisedChainEdge = {
+        ...chainEdge,
+        producerResultPath: 'items[0].alternative_id',
+      };
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-published-middle-revised-chain-fails',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: (reviewInput) => {
+          if (reviewInput.toolId !== CONSUMER_ID) return credibleBaselineMvpReview(reviewInput);
+          if (!reviewInput.resultEvidence.payload.chainEdgeId)
+            return credibleBaselineMvpReview(reviewInput);
+          consumerChainReviews += 1;
+          if (consumerChainReviews === 1) return credibleBaselineMvpReview(reviewInput);
+          revisedConsumerPreview = reviewInput.resultEvidence.payload.actualResult.preview;
+          return baselineMvpReview(reviewInput, 'revision_required');
+        },
+      });
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate, consumerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          requestMasterDecision: async (decisionInput) => {
+            let desiredPlan: DesiredTeachingPlan;
+            let outcome: 'accepted' | 'revised' = 'accepted';
+            let reason = 'Keep the current dependency-ordered fixture plan.';
+            if (decisionInput.phase === 'discovery') {
+              desiredPlan = initialDesiredPlan(decisionInput);
+            } else if (decisionInput.verificationFindings) {
+              repairDecisions += 1;
+              desiredPlan = desiredFromCurrent(decisionInput);
+              if (repairDecisions === 1) {
+                desiredPlan.tools.push({
+                  id: LEAF_ID,
+                  candidate: structuredClone(leafCandidate),
+                  compileContext: decisionInput.discovery.detectorSharedContext,
+                  evidenceRefs: [decisionInput.discovery.evidence.ref],
+                  strategy: {
+                    kind: 'api',
+                    reason: 'The recording contains one replayable request.',
+                  },
+                });
+                desiredPlan.buildWaves = [[PRODUCER_ID], [CONSUMER_ID], [LEAF_ID]];
+                desiredPlan.chainEdges = [revisedChainEdge, leafChainEdge];
+                outcome = 'revised';
+                reason =
+                  'Add the leaf while changing only the already-published middle tool incoming chain.';
+              } else {
+                reason = 'Keep the unchanged plan while retaining the exact rejected edge review.';
+              }
+            } else {
+              desiredPlan =
+                decisionInput.plannerProposals.length > 0
+                  ? proposalDesiredPlan(decisionInput)
+                  : desiredFromCurrent(decisionInput);
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome,
+              reason,
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          requestCompletionReview: async (reviewInput) => {
+            completionReviewCalls += 1;
+            return CompletionReviewOutputSchema.parse({
+              binding: reviewInput.run,
+              verdict: 'failed',
+              summary: 'The fixture asks the master to add the discovered leaf operation.',
+              findings: [
+                {
+                  severity: 'blocking',
+                  message: 'Add the leaf tool and revise the middle tool incoming chain.',
+                  evidenceRefs: [reviewInput.evidence.ref],
+                },
+              ],
+              toolResultReviews: (reviewInput.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
+                status: 'credible',
+                reason: 'The current two-tool MVP result is credible.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: reviewInput.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The supplied evidence supports the current-tool claim.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            });
+          },
+          runApiTool: async ({ workflowPath, parameters }) => {
+            if (workflowPath.includes(`/${PRODUCER_ID}/`)) {
+              return {
+                result: {
+                  ok: true as const,
+                  data: { items: [{ id: 'item-1', alternative_id: 'empty-item' }] },
+                },
+                executionMechanism: 'fixture-api',
+              };
+            }
+            if (workflowPath.includes(`/${LEAF_ID}/`)) {
+              return {
+                result: { ok: true as const, data: { rendered: parameters.item_id } },
+                executionMechanism: 'fixture-api',
+              };
+            }
+            return {
+              result:
+                parameters.item_id === 'empty-item'
+                  ? { ok: true as const, data: [] }
+                  : {
+                      ok: true as const,
+                      data: { id: parameters.item_id, name: 'Fixture item' },
+                    },
+              executionMechanism: 'fixture-api',
+            };
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('failed');
+      expect(terminal.message).toContain('same unresolved tool plan');
+      expect(completionReviewCalls).toBe(1);
+      expect(repairDecisions).toBe(2);
+      expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(1);
+      expect(events.filter((event) => event === `compile:${CONSUMER_ID}`)).toHaveLength(1);
+      expect(events.filter((event) => event === `compile:${LEAF_ID}`)).toHaveLength(1);
+      expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(1);
+      expect(events.filter((event) => event === `review:${CONSUMER_ID}`)).toHaveLength(3);
+      expect(events.filter((event) => event === `review:${LEAF_ID}`)).toHaveLength(2);
+      expect(revisedConsumerPreview).toBe('[]');
+      expect(promotionBatches).toEqual([[PRODUCER_NAME], [CONSUMER_NAME], [LEAF_NAME]]);
+
+      const state = FreshTeachJournalStateSchema.parse(
+        readJson(join(terminal.runRoot, 'journal', 'current.json')),
+      );
+      const consumerState = state.tools.find(({ toolId }) => toolId === CONSUMER_ID);
+      const leafState = state.tools.find(({ toolId }) => toolId === LEAF_ID);
+      expect(consumerState?.buildRef).toBeDefined();
+      expect(leafState?.buildRef).toBeDefined();
+      const currentChainRef = consumerState?.currentReceiptRefs.find(
+        ({ key }) => key === `chain:${EDGE_ID}`,
+      )?.ref;
+      if (!currentChainRef) throw new Error('fixture expected the revised chain receipt');
+      expect(readJson(join(terminal.runRoot, 'journal', currentChainRef.path))).toEqual(
+        expect.objectContaining({
+          check: 'chain',
+          chainEdgeId: EDGE_ID,
+          status: 'passed',
+          facts: expect.arrayContaining([
+            expect.objectContaining({ kind: 'invocation', status: 'passed' }),
+          ]),
+        }),
+      );
+      const archivedReceipts = state.supersededReceiptRefs.map((ref) =>
+        readJson(join(terminal.runRoot, 'journal', ref.path)),
+      ) as Array<{ check?: string; chainEdgeId?: string; status?: string }>;
+      expect(
+        archivedReceipts.some(
+          (receipt) => receipt.check === 'chain' && receipt.chainEdgeId === EDGE_ID,
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it('records a timed-out browser chain and revises wiring without rebuilding the tool', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);
       let playbookCalls = 0;
@@ -1747,6 +2749,7 @@ describe('fresh foreground master controller end to end', () => {
               findings: [],
               toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
                 toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
                 status: 'credible',
                 reason: 'The current result matches the focused fixture expectation.',
                 evidenceRefs: [result.ref],
@@ -1771,8 +2774,8 @@ describe('fresh foreground master controller end to end', () => {
       expect(removedTimedOutChain).toBe(true);
       expect(timedOutChainSignal?.aborted).toBe(true);
       expect(timedOutChainDurationMs).toBe(25);
-      expect(playbookCalls).toBe(3);
-      expect(consumerCompiles).toBe(2);
+      expect(playbookCalls).toBe(2);
+      expect(consumerCompiles).toBe(1);
 
       const state = FreshTeachJournalStateSchema.parse(
         readJson(join(terminal.runRoot, 'journal', 'current.json')),

@@ -160,6 +160,7 @@ const DependencyExecutionBindingSchema = strictObject({
   toolId: PromptToolIdSchema,
   buildRef: ContentAddressedRefSchema,
   executionBindingSha256: PromptShaSchema,
+  resultReceiptRef: ContentAddressedRefSchema,
 });
 const DependencyListSchema = z
   .array(DependencyExecutionBindingSchema)
@@ -185,7 +186,6 @@ export const ToolExecutionBindingSchema = strictObject({
   requestProvenance: ArtifactRequestProvenanceListSchema,
   artifactManifestRef: ContentAddressedRefSchema,
   sharedManifestRef: ContentAddressedRefSchema,
-  dependencies: DependencyListSchema,
 }).superRefine((binding, ctx) => {
   if (binding.implementationPlan.basedOnCompileInputsSha256 !== binding.compileInputsSha256)
     issue(ctx, ['implementationPlan'], 'implementation plan is based on other compile inputs');
@@ -198,8 +198,6 @@ export const ToolExecutionBindingSchema = strictObject({
     issue(ctx, ['requestProvenance'], 'API execution requires recorded request provenance');
   if (binding.strategyKind === 'playbook_fallback' && binding.requestProvenance.length > 0)
     issue(ctx, ['requestProvenance'], 'playbook request provenance must be empty');
-  if (binding.dependencies.some(({ toolId }) => toolId === binding.toolId))
-    issue(ctx, ['dependencies'], 'execution binding cannot depend on itself');
 });
 export const ExecutionReceiptSchema = strictObject({
   id: PromptIdSchema,
@@ -209,6 +207,7 @@ export const ExecutionReceiptSchema = strictObject({
   toolId: PromptToolIdSchema,
   check: PromptCheckSchema,
   chainEdgeId: PromptIdSchema.optional(),
+  chainEdgeSha256: PromptShaSchema.optional(),
   status: PromptCheckStatusSchema,
   buildRef: ContentAddressedRefSchema,
   executionBindingSha256: PromptShaSchema,
@@ -217,15 +216,14 @@ export const ExecutionReceiptSchema = strictObject({
 }).superRefine((receipt, ctx) => {
   if ((receipt.check === 'chain') !== Boolean(receipt.chainEdgeId))
     issue(ctx, ['chainEdgeId'], 'chain receipts alone require an edge id');
+  if ((receipt.check === 'chain') !== Boolean(receipt.chainEdgeSha256))
+    issue(ctx, ['chainEdgeSha256'], 'chain receipts alone require an exact edge hash');
+  if (receipt.check === 'chain' && receipt.dependencyBuilds.length !== 1)
+    issue(ctx, ['dependencyBuilds'], 'chain receipts require exactly one producer result');
   if (receipt.check !== 'chain' && receipt.dependencyBuilds.length > 0)
     issue(ctx, ['dependencyBuilds'], 'non-chain receipts cannot claim dependency builds');
   if (receipt.status !== summarizedStatus(receipt.facts))
     issue(ctx, ['status'], 'receipt status does not summarize facts');
-  const positions = receipt.facts.flatMap((fact, index) =>
-    fact.kind === 'request_comparison' ? [index] : [],
-  );
-  if (positions.length > 1 && positions.at(-1) !== (positions[0] ?? 0) + positions.length - 1)
-    issue(ctx, ['facts'], 'request comparisons must form one contiguous report');
 });
 export const ToolVerificationPayloadSchema = strictObject({
   toolId: PromptToolIdSchema,
@@ -264,52 +262,6 @@ export const ToolVerificationPayloadSchema = strictObject({
     ids.add(receipt.id);
     refs.add(refKey(receipt.ref));
   });
-  const replay = tool.receipts.find(({ check }) => check === 'replay');
-  if (!replay) return;
-  const comparisons = replay.facts.filter(
-    (fact): fact is Extract<ReceiptFact, { kind: 'request_comparison' }> =>
-      fact.kind === 'request_comparison',
-  );
-  if (binding.strategyKind === 'playbook_fallback') {
-    if (replay.status !== 'not_applicable')
-      issue(ctx, ['receipts'], 'playbook replay must be not applicable');
-    if (replay.facts.some(({ status }) => status !== 'not_applicable'))
-      issue(ctx, ['receipts'], 'playbook replay facts must all be not applicable');
-    if (comparisons.length)
-      issue(ctx, ['receipts'], 'playbook replay cannot contain request comparisons');
-    return;
-  }
-  if (replay.status === 'not_applicable')
-    issue(ctx, ['receipts'], 'API replay cannot be not applicable');
-  if (comparisons.length !== binding.requestProvenance.length) {
-    issue(ctx, ['receipts'], 'API replay must report every artifact request');
-    return;
-  }
-  let stopped = false;
-  comparisons.forEach((comparison, index) => {
-    if (
-      comparison.artifactRequestIndex !== index ||
-      comparison.recordingSeq !== binding.requestProvenance[index]?.recordingRequestSeq ||
-      comparison.remainingComparisons !== binding.requestProvenance.length - index - 1
-    )
-      issue(ctx, ['receipts'], 'API replay report does not match exact artifact provenance');
-    if (comparison.status === 'not_applicable')
-      issue(ctx, ['receipts'], 'API request comparisons cannot be not applicable');
-    if (stopped && comparison.status !== 'not_checked')
-      issue(ctx, ['receipts'], 'checked comparison follows a failed or unchecked target');
-    if (comparison.status === 'failed' || comparison.status === 'not_checked') stopped = true;
-  });
-  const hostFailure = replay.facts.some(({ kind }) => kind === 'host_error');
-  const comparisonFailure = comparisons.some(({ status }) => status === 'failed');
-  if (replay.status === 'failed' && !comparisonFailure && !hostFailure) {
-    issue(ctx, ['receipts'], 'failed replay needs a comparison mismatch or host error');
-  }
-  if (replay.status === 'passed' && comparisons.some(({ status }) => status !== 'passed')) {
-    issue(ctx, ['receipts'], 'passed replay requires every target to pass');
-  }
-  if (replay.status === 'not_checked' && comparisons.every(({ status }) => status === 'passed')) {
-    issue(ctx, ['receipts'], 'unchecked replay needs an unchecked target');
-  }
 });
 const CurrentExecutionSnapshotPayloadSchema = strictObject({
   run: RunIdentitySchema,
@@ -317,7 +269,6 @@ const CurrentExecutionSnapshotPayloadSchema = strictObject({
   sharedManifestRef: ContentAddressedRefSchema,
   tools: z.array(ToolVerificationPayloadSchema),
 }).superRefine((snapshot, ctx) => {
-  const tools = new Map(snapshot.tools.map((tool) => [tool.toolId, tool]));
   const toolIds = new Set<string>();
   const receiptIds = new Set<string>();
   const receiptRefs = new Set<string>();
@@ -342,15 +293,6 @@ const CurrentExecutionSnapshotPayloadSchema = strictObject({
         issue(ctx, ['tools', index, 'receipts', receiptIndex], 'duplicate current receipt ref');
       receiptIds.add(receipt.id);
       receiptRefs.add(key);
-    });
-    tool.executionBinding.dependencies.forEach((dependency, dependencyIndex) => {
-      const producer = tools.get(dependency.toolId);
-      if (
-        !producer ||
-        !same(dependency.buildRef, producer.currentBuildRef) ||
-        dependency.executionBindingSha256 !== producer.executionBindingSha256
-      )
-        issue(ctx, ['tools', index, 'dependencies', dependencyIndex], 'stale producer build');
     });
     toolIds.add(tool.toolId);
   });

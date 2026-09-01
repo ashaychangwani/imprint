@@ -420,6 +420,7 @@ function verification(
     toolId: string;
     buildRef: ContentAddressedRef;
     executionBindingSha256: string;
+    resultReceiptRef: ContentAddressedRef;
   }> = [],
   chainEdges: readonly ChainEdge[] = edges,
 ) {
@@ -443,15 +444,17 @@ function verification(
     requestProvenance: implementationPayload(tool).requestProvenance,
     artifactManifestRef,
     sharedManifestRef,
-    dependencies,
   });
   const executionBindingSha256 = digest(executionBinding);
-  const checks: Array<{ check: 'contract' | 'replay' | 'live' | 'chain'; edge?: string }> = [
+  const checks: Array<{
+    check: 'contract' | 'replay' | 'live' | 'chain';
+    edge?: ChainEdge;
+  }> = [
     { check: 'contract' },
     { check: 'replay' },
     { check: 'live' },
     ...(tool.id === 'catalog_detail'
-      ? edges.map(({ id }) => ({ check: 'chain' as const, edge: id }))
+      ? edges.map((edge) => ({ check: 'chain' as const, edge }))
       : []),
   ];
   return ToolVerificationPayloadSchema.parse({
@@ -462,16 +465,16 @@ function verification(
     executionBindingSha256,
     receipts: checks.map(({ check, edge }, index) =>
       ExecutionReceiptSchema.parse({
-        id: `${tool.id}-${check}-${edge ?? index}`,
+        id: `${tool.id}-${check}-${edge?.id ?? index}`,
         ref: ref(
-          `runs/run-fixture-1/receipts/${tool.id}-${check}-${edge ?? index}.json`,
+          `runs/run-fixture-1/receipts/${tool.id}-${check}-${edge?.id ?? index}.json`,
           String((index + 2) % 10),
         ),
         runId: runIdentity.runId,
         recordingSha256: runIdentity.recordingSha256,
         toolId: tool.id,
         check,
-        ...(edge ? { chainEdgeId: edge } : {}),
+        ...(edge ? { chainEdgeId: edge.id, chainEdgeSha256: digest(edge) } : {}),
         status:
           check === 'replay' && tool.strategy?.kind === 'playbook_fallback'
             ? 'not_applicable'
@@ -495,6 +498,7 @@ const searchDependency = {
   toolId: searchProof.toolId,
   buildRef: searchProof.currentBuildRef,
   executionBindingSha256: searchProof.executionBindingSha256,
+  resultReceiptRef: matching(searchProof.receipts, ({ check }) => check === 'live').ref,
 };
 const detailProof = verification(detailTool, [searchDependency]);
 const snapshot = CurrentExecutionSnapshotSchema.parse(
@@ -567,17 +571,24 @@ function completionResultEvidence(
   proof: typeof searchProof,
   actual: { preview: string; shape: string; count: number | null },
   expectedResult = `Return a current ${tool.candidate.toolName} result shape.`,
+  chainEdgeId?: string,
 ) {
   if (!tool.implementationPlan) throw new Error('result evidence fixture needs a plan');
-  const liveReceipt = matching(proof.receipts, ({ check }) => check === 'live');
+  const resultReceipt = matching(
+    proof.receipts,
+    (receipt) =>
+      receipt.check === (chainEdgeId ? 'chain' : 'live') &&
+      (!chainEdgeId || receipt.chainEdgeId === chainEdgeId),
+  );
   return CompletionToolResultEvidenceSchema.parse(
-    projection(`runs/run-fixture-1/result-evidence/${tool.id}.json`, {
+    projection(`runs/run-fixture-1/result-evidence/${tool.id}-${chainEdgeId ?? 'live'}.json`, {
       toolId: tool.id,
       toolName: tool.candidate.toolName,
       implementationPlanRef: tool.implementationPlan,
       verificationCaseId: `live_${tool.candidate.toolName}`,
       expectedResult,
-      liveReceiptRef: liveReceipt.ref,
+      resultReceiptRef: resultReceipt.ref,
+      ...(chainEdgeId ? { chainEdgeId } : {}),
       actualResult: {
         observed: true,
         preview: actual.preview,
@@ -609,6 +620,19 @@ function completionInput() {
         shape: 'object{item_id,description}',
         count: 1,
       }),
+      ...edges.map((edge) =>
+        completionResultEvidence(
+          detailTool,
+          detailProof,
+          {
+            preview: '{"item_id":"item-1","description":"Example chained detail"}',
+            shape: 'object{item_id,description}',
+            count: 1,
+          },
+          `Return a current ${detailTool.candidate.toolName} result shape.`,
+          edge.id,
+        ),
+      ),
     ],
     claims: [
       {
@@ -645,7 +669,7 @@ function baselineMvpBinding(input: BaselineMvpReviewInput) {
     compileInputsSha256: proof.executionBinding.compileInputsSha256,
     currentBuildRef: proof.currentBuildRef,
     executionBindingSha256: proof.executionBindingSha256,
-    liveReceiptRef: liveReceipt.ref,
+    resultReceiptRef: liveReceipt.ref,
     resultEvidenceRef: input.resultEvidence.ref,
   };
 }
@@ -684,6 +708,7 @@ const completionOutput = (
           ],
     toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
       toolId: result.payload.toolId,
+      ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
       status: 'credible' as const,
       reason: 'The current live result supports the implementation plan promise.',
       evidenceRefs: [result.ref],
@@ -884,18 +909,17 @@ describe('prompts and pre-plan discovery', () => {
     });
   }
 
-  it('tells the master that an unavailable replay has no parameter values', () => {
+  it('tells the master that recording comparison is optional diagnostic evidence', () => {
     const masterPrompt = prompt('master-teach-decision.md');
-    expect(masterPrompt).toContain('An unavailable replay case instead has an empty');
-    expect(masterPrompt).toContain('alone a reason to reject an API plan');
-    expect(masterPrompt).toContain('replayParameterValueOrigin?');
+    expect(masterPrompt).toContain('optional diagnostic');
+    expect(masterPrompt).toContain('does not by itself require browser');
+    expect(masterPrompt).not.toContain('replayParameterValueOrigin');
   });
 
-  it('defines replay byte lengths from baseline to rendered request', () => {
+  it('tells the master to account for changing request state', () => {
     const masterPrompt = prompt('master-teach-decision.md');
-    expect(masterPrompt).toContain('`expectedBytes` is the recorded request');
-    expect(masterPrompt).toContain('`actualBytes` is the request rendered');
-    expect(masterPrompt).toContain('zero-based first differing byte');
+    expect(masterPrompt).toContain('rotating state');
+    expect(masterPrompt).toContain('authentication, nonces, and signatures');
   });
 
   it('keeps optional parameter breadth outside the blocking MVP contract', () => {
@@ -916,15 +940,15 @@ describe('prompts and pre-plan discovery', () => {
     expect(focusedPrompt).toContain('never erase a distinct user-facing operation');
   });
 
-  it('tells every proof reviewer that unavailable API replay is not a failure', () => {
+  it('tells every proof reviewer that request comparison is advisory', () => {
     for (const name of [
       'master-teach-baseline-mvp-review.md',
       'master-teach-parameter-advisor.md',
       'master-teach-completion-review.md',
     ]) {
       const reviewerPrompt = prompt(name);
-      expect(reviewerPrompt).toContain('cleanly not checked');
-      expect(reviewerPrompt).toContain('baseline unavailable');
+      expect(reviewerPrompt).toContain('diagnostic evidence');
+      expect(reviewerPrompt).toContain('runtime veto');
     }
   });
 
@@ -934,6 +958,19 @@ describe('prompts and pre-plan discovery', () => {
       expect(discoveryPrompt).toContain('every valid');
       expect(discoveryPrompt).toContain('exact digests and lengths');
       expect(discoveryPrompt).toContain('focused planning');
+    }
+  });
+
+  it('keeps optional event citations in the top-level event sequence namespace', () => {
+    for (const name of [
+      'master-teach-tool-advisor.md',
+      'master-teach-decision.md',
+      'master-teach-focused-planner.md',
+    ]) {
+      const authorPrompt = prompt(name);
+      expect(authorPrompt).toContain('`recordingIndex.eventSeqs`');
+      expect(authorPrompt).toContain('top-level `events[].seq`');
+      expect(authorPrompt).toContain('Use `[]` whenever');
     }
   });
 
@@ -983,13 +1020,13 @@ describe('prompts and pre-plan discovery', () => {
     );
 
     const staleInput = structuredClone(input);
-    staleInput.resultEvidence.payload.liveReceiptRef = ref('runs/stale/live.json', '8');
+    staleInput.resultEvidence.payload.resultReceiptRef = ref('runs/stale/live.json', '8');
     staleInput.resultEvidence.ref = {
       ...staleInput.resultEvidence.ref,
       sha256: digest(staleInput.resultEvidence.payload),
     };
     expect(() => parseBaselineMvpReviewOutput(JSON.stringify(revision), staleInput)).toThrow(
-      'another live receipt',
+      'result receipt',
     );
     expect(Buffer.byteLength(revision.reason, 'utf8')).toBeLessThanOrEqual(1_000);
   });
@@ -1003,6 +1040,9 @@ describe('prompts and pre-plan discovery', () => {
     expect(masterPrompt).toContain('malformed generated request proves');
     expect(masterPrompt).toContain('It does not prove the recorded API is');
     expect(masterPrompt).toContain("failed compiler's conclusion");
+    expect(masterPrompt).toContain(
+      'cannot be superseded by\nmechanical green receipts for that same result',
+    );
   });
 
   it('makes the first advisor and master calls honestly pre-plan', async () => {
@@ -1261,15 +1301,15 @@ describe('prompts and pre-plan discovery', () => {
 
     const invalidBoundary = toolOutput();
     at(invalidBoundary.boundaries, 0).eventSeqs = [999];
-    expect(() =>
-      parseToolSelectionAdvisorOutput(JSON.stringify(invalidBoundary), toolInput()),
-    ).toThrow('unknown recording seq');
+    expect(parseToolSelectionAdvisorOutput(JSON.stringify(invalidBoundary), toolInput())).toEqual(
+      invalidBoundary,
+    );
 
     const invalidMaster = initialMasterOutput();
     at(invalidMaster.desiredPlan.tools, 0).candidate.eventSeqs = [999];
-    expect(() =>
-      parseMasterDecisionOutput(JSON.stringify(invalidMaster), initialMasterInput()),
-    ).toThrow('unknown recording seq');
+    expect(parseMasterDecisionOutput(JSON.stringify(invalidMaster), initialMasterInput())).toEqual(
+      invalidMaster,
+    );
   });
 
   it('rejects oversized detector boundaries and duplicate detector or master sequence lists', () => {
@@ -1483,19 +1523,11 @@ describe('canonical planning and immutable execution', () => {
     ).toEqual(proposal.payload.implementationPlan.ref);
   });
 
-  it('restores host-derived plan metadata after the master selects its stable identity', () => {
+  it('lets the master select a plan by its complete documented identity', () => {
     const planned = focusedOutput();
-    const replayCase = matching(
-      planned.implementationPlan.verificationCases,
-      ({ check }) => check === 'replay',
-    );
-    replayCase.parameterValueOrigin = 'recorded_baseline';
     const proposal = hostedProposal(
       planned,
       'runs/run-fixture-1/proposals/search-with-recorded-replay.json',
-    );
-    expect(proposal.payload.implementationPlan.ref.replayParameterValueOrigin).toBe(
-      'recorded_baseline',
     );
     const input: MasterDecisionInput = {
       ...initialMasterInput(),
@@ -1504,7 +1536,6 @@ describe('canonical planning and immutable execution', () => {
     const output = initialMasterOutput(input);
     const selectedTool = structuredClone(proposal.payload.tool);
     if (!selectedTool.implementationPlan) throw new Error('fixture needs a hosted plan ref');
-    selectedTool.implementationPlan.replayParameterValueOrigin = undefined;
     output.desiredPlan.tools[0] = selectedTool;
 
     expect(
@@ -1551,7 +1582,7 @@ describe('canonical planning and immutable execution', () => {
     expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(unchangedDetailPlan);
   });
 
-  it('lets a consumer proposal invalidate and replan an affected producer', () => {
+  it('lets a consumer proposal change wiring while retaining the producer plan', () => {
     const changedEdges = structuredClone(edges);
     at(changedEdges, 0).producerResultPath = '[0].canonical_item_id';
     const detailInput = {
@@ -1567,17 +1598,18 @@ describe('canonical planning and immutable execution', () => {
       plannerProposals: [detailProposal],
     };
     const output = revisionMasterOutput(input);
+    const retainedProducerPlan = at(output.desiredPlan.tools, 0).implementationPlan;
     output.desiredPlan.chainEdges = changedEdges;
     output.desiredPlan.tools[1] = detailProposal.payload.tool;
 
     const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
-    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
+    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toEqual(retainedProducerPlan);
     expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(
       detailProposal.payload.implementationPlan.ref,
     );
   });
 
-  it('lets a consumer proposal remove an edge without preserving the producer plan', () => {
+  it('lets a consumer proposal remove wiring while retaining the producer plan', () => {
     const detailInput = {
       ...focusedInput(detailTool),
       incomingChainEdges: [],
@@ -1591,11 +1623,12 @@ describe('canonical planning and immutable execution', () => {
       plannerProposals: [detailProposal],
     };
     const output = revisionMasterOutput(input);
+    const retainedProducerPlan = at(output.desiredPlan.tools, 0).implementationPlan;
     output.desiredPlan.chainEdges = [];
     output.desiredPlan.tools[1] = detailProposal.payload.tool;
 
     const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
-    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
+    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toEqual(retainedProducerPlan);
     expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(
       detailProposal.payload.implementationPlan.ref,
     );
@@ -1755,19 +1788,31 @@ describe('canonical planning and immutable execution', () => {
   });
 
   it('rejects a rebound proposal that cites recording data outside the run', () => {
-    const cases = [
-      (proposal: ReturnType<typeof hostedProposal>) => {
-        proposal.payload.tool.candidate.requestSeqs = [999];
-        proposal.payload.tool.candidate.representativeSeqs = [999];
+    const cases: Array<{
+      accepted: boolean;
+      mutate: (proposal: ReturnType<typeof hostedProposal>) => void;
+    }> = [
+      {
+        accepted: false,
+        mutate: (proposal) => {
+          proposal.payload.tool.candidate.requestSeqs = [999];
+          proposal.payload.tool.candidate.representativeSeqs = [999];
+        },
       },
-      (proposal: ReturnType<typeof hostedProposal>) => {
-        proposal.payload.tool.candidate.eventSeqs = [999];
+      {
+        accepted: true,
+        mutate: (proposal) => {
+          proposal.payload.tool.candidate.eventSeqs = [999];
+        },
       },
-      (proposal: ReturnType<typeof hostedProposal>) => {
-        proposal.payload.tool.compileContext.authRequestSeqs = [999];
+      {
+        accepted: false,
+        mutate: (proposal) => {
+          proposal.payload.tool.compileContext.authRequestSeqs = [999];
+        },
       },
     ];
-    for (const mutate of cases) {
+    for (const { accepted, mutate } of cases) {
       const proposal = structuredClone(hostedProposal());
       mutate(proposal);
       const compileInputsSha256 = teachingToolCompileInputsSha256(
@@ -1784,9 +1829,10 @@ describe('canonical planning and immutable execution', () => {
         ...initialMasterInput(),
         plannerProposals: [proposal],
       };
-      expect(() =>
-        parseMasterDecisionOutput(JSON.stringify(initialMasterOutput(input)), input),
-      ).toThrow('unknown recording seq 999');
+      const parse = () =>
+        parseMasterDecisionOutput(JSON.stringify(initialMasterOutput(input)), input);
+      if (accepted) expect(parse()).toEqual(initialMasterOutput(input));
+      else expect(parse).toThrow('unknown recording seq 999');
     }
   });
 
@@ -1921,63 +1967,18 @@ describe('host-current snapshots and structural chains', () => {
     );
   });
 
-  it('binds API replay pass to every exact ordered host target', () => {
+  it('parses historical replay facts without enforcing them as current proof', () => {
     const complete = structuredClone(searchProof);
     setProvenance(complete, [12, 18]);
     const replay = matching(complete.receipts, ({ check }) => check === 'replay');
-    replay.facts = replayFacts([12, 18]);
+    replay.facts = [at(replayFacts([12, 18]), 0), ...facts('passed'), at(replayFacts([12, 18]), 1)];
     expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(complete)).success).toBe(
       true,
     );
-
-    const subset = structuredClone(complete);
-    matching(subset.receipts, ({ check }) => check === 'replay').facts = replayFacts([12]);
-    expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(subset)).success).toBe(false);
-
-    const wrongOrder = structuredClone(complete);
-    matching(wrongOrder.receipts, ({ check }) => check === 'replay').facts = replayFacts([18, 12]);
-    expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(wrongOrder)).success).toBe(
-      false,
+    replay.facts = replayFacts([18, 12]);
+    expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(complete)).success).toBe(
+      true,
     );
-
-    const interspersed = structuredClone(complete);
-    const interspersedReplay = matching(interspersed.receipts, ({ check }) => check === 'replay');
-    interspersedReplay.facts = [
-      at(replayFacts([12, 18]), 0),
-      ...facts('passed'),
-      at(replayFacts([12, 18]), 1),
-    ];
-    expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(interspersed)).success).toBe(
-      false,
-    );
-
-    const incompleteFailure = structuredClone(complete);
-    const failedReplay = matching(incompleteFailure.receipts, ({ check }) => check === 'replay');
-    failedReplay.status = 'failed';
-    failedReplay.facts = replayFacts([12], ['failed']);
-    expect(
-      ToolVerificationPayloadSchema.safeParse(rebindVerification(incompleteFailure)).success,
-    ).toBe(false);
-
-    failedReplay.facts = replayFacts([12, 18], ['failed', 'not_checked']);
-    expect(
-      ToolVerificationPayloadSchema.safeParse(rebindVerification(incompleteFailure)).success,
-    ).toBe(true);
-    failedReplay.facts = replayFacts([12, 18], ['failed', 'passed']);
-    expect(
-      ToolVerificationPayloadSchema.safeParse(rebindVerification(incompleteFailure)).success,
-    ).toBe(false);
-
-    const uncheckedThenChecked = structuredClone(complete);
-    const uncheckedReplay = matching(
-      uncheckedThenChecked.receipts,
-      ({ check }) => check === 'replay',
-    );
-    uncheckedReplay.status = 'not_checked';
-    uncheckedReplay.facts = replayFacts([12, 18], ['not_checked', 'passed']);
-    expect(
-      ToolVerificationPayloadSchema.safeParse(rebindVerification(uncheckedThenChecked)).success,
-    ).toBe(false);
 
     const missing = structuredClone(complete);
     missing.receipts = missing.receipts.filter(({ check }) => check !== 'replay');
@@ -2048,7 +2049,7 @@ describe('host-current snapshots and structural chains', () => {
     ).toThrow('unknown recording seq');
   });
 
-  it('keeps playbook replay N/A comparison-free', () => {
+  it('does not apply strategy rules to optional historical replay receipts', () => {
     const browser = structuredClone(searchProof);
     browser.executionBinding.strategyKind = 'playbook_fallback';
     setProvenance(browser, []);
@@ -2058,14 +2059,10 @@ describe('host-current snapshots and structural chains', () => {
     expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(browser)).success).toBe(true);
     replay.status = 'passed';
     replay.facts = replayFacts([12]);
-    expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(browser)).success).toBe(
-      false,
-    );
+    expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(browser)).success).toBe(true);
     replay.status = 'failed';
     replay.facts = facts('failed');
-    expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(browser)).success).toBe(
-      false,
-    );
+    expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(browser)).success).toBe(true);
     browser.receipts = browser.receipts.filter(({ check }) => check !== 'replay');
     expect(ToolVerificationPayloadSchema.safeParse(rebindVerification(browser)).success).toBe(true);
   });
@@ -2265,7 +2262,7 @@ describe('host-current snapshots and structural chains', () => {
   });
 
   it('admits parameter advice only after the target mechanical proof passes', () => {
-    for (const remove of ['contract', 'live', 'replay', 'chain'] as const) {
+    for (const remove of ['contract', 'live', 'chain'] as const) {
       const current = structuredClone(snapshot);
       const proof = at(current.payload.tools, 1);
       proof.receipts = proof.receipts.filter(
@@ -2278,17 +2275,51 @@ describe('host-current snapshots and structural chains', () => {
           JSON.stringify(parameterOutput()),
           parameterInput({ snapshot: current }) as never,
         ),
-      ).toThrow(remove === 'replay' ? 'replay must pass' : 'must be passed');
+      ).toThrow('must be passed');
     }
+    const withoutReplay = structuredClone(snapshot);
+    at(withoutReplay.payload.tools, 1).receipts = at(
+      withoutReplay.payload.tools,
+      1,
+    ).receipts.filter(({ check }) => check !== 'replay');
+    rehash(withoutReplay);
+    expect(
+      parseParameterSelectionAdvisorOutput(
+        JSON.stringify(parameterOutput()),
+        parameterInput({ snapshot: withoutReplay }) as never,
+      ),
+    ).toEqual(parameterOutput());
   });
 
-  it('binds consumers to exact current producer builds and the shared manifest', () => {
+  it('binds consumers to the exact current producer build and live result', () => {
     const staleProducer = structuredClone(snapshot);
     const producer = at(staleProducer.payload.tools, 0);
     producer.currentBuildRef = ref('runs/run-fixture-1/builds/new-search.json', 'b');
     for (const receipt of producer.receipts) receipt.buildRef = producer.currentBuildRef;
     rehash(staleProducer);
-    expect(CurrentExecutionSnapshotSchema.safeParse(staleProducer).success).toBe(false);
+    expect(CurrentExecutionSnapshotSchema.safeParse(staleProducer).success).toBe(true);
+    expect(() =>
+      parseParameterSelectionAdvisorOutput(
+        JSON.stringify(parameterOutput()),
+        parameterInput({ snapshot: staleProducer }) as never,
+      ),
+    ).toThrow('chain receipt has stale producer result');
+
+    const staleProducerResult = structuredClone(snapshot);
+    const staleResultProducer = at(staleProducerResult.payload.tools, 0);
+    const replacementLive = matching(staleResultProducer.receipts, ({ check }) => check === 'live');
+    replacementLive.ref = ref('runs/run-fixture-1/receipts/new-search-live.json', 'd');
+    rehash(staleProducerResult);
+    expect(CurrentExecutionSnapshotSchema.safeParse(staleProducerResult).success).toBe(true);
+    expect(() =>
+      parseParameterSelectionAdvisorOutput(
+        JSON.stringify(parameterOutput()),
+        parameterInput({ snapshot: staleProducerResult }) as never,
+      ),
+    ).toThrow('chain receipt has stale producer result');
+    expect(
+      mechanicalProofFailures(desiredFromEditable(), staleProducerResult, detailTool.id),
+    ).toEqual(expect.arrayContaining([expect.stringContaining('chain')]));
 
     const staleShared = structuredClone(snapshot);
     staleShared.payload.sharedManifestRef = ref('runs/run-fixture-1/builds/new-shared.json', 'c');
@@ -2305,9 +2336,32 @@ describe('host-current snapshots and structural chains', () => {
     chain.ref = ref('runs/run-fixture-1/receipts/duplicate-edge.json', 'c');
     duplicate.receipts.push(chain);
     expect(ToolVerificationPayloadSchema.safeParse(duplicate).success).toBe(false);
+
+    const missingProducerResult = structuredClone(detailProof);
+    matching(missingProducerResult.receipts, ({ check }) => check === 'chain').dependencyBuilds =
+      [];
+    expect(ToolVerificationPayloadSchema.safeParse(missingProducerResult).success).toBe(false);
   });
 
-  it('requires explicit edge semantics and its exact producer build', () => {
+  it('rejects a chain receipt bound to stale edge content', () => {
+    const current = structuredClone(snapshot);
+    const proof = at(current.payload.tools, 1);
+    const chain = matching(proof.receipts, ({ check }) => check === 'chain');
+    chain.chainEdgeSha256 = digest({
+      ...at(edges, 0),
+      producerResultPath: '[0].stale_id',
+    });
+    rehash(current);
+
+    expect(() =>
+      parseParameterSelectionAdvisorOutput(
+        JSON.stringify(parameterOutput()),
+        parameterInput({ snapshot: current }) as never,
+      ),
+    ).toThrow('chain receipt has stale edge content');
+  });
+
+  it('requires explicit edge semantics and its exact producer result', () => {
     const wrongEdgeInput = revisionMasterInput();
     const wrong = revisionMasterOutput(wrongEdgeInput);
     at(wrong.desiredPlan.chainEdges, 0).consumerParameter = 'invented_parameter';
@@ -2326,7 +2380,7 @@ describe('host-current snapshots and structural chains', () => {
         JSON.stringify(parameterOutput()),
         parameterInput({ snapshot: wrongReceipt }) as never,
       ),
-    ).toThrow('stale producer build');
+    ).toThrow('stale producer result');
   });
 });
 
@@ -2603,7 +2657,7 @@ describe('completion history and factual pass gate', () => {
     ).toThrow('receipt id appears in current and history');
   });
 
-  it('allows clean unavailable API replay only when the implementation explicitly declares it', () => {
+  it('treats a cleanly unchecked recording comparison as advisory', () => {
     const input = structuredClone(completionInput());
     const replay = matching(
       at(input.snapshot.payload.tools, 0).receipts,
@@ -2612,52 +2666,12 @@ describe('completion history and factual pass gate', () => {
     replay.status = 'not_checked';
     replay.facts = replayFacts([12], ['not_checked']);
     rehash(input.snapshot);
-
-    expect(() =>
-      parseCompletionReviewOutput(JSON.stringify(completionOutput(input)), input),
-    ).toThrow('explicitly marks the parameter baseline unavailable');
-
-    const tool = at(input.currentPlan.payload.tools, 0);
-    if (!tool.implementationPlan) throw new Error('fixture tool needs an implementation plan');
-    const unavailablePayload = implementationPayload(tool);
-    const replayCase = matching(
-      unavailablePayload.verificationCases,
-      ({ check }) => check === 'replay',
-    );
-    replayCase.parameterValueOrigin = 'unavailable';
-    replayCase.parameterValues = [];
-    const unavailablePlanRef = {
-      ...tool.implementationPlan,
-      sha256: digest(unavailablePayload),
-      replayParameterValueOrigin: 'unavailable' as const,
-    };
-    tool.implementationPlan = unavailablePlanRef;
-    rehash(input.currentPlan);
-    input.run.planSha256 = input.currentPlan.ref.sha256;
-    const proof = at(input.snapshot.payload.tools, 0);
-    proof.executionBinding.implementationPlan = unavailablePlanRef;
-    rebindVerification(proof);
-    const consumerProof = at(input.snapshot.payload.tools, 1);
-    for (const dependency of consumerProof.executionBinding.dependencies)
-      if (dependency.toolId === proof.toolId)
-        dependency.executionBindingSha256 = proof.executionBindingSha256;
-    for (const receipt of consumerProof.receipts)
-      for (const dependency of receipt.dependencyBuilds)
-        if (dependency.toolId === proof.toolId)
-          dependency.executionBindingSha256 = proof.executionBindingSha256;
-    rebindVerification(consumerProof);
-    input.snapshot.payload.currentPlanRef = input.currentPlan.ref;
-    rehash(input.snapshot);
-    const resultEvidence = at(input.toolResultEvidence ?? [], 0);
-    resultEvidence.payload.implementationPlanRef = unavailablePlanRef;
-    rehash(resultEvidence);
     const output = completionOutput(input);
-
     expect(CompletionReviewInputSchema.safeParse(input).success).toBe(true);
     expect(parseCompletionReviewOutput(JSON.stringify(output), input)).toEqual(output);
   });
 
-  it('mechanically rejects completion on failed or API-N-A replay facts', () => {
+  it('keeps optional replay failures and N/A receipts advisory', () => {
     const failed = structuredClone(completionInput());
     const failedReplay = matching(
       at(failed.snapshot.payload.tools, 0).receipts,
@@ -2666,9 +2680,9 @@ describe('completion history and factual pass gate', () => {
     failedReplay.status = 'failed';
     failedReplay.facts = replayFacts([12], ['failed']);
     rehash(failed.snapshot);
-    expect(() =>
-      parseCompletionReviewOutput(JSON.stringify(completionOutput(failed)), failed),
-    ).toThrow('replay must pass');
+    expect(parseCompletionReviewOutput(JSON.stringify(completionOutput(failed)), failed)).toEqual(
+      completionOutput(failed),
+    );
 
     const input = structuredClone(completionInput());
     const replay = matching(
@@ -2678,12 +2692,12 @@ describe('completion history and factual pass gate', () => {
     replay.status = 'not_applicable';
     replay.facts = facts('not_applicable');
     rehash(input.snapshot);
-    expect(() =>
-      parseCompletionReviewOutput(JSON.stringify(completionOutput(input)), input),
-    ).toThrow('API replay cannot be not applicable');
+    expect(parseCompletionReviewOutput(JSON.stringify(completionOutput(input)), input)).toEqual(
+      completionOutput(input),
+    );
   });
 
-  it('allows browser replay N/A while retaining the factual gate', () => {
+  it('allows a browser completion without using replay as a gate', () => {
     const browserPlan = structuredClone(editablePlan);
     browserPlan.tools = [structuredClone(searchTool)];
     browserPlan.candidateCoverage = browserPlan.candidateCoverage.map((coverage) => ({
@@ -2710,9 +2724,7 @@ describe('completion history and factual pass gate', () => {
     const plan = projection('runs/run-fixture-1/browser-plan.json', browserPlan);
     const run = { ...runIdentity, planRevision: 4, planSha256: plan.ref.sha256 };
     const proof = verification(tool, [], []);
-    const replay = matching(proof.receipts, ({ check }) => check === 'replay');
-    replay.status = 'not_applicable';
-    replay.facts = facts('not_applicable');
+    proof.receipts = proof.receipts.filter(({ check }) => check !== 'replay');
     const current = CurrentExecutionSnapshotSchema.parse(
       projection('runs/run-fixture-1/browser-current.json', {
         run: runIdentity,
@@ -2756,7 +2768,7 @@ describe('completion history and factual pass gate', () => {
     const output = CompletionReviewOutputSchema.parse({
       binding: completionBinding(input as never),
       verdict: 'passed',
-      summary: 'Browser contract and live receipts pass; replay is not applicable.',
+      summary: 'Browser contract and live receipts pass without a replay receipt.',
       findings: [],
       toolResultReviews: [
         {
@@ -2878,6 +2890,7 @@ describe('completion history and factual pass gate', () => {
       findings: [],
       toolResultReviews: blocked.toolResultEvidence.map((result) => ({
         toolId: result.payload.toolId,
+        ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
         status: 'credible' as const,
         reason: 'The supplied result supports the current promised output.',
         evidenceRefs: [result.ref],

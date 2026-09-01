@@ -30,7 +30,6 @@ import {
   ToolSelectionAdvisorPromptInputSchema,
   schemaIssue as issue,
 } from './master-teach-agent-contracts.ts';
-import { implementationBoundApiReplayProofSatisfied } from './master-teach-checks.ts';
 import {
   type ChainEdge,
   type ContentAddressedRef,
@@ -78,11 +77,7 @@ function validateCandidates(
   ctx: z.RefinementCtx,
   path: Array<string | number>,
 ): void {
-  for (const problem of teachingCandidateIssues(
-    candidates,
-    new Set(index.requestSeqs),
-    new Set(index.eventSeqs),
-  ))
+  for (const problem of teachingCandidateIssues(candidates, new Set(index.requestSeqs)))
     issue(ctx, [...path, ...problem.path], problem.message);
 }
 function validateEvidence(
@@ -180,10 +175,8 @@ function validateToolLocalFields(
   path: Array<string | number>,
 ): void {
   const knownRequests = new Set(index.requestSeqs);
-  const knownEvents = new Set(index.eventSeqs);
   for (const field of ['requestSeqs', 'representativeSeqs', 'dependencySeqs'] as const)
     checkSeqs(tool.candidate[field], knownRequests, ctx, [...path, 'candidate', field]);
-  checkSeqs(tool.candidate.eventSeqs, knownEvents, ctx, [...path, 'candidate', 'eventSeqs']);
   const ownedRequests = new Set(tool.candidate.requestSeqs);
   tool.candidate.representativeSeqs.forEach((seq, index) => {
     if (!ownedRequests.has(seq))
@@ -286,7 +279,6 @@ function focusedPlannerOutputSchema(input: FocusedPlannerInput) {
         output.implementationPlan,
         output.tool,
         new Set(input.recordingIndex.requestSeqs),
-        new Set(input.recordingIndex.eventSeqs),
       );
     } catch (error) {
       issue(ctx, ['implementationPlan'], error instanceof Error ? error.message : String(error));
@@ -358,7 +350,6 @@ function validateSnapshot(
   )
     issue(ctx, path, 'current execution snapshot is stale');
   const planned = new Map(plan.tools.map((tool) => [tool.id, tool]));
-  const idByName = new Map(plan.tools.map((tool) => [tool.candidate.toolName, tool.id]));
   const proofs = new Map(snapshot.payload.tools.map((proof) => [proof.toolId, proof]));
   const requestSeqs = new Set(index.requestSeqs);
   snapshot.payload.tools.forEach((proof, proofIndex) => {
@@ -380,12 +371,6 @@ function validateSnapshot(
       !same(binding.implementationPlan, tool.implementationPlan)
     )
       issue(ctx, base, 'execution proof does not match exact tool compile inputs');
-    const expectedDependencies = new Set(
-      tool.candidate.dependsOnTools.flatMap((name) => idByName.get(name) ?? []),
-    );
-    const actualDependencies = new Set(binding.dependencies.map(({ toolId }) => toolId));
-    if (!same([...expectedDependencies].sort(), [...actualDependencies].sort()))
-      issue(ctx, [...base, 'executionBinding', 'dependencies'], 'wrong dependency tools');
     proof.receipts.forEach((receipt, receiptIndex) => {
       validateFactSeqs(
         receipt.facts,
@@ -398,16 +383,25 @@ function validateSnapshot(
       const producer = edge ? proofs.get(edge.producerToolId) : undefined;
       if (!edge || edge.consumerToolId !== tool.id || !producer)
         return issue(ctx, [...base, 'receipts', receiptIndex], 'unknown current chain edge');
+      if (receipt.chainEdgeSha256 !== digest(edge))
+        issue(ctx, [...base, 'receipts', receiptIndex], 'chain receipt has stale edge content');
+      const producerLive = producer.receipts.find(
+        ({ check, status }) => check === 'live' && status === 'passed',
+      );
+      if (!producerLive)
+        return issue(
+          ctx,
+          [...base, 'receipts', receiptIndex],
+          'chain receipt has no current passed producer live result',
+        );
       const expected = {
         toolId: producer.toolId,
         buildRef: producer.currentBuildRef,
         executionBindingSha256: producer.executionBindingSha256,
+        resultReceiptRef: producerLive.ref,
       };
-      if (
-        !same(receipt.dependencyBuilds, [expected]) ||
-        !binding.dependencies.some((dependency) => same(dependency, expected))
-      )
-        issue(ctx, [...base, 'receipts', receiptIndex], 'chain receipt has stale producer build');
+      if (!same(receipt.dependencyBuilds, [expected]))
+        issue(ctx, [...base, 'receipts', receiptIndex], 'chain receipt has stale producer result');
     });
   });
 }
@@ -441,27 +435,28 @@ export function mechanicalProofFailures(
       if (!proof.receipts.some((receipt) => receipt.check === check && receipt.status === status))
         failures.push(`${tool.id}: ${check} must be ${status}`);
     }
-    const replay = proof.receipts.find(({ check }) => check === 'replay');
-    if (tool.strategy.kind === 'api') {
-      if (
-        !replay ||
-        !implementationBoundApiReplayProofSatisfied(
-          replay.facts,
-          tool.implementationPlan?.replayParameterValueOrigin,
-        )
-      )
-        failures.push(
-          `${tool.id}: replay must pass unless its implementation plan explicitly marks the parameter baseline unavailable`,
-        );
-    } else if (replay?.status !== 'not_applicable') {
-      failures.push(`${tool.id}: replay must be not_applicable`);
-    }
     for (const edge of plan.chainEdges.filter(({ consumerToolId }) => consumerToolId === tool.id)) {
+      const producer = proofs.get(edge.producerToolId);
+      const producerLive = producer?.receipts.find(
+        ({ check, status }) => check === 'live' && status === 'passed',
+      );
+      const expectedDependency =
+        producer && producerLive
+          ? {
+              toolId: producer.toolId,
+              buildRef: producer.currentBuildRef,
+              executionBindingSha256: producer.executionBindingSha256,
+              resultReceiptRef: producerLive.ref,
+            }
+          : undefined;
       if (
+        !expectedDependency ||
         !proof.receipts.some(
           (receipt) =>
             receipt.check === 'chain' &&
             receipt.chainEdgeId === edge.id &&
+            receipt.chainEdgeSha256 === digest(edge) &&
+            same(receipt.dependencyBuilds, [expectedDependency]) &&
             receipt.status === 'passed',
         )
       )
@@ -492,15 +487,17 @@ function completionBinding(input: CompletionReviewInput) {
 }
 function baselineMvpBinding(input: BaselineMvpReviewInput) {
   const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === input.toolId);
-  const liveReceipt = proof?.receipts.find(({ check }) => check === 'live');
-  if (!proof || !liveReceipt) return undefined;
+  const resultReceipt = proof?.receipts.find(
+    ({ ref }) => refKey(ref) === refKey(input.resultEvidence.payload.resultReceiptRef),
+  );
+  if (!proof || !resultReceipt) return undefined;
   return {
     ...input.run,
     toolId: input.toolId,
     compileInputsSha256: proof.executionBinding.compileInputsSha256,
     currentBuildRef: proof.currentBuildRef,
     executionBindingSha256: proof.executionBindingSha256,
-    liveReceiptRef: liveReceipt.ref,
+    resultReceiptRef: resultReceipt.ref,
     resultEvidenceRef: input.resultEvidence.ref,
   };
 }
@@ -548,12 +545,11 @@ const BaselineMvpInputSchema = BaselineMvpReviewInputSchema.superRefine((input, 
     issue(ctx, ['snapshot'], 'missing current execution proof');
     return;
   }
-  for (const failure of mechanicalProofFailures(
-    input.currentPlan.payload,
-    input.snapshot,
-    input.toolId,
-  ))
-    issue(ctx, ['snapshot'], failure);
+  for (const check of ['contract', 'live'] as const) {
+    if (!proof.receipts.some((receipt) => receipt.check === check && receipt.status === 'passed')) {
+      issue(ctx, ['snapshot'], `${tool.id}: ${check} must be passed`);
+    }
+  }
   const result = input.resultEvidence.payload;
   if (result.toolId !== tool.id)
     issue(ctx, ['resultEvidence', 'payload', 'toolId'], 'result evidence belongs to another tool');
@@ -565,15 +561,28 @@ const BaselineMvpInputSchema = BaselineMvpReviewInputSchema.superRefine((input, 
       ['resultEvidence', 'payload', 'implementationPlanRef'],
       'result evidence belongs to another implementation plan',
     );
-  const liveReceipt = proof.receipts.find(({ check }) => check === 'live');
-  if (!liveReceipt || liveReceipt.status !== 'passed')
-    issue(ctx, ['snapshot'], 'baseline MVP review requires a passed current live receipt');
-  else if (!same(result.liveReceiptRef, liveReceipt.ref))
+  const resultReceipt = proof.receipts.find(
+    ({ ref }) => refKey(ref) === refKey(result.resultReceiptRef),
+  );
+  if (
+    !resultReceipt ||
+    !['live', 'chain'].includes(resultReceipt.check) ||
+    resultReceipt.status !== 'passed'
+  )
+    issue(ctx, ['snapshot'], 'baseline MVP review requires a passed current result receipt');
+  else if (!same(result.resultReceiptRef, resultReceipt.ref))
     issue(
       ctx,
-      ['resultEvidence', 'payload', 'liveReceiptRef'],
-      'result evidence cites another live receipt',
+      ['resultEvidence', 'payload', 'resultReceiptRef'],
+      'result evidence cites another result receipt',
     );
+  if (
+    resultReceipt &&
+    ((resultReceipt.check === 'chain' && result.chainEdgeId !== resultReceipt.chainEdgeId) ||
+      (resultReceipt.check === 'live' && result.chainEdgeId !== undefined))
+  ) {
+    issue(ctx, ['resultEvidence', 'payload', 'chainEdgeId'], 'result edge context is stale');
+  }
   if (!result.actualResult.observed)
     issue(
       ctx,
@@ -585,11 +594,13 @@ function baselineMvpOutputSchema(input: BaselineMvpReviewInput) {
   return BaselineMvpReviewOutputSchema.superRefine((output, ctx) => {
     if (!same(output.binding, baselineMvpBinding(input)))
       issue(ctx, ['binding'], 'stale baseline-MVP binding');
-    const liveReceipt = input.snapshot.payload.tools
+    const resultReceipt = input.snapshot.payload.tools
       .find(({ toolId }) => toolId === input.toolId)
-      ?.receipts.find(({ check }) => check === 'live');
+      ?.receipts.find(
+        ({ ref }) => refKey(ref) === refKey(input.resultEvidence.payload.resultReceiptRef),
+      );
     const authorized = new Set(
-      [input.resultEvidence.ref, ...(liveReceipt ? [liveReceipt.ref] : [])].map(refKey),
+      [input.resultEvidence.ref, ...(resultReceipt ? [resultReceipt.ref] : [])].map(refKey),
     );
     const cited = new Set(output.evidenceRefs.map(refKey));
     if (!cited.has(refKey(input.resultEvidence.ref)))
@@ -666,7 +677,10 @@ function baselineMvpReviewerPromptInput(input: BaselineMvpReviewInput) {
       expectedResult: input.resultEvidence.payload.expectedResult,
       actualResult: input.resultEvidence.payload.actualResult,
       resultEvidenceRef: input.resultEvidence.ref,
-      liveReceiptRef: input.resultEvidence.payload.liveReceiptRef,
+      resultReceiptRef: input.resultEvidence.payload.resultReceiptRef,
+      ...(input.resultEvidence.payload.chainEdgeId
+        ? { chainEdgeId: input.resultEvidence.payload.chainEdgeId }
+        : {}),
     },
   });
 }
@@ -799,10 +813,10 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
   input.plannerProposals.forEach((proposal, index) => {
     const { binding, tool, chainEdges, implementationPlan } = proposal.payload;
     const toolPath: Array<string | number> = ['plannerProposals', index, 'payload', 'tool'];
-    // The compiler contract includes every incident edge. Incoming edges name
-    // consumer parameters; outgoing edges name result paths this producer must
-    // preserve. The focused reply proposes only its incoming edges, so the
-    // host assembles the full current edge set before binding the proposal.
+    // The focused reply proposes only its incoming edges, so the host assembles
+    // the full current edge set before validating the proposal. Edge-only
+    // wiring changes retain compiled artifacts and are proved by fresh chain
+    // receipts; the tool's own request and parameter contract remains hashed.
     const compileInputsSha256 = teachingToolCompileInputsSha256(tool, effectiveProposalEdges);
     if (proposalIds.has(tool.id))
       issue(ctx, ['plannerProposals', index], 'duplicate proposal tool');
@@ -880,7 +894,6 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
         implementationPlan.payload,
         tool,
         new Set(input.discovery.recordingIndex.requestSeqs),
-        new Set(input.discovery.recordingIndex.eventSeqs),
       );
     } catch (error) {
       issue(
@@ -1020,7 +1033,10 @@ const CompletionInputSchema = CompletionReviewInputSchema.superRefine((input, ct
   if (input.terminalIntent === 'completed' && !input.toolResultEvidence)
     issue(ctx, ['toolResultEvidence'], 'completed intent requires semantic live result evidence');
   if (input.toolResultEvidence) {
-    const seenResultTools = new Set<string>();
+    const resultKey = (toolId: string, chainEdgeId?: string) =>
+      `${toolId}\u0000${chainEdgeId ?? 'standalone'}`;
+    const seenResults = new Set<string>();
+    const standaloneTools = new Set<string>();
     input.toolResultEvidence.forEach((result, index) => {
       const payload = result.payload;
       const tool = planTools.get(payload.toolId);
@@ -1028,9 +1044,23 @@ const CompletionInputSchema = CompletionReviewInputSchema.superRefine((input, ct
         issue(ctx, ['toolResultEvidence', index, 'payload', 'toolId'], 'unknown current tool');
         return;
       }
-      if (seenResultTools.has(payload.toolId))
+      const key = resultKey(payload.toolId, payload.chainEdgeId);
+      if (seenResults.has(key))
         issue(ctx, ['toolResultEvidence', index, 'payload', 'toolId'], 'duplicate tool result');
-      seenResultTools.add(payload.toolId);
+      seenResults.add(key);
+      if (payload.chainEdgeId) {
+        const edge = input.currentPlan.payload.chainEdges.find(
+          ({ id }) => id === payload.chainEdgeId,
+        );
+        if (!edge || edge.consumerToolId !== payload.toolId)
+          issue(
+            ctx,
+            ['toolResultEvidence', index, 'payload', 'chainEdgeId'],
+            'result evidence belongs to another or unknown chain edge',
+          );
+      } else {
+        standaloneTools.add(payload.toolId);
+      }
       if (payload.toolName !== tool.candidate.toolName)
         issue(ctx, ['toolResultEvidence', index, 'payload', 'toolName'], 'tool name mismatch');
       if (!tool.implementationPlan || !same(payload.implementationPlanRef, tool.implementationPlan))
@@ -1040,21 +1070,28 @@ const CompletionInputSchema = CompletionReviewInputSchema.superRefine((input, ct
           'result evidence belongs to another implementation plan',
         );
       const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === payload.toolId);
+      const resultReceipt = proof?.receipts.find(
+        (receipt) => refKey(receipt.ref) === refKey(payload.resultReceiptRef),
+      );
       if (
-        !proof?.receipts.some(
-          (receipt) =>
-            receipt.check === 'live' && refKey(receipt.ref) === refKey(payload.liveReceiptRef),
-        )
+        !resultReceipt ||
+        resultReceipt.status !== 'passed' ||
+        (payload.chainEdgeId
+          ? resultReceipt.check !== 'chain' || resultReceipt.chainEdgeId !== payload.chainEdgeId
+          : resultReceipt.check !== 'live')
       )
         issue(
           ctx,
-          ['toolResultEvidence', index, 'payload', 'liveReceiptRef'],
-          'result evidence does not cite the current live receipt',
+          ['toolResultEvidence', index, 'payload', 'resultReceiptRef'],
+          'result evidence does not cite a current passed result receipt',
         );
     });
     for (const toolId of tools)
-      if (!seenResultTools.has(toolId))
-        issue(ctx, ['toolResultEvidence'], `missing result evidence for "${toolId}"`);
+      if (!standaloneTools.has(toolId))
+        issue(ctx, ['toolResultEvidence'], `missing standalone result evidence for "${toolId}"`);
+    for (const edge of input.currentPlan.payload.chainEdges)
+      if (!seenResults.has(resultKey(edge.consumerToolId, edge.id)))
+        issue(ctx, ['toolResultEvidence'], `missing result evidence for chain "${edge.id}"`);
   }
   const claims = new Set<string>();
   input.claims.forEach((claim, index) => {
@@ -1073,8 +1110,13 @@ const CompletionInputSchema = CompletionReviewInputSchema.superRefine((input, ct
 function completionOutputSchema(input: CompletionReviewInput) {
   const claims = new Map(input.claims.map((claim) => [claim.id, claim]));
   const tools = new Set(input.currentPlan.payload.tools.map(({ id }) => id));
+  const resultKey = (toolId: string, chainEdgeId?: string) =>
+    `${toolId}\u0000${chainEdgeId ?? 'standalone'}`;
   const resultEvidence = new Map(
-    (input.toolResultEvidence ?? []).map((result) => [result.payload.toolId, result]),
+    (input.toolResultEvidence ?? []).map((result) => [
+      resultKey(result.payload.toolId, result.payload.chainEdgeId),
+      result,
+    ]),
   );
   return CompletionReviewOutputSchema.superRefine((output, ctx) => {
     if (!same(output.binding, completionBinding(input)))
@@ -1106,14 +1148,15 @@ function completionOutputSchema(input: CompletionReviewInput) {
     });
     const seenResultReviews = new Set<string>();
     output.toolResultReviews.forEach((review, index) => {
-      const evidence = resultEvidence.get(review.toolId);
+      const key = resultKey(review.toolId, review.chainEdgeId);
+      const evidence = resultEvidence.get(key);
       if (!tools.has(review.toolId))
         issue(ctx, ['toolResultReviews', index, 'toolId'], 'unknown tool');
       if (!evidence)
         issue(ctx, ['toolResultReviews', index, 'toolId'], 'no result evidence for tool');
-      if (seenResultReviews.has(review.toolId))
+      if (seenResultReviews.has(key))
         issue(ctx, ['toolResultReviews', index, 'toolId'], 'duplicate tool result review');
-      seenResultReviews.add(review.toolId);
+      seenResultReviews.add(key);
       if (evidence && !review.evidenceRefs.some((ref) => refKey(ref) === refKey(evidence.ref)))
         issue(
           ctx,
@@ -1139,9 +1182,15 @@ function completionOutputSchema(input: CompletionReviewInput) {
       }
     });
     if (input.toolResultEvidence) {
-      for (const toolId of tools)
-        if (!seenResultReviews.has(toolId))
-          issue(ctx, ['toolResultReviews'], `missing result review for "${toolId}"`);
+      for (const [key, evidence] of resultEvidence)
+        if (!seenResultReviews.has(key))
+          issue(
+            ctx,
+            ['toolResultReviews'],
+            `missing result review for "${evidence.payload.toolId}"${
+              evidence.payload.chainEdgeId ? ` chain "${evidence.payload.chainEdgeId}"` : ''
+            }`,
+          );
     } else if (output.toolResultReviews.length > 0) {
       issue(ctx, ['toolResultReviews'], 'result reviews require supplied result evidence');
     }

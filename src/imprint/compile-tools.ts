@@ -56,6 +56,7 @@ import {
 import { isIrreversibleRequest, workflowHasIrreversibleEffect } from './effects.ts';
 import { findEarlierResponseEqualities, groundEvent } from './param-grounding.ts';
 import { parsePlaybook } from './playbook-parser.ts';
+import { compareRecordedRequest } from './recording-request.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
@@ -398,7 +399,7 @@ function buildExistingArtifactRevisionContext(toolDir: string): Record<string, u
   return {
     mode: 'revise_existing_artifact',
     instruction: [
-      'This bounded resume is a revision, not a from-scratch compile.',
+      'This fresh-context revision starts from an existing artifact instead of starting over.',
       'Read each regular-file path listed in existingArtifacts.entries, durableDiagnostics.entries, and feedbackNotes.entries before re-reading focused recording bodies.',
       'Preserve behavior that live evidence proves works. Repair or narrow only the behavior contradicted by evidence.',
       'When evidence contradicts the existing design, inspect the exact request, response, state, and artifact before choosing a revision; do not guess from a category label.',
@@ -1109,7 +1110,7 @@ function buildCompareRenderedRequestsTool(
   return {
     name: 'compare_rendered_requests',
     description:
-      'Render the current workflow offline with its real substitutions and request transform, feed its accepted recorded responses through request chains, and compare each prepared request with its recordingRequestSeq. Returns factual URL/body sizes and bounded structural differences without making a semantic judgment. Run this after every request-construction edit, especially for forms, nested JSON, framed bodies, and positional arrays.',
+      'On-demand request-construction diagnostic. Render the current workflow offline with its real substitutions and request transform, feed its accepted recorded responses through request chains, and compare each prepared request with its recordingRequestSeq. Returns factual header, URL, and body comparisons with bounded structural differences, without making a semantic judgment or gating publication. Use when a live failure, empty or implausible result, or uncertain construction makes recorded comparison useful; exact bytes can legitimately differ as recordings age or dynamic values change.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1174,6 +1175,10 @@ function buildCompareRenderedRequestsTool(
           `synthetic-credential-${index + 1}`,
         ]),
       );
+      const renderedCredentialValues = {
+        ...defaultCredentialValues,
+        ...(credentialValues as Record<string, string>),
+      };
       const artifactRequestIndex =
         typeof args.artifactRequestIndex === 'number' && Number.isInteger(args.artifactRequestIndex)
           ? args.artifactRequestIndex
@@ -1240,10 +1245,7 @@ function buildCompareRenderedRequestsTool(
           credentials: {
             site: workflow.site,
             cookies: [],
-            values: {
-              ...defaultCredentialValues,
-              ...(credentialValues as Record<string, string>),
-            },
+            values: renderedCredentialValues,
             storage: [],
           },
           requestProvenance,
@@ -1341,6 +1343,28 @@ function buildCompareRenderedRequestsTool(
 
         const recordedUrl = requestUrlShape(recorded.url);
         const renderedUrl = requestUrlShape(prepared.url);
+        // Compare the actual prepared headers, including transform additions,
+        // while restoring harmless rendered credential values to placeholders.
+        // This preserves credential/redaction wildcard matching without hiding
+        // static headers that exact replay would reject.
+        const comparisonHeaders = Object.fromEntries(
+          Object.entries(prepared.headers).map(([name, value]) => {
+            let masked = value;
+            for (const [credentialName, credentialValue] of Object.entries(
+              renderedCredentialValues,
+            )) {
+              if (credentialValue.length > 0) {
+                masked = masked.split(credentialValue).join(`\${credential.${credentialName}}`);
+              }
+            }
+            return [name, masked];
+          }),
+        );
+        const headerComparison = compareRecordedRequest(
+          recorded,
+          { ...prepared, headers: comparisonHeaders, body: prepared.body ?? undefined },
+          { requestIndex: lookup.artifactRequestIndex },
+        ).comparisons.headers;
         return [
           {
             requestOrdinal: lookup.requestOrdinal,
@@ -1351,6 +1375,20 @@ function buildCompareRenderedRequestsTool(
               recorded: recorded.method.toUpperCase(),
               rendered: prepared.method.toUpperCase(),
               equal: recorded.method.toUpperCase() === prepared.method.toUpperCase(),
+            },
+            headers: {
+              state: headerComparison.status,
+              ...(headerComparison.field ? { field: headerComparison.field } : {}),
+              ...(headerComparison.reason ? { reason: headerComparison.reason } : {}),
+              ...(headerComparison.recordedBytes === undefined
+                ? {}
+                : { recordedBytes: headerComparison.recordedBytes }),
+              ...(headerComparison.workflowBytes === undefined
+                ? {}
+                : { renderedBytes: headerComparison.workflowBytes }),
+              ...(headerComparison.firstMismatchByte === undefined
+                ? {}
+                : { firstMismatchByte: headerComparison.firstMismatchByte }),
             },
             url: {
               recorded: recordedUrl,

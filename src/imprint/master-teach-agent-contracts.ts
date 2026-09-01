@@ -14,7 +14,6 @@ import {
   TeachingToolCandidateSchema,
   TeachingToolStrategySchema,
   teachingPlanContentSha256 as digest,
-  implementationPlanReplayParameterValueOrigin,
   implementationPlanRequestProvenanceSha256,
 } from './master-teach-plan.ts';
 import {
@@ -97,15 +96,6 @@ const HostedImplementationPlanSchema = strictObject({
     implementation.ref.requestProvenanceSha256
   )
     schemaIssue(ctx, ['ref', 'requestProvenanceSha256'], 'request provenance hash mismatch');
-  if (
-    implementationPlanReplayParameterValueOrigin(implementation.payload) !==
-    implementation.ref.replayParameterValueOrigin
-  )
-    schemaIssue(
-      ctx,
-      ['ref', 'replayParameterValueOrigin'],
-      'replay parameter origin does not match implementation plan payload',
-    );
 });
 const FocusedPlannerProposalPayloadSchema = strictObject({
   binding: PlannerProposalBindingSchema,
@@ -292,7 +282,8 @@ const CompletionToolResultEvidencePayloadSchema = strictObject({
   implementationPlanRef: ImplementationPlanRefSchema,
   verificationCaseId: PromptIdSchema,
   expectedResult: utf8Text(1, 2_000),
-  liveReceiptRef: ContentAddressedRefSchema,
+  resultReceiptRef: ContentAddressedRefSchema,
+  chainEdgeId: PromptIdSchema.optional(),
   actualResult: CompletionActualResultSchema,
 });
 export const CompletionToolResultEvidenceSchema = contentProjection(
@@ -318,7 +309,7 @@ const BaselineMvpReviewBindingSchema = CurrentPlanBindingSchema.extend({
   compileInputsSha256: PromptShaSchema,
   currentBuildRef: ContentAddressedRefSchema,
   executionBindingSha256: PromptShaSchema,
-  liveReceiptRef: ContentAddressedRefSchema,
+  resultReceiptRef: ContentAddressedRefSchema,
   resultEvidenceRef: ContentAddressedRefSchema,
 }).strict();
 export const BaselineMvpReviewerPromptInputSchema = strictObject({
@@ -333,7 +324,8 @@ export const BaselineMvpReviewerPromptInputSchema = strictObject({
     expectedResult: utf8Text(1, 2_000),
     actualResult: CompletionActualResultSchema,
     resultEvidenceRef: ContentAddressedRefSchema,
-    liveReceiptRef: ContentAddressedRefSchema,
+    resultReceiptRef: ContentAddressedRefSchema,
+    chainEdgeId: PromptIdSchema.optional(),
   }),
 });
 export const BaselineMvpReviewOutputSchema = strictObject({
@@ -366,6 +358,7 @@ const FindingSchema = strictObject({
 });
 const CompletionToolResultReviewSchema = strictObject({
   toolId: PromptToolIdSchema,
+  chainEdgeId: PromptIdSchema.optional(),
   status: z.enum(['credible', 'revision_required']),
   reason: Short,
   evidenceRefs: z.array(ContentAddressedRefSchema).min(1).max(32),

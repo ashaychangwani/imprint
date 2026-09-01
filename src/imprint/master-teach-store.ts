@@ -168,14 +168,13 @@ const CompletionReviewRecordSchema = strict({
 type ExecutionReceipt = z.infer<typeof ExecutionReceiptSchema>;
 type ReceiptHistoryProjection = z.infer<typeof ReceiptHistoryProjectionSchema>;
 type ReceiptBody = Omit<ExecutionReceipt, 'ref'>;
-type ToolExecutionBinding = z.infer<typeof ToolExecutionBindingSchema>;
 export type FreshTeachBootstrapObject =
   | { ref: ContentAddressedRef; kind: 'json'; value: unknown }
   | { ref: ContentAddressedRef; kind: 'bytes'; value: string | Uint8Array };
 const JournalErrorMessages = {
   bootstrap_ref_mismatch: 'bootstrap object ref mismatch',
   chain_edge_mismatch: 'chain receipt does not match a current edge',
-  chain_producer_missing: 'chain producer build is absent',
+  chain_producer_missing: 'chain producer has no current build with a passed live result',
   completion_input_stale: 'completion review input is not current',
   completion_intent_mismatch: 'completion review intent does not match terminal status',
   completion_proof_incomplete: 'completion proof is incomplete',
@@ -185,37 +184,50 @@ const JournalErrorMessages = {
   content_hash_mismatch: 'content object hash mismatch',
   content_invalid_json: 'content object is not valid JSON',
   content_path_mismatch: 'content reference path does not match its hash',
-  dependency_missing: 'a required dependency has no current build',
-  dependency_stale: 'current build has a stale dependency',
   module_missing: 'referenced module is absent from its manifest',
   module_path_invalid: 'module path must be a valid local or shared module path',
   parameter_type_missing: 'an accepted public parameter needs a concrete type',
-  prior_build_foreign: 'prior build belongs to another run',
-  prior_build_inputs_changed: 'prior build does not have unchanged compile inputs',
   receipt_facts_missing: 'receipt requires factual evidence',
   receipt_invalid: 'receipt facts do not match the current build and check',
   root_exists: 'fresh run root already exists',
   run_identity_mismatch: 'run identity does not match recording validation',
   state_unreadable: 'current state is unreadable',
   terminal_run: 'fresh teach run is terminal',
-  tool_missing: 'unknown tool',
   tool_plan_missing: 'tool has no accepted implementation plan',
-  tool_rebind_current: 'rebind requires an invalidated current build',
   workflow_parameters_mismatch: 'workflow parameters do not match accepted public parameters',
   workflow_provenance_mismatch: 'workflow request provenance does not match the accepted plan',
+  workflow_schema_invalid: 'workflow schema is invalid',
   workflow_site_mismatch: 'workflow site mismatch',
   workflow_tool_mismatch: 'workflow tool name does not match accepted tool',
 } as const;
 type JournalErrorCode = keyof typeof JournalErrorMessages;
 class FreshTeachJournalError extends Error {
   readonly code: JournalErrorCode;
-  constructor(code: JournalErrorCode) {
-    super(JournalErrorMessages[code]);
+  constructor(code: JournalErrorCode, detail?: string) {
+    super(detail ? `${JournalErrorMessages[code]}: ${detail}` : JournalErrorMessages[code]);
     this.name = 'FreshTeachJournalError';
     this.code = code;
   }
 }
-const journalFailure = (code: JournalErrorCode) => new FreshTeachJournalError(code);
+const journalFailure = (code: JournalErrorCode, detail?: string) =>
+  new FreshTeachJournalError(code, detail);
+const RepairableBuildErrorCodes = new Set<JournalErrorCode>([
+  'module_missing',
+  'module_path_invalid',
+  'parameter_type_missing',
+  'workflow_parameters_mismatch',
+  'workflow_provenance_mismatch',
+  'workflow_schema_invalid',
+  'workflow_site_mismatch',
+  'workflow_tool_mismatch',
+]);
+
+/** True only for deterministic generated-artifact defects that the compiler or
+ * master can repair. Journal state, content-store, and I/O failures stay host
+ * errors and must never be blamed on agent output. */
+export function isRepairableBuildArtifactError(error: unknown): boolean {
+  return error instanceof FreshTeachJournalError && RepairableBuildErrorCodes.has(error.code);
+}
 const bytesSha256 = (value: Uint8Array) =>
   `sha256:${createHash('sha256').update(value).digest('hex')}`;
 const asBytes = (value: string | Uint8Array) =>
@@ -411,6 +423,27 @@ export class FreshTeachJournal {
   ) {
     state.supersededReceiptRefs.push(...pointers.map(({ ref }) => ref));
   }
+  #invalidateChainsUsingResult(
+    state: FreshTeachJournalState,
+    producerToolId: string,
+    resultReceiptRef: ContentAddressedRef,
+  ): void {
+    for (const current of state.tools) {
+      if (current.toolId === producerToolId) continue;
+      const stale = current.currentReceiptRefs.filter((pointer) => {
+        if (!pointer.key.startsWith('chain:')) return false;
+        return this.readReceipt(pointer.ref).dependencyBuilds.some(
+          (dependency) =>
+            dependency.toolId === producerToolId &&
+            sameRef(dependency.resultReceiptRef, resultReceiptRef),
+        );
+      });
+      this.#archive(state, stale);
+      current.currentReceiptRefs = current.currentReceiptRefs.filter(
+        ({ ref }) => !stale.some((pointer) => sameRef(pointer.ref, ref)),
+      );
+    }
+  }
   #clearReview(state: FreshTeachJournalState): void {
     state.completionReviewRef = undefined;
   }
@@ -420,27 +453,40 @@ export class FreshTeachJournal {
   ): TeachingPlanRevisionResult {
     const state = this.readState();
     this.#assertActive(state);
-    const result = reviseEditableTeachingPlan(
-      this.#plan(state),
-      desiredPlan,
-      options,
-      this.#validation,
-    );
+    const priorPlan = this.#plan(state);
+    const result = reviseEditableTeachingPlan(priorPlan, desiredPlan, options, this.#validation);
     const nextPlanRef = this.#putJson(result.plan);
     const prior = new Map(state.tools.map((tool) => [tool.toolId, tool]));
     const recompile = new Set(result.recompileToolIds);
-    const reverify = new Set(result.reverifyToolIds);
+    const changedChainEdges = new Set(result.changedChainEdgeIds);
+    const invalidatedProducerIds = new Set([...result.recompileToolIds, ...result.removedToolIds]);
     for (const id of result.removedToolIds)
       this.#archive(state, prior.get(id)?.currentReceiptRefs ?? []);
     state.tools = result.plan.tools.map(({ id }) => {
       const old = prior.get(id) ?? { toolId: id, currentReceiptRefs: [] };
       const rebuild = recompile.has(id);
-      const recheck = rebuild || reverify.has(id);
-      if (recheck) this.#archive(state, old.currentReceiptRefs);
+      const obsoleteReceipts = rebuild
+        ? old.currentReceiptRefs
+        : old.currentReceiptRefs.filter((pointer) => {
+            if (pointer.key.startsWith('chain:')) {
+              const edgeId = pointer.key.slice('chain:'.length);
+              if (changedChainEdges.has(edgeId)) return true;
+              const receipt = this.readReceipt(pointer.ref);
+              return receipt.dependencyBuilds.some(({ toolId }) =>
+                invalidatedProducerIds.has(toolId),
+              );
+            }
+            return false;
+          });
+      this.#archive(state, obsoleteReceipts);
       return {
         toolId: id,
         ...(!rebuild && old.buildRef ? { buildRef: old.buildRef } : {}),
-        currentReceiptRefs: recheck ? [] : old.currentReceiptRefs,
+        currentReceiptRefs: rebuild
+          ? []
+          : old.currentReceiptRefs.filter(
+              ({ ref }) => !obsoleteReceipts.some((obsolete) => sameRef(obsolete.ref, ref)),
+            ),
       };
     });
     state.supersededPlanRefs.push(state.currentPlanRef);
@@ -464,22 +510,6 @@ export class FreshTeachJournal {
     state.sharedManifestRef = nextRef;
     this.#clearReview(state);
     return this.#commit(state);
-  }
-  #dependencies(state: FreshTeachJournalState, plan: EditableTeachingPlan, toolId: string) {
-    const tool = plan.tools.find(({ id }) => id === toolId);
-    if (!tool) throw journalFailure('tool_missing');
-    const idByName = new Map(plan.tools.map((item) => [item.candidate.toolName, item.id]));
-    return tool.candidate.dependsOnTools.map((name) => {
-      const id = idByName.get(name);
-      const dependency = state.tools.find(({ toolId: value }) => value === id);
-      if (!id || !dependency?.buildRef) throw journalFailure('dependency_missing');
-      const build = this.readBuild(dependency.buildRef);
-      return {
-        toolId: id,
-        buildRef: dependency.buildRef,
-        executionBindingSha256: build.executionBindingSha256,
-      };
-    });
   }
   #moduleEntry(
     moduleRef: string,
@@ -536,24 +566,6 @@ export class FreshTeachJournal {
       throw error;
     }
   }
-  #consumers(plan: EditableTeachingPlan, seedId: string): Set<string> {
-    const byName = new Map(plan.tools.map((tool) => [tool.candidate.toolName, tool.id]));
-    const consumers = new Map<string, string[]>();
-    for (const tool of plan.tools)
-      for (const name of tool.candidate.dependsOnTools) {
-        const producer = byName.get(name);
-        if (producer) consumers.set(producer, [...(consumers.get(producer) ?? []), tool.id]);
-      }
-    const affected = new Set([seedId]);
-    const queue = [seedId];
-    for (let index = 0; index < queue.length; index += 1)
-      for (const id of consumers.get(queue[index] ?? '') ?? [])
-        if (!affected.has(id)) {
-          affected.add(id);
-          queue.push(id);
-        }
-    return affected;
-  }
   issueBuild(input: {
     toolId: string;
     workflow: unknown;
@@ -570,9 +582,16 @@ export class FreshTeachJournal {
       this.readJson(tool.implementationPlan),
       tool,
       this.#validation.requestSeqs,
-      this.#validation.eventSeqs,
     );
-    const workflow = WorkflowSchema.parse(input.workflow);
+    const parsedWorkflow = WorkflowSchema.safeParse(input.workflow);
+    if (!parsedWorkflow.success) {
+      const detail = parsedWorkflow.error.issues
+        .slice(0, 12)
+        .map(({ path, message }) => `${path.join('.') || '<root>'}: ${message}`)
+        .join('; ');
+      throw journalFailure('workflow_schema_invalid', detail);
+    }
+    const workflow = parsedWorkflow.data;
     this.#assertWorkflowProvenance(workflow, implementation);
     if (workflow.toolName !== tool.candidate.toolName)
       throw journalFailure('workflow_tool_mismatch');
@@ -598,7 +617,6 @@ export class FreshTeachJournal {
       requestProvenance: implementation.requestProvenance,
       artifactManifestRef,
       sharedManifestRef: state.sharedManifestRef,
-      dependencies: this.#dependencies(state, plan, tool.id),
     });
     const record = StoredBuildRecordSchema.parse({
       toolId: tool.id,
@@ -611,97 +629,25 @@ export class FreshTeachJournal {
     });
     const ref = this.#putJson(record);
     if (toolState.buildRef && sameRef(toolState.buildRef, ref)) return { ref, record };
-    const affected = this.#consumers(plan, tool.id);
-    for (const current of state.tools) {
-      if (!affected.has(current.toolId)) continue;
-      this.#archive(state, current.currentReceiptRefs);
-      current.buildRef = undefined;
-      current.currentReceiptRefs = [];
-    }
-    toolState.buildRef = ref;
-    this.#clearReview(state);
-    this.#commit(state);
-    return { ref, record };
-  }
-  rebindBuild(input: {
-    toolId: string;
-    priorBuildRef: ContentAddressedRef;
-  }): { ref: ContentAddressedRef; record: StoredBuildRecord } {
-    const state = this.readState();
-    this.#assertActive(state);
-    const plan = this.#plan(state);
-    const tool = plan.tools.find(({ id }) => id === input.toolId);
-    const toolState = state.tools.find(({ toolId }) => toolId === input.toolId);
-    if (!tool || !toolState || !tool.implementationPlan || !tool.strategy)
-      throw journalFailure('tool_plan_missing');
-    if (toolState.buildRef && !sameRef(toolState.buildRef, input.priorBuildRef))
-      throw journalFailure('tool_rebind_current');
-    const prior = this.readBuild(input.priorBuildRef);
-    const compileInputsSha256 = teachingToolCompileInputsSha256(tool, plan.chainEdges);
-    if (
-      prior.toolId !== tool.id ||
-      prior.site !== state.run.site ||
-      prior.executionBinding.runId !== state.run.runId ||
-      prior.executionBinding.recordingSha256 !== state.run.recordingSha256
-    )
-      throw journalFailure('prior_build_foreign');
-    if (
-      prior.executionBinding.compileInputsSha256 !== compileInputsSha256 ||
-      !sameRef(prior.executionBinding.implementationPlan, tool.implementationPlan) ||
-      prior.executionBinding.strategyKind !== tool.strategy.kind
-    )
-      throw journalFailure('prior_build_inputs_changed');
-    const implementation = validateImplementationPlanForTool(
-      this.readJson(tool.implementationPlan),
-      tool,
-      this.#validation.requestSeqs,
-      this.#validation.eventSeqs,
-    );
-    const manifest = ArtifactManifestRecordSchema.parse(this.readJson(prior.artifactManifestRef));
-    const workflow = WorkflowSchema.parse(this.readJson(prior.workflowRef));
-    const publicParameters = tool.candidate.likelyParams.map(({ name, type }) => {
-      if (!type) throw journalFailure('parameter_type_missing');
-      return { name, type };
-    });
-    this.#assertWorkflow(
-      workflow,
-      { site: state.run.site, publicParameters },
-      manifest,
-      this.readSharedManifest(state.sharedManifestRef),
-    );
-    this.#assertWorkflowProvenance(workflow, implementation);
-    const executionBinding = ToolExecutionBindingSchema.parse({
-      runId: state.run.runId,
-      recordingSha256: state.run.recordingSha256,
-      toolId: tool.id,
-      compileInputsSha256,
-      implementationPlan: tool.implementationPlan,
-      strategyKind: tool.strategy.kind,
-      requestProvenance: implementation.requestProvenance,
-      artifactManifestRef: prior.artifactManifestRef,
-      sharedManifestRef: state.sharedManifestRef,
-      dependencies: this.#dependencies(state, plan, tool.id),
-    });
-    const record = StoredBuildRecordSchema.parse({
-      toolId: tool.id,
-      site: state.run.site,
-      publicParameters,
-      workflowRef: prior.workflowRef,
-      artifactManifestRef: prior.artifactManifestRef,
-      executionBinding,
-      executionBindingSha256: teachingPlanContentSha256(executionBinding),
-    });
-    const ref = this.#putJson(record);
-    const affected = this.#consumers(plan, tool.id);
-    for (const current of state.tools) {
-      if (current.toolId === tool.id || !affected.has(current.toolId)) continue;
-      this.#archive(state, current.currentReceiptRefs);
-      current.buildRef = undefined;
-      current.currentReceiptRefs = [];
-    }
+    const priorBuildRef = toolState.buildRef;
     this.#archive(state, toolState.currentReceiptRefs);
-    toolState.buildRef = ref;
     toolState.currentReceiptRefs = [];
+    if (priorBuildRef)
+      for (const current of state.tools) {
+        if (current.toolId === tool.id) continue;
+        const staleChainReceipts = current.currentReceiptRefs.filter((pointer) => {
+          if (!pointer.key.startsWith('chain:')) return false;
+          return this.readReceipt(pointer.ref).dependencyBuilds.some(
+            (dependency) =>
+              dependency.toolId === tool.id && sameRef(dependency.buildRef, priorBuildRef),
+          );
+        });
+        this.#archive(state, staleChainReceipts);
+        current.currentReceiptRefs = current.currentReceiptRefs.filter(
+          ({ ref: currentRef }) => !staleChainReceipts.some(({ ref }) => sameRef(ref, currentRef)),
+        );
+      }
+    toolState.buildRef = ref;
     this.#clearReview(state);
     this.#commit(state);
     return { ref, record };
@@ -712,13 +658,6 @@ export class FreshTeachJournal {
   readReceipt(ref: ContentAddressedRef): ExecutionReceipt {
     const body = this.readJson(ref) as ReceiptBody;
     return ExecutionReceiptSchema.parse({ ...body, ref });
-  }
-  #assertDependencies(state: FreshTeachJournalState, build: StoredBuildRecord): void {
-    for (const dependency of build.executionBinding.dependencies) {
-      const current = state.tools.find(({ toolId }) => toolId === dependency.toolId);
-      if (!current?.buildRef || !sameRef(current.buildRef, dependency.buildRef))
-        throw journalFailure('dependency_stale');
-    }
   }
   issueReceipt(input: {
     toolId: string;
@@ -733,40 +672,53 @@ export class FreshTeachJournal {
     const toolState = state.tools.find(({ toolId }) => toolId === input.toolId);
     if (!toolState?.buildRef) throw journalFailure('tool_plan_missing');
     const build = this.readBuild(toolState.buildRef);
-    this.#assertDependencies(state, build);
-    let chainDependency: ToolExecutionBinding['dependencies'][number] | undefined;
+    let chainDependency: ExecutionReceipt['dependencyBuilds'][number] | undefined;
+    let chainEdgeSha256: string | undefined;
     if (input.check === 'chain') {
       const edge = plan.chainEdges.find(({ id }) => id === input.chainEdgeId);
       if (!edge || edge.consumerToolId !== input.toolId)
         throw journalFailure('chain_edge_mismatch');
-      chainDependency = build.executionBinding.dependencies.find(
-        ({ toolId }) => toolId === edge.producerToolId,
+      chainEdgeSha256 = teachingPlanContentSha256(edge);
+      const producerState = state.tools.find(({ toolId }) => toolId === edge.producerToolId);
+      if (!producerState?.buildRef) throw journalFailure('chain_producer_missing');
+      const producerBuild = this.readBuild(producerState.buildRef);
+      const producerLivePointer = producerState.currentReceiptRefs.find(
+        ({ key }) => key === 'live',
       );
-      if (!chainDependency) throw journalFailure('chain_producer_missing');
+      const producerLive = producerLivePointer
+        ? this.readReceipt(producerLivePointer.ref)
+        : undefined;
+      if (
+        producerLive?.check !== 'live' ||
+        producerLive.status !== 'passed' ||
+        !sameRef(producerLive.buildRef, producerState.buildRef) ||
+        producerLive.executionBindingSha256 !== producerBuild.executionBindingSha256
+      ) {
+        throw journalFailure('chain_producer_missing');
+      }
+      chainDependency = {
+        toolId: edge.producerToolId,
+        buildRef: producerState.buildRef,
+        executionBindingSha256: producerBuild.executionBindingSha256,
+        resultReceiptRef: producerLive.ref,
+      };
     }
-    let facts: ReceiptFact[];
-    if (input.check === 'replay' && build.executionBinding.strategyKind === 'playbook_fallback') {
-      facts = [
-        { kind: 'invocation', subject: 'replay', status: 'not_applicable', invocationIndex: 0 },
-      ];
-    } else {
-      facts = [...(input.facts ?? [])];
-      if (input.hostError !== undefined)
-        facts.push({
-          kind: 'host_error',
-          subject: `host.${input.check}`,
-          status: 'failed',
-          hostError: hostErrorMessage(input.hostError).slice(0, 1_000),
-        });
-      if (!facts.length) throw journalFailure('receipt_facts_missing');
-    }
+    const facts: ReceiptFact[] = [...(input.facts ?? [])];
+    if (input.hostError !== undefined)
+      facts.push({
+        kind: 'host_error',
+        subject: `host.${input.check}`,
+        status: 'failed',
+        hostError: hostErrorMessage(input.hostError).slice(0, 1_000),
+      });
+    if (!facts.length) throw journalFailure('receipt_facts_missing');
     const body: ReceiptBody = {
       id: `receipt-${state.nextReceiptOrdinal}`,
       runId: state.run.runId,
       recordingSha256: state.run.recordingSha256,
       toolId: input.toolId,
       check: input.check,
-      ...(input.check === 'chain' ? { chainEdgeId: input.chainEdgeId } : {}),
+      ...(input.check === 'chain' ? { chainEdgeId: input.chainEdgeId, chainEdgeSha256 } : {}),
       status: receiptStatus(facts),
       buildRef: toolState.buildRef,
       executionBindingSha256: build.executionBindingSha256,
@@ -799,6 +751,8 @@ export class FreshTeachJournal {
     }
     this.#putJson(body);
     if (previous) this.#archive(state, [previous]);
+    if (input.check === 'live' && previous)
+      this.#invalidateChainsUsingResult(state, input.toolId, previous.ref);
     toolState.currentReceiptRefs = [...retained, { key, ref }];
     state.nextReceiptOrdinal += 1;
     this.#clearReview(state);
@@ -810,12 +764,6 @@ export class FreshTeachJournal {
     const tools = state.tools.flatMap((tool) => {
       if (!tool.buildRef || !tool.currentReceiptRefs.length) return [];
       const build = this.readBuild(tool.buildRef);
-      try {
-        this.#assertDependencies(state, build);
-      } catch (error) {
-        if (error instanceof FreshTeachJournalError && error.code === 'dependency_stale') return [];
-        throw error;
-      }
       return [
         ToolVerificationPayloadSchema.parse({
           toolId: tool.toolId,

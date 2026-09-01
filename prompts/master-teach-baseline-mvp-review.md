@@ -21,13 +21,14 @@ Judge only the supplied intended operation, expected result, and bounded actual
 result. Do not review code, request construction, authentication, strategy,
 tool boundaries, or public parameter breadth. Do not propose a repair.
 
-The host has already required current contract, live, and incoming-chain
-passes before calling you. API replay either passed or is cleanly not checked
-because the accepted plan explicitly marked its exact recorded parameter
-baseline unavailable; a replay mismatch or host/render failure remains
-blocking. Playbook replay is not applicable. Copy `validationContext.binding`
+The host has already required a current contract, a successful standalone live
+result, and the exact successful result receipt you are reviewing. When
+`chainEdgeId` is present, review that one producer-to-consumer invocation; do
+not treat it as the standalone invocation or as proof about another edge. A
+recorded-request comparison, when present, is
+diagnostic evidence rather than a runtime veto. Copy `validationContext.binding`
 exactly. Cite the supplied `baseline.resultEvidenceRef`; you may additionally
-cite the supplied live receipt ref. The host rejects stale bindings and
+cite the supplied live or chain result receipt ref. The host rejects stale bindings and
 unsupplied citations.
 
 Exact output schema (all objects reject extra fields):
@@ -37,7 +38,7 @@ Exact output schema (all objects reject extra fields):
   binding: {
     runId, site, recordingSha256, planRevision, planSha256, toolId,
     compileInputsSha256, currentBuildRef, executionBindingSha256,
-    liveReceiptRef, resultEvidenceRef
+    resultReceiptRef, resultEvidenceRef
   },
   status: "credible" | "revision_required",
   reason: string,
@@ -60,7 +61,7 @@ Exact output schema (all objects reject extra fields):
       "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     },
     "executionBindingSha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    "liveReceiptRef": {
+    "resultReceiptRef": {
       "path": "runs/run-fixture-1/receipts/catalog_search-live.json",
       "sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     },

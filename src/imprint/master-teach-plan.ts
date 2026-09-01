@@ -79,7 +79,6 @@ interface TeachingCandidateIssue {
 export function teachingCandidateIssues(
   candidates: readonly TeachingCandidateEvidence[],
   requestSeqs: ReadonlySet<number>,
-  eventSeqs: ReadonlySet<number>,
 ): TeachingCandidateIssue[] {
   const issues: TeachingCandidateIssue[] = [];
   const byName = new Map<string, TeachingCandidateEvidence>();
@@ -102,13 +101,6 @@ export function teachingCandidateIssues(
         issues.push({
           path: [candidateIndex, 'representativeSeqs', index],
           message: `representative seq ${seq} is absent from this candidate's requestSeqs`,
-        });
-    });
-    candidate.eventSeqs.forEach((seq, index) => {
-      if (!eventSeqs.has(seq))
-        issues.push({
-          path: [candidateIndex, 'eventSeqs', index],
-          message: `unknown recording seq ${seq}`,
         });
     });
     const params = candidate.likelyParams?.map(({ name }) => name) ?? [];
@@ -224,13 +216,13 @@ export const TeachingToolStrategySchema = z
   })
   .strict();
 
-export const ArtifactRequestProvenanceSchema = z
+const ArtifactRequestProvenanceSchema = z
   .object({
     artifactRequestIndex: z.number().int().nonnegative(),
     recordingRequestSeq: z.number().int().nonnegative(),
   })
   .strict();
-export type ArtifactRequestProvenance = z.infer<typeof ArtifactRequestProvenanceSchema>;
+type ArtifactRequestProvenance = z.infer<typeof ArtifactRequestProvenanceSchema>;
 
 export const ArtifactRequestProvenanceListSchema = z
   .array(ArtifactRequestProvenanceSchema)
@@ -262,12 +254,7 @@ const ImplementationVerificationCaseSchema = z
   .object({
     id: z.string().regex(/^[a-z][a-z0-9_-]{0,127}$/, 'invalid verification case id'),
     check: z.enum(['replay', 'live']),
-    /**
-     * Replay bytes are meaningful only with the inputs represented by the
-     * recording. Kept optional so existing stored plans remain readable, but a
-     * missing origin is not an explicit unavailable declaration and cannot
-     * waive replay proof.
-     */
+    /** Optional recording-comparison diagnostics need the origin of their inputs. */
     parameterValueOrigin: z.enum(['recorded_baseline', 'synthetic_live', 'unavailable']).optional(),
     parameterValues: z
       .array(
@@ -502,27 +489,15 @@ export const ImplementationPlanPayloadSchema = z
         message: 'implementation plans require at least one live verification case',
       });
     }
-    if (plan.strategyKind === 'api' && replayCaseCount !== 1) {
+    if (plan.strategyKind === 'api' && replayCaseCount > 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['verificationCases'],
-        message: 'API implementation plans require exactly one replay verification case',
+        message: 'API implementation plans may declare at most one replay diagnostic case',
       });
     }
   });
 export type ImplementationPlanPayload = z.infer<typeof ImplementationPlanPayloadSchema>;
-
-export type ReplayParameterValueOrigin = 'recorded_baseline' | 'unavailable';
-
-/** Value-free replay-baseline metadata carried beside the content-addressed plan. */
-export function implementationPlanReplayParameterValueOrigin(
-  value: ImplementationPlanPayload,
-): ReplayParameterValueOrigin | undefined {
-  const origin = value.verificationCases.find(
-    ({ check }) => check === 'replay',
-  )?.parameterValueOrigin;
-  return origin === 'recorded_baseline' || origin === 'unavailable' ? origin : undefined;
-}
 
 export function implementationPlanRequestProvenanceSha256(
   value: ImplementationPlanPayload | readonly ArtifactRequestProvenance[],
@@ -534,7 +509,6 @@ export function implementationPlanRequestProvenanceSha256(
 export const ImplementationPlanRefSchema = ContentAddressedRefSchema.extend({
   basedOnCompileInputsSha256: Sha256Schema,
   requestProvenanceSha256: Sha256Schema,
-  replayParameterValueOrigin: z.enum(['recorded_baseline', 'unavailable']).optional(),
 }).strict();
 type ImplementationPlanRef = z.infer<typeof ImplementationPlanRefSchema>;
 
@@ -650,7 +624,7 @@ export interface TeachingPlanRevisionResult {
   plan: EditableTeachingPlan;
   replanToolIds: string[];
   recompileToolIds: string[];
-  reverifyToolIds: string[];
+  changedChainEdgeIds: string[];
   addedToolIds: string[];
   removedToolIds: string[];
 }
@@ -693,16 +667,6 @@ function assertKnownSeqs(
       throw new TeachingPlanValidationError(`${label} references unknown recording seq ${seq}`);
     }
   }
-}
-
-function dependencyIds(plan: DesiredTeachingPlan): Map<string, string[]> {
-  const idByName = new Map(plan.tools.map((tool) => [tool.candidate.toolName, tool.id]));
-  return new Map(
-    plan.tools.map((tool) => [
-      tool.id,
-      tool.candidate.dependsOnTools.flatMap((name) => idByName.get(name) ?? []),
-    ]),
-  );
 }
 
 /**
@@ -916,11 +880,9 @@ export function validateDesiredTeachingPlan(
   }
   const ids = new Set<string>();
   const requests = validation.requestSeqs;
-  const events = validation.eventSeqs;
   const candidateIssue = teachingCandidateIssues(
     plan.tools.map(({ candidate }) => candidate),
     requests,
-    events,
   )[0];
   if (candidateIssue) throw new TeachingPlanValidationError(candidateIssue.message);
 
@@ -993,7 +955,7 @@ export function createEditableTeachingPlan(
 
 export function teachingToolCompileInputsSha256(
   tool: EditableTeachingTool,
-  chainEdges: readonly ChainEdge[] = [],
+  _chainEdges: readonly ChainEdge[] = [],
 ): string {
   const candidate = tool.candidate;
   return teachingPlanContentSha256({
@@ -1005,19 +967,11 @@ export function teachingToolCompileInputsSha256(
     evidenceSha256s: [...new Set(tool.evidenceRefs.map((ref) => ref.sha256))].sort(),
     requestSeqs: candidate.requestSeqs,
     representativeSeqs: candidate.representativeSeqs,
-    eventSeqs: candidate.eventSeqs,
     expectedOutput: candidate.expectedOutput,
     likelyParams: candidate.likelyParams,
     dependencySeqs: candidate.dependencySeqs,
-    dependsOnTools: candidate.dependsOnTools,
-    chainEdges: chainEdges
-      .flatMap((edge) => {
-        if (edge.consumerToolId === tool.id) return [edge];
-        if (edge.producerToolId !== tool.id) return [];
-        const { consumerParameter: _consumerParameter, ...producerObligation } = edge;
-        return [producerObligation];
-      })
-      .sort((left, right) => left.id.localeCompare(right.id)),
+    // Optional event citations, dependency scheduling, and chain wiring are
+    // verification context, not generated artifact identity.
   });
 }
 
@@ -1025,7 +979,6 @@ export function validateImplementationPlanForTool(
   value: unknown,
   tool: EditableTeachingTool,
   knownRecordingRequestSeqs: ReadonlySet<number>,
-  knownRecordingEventSeqs: ReadonlySet<number> = new Set(tool.candidate.eventSeqs),
 ): ImplementationPlanPayload {
   const plan = ImplementationPlanPayloadSchema.parse(value);
   if (plan.toolId !== tool.id) {
@@ -1033,15 +986,6 @@ export function validateImplementationPlanForTool(
   }
   if (!tool.strategy || plan.strategyKind !== tool.strategy.kind) {
     throw new TeachingPlanValidationError('implementation plan strategy does not match the tool');
-  }
-  if (
-    tool.implementationPlan &&
-    tool.implementationPlan.replayParameterValueOrigin !==
-      implementationPlanReplayParameterValueOrigin(plan)
-  ) {
-    throw new TeachingPlanValidationError(
-      'implementation plan replay parameter origin does not match its reference',
-    );
   }
   assertConcretePublicParameters(tool);
   for (const request of plan.requestProvenance) {
@@ -1099,13 +1043,6 @@ export function validateImplementationPlanForTool(
         );
       }
     }
-    for (const seq of verificationCase.provenance.recordingEventSeqs) {
-      if (!knownRecordingEventSeqs.has(seq)) {
-        throw new TeachingPlanValidationError(
-          `verification case "${verificationCase.id}" references unknown recording event seq ${seq}`,
-        );
-      }
-    }
     for (const ref of verificationCase.provenance.evidenceRefs) {
       if (!authorizedEvidence.has(canonicalTeachingPlanJson(ref))) {
         throw new TeachingPlanValidationError(
@@ -1160,46 +1097,11 @@ export function bindImplementationPlanRef(
   if (contentRef.sha256 !== teachingPlanContentSha256(payload)) {
     throw new TeachingPlanValidationError('implementation plan content ref hash mismatch');
   }
-  const replayParameterValueOrigin = implementationPlanReplayParameterValueOrigin(payload);
   return ImplementationPlanRefSchema.parse({
     ...contentRef,
     basedOnCompileInputsSha256,
     requestProvenanceSha256: implementationPlanRequestProvenanceSha256(payload),
-    ...(replayParameterValueOrigin ? { replayParameterValueOrigin } : {}),
   });
-}
-
-function consumerGraph(...plans: DesiredTeachingPlan[]): Map<string, Set<string>> {
-  const consumers = new Map<string, Set<string>>();
-  for (const plan of plans) {
-    const dependencies = dependencyIds(plan);
-    for (const [consumerId, producerIds] of dependencies) {
-      for (const producerId of producerIds) {
-        const values = consumers.get(producerId) ?? new Set<string>();
-        values.add(consumerId);
-        consumers.set(producerId, values);
-      }
-    }
-  }
-  return consumers;
-}
-
-function transitiveConsumers(
-  seedIds: Iterable<string>,
-  graph: Map<string, Set<string>>,
-): Set<string> {
-  const affected = new Set(seedIds);
-  const queue = [...affected];
-  for (let index = 0; index < queue.length; index += 1) {
-    const producerId = queue[index];
-    if (producerId === undefined) continue;
-    for (const consumerId of graph.get(producerId) ?? []) {
-      if (affected.has(consumerId)) continue;
-      affected.add(consumerId);
-      queue.push(consumerId);
-    }
-  }
-  return affected;
 }
 
 export function reviseEditableTeachingPlan(
@@ -1230,6 +1132,14 @@ export function reviseEditableTeachingPlan(
   const newById = new Map(desired.tools.map((tool) => [tool.id, tool]));
   const addedToolIds = [...newById.keys()].filter((id) => !oldById.has(id)).sort();
   const removedToolIds = [...oldById.keys()].filter((id) => !newById.has(id)).sort();
+  const oldEdges = new Map(current.chainEdges.map((edge) => [edge.id, edge]));
+  const newEdges = new Map(desired.chainEdges.map((edge) => [edge.id, edge]));
+  const changedChainEdgeIds = [...new Set([...oldEdges.keys(), ...newEdges.keys()])]
+    .filter(
+      (id) =>
+        canonicalTeachingPlanJson(oldEdges.get(id)) !== canonicalTeachingPlanJson(newEdges.get(id)),
+    )
+    .sort();
   const replanToolIds = desired.tools
     .filter((tool) => {
       const oldTool = oldById.get(tool.id);
@@ -1255,11 +1165,6 @@ export function reviseEditableTeachingPlan(
     .map((tool) => tool.id)
     .sort();
 
-  const affected = transitiveConsumers(
-    [...recompileToolIds, ...removedToolIds],
-    consumerGraph(current, desired),
-  );
-  const reverifyToolIds = [...affected].filter((id) => newById.has(id)).sort();
   const plan = EditableTeachingPlanSchema.parse({
     ...desired,
     version: MASTER_TEACH_PLAN_VERSION,
@@ -1271,7 +1176,7 @@ export function reviseEditableTeachingPlan(
     plan,
     replanToolIds,
     recompileToolIds,
-    reverifyToolIds,
+    changedChainEdgeIds,
     addedToolIds,
     removedToolIds,
   };

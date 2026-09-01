@@ -81,8 +81,8 @@ test('canonical TypeScript artifacts are syntactically valid named exports', () 
 });
 
 test('the pinned contract states applicability, edit invalidation, and playbook priority', () => {
-  expect(prompt).toContain('API workflow | contract → replay → live');
-  expect(prompt).toContain('Browser playbook fallback | contract → live; replay is `N/A`');
+  expect(prompt).toContain('API workflow | contract → live');
+  expect(prompt).toContain('Browser playbook fallback | contract → live');
   expect(prompt).toContain('Run the contract check again after every artifact edit.');
   expect(prompt).toContain('execution rungs have higher priority');
   expect(prompt).toContain('only when you are 100% certain');
@@ -90,11 +90,14 @@ test('the pinned contract states applicability, edit invalidation, and playbook 
   expect(prompt).toContain(
     'Start request construction from the complete recorded request template',
   );
-  expect(prompt).toContain('call `compare_rendered_requests`');
+  expect(prompt).toContain('`compare_rendered_requests` is an on-demand diagnostic');
+  expect(prompt).toContain('not a publication gate');
   expect(prompt).toContain('partial facts to distinguish the request that was actually sent');
-  expect(prompt).toContain('`expectedBytes` is the recorded request baseline');
-  expect(prompt).toContain('`actualBytes` is the');
-  expect(prompt).toContain('request rendered by the current artifact');
+  expect(prompt).toContain('semantically equivalent encodings can make exact bytes differ');
+  expect(prompt).toContain('Exact recorded bytes are an on-demand diagnostic');
+  expect(prompt).toContain('it does not require universal byte equality');
+  expect(prompt).toContain('`toolPlan.revision.masterGuidance`');
+  expect(prompt).toContain('exact prior failure facts available for this tool');
 });
 
 test('the playbook compiler remains site-neutral and follows the accepted auth and fallback plans', () => {

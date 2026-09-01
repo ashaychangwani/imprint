@@ -18,10 +18,9 @@ facts instead of trusting your prose.
 
 The host-current snapshot is content-addressed and includes the exact shared
 manifest, current producer builds, execution bindings, and receipts. The host
-calls this role only after contract, live, and incoming chain checks pass. API
-replay either passed or is cleanly not checked because the accepted plan marked
-its exact recorded parameter baseline unavailable; replay failures still
-block. Playbook replay is not applicable. Do not
+calls this role only after contract, live, and incoming chain checks pass. A
+recorded-request comparison, when present, is diagnostic evidence rather than
+a runtime veto. Do not
 replace those facts with an internally consistent story from another snapshot.
 The controller decides when to call you. Copy `validationContext.binding`
 exactly and return the complete replacement `likelyParams`, not edit actions.

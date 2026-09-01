@@ -343,7 +343,7 @@ describe('compile tools bounded context', () => {
           omitted: { atLeast: 0, exact: true },
         },
       });
-      expect(summary.revisionContext.instruction).toContain('not a from-scratch compile');
+      expect(summary.revisionContext.instruction).toContain('fresh-context revision');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -3234,6 +3234,7 @@ describe('compare_rendered_requests compile tool', () => {
             recordingRequestSeq: 42,
             transformDeclared: true,
             method: { equal: true },
+            headers: { state: 'matched' },
             url: { equal: true },
             body: { state: 'checked' },
           },
@@ -3267,6 +3268,27 @@ describe('compare_rendered_requests compile tool', () => {
       expect(afterEditFacts.comparisons[0].bodyBytes).toEqual({
         recorded: new TextEncoder().encode(recordedBody).length,
         rendered: new TextEncoder().encode(recordedBody).length,
+      });
+
+      writeFileSync(
+        pathJoin(dir, 'request-transform.ts'),
+        `import { renderedBody } from './transform-helper.ts';
+        export function transform(_method: string, url: string) {
+          if (url.includes('/second')) throw new Error('producer result was unusable');
+          return { headers: { accept: 'application/json' }, body: renderedBody };
+        }`,
+      );
+      const headerMismatch = await compare?.handler({
+        params: { query: 'fresh destination' },
+        artifactRequestIndex: 0,
+      });
+      expect(JSON.parse(headerMismatch?.result ?? '{}').comparisons[0].headers).toEqual({
+        state: 'mismatched',
+        field: 'headers.accept',
+        reason: 'workflow header is absent from the recorded request',
+        recordedBytes: 0,
+        renderedBytes: new TextEncoder().encode('application/json').length,
+        firstMismatchByte: 0,
       });
 
       writeFileSync(
@@ -3488,7 +3510,7 @@ describe('compare_rendered_requests compile tool', () => {
           timestamp: 1,
           method: 'GET',
           url: 'https://api.example.test/recorded?mode=one',
-          headers: {},
+          headers: { authorization: 'Bearer [REDACTED:v3:id=1:len=20]' },
           resourceType: 'Fetch',
           response: {
             status: 200,
@@ -3514,7 +3536,7 @@ describe('compare_rendered_requests compile tool', () => {
           {
             method: 'GET',
             url: 'https://api.example.test/${credential.api_key}?mode=one',
-            headers: {},
+            headers: { authorization: 'Bearer ${credential.api_key}' },
             recordingRequestSeq: 9,
           },
         ],
@@ -3541,6 +3563,7 @@ describe('compare_rendered_requests compile tool', () => {
       expect(JSON.parse(credentialResult)).toMatchObject({
         execution: { ok: true },
         preparedRequestCount: 1,
+        comparisons: [{ headers: { state: 'matched' } }],
       });
 
       const workflow = JSON.parse(readFileSync(pathJoin(dir, 'workflow.json'), 'utf8'));

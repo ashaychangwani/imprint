@@ -12,10 +12,8 @@ The history includes its immutable root, every superseded receipt, and
 newest-first ordinals. Current receipts are separate. Earlier
 failures may be superseded by a current receipt for the exact current tool
 execution. For `completed`, the host admits this review only after contract and
-live pass for every tool. API replay either passes or is cleanly not checked
-because the accepted plan explicitly marked its exact recorded parameter
-baseline unavailable; a replay mismatch or host/render failure remains
-blocking. Playbook replay is not applicable. Every current chain edge passes
+live pass for every tool. A recorded-request comparison, when present, is
+diagnostic evidence rather than a runtime veto. Every current chain edge passes
 against exact builds, and the plan contains at least one tool. Every original
 discovery row in `candidateCoverage` must either
 resolve to a current tool or carry an explicit exclusion reason. Each exclusion
@@ -34,11 +32,11 @@ which backend actually ran for that invocation; it is evidence only and never
 selects strategy or changes the required checks.
 
 `toolResultEvidence`, when present, is a separate bounded, already-redacted
-semantic view of each current live result. It does not alter, enrich, or replace
-the value-free receipts. For every supplied planned tool, compare the
+semantic view of each current standalone live result and each current chain-edge
+result. It does not alter, enrich, or replace the value-free receipts. For every supplied result, compare the
 implementation plan's `expectedResult` with the actual result `preview`,
-`shape`, and `count`. Produce exactly one `toolResultReviews` entry per planned
-tool. Mark it `credible` only when the supplied live result is believable
+`shape`, and `count`. Produce exactly one `toolResultReviews` entry per supplied
+result, copying `chainEdgeId` when it is present. Mark it `credible` only when the supplied result is believable
 evidence for the promised output. Mark it `revision_required` when the result
 is empty, has the wrong shape or meaning, or otherwise does not support the
 promise; then fail the review and add a blocking finding for that tool citing
@@ -55,7 +53,7 @@ Exact output schema (all objects reject extra fields):
   binding: {runId,site,recordingSha256,planRevision,planSha256},
   verdict: "passed" | "failed", summary: string,
   findings: Array<{severity:"blocking"|"warning",message,toolId?,evidenceRefs:ref[]}>,
-  toolResultReviews: Array<{toolId,status:"credible"|"revision_required",reason,evidenceRefs:ref[]}>,
+  toolResultReviews: Array<{toolId,chainEdgeId?,status:"credible"|"revision_required",reason,evidenceRefs:ref[]}>,
   claimDispositions: Array<{claimId,status:"supported"|"unsupported",reason,evidenceRefs:ref[]}>
 }
 ```

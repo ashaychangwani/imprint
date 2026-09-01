@@ -9,6 +9,11 @@ content-addressed refs; the host stores an accepted implementation plan.
 
 Copy `validationContext.binding` exactly.
 
+Candidate `eventSeqs` are optional supporting hints. Preserve only values in
+`recordingIndex.eventSeqs`, which comes from top-level `events[].seq`; never use
+a request or narration sequence number. Use `[]` whenever the citation is
+uncertain. Optional event metadata must not block an otherwise grounded plan.
+
 `masterGuidance` is the master's latest reasoning about the current plan.
 Address it directly. It is guidance, not evidence or an order: disagree when
 the focused evidence conflicts, and explain why. If the master rejected an
@@ -103,24 +108,17 @@ its exact response path. When the evidence does not establish which field is
 required, state that gap and ask the master for a revised evidence plan instead
 of choosing the friendliest-looking value.
 
-Author the invocation cases that should verify this exact plan. Each case
-chooses exactly one executable check (`replay` or `live`), states where its
-parameter values came from, states the expected result in plain language, and
-cites only the focused tool's exact evidence refs and known recording
-request/event sequences.
+Author the live invocation cases that should verify this exact plan. Each case
+states where its parameter values came from, states the expected result in
+plain language, and cites only the focused tool's exact evidence refs and known
+recording request/event sequences.
 
-For API replay, byte comparison is valid only with the exact public parameter
-values represented by the accepted recording requests. If every value can be
-recovered from the bounded recording evidence, use
-`parameterValueOrigin:"recorded_baseline"` and supply one scalar value of the
-declared type for every public parameter. If even one value is redacted or
-cannot be recovered exactly, use `parameterValueOrigin:"unavailable"` and an
-empty `parameterValues` array; the runtime will report replay as not checked.
-That factual deferral does not waive contract, live, or chain checks. A request
-mismatch or replay host/render error still fails. Never substitute a plausible
-or synthetic value into a recorded replay case.
-The replay request sequences must equal the plan's ordered
-`requestProvenance`.
+An API plan may optionally include one `replay` case when exact recorded public
+parameter values are available. It is diagnostic context for the compiler and
+master, not required proof and not an automatic runtime check. Never invent a
+plausible value for it. Exact request equality can expose a construction bug,
+but differences may also be legitimate because the recording is old or the API
+uses current dates, rotating state, authentication, nonces, or signatures.
 
 For live verification, use `parameterValueOrigin:"synthetic_live"` and supply
 one safe executable scalar value of the declared type for every parameter in
@@ -129,9 +127,8 @@ requests or events that support their inputs and expectation. Never reproduce
 a credential, cookie, token, or other secret. These cases are the
 compiler/verifier's declared core inputs—the runtime must not invent additional
 semantic cases or force deferred breadth into the MVP.
-Every plan needs at least one live case. An API plan also needs exactly one
-replay case; a playbook plan must not declare replay because replay is not
-applicable to it.
+Every plan needs at least one live case. A playbook plan must not declare
+replay because recording comparison is not applicable to it.
 
 Incoming chain edges may refer only to `availableProducers`, must target this
 tool's stable ID, and must name a proposed public consumer parameter. Keep the
@@ -248,20 +245,6 @@ Exact output schema (all objects reject extra fields):
 }],
 "outputGuidance": "Return a stable array of catalog entries and their identifiers.",
 "verificationCases": [{
-"id": "recorded_catalog_search",
-"check": "replay",
-"parameterValueOrigin": "recorded_baseline",
-"parameterValues": [{"parameterName":"query","value":"fixture query"}],
-"expectedResult": "Return catalog entries matching the supplied search text.",
-"provenance": {
-"recordingRequestSeqs": [12],
-"recordingEventSeqs": [4],
-"evidenceRefs": [{
-"path": "runs/run-fixture-1/evidence/recording.json",
-"sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-}]
-}
-}, {
 "id": "live_catalog_search",
 "check": "live",
 "parameterValueOrigin": "synthetic_live",

@@ -6,7 +6,6 @@ import {
   type CompletionReviewInput,
   CompletionToolResultEvidenceSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
-import { acceptedRequestNotCheckedCheck } from '../src/imprint/master-teach-checks.ts';
 import {
   type ChainEdge,
   type ContentAddressedRef,
@@ -287,7 +286,11 @@ function replayFacts(seqs: number[]): ReceiptFact[] {
 function passRequiredChecks(journal: FreshTeachJournal, id: string, seqs: number[]) {
   journal.issueReceipt({ toolId: id, check: 'contract', facts: [passedInvocation('contract')] });
   journal.issueReceipt({ toolId: id, check: 'replay', facts: replayFacts(seqs) });
-  journal.issueReceipt({ toolId: id, check: 'live', facts: [passedInvocation('live')] });
+  return journal.issueReceipt({
+    toolId: id,
+    check: 'live',
+    facts: [passedInvocation('live')],
+  });
 }
 
 function completionInput(journal: FreshTeachJournal): CompletionReviewInput {
@@ -311,7 +314,7 @@ function completionInput(journal: FreshTeachJournal): CompletionReviewInput {
       implementationPlanRef: plannedTool.implementationPlan,
       verificationCaseId: liveCase.id,
       expectedResult: liveCase.expectedResult,
-      liveReceiptRef: liveReceipt.ref,
+      resultReceiptRef: liveReceipt.ref,
       actualResult: {
         observed: true,
         preview: '[{"ok":true}]',
@@ -351,6 +354,7 @@ function passedCompletionOutput(input: CompletionReviewInput) {
     findings: [],
     toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
       toolId: result.payload.toolId,
+      ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
       status: 'credible' as const,
       reason: 'The current live result supports the implementation plan promise.',
       evidenceRefs: [result.ref],
@@ -398,7 +402,7 @@ describe('small fresh teach journal', () => {
     expect(issueBuild(journal, 'search-id').record.toolId).toBe('search-id');
   });
 
-  it('records factual receipts, browser replay N/A, and replacement history', () => {
+  it('requires supplied facts instead of synthesizing a browser replay receipt', () => {
     const { journal } = fixture([
       tool('api-id', 'api_search', 1),
       tool('browser-id', 'browser_search', 2, [], 'playbook_fallback'),
@@ -407,8 +411,9 @@ describe('small fresh teach journal', () => {
     issueBuild(journal, 'api-id');
     issueBuild(journal, 'browser-id');
     passRequiredChecks(journal, 'api-id', [1]);
-    const browserReplay = journal.issueReceipt({ toolId: 'browser-id', check: 'replay' });
-    expect(browserReplay.status).toBe('not_applicable');
+    expect(() => journal.issueReceipt({ toolId: 'browser-id', check: 'replay' })).toThrow(
+      'factual evidence',
+    );
     journal.issueReceipt({
       toolId: 'browser-id',
       check: 'contract',
@@ -486,7 +491,7 @@ describe('small fresh teach journal', () => {
     expect(after.tools.find(({ toolId }) => toolId === 'other-id')?.buildRef).toEqual(otherBuild);
   });
 
-  it('binds a chain receipt to the current producer build', () => {
+  it('binds a chain receipt to the producer build and live result', () => {
     const edge: ChainEdge = {
       id: 'producer-to-consumer',
       producerToolId: 'producer-id',
@@ -524,6 +529,16 @@ describe('small fresh teach journal', () => {
     });
     issueBuild(journal, 'producer-id');
     issueBuild(journal, 'consumer-id');
+    passRequiredChecks(journal, 'consumer-id', [2]);
+    expect(() =>
+      journal.issueReceipt({
+        toolId: 'consumer-id',
+        check: 'chain',
+        chainEdgeId: edge.id,
+        facts: [passedInvocation('chain')],
+      }),
+    ).toThrow('chain producer has no current build with a passed live result');
+    const producerLive = passRequiredChecks(journal, 'producer-id', [1]);
     const receipt = journal.issueReceipt({
       toolId: 'consumer-id',
       check: 'chain',
@@ -532,6 +547,182 @@ describe('small fresh teach journal', () => {
     });
     expect(receipt.dependencyBuilds).toHaveLength(1);
     expect(receipt.dependencyBuilds[0]?.toolId).toBe('producer-id');
+    expect(receipt.dependencyBuilds[0]?.resultReceiptRef).toEqual(producerLive.ref);
+    expect(receipt.chainEdgeSha256).toBe(teachingPlanContentSha256(edge));
+
+    const before = journal.readState();
+    const producerBuild = before.tools.find(({ toolId }) => toolId === 'producer-id')?.buildRef;
+    const consumerBuild = before.tools.find(({ toolId }) => toolId === 'consumer-id')?.buildRef;
+    const revised = desiredFrom(journal.currentPlan());
+    const revisedEdge = revised.chainEdges.find(({ id }) => id === edge.id);
+    if (!revisedEdge) throw new Error('missing revised chain edge');
+    revisedEdge.producerResultPath = '[0].replacement_id';
+    const revision = journal.revisePlan(revised, {
+      expectedRevision: journal.currentPlan().revision,
+      decision: decision(),
+    });
+
+    expect(revision.changedChainEdgeIds).toEqual([edge.id]);
+    expect(revision.recompileToolIds).toEqual([]);
+    const after = journal.readState();
+    expect(after.tools.find(({ toolId }) => toolId === 'producer-id')?.buildRef).toEqual(
+      producerBuild,
+    );
+    expect(after.tools.find(({ toolId }) => toolId === 'consumer-id')?.buildRef).toEqual(
+      consumerBuild,
+    );
+    expect(
+      after.tools
+        .find(({ toolId }) => toolId === 'producer-id')
+        ?.currentReceiptRefs.map(({ key }) => key),
+    ).toEqual(['contract', 'replay', 'live']);
+    expect(
+      after.tools
+        .find(({ toolId }) => toolId === 'consumer-id')
+        ?.currentReceiptRefs.map(({ key }) => key),
+    ).toEqual(['contract', 'replay', 'live']);
+    expect(after.supersededReceiptRefs).toContainEqual(receipt.ref);
+    expect(after.supersededReceiptRefs).toHaveLength(1);
+  });
+
+  it('invalidates only chain checks that consumed a replaced producer live result', () => {
+    const edge: ChainEdge = {
+      id: 'producer-to-consumer',
+      producerToolId: 'producer-id',
+      producerResultPath: '[0].id',
+      consumerToolId: 'consumer-id',
+      consumerParameter: 'item_id',
+    };
+    const producer = tool('producer-id', 'producer', 1);
+    const consumer = tool('consumer-id', 'consumer', 2, ['producer']);
+    consumer.candidate.likelyParams = [
+      { name: 'item_id', type: 'string', description: 'Identifier from producer output.' },
+    ];
+    const { journal } = fixture([producer, consumer], [edge]);
+    const desired = desiredFrom(journal.currentPlan());
+    for (const plannedTool of desired.tools) {
+      const payload = implementation(plannedTool);
+      payload.parameterMappings = plannedTool.candidate.likelyParams.map(({ name }) => ({
+        parameterName: name,
+        artifactRequestIndices: [0],
+        guidance: 'Apply the producer value.',
+      }));
+      for (const verificationCase of payload.verificationCases)
+        verificationCase.parameterValues = plannedTool.candidate.likelyParams.map(
+          ({ name: parameterName }) => ({ parameterName, value: 'fixture-id' }),
+        );
+      plannedTool.implementationPlan = journal.storeImplementationPlan(
+        payload,
+        teachingToolCompileInputsSha256(plannedTool, desired.chainEdges),
+      );
+    }
+    journal.revisePlan(desired, {
+      expectedRevision: journal.currentPlan().revision,
+      decision: decision(),
+    });
+    issueBuild(journal, 'producer-id');
+    issueBuild(journal, 'consumer-id');
+    const firstProducerLive = passRequiredChecks(journal, 'producer-id', [1]);
+    passRequiredChecks(journal, 'consumer-id', [2]);
+    const chain = journal.issueReceipt({
+      toolId: 'consumer-id',
+      check: 'chain',
+      chainEdgeId: edge.id,
+      facts: [passedInvocation('chain')],
+    });
+
+    const replacementLive = journal.issueReceipt({
+      toolId: 'producer-id',
+      check: 'live',
+      facts: [passedInvocation('live-retry')],
+    });
+
+    const state = journal.readState();
+    expect(
+      state.tools
+        .find(({ toolId }) => toolId === 'consumer-id')
+        ?.currentReceiptRefs.map(({ key }) => key),
+    ).toEqual(['contract', 'replay', 'live']);
+    expect(state.supersededReceiptRefs).toEqual(
+      expect.arrayContaining([firstProducerLive.ref, chain.ref]),
+    );
+    expect(state.supersededReceiptRefs).toHaveLength(2);
+
+    const replacementChain = journal.issueReceipt({
+      toolId: 'consumer-id',
+      check: 'chain',
+      chainEdgeId: edge.id,
+      facts: [passedInvocation('chain-retry')],
+    });
+    expect(replacementChain.dependencyBuilds[0]?.resultReceiptRef).toEqual(replacementLive.ref);
+  });
+
+  it('keeps a consumer artifact and standalone proof when its producer build changes', () => {
+    const edge: ChainEdge = {
+      id: 'producer-to-consumer',
+      producerToolId: 'producer-id',
+      producerResultPath: '[0].id',
+      consumerToolId: 'consumer-id',
+      consumerParameter: 'item_id',
+    };
+    const producer = tool('producer-id', 'producer', 1);
+    const consumer = tool('consumer-id', 'consumer', 2, ['producer']);
+    consumer.candidate.likelyParams = [
+      { name: 'item_id', type: 'string', description: 'Identifier from producer output.' },
+    ];
+    const { journal } = fixture([producer, consumer], [edge]);
+    const desired = desiredFrom(journal.currentPlan());
+    for (const plannedTool of desired.tools) {
+      const payload = implementation(plannedTool);
+      payload.parameterMappings = plannedTool.candidate.likelyParams.map(({ name }) => ({
+        parameterName: name,
+        artifactRequestIndices: [0],
+        guidance: 'Apply the public value.',
+      }));
+      for (const verificationCase of payload.verificationCases)
+        verificationCase.parameterValues = plannedTool.candidate.likelyParams.map(
+          ({ name: parameterName }) => ({ parameterName, value: 'fixture-id' }),
+        );
+      plannedTool.implementationPlan = journal.storeImplementationPlan(
+        payload,
+        teachingToolCompileInputsSha256(plannedTool, desired.chainEdges),
+      );
+    }
+    journal.revisePlan(desired, {
+      expectedRevision: journal.currentPlan().revision,
+      decision: decision(),
+    });
+    issueBuild(journal, 'producer-id');
+    issueBuild(journal, 'consumer-id');
+    passRequiredChecks(journal, 'producer-id', [1]);
+    passRequiredChecks(journal, 'consumer-id', [2]);
+    journal.issueReceipt({
+      toolId: 'consumer-id',
+      check: 'chain',
+      chainEdgeId: edge.id,
+      facts: [passedInvocation('chain')],
+    });
+    const before = journal.readState();
+    const producerBuild = before.tools.find(({ toolId }) => toolId === 'producer-id')?.buildRef;
+    const consumerBuild = before.tools.find(({ toolId }) => toolId === 'consumer-id')?.buildRef;
+    if (!producerBuild || !consumerBuild) throw new Error('fixture builds are missing');
+
+    const revisedWorkflow = workflow('producer', [1]);
+    revisedWorkflow.intent.description = 'Run the repaired producer.';
+    journal.issueBuild({ toolId: 'producer-id', workflow: revisedWorkflow });
+
+    const after = journal.readState();
+    expect(after.tools.find(({ toolId }) => toolId === 'producer-id')?.buildRef).not.toEqual(
+      producerBuild,
+    );
+    expect(after.tools.find(({ toolId }) => toolId === 'consumer-id')?.buildRef).toEqual(
+      consumerBuild,
+    );
+    expect(
+      after.tools
+        .find(({ toolId }) => toolId === 'consumer-id')
+        ?.currentReceiptRefs.map(({ key }) => key),
+    ).toEqual(['contract', 'replay', 'live']);
   });
 
   it('finishes only after every tool has factual proof and the independent review passes', () => {
@@ -547,21 +738,14 @@ describe('small fresh teach journal', () => {
     expect(() => journal.storeJson({ tooLate: true })).toThrow('terminal');
   });
 
-  it('finishes when an API replay baseline is explicitly unavailable', () => {
+  it('finishes with contract and live proof and no replay receipt', () => {
     const { journal } = fixture();
-    acceptImplementations(journal, new Set(['search-id']));
+    acceptImplementations(journal);
     issueBuild(journal, 'search-id');
     journal.issueReceipt({
       toolId: 'search-id',
       check: 'contract',
       facts: [passedInvocation('contract')],
-    });
-    journal.issueReceipt({
-      toolId: 'search-id',
-      check: 'replay',
-      facts: acceptedRequestNotCheckedCheck({
-        provenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 1 }],
-      }).facts,
     });
     journal.issueReceipt({
       toolId: 'search-id',
@@ -573,33 +757,5 @@ describe('small fresh teach journal', () => {
     expect(journal.finishWithReview('completed', input, passedCompletionOutput(input)).status).toBe(
       'completed',
     );
-  });
-
-  it('does not waive an unchecked API replay when the implementation omitted its origin', () => {
-    const { journal } = fixture();
-    acceptImplementations(journal);
-    issueBuild(journal, 'search-id');
-    journal.issueReceipt({
-      toolId: 'search-id',
-      check: 'contract',
-      facts: [passedInvocation('contract')],
-    });
-    journal.issueReceipt({
-      toolId: 'search-id',
-      check: 'replay',
-      facts: acceptedRequestNotCheckedCheck({
-        provenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 1 }],
-      }).facts,
-    });
-    journal.issueReceipt({
-      toolId: 'search-id',
-      check: 'live',
-      facts: [passedInvocation('live')],
-    });
-    const input = completionInput(journal);
-
-    expect(() =>
-      journal.finishWithReview('completed', input, passedCompletionOutput(input)),
-    ).toThrow('explicitly marks the parameter baseline unavailable');
   });
 });

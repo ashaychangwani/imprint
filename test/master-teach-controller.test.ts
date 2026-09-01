@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join as pathJoin } from 'node:path';
 import { triageRequests } from '../src/imprint/compile.ts';
 import {
   ParameterAdvisorLane,
-  apiReplayFacts,
   compatibleFocusedPlannerIndexes,
   compileEveryToolInBuildWaves,
   focusedPlanningFailureMessage,
@@ -15,6 +11,7 @@ import {
   prepareSessionForTeach,
   promoteReviewedCompletion,
   providerForFreshTeach,
+  revisionSeedArtifactNames,
   revisionStagingDir,
   runFocusedWaveOrchestration,
   runPlaybookInvocationWithDeadline,
@@ -24,12 +21,11 @@ import {
 import {
   type EditableTeachingPlan,
   type EditableTeachingTool,
-  type ImplementationPlanPayload,
   teachingPlanContentSha256,
   teachingToolCompileInputsSha256,
 } from '../src/imprint/master-teach-plan.ts';
 import { ProviderUnavailableError, RunDeadline } from '../src/imprint/provider-retry.ts';
-import type { Session, Workflow } from '../src/imprint/types.ts';
+import type { Session } from '../src/imprint/types.ts';
 
 const SHA = `sha256:${'a'.repeat(64)}`;
 
@@ -45,9 +41,28 @@ describe('fresh teach provider selection', () => {
   });
 });
 
+describe('revision artifact seeds', () => {
+  it('does not carry incompatible files across an API/browser strategy change', () => {
+    expect(revisionSeedArtifactNames('api')).toEqual([
+      'workflow.json',
+      'parser.ts',
+      'request-transform.ts',
+    ]);
+    expect(revisionSeedArtifactNames('playbook_fallback')).toEqual([
+      'workflow.json',
+      'playbook.yaml',
+    ]);
+    expect(revisionSeedArtifactNames('api', 'playbook_fallback')).toEqual([]);
+    expect(revisionSeedArtifactNames('playbook_fallback', 'api')).toEqual([]);
+  });
+});
+
 describe('optional finesse freshness', () => {
   const buildRef = { path: 'objects/json/build.json', sha256: SHA };
-  const target = { buildRef, executionBindingSha256: `sha256:${'b'.repeat(64)}` };
+  const target = {
+    buildRef,
+    executionBindingSha256: `sha256:${'b'.repeat(64)}`,
+  };
 
   it('stays current across unrelated plan revisions', () => {
     expect(
@@ -58,7 +73,7 @@ describe('optional finesse freshness', () => {
     ).toBe(true);
   });
 
-  it('becomes stale when the tool build or its dependency-bound execution changes', () => {
+  it('becomes stale when the tool build or execution binding changes', () => {
     expect(
       sameFinesseTarget(target, {
         currentBuildRef: { ...buildRef, sha256: `sha256:${'c'.repeat(64)}` },
@@ -94,86 +109,6 @@ describe('optional finesse freshness', () => {
     expect(await Promise.all(attempts)).toEqual([1, 2, 3]);
   });
 });
-
-function replaySession(request: Session['requests'][number]): Session {
-  return {
-    site: 'fixture-site',
-    startedAt: '2026-01-01T00:00:00.000Z',
-    url: 'https://fixture.invalid',
-    imprintVersion: '0.6.6',
-    requests: [request],
-    events: [],
-    narration: [],
-    cookieSnapshots: [],
-    storageSnapshots: [],
-  };
-}
-
-function replayReceiptBytes(request: {
-  method: string;
-  url: string;
-  headers: Record<string, string>;
-  body?: string;
-}): number {
-  const headers = Object.entries(request.headers)
-    .map(([name, value]) => [name.toLowerCase(), value] as const)
-    .sort(([left], [right]) => left.localeCompare(right));
-  return Buffer.byteLength(
-    JSON.stringify({
-      method: request.method.toUpperCase(),
-      url: request.url,
-      headers,
-      body: request.body ?? '',
-    }),
-    'utf8',
-  );
-}
-
-function replayImplementation(
-  parameterValueOrigin: 'recorded_baseline' | 'synthetic_live' | 'unavailable' | undefined,
-  parameterValues: ImplementationPlanPayload['verificationCases'][number]['parameterValues'],
-): ImplementationPlanPayload {
-  return {
-    version: 1,
-    toolId: 'fixture-tool',
-    strategyKind: 'api',
-    requestProvenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 7 }],
-    parameterMappings: parameterValues.map(({ parameterName }) => ({
-      parameterName,
-      artifactRequestIndices: [0],
-      guidance: 'Use the public value in the request.',
-    })),
-    responseDependencies: [],
-    resultSources: [{ artifactRequestIndex: 0, source: 'Return the response.' }],
-    outputGuidance: 'Return the fixture response.',
-    verificationCases: [
-      {
-        id: 'recorded_replay',
-        check: 'replay',
-        ...(parameterValueOrigin === undefined ? {} : { parameterValueOrigin }),
-        parameterValues,
-        expectedResult: 'Return the recorded fixture response.',
-        provenance: {
-          recordingRequestSeqs: [7],
-          recordingEventSeqs: [],
-          evidenceRefs: [{ path: 'evidence/replay.json', sha256: SHA }],
-        },
-      },
-      {
-        id: 'live_fixture',
-        check: 'live',
-        parameterValueOrigin: 'synthetic_live',
-        parameterValues,
-        expectedResult: 'Return the live fixture response.',
-        provenance: {
-          recordingRequestSeqs: [7],
-          recordingEventSeqs: [],
-          evidenceRefs: [{ path: 'evidence/replay.json', sha256: SHA }],
-        },
-      },
-    ],
-  };
-}
 
 function focusedTool(index: number, dependencyNames: string[] = []): EditableTeachingTool {
   const toolName = `tool_${index}`;
@@ -499,31 +434,115 @@ describe('master-owned focused build waves', () => {
     ]);
   });
 
-  it('still attempts later MVP compiles when accepting an earlier artifact fails', async () => {
+  it('surfaces host persistence failures instead of labeling them as artifact failures', async () => {
     const tools = [focusedTool(1), focusedTool(2), focusedTool(3)];
+    const firstTool = tools[0];
+    if (!firstTool) throw new Error('fixture expected a first tool');
     const attempted: string[] = [];
-    const result = await compileEveryToolInBuildWaves(
+    await expect(
+      compileEveryToolInBuildWaves(
+        {
+          tools,
+          buildWaves: tools.map(({ id }) => [id]),
+        },
+        {
+          compileTool: async (tool) => {
+            attempted.push(tool.id);
+            return tool.id;
+          },
+          acceptCompiledTool: (tool) => {
+            if (tool.id === firstTool.id) throw new Error('fixture journal write failed');
+          },
+        },
+      ),
+    ).rejects.toThrow('fixture journal write failed');
+
+    expect(attempted).toEqual([firstTool.id]);
+  });
+
+  it('waits for sibling workers before surfacing a host persistence failure', async () => {
+    const first = focusedTool(1);
+    const sibling = focusedTool(2);
+    let markSiblingStarted: (() => void) | undefined;
+    const siblingStarted = new Promise<void>((resolve) => {
+      markSiblingStarted = resolve;
+    });
+    let releaseSibling: (() => void) | undefined;
+    const siblingRelease = new Promise<void>((resolve) => {
+      releaseSibling = resolve;
+    });
+    let siblingSettled = false;
+    let rejectionObserved = false;
+
+    const invocation = compileEveryToolInBuildWaves(
       {
-        tools,
-        buildWaves: tools.map(({ id }) => [id]),
+        tools: [first, sibling],
+        buildWaves: [[first.id, sibling.id]],
       },
       {
+        concurrency: 2,
         compileTool: async (tool) => {
-          attempted.push(tool.id);
+          if (tool.id === sibling.id) {
+            markSiblingStarted?.();
+            await siblingRelease;
+            siblingSettled = true;
+          }
           return tool.id;
         },
-        acceptCompiledTool: (tool) => {
-          if (tool.id === tools[0]?.id) throw new Error('fixture MVP contract failed');
+        acceptCompiledTool: async (tool) => {
+          if (tool.id !== first.id) return;
+          await siblingStarted;
+          throw new Error('fixture journal write failed');
+        },
+      },
+    ).catch((error: unknown) => {
+      rejectionObserved = true;
+      throw error;
+    });
+
+    await siblingStarted;
+    await Promise.resolve();
+    expect(rejectionObserved).toBe(false);
+    releaseSibling?.();
+    await expect(invocation).rejects.toThrow('fixture journal write failed');
+    expect(siblingSettled).toBe(true);
+  });
+
+  it('surfaces host filesystem failures instead of asking the master to repair artifacts', async () => {
+    const tool = focusedTool(1);
+    const hostError = Object.assign(new Error('fixture disk is full'), { code: 'ENOSPC' });
+
+    await expect(
+      compileEveryToolInBuildWaves(
+        { tools: [tool], buildWaves: [[tool.id]] },
+        {
+          compileTool: async () => {
+            throw hostError;
+          },
+        },
+      ),
+    ).rejects.toBe(hostError);
+  });
+
+  it('keeps a missing generated artifact in ordinary compile repair', async () => {
+    const tool = focusedTool(1);
+    const artifactError = Object.assign(new Error('fixture artifact is missing'), {
+      code: 'ENOENT',
+    });
+
+    const result = await compileEveryToolInBuildWaves(
+      { tools: [tool], buildWaves: [[tool.id]] },
+      {
+        compileTool: async () => {
+          throw artifactError;
         },
       },
     );
 
-    expect(attempted).toEqual(tools.map(({ id }) => id));
-    expect(result.completed.map(({ tool }) => tool.id)).toEqual(tools.slice(1).map(({ id }) => id));
-    expect(result.failures).toHaveLength(1);
-    expect(result.failures[0]).toEqual(
-      expect.objectContaining({ toolId: tools[0]?.id, stage: 'contract' }),
-    );
+    expect(result.completed).toEqual([]);
+    expect(result.failures).toEqual([
+      expect.objectContaining({ toolId: tool.id, stage: 'compile', error: artifactError }),
+    ]);
   });
 
   it('settles every tool before returning an honest failed terminal status', async () => {
@@ -565,221 +584,6 @@ describe('master-owned focused build waves', () => {
       failedTools: 2,
       runRoot: '/tmp/fresh-master-run',
       message: '2 planned focused build(s) failed.',
-    });
-  });
-});
-
-describe('master API replay facts', () => {
-  it('does not compare synthetic or unavailable inputs with recorded bytes', async () => {
-    const workflow: Workflow = {
-      toolName: 'fixture_tool',
-      intent: { description: 'Fixture replay' },
-      site: 'fixture-site',
-      parameters: [{ name: 'query', type: 'string', description: 'Query' }],
-      requests: [
-        {
-          recordingRequestSeq: 7,
-          method: 'GET',
-          url: 'https://fixture.invalid/search?q=${param.query}',
-          headers: {},
-        },
-      ],
-    };
-    const session = replaySession({
-      seq: 7,
-      timestamp: 1,
-      method: 'GET',
-      url: 'https://fixture.invalid/search?q=recorded',
-      headers: {},
-      resourceType: 'xhr',
-      response: { status: 200, headers: {}, body: '{"ok":true}' },
-    });
-
-    const unavailableFacts = await apiReplayFacts({
-      compiled: {
-        workflow,
-        workflowPath: '/unused/workflow.json',
-        toolDir: '/unused',
-      },
-      implementation: replayImplementation('unavailable', []),
-      session,
-    });
-    const legacySyntheticFacts = await apiReplayFacts({
-      compiled: {
-        workflow,
-        workflowPath: '/unused/workflow.json',
-        toolDir: '/unused',
-      },
-      implementation: replayImplementation(undefined, [
-        { parameterName: 'query', value: 'synthetic-value' },
-      ]),
-      session,
-    });
-
-    for (const facts of [unavailableFacts, legacySyntheticFacts]) {
-      expect(facts).toHaveLength(1);
-      expect(facts[0]).toMatchObject({
-        kind: 'request_comparison',
-        status: 'not_checked',
-      });
-    }
-  });
-
-  it('compares the concrete URL and body emitted by the request transform', async () => {
-    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-master-replay-transform-'));
-    try {
-      const workflowPath = pathJoin(root, 'workflow.json');
-      const workflow: Workflow = {
-        toolName: 'fixture_tool',
-        intent: { description: 'Fixture replay' },
-        site: 'fixture-site',
-        parameters: [{ name: 'query', type: 'string', description: 'Query' }],
-        requestTransformModule: './request-transform.ts',
-        requests: [
-          {
-            recordingRequestSeq: 7,
-            method: 'POST',
-            url: 'https://fixture.invalid/search',
-            headers: { 'content-type': 'application/json' },
-            body: '{}',
-          },
-        ],
-      };
-      mkdirSync(root, { recursive: true });
-      writeFileSync(workflowPath, JSON.stringify(workflow));
-      writeFileSync(
-        pathJoin(root, 'request-transform.ts'),
-        `export function transform(method, url) {
-          return { method, url: url + '?q=wrong', body: '{"query":"wrong"}' };
-        }`,
-      );
-      const session = replaySession({
-        seq: 7,
-        timestamp: 1,
-        method: 'POST',
-        url: 'https://fixture.invalid/search?q=recorded',
-        headers: { 'content-type': 'application/json' },
-        body: '{"query":"recorded"}',
-        resourceType: 'xhr',
-        response: { status: 200, headers: {}, body: '{"ok":true}' },
-      });
-
-      const facts = await apiReplayFacts({
-        compiled: { workflow, workflowPath, toolDir: root },
-        implementation: replayImplementation('recorded_baseline', [
-          { parameterName: 'query', value: 'recorded' },
-        ]),
-        session,
-      });
-
-      expect(facts[0]).toMatchObject({
-        kind: 'request_comparison',
-        status: 'failed',
-        expectedBytes: Buffer.byteLength('https://fixture.invalid/search?q=recorded', 'utf8'),
-        actualBytes: Buffer.byteLength('https://fixture.invalid/search?q=wrong', 'utf8'),
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('fails replay when offline rendering returns an error', async () => {
-    const workflow: Workflow = {
-      toolName: 'fixture_tool',
-      intent: { description: 'Fixture replay' },
-      site: 'fixture-site',
-      parameters: [],
-      requests: [
-        {
-          recordingRequestSeq: 7,
-          method: 'GET',
-          url: 'https://fixture.invalid/search',
-          headers: {},
-          captures: [
-            {
-              name: 'required_value',
-              required: true,
-              capability: 'ordinary_http',
-              source: 'json',
-              path: 'missing',
-            },
-          ],
-        },
-      ],
-    };
-    const session = replaySession({
-      seq: 7,
-      timestamp: 1,
-      method: 'GET',
-      url: 'https://fixture.invalid/search',
-      headers: {},
-      resourceType: 'xhr',
-      response: { status: 200, headers: {}, body: '{"other":true}' },
-    });
-
-    const facts = await apiReplayFacts({
-      compiled: {
-        workflow,
-        workflowPath: '/unused/workflow.json',
-        toolDir: '/unused',
-      },
-      implementation: replayImplementation(undefined, []),
-      session,
-    });
-
-    expect(facts.map(({ status }) => status)).toEqual(['not_checked', 'failed']);
-    expect(facts.at(-1)).toMatchObject({ kind: 'host_error' });
-  });
-
-  it('uses deterministic credential placeholders instead of current stored values', async () => {
-    const workflow: Workflow = {
-      toolName: 'fixture_tool',
-      intent: { description: 'Fixture replay' },
-      site: 'fixture-site',
-      parameters: [],
-      requests: [
-        {
-          recordingRequestSeq: 7,
-          method: 'GET',
-          url: 'https://fixture.invalid/private',
-          headers: { 'x-api-key': '${credential.api_key}' },
-        },
-      ],
-    };
-    const session = replaySession({
-      seq: 7,
-      timestamp: 1,
-      method: 'GET',
-      url: 'https://fixture.invalid/private',
-      headers: { 'x-api-key': '[REDACTED:v3:id=1:len=12]' },
-      resourceType: 'xhr',
-      response: { status: 200, headers: {}, body: '{"ok":true}' },
-    });
-
-    const facts = await apiReplayFacts({
-      compiled: { workflow, workflowPath: '/unused/workflow.json', toolDir: '/unused' },
-      implementation: replayImplementation(undefined, []),
-      session,
-      credentialNames: ['api_key'],
-    });
-
-    expect(facts).toHaveLength(1);
-    const expectedBytes = replayReceiptBytes({
-      method: 'GET',
-      url: 'https://fixture.invalid/private',
-      headers: { 'x-api-key': '[REDACTED:v3:id=1:len=12]' },
-    });
-    const actualBytes = replayReceiptBytes({
-      method: 'GET',
-      url: 'https://fixture.invalid/private',
-      headers: { 'x-api-key': '${credential.api_key}' },
-    });
-    expect(expectedBytes).not.toBe(actualBytes);
-    expect(facts[0]).toMatchObject({
-      kind: 'request_comparison',
-      status: 'passed',
-      expectedBytes,
-      actualBytes,
     });
   });
 });
@@ -1024,7 +828,7 @@ describe('master repair revisions', () => {
     expect(implementationPlanRepairToolIds(plan)).toEqual([stale.id, missing.id]);
   });
 
-  it('defers a producer plan when a concurrent consumer changes its output obligation', () => {
+  it('keeps both plans when a concurrent consumer changes only chain wiring', () => {
     const producer = focusedTool(1);
     const consumer = focusedTool(2, [producer.candidate.toolName]);
     consumer.candidate.likelyParams = [
@@ -1051,7 +855,7 @@ describe('master repair revisions', () => {
       },
     ];
 
-    expect(compatibleFocusedPlannerIndexes([oldEdge], bundles)).toEqual([1]);
+    expect(compatibleFocusedPlannerIndexes([oldEdge], bundles)).toEqual([0, 1]);
     const producerBundle = bundles[0];
     if (!producerBundle) throw new Error('missing producer planner fixture');
     expect(
@@ -1067,7 +871,7 @@ describe('master repair revisions', () => {
     ).toEqual([0]);
   });
 
-  it('keeps compatible upstream work when two downstream links change', () => {
+  it('keeps all compatible work when two downstream links change', () => {
     const first = focusedTool(1);
     const second = focusedTool(2, [first.candidate.toolName]);
     const third = focusedTool(3, [second.candidate.toolName]);
@@ -1118,10 +922,10 @@ describe('master repair revisions', () => {
       },
     ];
 
-    expect(compatibleFocusedPlannerIndexes(currentEdges, bundles)).toEqual([0, 2]);
+    expect(compatibleFocusedPlannerIndexes(currentEdges, bundles)).toEqual([0, 1, 2]);
   });
 
-  it('keeps a same-wave consumer that proposes a new producer dependency', () => {
+  it('keeps same-wave tools when a consumer proposes new chain wiring', () => {
     const producer = focusedTool(1);
     const consumer = focusedTool(2, [producer.candidate.toolName]);
     consumer.candidate.likelyParams = [
@@ -1147,6 +951,6 @@ describe('master repair revisions', () => {
       },
     ];
 
-    expect(compatibleFocusedPlannerIndexes([], bundles)).toEqual([0]);
+    expect(compatibleFocusedPlannerIndexes([], bundles)).toEqual([0, 1]);
   });
 });
