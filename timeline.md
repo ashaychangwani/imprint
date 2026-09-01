@@ -1997,3 +1997,52 @@ event hints disappear without deleting the candidate, complete evidence still
 reaches the advisor, and any invalid event added later by the advisor or master
 is still rejected. The combined focused suite passes 198 tests, with type
 checking, lint, and whitespace checks clean.
+
+## 2026-08-31 20:56 PDT — Fresh Flights proved MVP-first delivery, then stale failures caused a planning loop
+
+Fresh, unsteered run `e4de54bb-b7b9-4f22-a0ed-13aa01438225` used the intended
+latest combined Flights recording. The detector handoff passed. The master kept
+four API tools in three dependency waves: location resolution; calendar fares
+and flight search; then booking options. It did not choose browser playbooks.
+
+The location resolver reached a real usable minimum first. Its contract passed,
+both recorded requests replayed byte for byte, and a live call returned a
+location. The controller immediately installed that one tool instead of waiting
+for the other three. It then started the parameter and breadth pass in the
+background while calendar and search began. The optional pass kept the one
+public `query` input and proved two live locations in roughly 0.4 seconds each.
+This is direct evidence that the new MVP-first lane can publish a producer,
+unblock later work, and run optional improvement beside the main teach.
+
+Calendar and search passed several mechanical request and live-transport checks,
+but their live parsed results were empty. The small result reviewer correctly
+rejected them, so neither empty tool was installed and booking remained blocked.
+This was minimum usefulness, not optional breadth: an HTTP 200 with zero usable
+fares or itineraries is not a shippable core tool.
+
+The agents then found useful new evidence. A calendar planner found the correct
+nested fare rows and learned that calendar consumes the resolver's airport code,
+while search uses a different resolver field. A later search compile also
+introduced one extra `Accept` header; exact replay caught the unrecorded 16 bytes
+even though the compiler's offline comparison missed them. These are factual,
+site-neutral examples of why exact checks and editable plans are both needed.
+
+The run was stopped only after revision 13 proved a controller loop. New
+calendar and search plans were being rejected with failures from older builds
+before the new plans had been compiled or checked. Changing a chain output path
+also discarded the already working resolver plan and all current receipts even
+though the installed resolver already returned both relevant fields. The
+controller therefore started rebuilding work it had already proved. Continuing
+would not have produced new evidence.
+
+The command ended as cancelled and printed `0 ready, 4 failed` because the
+current journal revision no longer pointed at the already installed resolver.
+The resolver remains installed on disk, but the terminal did not explain that
+distinction. The run will never be resumed.
+
+The next repairs are deliberately narrow and general: bind every failure to the
+exact plan/build that produced it so an older failure cannot reject an untested
+replacement; retain a published producer across a chain-edge edit long enough
+to test whether its existing output already satisfies the new edge; and report
+previously installed MVPs honestly when a later revision becomes stale. After
+those changes, validation will start with another fresh run.
