@@ -187,7 +187,6 @@ const edges = [
     producerResultPath: '[0].item_id',
     consumerToolId: 'catalog_detail',
     consumerParameter: 'item_id',
-    invocationGroup: 'catalog-detail-selection',
   },
   {
     id: 'catalog-variant-id',
@@ -195,7 +194,6 @@ const edges = [
     producerResultPath: '[0].variant_id',
     consumerToolId: 'catalog_detail',
     consumerParameter: 'variant_id',
-    invocationGroup: 'catalog-detail-selection',
   },
 ];
 
@@ -846,7 +844,7 @@ const initialMasterOutput = (input: MasterDecisionInput = initialMasterInput()) 
     binding: masterDecisionBinding(input),
     outcome: 'accepted',
     reason: 'The evidence supports one initial search tool.',
-    recallToolIds: [],
+    recallToolNames: [],
     desiredPlan: initialDesired,
   });
 const revisionMasterInput = () => ({
@@ -862,7 +860,7 @@ const revisionMasterOutput = (input: MasterDecisionInput = revisionMasterInput()
     binding: masterDecisionBinding(input),
     outcome: 'accepted',
     reason: 'The current producer-consumer plan remains supported.',
-    recallToolIds: [],
+    recallToolNames: [],
     desiredPlan: desiredFromEditable(),
   });
 
@@ -923,9 +921,9 @@ describe('prompts and pre-plan discovery', () => {
     const masterPrompt = prompt('master-teach-decision.md');
     expect(masterPrompt).toContain('optional diagnostic');
     expect(masterPrompt).toContain('does not by itself require browser');
-    expect(masterPrompt).toContain('top-level `recallToolIds`');
+    expect(masterPrompt).toContain('top-level `recallToolNames`');
     expect(masterPrompt).toContain('Omission of an `implementationPlan` is not a recall');
-    expect(masterPrompt).toContain('visible master command');
+    expect(masterPrompt).toContain('visible command');
     expect(masterPrompt).toMatch(/do\s+not mutate an unrelated field/);
     expect(masterPrompt).toContain('A chain-only wiring failure is different');
     expect(masterPrompt).toContain('edit only the supported `chainEdges` fields');
@@ -1009,17 +1007,12 @@ describe('prompts and pre-plan discovery', () => {
     }
   });
 
-  it('documents exact dependency-name and stable-ID namespaces for planning roles', () => {
+  it('documents one public-name namespace for planning roles', () => {
     const masterPrompt = prompt('master-teach-decision.md');
-    expect(masterPrompt).toContain('`candidate.dependsOnTools` entry must exactly match');
-    expect(masterPrompt).toContain('`desiredPlan.tools[].candidate.toolName`');
-    expect(masterPrompt).toContain(
-      'producer/consumer\n  fields in `chainEdges` use stable tool IDs',
-    );
-    expect(masterPrompt).toContain('use stable tool');
+    expect(masterPrompt).toContain('Use the public tool name everywhere');
+    expect(masterPrompt).toContain('must exactly\nequal its `candidate.toolName`');
     expect(masterPrompt).toContain('`candidateCoverage.plannedToolIds`');
-    expect(masterPrompt).toContain('`id: "catalog_search"`');
-    expect(masterPrompt).toContain('`dependsOnTools: ["search_catalog"]`');
+    expect(masterPrompt).toContain('`recallToolNames`');
 
     const advisorPrompt = prompt('master-teach-tool-advisor.md');
     expect(advisorPrompt).toContain('`dependsOnTools` entry must exactly match');
@@ -1027,19 +1020,15 @@ describe('prompts and pre-plan discovery', () => {
     expect(advisorPrompt).toContain('update every affected dependency');
   });
 
-  it('makes chain invocation grouping explicit instead of host-inferred', () => {
+  it('makes one consumer invocation explicit instead of host-inferred groups', () => {
     for (const name of [
       'master-teach-decision.md',
       'master-teach-focused-planner.md',
       'compile-agent.md',
     ]) {
       const authorPrompt = prompt(name);
-      expect(authorPrompt).toContain('`invocationGroup`');
-      expect(authorPrompt).toMatch(/without (?:it|a group).*runs?\s+alone|omitted means.*alone/is);
-      expect(authorPrompt).toMatch(
-        /same consumer.*(?:same (?:explicit )?group|and group).*together/is,
-      );
-      expect(authorPrompt).toMatch(/does\s+not\s+infer|never\s+rely\s+on\s+the\s+host/is);
+      expect(authorPrompt).toMatch(/one [^\n.]*invocation/is);
+      expect(authorPrompt).toMatch(/runtime|host/i);
       expect(authorPrompt).toMatch(/alternative/is);
     }
   });
@@ -1162,9 +1151,11 @@ describe('prompts and pre-plan discovery', () => {
 
   it('makes the first advisor and master calls honestly pre-plan', async () => {
     const seen: unknown[] = [];
+    const conversationKeys: Array<string | undefined> = [];
     const advisor: MasterTeachAnalyzer = {
-      async analyze(_prompt, payload) {
+      async analyze(_prompt, payload, options) {
         seen.push(payload);
+        conversationKeys.push(options?.conversationKey);
         return { text: JSON.stringify(toolOutput()) };
       },
     };
@@ -1187,13 +1178,15 @@ describe('prompts and pre-plan discovery', () => {
     expect(JSON.stringify(sentInput)).not.toContain('credentialNames');
 
     const master: MasterTeachAnalyzer = {
-      async analyze() {
+      async analyze(_prompt, _payload, options) {
+        conversationKeys.push(options?.conversationKey);
         return { text: JSON.stringify(initialMasterOutput()) };
       },
     };
     const result = await requestMasterDecision(initialMasterInput(), { analyzer: master });
     expect(result.binding).toEqual(masterDecisionBinding(initialMasterInput()));
     expect('planRevision' in result.binding).toBe(false);
+    expect(conversationKeys).toEqual(['tool-selection', 'master']);
   });
 
   it('runs one strict focused planner on only one tool and repairs invalid JSON once', async () => {
@@ -1201,11 +1194,13 @@ describe('prompts and pre-plan discovery', () => {
     const output = focusedOutput(input);
     const seen: unknown[] = [];
     const retries: unknown[] = [];
+    const conversationKeys: Array<string | undefined> = [];
     let calls = 0;
     const analyzer: MasterTeachAnalyzer = {
-      async analyze(system, payload) {
+      async analyze(system, payload, options) {
         expect(system).toContain('exactly one proposed tool');
         seen.push(payload);
+        conversationKeys.push(options?.conversationKey);
         calls += 1;
         return { text: calls === 1 ? '{"invalid":true}' : JSON.stringify(output) };
       },
@@ -1219,6 +1214,10 @@ describe('prompts and pre-plan discovery', () => {
       }),
     ).toEqual(output);
     expect(calls).toBe(2);
+    expect(conversationKeys).toEqual([
+      `tool:${input.tool.candidate.toolName}:planner`,
+      `tool:${input.tool.candidate.toolName}:planner`,
+    ]);
     expect(retries).toHaveLength(1);
     expect((retries[0] as { role: string }).role).toBe('focused planner');
     const sent = (seen[0] as { input: Record<string, unknown> }).input;
@@ -1240,7 +1239,7 @@ describe('prompts and pre-plan discovery', () => {
     ).toEqual(input.tool.evidenceRefs);
   });
 
-  it('hands the latest failed attempt to a fresh planner without requiring it in output', async () => {
+  it('hands the latest failed attempt to the retained planner without requiring it in output', async () => {
     const base = focusedInput();
     const previousPayload = implementationPayload(searchTool);
     if (!searchTool.implementationPlan) throw new Error('fixture needs a previous plan ref');
@@ -1362,15 +1361,14 @@ describe('prompts and pre-plan discovery', () => {
     at(duplicateGroupedParameter.chainEdges, 1).consumerParameter = 'item_id';
     expect(() =>
       parseFocusedPlannerOutput(JSON.stringify(duplicateGroupedParameter), detailInput),
-    ).toThrow('invocation group binds this consumer parameter more than once');
+    ).toThrow('invocation binds this consumer parameter more than once');
 
     const separateAlternatives = structuredClone(valid);
     at(separateAlternatives.chainEdges, 1).consumerParameter = 'item_id';
     at(separateAlternatives.chainEdges, 1).producerResultPath = '[0].item_id';
-    at(separateAlternatives.chainEdges, 1).invocationGroup = 'catalog-detail-alternative';
-    expect(parseFocusedPlannerOutput(JSON.stringify(separateAlternatives), detailInput)).toEqual(
-      separateAlternatives,
-    );
+    expect(() =>
+      parseFocusedPlannerOutput(JSON.stringify(separateAlternatives), detailInput),
+    ).toThrow('invocation binds this consumer parameter more than once');
 
     const missingParameter = structuredClone(valid);
     missingParameter.implementationPlan.parameterMappings.pop();
@@ -1590,7 +1588,7 @@ describe('prompts and pre-plan discovery', () => {
       binding: masterDecisionBinding(masterInput),
       outcome: 'accepted',
       reason: 'Every credible discovered operation remains in the plan.',
-      recallToolIds: [],
+      recallToolNames: [],
       desiredPlan: {
         site: runIdentity.site,
         recordingSha256: runIdentity.recordingSha256,
@@ -1754,7 +1752,7 @@ describe('canonical planning and immutable execution', () => {
     const detailPlan = detail.implementationPlan;
     search.implementationPlan = undefined;
     detail.implementationPlan = undefined;
-    output.recallToolIds = [search.id];
+    output.recallToolNames = [search.candidate.toolName];
 
     const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
     expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
@@ -1767,7 +1765,7 @@ describe('canonical planning and immutable execution', () => {
     const output = revisionMasterOutput(input);
     const recalled = at(output.desiredPlan.tools, 0);
     expect(recalled.implementationPlan).toBeDefined();
-    output.recallToolIds = [recalled.id];
+    output.recallToolNames = [recalled.candidate.toolName];
 
     const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
     expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
@@ -1776,16 +1774,16 @@ describe('canonical planning and immutable execution', () => {
   it('rejects duplicate or non-current recall targets', () => {
     const input = revisionMasterInput();
     const duplicate = revisionMasterOutput(input);
-    duplicate.recallToolIds = [
-      at(duplicate.desiredPlan.tools, 0).id,
-      at(duplicate.desiredPlan.tools, 0).id,
+    duplicate.recallToolNames = [
+      at(duplicate.desiredPlan.tools, 0).candidate.toolName,
+      at(duplicate.desiredPlan.tools, 0).candidate.toolName,
     ];
     expect(() => parseMasterDecisionOutput(JSON.stringify(duplicate), input)).toThrow(
-      'duplicate tool ID',
+      'duplicate public tool name',
     );
 
     const unknown = revisionMasterOutput(input);
-    unknown.recallToolIds = ['unknown_tool'];
+    unknown.recallToolNames = ['unknown_tool'];
     expect(() => parseMasterDecisionOutput(JSON.stringify(unknown), input)).toThrow(
       'recall target is absent from current plan',
     );
@@ -1794,7 +1792,7 @@ describe('canonical planning and immutable execution', () => {
   it('rejects recall commands during initial discovery', () => {
     const input = initialMasterInput();
     const output = initialMasterOutput(input);
-    output.recallToolIds = [at(output.desiredPlan.tools, 0).id];
+    output.recallToolNames = [at(output.desiredPlan.tools, 0).candidate.toolName];
     expect(() => parseMasterDecisionOutput(JSON.stringify(output), input)).toThrow(
       'initial discovery cannot recall an existing tool',
     );
@@ -3256,9 +3254,7 @@ describe('strict repair and one real deadline', () => {
     expect(repair.parseErrors.join(' ')).toContain(
       'desiredPlan.tools.1.candidate.dependsOnTools.0',
     );
-    expect(calls[1]?.prompt).toContain(
-      'must exactly match another current desiredPlan.tools[].candidate.toolName',
-    );
+    expect(calls[1]?.prompt).toContain('use the public candidate.toolName everywhere');
   });
 
   it('aborts a retry callback at the one absolute deadline', async () => {

@@ -22,6 +22,7 @@ import { inferAppApiHosts } from './app-api-hosts.ts';
 import type { SharedModuleManifestEntry } from './build-plan.ts';
 import type { CompileVerificationMode, CompileVerificationSummary } from './compile-agent-types.ts';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
+import type { CompilerResume } from './compile-provider-recovery.ts';
 import type { CompileStrategyKind } from './compile-strategy.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactUrlForLlm } from './llm-url.ts';
@@ -107,6 +108,9 @@ interface GenerateOptions extends CompileOptions {
   /** Master-only fast boundary. Omit for standalone generate's full live
    * semantic verification. */
   verificationMode?: CompileVerificationMode;
+  /** Continue an existing tool compiler conversation for an ordinary repair. */
+  initialResume?: CompilerResume;
+  onSessionId?: (sessionId: string) => void;
 }
 
 interface GenerateResult {
@@ -120,6 +124,7 @@ interface GenerateResult {
   outputTokens: number | null;
   durationMs: number;
   verification?: CompileVerificationSummary;
+  sessionId?: string;
 }
 
 export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
@@ -156,6 +161,8 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         revisionMode: opts.revisionMode,
         preTriagedSession: opts.preTriagedSession,
         verificationMode: opts.verificationMode,
+        initialResume: opts.initialResume,
+        onSessionId: opts.onSessionId,
       });
 
       setSpanAttributes(span, {
@@ -219,6 +226,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
         outputTokens: result.outputTokens,
         durationMs: result.durationMs,
         verification: result.verification,
+        sessionId: result.sessionId,
       };
     },
   );

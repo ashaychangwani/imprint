@@ -161,9 +161,9 @@ Every plan needs at least one live case. A playbook plan must not declare
 replay because recording comparison is not applicable to it.
 
 Incoming chain edges may refer only to `availableProducers`, must target this
-tool's stable ID, and must name a proposed public consumer parameter. Keep the
-stable tool ID even when suggesting candidate changes. Return no
-implementation-plan ref.
+tool's public name, and must name a proposed public consumer parameter. The
+`id` fields in this wire format are not a second namespace: they must exactly
+equal the corresponding public `candidate.toolName`. Return no implementation-plan ref.
 
 `outgoingChainEdges` are current consumer obligations on this tool's result.
 Account for each named `producerResultPath` when proposing the result shape.
@@ -171,17 +171,10 @@ They are context only: return this tool's proposed incoming edges in
 `chainEdges`; the master decides whether an outgoing consumer edge should be
 revised separately.
 
-For each incoming edge, optional `invocationGroup` declares execution exactly.
-An edge without a group runs alone. Edges with the same consumer tool ID and
-the same group run together in one consumer invocation. Use a shared group for
-correlated sibling producer values that must be applied as a set. A group may
-bind each consumer parameter only once. Put alternative producer bindings in
-different groups (or omit the group so each edge runs alone). The runtime does
-not infer sibling combinations or alternatives. Repeat a shared binding with a
-different edge ID in every alternative group that needs it. For example,
-`item_id` and `item_kind` edges that must come from the same selected result can
-both use `"invocationGroup":"selected-item"`; a second possible `item_id`
-producer must use another group.
+All incoming edges for this consumer form one explicit consumer invocation.
+Use at most one producer binding for each consumer parameter. If the evidence
+offers alternative bindings, choose the best supported one; do not return
+alternatives and do not ask the runtime to group or rank them.
 
 Exact output schema (all objects reject extra fields):
 
@@ -195,8 +188,7 @@ Exact output schema (all objects reject extra fields):
     strategy: {kind:"api"|"playbook_fallback", reason:string}
   },
   chainEdges: Array<{
-    id, producerToolId, producerResultPath, consumerToolId, consumerParameter,
-    invocationGroup?: string
+    id, producerToolId, producerResultPath, consumerToolId, consumerParameter
   }>,
   implementationPlan: {
     version: 1, toolId, strategyKind:"api"|"playbook_fallback",

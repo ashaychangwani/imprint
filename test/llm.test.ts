@@ -12,7 +12,6 @@ import {
   availableModelsForProvider,
   cliExitError,
   cliStderrTail,
-  codexAnalyzeArgs,
   detectProvider,
   detectTeachProvider,
   extractJsonObject,
@@ -298,19 +297,6 @@ describe('CLI provider failure diagnostics', () => {
 
     expect(tail.length).toBe(32);
     expect(tail.endsWith('final error')).toBe(true);
-  });
-});
-
-describe('codexAnalyzeArgs', () => {
-  it('isolates generic Codex JSON calls from user MCP config and repo rules', () => {
-    const args = codexAnalyzeArgs('gpt-test');
-
-    expect(args).toContain('--ignore-user-config');
-    expect(args).toContain('--ignore-rules');
-    expect(args).toContain('--skip-git-repo-check');
-    expect(args).toContain('--ephemeral');
-    expect(args).toContain('--json');
-    expect(args.slice(args.indexOf('-m'), args.indexOf('-m') + 2)).toEqual(['-m', 'gpt-test']);
   });
 });
 

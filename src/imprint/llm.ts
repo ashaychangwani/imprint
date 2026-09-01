@@ -2,6 +2,7 @@
  *  user payload → raw model text. */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { Codex, type Thread } from '@openai/codex-sdk';
 import { runOwnedCli } from './compiler-process.ts';
 import {
   ProviderReportedError,
@@ -12,7 +13,7 @@ import {
   resolvedRunDeadline,
   retryTransientProviderFailure,
 } from './provider-retry.ts';
-import { parseClaudeTerminalOutput, parseCodexTerminalOutput } from './provider-terminal.ts';
+import { parseClaudeTerminalOutput } from './provider-terminal.ts';
 import {
   llmSpanAttributes,
   resolveTraceTokenCount,
@@ -61,6 +62,9 @@ interface AnalyzeInvocationOptions {
   onEvent?: (event: AnalyzeInvocationEvent) => void;
   onProviderRetry?: (event: ProviderRetryEvent) => void;
   onDeadlineReached?: () => Promise<number | null | undefined>;
+  /** Stable logical conversation. Providers that support threads append this
+   * turn to the same agent context instead of reconstructing it from a summary. */
+  conversationKey?: string;
 }
 
 type AnalyzeInvocationEvent = {
@@ -406,9 +410,15 @@ function enrichClaudeCliError(err: unknown, _config: { model: string }): Error {
 class CodexCliProvider implements LLMProvider {
   readonly name: ProviderName = 'codex-cli';
   private model: string;
+  private readonly codex: Codex;
+  private readonly conversations = new Map<
+    string,
+    { thread: Thread; systemPrompt: string; initialized: boolean; threadId?: string }
+  >();
 
   constructor({ model }: { model: string }) {
     this.model = model;
+    this.codex = new Codex();
   }
 
   async analyze(
@@ -416,11 +426,36 @@ class CodexCliProvider implements LLMProvider {
     userPayload: unknown,
     opts: AnalyzeInvocationOptions = {},
   ): Promise<AnalyzeResult> {
-    const combinedPrompt = `<system_instructions>
-${systemPrompt}
-</system_instructions>
-
-<user_payload_json>
+    const existing = opts.conversationKey
+      ? this.conversations.get(opts.conversationKey)
+      : undefined;
+    const thread =
+      existing?.thread ??
+      this.codex.startThread({
+        model: this.model,
+        sandboxMode: 'read-only',
+        workingDirectory: process.cwd(),
+        skipGitRepoCheck: true,
+        approvalPolicy: 'never',
+        threadSource: 'imprint-teach',
+      });
+    if (opts.conversationKey && !existing) {
+      // Keep the same SDK thread even when its first turn is interrupted. A
+      // provider retry should continue this conversation, not silently fork it.
+      this.conversations.set(opts.conversationKey, {
+        thread,
+        systemPrompt,
+        initialized: false,
+      });
+    }
+    const systemUpdate = existing?.initialized
+      ? systemPrompt === existing.systemPrompt
+        ? ''
+        : systemPrompt.startsWith(existing.systemPrompt)
+          ? `<additional_turn_instructions>\n${systemPrompt.slice(existing.systemPrompt.length).trim()}\n</additional_turn_instructions>\n\n`
+          : `<updated_role_instructions>\n${systemPrompt}\n</updated_role_instructions>\n\n`
+      : `<system_instructions>\n${systemPrompt}\n</system_instructions>\n\n`;
+    const combinedPrompt = `${systemUpdate}<user_payload_json>
 ${JSON.stringify(userPayload)}
 </user_payload_json>
 
@@ -433,23 +468,17 @@ ${cliFinalArtifactInstruction()}`;
       async () => {
         const t0 = Date.now();
 
-        const args = codexAnalyzeArgs(this.model);
-
         opts.onEvent?.({
           type: 'process.started',
           timestamp: new Date().toISOString(),
           provider: this.name,
-          command: args[0],
-          args: args.slice(1),
+          command: '@openai/codex-sdk',
+          conversationKey: opts.conversationKey,
+          threadId: existing?.threadId,
         });
-        let output: Awaited<ReturnType<typeof runOwnedCli>>;
+        let turn: Awaited<ReturnType<Thread['run']>>;
         try {
-          output = await runOwnedCli({
-            command: args[0] as string,
-            args: args.slice(1),
-            input: combinedPrompt,
-            signal: opts.signal,
-          });
+          turn = await thread.run(combinedPrompt, { signal: opts.signal });
         } catch (err) {
           opts.onEvent?.({
             type: 'process.spawn_failed',
@@ -459,48 +488,45 @@ ${cliFinalArtifactInstruction()}`;
           });
           throw enrichCodexCliError(err, { model: this.model });
         }
-        const { stdout, stderr, exitCode } = output;
-        const parsed = parseCodexTerminalOutput(stdout, stderr);
-        if (parsed.providerError) throw parsed.providerError;
-        if (exitCode !== 0) throw cliExitError('codex-cli', exitCode ?? -1, stderr);
-        if (!parsed.text) {
+        if (!turn.finalResponse) {
           throw new Error('codex-cli output missing a final agent message');
         }
+        const threadId = thread.id ?? existing?.threadId;
+        if (opts.conversationKey)
+          this.conversations.set(opts.conversationKey, {
+            thread,
+            systemPrompt,
+            initialized: true,
+            threadId,
+          });
+        opts.onEvent?.({
+          type: 'thread.available',
+          timestamp: new Date().toISOString(),
+          provider: this.name,
+          conversationKey: opts.conversationKey,
+          threadId,
+        });
 
-        const text = normalizeCliAnalyzeOutput(parsed.text, systemPrompt);
+        const text = normalizeCliAnalyzeOutput(turn.finalResponse, systemPrompt);
+        const usage = turn.usage;
 
         return {
           text,
-          inputTokens: null,
-          outputTokens: null,
+          inputTokens: usage ? Math.max(0, usage.input_tokens - usage.cached_input_tokens) : null,
+          outputTokens: usage?.output_tokens ?? null,
+          cacheReadInputTokens: usage?.cached_input_tokens ?? null,
+          cacheCreationInputTokens: usage?.cache_write_input_tokens ?? null,
           durationMs: Date.now() - t0,
           stopReason: null,
         };
       },
       promptTraceDetails(combinedPrompt, {
-        command: 'codex exec',
+        command: '@openai/codex-sdk',
         sandbox: 'read-only',
+        conversationKey: opts.conversationKey,
       }),
     );
   }
-}
-
-export function codexAnalyzeArgs(model: string): string[] {
-  return [
-    'codex',
-    '-a',
-    'never',
-    'exec',
-    '-m',
-    model,
-    '-s',
-    'read-only',
-    '--ephemeral',
-    '--ignore-user-config',
-    '--ignore-rules',
-    '--skip-git-repo-check',
-    '--json',
-  ];
 }
 
 export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string): string {

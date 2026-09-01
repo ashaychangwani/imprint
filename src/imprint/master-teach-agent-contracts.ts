@@ -220,8 +220,8 @@ export const MasterDecisionOutputSchema = strictObject({
   binding: MasterDecisionBindingSchema,
   outcome: z.enum(['accepted', 'rejected', 'revised']),
   reason: Reason,
-  /** Master-owned command to recall a fresh focused planner/compiler. */
-  recallToolIds: z.array(PromptToolIdSchema),
+  /** Public tool names whose retained planner/compiler conversations need work. */
+  recallToolNames: z.array(SemanticToolCandidateSchema.shape.toolName),
   desiredPlan: DesiredTeachingPlanSchema,
 });
 export const ParameterSelectionAdvisorInputSchema = strictObject({

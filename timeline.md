@@ -2624,3 +2624,49 @@ grandchild-reaping stress test). The focused tests for this change passed in
 all three independent reviews, and the previously cascading compile, store,
 and verifier tests passed 80 of 80 when rerun directly. These two timing flakes
 are environmental and are not being turned into teach-runtime policy.
+
+## 2026-09-01 14:20 PDT — Kept real agent conversations and removed chain grouping
+
+The long Flights repairs were repeatedly paying the cost of re-explaining a
+tool to a new agent. Imprint's small semantic roles also used
+`codex exec --ephemeral`, so even the master and focused planner forgot earlier
+turns. Those calls now use the official Codex SDK. One SDK thread is retained
+for the master, one for discovery review, and one per tool and focused role.
+Later messages append to the same thread. Imprint does not summarize or compact
+those conversations; Codex owns its normal context management and compaction.
+A provider interruption also keeps the same thread object instead of forking a
+new conversation during backoff.
+
+The tool compiler already had a resumable Codex conversation, but the master
+started a new one for every ordinary repair. The controller now remembers the
+compiler session for each public tool and strategy. A contract, request, or
+live-check repair returns to that session with the current plan and exact new
+facts. It also seeds the last artifact directory, so a small requested change
+can be a small edit. A real API-to-browser strategy change still starts a new
+compiler because it is a different job. Tests prove that the second
+same-strategy attempt receives both the prior files and the first session ID.
+
+The master-facing repair command is now `recallToolNames`, and its values are
+public tool names. The prompt now tells agents to use that public name for all
+references instead of reasoning about a second ID namespace. Existing journal
+fields remain as storage details for compatibility, but the teaching decision
+no longer asks the master to choose between two names.
+
+The chain checker no longer has optional groups or alternative routes that the
+runtime combines. All bindings for one consumer are one explicit invocation.
+The master chooses at most one producer binding for each consumer parameter;
+if evidence shows alternatives, the master chooses the best-supported route.
+The runtime only reads those paths, invokes the consumer once, and records the
+facts. Changing any binding invalidates that consumer invocation's old chain
+receipts, not unrelated artifacts.
+
+No site-specific rule was added. Type checking and the focused planning,
+journal, provider-recovery, controller, and end-to-end tests pass. A fresh
+teach has not started yet; repository-wide validation and a commit come first,
+then the next Google Flights teach starts from the latest combined recording.
+
+Repository-wide validation then passed type checking, lint, dead-code checks,
+and circular-dependency checks. The full run passed 1,830 tests and hit the same
+known process-teardown timing flake recorded at 11:47; that single hostile
+grandchild test passed immediately on its own. No teach policy was added for
+the environmental flake.

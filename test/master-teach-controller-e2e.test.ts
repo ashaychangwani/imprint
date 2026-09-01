@@ -543,7 +543,7 @@ function lifecycleFailureFixture(input: {
         binding: decisionInput.current?.run ?? decisionInput.discovery.run,
         outcome: 'accepted',
         reason: 'The complete dependency-ordered fixture plan remains supported.',
-        recallToolIds: [],
+        recallToolNames: [],
         desiredPlan,
       });
       return requestValidatedMasterDecision(decisionInput, {
@@ -787,7 +787,7 @@ describe('fresh foreground master controller end to end', () => {
                 : revisesWithStalePlan
                   ? 'Keep the semantic description revision and replan only its stale implementation.'
                   : 'The complete dependency-ordered plan remains supported.',
-              recallToolIds: revisesWithStalePlan ? [PRODUCER_ID] : [],
+              recallToolNames: revisesWithStalePlan ? [PRODUCER_NAME] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(input, {
@@ -1104,17 +1104,13 @@ describe('fresh foreground master controller end to end', () => {
       const promotionBatches: string[][] = [];
       const consumerInvocations: Array<Record<string, string | number | boolean>> = [];
       const reviewedChainEdgeIds: Array<string | undefined> = [];
-      const groupedIdEdge = {
-        ...chainEdge,
-        invocationGroup: 'item-selection',
-      };
+      const groupedIdEdge = { ...chainEdge };
       const kindEdge = {
         id: 'search-item-kind',
         producerToolId: PRODUCER_ID,
         producerResultPath: 'items[0].kind',
         consumerToolId: CONSUMER_ID,
         consumerParameter: 'item_kind',
-        invocationGroup: 'item-selection',
       };
       const siblingEdges = [groupedIdEdge, kindEdge];
       const pairConsumerCandidate = {
@@ -1168,7 +1164,7 @@ describe('fresh foreground master controller end to end', () => {
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
               outcome: 'accepted',
               reason: 'Both correlated producer fields belong to one consumer invocation.',
-              recallToolIds: [],
+              recallToolNames: [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -1258,7 +1254,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('checks alternative paths separately while keeping every sibling parameter producer-backed', async () => {
+  it('runs only the one producer route selected by the master', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);
       const events: string[] = [];
@@ -1267,13 +1263,6 @@ describe('fresh foreground master controller end to end', () => {
       const reviewedChainEdgeIds: Array<string | undefined> = [];
       const routeAIdEdge = {
         ...chainEdge,
-        invocationGroup: 'route-a',
-      };
-      const alternativeEdge = {
-        ...chainEdge,
-        id: 'search-alternative-item-id',
-        producerResultPath: 'items[0].alternative_id',
-        invocationGroup: 'route-b',
       };
       const kindProducerId = 'lookup_item_kind_tool';
       const kindProducerName = 'lookup_item_kind';
@@ -1290,14 +1279,8 @@ describe('fresh foreground master controller end to end', () => {
         producerResultPath: 'items[0].kind',
         consumerToolId: CONSUMER_ID,
         consumerParameter: 'item_kind',
-        invocationGroup: 'route-a',
       };
-      const kindEdgeB = {
-        ...kindEdgeA,
-        id: 'search-route-b-kind',
-        invocationGroup: 'route-b',
-      };
-      const alternativeEdges = [routeAIdEdge, kindEdgeA, alternativeEdge, kindEdgeB];
+      const selectedEdges = [routeAIdEdge, kindEdgeA];
       const base = lifecycleFailureFixture({
         runId: 'run-e2e-alternative-chain-paths',
         events,
@@ -1352,7 +1335,7 @@ describe('fresh foreground master controller end to end', () => {
               });
               producerCoverage.plannedToolIds.push(kindProducerId);
               desiredPlan.buildWaves = [[PRODUCER_ID, kindProducerId], [CONSUMER_ID]];
-              desiredPlan.chainEdges = alternativeEdges;
+              desiredPlan.chainEdges = selectedEdges;
             } else if (decisionInput.plannerProposals.length > 0) {
               desiredPlan = proposalDesiredPlan(decisionInput);
             } else {
@@ -1361,8 +1344,8 @@ describe('fresh foreground master controller end to end', () => {
             const output = MasterDecisionOutputSchema.parse({
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
               outcome: 'accepted',
-              reason: 'Both producer paths are explicit alternatives for the same parameter.',
-              recallToolIds: [],
+              reason: 'This is the one best-supported producer route for the consumer.',
+              recallToolNames: [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -1451,7 +1434,7 @@ describe('fresh foreground master controller end to end', () => {
             CompletionReviewOutputSchema.parse({
               binding: input.run,
               verdict: 'passed',
-              summary: 'Both alternative paths retain the correlated producer-backed kind.',
+              summary: 'The selected path retains the correlated producer-backed kind.',
               findings: [],
               toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
                 toolId: result.payload.toolId,
@@ -1474,9 +1457,8 @@ describe('fresh foreground master controller end to end', () => {
       expect(consumerInvocations).toEqual([
         { item_id: 'item-1', item_kind: 'item-1' },
         { item_id: 'producer-id', item_kind: 'producer-kind' },
-        { item_id: 'producer-alternative-id', item_kind: 'producer-kind' },
       ]);
-      expect(reviewedChainEdgeIds).toEqual([EDGE_ID, alternativeEdge.id]);
+      expect(reviewedChainEdgeIds).toEqual([EDGE_ID]);
       const state = FreshTeachJournalStateSchema.parse(
         readJson(join(terminal.runRoot, 'journal', 'current.json')),
       );
@@ -1485,12 +1467,7 @@ describe('fresh foreground master controller end to end', () => {
           .find(({ toolId }) => toolId === CONSUMER_ID)
           ?.currentReceiptRefs.filter(({ key }) => key.startsWith('chain:'))
           .map(({ key }) => key),
-      ).toEqual([
-        `chain:${EDGE_ID}`,
-        `chain:${kindEdgeA.id}`,
-        `chain:${alternativeEdge.id}`,
-        `chain:${kindEdgeB.id}`,
-      ]);
+      ).toEqual([`chain:${EDGE_ID}`, `chain:${kindEdgeA.id}`]);
     });
   });
 
@@ -1834,7 +1811,7 @@ describe('fresh foreground master controller end to end', () => {
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
               outcome: 'accepted',
               reason: 'Retry the same current artifact once because the returned failure changed.',
-              recallToolIds: [],
+              recallToolNames: [],
               desiredPlan: desiredFromCurrent(decisionInput),
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2035,7 +2012,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('recalls a fresh planner and compiler when the master explicitly names the rejected tool', async () => {
+  it('continues planner and compiler work when the master names the rejected tool', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];
       const promotionBatches: string[][] = [];
@@ -2100,7 +2077,7 @@ describe('fresh foreground master controller end to end', () => {
               outcome: 'accepted',
               reason:
                 'Keep the accepted tool contract and explicitly recall its rejected implementation.',
-              recallToolIds: decisionInput.verificationFindings ? [PRODUCER_ID] : [],
+              recallToolNames: decisionInput.verificationFindings ? [PRODUCER_NAME] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2256,7 +2233,7 @@ describe('fresh foreground master controller end to end', () => {
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
               outcome,
               reason,
-              recallToolIds: decisionInput.verificationFindings ? [PRODUCER_ID] : [],
+              recallToolNames: decisionInput.verificationFindings ? [PRODUCER_NAME] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2405,7 +2382,7 @@ describe('fresh foreground master controller end to end', () => {
               reason: decisionInput.verificationFindings
                 ? `Repair the producer from factual failure ${repairDecisions}.`
                 : 'Keep the current focused producer plan.',
-              recallToolIds: decisionInput.verificationFindings ? [PRODUCER_ID] : [],
+              recallToolNames: decisionInput.verificationFindings ? [PRODUCER_NAME] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2463,12 +2440,16 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('gives the first rejected artifact to the next fresh same-strategy repair', async () => {
+  it('gives the rejected artifact and retained session to the same-strategy repair', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];
       const promotionBatches: string[][] = [];
       const recordingPath = syntheticSessionPath(root);
-      const compileAttempts: Array<{ stagingDir: string; priorToolDir?: string }> = [];
+      const compileAttempts: Array<{
+        stagingDir: string;
+        priorToolDir?: string;
+        resumeSessionId?: string;
+      }> = [];
       let repairDecisions = 0;
       const base = lifecycleFailureFixture({
         runId: 'run-e2e-seed-first-rejected-artifact',
@@ -2502,7 +2483,9 @@ describe('fresh foreground master controller end to end', () => {
             compileAttempts.push({
               stagingDir: compileInput.stagingDir,
               priorToolDir: compileInput.priorToolDir,
+              resumeSessionId: compileInput.resumeSessionId,
             });
+            if (compileAttempts.length === 1) compileInput.onSessionId?.('compiler-session-1');
             if (compileAttempts.length === 2)
               throw new ProviderUnavailableError(
                 new Error('fixture stops after observing the rejected draft seed'),
@@ -2537,7 +2520,7 @@ describe('fresh foreground master controller end to end', () => {
               reason: decisionInput.verificationFindings
                 ? 'Correct only the exact provenance defect in the rejected draft.'
                 : 'Keep the focused producer plan.',
-              recallToolIds: decisionInput.verificationFindings ? [PRODUCER_ID] : [],
+              recallToolNames: decisionInput.verificationFindings ? [PRODUCER_NAME] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2556,6 +2539,8 @@ describe('fresh foreground master controller end to end', () => {
       expect(compileAttempts).toHaveLength(2);
       expect(compileAttempts[0]?.priorToolDir).toBeUndefined();
       expect(compileAttempts[1]?.priorToolDir).toBe(compileAttempts[0]?.stagingDir);
+      expect(compileAttempts[0]?.resumeSessionId).toBeUndefined();
+      expect(compileAttempts[1]?.resumeSessionId).toBe('compiler-session-1');
       expect(events).not.toContain(`review:${PRODUCER_ID}`);
       expect(promotionBatches).toEqual([]);
     });
@@ -2671,7 +2656,7 @@ describe('fresh foreground master controller end to end', () => {
                   : outcome === 'rejected'
                     ? `Paraphrased guidance ${reviewedFocusedProposals}: keep the public tool unchanged and propose a corrected implementation.`
                     : 'The fixture plan remains supported.',
-              recallToolIds: outcome === 'revised' ? [PRODUCER_ID] : [],
+              recallToolNames: outcome === 'revised' ? [PRODUCER_NAME] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2829,7 +2814,7 @@ describe('fresh foreground master controller end to end', () => {
               reason: repairingWithoutPlans
                 ? 'Recompile only the producer and recheck retained downstream tools.'
                 : 'The dependency-ordered fixture plan remains supported.',
-              recallToolIds: repairingWithoutPlans ? [PRODUCER_ID] : [],
+              recallToolNames: repairingWithoutPlans ? [PRODUCER_NAME] : [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -2983,7 +2968,7 @@ describe('fresh foreground master controller end to end', () => {
               binding: decisionInput.current?.run ?? decisionInput.discovery.run,
               outcome,
               reason,
-              recallToolIds: [],
+              recallToolNames: [],
               desiredPlan,
             });
             return requestValidatedMasterDecision(decisionInput, {
@@ -3165,7 +3150,7 @@ describe('fresh foreground master controller end to end', () => {
               binding: input.current?.run ?? input.discovery.run,
               outcome,
               reason,
-              recallToolIds: [],
+              recallToolNames: [],
               desiredPlan,
             });
             return await requestValidatedMasterDecision(input, {

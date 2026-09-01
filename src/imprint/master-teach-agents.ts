@@ -147,7 +147,7 @@ function validateFocusedPlannerEdges(
 ): void {
   const ids = new Set<string>();
   const tuples = new Set<string>();
-  const groupedConsumerParameters = new Set<string>();
+  const consumerParameters = new Set<string>();
   edges.forEach((edge, index) => {
     const base = [...path, index];
     if (ids.has(edge.id)) issue(ctx, [...base, 'id'], 'duplicate chain edge id');
@@ -156,7 +156,6 @@ function validateFocusedPlannerEdges(
       edge.producerResultPath,
       edge.consumerToolId,
       edge.consumerParameter,
-      edge.invocationGroup ?? null,
     ]);
     if (tuples.has(tuple)) issue(ctx, base, 'duplicate chain edge');
     const producer = producers.get(edge.producerToolId);
@@ -167,20 +166,14 @@ function validateFocusedPlannerEdges(
       issue(ctx, [...base, 'consumerParameter'], 'unknown focused consumer parameter');
     if (producer && !tool.candidate.dependsOnTools.includes(producer.toolName))
       issue(ctx, base, 'focused chain edge is absent from the proposed tool dependency');
-    if (edge.invocationGroup !== undefined) {
-      const groupedParameter = digest([
-        edge.consumerToolId,
-        edge.invocationGroup,
-        edge.consumerParameter,
-      ]);
-      if (groupedConsumerParameters.has(groupedParameter))
-        issue(
-          ctx,
-          [...base, 'consumerParameter'],
-          'focused chain invocation group binds this consumer parameter more than once',
-        );
-      groupedConsumerParameters.add(groupedParameter);
-    }
+    const consumerParameter = digest([edge.consumerToolId, edge.consumerParameter]);
+    if (consumerParameters.has(consumerParameter))
+      issue(
+        ctx,
+        [...base, 'consumerParameter'],
+        'focused chain invocation binds this consumer parameter more than once',
+      );
+    consumerParameters.add(consumerParameter);
     ids.add(edge.id);
     tuples.add(tuple);
   });
@@ -898,7 +891,7 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
       issue(ctx, ['plannerProposals', index, 'payload', 'binding'], 'stale planner proposal');
     const edgeIds = new Set<string>();
     const edgeTuples = new Set<string>();
-    const groupedConsumerParameters = new Set<string>();
+    const consumerParameters = new Set<string>();
     chainEdges.forEach((edge, edgeIndex) => {
       const edgePath: Array<string | number> = [
         'plannerProposals',
@@ -919,7 +912,6 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
         edge.producerResultPath,
         edge.consumerToolId,
         edge.consumerParameter,
-        edge.invocationGroup ?? null,
       ]);
       if (edgeTuples.has(tuple)) issue(ctx, edgePath, 'duplicate proposal chain edge');
       const producer = authoredToolsById.get(edge.producerToolId);
@@ -928,20 +920,14 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
         issue(ctx, [...edgePath, 'consumerParameter'], 'unknown proposal consumer parameter');
       if (producer && !tool.candidate.dependsOnTools.includes(producer.candidate.toolName))
         issue(ctx, edgePath, 'proposal edge is absent from the proposed tool dependency');
-      if (edge.invocationGroup !== undefined) {
-        const groupedParameter = digest([
-          edge.consumerToolId,
-          edge.invocationGroup,
-          edge.consumerParameter,
-        ]);
-        if (groupedConsumerParameters.has(groupedParameter))
-          issue(
-            ctx,
-            [...edgePath, 'consumerParameter'],
-            'proposal chain invocation group binds this consumer parameter more than once',
-          );
-        groupedConsumerParameters.add(groupedParameter);
-      }
+      const consumerParameter = digest([edge.consumerToolId, edge.consumerParameter]);
+      if (consumerParameters.has(consumerParameter))
+        issue(
+          ctx,
+          [...edgePath, 'consumerParameter'],
+          'proposal chain invocation binds this consumer parameter more than once',
+        );
+      consumerParameters.add(consumerParameter);
       edgeIds.add(edge.id);
       edgeTuples.add(tuple);
     });
@@ -1032,9 +1018,10 @@ function masterOutputSchema(input: MasterDecisionInput) {
     suppliedPlanRefs.map((plan) => [selectionKey(plan), plan] as const),
   );
   return MasterDecisionOutputSchema.transform((output) => {
-    const recalledToolIds = new Set(output.recallToolIds);
+    const recalledToolNames = new Set(output.recallToolNames);
     const tools = output.desiredPlan.tools.map((tool): EditableTeachingTool => {
-      if (recalledToolIds.has(tool.id)) return { ...tool, implementationPlan: undefined };
+      if (recalledToolNames.has(tool.candidate.toolName))
+        return { ...tool, implementationPlan: undefined };
       const selectedPlan =
         tool.implementationPlan ?? currentPlanByToolId.get(tool.id)?.implementationPlan;
       if (!selectedPlan) return tool;
@@ -1042,7 +1029,7 @@ function masterOutputSchema(input: MasterDecisionInput) {
       if (!canonicalPlan) return tool;
       // A revision may change compile inputs while accidentally echoing the
       // old hosted plan. Invalidate that mechanically unusable plan and let a
-      // fresh focused planner rebuild it instead of rejecting the revision.
+      // retained focused planner rebuild it instead of rejecting the revision.
       // Host-derived metadata is restored from the supplied reference so the
       // master only has to select the stable content-addressed identity.
       return withoutStaleImplementationPlan(
@@ -1065,17 +1052,21 @@ function masterOutputSchema(input: MasterDecisionInput) {
       output.desiredPlan.recordingSha256 !== input.discovery.run.recordingSha256
     )
       issue(ctx, ['desiredPlan'], 'desired plan belongs to another recording');
-    if (new Set(output.recallToolIds).size !== output.recallToolIds.length)
-      issue(ctx, ['recallToolIds'], 'duplicate tool ID');
-    if (input.phase === 'discovery' && output.recallToolIds.length > 0)
-      issue(ctx, ['recallToolIds'], 'initial discovery cannot recall an existing tool');
-    const currentToolIds = new Set(input.current?.plan.payload.tools.map(({ id }) => id) ?? []);
-    const desiredToolIds = new Set(output.desiredPlan.tools.map(({ id }) => id));
-    output.recallToolIds.forEach((toolId, index) => {
-      if (!currentToolIds.has(toolId))
-        issue(ctx, ['recallToolIds', index], 'recall target is absent from current plan');
-      if (!desiredToolIds.has(toolId))
-        issue(ctx, ['recallToolIds', index], 'recall target is absent from desired plan');
+    if (new Set(output.recallToolNames).size !== output.recallToolNames.length)
+      issue(ctx, ['recallToolNames'], 'duplicate public tool name');
+    if (input.phase === 'discovery' && output.recallToolNames.length > 0)
+      issue(ctx, ['recallToolNames'], 'initial discovery cannot recall an existing tool');
+    const currentToolNames = new Set(
+      input.current?.plan.payload.tools.map(({ candidate }) => candidate.toolName) ?? [],
+    );
+    const desiredToolNames = new Set(
+      output.desiredPlan.tools.map(({ candidate }) => candidate.toolName),
+    );
+    output.recallToolNames.forEach((toolName, index) => {
+      if (!currentToolNames.has(toolName))
+        issue(ctx, ['recallToolNames', index], 'recall target is absent from current plan');
+      if (!desiredToolNames.has(toolName))
+        issue(ctx, ['recallToolNames', index], 'recall target is absent from desired plan');
     });
     validatePlan(
       output.desiredPlan,
@@ -1334,6 +1325,7 @@ export interface MasterTeachAnalyzer {
       signal?: AbortSignal;
       onProviderRetry?: (event: ProviderRetryEvent) => void;
       onDeadlineReached?: () => Promise<number | null | undefined>;
+      conversationKey?: string;
     },
   ): Promise<{ text: string }>;
 }
@@ -1432,7 +1424,7 @@ export function parseCompletionReviewOutput(text: string, input: CompletionRevie
 function semanticRepairPrompt(system: string, role: Role): string {
   const roleRule =
     role === 'master decision'
-      ? '\nFor a master decision, every candidate.dependsOnTools value must exactly match another current desiredPlan.tools[].candidate.toolName. buildWaves and chainEdges use stable tool IDs. Propagate every rename through all affected references.'
+      ? '\nFor a master decision, use the public candidate.toolName everywhere. Each wire-format tool id must equal that public name, including buildWaves and chainEdges. Propagate every rename through all affected references.'
       : '';
   return `${system}\n\n# Output repair\n\nThis is a repair of your previous output. originalInput is the authoritative original task, validationContext contains the exact allowed bindings and recording IDs, priorResponse is your complete previous answer, and parseErrors are factual validator diagnostics. Return one complete replacement object in the original schema, not a patch, wrapper, prose, or commentary. Preserve valid decisions and change what is needed to correct every listed issue.${roleRule}`;
 }
@@ -1517,6 +1509,7 @@ async function ensureSemanticRoleDeadline(
 }
 async function request<S extends z.ZodTypeAny>(options: {
   role: Role;
+  conversationKey: string;
   prompt: string;
   input: unknown;
   validation: unknown;
@@ -1561,6 +1554,7 @@ async function request<S extends z.ZodTypeAny>(options: {
           timeoutLabel: `master teach ${options.role}`,
           onProviderRetry: options.agent.onProviderRetry,
           onDeadlineReached: options.agent.onDeadlineReached,
+          conversationKey: options.conversationKey,
         }),
       signal,
       active.waitForDeadlineDecision,
@@ -1617,6 +1611,7 @@ export async function requestToolSelectionAdvice(
   const checked = ToolInputSchema.parse(input);
   return request({
     role: 'tool advisor',
+    conversationKey: 'tool-selection',
     prompt: 'master-teach-tool-advisor.md',
     input: toolAdvisorPromptInput(checked),
     validation: { binding: checked.run, recordingIndex: checked.recordingIndex },
@@ -1631,6 +1626,7 @@ export async function requestFocusedPlan(
   const checked = FocusedPlannerInputValidationSchema.parse(input);
   return request({
     role: 'focused planner',
+    conversationKey: `tool:${checked.tool.candidate.toolName}:planner`,
     prompt: 'master-teach-focused-planner.md',
     input: checked,
     validation: {
@@ -1649,6 +1645,7 @@ export async function requestMasterDecision(
   const checked = MasterInputSchema.parse(input);
   return request({
     role: 'master decision',
+    conversationKey: 'master',
     prompt: 'master-teach-decision.md',
     input: masterDecisionPromptInput(checked),
     validation: {
@@ -1666,6 +1663,7 @@ export async function requestParameterSelectionAdvice(
   const checked = ParameterInputSchema.parse(input);
   return request({
     role: 'parameter advisor',
+    conversationKey: `tool:${checked.toolId}:parameter-advisor`,
     prompt: 'master-teach-parameter-advisor.md',
     input: parameterAdvisorPromptInput(checked),
     validation: { binding: parameterBinding(checked) },
@@ -1680,6 +1678,7 @@ export async function requestBaselineMvpReview(
   const checked = BaselineMvpInputSchema.parse(input);
   return request({
     role: 'baseline MVP reviewer',
+    conversationKey: `tool:${checked.toolId}:mvp-reviewer`,
     prompt: 'master-teach-baseline-mvp-review.md',
     input: baselineMvpReviewerPromptInput(checked),
     validation: { binding: baselineMvpBinding(checked) },
@@ -1694,6 +1693,7 @@ export async function requestCompletionReview(
   const checked = CompletionInputSchema.parse(input);
   return request({
     role: 'completion reviewer',
+    conversationKey: 'completion-reviewer',
     prompt: 'master-teach-completion-review.md',
     input: checked,
     validation: {

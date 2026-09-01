@@ -221,7 +221,7 @@ describe('master MVP compile contract', () => {
 
     expect(prompt).toContain('never add, remove, rename, or retype');
     expect(prompt).toContain('call give_up with the exact parameter');
-    expect(prompt).toContain('master can revise the plan in a fresh compile');
+    expect(prompt).toContain('return it to this retained compiler conversation');
   });
 });
 

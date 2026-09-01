@@ -675,7 +675,6 @@ describe('small fresh teach journal', () => {
       producerResultPath: '[0].id',
       consumerToolId: consumer.id,
       consumerParameter: 'item_id',
-      invocationGroup: 'consumer-selection',
     };
     const kindEdge: ChainEdge = {
       id: 'producer-b-to-consumer',
@@ -683,7 +682,6 @@ describe('small fresh teach journal', () => {
       producerResultPath: '[0].kind',
       consumerToolId: consumer.id,
       consumerParameter: 'item_kind',
-      invocationGroup: 'consumer-selection',
     };
     const unrelatedEdge: ChainEdge = {
       id: 'producer-a-to-other-consumer',
@@ -776,12 +774,13 @@ describe('small fresh teach journal', () => {
     expect(state.supersededReceiptRefs).not.toContainEqual(unrelatedReceipt.ref);
   });
 
-  it('keeps an independent alternative invocation when another producer result changes', () => {
+  it('invalidates the whole explicit consumer invocation when one producer result changes', () => {
     const producerA = tool('producer-a-id', 'producer_a', 1);
     const producerB = tool('producer-b-id', 'producer_b', 2);
     const consumer = tool('consumer-id', 'consumer', 3, ['producer_a', 'producer_b']);
     consumer.candidate.likelyParams = [
-      { name: 'item_id', type: 'string', description: 'Identifier from either producer.' },
+      { name: 'item_id', type: 'string', description: 'Identifier from the first producer.' },
+      { name: 'item_kind', type: 'string', description: 'Kind from the second producer.' },
     ];
     const routeA: ChainEdge = {
       id: 'producer-a-route',
@@ -789,13 +788,12 @@ describe('small fresh teach journal', () => {
       producerResultPath: '[0].id',
       consumerToolId: consumer.id,
       consumerParameter: 'item_id',
-      invocationGroup: 'route-a',
     };
     const routeB: ChainEdge = {
       ...routeA,
       id: 'producer-b-route',
       producerToolId: producerB.id,
-      invocationGroup: 'route-b',
+      consumerParameter: 'item_kind',
     };
     const { journal } = fixture([producerA, producerB, consumer], [routeA, routeB]);
     const desired = desiredFrom(journal.currentPlan());
@@ -848,9 +846,9 @@ describe('small fresh teach journal', () => {
       state.tools
         .find(({ toolId }) => toolId === consumer.id)
         ?.currentReceiptRefs.map(({ key }) => key),
-    ).toEqual(['contract', 'replay', 'live', `chain:${routeB.id}`]);
+    ).toEqual(['contract', 'replay', 'live']);
     expect(state.supersededReceiptRefs).toContainEqual(routeAReceipt.ref);
-    expect(state.supersededReceiptRefs).not.toContainEqual(routeBReceipt.ref);
+    expect(state.supersededReceiptRefs).toContainEqual(routeBReceipt.ref);
   });
 
   it('keeps a consumer artifact and standalone proof when its producer build changes', () => {

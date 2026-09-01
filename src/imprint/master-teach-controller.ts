@@ -32,7 +32,7 @@ import { type Replacement, extractCredentials } from './credential-extract.ts';
 import { emit } from './emit.ts';
 import { redactFreeformText } from './freeform-redact.ts';
 import { type LiveFinesseResult, runBestEffortLiveFinesse } from './live-finesse-runner.ts';
-import { type LLMOptions, type ProviderName, detectTeachProvider } from './llm.ts';
+import { type LLMOptions, type ProviderName, detectTeachProvider, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import {
   type CompletionReviewInput,
@@ -414,6 +414,8 @@ interface FreshTeachControllerDependencies {
     priorToolDir?: string;
     revisionGuidance?: string;
     revisionContext?: FocusedPlannerRevisionContext;
+    resumeSessionId?: string;
+    onSessionId?: (sessionId: string) => void;
     llmConfig: LLMOptions;
     runDeadline: RunDeadlineRef;
     signal?: AbortSignal;
@@ -1190,7 +1192,7 @@ function failureEntryBelongsToTool(
   }
 }
 
-/** Give a fresh planner/compiler the latest failed attempt as explicitly old
+/** Give the retained planner/compiler the latest failed attempt as explicitly old
  * history. This is an agent handoff only: it neither validates nor rejects the
  * replacement plan. */
 function focusedRepairContexts(
@@ -1256,12 +1258,16 @@ function agentOptions(
   deadline: RunDeadline,
   deps?: Partial<MasterTeachAgentOptions>,
 ): MasterTeachAgentOptions {
+  const analyzer =
+    deps?.analyzer ??
+    (providerForFreshTeach(opts) === 'codex-cli' ? resolveProvider(llmOptions(opts)) : undefined);
   return {
     provider: providerForFreshTeach(opts),
     ...(opts.model ? { model: opts.model } : {}),
     deadlineMs: deadline.deadlineMs,
     runDeadline: deadline,
     signal: opts.signal,
+    ...(analyzer ? { analyzer } : {}),
     ...deps,
   };
 }
@@ -1286,6 +1292,8 @@ async function compileFocusedToolWithShippedAgent(input: {
   priorToolDir?: string;
   revisionGuidance?: string;
   revisionContext?: FocusedPlannerRevisionContext;
+  resumeSessionId?: string;
+  onSessionId?: (sessionId: string) => void;
   llmConfig: LLMOptions;
   runDeadline: RunDeadlineRef;
   signal?: AbortSignal;
@@ -1300,6 +1308,27 @@ async function compileFocusedToolWithShippedAgent(input: {
         copyFileSync(prior, pathJoin(input.stagingDir, name));
     }
   }
+  const toolPlan = JSON.stringify(
+    {
+      tool: input.tool,
+      implementationPlan: input.implementationPlan,
+      ...(input.revisionGuidance || input.revisionContext
+        ? {
+            revision: {
+              instruction: input.priorToolDir
+                ? 'Use the compatible prior artifact as a starting point and make the smallest change required by the current master plan. Re-check it; the prior artifact may be a rejected draft or a previously working build.'
+                : 'No compatible prior artifact can be seeded. Follow the current failure facts and accepted strategy without copying executable files from another strategy.',
+              masterGuidance:
+                input.revisionGuidance ??
+                'Investigate the immediately preceding failed attempt and preserve every behavior that remains supported.',
+              ...(input.revisionContext ? { priorAttempt: input.revisionContext } : {}),
+            },
+          }
+        : {}),
+    },
+    null,
+    2,
+  );
   const result = await generate({
     sessionPath: input.sessionPath,
     outDir: input.stagingDir,
@@ -1314,27 +1343,16 @@ async function compileFocusedToolWithShippedAgent(input: {
     // Production promotion still copies only the allowed runtime artifacts.
     keepTest: true,
     onProgress: input.onProgress,
-    toolPlan: JSON.stringify(
-      {
-        tool: input.tool,
-        implementationPlan: input.implementationPlan,
-        ...(input.revisionGuidance || input.revisionContext
-          ? {
-              revision: {
-                instruction: input.priorToolDir
-                  ? 'Use the compatible prior artifact as a starting point and make the smallest change required by the current master plan. Re-check it; the prior artifact may be a rejected draft or a previously working build.'
-                  : 'No compatible prior artifact can be seeded. Follow the current failure facts and accepted strategy without copying executable files from another strategy.',
-                masterGuidance:
-                  input.revisionGuidance ??
-                  'Investigate the immediately preceding failed attempt and preserve every behavior that remains supported.',
-                ...(input.revisionContext ? { priorAttempt: input.revisionContext } : {}),
-              },
-            }
-          : {}),
-      },
-      null,
-      2,
-    ),
+    toolPlan,
+    ...(input.resumeSessionId
+      ? {
+          initialResume: {
+            sessionId: input.resumeSessionId,
+            message: `Continue this same tool conversation. The master and verifier supplied new factual feedback. Work in the current tool directory, inspect the seeded current artifacts, make the smallest supported repair, rerun the normal checks, and finish through done() or give_up().\n\nCurrent accepted tool plan and latest feedback:\n${toolPlan}`,
+          },
+        }
+      : {}),
+    onSessionId: input.onSessionId,
     strategyKind: input.implementationPlan.strategyKind,
     revisionMode: Boolean(input.revisionGuidance || input.revisionContext || input.priorToolDir),
     verificationMode: 'master_mvp',
@@ -2059,6 +2077,8 @@ async function compileAndCheckCurrentPlan(input: {
   priorChain?: Map<string, LiveCheckResult>;
   revisionGuidanceByToolId?: ReadonlyMap<string, string>;
   revisionContextByToolId?: ReadonlyMap<string, FocusedPlannerRevisionContext>;
+  /** Durable compiler conversations, one per tool and strategy. */
+  compileSessionsByToolStrategy?: Map<string, string>;
   /** Install an independently usable MVP before optional breadth work. */
   publishMvp?: (tool: EditableTeachingTool, compiled: CompiledFocusedTool) => Promise<void>;
   /** Review only the default result's fitness for the core operation. */
@@ -2179,6 +2199,14 @@ async function compileAndCheckCurrentPlan(input: {
           : draftSourceByToolStrategy.get(draftSourceKey(tool.id, tool.strategy.kind))?.toolDir,
       revisionGuidance: input.revisionGuidanceByToolId?.get(tool.id),
       revisionContext: input.revisionContextByToolId?.get(tool.id),
+      resumeSessionId: input.compileSessionsByToolStrategy?.get(
+        draftSourceKey(tool.id, tool.strategy.kind),
+      ),
+      onSessionId: (sessionId) =>
+        input.compileSessionsByToolStrategy?.set(
+          draftSourceKey(tool.id, tool.strategy?.kind ?? implementation.strategyKind),
+          sessionId,
+        ),
       llmConfig: input.llmConfig,
       runDeadline: input.runDeadline,
       signal: input.signal,
@@ -3902,6 +3930,7 @@ export async function runFreshMasterTeach(
     let draftSourceByToolStrategy = new Map<string, CompiledFocusedTool>();
     let liveByToolId = new Map<string, LiveCheckResult>();
     let chainByEdgeId = new Map<string, LiveCheckResult>();
+    const compileSessionsByToolStrategy = new Map<string, string>();
     const revisionGuidanceByToolId = new Map<string, string>();
     const repairContextByToolId = new Map<string, FocusedPlannerRevisionContext>();
     const mvpDispositionByResult = new Map<
@@ -3999,6 +4028,7 @@ export async function runFreshMasterTeach(
           priorChain: chainByEdgeId,
           revisionGuidanceByToolId,
           revisionContextByToolId: repairContextByToolId,
+          compileSessionsByToolStrategy,
           isMvpPublished: (toolId, buildRef) =>
             publishedMvpBuilds.has(`${toolId}:${buildRef.sha256}`),
           resultDisposition: (toolId, resultReceiptRef) =>

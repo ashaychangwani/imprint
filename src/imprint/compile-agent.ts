@@ -29,7 +29,10 @@ import {
   formatCompileVerificationMode,
   formatToolPlan,
 } from './compile-agent-types.ts';
-import { runCompileWithProviderRecovery } from './compile-provider-recovery.ts';
+import {
+  type CompilerResume,
+  runCompileWithProviderRecovery,
+} from './compile-provider-recovery.ts';
 import type { CompileStrategyKind } from './compile-strategy.ts';
 import {
   applyIrreversibleVerificationWaiver,
@@ -152,14 +155,18 @@ interface CompileAgentOptions {
    * are not held behind live semantic breadth work. Standalone generation
    * keeps the full verifier by default. */
   verificationMode?: CompileVerificationMode;
+  /** Continue the same tool conversation after factual master/verifier feedback. */
+  initialResume?: CompilerResume;
+  /** Reports the durable provider thread even when the artifact attempt fails. */
+  onSessionId?: (sessionId: string) => void;
 }
 
 function formatRevisionMode(enabled: boolean | undefined): string {
   return enabled
     ? [
-        'REVISION MODE: this is a fresh compiler context revising an existing generated tool, not a from-scratch compile and not a resumed prior agent session.',
+        'REVISION MODE: continue this tool and strategy in its retained compiler conversation; do not restart the investigation from scratch.',
         'Use read_session_summary.revisionContext, then read any listed compatible artifacts and durable verification feedback before inspecting raw response bodies.',
-        'Read the supplied tool-plan revision guidance, preserve proven behavior when a compatible artifact exists, and make the smallest evidence-backed repair.',
+        'Use the conversation history plus supplied tool-plan revision guidance, preserve proven behavior when a compatible artifact exists, and make the smallest evidence-backed repair. Let Codex manage context compaction when needed.',
       ].join(' ')
     : '';
 }
@@ -296,6 +303,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
       const providerName = resolvedProvider.name;
       const compiler = providerName === 'claude-cli' ? claudeCliCompiler : codexCliCompiler;
       const result = await runCompileWithProviderRecovery({
+        initialResume: opts.initialResume,
         runDeadline,
         signal: opts.signal,
         onDeadlineReached: opts.onDeadlineReached,
@@ -333,6 +341,7 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
               : undefined,
           }),
       });
+      if (result.sessionId) opts.onSessionId?.(result.sessionId);
       if (!result.success) return result;
       if (!opts.keepTest && opts.verificationMode !== 'master_mvp') {
         removeEphemeralTests(absoluteToolDir);

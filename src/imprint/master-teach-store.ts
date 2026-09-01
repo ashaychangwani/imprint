@@ -456,10 +456,7 @@ export class FreshTeachJournal {
     const priorEdges = new Map(priorPlan.chainEdges.map((edge) => [edge.id, edge] as const));
     const nextEdges = new Map(result.plan.chainEdges.map((edge) => [edge.id, edge] as const));
     const invocationKey = (edge: (typeof priorPlan.chainEdges)[number]) =>
-      canonicalTeachingPlanJson([
-        edge.consumerToolId,
-        edge.invocationGroup === undefined ? { edgeId: edge.id } : { group: edge.invocationGroup },
-      ]);
+      canonicalTeachingPlanJson([edge.consumerToolId]);
     const invalidatedInvocationKeys = new Set<string>();
     for (const edgeId of result.changedChainEdgeIds) {
       const priorEdge = priorEdges.get(edgeId);

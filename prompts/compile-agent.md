@@ -73,7 +73,7 @@ Follow these steps to compile the session:
    an action, omit it or report the evidence gap to the master. Then write the
    two browser artifacts, run useful schema checks, and call `done`; steps 3
    through 11 below are the API compile path.
-   - If the summary contains `revisionContext`, this is a bounded revision of an existing tool in a fresh agent context. Read `toolPlan.revision.masterGuidance` and, when present, `toolPlan.revision.priorAttempt`. The latter contains the complete previous accepted implementation plan, identifies the older source plan/build being revised, and contains only the latest factual repair package. Those facts may describe this tool directly or a dependency failure for which the master explicitly chose to recall this tool. They are history, not a verdict on this fresh artifact. Preserve supported decisions and carry each still-relevant repair requirement forward; explicitly reject one only when current evidence contradicts it. Then read every relative path listed under `existingArtifacts.entries`, `durableDiagnostics.entries`, and `feedbackNotes.entries` before re-deriving behavior from focused recording bodies. Respect each inventory's omission and scan metadata: `feedbackNotes.state: "not_checked"` means more entries may exist beyond the bounded scan. The existing implementation plus live evidence is your starting point. Preserve proven branches; make the smallest evidence-backed repair. Treat the guidance as factual context to investigate, not permission to invent a fix.
+   - If the summary contains `revisionContext`, continue the existing tool investigation in this retained compiler conversation. Read `toolPlan.revision.masterGuidance` and, when present, `toolPlan.revision.priorAttempt`. The latter contains the complete previous accepted implementation plan, identifies the older source plan/build being revised, and contains only the latest factual repair package. Those facts may describe this tool directly or a dependency failure for which the master explicitly chose to recall this tool. They are new evidence, not a reason to discard the conversation history. Preserve supported decisions and carry each still-relevant repair requirement forward; explicitly reject one only when current evidence contradicts it. Then read every relative path listed under `existingArtifacts.entries`, `durableDiagnostics.entries`, and `feedbackNotes.entries` before re-deriving behavior from focused recording bodies. Respect each inventory's omission and scan metadata: `feedbackNotes.state: "not_checked"` means more entries may exist beyond the bounded scan. The existing implementation plus live evidence is your starting point. Preserve proven branches; make the smallest evidence-backed repair. Let Codex perform its own context compaction when needed.
 
    If the summary includes `selectedCandidate`, compile only that candidate. Other actions in the same recording are out of scope unless listed in `dependsOnTools`. Treat those names as separately callable setup tools: keep this tool's workflow narrow, and make its integration test establish required state through the named sibling tool when necessary.
 
@@ -365,7 +365,7 @@ Follow these steps to compile the session:
 
 12. **Fix and iterate.** If tests fail:
     - **parser.test.ts or request.test.ts failures**: re-read the recorded request/response and adjust the parser, encoding declaration, or transform
-    - **integration.test.ts feedback from the verifier**: in a standalone full compile, read the exact captured request, response, state, and parsed output, then investigate before changing the workflow. In `MASTER MVP COMPILE MODE`, live checking happens only after this compiler returns; a failure starts a fresh compiler with the prior artifact and its source-bound repair facts. Do not infer one universal cause from a status code and do not retry the same request without a new evidence-backed hypothesis.
+    - **integration.test.ts feedback from the verifier**: in a standalone full compile, read the exact captured request, response, state, and parsed output, then investigate before changing the workflow. In `MASTER MVP COMPILE MODE`, live checking happens only after this compiler returns; a failure resumes this compiler conversation with the prior artifact and its source-bound repair facts. Do not infer one universal cause from a status code and do not retry the same request without a new evidence-backed hypothesis.
     - Re-run tests
     - Repeat until all tests pass
 
@@ -382,9 +382,9 @@ Follow these steps to compile the session:
     - **When a shared request-transform (or any shared helper) constructs the request, pass parameters using the EXACT names and types that helper consumes.** Never assume the shapes line up — confirm against the helper's actual exported signature AND against the recording. When the tool's parameter names/types differ from the helper's expected input (e.g. snake_case vs camelCase; a comma-separated string vs an array; a string-encoded number vs a number), adapt them explicitly at the call site — split a comma list into an array, coerce the type, rename the key — so the value the helper receives matches what it expects. A mismatched name or type is silently dropped: the helper sees the wrong shape, skips the value, and the request goes out unfiltered while the tool claims to filter.
     - **Never hardcode a single recorded variant of the request when the tool exposes a parameter meant to vary it.** If a parameter selects among request variants (it changes the request shape or body), the parameter must actually drive the variation — wire it so each variant's value produces the request the recording shows for that variant. Do not bake one recorded variant into the body and leave the parameter disconnected; that variant would always win and the parameter would be inert.
     - **Fail closed for selector parameters.** For detail and mutation tools, when a parameter selects a record, segment, passenger, seat, line item, or reservation, your request-transform must throw a clear error if the live response does not contain that exact selector. Do not fall back to the first item, first segment, first passenger, or a recorded default for state-changing requests or record-specific detail requests; that can mutate or return the wrong entity while tests still look green.
-    - **If a parameter's effect cannot be reproduced from the recorded data**, distinguish grounded construction from verified behavior in a plain evidence note. When request placement and encoding are grounded but the live effect cannot be confirmed, keep the parameter only if the remaining contract is honest and useful; the semantic reviewer will record the gap. In a standalone compile, when there is no grounded encoding or evidence shows the secondary parameter is broken with no supported repair, remove it and document the limitation. In `MASTER MVP COMPILE MODE`, never remove, rename, retype, or silently disconnect an accepted parameter. Call `give_up` with the exact parameter, request sequence/path, attempted encoding, and factual contradiction so the master can revise the contract and start a fresh compile. Never retain a known no-op input merely to satisfy the original candidate checklist.
+    - **If a parameter's effect cannot be reproduced from the recorded data**, distinguish grounded construction from verified behavior in a plain evidence note. When request placement and encoding are grounded but the live effect cannot be confirmed, keep the parameter only if the remaining contract is honest and useful; the semantic reviewer will record the gap. In a standalone compile, when there is no grounded encoding or evidence shows the secondary parameter is broken with no supported repair, remove it and document the limitation. In `MASTER MVP COMPILE MODE`, never remove, rename, retype, or silently disconnect an accepted parameter. Call `give_up` with the exact parameter, request sequence/path, attempted encoding, and factual contradiction so the master can revise the contract and return it to this retained compiler conversation. Never retain a known no-op input merely to satisfy the original candidate checklist.
 
-14. **Claim completion.** Call `done` only after the required artifacts exist, meaningful parser and request tests pass through `run_tests`, generated modules typecheck, the baseline `integration.test.ts` has been written for later live review, and every request-construction defect named in the current revision has been investigated. In `MASTER MVP COMPILE MODE`, `done` performs the deterministic contract handoff and the master runs the live call afterward; a later live failure belongs to a fresh compiler context. In a standalone full compile, `done` continues into independent live verification and deterministic failures may return to this context for repair.
+14. **Claim completion.** Call `done` only after the required artifacts exist, meaningful parser and request tests pass through `run_tests`, generated modules typecheck, the baseline `integration.test.ts` has been written for later live review, and every request-construction defect named in the current revision has been investigated. In `MASTER MVP COMPILE MODE`, `done` performs the deterministic contract handoff and the master runs the live call afterward; a later live failure resumes this same tool conversation. In a standalone full compile, `done` continues into independent live verification and deterministic failures may return to this context for repair.
 
 ## Efficiency Rules
 
@@ -542,7 +542,7 @@ You may call `give_up` only in these cases:
 
 5. **One unexplained live failure is not a reason to `give_up`.** Preserve the exact failure, investigate alternative evidence and supported execution strategies, and call `done` when the mode-specific downstream master or verifier should judge the remaining facts. Use `give_up` only when the evidence satisfies one of the concrete impossibility cases above.
 
-6. **The accepted master contract is contradicted by the recording.** This case applies only in `MASTER MVP COMPILE MODE`. If an accepted public parameter has no honest grounded encoding, do not delete or rewrite it and do not keep repairing the same contract in place. Call `give_up` with the parameter name and type, the exact request sequence/path inspected, the attempted construction, and the contradiction. The master owns the resulting plan change and a fresh compiler revision.
+6. **The accepted master contract is contradicted by the recording.** This case applies only in `MASTER MVP COMPILE MODE`. If an accepted public parameter has no honest grounded encoding, do not delete or rewrite it and do not keep repairing the same contract in place. Call `give_up` with the parameter name and type, the exact request sequence/path inspected, the attempted construction, and the contradiction. The master owns the resulting plan change and sends it back to this retained compiler conversation when the strategy remains the same.
 
 In all cases, the `give_up` call must include a `what_was_tried` field listing concrete approaches and why each failed. "This is difficult" or "the format is opaque" are not sufficient justifications.
 
@@ -602,7 +602,7 @@ In standalone full mode only, the harness then hands the integration suite to
 the independent verifier, which runs `integration.test.ts`, inspects factual
 inputs and parsed outputs, and returns semantic feedback in this compile
 session. In `MASTER MVP COMPILE MODE`, `done` returns after steps 1–4; the
-master runs the accepted live case and launches a fresh compiler with exact
+master runs the accepted live case and resumes the retained compiler with exact
 source-bound facts if a repair is needed.
 
 For `playbook_fallback`, it validates the request-free `workflow.json` and
@@ -901,11 +901,9 @@ notes: Use only after the accepted plan establishes that no API execution rung i
 
 A producer-consumer relationship is an editable proposal until a live chain
 proves it. The valid plan field is `chainEdges`; `candidate_chain` is a human
-label, not an extra artifact field. Optional `invocationGroup` is an exact
-agent-authored execution contract: omitted means this edge is checked alone;
-edges with the same consumer and group are checked together. Do not invent,
-remove, merge, or split groups in the generated artifact, and do not expect the
-runtime to infer correlated sibling bindings or alternative combinations:
+label, not an extra artifact field. Every edge for the same consumer belongs
+to one master-chosen invocation. Do not invent alternative bindings or expect
+the runtime to group or rank them:
 
 ```json
 {
@@ -915,16 +913,14 @@ runtime to infer correlated sibling bindings or alternative combinations:
       "producerToolId": "catalog_search",
       "producerResultPath": "items[0].id",
       "consumerToolId": "catalog_detail",
-      "consumerParameter": "item_id",
-      "invocationGroup": "catalog-detail-selection"
+      "consumerParameter": "item_id"
     },
     {
       "id": "catalog-variant-to-detail",
       "producerToolId": "catalog_search",
       "producerResultPath": "items[0].variant_id",
       "consumerToolId": "catalog_detail",
-      "consumerParameter": "variant_id",
-      "invocationGroup": "catalog-detail-selection"
+      "consumerParameter": "variant_id"
     }
   ]
 }
@@ -934,10 +930,8 @@ The producer must return the actual `items[0].id` and
 `items[0].variant_id`; the consumer must apply both fresh values at their exact
 recorded parameter positions in the declared shared invocation. A similar
 name, a copied recorded constant, or a test of only one side is not chain
-proof. Alternative bindings for the same consumer parameter belong in separate
-groups (or as separate ungrouped edges), never twice in one group. A binding
-shared by several alternative invocations appears as a distinct edge in each
-group; the runtime does not copy it across groups.
+proof. If the evidence supports alternative bindings for one consumer
+parameter, the master chooses one; the runtime never ranks alternatives.
 
 ## WorkflowSchema Reference
 
