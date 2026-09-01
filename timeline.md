@@ -1989,3 +1989,11 @@ dependency, and evidence document remain untouched for the advisor and master
 to judge. Later advisor and master outputs remain strictly validated. This is a
 mechanical detector-to-master handoff fix, not a Flights rule or a change to
 candidate selection semantics. The failed run will not be resumed.
+
+The repair is commit `fb0347f`. It replaces the earlier narration-only cleanup
+with the single recording-event intersection and removes the now-unneeded
+narration index from the controller. Tests prove real events survive, invalid
+event hints disappear without deleting the candidate, complete evidence still
+reaches the advisor, and any invalid event added later by the advisor or master
+is still rejected. The combined focused suite passes 198 tests, with type
+checking, lint, and whitespace checks clean.
