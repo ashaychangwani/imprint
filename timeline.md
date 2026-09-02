@@ -3532,3 +3532,40 @@ focused tests, type checking, and lint pass.
 Fresh validation run `5d3c8456-d570-47a3-a1cf-fd8b01078030` then started from
 the accepted candidate boundaries with isolated per-tool CDP sessions and the
 researcher blocker self-review enabled. No stopped run state was resumed.
+
+## 2026-09-02 16:46 PDT — Fresh Flights run ended honestly with one usable MVP
+
+Run `5d3c8456-d570-47a3-a1cf-fd8b01078030` used the correct combined recording
+and ended `partial` with one ready tool and three unresolved operations. It
+published `resolve_flight_location` after a successful live CDP check and a
+separate result review. Calendar and Search stayed on API research, never used
+a playbook, and kept their own conversation history across attempts. Their
+first blocker proposals were returned to the same researchers for review; each
+researcher found at least one missed comparison, tested it, and only then
+repeated its blocker. The downstream booking tool remained unresolved because
+its Search producer never became usable. The terminal clearly reported `1
+ready, 3 unresolved`; it did not claim completion or hide those failures.
+
+The run also confirmed that browser isolation and warm reuse now behave as
+intended. Different tools launched separate browser state. Within one unchanged
+Calendar check, the second CDP execution reused that tool's browser and took
+257 ms instead of another roughly 30-second startup.
+
+Calendar and Search both found that their first transformed request bodies had
+one extra array wrapper around each airport code. After correcting that, they
+tested fresh and recorded session values, generic and route-specific page
+state, future dates, several request-ID choices, recorded opaque headers, and
+both CDP and stealth execution where relevant. The live site still returned
+short protocol failures rather than fares or itineraries.
+
+The checked-in examples were then executed independently with future dates.
+The shipped Calendar artifact currently fails before sending because its
+shared transport adapter expects an input object that the current runtime no
+longer supplies. With only that adapter bypassed, its recorded request recipe
+reached HTTP 200 but returned a 132-byte error/empty frame and parsed as zero
+fares. The checked-in Search artifact likewise reached HTTP 200 but returned a
+132-byte non-data frame, and its parser correctly rejected it because it
+contained no recognizable itineraries. Therefore the examples' old
+`liveVerified` flags and backend receipts show historical transport success,
+not current useful functionality. The diagnostic edits to the Calendar example
+were fully restored; the worktree remained clean before this timeline entry.
