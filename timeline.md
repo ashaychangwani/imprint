@@ -3253,3 +3253,33 @@ The initial MVP must demonstrate at least one core record unless the operation's
 purpose is itself to prove absence. Mechanical receipts and semantic evidence
 now use an emitted object's explicit integer `count`, so `{entries: [], count:
 0}` is reported as zero core results rather than one wrapper object.
+
+## 2026-09-02 04:08 PDT — Restart proved the semantic fix and ended honestly
+
+Fresh Flights run `624964ca-d96a-4206-b278-2ca4b461f2d2` reused only the
+previously reviewed candidate boundaries and restarted planning, compilation,
+and verification on the correct combined recording. It finished partial after
+about 45 minutes with one ready tool and three explicitly unresolved tools.
+Only `resolve_flight_location` was promoted.
+
+The run repeatedly exercised the bug fixed above. Calendar reached Google via
+CDP several times but returned zero fares, usually as a 130–132 byte protocol
+error or diagnostic response. Search likewise returned zero flights or failed
+to obtain required live page state. The checker rejected every empty result,
+reported an explicit count of zero, and never promoted either tool merely
+because the HTTP request completed. Booking stayed unresolved because Search
+never produced the selection value it consumes. No playbook fallback was used.
+
+The retained Calendar and Search compiler conversations were resumed for each
+repair, so earlier reasoning was not discarded. The master stopped retrying
+Calendar when it had exhausted its distinct evidence-backed constructions, then
+gave Search one further construction before requesting independent completion
+review. The terminal accurately reported `1 ready, 3 unresolved`.
+
+For comparison, a clean run of shipped Imprint on the same recording took about
+40 minutes and claimed three ready tools, but independent checks found only its
+location tool genuinely returned data. Its Search and Booking tools returned
+empty wrapper objects, and it missed Calendar entirely. The current flow is not
+yet better at reconstructing the hard live requests, but it is now materially
+more honest: it discovers all four operations and refuses to ship hollow API
+results.
