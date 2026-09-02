@@ -3508,3 +3508,7 @@ not choose a hypothesis, classify a field, or inspect site semantics. Focused
 tests prove that a researcher can recover from its proposed blocker and hand a
 subsequent proven candidate to compilation. Prompt tests, type checking, and
 lint pass.
+
+Fresh validation run `ea08b54b-992c-4c4c-8517-fd87b2cd042e` then started from
+the same accepted candidate boundaries. Planning, research, and compilation
+are fresh; the stopped run is diagnostic evidence only.
