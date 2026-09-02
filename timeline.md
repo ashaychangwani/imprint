@@ -3475,3 +3475,10 @@ all later work are fresh; no failed research or compilation run was resumed.
 Its first validation target is whether the retained Calendar and Search
 researchers continue through the strongest untried constructions instead of
 repeating the unsupported opaque-header blocker.
+
+At 15:41 PDT the user requested a restart. Run
+`ed84534a-1ade-48aa-95e9-8b807800209d` was cancelled during fresh planning with
+no ready or unfinished tools. A new fresh run,
+`ae5108bd-968b-4caf-8409-d9c601a2d16f`, started from the same accepted candidate
+boundaries. It does not reuse the cancelled run's planning, research, or build
+state.
