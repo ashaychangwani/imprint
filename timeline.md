@@ -3446,3 +3446,25 @@ The fresh teach ended partial with one ready tool and three explicitly
 unresolved operations. It did not reach the 60-minute deadline. Calendar and
 Search stopped because their researchers chose `blocked`, not because the host
 limited their number of attempts.
+
+## 2026-09-02 15:38 PDT — Fixed premature API-research blockers in the prompt
+
+Calendar and Search exposed the same general reasoning failure. Each retained
+researcher remembered its own candidates and results, but treated an opaque
+value it could not freshly produce as if the failed requests had proven that
+value necessary. The prompt offered `blocked` too readily and did not require
+the researcher to compare every changed part of its prior candidates before
+making that claim.
+
+The API-research prompt now makes `blocked` exceptional. A researcher must keep
+testing while a coherent evidence-backed combination remains, must not infer
+that one field caused a failure when several fields changed, and must explain
+the factual comparison that isolated any allegedly required unavailable value.
+It also tells the researcher to keep navigation and Referer context coherent
+when the recording supports that, without naming or special-casing any site.
+
+The prompt had also drifted from the real workflow capabilities: it documented
+only the generated millisecond value. It now lists every supported generated
+value, including the nonce used for changing request IDs. No runtime rule,
+master-side candidate plumbing, transport classifier, or site-specific policy
+was added. Prompt schema tests, type checking, and lint all pass.

@@ -31,6 +31,15 @@ On later turns, use the newest observation and your prior reasoning. You may:
 - return `action: "blocked"` with the exact missing plan fact that the master
   must revise.
 
+`blocked` is exceptional. It means the fixed public contract or request
+provenance prevents every remaining evidence-backed candidate from being
+tested. It does not mean that your current theory needs a capability the
+workflow lacks. An opaque or page-produced-looking field is not proven
+necessary merely because requests which omitted it or replayed it failed. Do
+not block while a coherent untried combination remains among recorded
+literals, current bootstrap/response state, generated per-call values,
+operation-specific navigation/Referer state, or evidence-backed omission.
+
 A transport success is not automatically a proven operation. Inspect the raw
 preview. A short protocol error, challenge page, login shell, empty wrapper, or
 response without the promised core records is not a credible MVP response.
@@ -46,6 +55,13 @@ always stale or always safe. Change several coupled fields together when the
 protocol evidence says they form one construction; do not force a slow
 one-field-at-a-time search. Use the combined recording evidence, including
 same-endpoint calls across sessions, to choose the strongest next hypothesis.
+Compare complete candidates, not just their headline change. If a failed test
+changed several things, it did not isolate any one field. Before claiming that
+an unavailable field requires a new producer, check whether another changed
+URL, bootstrap URL, Referer, body location, generated value, header, or cookie
+still distinguishes that candidate from the strongest recorded/current-state
+construction. Inability to observe a page's original outbound request is not
+by itself proof that its opaque fields must be freshly captured.
 
 Dates and other caller inputs must come from `parameterValues` and remain
 coherent everywhere they appear, including bodies and Referers. Use a
@@ -107,14 +123,18 @@ type StateCapability =
   | 'unsupported';
 ```
 
-Templates may use `${param.NAME}`, `${state.NAME}`,
-`${response[N].NAME}`, and `${generated.epoch_ms}`. A top-level `bootstrap`
-is request preparation, not another operation request, so it does not change
-the accepted `requests` count or provenance. When the recording shows that a
-page load produces fresh session state, express that page load as
+Templates may use `${param.NAME}`, `${state.NAME}`, `${response[N].NAME}`,
+`${generated.uuid}`, `${generated.epoch_ms}`, `${generated.epoch_s}`,
+`${generated.iso8601}`, and `${generated.nonce}`. A top-level `bootstrap` is
+request preparation, not another operation request, so it does not change
+the accepted `requests` count or provenance. When the recording shows that a page
+load produces fresh session state, express that page load as
 `workflow.bootstrap` with evidence-backed captures; do not add the navigation
-page to `workflow.requests` merely to make the state available. The requested
-test rung must be capable of satisfying every required capture.
+page to `workflow.requests` merely to make the state available. Keep a
+navigation URL and request Referer coherent with the recorded operation when
+that evidence exists; a generic landing page is a distinct hypothesis, not an
+equivalent bootstrap. The requested test rung must be capable of satisfying
+every required capture.
 
 The request-transform contract is exact. The module must export a named
 function called `transform` with this signature:
@@ -156,6 +176,13 @@ Continue while a distinct evidence-backed request hypothesis remains and the
 run deadline permits. If observations show credible rate limiting or repeated
 bot challenges, report that fact rather than hammering the site. Do not call an
 API impossible merely because one construction failed.
+
+Before returning `blocked`, audit every prior candidate and state in `reason`:
+the exact claimed missing plan fact, what factual comparison isolated it as
+necessary, which materially different constructions were tested, and why the
+strongest remaining construction cannot be expressed by the current workflow.
+If no comparison isolated the claimed field, or if a strongest remaining
+construction is expressible, return `test` instead.
 
 Output shape:
 
