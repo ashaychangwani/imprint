@@ -3097,8 +3097,17 @@ async function requestRepairRevision(
   };
   const decision = await context.deps.requestMasterDecision(decisionInput, context.agent);
   const decisionRef = context.journal.storeJson(decision);
+  const toolIdByName = new Map(
+    current.plan.tools.map((tool) => [tool.candidate.toolName, tool.id] as const),
+  );
+  const forceRecompileToolIds = decision.recallToolNames.map((toolName) => {
+    const toolId = toolIdByName.get(toolName);
+    if (!toolId) throw new Error(`recall references missing public tool name "${toolName}"`);
+    return toolId;
+  });
   const revision = context.journal.revisePlan(decision.desiredPlan, {
     expectedRevision: current.plan.revision,
+    forceRecompileToolIds,
     decision: planDecision(
       context.deps.now(),
       decision.outcome,

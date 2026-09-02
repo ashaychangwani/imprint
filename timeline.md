@@ -2706,3 +2706,36 @@ wait from ordinary Google Flights API checks without adding site-specific
 rules. Focused agent, controller, backend, and SDK tests pass, as do type
 checking, lint, and whitespace checks. A fresh teach after the final full test
 and commit is the next validation; the failed pre-change run will not resume.
+
+## 2026-09-01 16:49 PDT — Fresh Flights run proved context was fixed but repair routing still looped
+
+Fresh run `38c3bd00-25a8-4eaf-b312-a2eb32ba4216` used the latest combined
+Google Flights recording. It moved directly from triage to discovery without
+the old whole-session browser replay, found five operations, and kept one
+master conversation. The master's new inputs were about 39 KB, 43 KB, and
+25 KB instead of the prior 592–683 KB snapshots, so the context-overflow fix
+worked.
+
+The run still took 30 minutes and ended honestly with two ready tools and three
+not ready. `search_flight_locations` and `resolve_flight_location` compiled,
+passed live fetch checks, and published as usable MVPs. Calendar and flight
+search compiled but their live POSTs returned HTTP 400. Browser-backed
+transports were attempted only after those real API failures; this was backend
+verification, not the removed discovery-time observation.
+
+The live audit found the remaining avoidable loop. The master correctly said
+the API tool designs were still valid and asked to repair the compiled
+artifacts. However, the host interpreted `recallToolNames` as “discard the
+implementation plan and call the planner again.” That produced master →
+planner → master turns before the retained compiler could receive a narrow
+repair. One planner then hit the run-wide deadline, so the intended compiler
+repair never started.
+
+`recallToolNames` now means exactly “rebuild this public tool's artifact.” The
+journal invalidates that tool's build and receipts but preserves its accepted
+implementation plan. The master reason and source-bound failure facts go
+straight to the same retained compiler conversation. A planner runs again only
+when the master actually changes compile inputs such as parameters, strategy,
+evidence, or the request plan. Focused agent, journal, and foreground
+controller tests prove that an unchanged recall skips the planner while the
+compiler receives the prior build, failure facts, and repair guidance.

@@ -322,8 +322,11 @@ The public teaching path is one fresh foreground controller:
    failure.
 9. After a tool passes, a focused parameter advisor reviews the public parameter
    choices. Its advice is not authoritative.
-10. A failed check or useful advisor suggestion returns to the master. A changed
-    tool invalidates only itself and the consumers that depend on it. Unrelated
+10. A failed check or useful advisor suggestion returns to the master. If the
+    accepted tool design is unchanged, the repair goes directly to that tool's
+    retained compiler conversation. The focused planner runs again only when
+    the master changes the tool contract or request plan. A changed tool
+    invalidates only itself and the consumers that depend on it. Unrelated
     verified tools stay current.
 11. A fresh independent reviewer sees the current plan, result evidence, and
     immutable check history. Completion is rejected while any planned tool is

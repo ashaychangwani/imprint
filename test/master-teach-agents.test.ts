@@ -924,7 +924,7 @@ describe('prompts and pre-plan discovery', () => {
     expect(masterPrompt).toContain('top-level `recallToolNames`');
     expect(masterPrompt).toContain('Omission of an `implementationPlan` is not a recall');
     expect(masterPrompt).toContain('visible command');
-    expect(masterPrompt).toMatch(/do\s+not mutate an unrelated field/);
+    expect(masterPrompt).toMatch(/[Dd]o\s+not mutate an unrelated field/);
     expect(masterPrompt).toContain('A chain-only wiring failure is different');
     expect(masterPrompt).toContain('edit only the supported `chainEdges` fields');
     expect(masterPrompt).not.toContain('replayParameterValueOrigin');
@@ -1774,7 +1774,7 @@ describe('canonical planning and immutable execution', () => {
     expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(unchangedDetailPlan);
   });
 
-  it('carries omitted current plans except for tools the master explicitly recalls', () => {
+  it('carries omitted current plans while an explicit recall keeps the accepted plan', () => {
     const input = revisionMasterInput();
     const output = revisionMasterOutput(input);
     const search = at(output.desiredPlan.tools, 0);
@@ -1786,12 +1786,12 @@ describe('canonical planning and immutable execution', () => {
     output.recallToolNames = [search.candidate.toolName];
 
     const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
-    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
+    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toEqual(searchPlan);
     expect(at(parsed.desiredPlan.tools, 1).implementationPlan).toEqual(detailPlan);
     expect(searchPlan).toBeDefined();
   });
 
-  it('lets an explicit recall override an echoed old implementation plan', () => {
+  it('keeps an echoed implementation plan when recalling only its compiled artifact', () => {
     const input = revisionMasterInput();
     const output = revisionMasterOutput(input);
     const recalled = at(output.desiredPlan.tools, 0);
@@ -1799,7 +1799,7 @@ describe('canonical planning and immutable execution', () => {
     output.recallToolNames = [recalled.candidate.toolName];
 
     const parsed = parseMasterDecisionOutput(JSON.stringify(output), input);
-    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toBeUndefined();
+    expect(at(parsed.desiredPlan.tools, 0).implementationPlan).toEqual(recalled.implementationPlan);
   });
 
   it('rejects duplicate or non-current recall targets', () => {

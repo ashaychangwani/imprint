@@ -1052,10 +1052,7 @@ function masterOutputSchema(input: MasterDecisionInput) {
     suppliedPlanRefs.map((plan) => [selectionKey(plan), plan] as const),
   );
   return MasterDecisionOutputSchema.transform((output) => {
-    const recalledToolNames = new Set(output.recallToolNames);
     const tools = output.desiredPlan.tools.map((tool): EditableTeachingTool => {
-      if (recalledToolNames.has(tool.candidate.toolName))
-        return { ...tool, implementationPlan: undefined };
       const selectedPlan =
         tool.implementationPlan ?? currentPlanByToolId.get(tool.id)?.implementationPlan;
       if (!selectedPlan) return tool;

@@ -491,6 +491,28 @@ describe('small fresh teach journal', () => {
     expect(after.tools.find(({ toolId }) => toolId === 'other-id')?.buildRef).toEqual(otherBuild);
   });
 
+  it('recompiles a recalled artifact without discarding its accepted implementation plan', () => {
+    const { journal } = fixture();
+    acceptImplementations(journal);
+    issueBuild(journal, 'search-id');
+    passRequiredChecks(journal, 'search-id', [1]);
+    const current = journal.currentPlan();
+    const implementationPlan = current.tools[0]?.implementationPlan;
+
+    const revision = journal.revisePlan(desiredFrom(current), {
+      expectedRevision: current.revision,
+      decision: decision(),
+      forceRecompileToolIds: ['search-id'],
+    });
+
+    expect(revision.replanToolIds).toEqual([]);
+    expect(revision.recompileToolIds).toEqual(['search-id']);
+    expect(journal.currentPlan().tools[0]?.implementationPlan).toEqual(implementationPlan);
+    const state = journal.readState().tools[0];
+    expect(state?.buildRef).toBeUndefined();
+    expect(state?.currentReceiptRefs).toEqual([]);
+  });
+
   it('binds a chain receipt to the producer build and live result', () => {
     const edge: ChainEdge = {
       id: 'producer-to-consumer',

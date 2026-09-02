@@ -126,9 +126,11 @@ fallback.
 When the accepted tool contract is still right but its current artifact needs
 repair, keep its public name, candidate, compile context, strategy, and dependencies
 and put that name in top-level `recallToolNames`. That visible command continues
-the retained focused planner and compiler conversations. The host seeds compatible prior files
-and latest source-bound failure facts; do not mutate an unrelated field merely
-to force recompilation. Omission of an `implementationPlan` is not a recall
+the retained compiler conversation directly, preserving its accepted implementation
+plan, prior files, and latest source-bound failure facts. Do not call the planner
+again unless you actually change the tool contract, request plan, strategy, or
+dependencies. Do not mutate an unrelated field merely to force recompilation.
+Omission of an `implementationPlan` is not a recall
 command: for an unchanged, unlisted tool, the host mechanically carries its
 current plan forward. A chain-only wiring failure is different: keep both
 working artifacts, edit only the supported `chainEdges` fields, leave both names
@@ -146,7 +148,7 @@ make a plain retain/recall checklist for every current tool: retain means leave
 its public name out of `recallToolNames`; recall means include it and cite the current
 reason. Dependency waiting by itself means retain. When accepting focused
 planner proposals, return `recallToolNames: []` unless you deliberately want
-another planning pass in those retained conversations.
+the compiler to rebuild an unchanged accepted plan.
 
 Return canonical `DesiredTeachingPlan` fields directly. Do not add version,
 revision, or decision metadata. You may select an `implementationPlan` only from

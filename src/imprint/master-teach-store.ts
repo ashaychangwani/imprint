@@ -443,7 +443,11 @@ export class FreshTeachJournal {
   }
   revisePlan(
     desiredPlan: DesiredTeachingPlan,
-    options: { expectedRevision: number; decision: TeachingPlanDecision },
+    options: {
+      expectedRevision: number;
+      decision: TeachingPlanDecision;
+      forceRecompileToolIds?: readonly string[];
+    },
   ): TeachingPlanRevisionResult {
     const state = this.readState();
     this.#assertActive(state);
@@ -451,8 +455,18 @@ export class FreshTeachJournal {
     const result = reviseEditableTeachingPlan(priorPlan, desiredPlan, options, this.#validation);
     const nextPlanRef = this.#putJson(result.plan);
     const prior = new Map(state.tools.map((tool) => [tool.toolId, tool]));
-    const recompile = new Set(result.recompileToolIds);
-    const invalidatedProducerIds = new Set([...result.recompileToolIds, ...result.removedToolIds]);
+    const desiredToolIds = new Set(result.plan.tools.map(({ id }) => id));
+    const forcedRecompileToolIds = [...new Set(options.forceRecompileToolIds ?? [])].sort();
+    for (const toolId of forcedRecompileToolIds) {
+      if (!desiredToolIds.has(toolId)) {
+        throw new Error(`forced recompile references missing tool "${toolId}"`);
+      }
+    }
+    const recompileToolIds = [
+      ...new Set([...result.recompileToolIds, ...forcedRecompileToolIds]),
+    ].sort();
+    const recompile = new Set(recompileToolIds);
+    const invalidatedProducerIds = new Set([...recompileToolIds, ...result.removedToolIds]);
     const priorEdges = new Map(priorPlan.chainEdges.map((edge) => [edge.id, edge] as const));
     const nextEdges = new Map(result.plan.chainEdges.map((edge) => [edge.id, edge] as const));
     const invocationKey = (edge: (typeof priorPlan.chainEdges)[number]) =>
@@ -496,7 +510,7 @@ export class FreshTeachJournal {
     state.currentPlanRef = nextPlanRef;
     this.#clearReview(state);
     this.#commit(state);
-    return result;
+    return { ...result, recompileToolIds };
   }
   updateSharedManifest(value: unknown): FreshTeachJournalState {
     const state = this.readState();
