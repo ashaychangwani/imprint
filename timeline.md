@@ -3512,3 +3512,19 @@ lint pass.
 Fresh validation run `ea08b54b-992c-4c4c-8517-fd87b2cd042e` then started from
 the same accepted candidate boundaries. Planning, research, and compilation
 are fresh; the stopped run is diagnostic evidence only.
+
+## 2026-09-02 16:12 PDT — Stopped validation after detecting cross-tool CDP reuse
+
+Run `ea08b54b-992c-4c4c-8517-fd87b2cd042e` reached API research, but its logs
+showed a Calendar CDP diagnostic reusing the process-wide browser pool after a
+Location check had prepared it. The pool key was only the site name, despite an
+old comment incorrectly claiming concurrent compile lanes used separate
+processes. This could mix page and session state between tools and make research
+results unreliable. The run was cancelled with zero ready and four unfinished
+tools.
+
+The pool key now contains the public tool name and its fully rendered bootstrap
+context. Repeated checks of the same unchanged tool can remain warm; a different
+tool or materially different bootstrap gets a separate browser. This is purely
+execution isolation, with no site classification or semantic policy. Ninety-two
+focused tests, type checking, and lint pass.

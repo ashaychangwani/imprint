@@ -170,13 +170,10 @@ function rememberCompileUnavailableBackends(memoKey: string, result: LadderResul
 }
 
 /** Process-global CDP pool for the compile/test path (`runWorkflowWithLadder`).
- *  cdp-replay stores its live Chrome here on success so subsequent calls within
- *  the same `bun test` process reuse it (~2-5s vs ~33s cold start) — the same
- *  mechanism as the runtime pool in mcp-server.ts. An idle timer (re)armed after
- *  every call closes each browser shortly after the LAST call, so the host
- *  process drains and exits cleanly (no leak, no hang) without a per-call drain.
- *  Per-process: concurrent compile lanes are separate `bun test` processes, so
- *  this is never shared across lanes; never consulted by production replay. */
+ *  Each tool and rendered bootstrap context has its own entry. Repeated checks
+ *  of that same construction stay warm, while concurrent tools and materially
+ *  different bootstrap contexts cannot inherit one another's page/session
+ *  state. An idle timer closes browsers shortly after the last call. */
 const compileCdpPool = new Map<string, CdpBrowserFetch>();
 const compileCdpIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const COMPILE_CDP_IDLE_MS = 15_000;
@@ -287,8 +284,8 @@ export function __resetCompilePacingForTest(): void {
   compileLastRequestAt.clear();
 }
 
-export function cdpReplayPoolKey(site: string, _baseUrl: string): string {
-  return site;
+export function cdpReplayPoolKey(site: string, toolName: string, bootstrapUrl: string): string {
+  return `${site}\u0000${toolName}\u0000${bootstrapUrl}`;
 }
 
 /** Expand a replayBackend choice into a concrete ladder. 'auto' prefers
@@ -1042,7 +1039,7 @@ async function runCdpReplay(
     : undefined;
 
   const siteDir = pathResolve(tool.dir, '..');
-  const poolKey = cdpReplayPoolKey(tool.site, baseUrl);
+  const poolKey = cdpReplayPoolKey(tool.site, tool.workflow.toolName, bootstrapUrl ?? baseUrl);
   const pooled = cdpPool?.get(poolKey);
   const ownsSession = !pooled;
 

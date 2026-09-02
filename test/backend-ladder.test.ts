@@ -1754,6 +1754,19 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     };
   }
 
+  it('isolates pooled CDP sessions by tool and rendered bootstrap context', () => {
+    const first = cdpReplayPoolKey('fixture', 'search_one', 'https://fixture.test/search?q=one');
+    expect(cdpReplayPoolKey('fixture', 'search_two', 'https://fixture.test/search?q=one')).not.toBe(
+      first,
+    );
+    expect(cdpReplayPoolKey('fixture', 'search_one', 'https://fixture.test/search?q=two')).not.toBe(
+      first,
+    );
+    expect(cdpReplayPoolKey('fixture', 'search_one', 'https://fixture.test/search?q=one')).toBe(
+      first,
+    );
+  });
+
   it('uses workflow defaults before fetch-bootstrap substitutes bootstrap.url', async () => {
     let seenBootstrapUrl: string | undefined;
     let seenParams: Record<string, unknown> | undefined;
@@ -1855,7 +1868,13 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     });
 
     expect(r.result.ok).toBe(false);
-    const retained = cdpPool.get(cdpReplayPoolKey('flights', 'https://flights.example.com'));
+    const retained = cdpPool.get(
+      cdpReplayPoolKey(
+        'flights',
+        'tool_flights',
+        'https://flights.example.com/search?origin=SAN&returnDate=&adults=1',
+      ),
+    );
     expect(retained?.inspectPage).toBe(inspectPage);
     expect(closes).toBe(0);
   });
@@ -1895,7 +1914,13 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     expect(r.result.ok).toBe(false);
     expect(inspections).toBe(1);
     expect(
-      cdpPool.get(cdpReplayPoolKey('flights', 'https://flights.example.com'))?.inspectPage,
+      cdpPool.get(
+        cdpReplayPoolKey(
+          'flights',
+          'tool_flights',
+          'https://flights.example.com/search?origin=SAN&returnDate=&adults=1',
+        ),
+      )?.inspectPage,
     ).toBe(inspectPage);
     expect(closes).toBe(0);
   });
@@ -2269,7 +2294,15 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
     expect(r3.result.ok).toBe(true);
     expect(createCount).toBe(1);
     expect(closes).toBe(0);
-    expect(cdpPool.has(cdpReplayPoolKey('google-flights', 'https://www.google.com'))).toBe(true);
+    expect(
+      cdpPool.has(
+        cdpReplayPoolKey(
+          'google-flights',
+          googleFlightsWorkflow.toolName,
+          googleFlightsWorkflow.bootstrap?.url ?? 'https://www.google.com',
+        ),
+      ),
+    ).toBe(true);
     expect(requestBodies).toHaveLength(3);
     expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('SJC');
     expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('SAN');
