@@ -3320,3 +3320,29 @@ service but its parser found no recognizable itineraries, and the other backend
 rungs failed. This means the example remains useful historical evidence about
 request design, but it is not a currently working answer that the teach process
 could simply rediscover. The fresh teach must still prove its own live result.
+
+## 2026-09-02 14:12 PDT — Split API research from artifact compilation
+
+The short-lived experiment that let the compiler call `probe_api` directly was
+rolled back. Commit `e785eda` reverses only `d4d04b6` and its follow-up
+`2bdf14d`; it does not roll the branch back to `main` or discard the earlier
+master-teach work. The prior Flights run had already exited, so it was not
+resumed after this prompt and code change.
+
+The replacement gives each API tool two small, persistent conversations. An API
+researcher receives the recording evidence and accepted plan, tests candidate
+requests through Imprint's existing fetch/CDP ladder, reads the returned data,
+and continues until one exact request returns the promised core records. It
+cannot write a parser or choose a browser playbook. Once it proves a request,
+the compiler receives those exact tested files and focuses on the parser,
+offline tests, integration case, and normal Imprint packaging. The compiler is
+told not to restart the request search or silently replace the proven request.
+
+Both conversations keep their own history through the existing Codex SDK
+session support; they are not recreated between repairs and Imprint does not
+manually summarize them. The host only checks file shape, recording references,
+and that the request handed to the compiler is byte-for-byte the request that
+was actually tested. It does not add site rules or decide what changing values
+mean. All 1,852 tests, type checking, and lint passed. A fresh teach run has
+not yet started; it will be the next validation after this checkpoint is
+committed.

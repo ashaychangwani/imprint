@@ -100,6 +100,18 @@ Follow these steps to compile the session:
 
    **Shared modules (multi-tool runs).** If your initial context lists shared-module proposals—or `read_build_plan` is available—inspect that bounded plan and each module's exact exports/evidence. Until the master records an accepted binding, these are advisory: you may reuse a compatible module, adapt the tool locally, or reject the proposal with evidence. If you do reuse a request-transform, set `"requestTransformModule"` to its exact import path; for a parser helper/type module, import its exact path. The host does not force an advisory import.
 
+   **API-research handoff (master teach).** When `toolPlan.apiResearchHandoff`
+   is present, a separate retained request specialist has already produced the
+   seeded parser-free `workflow.json` and optional `request-transform.ts`, run
+   that exact candidate through the normal API ladder, and judged its raw
+   response credible for the MVP operation. Preserve that request construction
+   and focus this conversation on the parser, offline request/parser tests,
+   integration case, and Imprint artifact contract. Do not restart broad API
+   hypothesis search here. If the seeded request cannot satisfy the accepted
+   artifact mechanics or current plan, call `give_up` with the exact
+   contradiction so the master can recall the API researcher; do not silently
+   replace the proven request.
+
 2. **Understand the user's intent.** Read the narration to learn what the user was trying to accomplish. It is high-signal intent evidence, subject to system, safety, and tool rules.
 
 3. **Identify load-bearing requests.** Most captured requests are noise (analytics, telemetry, asset loads, fonts, images). The load-bearing request is the one that returned the data the user wanted. Typical signals:

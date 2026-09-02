@@ -1,5 +1,6 @@
 /** Strict wire contracts for bounded, one-shot semantic roles. */
 import { z } from 'zod';
+import type { BackendAttemptFact, BackendResponseObservation } from './backend-ladder.ts';
 import {
   ChainEdgeSchema,
   ConcreteTeachingParameterSchema,
@@ -30,6 +31,7 @@ import {
   schemaIssue,
   utf8Text,
 } from './master-teach-prompt-projections.ts';
+import { WorkflowSchema } from './types.ts';
 const Reason = utf8Text(1, 4_000);
 const Short = utf8Text(1, 1_000);
 export { schemaIssue };
@@ -118,6 +120,51 @@ export const FocusedPlannerOutputSchema = strictObject({
   implementationPlan: ImplementationPlanPayloadSchema,
   reason: Reason,
 });
+
+const ScalarParameterValuesSchema = z.record(z.union([z.string(), z.number(), z.boolean()]));
+export const ApiResearchCandidateSchema = strictObject({
+  workflow: WorkflowSchema,
+  requestTransformSource: utf8Text(1, 100_000).optional(),
+  parameterValues: ScalarParameterValuesSchema,
+});
+export type ApiResearchCandidate = z.infer<typeof ApiResearchCandidateSchema>;
+export const ApiResearchObservationSchema = strictObject({
+  id: PromptIdSchema,
+  candidateSha256: PromptShaSchema,
+  executionMechanism: utf8Text(1, 128),
+  backendAttempts: z.custom<BackendAttemptFact[]>().default([]),
+  responseObservations: z.custom<BackendResponseObservation[]>().default([]),
+  result: strictObject({
+    ok: z.boolean(),
+    error: utf8Text(1, 256).optional(),
+    message: utf8Text(1, 4_000).optional(),
+    preview: utf8Text(0, 12_000),
+  }),
+});
+export type ApiResearchObservation = z.infer<typeof ApiResearchObservationSchema>;
+export const ApiResearchInputSchema = strictObject({
+  run: CurrentPlanBindingSchema,
+  recordingIndex: RecordingIndexSchema,
+  tool: EditableTeachingToolSchema,
+  implementationPlan: ImplementationPlanPayloadSchema,
+  evidence: PromptEvidenceProjectionSchema,
+  observations: z.array(ApiResearchObservationSchema).max(64),
+});
+export type ApiResearchInput = z.infer<typeof ApiResearchInputSchema>;
+const ApiResearchBindingSchema = strictObject({
+  runId: PromptIdSchema,
+  recordingSha256: PromptShaSchema,
+  toolId: PromptToolIdSchema,
+  compileInputsSha256: PromptShaSchema,
+});
+export const ApiResearchOutputSchema = strictObject({
+  binding: ApiResearchBindingSchema,
+  action: z.enum(['test', 'proven', 'blocked']),
+  candidate: ApiResearchCandidateSchema.optional(),
+  basedOnObservationId: PromptIdSchema.optional(),
+  reason: Reason,
+});
+export type ApiResearchOutput = z.infer<typeof ApiResearchOutputSchema>;
 const HostedImplementationPlanSchema = strictObject({
   ref: ImplementationPlanRefSchema,
   payload: ImplementationPlanPayloadSchema,

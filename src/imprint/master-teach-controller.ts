@@ -14,9 +14,11 @@ import {
   readFileSync,
   renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
+import { type ApiResearchResult, researchApiMvpCall } from './api-research-agent.ts';
 import {
   type BackendAttemptFact,
   type BackendResponseObservation,
@@ -56,6 +58,7 @@ import {
 import {
   type MasterTeachAgentOptions,
   mechanicalProofFailures,
+  requestApiResearchStep,
   requestBaselineMvpReview,
   requestCompletionReview,
   requestFocusedPlan,
@@ -426,6 +429,17 @@ interface CandidateSelectionCheckpoint {
   bootstrap: FreshTeachBootstrapObject[];
 }
 
+type ApiToolRunner = (input: {
+  workflowPath: string;
+  parameters: Record<string, string | number | boolean>;
+  signal?: AbortSignal;
+}) => Promise<{
+  result: ToolResult<unknown>;
+  executionMechanism: string;
+  backendAttempts?: BackendAttemptFact[];
+  responseObservations?: BackendResponseObservation[];
+}>;
+
 /** Test seams are deliberately role-sized; production defaults use the shipped modules. */
 interface FreshTeachControllerDependencies {
   now: () => Date;
@@ -441,6 +455,7 @@ interface FreshTeachControllerDependencies {
   detectToolCandidates: typeof detectToolCandidates;
   requestToolSelectionAdvice: typeof requestToolSelectionAdvice;
   requestFocusedPlan: typeof requestFocusedPlan;
+  requestApiResearchStep: typeof requestApiResearchStep;
   requestMasterDecision: typeof requestMasterDecision;
   requestBaselineMvpReview: typeof requestBaselineMvpReview;
   requestParameterSelectionAdvice: typeof requestParameterSelectionAdvice;
@@ -452,6 +467,8 @@ interface FreshTeachControllerDependencies {
     sessionPath: string;
     stagingDir: string;
     priorToolDir?: string;
+    apiResearchDir?: string;
+    apiResearchSummary?: string;
     revisionGuidance?: string;
     revisionContext?: FocusedPlannerRevisionContext;
     resumeSessionId?: string;
@@ -462,16 +479,8 @@ interface FreshTeachControllerDependencies {
     keepTest?: boolean;
     onProgress?: (progress: CompileAgentProgress) => void;
   }) => Promise<CompiledFocusedTool>;
-  runApiTool: (input: {
-    workflowPath: string;
-    parameters: Record<string, string | number | boolean>;
-    signal?: AbortSignal;
-  }) => Promise<{
-    result: ToolResult<unknown>;
-    executionMechanism: string;
-    backendAttempts?: BackendAttemptFact[];
-    responseObservations?: BackendResponseObservation[];
-  }>;
+  runApiResearchTool: ApiToolRunner;
+  runApiTool: ApiToolRunner;
   runPlaybookTool: (input: {
     playbookPath: string;
     site: string;
@@ -489,6 +498,20 @@ interface FreshTeachControllerDependencies {
   }) => Promise<void>;
 }
 
+const runApiToolWithLadder: ApiToolRunner = async ({ workflowPath, parameters, signal }) => {
+  const run = await runWorkflowWithLadder({
+    workflowPath,
+    params: parameters,
+    signal,
+  });
+  return {
+    result: run.result,
+    executionMechanism: run.usedBackend,
+    backendAttempts: run.attempts,
+    responseObservations: run.responseObservations,
+  };
+};
+
 const defaultDependencies: FreshTeachControllerDependencies = {
   now: () => new Date(),
   runId: () => randomUUID(),
@@ -499,24 +522,14 @@ const defaultDependencies: FreshTeachControllerDependencies = {
   detectToolCandidates,
   requestToolSelectionAdvice,
   requestFocusedPlan,
+  requestApiResearchStep,
   requestMasterDecision,
   requestBaselineMvpReview,
   requestParameterSelectionAdvice,
   requestCompletionReview,
   compileFocusedTool: compileFocusedToolWithShippedAgent,
-  runApiTool: async ({ workflowPath, parameters, signal }) => {
-    const run = await runWorkflowWithLadder({
-      workflowPath,
-      params: parameters,
-      signal,
-    });
-    return {
-      result: run.result,
-      executionMechanism: run.usedBackend,
-      backendAttempts: run.attempts,
-      responseObservations: run.responseObservations,
-    };
-  },
+  runApiResearchTool: runApiToolWithLadder,
+  runApiTool: runApiToolWithLadder,
   runPlaybookTool: async ({ playbookPath, site, parameters, maxDurationMs, signal }) => ({
     result: await runPlaybook({
       playbook: playbookPath,
@@ -1669,6 +1682,8 @@ async function compileFocusedToolWithShippedAgent(input: {
   sessionPath: string;
   stagingDir: string;
   priorToolDir?: string;
+  apiResearchDir?: string;
+  apiResearchSummary?: string;
   revisionGuidance?: string;
   revisionContext?: FocusedPlannerRevisionContext;
   resumeSessionId?: string;
@@ -1687,10 +1702,31 @@ async function compileFocusedToolWithShippedAgent(input: {
         copyFileSync(prior, pathJoin(input.stagingDir, name));
     }
   }
+  if (input.apiResearchDir) {
+    for (const name of ['workflow.json', 'request-transform.ts'] as const) {
+      const researched = pathJoin(input.apiResearchDir, name);
+      const target = pathJoin(input.stagingDir, name);
+      if (existsSync(researched) && statSync(researched).isFile()) copyFileSync(researched, target);
+      else if (name === 'request-transform.ts' && existsSync(target)) {
+        // The tested request deliberately removed the prior transform.
+        unlinkSync(target);
+      }
+    }
+  }
   const toolPlan = JSON.stringify(
     {
       tool: input.tool,
       implementationPlan: input.implementationPlan,
+      ...(input.apiResearchSummary
+        ? {
+            apiResearchHandoff: {
+              status: 'proven',
+              instruction:
+                'Preserve the tested request construction. Focus on the parser, offline tests, integration case, and Imprint packaging. Change the request only if the accepted plan or artifact mechanics make the handoff impossible; report that exact contradiction to the master.',
+              summary: input.apiResearchSummary,
+            },
+          }
+        : {}),
       ...(input.revisionGuidance || input.revisionContext
         ? {
             revision: {
@@ -2484,6 +2520,7 @@ async function compileAndCheckCurrentPlan(input: {
   sessionPath: string;
   stagingRoot: string;
   llmConfig: LLMOptions;
+  agent: MasterTeachAgentOptions;
   runDeadline: RunDeadlineRef;
   deps: FreshTeachControllerDependencies;
   signal?: AbortSignal;
@@ -2497,6 +2534,8 @@ async function compileAndCheckCurrentPlan(input: {
   priorChain?: Map<string, LiveCheckResult>;
   revisionGuidanceByToolId?: ReadonlyMap<string, string>;
   revisionContextByToolId?: ReadonlyMap<string, FocusedPlannerRevisionContext>;
+  focusedEvidenceByToolId: ReadonlyMap<string, PromptEvidenceProjection>;
+  apiResearchByPlan?: Map<string, ApiResearchResult>;
   /** Durable compiler conversations, one per public tool. */
   compileSessionsByToolId?: Map<string, string>;
   /** Install an independently usable MVP before optional breadth work. */
@@ -2599,6 +2638,37 @@ async function compileAndCheckCurrentPlan(input: {
     const implementation = input.journal.readJson(
       tool.implementationPlan,
     ) as ImplementationPlanPayload;
+    let apiResearch: ApiResearchResult | undefined;
+    if (tool.strategy.kind === 'api') {
+      const evidence = input.focusedEvidenceByToolId.get(tool.id);
+      if (!evidence) throw new Error(`API research evidence is missing for "${tool.id}"`);
+      const researchKey = `${tool.id}:${tool.implementationPlan.sha256}`;
+      apiResearch = input.apiResearchByPlan?.get(researchKey);
+      if (!apiResearch) {
+        input.report?.(`${tool.candidate.toolName}: researching MVP API request`);
+        const current = currentPlanProjection(input.journal);
+        apiResearch = await researchApiMvpCall({
+          run: current.binding,
+          recordingIndex: recordingIndexFromSession(
+            input.triage.session,
+            current.binding.recordingSha256,
+          ),
+          tool,
+          implementationPlan: implementation,
+          evidence,
+          toolDir: pathJoin(input.stagingRoot, `api-research-${plan.revision}`, tool.id),
+          agent: input.agent,
+          runDeadline: input.runDeadline,
+          signal: input.signal,
+          report: input.report,
+          dependencies: {
+            requestStep: input.deps.requestApiResearchStep,
+            runApiTool: input.deps.runApiResearchTool,
+          },
+        });
+        input.apiResearchByPlan?.set(researchKey, apiResearch);
+      }
+    }
     // A master revision gets new bytes at a new module path. This keeps a
     // failed parser or transform from leaking into the next compile and also
     // avoids Bun's local TypeScript module cache returning the prior build.
@@ -2617,6 +2687,8 @@ async function compileAndCheckCurrentPlan(input: {
         revisionSourceByToolId.get(tool.id)?.strategyKind === tool.strategy.kind
           ? revisionSourceByToolId.get(tool.id)?.toolDir
           : draftSourceByToolStrategy.get(draftSourceKey(tool.id, tool.strategy.kind))?.toolDir,
+      apiResearchDir: apiResearch?.toolDir,
+      apiResearchSummary: apiResearch?.summary,
       revisionGuidance: input.revisionGuidanceByToolId?.get(tool.id),
       revisionContext: input.revisionContextByToolId?.get(tool.id),
       resumeSessionId: input.compileSessionsByToolId?.get(tool.id),
@@ -4382,6 +4454,7 @@ export async function runFreshMasterTeach(
     let liveByToolId = new Map<string, LiveCheckResult>();
     let chainByEdgeId = new Map<string, LiveCheckResult>();
     const compileSessionsByToolId = new Map<string, string>();
+    const apiResearchByPlan = new Map<string, ApiResearchResult>();
     const revisionGuidanceByToolId = new Map<string, string>();
     const repairContextByToolId = new Map<string, FocusedPlannerRevisionContext>();
     const latestFailureEvidenceByToolName = new Map<string, PromptEvidenceEntry[]>();
@@ -4467,6 +4540,7 @@ export async function runFreshMasterTeach(
           sessionPath: redacted.path,
           stagingRoot,
           llmConfig: llmOptions(opts),
+          agent: agents,
           runDeadline: deadline,
           deps,
           signal: opts.signal,
@@ -4480,6 +4554,8 @@ export async function runFreshMasterTeach(
           priorChain: chainByEdgeId,
           revisionGuidanceByToolId,
           revisionContextByToolId: repairContextByToolId,
+          focusedEvidenceByToolId: planned.focusedEvidence,
+          apiResearchByPlan,
           compileSessionsByToolId,
           isMvpPublished: (toolId, buildRef) =>
             publishedMvpBuilds.has(`${toolId}:${buildRef.sha256}`),

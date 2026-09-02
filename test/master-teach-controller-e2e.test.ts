@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TriageResult } from '../src/imprint/compile.ts';
 import {
+  type ApiResearchInput,
   type BaselineMvpReviewInput,
   BaselineMvpReviewOutputSchema,
   CompletionReviewOutputSchema,
@@ -339,6 +340,76 @@ function initialThreeToolDesiredPlan(input: MasterDecisionInput): DesiredTeachin
   return desired;
 }
 
+async function fixtureApiResearchStep(researchInput: ApiResearchInput) {
+  const tool = researchInput.tool;
+  if (!tool.implementationPlan) throw new Error('fixture expected an implementation-plan ref');
+  const candidate = {
+    workflow: WorkflowSchema.parse({
+      toolName: tool.candidate.toolName,
+      intent: { description: tool.candidate.description },
+      parameters: tool.candidate.likelyParams.map(({ name, type, description }) => ({
+        name,
+        type,
+        description,
+      })),
+      requests: [
+        {
+          recordingRequestSeq: tool.candidate.requestSeqs[0],
+          method: 'GET',
+          url:
+            tool.id === PRODUCER_ID
+              ? 'https://fixture.invalid/api/items'
+              : tool.id === CONSUMER_ID
+                ? 'https://fixture.invalid/api/items/${param.item_id}'
+                : 'https://fixture.invalid/api/render/${param.item_id}',
+          headers: { accept: 'application/json' },
+        },
+      ],
+      site: SITE,
+    }),
+    parameterValues: Object.fromEntries(
+      tool.candidate.likelyParams.map(({ name, type }) => [
+        name,
+        type === 'number' ? 1 : type === 'boolean' ? true : 'item-1',
+      ]),
+    ),
+  };
+  const observation = researchInput.observations.at(-1);
+  return {
+    binding: {
+      runId: researchInput.run.runId,
+      recordingSha256: researchInput.run.recordingSha256,
+      toolId: tool.id,
+      compileInputsSha256: tool.implementationPlan.basedOnCompileInputsSha256,
+    },
+    action: observation ? ('proven' as const) : ('test' as const),
+    candidate,
+    ...(observation ? { basedOnObservationId: observation.id } : {}),
+    reason: observation
+      ? 'The fixture request returned the promised core data.'
+      : 'Test the exact recorded fixture request.',
+  };
+}
+
+async function fixtureApiResearchTool(input: {
+  workflowPath: string;
+  parameters: Record<string, string | number | boolean>;
+}) {
+  const producer = input.workflowPath.includes(`/${PRODUCER_ID}/`);
+  const leaf = input.workflowPath.includes(`/${LEAF_ID}/`);
+  return {
+    result: producer
+      ? { ok: true as const, data: { items: [{ id: 'item-1' }] } }
+      : leaf
+        ? { ok: true as const, data: { rendered: input.parameters.item_id } }
+        : {
+            ok: true as const,
+            data: { id: input.parameters.item_id, name: 'Fixture item' },
+          },
+    executionMechanism: 'fixture-api-research',
+  };
+}
+
 function initialSingleToolDesiredPlan(input: MasterDecisionInput): DesiredTeachingPlan {
   const candidate = input.discovery.discoveryCandidates.find(
     ({ toolName }) => toolName === PRODUCER_NAME,
@@ -573,6 +644,7 @@ function lifecycleFailureFixture(input: {
         implementationPlan: focusedImplementation(plannerInput),
         reason: 'The focused request and expected result are explicit.',
       }),
+    requestApiResearchStep: fixtureApiResearchStep,
     compileFocusedTool: async ({ tool, stagingDir }) => {
       input.events.push(`compile:${tool.id}`);
       if (tool.id === input.failCompileToolId) {
@@ -608,6 +680,7 @@ function lifecycleFailureFixture(input: {
       writeFileSync(workflowPath, `${JSON.stringify(workflow)}\n`);
       return { workflow, workflowPath, toolDir: stagingDir };
     },
+    runApiResearchTool: fixtureApiResearchTool,
     runApiTool: async ({ workflowPath, parameters }) => {
       const producer = workflowPath.includes(`/${PRODUCER_ID}/`);
       const leaf = workflowPath.includes(`/${LEAF_ID}/`);
@@ -799,6 +872,8 @@ describe('fresh foreground master controller end to end', () => {
         {
           now: () => FIXED_NOW,
           runId: () => 'run-e2e-completed',
+          requestApiResearchStep: fixtureApiResearchStep,
+          runApiResearchTool: fixtureApiResearchTool,
           prepareSession: async (session) => preparedSession(session, [1]),
           detectToolCandidates: async (_session, _llm, options) => {
             detectorRequestSeqs = _session.requests.map(({ seq }) => seq);
@@ -3459,6 +3534,8 @@ describe('fresh foreground master controller end to end', () => {
         {
           now: () => FIXED_NOW,
           runId: () => 'run-e2e-browser-chain-timeout',
+          requestApiResearchStep: fixtureApiResearchStep,
+          runApiResearchTool: fixtureApiResearchTool,
           playbookInvocationTimeoutMs: 25,
           playbookCleanupGraceMs: 15,
           prepareSession: async (session) => preparedSession(session),

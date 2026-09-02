@@ -10,6 +10,10 @@ const playbookPrompt = readFileSync(
   pathJoin(import.meta.dir, '..', 'prompts', 'playbook-compilation.md'),
   'utf8',
 );
+const apiResearchPrompt = readFileSync(
+  pathJoin(import.meta.dir, '..', 'prompts', 'master-teach-api-researcher.md'),
+  'utf8',
+);
 
 function canonicalExample(name: string, language: string): string {
   const marker = `<!-- canonical-example:${name} -->`;
@@ -126,4 +130,14 @@ test('the playbook compiler remains site-neutral and follows the accepted auth a
   expect(playbookPrompt).toContain('Every compatible API rung has');
   expect(playbookPrompt).toContain('Follow the accepted authentication plan.');
   expect(playbookPrompt).not.toMatch(/google|southwest|hotels|flights/i);
+});
+
+test('API research stays separate, retained, site-neutral, and ahead of compilation', () => {
+  expect(apiResearchPrompt).toContain('smallest credible live API call before the compiler');
+  expect(apiResearchPrompt).toContain('same retained conversation');
+  expect(apiResearchPrompt).toContain('Do not look at the');
+  expect(apiResearchPrompt).toContain('Do not choose or recommend playbook here.');
+  expect(apiResearchPrompt).not.toMatch(/google|southwest|hotels|flights/i);
+  expect(prompt).toContain('separate retained request specialist has already produced');
+  expect(prompt).toContain('Preserve that request construction');
 });

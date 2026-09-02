@@ -5,6 +5,10 @@ import type { z } from 'zod';
 import { abortSignalError } from './concurrency.ts';
 import { type LLMOptions, type ProviderName, resolveProvider } from './llm.ts';
 import {
+  type ApiResearchCandidate,
+  type ApiResearchInput,
+  ApiResearchInputSchema,
+  ApiResearchOutputSchema,
   type BaselineMvpReviewInput,
   BaselineMvpReviewInputSchema,
   BaselineMvpReviewOutputSchema,
@@ -41,6 +45,7 @@ import {
   teachingCandidateIssues,
   teachingToolCompileInputsSha256,
   unresolvedCandidateCoverage,
+  validateBuildWorkflowProvenance,
   validateDesiredTeachingPlan,
   validateImplementationPlanForTool,
 } from './master-teach-plan.ts';
@@ -61,6 +66,8 @@ export * from './master-teach-agent-contracts.ts';
 export * from './master-teach-prompt-projections.ts';
 const PROMPTS = join(import.meta.dir, '..', '..', 'prompts');
 const same = (left: unknown, right: unknown) => digest(left) === digest(right);
+export const apiResearchCandidateSha256 = (candidate: ApiResearchCandidate): string =>
+  digest(candidate);
 const refKey = (ref: ContentAddressedRef) => `${ref.path}\u0000${ref.sha256}`;
 function checkSeqs(
   values: readonly number[],
@@ -137,6 +144,112 @@ function focusedPlannerBinding(input: FocusedPlannerInput) {
     recordingSha256: input.run.recordingSha256,
     toolId: input.tool.id,
   };
+}
+
+function apiResearchBinding(input: ApiResearchInput) {
+  return {
+    runId: input.run.runId,
+    recordingSha256: input.run.recordingSha256,
+    toolId: input.tool.id,
+    compileInputsSha256:
+      input.tool.implementationPlan?.basedOnCompileInputsSha256 ??
+      teachingToolCompileInputsSha256(input.tool, []),
+  };
+}
+
+const ApiResearchInputValidationSchema = ApiResearchInputSchema.superRefine((input, ctx) => {
+  if (input.run.recordingSha256 !== input.recordingIndex.recordingSha256)
+    issue(ctx, ['run'], 'API research recording binding is stale');
+  if (input.tool.strategy?.kind !== 'api')
+    issue(ctx, ['tool', 'strategy'], 'API research requires an accepted API strategy');
+  if (!input.tool.implementationPlan)
+    issue(ctx, ['tool', 'implementationPlan'], 'API research requires the hosted plan binding');
+  if (
+    input.implementationPlan.toolId !== input.tool.id ||
+    input.implementationPlan.strategyKind !== 'api'
+  )
+    issue(ctx, ['implementationPlan'], 'API research plan does not match the tool');
+  validateEvidence(input.evidence, input.recordingIndex, ctx, ['evidence']);
+});
+
+function apiResearchOutputSchema(input: ApiResearchInput) {
+  return ApiResearchOutputSchema.superRefine((output, ctx) => {
+    if (!same(output.binding, apiResearchBinding(input)))
+      issue(ctx, ['binding'], 'stale API-research binding');
+    if (output.action === 'blocked') {
+      if (output.candidate)
+        issue(ctx, ['candidate'], 'blocked research cannot hand off a candidate');
+      if (output.basedOnObservationId)
+        issue(ctx, ['basedOnObservationId'], 'blocked research cannot claim a proven observation');
+      return;
+    }
+    const candidate = output.candidate;
+    if (!candidate) {
+      issue(ctx, ['candidate'], `${output.action} research requires a complete candidate`);
+      return;
+    }
+    const { workflow, requestTransformSource, parameterValues } = candidate;
+    if (workflow.site !== input.run.site)
+      issue(ctx, ['candidate', 'workflow', 'site'], 'wrong site');
+    if (workflow.toolName !== input.tool.candidate.toolName)
+      issue(ctx, ['candidate', 'workflow', 'toolName'], 'wrong public tool name');
+    if (workflow.parserModule)
+      issue(ctx, ['candidate', 'workflow', 'parserModule'], 'API research must stay parser-free');
+    if (Boolean(workflow.requestTransformModule) !== Boolean(requestTransformSource))
+      issue(
+        ctx,
+        ['candidate', 'requestTransformSource'],
+        'request transform source and module must be supplied together',
+      );
+    if (
+      workflow.requestTransformModule &&
+      workflow.requestTransformModule !== './request-transform.ts'
+    )
+      issue(
+        ctx,
+        ['candidate', 'workflow', 'requestTransformModule'],
+        'API research transform module must be ./request-transform.ts',
+      );
+    const expectedParameters = input.tool.candidate.likelyParams
+      .map(({ name, type }) => ({ name, type }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const actualParameters = workflow.parameters
+      .map(({ name, type }) => ({ name, type }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    if (!same(actualParameters, expectedParameters))
+      issue(ctx, ['candidate', 'workflow', 'parameters'], 'workflow parameters changed');
+    for (const parameter of workflow.parameters) {
+      if (!(parameter.name in parameterValues) && parameter.default === undefined)
+        issue(ctx, ['candidate', 'parameterValues', parameter.name], 'missing required test value');
+    }
+    try {
+      validateBuildWorkflowProvenance(workflow, input.implementationPlan);
+    } catch (error) {
+      issue(
+        ctx,
+        ['candidate', 'workflow', 'requests'],
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    if (output.action === 'test') {
+      if (output.basedOnObservationId)
+        issue(ctx, ['basedOnObservationId'], 'a new test cannot claim an older observation');
+      return;
+    }
+    if (!output.basedOnObservationId) {
+      issue(ctx, ['basedOnObservationId'], 'proven research must cite the successful test');
+      return;
+    }
+    const observation = input.observations.find(({ id }) => id === output.basedOnObservationId);
+    if (!observation) {
+      issue(ctx, ['basedOnObservationId'], 'unknown API-research observation');
+      return;
+    }
+    if (!observation.result.ok)
+      issue(ctx, ['basedOnObservationId'], 'failed transport observation cannot prove a request');
+    if (observation.candidateSha256 !== apiResearchCandidateSha256(candidate))
+      issue(ctx, ['candidate'], 'proven candidate differs from the tested request');
+  });
 }
 function validateFocusedPlannerEdges(
   tool: EditableTeachingTool,
@@ -1389,6 +1502,7 @@ export interface MasterTeachAnalyzer {
 type Role =
   | 'tool advisor'
   | 'focused planner'
+  | 'API researcher'
   | 'master decision'
   | 'baseline MVP reviewer'
   | 'parameter advisor'
@@ -1458,6 +1572,10 @@ export function parseToolSelectionAdvisorOutput(text: string, input: ToolSelecti
 export function parseFocusedPlannerOutput(text: string, input: FocusedPlannerInput) {
   const checked = FocusedPlannerInputValidationSchema.parse(input);
   return parse('focused planner', text, focusedPlannerOutputSchema(checked));
+}
+export function parseApiResearchOutput(text: string, input: ApiResearchInput) {
+  const checked = ApiResearchInputValidationSchema.parse(input);
+  return parse('API researcher', text, apiResearchOutputSchema(checked));
 }
 export function parseMasterDecisionOutput(text: string, input: MasterDecisionInput) {
   const checked = MasterInputSchema.parse(input);
@@ -1698,6 +1816,32 @@ export async function requestFocusedPlan(
       authorizedEvidenceRefs: checked.tool.evidenceRefs,
     },
     schema: focusedPlannerOutputSchema(checked),
+    agent,
+  });
+}
+export async function requestApiResearchStep(
+  input: ApiResearchInput,
+  agent: MasterTeachAgentOptions = {},
+) {
+  const checked = ApiResearchInputValidationSchema.parse(input);
+  const latestObservation = checked.observations.at(-1);
+  return request({
+    role: 'API researcher',
+    conversationKey: `tool:${checked.tool.candidate.toolName}:api-researcher`,
+    prompt: 'master-teach-api-researcher.md',
+    input:
+      agent.provider === 'codex-cli' && latestObservation
+        ? {
+            instruction:
+              'Continue the same API-research conversation. Evaluate the newest factual result, then either test one revised complete candidate, mark that exact tested candidate proven, or report the exact plan gap.',
+            latestObservation,
+          }
+        : checked,
+    validation: {
+      binding: apiResearchBinding(checked),
+      testedCandidateSha256: latestObservation?.candidateSha256,
+    },
+    schema: apiResearchOutputSchema(checked),
     agent,
   });
 }
