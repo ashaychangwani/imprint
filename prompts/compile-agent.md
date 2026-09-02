@@ -75,6 +75,12 @@ Follow these steps to compile the session:
    exposes an untried grounded API construction, call `give_up` with this plan
    contradiction so the master can restore an API strategy; never silently
    accept the fallback. Otherwise, call `read_event` for every cited browser event you use.
+   The accepted plan must already cite a complete ordered sequence covering
+   every input, selection, submit action, and result extraction. Do not brute
+   force nearby or arbitrary event numbers to manufacture missing playbook
+   evidence. If the cited sequence is incomplete, call `give_up` with that
+   exact contradiction so the master can keep the API unresolved or revise the
+   plan instead of shipping guessed browser automation.
    When an event carries element/DOM detail, ground the corresponding action
    and locator in that detail.
    Do not invent a control, click a fixed/default state that the recording never

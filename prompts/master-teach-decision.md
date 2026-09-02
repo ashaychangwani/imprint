@@ -130,6 +130,22 @@ and the factual result of each. A rotating-looking field name, an empty result,
 one failed comparison, or one compiler's belief that state is page-generated
 does not establish impossibility.
 
+If the API still has a grounded construction but current live evidence is
+inconclusive, leave that tool unresolved and publish the other usable API MVPs
+instead of converting it into a speculative playbook. A fallback is not an MVP
+shortcut. Before accepting one, require a complete ordered browser-evidence
+sequence for every input, selection, submit action, and result extraction the
+playbook needs. Two endpoint clicks plus guessed intermediate selectors are not
+a supported browser implementation. Do not make the compiler scan arbitrary
+event numbers to invent the missing sequence.
+
+When a live API call returns HTTP success but an empty, tiny, or implausible
+payload, inspect the exact response observation and parser input before blaming
+a missing dynamic header. Distinguish an explicit server error or challenge
+from valid empty inventory and from a parser miss. The mere fact that a request
+header changes in the browser does not prove that its absence caused the
+response or that browser automation is required.
+
 A `revision_required` baseline review for a result cannot be superseded by
 mechanical green receipts for that same result.
 

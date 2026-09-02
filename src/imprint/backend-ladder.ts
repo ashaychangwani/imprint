@@ -146,8 +146,27 @@ const DEFAULT_PLAYBOOK_BACKEND_STEP_TIMEOUT_MS = 45_000;
  *  skip doomed rungs after the first success. Never persisted; never consulted
  *  by production replay. Exported reset for test isolation. */
 const compileWinningBackend = new Map<string, ConcreteBackend>();
+/** Compile-only memory of a rung that produced a conclusive mechanical miss for
+ * one public tool. This currently records only an unvalidated browser-minted
+ * jar: rerunning that same expensive mint on every artifact revision adds no
+ * new request evidence. It is process-scoped and never affects production. */
+const compileUnavailableBackends = new Map<string, Set<ConcreteBackend>>();
 export function __resetCompileWinningBackendForTest(): void {
   compileWinningBackend.clear();
+  compileUnavailableBackends.clear();
+}
+
+function rememberCompileUnavailableBackends(memoKey: string, result: LadderResult): void {
+  if (
+    !result.attempts.some(
+      ({ backend, detail }) => backend === 'fetch-bootstrap' && detail.includes('did not validate'),
+    )
+  ) {
+    return;
+  }
+  const unavailable = compileUnavailableBackends.get(memoKey) ?? new Set<ConcreteBackend>();
+  unavailable.add('fetch-bootstrap');
+  compileUnavailableBackends.set(memoKey, unavailable);
 }
 
 /** Process-global CDP pool for the compile/test path (`runWorkflowWithLadder`).
@@ -1580,9 +1599,18 @@ export async function runWorkflowWithLadder(opts: {
   // ladder skips. Use a conventional value for completeness.
   const assetRoot = pathResolve(toolDir, '..', '..');
 
-  const ladder: ConcreteBackend[] = ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
-
   const memoKey = `${tool.site}::${workflow.toolName}`;
+  const unavailable = compileUnavailableBackends.get(memoKey);
+  const defaultCompileLadder: ConcreteBackend[] = [
+    'fetch',
+    'fetch-bootstrap',
+    'cdp-replay',
+    'stealth-fetch',
+  ];
+  const ladder = defaultCompileLadder.filter((backend) => !unavailable?.has(backend));
+  if (unavailable?.has('fetch-bootstrap')) {
+    log(`compile memo: ${memoKey} skipping previously unvalidated fetch-bootstrap`);
+  }
   let memoWinner = compileWinningBackend.get(memoKey);
 
   // Share one stealth token across this site's compile-time test processes.
@@ -1685,12 +1713,14 @@ export async function runWorkflowWithLadder(opts: {
     // winner for the next call.
     if (!memoWinner) {
       const result = await runWithLadder(ladder, tool, opts.params, assetRoot, stealthCache, {
+        skipBootstrapSplice: unavailable?.has('fetch-bootstrap') === true,
         cdpPool,
         initialState: opts.initialState,
         credentials: opts.credentials,
         signal: opts.signal,
         onResponse: observeResponse,
       });
+      rememberCompileUnavailableBackends(memoKey, result);
       if (isProbeReachable(result.result)) compileWinningBackend.set(memoKey, result.usedBackend);
       return { ...result, responseObservations };
     }
@@ -1714,6 +1744,7 @@ export async function runWorkflowWithLadder(opts: {
       signal: opts.signal,
       onResponse: observeResponse,
     });
+    rememberCompileUnavailableBackends(memoKey, result);
     if (isProbeReachable(result.result)) {
       compileWinningBackend.set(memoKey, result.usedBackend);
     } else {

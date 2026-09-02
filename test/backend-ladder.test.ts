@@ -1127,6 +1127,63 @@ describe('runWorkflowWithLadder', () => {
       __resetCompileWinningBackendForTest();
     }
   }, 15_000);
+
+  it('does not repeat an unvalidated fetch-bootstrap mint for the same tool', async () => {
+    __resetCompileWinningBackendForTest();
+    let mints = 0;
+    __setCdpJarMinterForTest(async () => {
+      mints++;
+      return {
+        cookies: [],
+        ua: 'JarUA/148',
+        html: '',
+        bootstrapEpoch: Date.now(),
+        abckFlag: '-1',
+        validated: false,
+      } as MintedJar;
+    });
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response('{}', { status: 200 }),
+    });
+    try {
+      const toolDir = pathJoin(root, 'unvalidated-site', 'unvalidated_tool');
+      mkdirSync(toolDir, { recursive: true });
+      const workflowPath = pathJoin(toolDir, 'workflow.json');
+      writeFileSync(
+        workflowPath,
+        JSON.stringify({
+          toolName: 'unvalidated_tool',
+          intent: { description: 'Return records.' },
+          parameters: [],
+          requests: [{ method: 'GET', url: `http://127.0.0.1:${server.port}/x`, headers: {} }],
+          parserModule: './parser.ts',
+          site: 'unvalidated-site',
+        }),
+      );
+      writeFileSync(
+        pathJoin(toolDir, 'parser.ts'),
+        'export function parse() { throw new Error("unusable response"); }\n',
+      );
+      saveCachedToken(pathJoin(root, 'unvalidated-site'), {
+        cookies: [],
+        sensorHeaders: {},
+        bootstrappedAt: Date.now(),
+      });
+
+      const first = await runWorkflowWithLadder({ workflowPath, params: {} });
+      const afterFirst = mints;
+      const second = await runWorkflowWithLadder({ workflowPath, params: {} });
+
+      expect(first.attempts.some(({ backend }) => backend === 'fetch-bootstrap')).toBe(true);
+      expect(afterFirst).toBe(1);
+      expect(second.attempts.some(({ backend }) => backend === 'fetch-bootstrap')).toBe(false);
+      expect(mints).toBe(afterFirst);
+    } finally {
+      server.stop(true);
+      __resetCompileWinningBackendForTest();
+    }
+  });
 });
 
 describe('evaluateBootstrapCapture — response_header source (Fix C)', () => {

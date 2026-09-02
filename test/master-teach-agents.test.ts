@@ -930,6 +930,16 @@ describe('prompts and pre-plan discovery', () => {
     expect(masterPrompt).not.toContain('replayParameterValueOrigin');
   });
 
+  it('requires complete browser evidence instead of using playbook as an MVP shortcut', () => {
+    const masterPrompt = prompt('master-teach-decision.md');
+    const compilePrompt = prompt('compile-agent.md');
+    expect(masterPrompt).toContain('leave that tool unresolved');
+    expect(masterPrompt).toContain('complete ordered browser-evidence');
+    expect(masterPrompt).toContain('HTTP success but an empty, tiny, or implausible');
+    expect(compilePrompt).toContain('complete ordered sequence');
+    expect(compilePrompt).toContain('Do not brute');
+  });
+
   it('tells the master to account for changing request state', () => {
     const masterPrompt = prompt('master-teach-decision.md');
     expect(masterPrompt).toContain('rotating state');

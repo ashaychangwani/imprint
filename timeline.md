@@ -2933,3 +2933,58 @@ decision was added.
 
 The complete project check passes after this change: 1,839 tests, type checking,
 lint, unused-code analysis, and the circular-dependency check are all clean.
+
+## 2026-09-01 21:39 PDT — Flights proved the request fix, then chose browser automation too early
+
+Fresh Flights run `bb4332f1-6f1f-4726-88f6-86ab4d8591ca` reused only the four
+accepted operation boundaries from the earlier run. Planning and every build
+started fresh. The master again planned four API tools in two dependency waves.
+
+The repaired request comparison changed the outcome materially. Location lookup
+passed its live check and was published. Search no longer sent the extra airport
+array layer: its first repaired request reached Google through ordinary fetch in
+143 ms. Calendar initially failed, but its retained compiler repaired the query
+and request structure; a later ordinary-fetch check passed in 553 ms and the
+journal retained both its contract and live receipts. This confirms that the
+previous request-comparison crash was hiding a real construction defect.
+
+The run still exceeded the 15-minute target. Initial planning took about five
+minutes. More importantly, an unchanged tool could spend about 30 seconds in
+`fetch-bootstrap`, learn that its browser-minted cookie was unvalidated, and
+then spend another 30 seconds starting CDP. Calendar paid that pair more than
+once after revisions. Search later demonstrated that the warm path works: CDP
+reused an already-open browser and completed in 2.3 seconds. The missing piece
+was remembering the conclusive unvalidated-bootstrap result for a tool whose
+artifact was being revised.
+
+On the third search repair, the master changed the strategy to a nine-step
+browser playbook because three current API combinations returned tiny or empty
+responses and it believed a fresh changing header could only come from the
+page. The browser evidence did not contain the complete interaction. The
+compiler consequently brute-forced many nearby event numbers to invent the
+missing locators. As soon as the live playbook began, the run was cancelled.
+It is diagnostic evidence only and will not be resumed.
+
+The teaching instructions now make the simpler choice explicit: when API
+evidence remains grounded but current live behavior is inconclusive, publish
+the other usable API MVPs and leave this tool unresolved. Do not use a guessed
+playbook as an MVP shortcut. A browser fallback must already have a complete
+ordered recording for every input, selection, submit action, and result
+extraction; the compiler must not scan arbitrary event numbers to fill gaps.
+An HTTP-success response that is tiny or empty must also be inspected as a
+response/parser fact before blaming a changing header.
+
+The compile-time backend ladder now remembers, for that public tool and current
+process only, when browser bootstrap conclusively produced an unvalidated jar.
+Later artifact revisions skip that same doomed 30-second rung and continue to
+CDP or the remaining transports. This is a mechanical performance memory, not
+a site rule, and it does not affect installed-tool runtime behavior. Focused
+tests cover both the prompt contract and the saved retry; 186 tests pass.
+
+The full project run exposed an older process-cleanup race under parallel test
+load. Imprint stopped waiting when a killed child's ownership marker vanished,
+although macOS could still report the already-killed process id briefly. Cleanup
+now waits on the exact process ids it already observed, within the existing
+500 ms ceiling. This prevents a finished compiler from leaving a short-lived
+grandchild behind. The final complete check passes: 1,841 tests, type checking,
+lint, unused-code analysis, and circular-dependency analysis are all clean.

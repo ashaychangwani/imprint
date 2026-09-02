@@ -87,6 +87,15 @@ function signalPid(pid: number, signal: NodeJS.Signals): void {
   } catch {}
 }
 
+function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function signalRoot(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.pid) signalPid(-child.pid, signal);
   else child.kill(signal);
@@ -148,6 +157,7 @@ class ProcessOwner {
 
   private async cleanupOnce(includeRoot: boolean, signal: NodeJS.Signals): Promise<void> {
     let rows = this.token ? tokenPids(this.token) : [];
+    const observedPids = new Set(rows.map(({ pid }) => pid));
     const rootAlive = this.child.exitCode == null && this.child.signalCode == null;
     this.signalOwned(includeRoot, signal, rows);
 
@@ -155,6 +165,7 @@ class ProcessOwner {
     while (rows.length > 0 && Date.now() < end) {
       await abortableDelay(Math.min(25, Math.max(1, end - Date.now())));
       rows = this.token ? tokenPids(this.token) : [];
+      for (const { pid } of rows) observedPids.add(pid);
     }
     if (rows.length > 0) signalRows(rows, this.child.pid, 'SIGKILL');
     else if (
@@ -169,7 +180,10 @@ class ProcessOwner {
     }
 
     const killEnd = Date.now() + KILL_WAIT_MS;
-    while (this.token && tokenPids(this.token).length > 0 && Date.now() < killEnd) {
+    while (Date.now() < killEnd) {
+      const ownedRows = this.token ? tokenPids(this.token) : [];
+      for (const { pid } of ownedRows) observedPids.add(pid);
+      if (ownedRows.length === 0 && ![...observedPids].some(pidIsAlive)) break;
       await abortableDelay(20);
     }
   }
