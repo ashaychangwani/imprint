@@ -7,7 +7,6 @@
  */
 
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
@@ -33,7 +32,7 @@ import {
   sep as pathSeparator,
 } from 'node:path';
 import type { AgentTool } from './agent.ts';
-import { renderWorkflowRequests, runWorkflowWithLadder } from './backend-ladder.ts';
+import { renderWorkflowRequests } from './backend-ladder.ts';
 import {
   bodyEncodingPathsAtPointer,
   compareBodyStructures,
@@ -52,11 +51,9 @@ import type { CompileStrategyKind } from './compile-strategy.ts';
 import {
   LIVE_EVIDENCE_PATH_ENV,
   type LiveIntegrationEvidence,
-  acquireSiteLiveLock,
   readLiveIntegrationEvidence,
 } from './compile-verification.ts';
 import { isIrreversibleRequest, workflowHasIrreversibleEffect } from './effects.ts';
-import { redactFreeformText } from './freeform-redact.ts';
 import { findEarlierResponseEqualities, groundEvent } from './param-grounding.ts';
 import { parsePlaybook } from './playbook-parser.ts';
 import { compareRecordedRequest } from './recording-request.ts';
@@ -140,7 +137,6 @@ export function buildCompileTools(
     buildSearchResponseBodyTool(session),
     buildWriteFileTool(toolDir, [], context.strategyKind),
     buildReadFileTool(toolDir),
-    buildProbeApiTool(toolDir),
     buildRunBashTool(toolDir),
   ];
   tools.push(
@@ -1035,146 +1031,6 @@ function scalarParams(value: unknown): ScalarParams | undefined {
   )
     return undefined;
   return Object.fromEntries(entries) as ScalarParams;
-}
-
-// ─── Tool: probe_api ────────────────────────────────────────────────────────
-
-const API_PROBE_PREVIEW_CHARS = 8 * 1024;
-const API_PROBE_FILE_CHARS = 4 * 1024 * 1024;
-
-/**
- * Give the compiler a curl-like feedback loop without creating another HTTP
- * implementation. The draft runs through the same API-only ladder used by
- * compile verification, with parserModule removed so the agent sees the wire
- * response shape before it writes extraction code.
- */
-export function buildProbeApiTool(toolDir: string): AgentTool {
-  return {
-    name: 'probe_api',
-    description:
-      'Run the current workflow.json through the normal API ladder (fetch → fetch-bootstrap → cdp-replay → stealth-fetch) without parser.ts. Dry-run request transforms and their offline tests first so local bugs do not spend a browser probe. Returns factual rung attempts and a redacted raw-response preview, and saves the longer response under notes/ for inspection. A failed probe is not proof that the request works: repair and probe again, or report the exact missing plan fact. This is compiler scratch work: it creates no verification receipt and cannot publish the tool.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        params: {
-          type: 'object',
-          additionalProperties: {
-            anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
-          },
-          description: 'Concrete public parameter values for this request hypothesis.',
-        },
-        reason: {
-          type: 'string',
-          description: 'What request hypothesis this call tests.',
-        },
-      },
-      required: ['params', 'reason'],
-    },
-    handler: async (input: unknown) => {
-      const args = inputRecord(input);
-      const params = scalarParams(args.params);
-      if (!params) return { result: 'params must contain only scalar values', isError: true };
-      if (typeof args.reason !== 'string' || args.reason.trim().length === 0) {
-        return { result: 'reason must be a non-empty string', isError: true };
-      }
-
-      const workflowPath = pathJoin(toolDir, 'workflow.json');
-      if (!existsSync(workflowPath)) {
-        return {
-          result: 'workflow.json has not been written; write the request-only draft first',
-          isError: true,
-        };
-      }
-
-      let workflow: Workflow;
-      try {
-        workflow = WorkflowSchema.parse(JSON.parse(readFileSync(workflowPath, 'utf8')));
-      } catch (error) {
-        return {
-          result: `workflow.json schema invalid: ${error instanceof Error ? error.message : String(error)}`,
-          isError: true,
-        };
-      }
-      if (workflow.requests.length === 0) {
-        return { result: 'probe_api requires at least one API request', isError: true };
-      }
-      if (workflowHasIrreversibleEffect(workflow)) {
-        return {
-          result: 'probe_api does not execute an irreversible workflow; use recorded evidence',
-          isError: true,
-        };
-      }
-
-      const probeWorkflowPath = pathJoin(toolDir, `.imprint-api-probe-${randomUUID()}.json`);
-      const probeWorkflow = { ...workflow, parserModule: undefined };
-      writeFileSync(probeWorkflowPath, JSON.stringify(probeWorkflow, null, 2), 'utf8');
-
-      let release: (() => void) | undefined;
-      try {
-        release = await acquireSiteLiveLock(probeWorkflowPath);
-        const run = await runWorkflowWithLadder({ workflowPath: probeWorkflowPath, params });
-        const raw = run.result.ok
-          ? typeof run.result.data === 'string'
-            ? run.result.data
-            : JSON.stringify(run.result.data, null, 2)
-          : JSON.stringify(
-              {
-                error: run.result.error,
-                message: run.result.message,
-                ...(run.result.remediation ? { remediation: run.result.remediation } : {}),
-              },
-              null,
-              2,
-            );
-        const rawChars = raw.length;
-        const boundedRaw = raw.slice(0, API_PROBE_FILE_CHARS);
-        const redacted = redactFreeformText(boundedRaw).redacted;
-        const responseRelativePath = `notes/api-probe-${Date.now()}-${randomUUID().slice(0, 8)}.md`;
-        mkdirSync(pathJoin(toolDir, 'notes'), { recursive: true });
-        writeFileSync(pathJoin(toolDir, responseRelativePath), redacted, 'utf8');
-
-        return {
-          result: JSON.stringify(
-            {
-              hypothesis: args.reason.trim(),
-              usedBackend: run.usedBackend,
-              attempts: run.attempts,
-              responseObservations: run.responseObservations ?? [],
-              result: run.result.ok
-                ? {
-                    ok: true,
-                    rawChars,
-                    savedChars: redacted.length,
-                    truncated: rawChars > boundedRaw.length,
-                    preview: redacted.slice(0, API_PROBE_PREVIEW_CHARS),
-                  }
-                : {
-                    ok: false,
-                    error: run.result.error,
-                    message: redactFreeformText(run.result.message).redacted,
-                  },
-              responseFile: responseRelativePath,
-              createsVerificationReceipt: false,
-            },
-            null,
-            2,
-          ),
-        };
-      } catch (error) {
-        return {
-          result: `probe_api failed: ${error instanceof Error ? error.message : String(error)}`,
-          isError: true,
-        };
-      } finally {
-        release?.();
-        try {
-          unlinkSync(probeWorkflowPath);
-        } catch {
-          // The draft probe file is private scratch and may already be gone.
-        }
-      }
-    },
-  };
 }
 
 function requestUrlShape(value: string): Record<string, unknown> {

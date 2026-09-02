@@ -16,7 +16,6 @@ describe('Claude data-compile tool access', () => {
         'read_event',
         'diff_request_for_event',
         'compare_rendered_requests',
-        'probe_api',
       ]),
     );
     const prompt = readFileSync(

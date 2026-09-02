@@ -1103,7 +1103,7 @@ describe('prompts and pre-plan discovery', () => {
     }
     expect(masterPrompt).toMatch(/does not mean [“"]the field is required/i);
     expect(compilerPrompt).toMatch(
-      /call `done` so the independent\s+live verifier can confirm it/i,
+      /call `done` so the independent\s+live verifier can measure it/i,
     );
     expect(completionPrompt).toMatch(
       /absence of a producer from proof that the field is necessary/i,

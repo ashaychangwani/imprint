@@ -222,9 +222,6 @@ describe('master MVP compile contract', () => {
     expect(prompt).toContain('never add, remove, rename, or retype');
     expect(prompt).toContain('call give_up with the exact parameter');
     expect(prompt).toContain('return it to this retained compiler conversation');
-    expect(prompt).toContain('Dry-run any request transform');
-    expect(prompt).toContain('probe the repaired request again');
-    expect(prompt).toContain('passing offline tests alone is not completion');
   });
 });
 

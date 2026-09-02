@@ -96,7 +96,6 @@ export const DATA_COMPILE_TOOL_NAMES = [
   'compare_rendered_requests',
   'read_file',
   'write_file',
-  'probe_api',
   'run_bash',
   'run_tests',
   'read_build_plan',
