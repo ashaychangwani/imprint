@@ -214,6 +214,14 @@ playbook needs. Two endpoint clicks plus guessed intermediate selectors are not
 a supported browser implementation. Do not make the compiler scan arbitrary
 event numbers to invent the missing sequence.
 
+Do not let a verification case weaken the accepted tool promise. If the
+recorded operation and `expectedOutput` describe records, matches, prices,
+options, availability, or another positive core result, the first live MVP must
+show at least one credible core item. “Or an empty result” is not proof that a
+new retrieval tool works, even though empty output may be valid for some later
+production calls. Only an operation whose intended purpose is itself to prove
+absence may use emptiness as positive MVP evidence.
+
 When a live API call returns HTTP success but an empty, tiny, or implausible
 payload, inspect the exact response observation and parser input before blaming
 a missing dynamic header. Distinguish an explicit server error or challenge

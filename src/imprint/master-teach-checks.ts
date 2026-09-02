@@ -252,9 +252,22 @@ type MechanicalInvocationOutcome =
   | { kind: 'returned'; result: ToolResult<unknown> }
   | { kind: 'host_error'; error: unknown };
 
-function resultCount(result: unknown): number {
+/**
+ * Return a mechanically declared collection size without guessing which nested
+ * field is semantically important. Generated result objects may expose their
+ * own integer `count`; otherwise only a top-level array has a known collection
+ * size. A scalar/object result has no collection count.
+ */
+export function resultCollectionCount(result: unknown): number | null {
+  if (Array.isArray(result)) return result.length;
+  if (!result || typeof result !== 'object') return null;
+  const count = (result as Record<string, unknown>).count;
+  return typeof count === 'number' && Number.isInteger(count) && count >= 0 ? count : null;
+}
+
+function receiptResultCount(result: unknown): number {
   if (result === null || result === undefined) return 0;
-  return Array.isArray(result) ? result.length : 1;
+  return resultCollectionCount(result) ?? 1;
 }
 
 /** Project one invocation into bounded facts; returned result values are never copied. */
@@ -298,7 +311,7 @@ export function invocationOutcomeCheck(input: {
         kind: 'result',
         subject: input.subject,
         status: 'passed',
-        resultCount: resultCount(input.outcome.result.data),
+        resultCount: receiptResultCount(input.outcome.result.data),
       }),
     );
   } else {

@@ -63,7 +63,11 @@ import {
   requestParameterSelectionAdvice,
   requestToolSelectionAdvice,
 } from './master-teach-agents.ts';
-import { bindProducerResultToConsumer, invocationOutcomeCheck } from './master-teach-checks.ts';
+import {
+  bindProducerResultToConsumer,
+  invocationOutcomeCheck,
+  resultCollectionCount,
+} from './master-teach-checks.ts';
 import {
   type ChainEdge,
   type ContentAddressedRef,
@@ -4092,7 +4096,7 @@ function completionToolResultEvidenceFor(
       observed: true,
       preview,
       shape,
-      count: Array.isArray(live.result.data) ? live.result.data.length : null,
+      count: resultCollectionCount(live.result.data),
       truncated: Buffer.byteLength(serialized, 'utf8') > Buffer.byteLength(preview, 'utf8'),
     },
   };

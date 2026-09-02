@@ -228,6 +228,27 @@ describe('invocation outcome facts', () => {
     expect(JSON.stringify(check)).not.toContain(privateSession);
   });
 
+  it('uses an explicit object count instead of counting the wrapper as one result', () => {
+    const check = invocationOutcomeCheck({
+      subject: 'live',
+      invocationIndex: 0,
+      outcome: {
+        kind: 'returned',
+        result: {
+          ok: true,
+          data: { entries: [], count: 0, route: { origin: 'AAA', destination: 'BBB' } },
+        },
+      },
+    });
+
+    expect(check.facts).toContainEqual({
+      kind: 'result',
+      subject: 'live',
+      status: 'passed',
+      resultCount: 0,
+    });
+  });
+
   it('reports bounded host errors and emits no unbounded outcome fields', () => {
     const check = invocationOutcomeCheck({
       subject: 'chain',

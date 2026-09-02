@@ -1155,6 +1155,19 @@ describe('prompts and pre-plan discovery', () => {
     expect(requestPayload.validationContext.binding).toEqual(baselineMvpBinding(input));
   });
 
+  it('does not let an empty-allowed case weaken a retrieval MVP promise', () => {
+    const plannerPrompt = prompt('master-teach-focused-planner.md');
+    const masterPrompt = prompt('master-teach-decision.md');
+    const baselinePrompt = prompt('master-teach-baseline-mvp-review.md');
+    const completionPrompt = prompt('master-teach-completion-review.md');
+
+    expect(plannerPrompt).toContain('Do not weaken that proof');
+    expect(masterPrompt).toContain('Do not let a verification case weaken');
+    expect(baselinePrompt).toContain('actualResult.count: 0');
+    expect(baselinePrompt).toContain('non-empty wrapper object');
+    expect(completionPrompt).toContain('a supplied `count` of zero');
+  });
+
   it('shows the baseline reviewer every member of the exact grouped chain call', async () => {
     const firstEdge = at(edges, 0);
     const input: BaselineMvpReviewInput = {

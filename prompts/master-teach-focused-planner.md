@@ -164,6 +164,16 @@ individual `input.evidence.payload.entries[].ref` values into the output; those
 identify pieces inside the one authorized focused bundle, not separately
 authorized verification evidence.
 
+The live verification case must demonstrate the tool's core operation, not
+merely produce a technically successful response. When the recorded operation
+returned core records, options, matches, prices, availability, or other items,
+choose representative live parameters and require at least one credible core
+item. Do not weaken that proof with phrases such as “or an empty result.” Empty
+output can be a legitimate production outcome, but it does not prove a new
+retrieval MVP works. The exception is an operation whose intended purpose is
+itself to establish absence or emptiness; a retrieval call that happens to find
+nothing is not such an operation.
+
 Every API rung has higher priority than `playbook_fallback`. Suggest the
 fallback only when the evidence makes you certain no API rung is compatible,
 not because browser automation looks easier. These are the only two strategy

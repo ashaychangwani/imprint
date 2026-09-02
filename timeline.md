@@ -3226,3 +3226,30 @@ tool verifies, the evidence truly rules out the remaining ideas, the user
 cancels, or the shared 60-minute deadline expires. The existing repeated-state
 guard still rejects an exact retry of the same plan, artifacts, checks, and
 failure; it is not a numeric repair limit.
+
+## 2026-09-02 03:22 PDT — Empty calendar output exposed a false semantic pass
+
+Fresh Flights run `8ab4fdc7-39ee-4c5b-a641-6ef24af00919` ended partial after
+about 35 minutes. It reported two ready tools, but only location lookup was
+actually proven. Calendar returned HTTP success with a 130–131 byte protocol
+response and zero fare rows. The planning agent had weakened its live
+expectation to allow “a truthful empty result,” so both the one-tool semantic
+reviewer and final reviewer accepted the empty result. Independent CDP calls for
+three busy routes all returned the same tiny empty response. The recorded
+response was 6,919 bytes and contained 38 fare rows. Calendar was therefore a
+false-positive semantic pass, not a working MVP.
+
+The compiler was not at fault. In one retained conversation it corrected two
+artifact bugs, matched the recorded 446-byte request body, passed six offline
+tests, and built a parser that extracts the 38 recorded rows. The unresolved
+problem remained live transport. Search retained its compiler conversation
+through six distinct repair cycles and every empty or protocol-error response
+was correctly rejected. Booking remained unresolved because search never
+produced usable selection state.
+
+The semantic contract is now explicit and site-neutral. A verification case may
+not weaken a retrieval tool's intended output by saying empty is acceptable.
+The initial MVP must demonstrate at least one core record unless the operation's
+purpose is itself to prove absence. Mechanical receipts and semantic evidence
+now use an emitted object's explicit integer `count`, so `{entries: [], count:
+0}` is reported as zero core results rather than one wrapper object.

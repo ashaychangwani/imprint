@@ -65,6 +65,14 @@ demand coverage of everything in the world. A `completed` intent without this
 evidence must fail. A blocked review may omit it; in that case return an empty
 `toolResultReviews` array.
 
+The tool's intended operation and `expectedOutput` outrank a weaker verification
+case. For a retrieval tool that promises records, matches, prices, options,
+availability, or another positive core collection, a supplied `count` of zero
+requires revision even when `expectedResult` says empty output is allowed. A
+non-empty wrapper object is not a non-empty result set. Accept an empty result
+as positive proof only when the intended operation itself is explicitly an
+absence/emptiness check.
+
 Exact output schema (all objects reject extra fields):
 
 ```text
