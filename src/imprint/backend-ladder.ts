@@ -1862,9 +1862,23 @@ export async function renderWorkflowRequests(opts: {
       requestOrdinal,
       ...(provenance ? { provenance } : {}),
     });
+    const recordedHeaders = new Headers();
+    for (const [name, rawValue] of Object.entries(rec?.headers ?? {})) {
+      // CDP can preserve literal line breaks in a combined response header
+      // (notably CSP), while the Fetch Headers implementation rejects that
+      // wire representation. Unfold it to ordinary HTTP whitespace for this
+      // offline response. A malformed response field must not erase every
+      // later prepared-request fact.
+      const value = rawValue.replace(/\r?\n[\t ]*/g, ' ');
+      try {
+        recordedHeaders.append(name, value);
+      } catch {
+        // Ignore only the unrepresentable response field.
+      }
+    }
     return new Response(rec?.body ?? '{}', {
       status: rec?.status ?? 200,
-      headers: new Headers(rec?.headers ?? {}),
+      headers: recordedHeaders,
     });
   };
   const fetchImpl: typeof fetch = (async (

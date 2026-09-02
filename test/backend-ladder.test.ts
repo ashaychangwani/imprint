@@ -1247,14 +1247,23 @@ describe('renderWorkflowRequests — offline param verification', () => {
         },
       ],
     };
-    const { requests } = await renderWorkflowRequests({
+    const { requests, result } = await renderWorkflowRequests({
       workflow: wf,
       params: { q: 'hello' },
       recordedResponseFor: (_m, u) =>
-        u.includes('/page') ? { status: 200, body: '<x>TOKEN=deadbeef</x>' } : undefined,
+        u.includes('/page')
+          ? {
+              status: 200,
+              body: '<x>TOKEN=deadbeef</x>',
+              headers: {
+                'content-security-policy': "script-src 'self'\nreport-uri /csp",
+              },
+            }
+          : undefined,
     });
     const act = requests.find((r) => r.url.includes('/act'));
     // The capture resolved from the recorded response, fully offline.
+    expect(result.ok).toBe(true);
     expect(act?.headers['X-Tok'] ?? act?.headers['x-tok']).toBe('deadbeef');
     expect(act?.body).toContain('q=hello');
   });

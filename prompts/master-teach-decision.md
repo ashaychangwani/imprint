@@ -152,6 +152,14 @@ coupled location still contains an old recorded value, keep the API strategy
 and ask the retained compiler to correct those locations together. Such a
 mixed request cannot justify playbook fallback.
 
+Treat an offline comparison marked `not_checked`, `render_failed`, or missing
+as an open request-construction question, not as evidence that the request is
+coherent. Before fallback, require either a completed comparison or an exact
+recorded-versus-generated structural account covering nested array depth,
+fixed positional codes, field order, headers, URL, and body. Tests written
+against the generated structure alone cannot establish that it matches the
+successful recorded call.
+
 When the accepted tool contract is still right but its current artifact needs
 repair, keep its public name, candidate, compile context, strategy, and dependencies
 and put that name in top-level `recallToolNames`. That visible command continues

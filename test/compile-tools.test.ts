@@ -3230,7 +3230,10 @@ describe('compare_rendered_requests compile tool', () => {
       body: recordedBody,
       response: {
         status: 200,
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          'content-security-policy': "script-src 'self'\nreport-uri /csp",
+        },
         mimeType: 'application/json',
         body: '{"items":[]}',
       },

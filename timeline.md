@@ -2885,3 +2885,51 @@ moment it was most important. Compiler conversations are now retained by the
 public tool name alone. Draft files remain isolated by strategy, so a playbook
 cannot accidentally inherit API files. A new end-to-end test proves both
 properties, and the focused controller, prompt, type, and lint checks pass.
+
+## 2026-09-01 21:00 PDT — The request comparison crashed, so the wrong body looked credible
+
+Fresh Flights run `991d471f-a9e1-4c00-ba02-abbabdce82d3` again reused only the
+four good operation boundaries. It kept all four tools on the API path for four
+repair revisions. Location lookup passed and was published. Calendar reached
+HTTP 200 but returned no fares. Search improved from HTTP 400 to HTTP 200 in a
+manual diagnostic, but returned no flights. Booking remained correctly blocked
+behind search. When the fifth master decision proposed browser playbooks for
+the remaining three tools, the run was cancelled with one ready tool and three
+unfinished tools.
+
+The retained conversations and new instructions worked. The master found a
+stale request id, kept the date/body/Referer fields together, repaired the
+calendar location extraction, and did not choose playbook after the first few
+failures. However, it was working from an incorrect claim that the generated
+search body already matched the successful recording.
+
+The offline request comparison had actually crashed before preparing the
+search request. A recorded multiline Content-Security-Policy response header
+cannot be passed directly to the Fetch `Headers` class. Because the bootstrap
+response could not be constructed, the later search body was never compared.
+The compiler then wrote tests against its own invented array shape. Those tests
+passed, but the generated body contained one extra array layer around every
+airport. Its encoded route also used a different fixed trip-type byte from the
+recorded route. The master spent later repairs varying BGR headers around that
+unproven request.
+
+The shipped search example was also probed with current future dates. It no
+longer returns usable flights: CDP reaches HTTP 200, but the current response
+does not contain recognizable itineraries. It remains useful design evidence,
+but its old backend cache is not proof that it works today.
+
+Offline rendering now unfolds multiline recorded response headers into normal
+HTTP whitespace and ignores only an individual header that still cannot be
+represented. It no longer discards the downstream request comparison. Running
+the repaired diagnostic against the failed search artifact prepared both
+requests and immediately reported the exact extra array depth, the 571-versus-
+595-byte body difference, and the Referer mismatch. The instructions also say
+that `not_checked` is an open construction question, and that agent-authored
+tests must anchor positional bodies to the successful recording rather than to
+the generated structure itself. Exact `read_file` and `write_file` argument
+names are now shown to prevent the repeated tool-call typo seen in each repair.
+These are site-neutral diagnostic and prompt fixes; no Google-specific runtime
+decision was added.
+
+The complete project check passes after this change: 1,839 tests, type checking,
+lint, unused-code analysis, and the circular-dependency check are all clean.

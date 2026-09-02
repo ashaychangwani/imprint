@@ -610,8 +610,8 @@ baseline integration case, then call `done` for the mode-specific handoff.
 | `compare_rendered_requests` | Optional offline diagnostic that prepares the real workflow against recorded responses and reports factual request differences without gating publication |
 | `read_response_body` | Response body for a given seq (paginated for large bodies via offset/length) |
 | `search_response_body` | Find substrings in a response body and return matching offsets+context (essential for anchoring on known values inside opaque JSPB) |
-| `write_file` | Write the files allowed by the accepted strategy: API artifacts for `api`, or workflow.json + playbook.yaml for `playbook_fallback`; notes/*.md are also allowed |
-| `read_file` | Read a file by relative path (e.g. `parser.ts`, `workflow.json`) |
+| `write_file` | Write the files allowed by the accepted strategy: API artifacts for `api`, or workflow.json + playbook.yaml for `playbook_fallback`; notes/*.md are also allowed. Input is `{"relativePath":"workflow.json","content":"..."}`. |
+| `read_file` | Read a file by relative path. Input is `{"path":"parser.ts"}` (the field is `path`, not `relativePath`). |
 | `run_bash` | Run a bounded local diagnostic command in the tool directory |
 | `run_tests` | Run parser.test.ts and/or request.test.ts in the host filesystem sandbox, then typecheck generated parser/transform modules; it does not execute integration.test.ts, and network is disabled for irreversible workflows |
 | `done` | Claim the artifact handoff is complete; in master MVP mode this runs deterministic checks only, while standalone full mode continues into independent live verification |
@@ -713,6 +713,12 @@ Route failures by the fact that failed:
   agrees across its body, URL, bootstrap/navigation URL, `Referer`/`Origin`, and
   captured state. Recorded-byte equality cannot validate a live request whose
   coupled fields disagree.
+  A comparison whose state is `not_checked` or whose render failed has not
+  established request coherence. Repair the diagnostic failure and rerun it,
+  or decode the recorded and generated bodies and compare their exact paths,
+  array depths, fixed codes, and field order yourself. Do not validate a
+  generated positional body solely with tests that assert the structure you
+  just invented; anchor those assertions to the recorded successful request.
 - Chain: inspect the producer's actual result path and the consumer's exact
   parameter position. Revise the producer, consumer, or edge supported by the
   evidence; do not fabricate a connecting value.
