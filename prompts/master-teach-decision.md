@@ -142,6 +142,16 @@ dates, rotating state, authentication, nonces, and signatures. A difference is
 evidence for the master to interpret; it does not by itself require browser
 fallback.
 
+Before concluding that an API is incompatible, check the failed live request
+for internal contradictions. A fresh date, route, locale, or similar input
+must be reflected consistently in every place that represents it: body, URL,
+bootstrap/navigation URL, `Referer`/`Origin`, and response-produced state. A
+recorded-byte match proves only that replay construction is close to the old
+request; it does not prove that a new live invocation is coherent. If any
+coupled location still contains an old recorded value, keep the API strategy
+and ask the retained compiler to correct those locations together. Such a
+mixed request cannot justify playbook fallback.
+
 When the accepted tool contract is still right but its current artifact needs
 repair, keep its public name, candidate, compile context, strategy, and dependencies
 and put that name in top-level `recallToolNames`. That visible command continues

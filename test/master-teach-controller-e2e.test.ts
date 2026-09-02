@@ -2640,6 +2640,137 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
+  it('retains the compiler conversation but not incompatible draft files across strategy changes', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      const compileAttempts: Array<{
+        stagingDir: string;
+        priorToolDir?: string;
+        resumeSessionId?: string;
+        strategyKind?: string;
+      }> = [];
+      let repairDecisions = 0;
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-session-survives-strategy-change',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseCompileFocusedTool = base.compileFocusedTool;
+      if (!baseCompileFocusedTool) throw new Error('fixture compiler is missing');
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          requestFocusedPlan: async (plannerInput) => {
+            const browser = plannerInput.tool.strategy?.kind === 'playbook_fallback';
+            return FocusedPlannerOutputSchema.parse({
+              binding: {
+                runId: plannerInput.run.runId,
+                site: plannerInput.run.site,
+                recordingSha256: plannerInput.run.recordingSha256,
+                toolId: plannerInput.tool.id,
+              },
+              tool: plannerInput.tool,
+              chainEdges: plannerInput.incomingChainEdges,
+              implementationPlan: browser
+                ? browserFocusedImplementation(plannerInput)
+                : focusedImplementation(plannerInput),
+              reason: 'The fixture implementation follows the currently accepted strategy.',
+            });
+          },
+          compileFocusedTool: async (compileInput) => {
+            compileAttempts.push({
+              stagingDir: compileInput.stagingDir,
+              priorToolDir: compileInput.priorToolDir,
+              resumeSessionId: compileInput.resumeSessionId,
+              strategyKind: compileInput.tool.strategy?.kind,
+            });
+            if (compileAttempts.length === 1) compileInput.onSessionId?.('compiler-session-1');
+            if (compileAttempts.length === 2) {
+              throw new ProviderUnavailableError(
+                new Error('fixture stops after observing the strategy-change context'),
+              );
+            }
+            const focused = await baseCompileFocusedTool(compileInput);
+            return {
+              ...focused,
+              workflow: WorkflowSchema.parse({
+                ...focused.workflow,
+                requests: focused.workflow.requests.map((request, index) =>
+                  index === 0 ? { ...request, recordingRequestSeq: 999 } : request,
+                ),
+              }),
+            };
+          },
+          requestMasterDecision: async (decisionInput) => {
+            const desiredPlan =
+              decisionInput.phase === 'discovery'
+                ? initialSingleToolDesiredPlan(decisionInput)
+                : decisionInput.plannerProposals.length > 0
+                  ? proposalDesiredPlan(decisionInput)
+                  : desiredFromCurrent(decisionInput);
+            if (decisionInput.verificationFindings) {
+              repairDecisions += 1;
+              const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+              if (!tool) throw new Error('fixture expected the producer plan');
+              tool.strategy = {
+                kind: 'playbook_fallback',
+                reason: 'The fixture explicitly exercises an accepted strategy change.',
+              };
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome: decisionInput.verificationFindings ? 'revised' : 'accepted',
+              reason: decisionInput.verificationFindings
+                ? 'Change the fixture strategy while preserving the compiler discussion.'
+                : 'Keep the focused producer plan.',
+              recallToolNames: [],
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('provider_unavailable');
+      expect(repairDecisions).toBe(1);
+      expect(compileAttempts).toHaveLength(2);
+      expect(compileAttempts[0]?.strategyKind).toBe('api');
+      expect(compileAttempts[1]?.strategyKind).toBe('playbook_fallback');
+      expect(compileAttempts[0]?.priorToolDir).toBeUndefined();
+      expect(compileAttempts[1]?.priorToolDir).toBeUndefined();
+      expect(compileAttempts[0]?.resumeSessionId).toBeUndefined();
+      expect(compileAttempts[1]?.resumeSessionId).toBe('compiler-session-1');
+      expect(events).not.toContain(`review:${PRODUCER_ID}`);
+      expect(promotionBatches).toEqual([]);
+    });
+  });
+
   it('stops repeated executable proposals but reviews changed implementation plans', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];

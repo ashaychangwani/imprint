@@ -2427,8 +2427,8 @@ async function compileAndCheckCurrentPlan(input: {
   priorChain?: Map<string, LiveCheckResult>;
   revisionGuidanceByToolId?: ReadonlyMap<string, string>;
   revisionContextByToolId?: ReadonlyMap<string, FocusedPlannerRevisionContext>;
-  /** Durable compiler conversations, one per tool and strategy. */
-  compileSessionsByToolStrategy?: Map<string, string>;
+  /** Durable compiler conversations, one per public tool. */
+  compileSessionsByToolId?: Map<string, string>;
   /** Install an independently usable MVP before optional breadth work. */
   publishMvp?: (tool: EditableTeachingTool, compiled: CompiledFocusedTool) => Promise<void>;
   /** Review only the default result's fitness for the core operation. */
@@ -2549,14 +2549,8 @@ async function compileAndCheckCurrentPlan(input: {
           : draftSourceByToolStrategy.get(draftSourceKey(tool.id, tool.strategy.kind))?.toolDir,
       revisionGuidance: input.revisionGuidanceByToolId?.get(tool.id),
       revisionContext: input.revisionContextByToolId?.get(tool.id),
-      resumeSessionId: input.compileSessionsByToolStrategy?.get(
-        draftSourceKey(tool.id, tool.strategy.kind),
-      ),
-      onSessionId: (sessionId) =>
-        input.compileSessionsByToolStrategy?.set(
-          draftSourceKey(tool.id, tool.strategy?.kind ?? implementation.strategyKind),
-          sessionId,
-        ),
+      resumeSessionId: input.compileSessionsByToolId?.get(tool.id),
+      onSessionId: (sessionId) => input.compileSessionsByToolId?.set(tool.id, sessionId),
       llmConfig: input.llmConfig,
       runDeadline: input.runDeadline,
       signal: input.signal,
@@ -4293,7 +4287,7 @@ export async function runFreshMasterTeach(
     let draftSourceByToolStrategy = new Map<string, CompiledFocusedTool>();
     let liveByToolId = new Map<string, LiveCheckResult>();
     let chainByEdgeId = new Map<string, LiveCheckResult>();
-    const compileSessionsByToolStrategy = new Map<string, string>();
+    const compileSessionsByToolId = new Map<string, string>();
     const revisionGuidanceByToolId = new Map<string, string>();
     const repairContextByToolId = new Map<string, FocusedPlannerRevisionContext>();
     const mvpDispositionByResult = new Map<
@@ -4391,7 +4385,7 @@ export async function runFreshMasterTeach(
           priorChain: chainByEdgeId,
           revisionGuidanceByToolId,
           revisionContextByToolId: repairContextByToolId,
-          compileSessionsByToolStrategy,
+          compileSessionsByToolId,
           isMvpPublished: (toolId, buildRef) =>
             publishedMvpBuilds.has(`${toolId}:${buildRef.sha256}`),
           resultDisposition: (toolId, resultReceiptRef) =>

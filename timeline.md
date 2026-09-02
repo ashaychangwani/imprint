@@ -2842,3 +2842,46 @@ Dead-code and circular-dependency checks also pass. After this checkpoint is
 committed, the next attempt will again be a fresh run from the candidate
 checkpoint and the exact combined recording, never a resume of this failed
 build.
+
+## 2026-09-01 20:12 PDT — Fresh dates were mixed with an old recorded route
+
+Fresh Flights run `a21b7f1a-ccba-417e-9c55-e333cc1856a5` reused only the good
+four-operation selection from the earlier run. It planned four API tools in two
+waves. Location lookup passed and was published. Calendar and search both
+reached Google with HTTP 200 responses, but Google returned small error-shaped
+responses instead of fares or flights. Booking correctly remained waiting on
+search.
+
+The master and retained compilers tried several API repairs. This was useful:
+search improved from missing browser state, to HTTP 400, to HTTP 200. The
+transport memory also remembered that calendar had previously reached Google
+through CDP and that search had reached it through ordinary fetch, so later
+revisions did not probe every transport again. The run nevertheless lasted too
+long. On its fifth repair decision, the master changed calendar, search, and
+booking to browser playbooks. Because playbook is supposed to be the last
+resort, the run was cancelled with one ready tool and three unfinished tools.
+Nothing from this run will be resumed as a build.
+
+Inspection found a simpler explanation that the API repairs missed. The live
+test correctly chose future October dates, but the generated calendar and
+search requests still sent a recorded route or `Referer` containing June
+dates. The body described one trip while the surrounding page context described
+another. Comparing the generated request with the old recording encouraged the
+compiler to restore the old header, but that comparison said nothing about
+whether the new live request agreed with itself.
+
+The instructions now tell the planner, compiler, and master to treat all copies
+of a changing input as one unit. A new date, route, locale, or similar value
+must agree in the body, URL, bootstrap URL, headers, and captured state. Old
+recorded strings remain useful replay evidence but cannot be hardcoded into a
+different live call. Before choosing a playbook, the master must first rule out
+this kind of mixed old/new request. This is agent guidance, not a new
+site-specific runtime rule.
+
+The run exposed a second general bug. Imprint correctly kept API files separate
+from playbook files, but it also started a new compiler conversation whenever
+the strategy changed. That discarded the agent's full repair history at the
+moment it was most important. Compiler conversations are now retained by the
+public tool name alone. Draft files remain isolated by strategy, so a playbook
+cannot accidentally inherit API files. A new end-to-end test proves both
+properties, and the focused controller, prompt, type, and lint checks pass.

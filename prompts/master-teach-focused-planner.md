@@ -171,6 +171,14 @@ requests or events that support their inputs and expectation. Never reproduce
 a credential, cookie, token, or other secret. These cases are the
 compiler/verifier's declared core inputs—the runtime must not invent additional
 semantic cases or force deferred breadth into the MVP.
+When a live case changes a date, route, locale, or other value that appears in
+more than one place, explicitly tell the compiler to derive every coupled
+representation from that same live input. This includes request bodies, URLs,
+bootstrap or navigation URLs, `Referer`/`Origin` headers, and captured state.
+A recorded URL or header containing the old value is useful replay evidence;
+it is not a valid constant for a live case with a different value. Call out
+these coupled locations in `parameterMappings` or construction guidance so the
+compiler does not produce an internally contradictory request.
 Every plan needs at least one live case. A playbook plan must not declare
 replay because recording comparison is not applicable to it.
 

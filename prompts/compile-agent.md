@@ -305,6 +305,14 @@ Follow these steps to compile the session:
     derive rolling future dates at test runtime. Never reuse a recorded calendar
     date that may be past by the time teach runs.
 
+    Treat every representation of a live input as one coupled request contract.
+    If a live date, route, locale, or similar value differs from the recording,
+    derive the request body, URL, bootstrap/navigation URL, `Referer`/`Origin`
+    headers, and captured state from the same live parameters. Do not hardcode a
+    recorded dynamic value in one of those locations while sending the live value
+    somewhere else. A recorded request is replay evidence, not a source of stale
+    constants for a different live invocation.
+
     When the case fails, inspect the exact outgoing request, response, prior state, and parser output before choosing a repair. A status code or backend name alone does not tell you whether the cause is request construction, authentication, changing state, upstream behavior, or execution environment. If exact evidence shows a value must be produced earlier or computed, add the corresponding capture, chain, generation, or transform and verify again.
 
 **Irreversible workflows are never live-tested.** Do not call `runWorkflowWithLadder`, direct fetch, curl, browser actions, or any generated MCP tool for a workflow containing `effect: "irreversible"`. Use recorded response fixtures for parser tests and offline request rendering for parameter fidelity. The host records live verification as not applicable; it never fabricates a successful response.
@@ -700,7 +708,11 @@ Route failures by the fact that failed:
   recording helps isolate the defect. Reproduce the recorded call as closely as
   the current API requires, while accounting for recording age, current dates,
   rotating state, authentication, nonces, and signatures. Exact equality is
-  evidence, not a universal pass/fail rule.
+  evidence, not a universal pass/fail rule. Also inspect the prepared **live**
+  request. Confirm that each changed date, route, locale, or similar parameter
+  agrees across its body, URL, bootstrap/navigation URL, `Referer`/`Origin`, and
+  captured state. Recorded-byte equality cannot validate a live request whose
+  coupled fields disagree.
 - Chain: inspect the producer's actual result path and the consumer's exact
   parameter position. Revise the producer, consumer, or edge supported by the
   evidence; do not fabricate a connecting value.
