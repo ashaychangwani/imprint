@@ -823,6 +823,17 @@ describe('backendInvariantProbeFailure', () => {
         message: 'request timed out',
       }),
     ).toBeNull();
+    expect(
+      backendInvariantProbeFailure({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'request transform failed for request 1: state was unavailable',
+        requestStageFacts: [
+          { requestIndex: 0, stage: 'send', outcome: 'passed', httpStatus: 200 },
+          { requestIndex: 1, stage: 'transform', outcome: 'failed' },
+        ],
+      }),
+    ).toBeNull();
   });
 
   it('carries only value-free request-stage facts through a failed probe', async () => {
@@ -841,16 +852,10 @@ describe('backendInvariantProbeFailure', () => {
       toolFn: async () => ({
         ok: false,
         error: 'BAD_RESPONSE',
-        message: 'request transform failed for request 1: state was unavailable',
+        message: 'request transform failed for request 0: state was unavailable',
         requestStageFacts: [
           {
             requestIndex: 0,
-            stage: 'send',
-            outcome: 'passed',
-            httpStatus: 200,
-          },
-          {
-            requestIndex: 1,
             stage: 'transform',
             outcome: 'failed',
             bodyPresent: true,
@@ -874,13 +879,6 @@ describe('backendInvariantProbeFailure', () => {
       {
         backend: 'fetch',
         requestIndex: 0,
-        stage: 'send',
-        outcome: 'passed',
-        httpStatus: 200,
-      },
-      {
-        backend: 'fetch',
-        requestIndex: 1,
         stage: 'transform',
         outcome: 'failed',
         bodyPresent: true,

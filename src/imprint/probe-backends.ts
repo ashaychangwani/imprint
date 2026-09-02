@@ -13,7 +13,8 @@ import {
   loadBackendsCache,
   loadBackendsCacheStatus,
 } from './backend-cache.ts';
-import { runWithLadder } from './backend-ladder.ts';
+import { backendInvariantProbeFailure, runWithLadder } from './backend-ladder.ts';
+export { backendInvariantProbeFailure } from './backend-ladder.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { workflowHasIrreversibleEffect } from './effects.ts';
 import { createLog } from './log.ts';
@@ -28,7 +29,6 @@ import {
   type ConcreteBackend,
   CronConfigSchema,
   type RequestStageFact,
-  type ToolResult,
   WorkflowSchema,
 } from './types.ts';
 import { VERSION } from './version.ts';
@@ -365,25 +365,6 @@ export async function probeResolvedTool(
   log(`wrote ${outPath} — preferred: ${cache.preferredOrder.join(' → ')}`);
 
   return { cache, outPath };
-}
-
-/**
- * Some generated-workflow failures happen before any HTTP request is sent.
- * Retrying those through browser-backed transports is both expensive and
- * misleading: a different transport cannot repair a deterministic transform.
- * Keep remote HTTP BAD_RESPONSE failures probeable because bot defenses can
- * return backend-specific 4xx responses.
- */
-export function backendInvariantProbeFailure(result: ToolResult): string | null {
-  if (result.ok || result.error !== 'BAD_RESPONSE') return null;
-  const transformCouldNotPrepareRequest = result.requestStageFacts?.some(
-    ({ stage, outcome }) =>
-      stage === 'transform' && (outcome === 'failed' || outcome === 'unavailable'),
-  );
-  return transformCouldNotPrepareRequest ||
-    /^request transform (?:failed for request \d+:|module was unavailable)/i.test(result.message)
-    ? result.message
-    : null;
 }
 
 export function rankSuccessfulBackends(candidates: BackendProbeCandidate[]): ConcreteBackend[] {

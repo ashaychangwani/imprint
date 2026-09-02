@@ -37,15 +37,15 @@ const OMITTED_FILE_PREFIXES = [
  * at a time. MVP compilation and downstream dependency work remain separate. */
 export const LIVE_FINESSE_CONCURRENCY = 1;
 
-export type LiveFinesseReport = Awaited<ReturnType<typeof runLiveSemanticVerification>>['report'];
+type LiveFinesseReport = Awaited<ReturnType<typeof runLiveSemanticVerification>>['report'];
 
-export interface LiveFinesseArtifactSnapshot {
+interface LiveFinesseArtifactSnapshot {
   reportJson?: string;
   evidenceJson?: string;
   logJsonl?: string;
 }
 
-export interface LiveFinesseResult {
+interface LiveFinesseResult {
   status: 'completed' | 'inconclusive' | 'cancelled';
   provider: ProviderName;
   model?: string;

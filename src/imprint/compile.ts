@@ -116,6 +116,10 @@ interface GenerateOptions extends CompileOptions {
 interface GenerateResult {
   workflow: Workflow;
   workflowPath: string;
+  /** The compiler's final factual account, including any request comparisons
+   * it chose to report through done(). Teach carries this into the next repair
+   * turn instead of making the master rediscover it. */
+  compilerSummary: string;
   /** Number of requests the LLM saw (after shrinking). */
   requestsSent: number;
   /** Original count before shrinking. */
@@ -220,6 +224,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       return {
         workflow,
         workflowPath,
+        compilerSummary: result.message,
         requestsSent: 0, // legacy field — no longer meaningful for agentic compile
         requestsOriginal: 0, // legacy field
         inputTokens: result.inputTokens,

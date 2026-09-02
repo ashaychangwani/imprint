@@ -2778,3 +2778,67 @@ dependency checks, and whitespace checks pass. The next step is to commit this
 checkpoint and start a fresh Flights teach from the preserved four-tool
 selection and its exact recording, with a 60-minute hard limit and a 15-minute
 expected completion time.
+
+## 2026-09-01 19:15 PDT — The candidate restart worked; factual repair feedback did not
+
+The first restart attempt, run `34f37789-308f-46c2-85b0-d376e81b27bc`, used
+the killed run's local redacted copy rather than the original combined
+recording. Its bytes did not match the candidate checkpoint, so the new hash
+guard rejected it immediately. The latest combined source recording was then
+matched by its exact hash and used for the real fresh run. This confirmed that
+candidate reuse is tied to the recording that actually produced the selection.
+
+Fresh Flights run `6e3c489f-4404-424e-b749-e9d335bac32a` loaded the four-tool
+selection in about two seconds and planned four API tools in two waves:
+location lookup, calendar fares, flight search, and booking options. It did not
+switch any tool to a playbook. Location lookup passed and was published. The
+calendar and search requests eventually ran, but their parsers returned empty
+results, so booking correctly remained waiting on search. The run ended after
+about 39 minutes with one ready tool and three unfinished tools.
+
+The final crash was not an agent choosing to ship bad work. After the last
+search check, the small result-review agent was called. Its Codex child process
+exited with code 101 before producing any response. The newer Codex SDK exposed
+that as ordinary text, so the existing temporary-provider retry never saw it.
+That exact SDK message now goes through the same capped backoff as other blank
+provider interruptions while retaining the same agent conversation. A real
+diagnostic or a different exit code still fails normally.
+
+Two general runtime mistakes also cost time. First, a search request failed
+locally while its transform was building request 2, but Imprint repeated the
+same local failure through fetch bootstrap, CDP, and stealth fetch. A review
+caught that a later transform can depend on an earlier response, so it is not
+always independent of transport. Only a request-construction failure before
+request 0 reaches the network now returns straight to the retained compiler.
+Later response-dependent transforms, real HTTP responses, and browser-capable
+missing state keep the normal fallback ladder. This narrow shortcut uses only
+the recorded execution stage and has no site knowledge.
+
+Second, both retained compilers had already compared their rendered requests
+with the recording and reported useful differences. The controller discarded
+those summaries before asking the master what to do next. It also kept only the
+parser's empty result and hid the shape of the current API response. Compiler
+summaries now follow the exact build into the next repair turn, including when
+the host rejects a file on schema or recording-provenance grounds. Live checks
+add value-free response facts: status, byte length, content type, value type,
+array length, and top-level keys. Failed HTTP responses are observed before
+their status is classified. No raw response values are copied into the journal,
+and these facts are agent evidence rather than new pass/fail rules.
+
+The foreground command was also launching a second full live breadth verifier
+for every already-published MVP. On the location tool that repeated four cold
+Chrome starts even though the authoritative live check had already passed.
+Foreground teach now launches only the small parameter-choice advisor in the
+background. Full breadth testing remains later finesse work and cannot consume
+the browser and provider capacity needed to unblock the remaining MVPs.
+
+No Google-specific policy was added. A review also fixed optional parameter
+advice so its cache identity includes both the tool bytes and its current
+dependency wiring. Focused type checking and lint, plus 251
+runtime/controller/provider tests, pass. The repository-wide suite passed
+1,837 tests and hit one already-known process-cleanup timing flake under full
+load; that exact hostile-process test passed immediately when run alone.
+Dead-code and circular-dependency checks also pass. After this checkpoint is
+committed, the next attempt will again be a fresh run from the candidate
+checkpoint and the exact combined recording, never a resume of this failed
+build.

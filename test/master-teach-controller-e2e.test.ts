@@ -627,15 +627,6 @@ function lifecycleFailureFixture(input: {
     requestParameterSelectionAdvice: async () => {
       throw new Error('Optional fixture parameter advice is unavailable.');
     },
-    runLiveFinesse: async ({ provider }) => ({
-      status: 'inconclusive',
-      provider,
-      attempts: 0,
-      completedReview: false,
-      artifacts: {},
-      message: 'Optional fixture live finesse is unavailable.',
-      durationMs: 1,
-    }),
     requestCompletionReview: async () => {
       throw new Error('fixture must stop before completion review');
     },
@@ -784,7 +775,6 @@ describe('fresh foreground master controller end to end', () => {
       let groundedCandidateRemainedAdvisory = false;
       let narrationRemainedInEvidence = false;
       const parameterAdvisorCalls: string[] = [];
-      const liveFinesseCalls: string[] = [];
       const parameterAdvisorChecks = new Map<string, string[]>();
       const pendingParameterAdvice: Array<() => void> = [];
       let parameterAdviceHadToBeReleased = false;
@@ -1024,21 +1014,6 @@ describe('fresh foreground master controller end to end', () => {
               if (parameterAdviceHadToBeReleased) rejectAdvice();
             });
           },
-          runLiveFinesse: async ({ provider, toolDir }) => {
-            const toolId = toolDir.includes(`/${PRODUCER_ID}`) ? PRODUCER_ID : CONSUMER_ID;
-            liveFinesseCalls.push(toolId);
-            events.push(`finesse-live:${toolId}`);
-            return {
-              status: 'completed',
-              provider,
-              model: 'fixture',
-              attempts: 1,
-              completedReview: true,
-              artifacts: {},
-              message: 'Fixture breadth review completed.',
-              durationMs: 1,
-            };
-          },
           requestCompletionReview: async (input) => {
             events.push('completion-review');
             checksSeenByReviewer = new Map(
@@ -1140,11 +1115,7 @@ describe('fresh foreground master controller end to end', () => {
       // Optional provider work is bounded independently from the core path,
       // while both tools can still begin their post-publication review.
       expect(parameterAdvisorCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
-      expect(liveFinesseCalls).toEqual([PRODUCER_ID, CONSUMER_ID]);
       expect(events.indexOf(`finesse:${PRODUCER_ID}`)).toBeLessThan(
-        events.indexOf(`compile:${CONSUMER_ID}`),
-      );
-      expect(events.indexOf(`finesse-live:${PRODUCER_ID}`)).toBeLessThan(
         events.indexOf(`compile:${CONSUMER_ID}`),
       );
       expect(parameterAdvisorChecks.get(PRODUCER_ID)).toEqual(['contract:passed', 'live:passed']);
@@ -1179,19 +1150,16 @@ describe('fresh foreground master controller end to end', () => {
         const finesseFile = readdirSync(finesseDir).find((name) => name.endsWith('.json'));
         if (!finesseFile) throw new Error(`missing finesse record for ${toolId}`);
         const finesseRecord = readJson(join(finesseDir, finesseFile));
+        const executionBindingSha256 = (finesseRecord as { executionBindingSha256: string })
+          .executionBindingSha256;
+        expect(finesseFile).toBe(
+          `${buildRef.sha256.slice('sha256:'.length)}-${executionBindingSha256.slice('sha256:'.length)}.json`,
+        );
         expect(finesseRecord).toEqual(
           expect.objectContaining({
             toolId,
             buildRef,
             status: 'deferred',
-          }),
-        );
-        expect(finesseRecord).toEqual(
-          expect.objectContaining({
-            liveFinesse: expect.objectContaining({
-              status: 'completed',
-              completedReview: true,
-            }),
           }),
         );
       }
@@ -1715,6 +1683,8 @@ describe('fresh foreground master controller end to end', () => {
       });
       const baseMasterDecision = base.requestMasterDecision;
       if (!baseMasterDecision) throw new Error('fixture master decision is missing');
+      const baseCompileFocusedTool = base.compileFocusedTool;
+      if (!baseCompileFocusedTool) throw new Error('fixture compiler is missing');
 
       const terminal = await runFreshMasterTeach(
         {
@@ -1726,6 +1696,11 @@ describe('fresh foreground master controller end to end', () => {
         },
         {
           ...base,
+          compileFocusedTool: async (compileInput) => ({
+            ...(await baseCompileFocusedTool(compileInput)),
+            compilerSummary:
+              'compare_rendered_requests: method equal; body bytes recorded=148 rendered=146; first mismatch byte=72',
+          }),
           requestMasterDecision: async (decisionInput) => {
             if (decisionInput.verificationFindings) {
               repairReached = true;
@@ -1764,6 +1739,17 @@ describe('fresh foreground master controller end to end', () => {
               message: 'The fixture live check failed before semantic review.',
             },
             executionMechanism: 'fixture-api',
+            responseObservations: [
+              {
+                backend: 'fetch' as const,
+                requestIndex: 0,
+                status: 400,
+                bodyByteLength: 41,
+                contentType: 'application/json',
+                valueType: 'object' as const,
+                topLevelKeys: ['error', 'reason'],
+              },
+            ],
           }),
         },
       );
@@ -1780,6 +1766,12 @@ describe('fresh foreground master controller end to end', () => {
       );
       expect(repairFailureQuote).toContain('BAD_RESPONSE');
       expect(repairFailureQuote).toContain('The fixture live check failed before semantic review.');
+      expect(repairFailureQuote).toContain('compare_rendered_requests');
+      expect(repairFailureQuote).toContain('recorded=148 rendered=146');
+      expect(repairFailureQuote).toContain('liveResponseObservations');
+      expect(repairFailureQuote).toContain('"status":400');
+      expect(repairFailureQuote).toContain('"topLevelKeys":["error","reason"]');
+      expect(repairFailureQuote).not.toContain('invalid request shape');
       expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(0);
       expect(promotionBatches).toEqual([]);
     });
@@ -2452,6 +2444,8 @@ describe('fresh foreground master controller end to end', () => {
             if (compileAttempts.length !== 2) return focused;
             return {
               ...focused,
+              compilerSummary:
+                'The compiler wrote request sequence 999 while the accepted evidence requires sequence 1.',
               workflow: WorkflowSchema.parse({
                 ...focused.workflow,
                 requests: focused.workflow.requests.map((request, index) =>
@@ -2527,6 +2521,9 @@ describe('fresh foreground master controller end to end', () => {
       expect(compileAttempts[2]?.priorToolDir).toBe(compileAttempts[0]?.stagingDir);
       expect(JSON.stringify(compileAttempts[2]?.revisionContext?.latestFailureFacts)).toContain(
         'workflow request provenance does not match the accepted plan',
+      );
+      expect(JSON.stringify(compileAttempts[2]?.revisionContext?.latestFailureFacts)).toContain(
+        'The compiler wrote request sequence 999',
       );
       expect(JSON.stringify(compileAttempts[2]?.revisionContext?.latestFailureFacts)).not.toContain(
         'does not demonstrate the fixture operation',
@@ -3358,15 +3355,6 @@ describe('fresh foreground master controller end to end', () => {
           requestParameterSelectionAdvice: async () => {
             throw new Error('Optional fixture parameter advice is unavailable.');
           },
-          runLiveFinesse: async ({ provider }) => ({
-            status: 'inconclusive',
-            provider,
-            attempts: 0,
-            completedReview: false,
-            artifacts: {},
-            message: 'Fixture live finesse is intentionally unavailable.',
-            durationMs: 1,
-          }),
           requestCompletionReview: async (input) =>
             CompletionReviewOutputSchema.parse({
               binding: input.run,

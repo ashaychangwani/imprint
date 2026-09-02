@@ -779,11 +779,19 @@ function promptRequestsJsonObject(systemPrompt: string): boolean {
   return /\bjson\b/.test(lc) && /\bobject\b/.test(lc);
 }
 
-function enrichCodexCliError(err: unknown, _config: { model: string }): Error {
+export function enrichCodexCliError(err: unknown, _config: { model: string }): Error {
   const control = providerControlError(err);
   if (control) return control;
   const msg = err instanceof Error ? err.message : String(err);
   const lc = msg.toLowerCase();
+
+  // @openai/codex-sdk reports process exits as ordinary Error objects instead
+  // of the structured provider error used by the older CLI adapter. Normalize
+  // that exact adapter-owned shape so a blank exit 101 gets the same bounded
+  // provider retry as every other interrupted Codex call. Keep diagnostics and
+  // all other exit codes deterministic.
+  const sdkExit = /^Codex Exec exited with code (\d+):([\s\S]*)$/.exec(msg);
+  if (sdkExit) return cliExitError('codex-cli', Number(sdkExit[1]), sdkExit[2] ?? '');
 
   if (lc.includes('enoent') || lc.includes('not found') || lc.includes('command not found')) {
     return new Error(

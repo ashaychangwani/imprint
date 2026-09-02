@@ -14,6 +14,7 @@ import {
   cliStderrTail,
   detectProvider,
   detectTeachProvider,
+  enrichCodexCliError,
   extractJsonObject,
   getProviderStatuses,
   isTeachCompatibleProvider,
@@ -95,6 +96,54 @@ describe('normalizeCliAnalyzeOutput', () => {
 });
 
 describe('structured CLI provider failures', () => {
+  it('normalizes the Codex SDK exit shape before applying provider retry policy', async () => {
+    const interruption = enrichCodexCliError(new Error('Codex Exec exited with code 101: '), {
+      model: 'gpt-5.6-sol',
+    });
+    expect(interruption).toBeInstanceOf(ProviderReportedError);
+    expect(isTransientProviderCapacityError(interruption)).toBe(true);
+
+    const diagnosed = enrichCodexCliError(
+      new Error('Codex Exec exited with code 101: worker panic'),
+      { model: 'gpt-5.6-sol' },
+    );
+    expect(diagnosed).not.toBeInstanceOf(ProviderReportedError);
+    expect(isTransientProviderCapacityError(diagnosed)).toBe(false);
+
+    const otherExit = enrichCodexCliError(new Error('Codex Exec exited with code 1: '), {
+      model: 'gpt-5.6-sol',
+    });
+    expect(otherExit).not.toBeInstanceOf(ProviderReportedError);
+    expect(isTransientProviderCapacityError(otherExit)).toBe(false);
+
+    const embedded = enrichCodexCliError(
+      new Error('wrapper mentioned Codex Exec exited with code 101: '),
+      { model: 'gpt-5.6-sol' },
+    );
+    expect(isTransientProviderCapacityError(embedded)).toBe(false);
+
+    let calls = 0;
+    const retryReasons: string[] = [];
+    const recovered = await retryTransientProviderFailure(
+      async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw enrichCodexCliError(new Error('Codex Exec exited with code 101: '), {
+            model: 'gpt-5.6-sol',
+          });
+        }
+        return 'recovered';
+      },
+      {
+        sleep: async () => {},
+        onRetry: ({ reason }) => retryReasons.push(reason),
+      },
+    );
+    expect(recovered).toBe('recovered');
+    expect(calls).toBe(2);
+    expect(retryReasons).toEqual(['provider_process_interrupted']);
+  });
+
   it('retries a diagnostic-free Codex process exit without guessing about artifact failure', () => {
     const interruption = cliExitError('codex-cli', 101, '');
     expect(interruption).toBeInstanceOf(ProviderReportedError);

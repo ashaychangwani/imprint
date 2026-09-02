@@ -38,6 +38,7 @@ import { runPlaybook } from './playbook-runner.ts';
 import {
   type BrowserNavigationTransport,
   type CredentialStore,
+  type ResponseObservation,
   executeWorkflow,
   loadCredentialStore,
   substituteString,
@@ -71,17 +72,50 @@ export interface BackendAttemptFact {
   durationMs: number;
 }
 
+export type BackendResponseObservation = ResponseObservation & { backend: ConcreteBackend };
+
 interface LadderResult {
   result: ToolResult;
   usedBackend: UsedBackend;
   /** One entry per rung that was tried. */
   attempts: BackendAttemptFact[];
+  /** Present on compile/teach calls that request bounded response diagnostics. */
+  responseObservations?: BackendResponseObservation[];
 }
 
 const BACKEND_ATTEMPT_DETAIL_LIMIT = 500;
 
 function backendAttemptDetail(result: Exclude<ToolResult, { ok: true }>): string {
   return `${result.error}: ${result.message.slice(0, BACKEND_ATTEMPT_DETAIL_LIMIT)}`;
+}
+
+/**
+ * Return a request-construction failure that happened before any earlier
+ * request was sent. That narrow case cannot depend on transport-produced
+ * response state, so callers can return it to the compiler without walking the
+ * expensive backend ladder. Later transforms may consume earlier responses and
+ * must remain eligible for another transport.
+ */
+export function backendInvariantProbeFailure(result: ToolResult): string | null {
+  if (result.ok || result.error !== 'BAD_RESPONSE') return null;
+  const facts = result.requestStageFacts ?? [];
+  const terminalFailure = [...facts]
+    .reverse()
+    .find(({ outcome }) => outcome === 'failed' || outcome === 'unavailable');
+  if (terminalFailure?.stage === 'preparation' || terminalFailure?.stage === 'transform') {
+    const priorSend = facts.some(
+      ({ requestIndex, stage }) => stage === 'send' && requestIndex < terminalFailure.requestIndex,
+    );
+    if (priorSend) return null;
+    return result.message;
+  }
+  // Compatibility for older generated runtimes that predate stage receipts.
+  if (facts.length > 0) return null;
+  const legacy =
+    /^request transform (?:failed for request|module was unavailable for request) (\d+)(?::|$)/i.exec(
+      result.message,
+    );
+  return legacy?.[1] === '0' ? result.message : null;
 }
 
 const log = createLog('backend');
@@ -286,6 +320,8 @@ export async function runWithLadder(
     credentials?: CredentialStore;
     /** Caller cancellation for bounded verification work. */
     signal?: AbortSignal;
+    /** Bounded, value-free response observations for factual repair feedback. */
+    onResponse?: (observation: BackendResponseObservation) => void;
   },
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
@@ -355,6 +391,8 @@ export async function runWithLadder(
     const t0 = Date.now();
     log(`trying ${backend}…`);
     let result: ToolResult;
+    const onResponse = (observation: ResponseObservation): void =>
+      options?.onResponse?.({ ...observation, backend });
     try {
       switch (backend) {
         case 'fetch': {
@@ -365,6 +403,7 @@ export async function runWithLadder(
           if (proxyFetch) fetchOpts.fetchImpl = proxyFetch;
           if (options?.initialState) fetchOpts.initialState = options.initialState;
           if (options?.credentials) fetchOpts.credentials = options.credentials;
+          if (options?.onResponse) fetchOpts.onResponse = onResponse;
           result = await tool.toolFn(params, fetchOpts);
           break;
         }
@@ -374,6 +413,7 @@ export async function runWithLadder(
             params,
             options?.initialState,
             options?.credentials,
+            options?.onResponse ? onResponse : undefined,
           );
           break;
         case 'cdp-replay':
@@ -384,6 +424,7 @@ export async function runWithLadder(
             options?.initialState,
             options?.credentials,
             options?.signal,
+            options?.onResponse ? onResponse : undefined,
           );
           break;
         case 'stealth-fetch': {
@@ -408,6 +449,7 @@ export async function runWithLadder(
             fetchImpl: sf.fetchImpl,
             initialState,
             credentials: options?.credentials,
+            ...(options?.onResponse ? { onResponse } : {}),
           });
           break;
         }
@@ -484,16 +526,24 @@ export async function runWithLadder(
       continue;
     }
 
-    // BAD_RESPONSE (e.g. HTTP 400) is backend-specific on anti-bot sites, so it
-    // escalates rather than stopping. A cdp-replay in-page POST can be rejected
-    // because it lacks the live Akamai sensor headers the endpoint demands, while
-    // stealth-fetch — which MINTS those sensor headers during its bootstrap —
-    // returns 200 for the byte-identical request. Validated on southwest's
-    // low-fare-calendar (cdp-replay 400, stealth-fetch 200). Stopping at the first
-    // 400 stranded the working rung; escalate so a higher-trust backend gets a
-    // shot, and the winner memo then locks onto whatever passed. A genuinely
-    // malformed request 400s at every rung and the last 400 is still returned
-    // below — cost is bounded by the ladder length.
+    // A local preparation/transform failure is an artifact fact, not a
+    // transport result. Return it immediately so the retained compiler can
+    // repair the request instead of paying for the same failure in browsers.
+    const invariantFailure = backendInvariantProbeFailure(result);
+    if (invariantFailure) {
+      attempts.push({
+        backend,
+        outcome: 'failed',
+        detail: backendAttemptDetail(result),
+        durationMs,
+      });
+      log(`${backend}: request construction failed in ${durationMs}ms — returning to compiler`);
+      return { result, usedBackend: backend, attempts };
+    }
+
+    // A BAD_RESPONSE produced by a completed HTTP send can differ by transport,
+    // so leave the other rungs available. If they all fail, return the last
+    // concrete response below.
     if (result.error === 'BAD_RESPONSE') {
       attempts.push({
         backend,
@@ -805,6 +855,7 @@ async function runFetchBootstrap(
   params: Record<string, string | number | boolean>,
   callerState?: Record<string, unknown>,
   credentialOverride?: CredentialStore,
+  onResponse?: (observation: ResponseObservation) => void,
 ): Promise<ToolResult> {
   let baseUrl: string;
   try {
@@ -903,6 +954,7 @@ async function runFetchBootstrap(
       credentials: bootstrappedCredentials,
       initialState: { ...callerState, ...captureResult.state },
       fetchImpl: makeJarUaFetch(jar.ua),
+      ...(onResponse ? { onResponse } : {}),
     });
 
     if (result.ok) return result;
@@ -944,6 +996,7 @@ async function runCdpReplay(
   callerState?: Record<string, unknown>,
   credentialOverride?: CredentialStore,
   signal?: AbortSignal,
+  onResponse?: (observation: ResponseObservation) => void,
 ): Promise<ToolResult> {
   let baseUrl: string;
   try {
@@ -1060,6 +1113,7 @@ async function runCdpReplay(
             }
           : undefined,
       signal,
+      ...(onResponse ? { onResponse } : {}),
     });
 
     if (result.ok) {
@@ -1518,6 +1572,10 @@ export async function runWorkflowWithLadder(opts: {
   const tool = resolveWorkflowTool(opts.workflowPath, opts.credentials);
   const workflow = tool.workflow;
   const toolDir = tool.dir;
+  const responseObservations: BackendResponseObservation[] = [];
+  const observeResponse = (observation: BackendResponseObservation): void => {
+    responseObservations.push(observation);
+  };
   // assetRoot only matters for playbook-rung path resolution, which this
   // ladder skips. Use a conventional value for completeness.
   const assetRoot = pathResolve(toolDir, '..', '..');
@@ -1583,13 +1641,22 @@ export async function runWorkflowWithLadder(opts: {
     // falling to another rung would lose the live session and defeat the pin.
     if (opts.forceBackend) {
       log(`forced backend: ${opts.forceBackend} (probe + memo skipped)`);
-      return await runWithLadder([opts.forceBackend], tool, opts.params, assetRoot, stealthCache, {
-        skipBootstrapSplice: true,
-        cdpPool,
-        initialState: opts.initialState,
-        credentials: opts.credentials,
-        signal: opts.signal,
-      });
+      const result = await runWithLadder(
+        [opts.forceBackend],
+        tool,
+        opts.params,
+        assetRoot,
+        stealthCache,
+        {
+          skipBootstrapSplice: true,
+          cdpPool,
+          initialState: opts.initialState,
+          credentials: opts.credentials,
+          signal: opts.signal,
+          onResponse: observeResponse,
+        },
+      );
+      return { ...result, responseObservations };
     }
 
     if (!memoWinner) {
@@ -1622,9 +1689,10 @@ export async function runWorkflowWithLadder(opts: {
         initialState: opts.initialState,
         credentials: opts.credentials,
         signal: opts.signal,
+        onResponse: observeResponse,
       });
       if (isProbeReachable(result.result)) compileWinningBackend.set(memoKey, result.usedBackend);
-      return result;
+      return { ...result, responseObservations };
     }
 
     // ── Memo hit: start at the memoized winner, keep all later rungs ─────
@@ -1644,13 +1712,14 @@ export async function runWorkflowWithLadder(opts: {
       initialState: opts.initialState,
       credentials: opts.credentials,
       signal: opts.signal,
+      onResponse: observeResponse,
     });
     if (isProbeReachable(result.result)) {
       compileWinningBackend.set(memoKey, result.usedBackend);
     } else {
       compileWinningBackend.delete(memoKey);
     }
-    return result;
+    return { ...result, responseObservations };
   } finally {
     // Keep the pool warm for the next call in this process; arm an idle-close so
     // it's torn down shortly after the LAST call — that lets a raw `bun probe.ts`
@@ -1690,6 +1759,7 @@ export function resolveWorkflowTool(
             initialState?: Record<string, unknown>;
             credentials?: CredentialStore;
             signal?: AbortSignal;
+            onResponse?: (observation: ResponseObservation) => void;
           }
         | undefined;
       return executeWorkflow({
@@ -1701,6 +1771,7 @@ export function resolveWorkflowTool(
         browser: o?.browser,
         initialState: o?.initialState,
         signal: o?.signal,
+        onResponse: o?.onResponse,
       });
     },
   };

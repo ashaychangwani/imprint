@@ -906,13 +906,22 @@ describe('runWorkflowWithLadder', () => {
         ),
       );
 
-      const { result, usedBackend } = await runWorkflowWithLadder({
+      const { result, usedBackend, responseObservations } = await runWorkflowWithLadder({
         workflowPath,
         params: { q: 'hello' },
         forceBackend: 'fetch',
       });
       expect(result.ok).toBe(true);
       expect(usedBackend).toBe('fetch');
+      expect(responseObservations).toEqual([
+        expect.objectContaining({
+          backend: 'fetch',
+          requestIndex: 0,
+          status: 200,
+          valueType: 'object',
+          topLevelKeys: ['ok', 'q'],
+        }),
+      ]);
       if (result.ok) {
         expect(result.data).toEqual({ q: 'hello', ok: true });
       }
@@ -2206,6 +2215,100 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
 });
 
 describe('runWithLadder — BAD_RESPONSE (400) escalates (anti-bot backend divergence)', () => {
+  it('returns a local transform failure without retrying it through another transport', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: {
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'request transform failed for request 0: no matching tuple',
+        requestStageFacts: [
+          { requestIndex: 0, stage: 'preparation', outcome: 'passed' },
+          { requestIndex: 0, stage: 'transform', outcome: 'failed' },
+        ],
+      },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('local-transform', behavior, pathJoin(root, 'local', 'tool'));
+    const result = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+
+    expect(result.usedBackend).toBe('fetch');
+    expect(result.result.ok).toBe(false);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]).toMatchObject({ backend: 'fetch', outcome: 'failed' });
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(0);
+  });
+
+  it('allows another transport when a later transform depends on an earlier response', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: {
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'request transform failed for request 1: no matching tuple',
+        requestStageFacts: [
+          { requestIndex: 0, stage: 'send', outcome: 'passed', httpStatus: 200 },
+          { requestIndex: 1, stage: 'preparation', outcome: 'passed' },
+          { requestIndex: 1, stage: 'transform', outcome: 'failed' },
+        ],
+      },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool(
+      'response-dependent-transform',
+      behavior,
+      pathJoin(root, 'local', 'tool'),
+    );
+    const result = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+
+    expect(result.usedBackend).toBe('stealth-fetch');
+    expect(result.result).toEqual({ ok: true, data: { via: 'stealth' } });
+    expect(result.attempts).toHaveLength(2);
+    expect(behavior.calls).toEqual({ fetch: 1, stealth: 1 });
+  });
+
+  it('returns a local preparation failure without launching a browser-backed rung', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: {
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'request 0 could not be prepared',
+        requestStageFacts: [{ requestIndex: 0, stage: 'preparation', outcome: 'failed' }],
+      },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('local-preparation', behavior, pathJoin(root, 'local', 'tool'));
+    const result = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+
+    expect(result.attempts).toEqual([
+      expect.objectContaining({ backend: 'fetch', outcome: 'failed' }),
+    ]);
+    expect(behavior.calls).toEqual({ fetch: 1, stealth: 0 });
+  });
+
   it('escalates a 400 from one backend to a higher-trust rung that passes', async () => {
     // southwest's reality: cdp-replay's in-page POST 400s (no live Akamai sensor
     // headers) but stealth-fetch (mints them) returns 200 for the same request.

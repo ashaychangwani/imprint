@@ -136,6 +136,39 @@ describe('executeWorkflow', () => {
     expect(r.data).toEqual({ results: [1, 2, 3] });
   });
 
+  it('emits a value-free response observation for a failed HTTP response', async () => {
+    const observations: unknown[] = [];
+    const opaque = 'opaque-browser-minted-credential-12345';
+    const body = JSON.stringify({ error: 'invalid request shape', csrf: opaque });
+    const result = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () =>
+        new Response(body, {
+          status: 400,
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+        })) as unknown as typeof fetch,
+      onResponse: (observation) => observations.push(observation),
+    });
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, error: 'BAD_RESPONSE' }));
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toEqual(
+      expect.objectContaining({
+        requestIndex: 0,
+        status: 400,
+        bodyByteLength: new TextEncoder().encode(body).byteLength,
+        contentType: 'application/json',
+        valueType: 'object',
+        topLevelKeys: ['csrf', 'error'],
+      }),
+    );
+    expect(observations[0]).not.toHaveProperty('preview');
+    expect(JSON.stringify(observations)).not.toContain(opaque);
+    expect(JSON.stringify(observations)).not.toContain('invalid request shape');
+  });
+
   it('parses JSON body even when content-type is text/html', async () => {
     const fetchMock = (async () =>
       new Response(JSON.stringify({ vehicles: [{ type: 'SUV', price: 45 }] }), {

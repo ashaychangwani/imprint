@@ -153,6 +153,16 @@ export async function loadCredentialStore(site: string): Promise<CredentialStore
   return store;
 }
 
+export interface ResponseObservation {
+  requestIndex: number;
+  status: number;
+  bodyByteLength: number;
+  contentType?: string;
+  valueType: 'null' | 'array' | 'object' | 'string' | 'number' | 'boolean';
+  topLevelKeys?: string[];
+  arrayLength?: number;
+}
+
 interface ExecuteOptions {
   workflow: Workflow;
   params: Record<string, string | number | boolean>;
@@ -174,6 +184,9 @@ interface ExecuteOptions {
   persistAuthState?: boolean;
   /** Internal observation hook used by offline rendering after transforms run. */
   onPreparedRequest?: (requestIndex: number) => void;
+  /** Teach/debug observation. It cannot affect execution and never receives an
+   * unbounded response body. */
+  onResponse?: (observation: ResponseObservation) => void;
 }
 
 interface ResponseSlot {
@@ -187,6 +200,39 @@ function bodyStageFacts(
   return {
     bodyPresent: body !== undefined,
     bodyByteLength: body === undefined ? 0 : new TextEncoder().encode(body).byteLength,
+  };
+}
+
+const RESPONSE_OBSERVATION_KEYS = 32;
+
+function responseObservation(
+  requestIndex: number,
+  response: Response,
+  text: string,
+  parsed: unknown,
+): ResponseObservation {
+  let valueType: ResponseObservation['valueType'];
+  if (parsed === null) valueType = 'null';
+  else if (Array.isArray(parsed)) valueType = 'array';
+  else if (typeof parsed === 'object') valueType = 'object';
+  else if (typeof parsed === 'number') valueType = 'number';
+  else if (typeof parsed === 'boolean') valueType = 'boolean';
+  else valueType = 'string';
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.slice(0, 200);
+  return {
+    requestIndex,
+    status: response.status,
+    bodyByteLength: new TextEncoder().encode(text).byteLength,
+    ...(contentType ? { contentType } : {}),
+    valueType,
+    ...(Array.isArray(parsed) ? { arrayLength: parsed.length } : {}),
+    ...(parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? {
+          topLevelKeys: Object.keys(parsed as Record<string, unknown>)
+            .sort()
+            .slice(0, RESPONSE_OBSERVATION_KEYS),
+        }
+      : {}),
   };
 }
 
@@ -483,6 +529,20 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       ? `[response body unavailable: ${responseReadError}]`
       : text;
 
+    let parsed: unknown = text;
+    if (!responseReadError) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        // Not valid JSON — keep as raw text string.
+      }
+      try {
+        opts.onResponse?.(responseObservation(i, resp, text, parsed));
+      } catch {
+        // Diagnostics must never change the workflow's execution result.
+      }
+    }
+
     if (resp.status === 401) {
       return withRequestStageFacts(
         {
@@ -556,12 +616,6 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       // Non-fatal; cookies stay as they were.
     }
 
-    let parsed: unknown = text;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      // Not valid JSON — keep as raw text string.
-    }
     const aliases = evaluateLegacyExtract(req, parsed);
     responseSlots.push({ raw: parsed, aliases });
 

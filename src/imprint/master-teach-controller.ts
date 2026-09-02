@@ -17,7 +17,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
-import { type BackendAttemptFact, runWorkflowWithLadder } from './backend-ladder.ts';
+import {
+  type BackendAttemptFact,
+  type BackendResponseObservation,
+  runWorkflowWithLadder,
+} from './backend-ladder.ts';
 import type { CompileAgentProgress } from './compile-agent-types.ts';
 import type { CompileStrategyKind } from './compile-strategy.ts';
 import {
@@ -31,7 +35,6 @@ import { TimeoutError, abortSignalError } from './concurrency.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import { emit } from './emit.ts';
 import { redactFreeformText } from './freeform-redact.ts';
-import { type LiveFinesseResult, runBestEffortLiveFinesse } from './live-finesse-runner.ts';
 import { type LLMOptions, type ProviderName, detectTeachProvider, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import {
@@ -184,6 +187,11 @@ interface BuildWaveFailure {
   chainEdgeId?: string;
   /** Exact invocation members when a shared consumer call failed as a whole. */
   chainEdgeIds?: string[];
+  /** Redacted before entering a prompt. Bound to the focused build that
+   * produced this failure so compiler diagnostics survive the host handoff. */
+  compilerSummary?: string;
+  /** Bounded observations from the live backend that produced the failure. */
+  liveResponseObservations?: BackendResponseObservation[];
 }
 
 interface BuildWaveResult<Value> {
@@ -208,10 +216,12 @@ interface BuildWaveDependencies<Value> {
 
 class CompiledArtifactContractError extends Error {
   override readonly cause: unknown;
-  constructor(cause: unknown) {
+  readonly compilerSummary?: string;
+  constructor(cause: unknown, compilerSummary?: string) {
     super(cause instanceof Error ? cause.message : String(cause));
     this.name = 'CompiledArtifactContractError';
     this.cause = cause;
+    this.compilerSummary = compilerSummary;
   }
 }
 
@@ -302,6 +312,7 @@ export async function compileEveryToolInBuildWaves<Value>(
             waveIndex,
             stage: 'contract',
             error: error.cause,
+            compilerSummary: error.compilerSummary,
           });
           continue;
         }
@@ -367,6 +378,8 @@ interface CompiledFocusedTool {
   /** The strategy that authored these executable files. Older injected test
    * fixtures may omit it; accepted builds are normalized before reuse. */
   strategyKind?: CompileStrategyKind;
+  /** Final summary from this retained compiler turn. */
+  compilerSummary?: string;
 }
 
 interface LiveCheckResult {
@@ -375,6 +388,7 @@ interface LiveCheckResult {
   executionMechanism: string;
   /** Mechanical outcomes from every backend the runtime actually tried. */
   backendAttempts?: BackendAttemptFact[];
+  responseObservations?: BackendResponseObservation[];
   parameters: Record<string, string | number | boolean>;
   buildRef: ContentAddressedRef;
   resultReceiptRef: ContentAddressedRef;
@@ -427,7 +441,6 @@ interface FreshTeachControllerDependencies {
   requestBaselineMvpReview: typeof requestBaselineMvpReview;
   requestParameterSelectionAdvice: typeof requestParameterSelectionAdvice;
   requestCompletionReview: typeof requestCompletionReview;
-  runLiveFinesse: typeof runBestEffortLiveFinesse;
   compileFocusedTool: (input: {
     tool: EditableTeachingTool;
     implementationPlan: ImplementationPlanPayload;
@@ -453,6 +466,7 @@ interface FreshTeachControllerDependencies {
     result: ToolResult<unknown>;
     executionMechanism: string;
     backendAttempts?: BackendAttemptFact[];
+    responseObservations?: BackendResponseObservation[];
   }>;
   runPlaybookTool: (input: {
     playbookPath: string;
@@ -485,7 +499,6 @@ const defaultDependencies: FreshTeachControllerDependencies = {
   requestBaselineMvpReview,
   requestParameterSelectionAdvice,
   requestCompletionReview,
-  runLiveFinesse: runBestEffortLiveFinesse,
   compileFocusedTool: compileFocusedToolWithShippedAgent,
   runApiTool: async ({ workflowPath, parameters, signal }) => {
     const run = await runWorkflowWithLadder({
@@ -497,6 +510,7 @@ const defaultDependencies: FreshTeachControllerDependencies = {
       result: run.result,
       executionMechanism: run.usedBackend,
       backendAttempts: run.attempts,
+      responseObservations: run.responseObservations,
     };
   },
   runPlaybookTool: async ({ playbookPath, site, parameters, maxDurationMs, signal }) => ({
@@ -1252,6 +1266,19 @@ function verificationFailureProjection(
         failure.error instanceof Error ? failure.error.message : String(failure.error),
         12_000,
       ),
+      ...(failure.compilerSummary
+        ? {
+            compilerSummary: utf8Prefix(
+              redactFreeformText(failure.compilerSummary).redacted,
+              8_000,
+            ),
+          }
+        : {}),
+      ...(failure.liveResponseObservations?.length
+        ? {
+            liveResponseObservations: failure.liveResponseObservations.slice(-12),
+          }
+        : {}),
     };
     const ref = journal.storeJson(fact);
     entries.push({
@@ -1653,6 +1680,7 @@ async function compileFocusedToolWithShippedAgent(input: {
     workflowPath: result.workflowPath,
     toolDir: dirname(result.workflowPath),
     strategyKind: input.implementationPlan.strategyKind,
+    compilerSummary: result.compilerSummary,
   };
 }
 
@@ -2163,7 +2191,15 @@ function checkFailure(
   waveIndex: number,
   stage: BuildWaveFailure['stage'],
   error: unknown,
-  identity: Pick<BuildWaveFailure, 'receiptRef' | 'buildRef' | 'chainEdgeId' | 'chainEdgeIds'> = {},
+  identity: Pick<
+    BuildWaveFailure,
+    | 'receiptRef'
+    | 'buildRef'
+    | 'chainEdgeId'
+    | 'chainEdgeIds'
+    | 'compilerSummary'
+    | 'liveResponseObservations'
+  > = {},
 ): BuildWaveFailure {
   return {
     toolId: tool.id,
@@ -2408,7 +2444,7 @@ async function compileAndCheckCurrentPlan(input: {
   /** True only for the exact build already installed as a usable MVP. */
   isMvpPublished?: (toolId: string, buildRef: ContentAddressedRef) => boolean;
   /** Starts advisory breadth work after the factual MVP proof is complete. */
-  onMvpReady?: (toolId: string, compiled: CompiledFocusedTool) => void;
+  onMvpReady?: (toolId: string) => void;
 }): Promise<CheckedBuilds> {
   const plan = input.journal.currentPlan();
   const initialState = input.journal.readState();
@@ -2555,7 +2591,8 @@ async function compileAndCheckCurrentPlan(input: {
         artifacts: storeLocalArtifacts(input.journal, focused.toolDir),
       });
     } catch (error) {
-      if (isRepairableBuildArtifactError(error)) throw new CompiledArtifactContractError(error);
+      if (isRepairableBuildArtifactError(error))
+        throw new CompiledArtifactContractError(error, focused.compilerSummary);
       throw error;
     }
     const contract = invocationOutcomeCheck({
@@ -2606,11 +2643,11 @@ async function compileAndCheckCurrentPlan(input: {
         true && proof.receipts.some(({ check, status }) => check === 'live' && status === 'passed')
     );
   };
-  const markVerified = (tool: EditableTeachingTool, focused: CompiledFocusedTool): void => {
+  const markVerified = (tool: EditableTeachingTool): void => {
     verifiedToolIds.add(tool.id);
     if (finesseStartedToolIds.has(tool.id)) return;
     finesseStartedToolIds.add(tool.id);
-    input.onMvpReady?.(tool.id, focused);
+    input.onMvpReady?.(tool.id);
   };
   const hasUsableProducer = (toolId: string): boolean => {
     if (rejectedMvpToolIds.has(toolId)) return false;
@@ -2659,6 +2696,8 @@ async function compileAndCheckCurrentPlan(input: {
           rejectedResultError(disposition.reason, resultEvidence),
           {
             receiptRef: live.resultReceiptRef,
+            compilerSummary: focused.compilerSummary,
+            liveResponseObservations: live.responseObservations,
           },
         ),
       );
@@ -2739,7 +2778,12 @@ async function compileAndCheckCurrentPlan(input: {
         check: 'live',
         facts: check.facts,
       });
-      failures.push(checkFailure(tool, waveIndex, 'live', error, { receiptRef: receipt.ref }));
+      failures.push(
+        checkFailure(tool, waveIndex, 'live', error, {
+          receiptRef: receipt.ref,
+          compilerSummary: focused.compilerSummary,
+        }),
+      );
       liveByToolId.delete(tool.id);
       return undefined;
     }
@@ -2769,7 +2813,11 @@ async function compileAndCheckCurrentPlan(input: {
                 observed.result,
                 observed.backendAttempts,
               ),
-          { receiptRef: receipt.ref },
+          {
+            receiptRef: receipt.ref,
+            compilerSummary: focused.compilerSummary,
+            liveResponseObservations: observed.responseObservations,
+          },
         ),
       );
       liveByToolId.delete(tool.id);
@@ -2817,6 +2865,7 @@ async function compileAndCheckCurrentPlan(input: {
           durationMs: number;
           mechanism: string;
           backendAttempts?: BackendAttemptFact[];
+          responseObservations?: BackendResponseObservation[];
           parameters: Record<string, string | number | boolean>;
         }
       | { kind: 'artifact_error'; error: Error }
@@ -2880,6 +2929,10 @@ async function compileAndCheckCurrentPlan(input: {
           durationMs: Date.now() - startedAt,
           mechanism: chained.executionMechanism,
           backendAttempts: chained.backendAttempts,
+          responseObservations:
+            'responseObservations' in chained && Array.isArray(chained.responseObservations)
+              ? (chained.responseObservations as BackendResponseObservation[])
+              : undefined,
           parameters,
         };
       } catch (error) {
@@ -2936,6 +2989,9 @@ async function compileAndCheckCurrentPlan(input: {
       failures.push(
         checkFailure(tool, waveIndex, 'chain', error, {
           receiptRef: primaryReceipt.ref,
+          compilerSummary: focused.compilerSummary,
+          liveResponseObservations:
+            outcome.kind === 'returned' ? outcome.responseObservations : undefined,
           ...(bindingFailure
             ? { chainEdgeId: bindingFailure.edge.id }
             : { chainEdgeIds: edges.map(({ id }) => id) }),
@@ -2951,6 +3007,7 @@ async function compileAndCheckCurrentPlan(input: {
       result: outcome.result,
       durationMs: outcome.durationMs,
       executionMechanism: outcome.mechanism,
+      responseObservations: outcome.responseObservations,
       parameters: outcome.parameters,
       buildRef,
       chainInvocationSha256: invocation.sha256,
@@ -2990,6 +3047,8 @@ async function compileAndCheckCurrentPlan(input: {
         {
           receiptRef: result.resultReceiptRef,
           chainEdgeIds: invocation.edges.map(({ id }) => id),
+          compilerSummary: compiledByToolId.get(tool.id)?.compilerSummary,
+          liveResponseObservations: result.responseObservations,
         },
       ),
     );
@@ -3029,7 +3088,7 @@ async function compileAndCheckCurrentPlan(input: {
       tool.id,
     );
     if (proofFailures.length === 0 && !chainReviewFailed && standaloneApproved) {
-      markVerified(tool, focused);
+      markVerified(tool);
     } else if (!failures.some(({ toolId }) => toolId === tool.id)) {
       failures.push(checkFailure(tool, waveIndex, 'proof', new Error(proofFailures.join('; '))));
     }
@@ -3245,7 +3304,7 @@ async function compileAndCheckCurrentPlan(input: {
         mechanicalProofFailures(plan, input.journal.currentExecutionSnapshot(), tool.id).length ===
           0
       ) {
-        markVerified(tool, focused);
+        markVerified(tool);
       }
     }
   }
@@ -3272,7 +3331,7 @@ async function compileAndCheckCurrentPlan(input: {
         hasUsableProducer(tool.id) ||
         (await approveAndPublishMvp(tool, waveByToolId.get(tool.id) ?? 0, focused));
       if (standaloneApproved && !failures.some(({ toolId }) => toolId === tool.id)) {
-        markVerified(tool, focused);
+        markVerified(tool);
       }
     } else if (!failures.some(({ toolId }) => toolId === tool.id)) {
       failures.push(
@@ -3517,16 +3576,14 @@ interface ParameterFinesseRecord {
   finishedAt?: string;
   message?: string;
   advice?: Awaited<ReturnType<typeof requestParameterSelectionAdvice>>;
-  liveFinesse?: LiveFinesseResult;
 }
 
 interface ParameterFinesseLane {
-  start: (toolId: string, toolDir: string) => void;
+  start: (toolId: string) => void;
   stop: (reason: string) => Promise<Record<ParameterFinesseStatus, number>>;
 }
 
-/** Keep at most two optional parameter advisors beside the core teach work.
- * Live finesse has its own queue, so it is deliberately not routed here. */
+/** Keep at most two optional parameter advisors beside the core teach work. */
 export class ParameterAdvisorLane {
   private active = 0;
   private readonly waiters: Array<{
@@ -3630,7 +3687,7 @@ function createParameterFinesseLane(input: {
       input.runRoot,
       'finesse',
       record.toolId,
-      `${record.buildRef.sha256.slice('sha256:'.length)}.json`,
+      `${record.buildRef.sha256.slice('sha256:'.length)}-${record.executionBindingSha256.slice('sha256:'.length)}.json`,
     );
   const persist = (key: string, record: ParameterFinesseRecord): void => {
     records.set(key, record);
@@ -3655,7 +3712,7 @@ function createParameterFinesseLane(input: {
   };
 
   return {
-    start: (toolId, toolDir) => {
+    start: (toolId) => {
       try {
         const current = currentPlanProjection(input.journal);
         const snapshot = input.journal.currentExecutionSnapshot();
@@ -3663,7 +3720,7 @@ function createParameterFinesseLane(input: {
         const tool = current.plan.tools.find(({ id }) => id === toolId);
         const proof = snapshot.payload.tools.find((candidate) => candidate.toolId === toolId);
         if (!tool || !proof) return;
-        const key = `${toolId}:${proof.currentBuildRef.sha256}`;
+        const key = `${toolId}:${proof.currentBuildRef.sha256}:${proof.executionBindingSha256}`;
         if (records.has(key)) return;
         const record: ParameterFinesseRecord = {
           version: 1,
@@ -3713,87 +3770,52 @@ function createParameterFinesseLane(input: {
             return;
           }
 
-          const [adviceAttempt, liveAttempt] = await Promise.all([
-            advisorLane
-              .run(controller.signal, async () => {
-                const queuedProof = input.journal
-                  .currentExecutionSnapshot()
-                  .payload.tools.find((candidate) => candidate.toolId === toolId);
-                if (!sameFinesseTarget(record, queuedProof)) {
-                  throw new Error(
-                    'The plan, MVP build, or dependency changed before optional parameter advice started.',
-                  );
-                }
-                return await input.deps.requestParameterSelectionAdvice(advisorInput, {
-                  ...input.agent,
-                  signal: controller.signal,
-                });
-              })
-              .then(
-                (value) => {
-                  persist(key, { ...(records.get(key) ?? record), advice: value });
-                  return { ok: true as const, value };
-                },
-                (error: unknown) => ({ ok: false as const, error }),
-              ),
-            input.deps
-              .runLiveFinesse({
-                provider: input.agent.provider ?? detectTeachProvider(),
-                toolDir,
-                deadlineMs: input.agent.deadlineMs,
-                runDeadline: input.agent.runDeadline,
+          const adviceAttempt = await advisorLane
+            .run(controller.signal, async () => {
+              const queuedProof = input.journal
+                .currentExecutionSnapshot()
+                .payload.tools.find((candidate) => candidate.toolId === toolId);
+              if (!sameFinesseTarget(record, queuedProof)) {
+                throw new Error(
+                  'The plan, MVP build, or dependency changed before optional parameter advice started.',
+                );
+              }
+              return await input.deps.requestParameterSelectionAdvice(advisorInput, {
+                ...input.agent,
                 signal: controller.signal,
-              })
-              .then(
-                (value) => {
-                  persist(key, { ...(records.get(key) ?? record), liveFinesse: value });
-                  return { ok: true as const, value };
-                },
-                (error: unknown) => ({ ok: false as const, error }),
-              ),
-          ]);
+              });
+            })
+            .then(
+              (value) => {
+                persist(key, { ...(records.get(key) ?? record), advice: value });
+                return { ok: true as const, value };
+              },
+              (error: unknown) => ({ ok: false as const, error }),
+            );
 
           const after = input.journal.currentExecutionSnapshot().payload;
           const afterProof = after.tools.find((candidate) => candidate.toolId === toolId);
           const remainsCurrent = sameFinesseTarget(record, afterProof);
           const deferred = controller.signal.aborted;
           const hasAdvice = adviceAttempt.ok;
-          const hasCompletedLiveReview =
-            liveAttempt.ok && liveAttempt.value.completedReview === true;
-          const failed = !hasAdvice && !hasCompletedLiveReview;
-          const available = [
-            ...(hasAdvice ? ['parameter advice'] : []),
-            ...(hasCompletedLiveReview ? ['live breadth results'] : []),
-          ];
-          const unavailable = [
-            ...(!adviceAttempt.ok
-              ? [`parameter advisor: ${boundedTerminalMessage(adviceAttempt.error)}`]
-              : []),
-            ...(liveAttempt.ok && !hasCompletedLiveReview
-              ? [`live finesse ${liveAttempt.value.status}: ${liveAttempt.value.message}`]
-              : !liveAttempt.ok
-                ? [`live finesse: ${boundedTerminalMessage(liveAttempt.error)}`]
-                : []),
-          ];
           persist(key, {
             ...(records.get(key) ?? record),
             status: deferred
               ? 'deferred'
               : remainsCurrent
-                ? failed
-                  ? 'failed'
-                  : 'suggested'
+                ? hasAdvice
+                  ? 'suggested'
+                  : 'failed'
                 : 'stale',
             finishedAt: new Date().toISOString(),
             message: deferred
               ? 'The MVP completed before this optional finesse pass; its state is saved as deferred.'
               : !remainsCurrent
                 ? 'The plan or MVP build changed before this suggestion returned.'
-                : failed
-                  ? unavailable.join('; ')
-                  : `${available.join(' and ')} available for a later finesse pass${unavailable.length > 0 ? `; ${unavailable.join('; ')}` : '.'}`,
+                : hasAdvice
+                  ? 'Parameter-selection advice is available. Live breadth testing is deferred to a later finesse run.'
+                  : `parameter advisor: ${boundedTerminalMessage(adviceAttempt.error)}`,
             ...(adviceAttempt.ok ? { advice: adviceAttempt.value } : {}),
-            ...(liveAttempt.ok ? { liveFinesse: liveAttempt.value } : {}),
           });
         })()
           .catch((error) => {
@@ -4424,7 +4446,7 @@ export async function runFreshMasterTeach(
             await deps.promote({ site, runId, runRoot, tools: [compiled] });
             publishedMvpBuilds.add(key);
           },
-          onMvpReady: (toolId, compiled) => finesse?.start(toolId, compiled.toolDir),
+          onMvpReady: (toolId) => finesse?.start(toolId),
         });
       } catch (error) {
         const status = terminalStatusForError(error, opts.signal);
