@@ -46,6 +46,37 @@ express the recorded encoding. When present, the workflow must set
 `requestTransformModule` to exactly `./request-transform.ts`. Never set
 `parserModule`.
 
+The request-transform contract is exact. The module must export a named
+function called `transform` with this signature:
+
+```typescript
+type Params = Record<string, string | number | boolean>;
+
+export function transform(
+  method: string,
+  url: string,
+  responses: unknown[],
+  params: Params = {},
+): string | {
+  url?: string;
+  body?: string;
+  headers?: Record<string, string>;
+  skip?: boolean;
+} {
+  // Return a URL string, or only the request fields that must change.
+  return url;
+}
+```
+
+It does not receive one wrapper object, `parameterValues`, `bootstrap`,
+`state`, or `capturedState`. `responses` contains prior workflow response
+bodies in request order; `params` contains the public test values. If the
+request needs a fresh value from a prior response, the accepted workflow must
+include that producer request before the consumer request and the transform
+must read it from `responses`. If the fixed plan does not contain that request,
+report the precise plan gap to the master instead of inventing another input
+shape.
+
 The workflow's public tool name, site, parameter names/types, request count,
 order, and `recordingRequestSeq` values are fixed by the accepted plan. If those
 must change, return `blocked`; the master owns plan revision. Do not look at the

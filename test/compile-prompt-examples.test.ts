@@ -135,6 +135,10 @@ test('the playbook compiler remains site-neutral and follows the accepted auth a
 test('API research stays separate, retained, site-neutral, and ahead of compilation', () => {
   expect(apiResearchPrompt).toContain('smallest credible live API call before the compiler');
   expect(apiResearchPrompt).toContain('same retained conversation');
+  expect(apiResearchPrompt).toContain('export function transform(');
+  expect(apiResearchPrompt).toContain('responses: unknown[]');
+  expect(apiResearchPrompt).toContain('params: Params = {}');
+  expect(apiResearchPrompt).toContain('It does not receive one wrapper object');
   expect(apiResearchPrompt).toContain('Do not look at the');
   expect(apiResearchPrompt).toContain('Do not choose or recommend playbook here.');
   expect(apiResearchPrompt).not.toMatch(/google|southwest|hotels|flights/i);

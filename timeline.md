@@ -3346,3 +3346,28 @@ was actually tested. It does not add site rules or decide what changing values
 mean. All 1,852 tests, type checking, and lint passed. A fresh teach run has
 not yet started; it will be the next validation after this checkpoint is
 committed.
+
+## 2026-09-02 14:32 PDT — First split-agent run exposed one missing contract
+
+Fresh Flights run `6dce0c87-81b0-4604-91e5-2e2c94eec400` reused only the four
+reviewed candidate boundaries and started all later work fresh. The new split
+worked for Location: its researcher rejected one malformed request, repaired it
+in the same conversation, and proved a live autocomplete response containing
+San Diego and airport records. Only then did the compiler start, and it
+finished its parser and tests in about two minutes.
+
+Calendar exposed a prompt defect. Its researcher needed a request transform,
+but the new researcher prompt did not state the transform function's exact
+name and arguments. It guessed `transformRequest(input)`, while Imprint loads
+the named export `transform(method, url, responses, params)`. The host therefore
+reported that the module was unavailable. The researcher later exhausted
+several static request variants and correctly refused to call the protocol
+error response a success, but its conclusion was contaminated by our missing
+contract.
+
+The run was stopped rather than resumed. The researcher prompt now includes
+the exact TypeScript signature and explains that earlier workflow responses and
+public parameters are its only dynamic inputs. It also says to ask the master
+for a producer request when the accepted plan lacks one, instead of inventing a
+wrapper object with hidden bootstrap or state fields. This is a site-neutral
+prompt correction; runtime strategy rules were not added.
