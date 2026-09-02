@@ -235,6 +235,13 @@ dependencies. Do not mutate an unrelated field merely to force recompilation.
 Missing transport provenance, an unnecessary dependency, or newly available
 sibling bootstrap evidence changes the request plan: omit the old
 `implementationPlan` and re-plan the tool instead of using `recallToolNames`.
+When the current snapshot proves a tool and the supplied failure does not
+target it, copy that complete tool object byte-for-byte. Do not rewrite its
+candidate rationale, strategy reason, compile context, evidence refs, or
+implementation plan merely to mention that it passed, and do not append review
+evidence to the tool. Put that explanation only in this decision's `reason`.
+Otherwise a prose-only embellishment can invalidate a usable artifact and make
+the compiler repeat finished work.
 Omission of an `implementationPlan` is not a recall
 command: for an unchanged, unlisted tool, the host mechanically carries its
 current plan forward. A chain-only wiring failure is different: keep both

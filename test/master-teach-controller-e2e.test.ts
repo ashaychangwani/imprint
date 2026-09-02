@@ -3043,7 +3043,12 @@ describe('fresh foreground master controller end to end', () => {
           requestCompletionReview: async (input) => {
             completionReviewCount += 1;
             expect(input.terminalIntent).toBe('partial');
-            expect(input.claims.some(({ kind }) => kind === 'blocker')).toBe(true);
+            const blocker = input.claims.find(({ kind }) => kind === 'blocker');
+            expect(blocker).toBeDefined();
+            expect(blocker?.evidenceRefs.length).toBeGreaterThan(1);
+            expect(JSON.stringify(input.evidence)).toContain(
+              'The recorded consumer operation is unresolved.',
+            );
             return CompletionReviewOutputSchema.parse({
               binding: input.run,
               verdict: 'passed',

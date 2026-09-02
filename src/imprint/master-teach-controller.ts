@@ -1214,6 +1214,63 @@ function storedEvidenceProjection(
   return PromptEvidenceProjectionSchema.parse({ ref, payload });
 }
 
+type PromptEvidenceEntry = PromptEvidenceProjection['payload']['entries'][number];
+
+function rememberLatestFailureEvidence(
+  plan: EditableTeachingPlan,
+  projection: PromptEvidenceProjection,
+  byToolName: Map<string, PromptEvidenceEntry[]>,
+): void {
+  const toolNameById = new Map(plan.tools.map((tool) => [tool.id, tool.candidate.toolName]));
+  const grouped = new Map<string, PromptEvidenceEntry[]>();
+  for (const entry of projection.payload.entries) {
+    let toolId: string | undefined;
+    let toolName: string | undefined;
+    if (entry.kind === 'mechanical_fact') toolId = entry.toolId;
+    else if (entry.kind === 'untrusted_redacted_quote') {
+      try {
+        const fact = JSON.parse(entry.quote) as { toolId?: unknown; toolName?: unknown };
+        if (typeof fact.toolId === 'string') toolId = fact.toolId;
+        if (typeof fact.toolName === 'string') toolName = fact.toolName;
+      } catch {
+        // Keep malformed diagnostics available to the master, but do not bind
+        // them to an unresolved operation for completion review.
+      }
+    }
+    toolName ??= toolId ? toolNameById.get(toolId) : undefined;
+    if (!toolName) continue;
+    const entries = grouped.get(toolName) ?? [];
+    entries.push(entry);
+    grouped.set(toolName, entries);
+  }
+  for (const [toolName, entries] of grouped) byToolName.set(toolName, entries.slice(-8));
+}
+
+function partialCompletionEvidence(input: {
+  journal: FreshTeachJournal;
+  discoveryEvidence: PromptEvidenceProjection;
+  plan: EditableTeachingPlan;
+  latestFailureEvidenceByToolName: ReadonlyMap<string, readonly PromptEvidenceEntry[]>;
+}): { evidence: PromptEvidenceProjection; failureRefs: ContentAddressedRef[] } {
+  const unresolvedNames = new Set(
+    unresolvedCandidateCoverage(input.plan).map(
+      ({ discoveryCandidateName }) => discoveryCandidateName,
+    ),
+  );
+  const failureEntries = [...input.latestFailureEvidenceByToolName]
+    .filter(([toolName]) => unresolvedNames.has(toolName))
+    .flatMap(([, entries]) => entries)
+    .slice(-24);
+  const entries = [...input.discoveryEvidence.payload.entries, ...failureEntries].filter(
+    (entry, index, all) =>
+      all.findIndex((candidate) => sameContentRef(candidate.ref, entry.ref)) === index,
+  );
+  return {
+    evidence: storedEvidenceProjection(input.journal, entries),
+    failureRefs: uniqueRefs(failureEntries.map(({ ref }) => ref)).slice(-31),
+  };
+}
+
 function verificationFailureProjection(
   journal: FreshTeachJournal,
   failures: readonly BuildWaveFailure[],
@@ -3872,6 +3929,7 @@ function completionInput(input: {
   discoveryInput: ToolSelectionAdvisorInput;
   evidence: PromptEvidenceProjection;
   terminalIntent: 'completed' | 'partial' | 'blocked';
+  unresolvedEvidenceRefs?: readonly ContentAddressedRef[];
   liveByToolId?: ReadonlyMap<string, LiveCheckResult>;
   chainByEdgeId?: ReadonlyMap<string, LiveCheckResult>;
 }): CompletionReviewInput {
@@ -3903,7 +3961,10 @@ function completionInput(input: {
                 `Unresolved detector candidate "${discoveryCandidateName}": ${unresolvedReason}`,
                 1_000,
               ),
-              evidenceRefs: [input.evidence.ref],
+              evidenceRefs: uniqueRefs([
+                input.evidence.ref,
+                ...(input.unresolvedEvidenceRefs ?? []),
+              ]).slice(0, 32),
             },
           ]
         : [],
@@ -4044,6 +4105,7 @@ async function requestIndependentReview(input: {
   discoveryInput: ToolSelectionAdvisorInput;
   evidence: PromptEvidenceProjection;
   terminalIntent: 'completed' | 'partial' | 'blocked';
+  unresolvedEvidenceRefs?: readonly ContentAddressedRef[];
   liveByToolId?: ReadonlyMap<string, LiveCheckResult>;
   chainByEdgeId?: ReadonlyMap<string, LiveCheckResult>;
   agent: MasterTeachAgentOptions;
@@ -4318,6 +4380,7 @@ export async function runFreshMasterTeach(
     const compileSessionsByToolId = new Map<string, string>();
     const revisionGuidanceByToolId = new Map<string, string>();
     const repairContextByToolId = new Map<string, FocusedPlannerRevisionContext>();
+    const latestFailureEvidenceByToolName = new Map<string, PromptEvidenceEntry[]>();
     const mvpDispositionByResult = new Map<
       string,
       Pick<
@@ -4493,7 +4556,14 @@ export async function runFreshMasterTeach(
         );
         if (terminal) throw terminal.error;
         const currentFailures = verificationFailureProjection(activeJournal, checked.failures);
-        if (currentFailures.payload.entries.length > 0) await repair(currentFailures);
+        if (currentFailures.payload.entries.length > 0) {
+          rememberLatestFailureEvidence(
+            activeJournal.currentPlan(),
+            currentFailures,
+            latestFailureEvidenceByToolName,
+          );
+          await repair(currentFailures);
+        }
         continue;
       }
 
@@ -4525,7 +4595,13 @@ export async function runFreshMasterTeach(
             ),
           );
         if (failures.length > 0) {
-          await repair(verificationFailureProjection(activeJournal, failures));
+          const currentFailures = verificationFailureProjection(activeJournal, failures);
+          rememberLatestFailureEvidence(
+            activeJournal.currentPlan(),
+            currentFailures,
+            latestFailureEvidenceByToolName,
+          );
+          await repair(currentFailures);
           continue;
         }
         if (finalPlan.tools.length > 0 && unresolvedCandidateCoverage(finalPlan).length > 0) {
@@ -4537,12 +4613,22 @@ export async function runFreshMasterTeach(
         }
       }
 
+      const partialEvidence =
+        terminalIntent === 'partial'
+          ? partialCompletionEvidence({
+              journal: activeJournal,
+              discoveryEvidence: planned.discoveryEvidence,
+              plan: finalPlan,
+              latestFailureEvidenceByToolName,
+            })
+          : undefined;
       reportProgress(opts, 'running independent completion review');
       const reviewed = await requestIndependentReview({
         journal: activeJournal,
         discoveryInput: planned.discoveryInput,
-        evidence: planned.discoveryEvidence,
+        evidence: partialEvidence?.evidence ?? planned.discoveryEvidence,
         terminalIntent,
+        ...(partialEvidence ? { unresolvedEvidenceRefs: partialEvidence.failureRefs } : {}),
         liveByToolId,
         chainByEdgeId,
         agent: agents,

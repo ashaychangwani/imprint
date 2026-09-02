@@ -3079,3 +3079,45 @@ The focused suite passes 229 tests; type checking, lint, unused-code analysis,
 and circular-dependency analysis pass. The first full run had one unrelated
 macOS hostile-process cleanup timing failure; that exact stress test passed when
 rerun immediately, and the complete project check then passed all 1,845 tests.
+
+## 2026-09-02 01:22 PDT — Minimal requests worked; two controller loops wasted the result
+
+Fresh Flights run `1faa59e0-6507-4865-8f77-457b58b1ed1c` started from the
+previously accepted candidate boundaries, with fresh planning and compilation.
+The corrected planning instructions materially improved the first plan.
+Calendar used only its direct result request and explicitly rejected two
+unproven location lookups. Search used one result request plus relevant
+fresh-page bootstrap evidence. All four tools stayed on the API path; none
+fell back to a playbook.
+
+The compilers then exposed a real missing fact instead of blindly editing code:
+a changing request header had no known live producer. The independent reviewer
+correctly required the master to test whether the header was unnecessary before
+calling the tools blocked. That omission test ran. Location resolution passed
+and published. Calendar reached the server but returned no usable fare result.
+Search reached the server through CDP but returned an unusable error-shaped
+result. A warm CDP call took 337 ms, confirming that repeated setup was not the
+bottleneck. One search compile still spent more than eight minutes learning to
+parse a large framed response; that remains a speed problem in the evidence
+given to the compiler, not a reason for a Google-specific runtime rule.
+
+The run exposed two controller bugs. First, when the master restored unresolved
+tools for another test, it also rewrote explanatory text on the already verified
+location tool. That harmless prose changed the tool's plan identity and caused
+the working tool to compile and verify again, twice. The master prompt now says
+that a proven, untargeted tool must be copied byte-for-byte; review explanations
+belong in the decision note, not inside the tool object.
+
+Second, the completion reviewer was asked to judge whether unresolved tools had
+been tried thoroughly, but it received only the original recording evidence.
+It did not receive the later immutable check failures, so it had to reject the
+otherwise honest partial result. The controller now adds the latest factual
+failure receipts to the review evidence for each unresolved public tool name.
+This keeps the reviewer strict while giving it the facts needed to support a
+blocker or request a real repair.
+
+The diagnostic run was cancelled at about 42 minutes rather than allowing these
+two loops to consume the 60-minute ceiling. It is not resumable validation.
+Focused validation of the fixes passes type checking, lint, and 229 controller,
+prompt, store, and CLI tests. A neutral end-to-end test now proves that an
+unresolved consumer's actual failure is visible to the completion reviewer.

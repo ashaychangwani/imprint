@@ -1079,6 +1079,8 @@ describe('prompts and pre-plan discovery', () => {
     expect(masterPrompt).toMatch(/Initial focused planners may run concurrently/);
     expect(masterPrompt).toMatch(/omit that tool's stale `implementationPlan`/);
     expect(masterPrompt).toMatch(/return no\s+`recallToolNames` entry/);
+    expect(masterPrompt).toMatch(/copy that complete tool object byte-for-byte/i);
+    expect(masterPrompt).toMatch(/do not append review\s+evidence to the tool/i);
 
     const detectorPrompt = prompt('tool-candidate-detection.md');
     expect(detectorPrompt).toMatch(/smallest directly recorded request graph/i);
