@@ -941,12 +941,12 @@ describe('prompts and pre-plan discovery', () => {
     expect(compilePrompt).toContain('Do not brute');
   });
 
-  it('treats a bounded retained-compiler give-up as an MVP stop signal', () => {
+  it('uses the run deadline rather than a fixed retained-compiler repair cap', () => {
     const masterPrompt = prompt('master-teach-decision.md');
-    expect(masterPrompt).toContain('stop signal for that MVP cycle');
-    expect(masterPrompt).toMatch(/do not immediately recall the\s+same tool/);
-    expect(masterPrompt).toContain('finish with the verified MVPs');
-    expect(masterPrompt).toMatch(/Rephrasing the same failed construction is not new\s+evidence/);
+    expect(masterPrompt).toMatch(/not a fixed\s+repair limit or an automatic stop signal/);
+    expect(masterPrompt).toContain('Do not impose a numeric cap on repair turns');
+    expect(masterPrompt).toMatch(/the shared run deadline\s+expires/);
+    expect(masterPrompt).toMatch(/exact same construction with unchanged evidence is not progress/);
   });
 
   it('tells the master to account for changing request state', () => {

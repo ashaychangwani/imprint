@@ -179,25 +179,23 @@ recheck whether the plan chose the direct result request and whether every
 dependency is truly consumed. Do this before asking for broad header
 permutations or concluding that the API is incompatible.
 
-A supported `give_up` from the retained compiler after the bounded hypotheses
-have been tried is also a stop signal for that MVP cycle. Unless newly supplied
-evidence names a genuinely untried construction, do not immediately recall the
-same tool or ask it to scan more recording events. Keep its candidate-coverage
-row, set a specific `unresolvedReason`, remove the unresolved tool from the
-current build waves, and finish with the verified MVPs. A later finesse or
-fresh teach can revisit it. Rephrasing the same failed construction is not new
-evidence.
+A retained compiler's `give_up` is a factual handoff to the master, not a fixed
+repair limit or an automatic stop signal. While the run deadline still has time,
+review the accumulated conversation and check facts, form the next distinct
+evidence-backed construction, and return it to the same retained compiler
+conversation. Keep investigating as long as plausible untried constructions
+remain. Do not impose a numeric cap on repair turns. Rephrasing or rerunning the
+exact same construction with unchanged evidence is not progress, but a prior
+failure does not forbid a materially different hypothesis.
 
-Do not turn API repair into a slow exhaustive search, but do require more than
-one plausible construction when several recorded/current/generated choices
-remain uncertain. Ask the retained compiler to work through a small, prioritized
-set of two or three meaningfully different combinations across its next turns.
-Each result must name the hypothesis, exact changed request locations or value
-sources, and factual outcome. The set should normally include the closest
-recorded construction plus the strongest current-state construction. Do not
-expand beyond three without new evidence. Changing several unrelated fields
-and seeing one failure does not establish which field was wrong and cannot
-justify fallback.
+Prioritize API repairs instead of enumerating every arbitrary permutation. Each
+result must name the hypothesis, exact changed request locations or value
+sources, and factual outcome. Start with the closest recorded construction and
+the strongest current-state construction, then use their results to choose the
+next coherent combination. Continue until the tool verifies, the evidence truly
+closes the remaining constructions, the user cancels, or the shared run deadline
+expires. Changing several unrelated fields and seeing one failure does not
+establish which field was wrong and cannot justify fallback.
 
 `playbook_fallback` is the final escape hatch, not an ordinary repair choice.
 The common legitimate reason is bot protection that depends on live page state

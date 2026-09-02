@@ -3210,3 +3210,19 @@ plus fresh per-call values plus omission of unproven fields, with the closest
 recorded request kept only as a diagnostic. This remains an agent decision based
 on repeated-request evidence; no runtime field classifier or Google-specific
 rule was introduced.
+
+## 2026-09-02 02:45 PDT — Repair turns now use the run deadline, not an early prompt cap
+
+There was no runtime counter that stopped a tool after exactly five repairs. The
+earlier Flights run happened to reach five compiler repairs, and the master
+prompt separately told the agent to try only two or three combinations and treat
+a supported compiler `give_up` as the end of that MVP cycle. In practice, that
+could stop useful reasoning well before the 60-minute run deadline.
+
+That early-stop instruction has been removed. A compiler `give_up` is now a
+factual handoff to the master. The master can keep using the same retained
+conversation and try further distinct, evidence-backed constructions until the
+tool verifies, the evidence truly rules out the remaining ideas, the user
+cancels, or the shared 60-minute deadline expires. The existing repeated-state
+guard still rejects an exact retry of the same plan, artifacts, checks, and
+failure; it is not a numeric repair limit.
