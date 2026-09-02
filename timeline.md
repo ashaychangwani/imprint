@@ -3401,3 +3401,25 @@ needed when fetch returns HTTP 200 with a semantic protocol error: automatic
 transport stops at that HTTP success, but the agent can now test the same
 request through CDP without changing the artifact or adding a semantic runtime
 classifier. Focused end-to-end tests, type checking, and lint passed.
+
+## 2026-09-02 15:01 PDT — Fresh Calendar research narrowed the problem, then stopped one step early
+
+Fresh Flights run `8e0a3042-d3fd-42e6-8aca-60d705e8699f` reused only the
+previously accepted candidate boundaries and started all research and
+compilation work fresh. The Calendar researcher now used the intended
+top-level bootstrap and tested through CDP. It correctly rejected three HTTP
+200 responses because each contained only the same 130-byte Google protocol
+error instead of fares. It also corrected an extra nesting level in its first
+generated request body and then tested the closest fully recorded request as a
+coherent baseline.
+
+The researcher did not reach a proven Calendar request. It concluded that a
+fresh `x-goog-batchexecute-bgr` value required a new producer step, but the
+checked-in working example does not prove that conclusion. The example instead
+combines a route-specific `tfs` bootstrap and Referer, freshly captured
+`f.sid`/`bl`, a fresh `_reqid`, the recorded `bgr` header, and the recorded
+request shape. The researcher never tested that exact combination: its fresh
+state tests used the generic Flights bootstrap and a recorded `_reqid`, while
+its closest-recorded test had no fresh state. The research process therefore
+converged on the correct session-coherence problem but declared the wrong
+missing dependency before exhausting the strongest evidence-backed hybrid.
