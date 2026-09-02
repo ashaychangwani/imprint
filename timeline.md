@@ -3423,3 +3423,26 @@ state tests used the generic Flights bootstrap and a recorded `_reqid`, while
 its closest-recorded test had no fresh state. The research process therefore
 converged on the correct session-coherence problem but declared the wrong
 missing dependency before exhausting the strongest evidence-backed hybrid.
+
+## 2026-09-02 15:33 PDT — Search repeated the same unsupported blocker
+
+The Search researcher made two genuine attempts. First it tried a small
+round-trip `GetShoppingResults` request with fresh `f.sid`/`bl`. Then it restored
+the recorded `_reqid`, route Referer, browser headers, and recorded `bgr` value.
+It correctly rejected the returned 138- and 140-byte framed protocol errors as
+non-results.
+
+It then claimed that a fresh `x-goog-batchexecute-bgr` producer was required and
+blocked. The master revised the plan without supplying such a producer, so the
+same retained researcher immediately blocked again without another live test.
+That conclusion conflicts with the checked-in Search example: the example does
+not send a `bgr` header. It uses a route-specific search bootstrap and matching
+Referer, fresh `f.sid`/`bl`, a generated request ID, the recorded request shape,
+and CDP replay. The researcher never tested that exact combination; its fresh
+state tests kept the generic Flights bootstrap and its closest-recorded test
+kept a recorded request ID.
+
+The fresh teach ended partial with one ready tool and three explicitly
+unresolved operations. It did not reach the 60-minute deadline. Calendar and
+Search stopped because their researchers chose `blocked`, not because the host
+limited their number of attempts.
