@@ -3528,3 +3528,7 @@ context. Repeated checks of the same unchanged tool can remain warm; a different
 tool or materially different bootstrap gets a separate browser. This is purely
 execution isolation, with no site classification or semantic policy. Ninety-two
 focused tests, type checking, and lint pass.
+
+Fresh validation run `5d3c8456-d570-47a3-a1cf-fd8b01078030` then started from
+the accepted candidate boundaries with isolated per-tool CDP sessions and the
+researcher blocker self-review enabled. No stopped run state was resumed.
