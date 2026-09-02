@@ -91,6 +91,26 @@ changed by each hypothesis so the compiler can build it and the live verifier
 can test it. Do not call the API incompatible merely because the current
 artifact cannot intercept the browser's original XHR.
 
+The built-in fresh-value placeholders are exactly `${generated.uuid}`,
+`${generated.epoch_ms}`, `${generated.epoch_s}`, `${generated.iso8601}`, and
+`${generated.nonce}`. A request transform may also compute a fresh value from
+the current time or randomness when repeated request evidence supports that
+lifecycle and the required wire shape. These are available mechanisms, not
+automatic classifications. A field name, entropy, or variation alone does not
+prove which one is correct. Cite the repeated-request shape, cadence, absence
+of a prior-response producer, or other exact evidence that makes generation a
+reasonable hypothesis; otherwise omit or report the uncertainty.
+
+Plan a small set of coherent request constructions, not an additive ladder that
+first drops every uncertain value and then pastes stale recorded values back one
+at a time. Group fields whose evidence indicates the same lifecycle. The
+strongest fresh construction should combine fresh bootstrap/session values with
+supported per-invocation generation while omitting fields whose necessity is
+unproven. Keep the closest recorded construction as a diagnostic comparison.
+Failure of an omit-everything construction does not prove that every omitted
+field is required, and failure after adding several recorded values does not
+identify which one mattered.
+
 Know the API artifact's actual vocabulary before proposing a plan. It can issue
 ordered recorded requests; substitute parameters, credentials, captured state,
 earlier responses, and the supported generated values; and use a TypeScript

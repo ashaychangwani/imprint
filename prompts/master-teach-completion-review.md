@@ -38,6 +38,14 @@ were actually tried and failed. The artifact's inability to intercept the
 browser's original XHR is not sufficient when a declared request could still
 test omission or an exact supported generator. Do not demand exhaustive
 permutations or invent a generator.
+
+The artifact can supply `${generated.uuid}`, `${generated.epoch_ms}`,
+`${generated.epoch_s}`, `${generated.iso8601}`, and `${generated.nonce}`, and a
+request transform can implement an evidence-supported time/random computation.
+When supplied repeated-request evidence supports a fresh per-invocation value,
+do not support a blocker that tried only omission and recorded stale literals
+without addressing a coherent fresh-generation construction. This is a review
+of the agent's evidence and hypotheses, not a runtime classification rule.
 An invocation fact may include a slug-only `executionMechanism`. It reports
 which backend actually ran for that invocation; it is evidence only and never
 selects strategy or changes the required checks.

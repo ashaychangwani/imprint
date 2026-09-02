@@ -1110,6 +1110,24 @@ describe('prompts and pre-plan discovery', () => {
     );
   });
 
+  it('documents fresh-value primitives and coherent transport hypotheses for every reasoning role', () => {
+    for (const name of [
+      'master-teach-focused-planner.md',
+      'master-teach-decision.md',
+      'compile-agent.md',
+      'master-teach-completion-review.md',
+    ]) {
+      const authorPrompt = prompt(name);
+      expect(authorPrompt).toContain('${generated.uuid}');
+      expect(authorPrompt).toContain('${generated.epoch_ms}');
+      expect(authorPrompt).toContain('${generated.epoch_s}');
+      expect(authorPrompt).toContain('${generated.iso8601}');
+      expect(authorPrompt).toContain('${generated.nonce}');
+      expect(authorPrompt).toMatch(/coherent/i);
+      expect(authorPrompt).toMatch(/classif|rule/i);
+    }
+  });
+
   it('keeps baseline MVP review focused on one bounded result and exact current binding', async () => {
     const input = baselineMvpInput();
     const output = baselineMvpOutput(input);

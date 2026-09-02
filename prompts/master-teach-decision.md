@@ -155,6 +155,23 @@ measure it. Inability to intercept the browser's original XHR is not by itself
 an API blocker when the declared request can omit or generate the uncertain
 field. Do not invent a generator or exhaustively permute transport noise.
 
+The built-in fresh-value placeholders are exactly `${generated.uuid}`,
+`${generated.epoch_ms}`, `${generated.epoch_s}`, `${generated.iso8601}`, and
+`${generated.nonce}`. A request transform may compute a time- or randomness-
+based value when repeated request evidence supports its lifecycle and wire
+shape. The agent still decides whether generation fits; the runtime does not
+classify a field from its name or appearance. Reject “no supported generator”
+when the plan has not considered these actual mechanisms against the supplied
+repeated-request evidence.
+
+Review hypotheses as coherent constructions rather than an additive ladder.
+Prefer one strongest fresh construction that combines current session/bootstrap
+state, supported per-call generation, and omission of fields whose necessity is
+unproven. Keep one closest-recorded diagnostic construction. Do not infer that
+every omitted field is required when an omit-all request fails, and do not keep
+adding unrelated stale values until the request happens to work. Ask what each
+result isolated before authorizing the next construction.
+
 For an HTTP-success response that is empty, tiny, or semantically unusable,
 first audit the plan's transport provenance: every changing query value, body
 field, header, cookie, and captured state must have a named live producer. Then

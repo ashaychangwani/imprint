@@ -3164,3 +3164,49 @@ is not proven, the master must authorize a bounded omission construction and,
 when exact repeated-request evidence supports it, a generated-value construction
 before accepting the blocker. The runtime still makes no semantic classification
 and no Google-specific policy was added.
+
+## 2026-09-02 02:37 PDT — Fresh generation tested the right question but missed the right combination
+
+Fresh Flights run `8d431fc1-2480-4463-8fe7-ce6357f71c34` validated the new
+reasoning instructions. Planning explicitly separated “no producer” from “field
+is required.” Search compiled an API artifact that omitted the unexplained
+changing fields instead of giving up. Calendar did the same. Location passed and
+published. The search omission call reached Google through warm CDP in 362 ms,
+but its 129-byte response contained no flights. Calendar and search then tried
+fresh bootstrap state, coherent parameterized bodies and Referers, recorded
+request ids, and finally recorded changing headers. Every construction returned
+a tiny HTTP-success response with no semantic results. The run ended honestly
+as partial after 29 minutes 43 seconds: one ready tool and three unresolved.
+No playbook was used or proposed.
+
+The user clarified that 30 minutes is an acceptable normal target for Google
+Flights and Google Hotels. Simpler sites should still aim near 15 minutes. The
+run-wide kill ceiling remains 60 minutes, and complex-site runs should still be
+audited near 30 minutes for repeated work.
+
+After-the-fact comparison with the checked-in Google Flights example explains
+why the example is stronger. It was not the untouched output of one teach run.
+The first generated snapshot landed on June 6, a live-search correction landed
+on June 26, and a large audit-driven rewrite landed on June 30. That audit added
+a shared transport helper, fresh request-id generation, stronger parsers and
+token contracts, and re-probed the tools live. The saved backend receipts then
+showed search and calendar passing CDP replay, including an 886 ms warm search
+and a 550 ms calendar call.
+
+The important construction difference is site-neutral. The shipped search tool
+combines fresh page session values with a freshly generated request id and omits
+the changing browser header. The new run tried omission without a fresh request
+id, then moved toward recorded request ids and recorded headers. It never tried
+the successful lifecycle combination. The shipped calendar similarly combines
+fresh session values, a fresh request id, and the recorded header. The new run
+treated generation as unsupported because the planning prompts mentioned
+“supported generated values” without naming the mechanisms the artifact actually
+provides.
+
+The prompts now list the exact fresh-value primitives and explain that a request
+transform may implement an evidence-supported time/random computation. They also
+tell every reasoning role to test coherent constructions: fresh session state
+plus fresh per-call values plus omission of unproven fields, with the closest
+recorded request kept only as a diagnostic. This remains an agent decision based
+on repeated-request evidence; no runtime field classifier or Google-specific
+rule was introduced.

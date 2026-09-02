@@ -153,6 +153,21 @@ Follow these steps to compile the session:
    do not guess. The compiler is not expected to prove a live omission before
    producing the artifact that will be verified.
 
+   The built-in fresh-value placeholders are exactly `${generated.uuid}`,
+   `${generated.epoch_ms}`, `${generated.epoch_s}`, `${generated.iso8601}`,
+   and `${generated.nonce}`. A request transform may compute a fresh time- or
+   randomness-based value when repeated requests support that lifecycle and
+   exact wire shape. Treat this as agent-chosen construction, not a field-name
+   rule. When the accepted plan selects generation, implement and test its exact
+   shape instead of substituting a recorded per-invocation literal.
+
+   Preserve each hypothesis as one coherent construction. Do not respond to an
+   omit-all failure by mechanically adding unrelated recorded values one at a
+   time. Combine current bootstrap/session values with supported per-call
+   generation when their lifecycles differ, omit fields still unproven as
+   necessary, and retain the closest recorded request only as a diagnostic
+   construction. State what each live result isolated for the master.
+
 5. **Write workflow.json.** Template the request(s):
    - Replace user-variable values with `${param.NAME}` placeholders (e.g., query, date, quantity)
    - Expose only caller-meaningful parameters. If a recorded field is an internal navigation/context/source constant (for example a page entry-point marker, tracking context, or continuation hint) and changing it does not correspond to a user-facing choice in the narration or UI, keep the recorded literal instead of advertising a caller parameter.
