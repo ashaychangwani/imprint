@@ -83,6 +83,14 @@ describe('teach help', () => {
     expect(summary('blocked')).toContain('4 blocked');
   });
 
+  it('documents candidate-selection reuse as fresh downstream work', () => {
+    const teach = VERB_HELP.teach;
+    const flag = (teach?.flags ?? []).find(({ name }) => name === '--from-candidates <run-id>');
+    expect(teach?.usage.join(' ')).toContain('[--from-candidates <run-id>]');
+    expect(flag?.description).toContain('candidate selection');
+    expect(flag?.description).toContain('planning and compilation start fresh');
+  });
+
   it('does not expose retired selection or resume flags', () => {
     const names = (VERB_HELP.teach?.flags ?? []).map(({ name }) => name);
     for (const retired of [

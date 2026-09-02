@@ -106,6 +106,17 @@ request can truthfully implement the operation, say exactly what you reviewed
 and why an API workflow cannot be constructed; you need not speculate about
 undocumented APIs outside the recording.
 
+Treat a browser playbook as a final escape hatch. The usual legitimate case is
+bot protection that requires live page state the supported API artifact cannot
+capture, reproduce, or preserve. A rotating-looking field, one empty live
+result, one failed render comparison, or a compiler's unsupported conclusion
+does not prove that. When request construction is uncertain, propose a small
+prioritized set of meaningfully different API combinations for the retained
+compiler to try: include the closest recorded construction and the strongest
+fresh-state construction, and state what each combination is meant to test.
+Do not demand an exhaustive Cartesian search, but do not recommend playbook
+while a plausible grounded combination remains untried.
+
 Discovery parameter guesses may have a missing type or description. They are a
 starting suggestion, not a checklist: accept, rename, add, or remove them from
 your proposed `tool.candidate.likelyParams` when the focused evidence supports
@@ -121,6 +132,9 @@ first contract; the parameter-finesse agent reviews that breadth after the MVP
 is published. Never omit an input required to perform the core operation, and
 never erase a distinct user-facing operation merely to make its implementation
 smaller.
+Here, “additional variants” means extra public features or modes. It does not
+mean internal request-construction hypotheses for the same core operation;
+those remain part of the bounded API repair set above.
 Return one parameter mapping for every proposed public parameter. A mapping
 lists the artifact requests it affects plus concise construction guidance.
 Response dependencies identify an earlier producer request, a later consumer

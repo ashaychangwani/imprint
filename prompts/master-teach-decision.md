@@ -111,6 +111,25 @@ any untested construction remains. Do not cite the failed compiler's conclusion
 as the sole fallback evidence. The master may choose fallback only after the
 evidence itself closes those API repair paths.
 
+Do not turn API repair into a slow exhaustive search, but do require more than
+one plausible construction when several recorded/current/generated choices
+remain uncertain. Ask the retained compiler to work through a small, prioritized
+set of two or three meaningfully different combinations across its next turns.
+Each result must name the hypothesis, exact changed request locations or value
+sources, and factual outcome. The set should normally include the closest
+recorded construction plus the strongest current-state construction. Do not
+expand beyond three without new evidence. Changing several unrelated fields
+and seeing one failure does not establish which field was wrong and cannot
+justify fallback.
+
+`playbook_fallback` is the final escape hatch, not an ordinary repair choice.
+The common legitimate reason is bot protection that depends on live page state
+which the supported API artifact truly cannot capture, reproduce, or preserve.
+Even then, name the exact state, the grounded API combinations already tried,
+and the factual result of each. A rotating-looking field name, an empty result,
+one failed comparison, or one compiler's belief that state is page-generated
+does not establish impossibility.
+
 A `revision_required` baseline review for a result cannot be superseded by
 mechanical green receipts for that same result.
 

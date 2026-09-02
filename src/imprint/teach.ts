@@ -11,7 +11,9 @@ type TeachResult = FreshTeachTerminalResult;
 
 /**
  * Start from the selected current recording and return only after the run is
- * terminal. There is no resume, phase window, or partial-tool mode.
+ * terminal. A caller may reuse a completed candidate-selection checkpoint,
+ * but planning, compilation, verification, and terminal accounting are always
+ * a new run. There is no in-progress run resume or partial-tool mode.
  */
 export async function teach(opts: TeachOptions): Promise<TeachResult> {
   return await runFreshMasterTeach(opts);

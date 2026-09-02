@@ -2739,3 +2739,42 @@ when the master actually changes compile inputs such as parameters, strategy,
 evidence, or the request plan. Focused agent, journal, and foreground
 controller tests prove that an unchanged recall skips the planner while the
 compiler receives the prior build, failure facts, and repair guidance.
+
+## 2026-09-01 18:20 PDT — Stopped the browser detour and kept only the good Flights selection
+
+Fresh Flights run `ccaa4f00-3fc7-4869-b7d0-5176c69e0f5d` began with a sound
+four-tool API plan: location lookup, calendar fares, flight search, and booking
+options. Later repairs changed calendar and search to browser playbooks and
+dropped booking options. That was the wrong direction, so the run was stopped
+with one ready tool and three unfinished tools. None of its compiled files or
+failed repairs will be resumed.
+
+Starting discovery over would also throw away work that was already good. Teach
+therefore has a narrow `--from-candidates <run-id>` restart. It copies only the
+chosen operation boundaries and the recording evidence behind them. The source
+site and exact recording hash must match. The new run gets a new folder, plan,
+master conversation, planner conversations, compiler conversations, builds,
+and checks. The first new master message includes the complete selection so it
+does not assume an old conversation still exists. Older runs without the new
+checkpoint file can recover the earliest selection from their saved history;
+every recovered file is checked against its recorded hash first.
+
+The agent instructions now make browser playbooks the final escape hatch. A
+single HTTP failure, empty result, changing-looking field, or request mismatch
+does not prove an API is impossible. When request construction is uncertain,
+the retained compiler should try a small set of two or three meaningful API
+combinations, normally including the closest recorded request and the strongest
+fresh-state version. It records what changed and what happened, but avoids a
+slow exhaustive search. These are general instructions and contain no Google
+Flights-specific runtime rule.
+
+An independent review found no path for old builds, check results, compiler
+sessions, or staged files to cross into the restart. Type checking and 209
+focused CLI, agent, and end-to-end tests pass. The full run passed 1,831 tests;
+one prompt expectation needed the explicit “100% certain” fallback wording and
+the same known process-cleanup timing test flaked under full-suite load. Both
+passed immediately when rerun. Lint, type checking, dead-code checks, circular
+dependency checks, and whitespace checks pass. The next step is to commit this
+checkpoint and start a fresh Flights teach from the preserved four-tool
+selection and its exact recording, with a 60-minute hard limit and a 15-minute
+expected completion time.

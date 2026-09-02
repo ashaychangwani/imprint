@@ -1678,6 +1678,7 @@ export async function requestFocusedPlan(
 export async function requestMasterDecision(
   input: MasterDecisionInput,
   agent: MasterTeachAgentOptions = {},
+  options: { selfContained?: boolean } = {},
 ) {
   const checked = MasterInputSchema.parse(input);
   return request({
@@ -1685,7 +1686,7 @@ export async function requestMasterDecision(
     conversationKey: 'master',
     prompt: 'master-teach-decision.md',
     input:
-      agent.provider === 'codex-cli'
+      agent.provider === 'codex-cli' && !options.selfContained
         ? masterDecisionConversationInput(checked)
         : masterDecisionPromptInput(checked),
     validation: {

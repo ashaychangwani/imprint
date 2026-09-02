@@ -44,8 +44,11 @@ import {
   type FocusedPlannerRevisionContext,
   FocusedPlannerRevisionContextSchema,
   type MasterDecisionInput,
+  MasterDecisionOutputSchema,
   type ParameterSelectionAdvisorInput,
   type ToolSelectionAdvisorInput,
+  ToolSelectionAdvisorInputSchema,
+  ToolSelectionAdvisorOutputSchema,
 } from './master-teach-agent-contracts.ts';
 import {
   type MasterTeachAgentOptions,
@@ -63,6 +66,7 @@ import {
   type ContentAddressedRef,
   type DesiredTeachingPlan,
   type EditableTeachingPlan,
+  EditableTeachingPlanSchema,
   type EditableTeachingTool,
   type ImplementationPlanPayload,
   bindImplementationPlanRef,
@@ -85,6 +89,7 @@ import {
 import {
   type FreshTeachBootstrapObject,
   FreshTeachJournal,
+  FreshTeachJournalStateSchema,
   type FreshTeachRunStatus,
   isRepairableBuildArtifactError,
 } from './master-teach-store.ts';
@@ -145,6 +150,10 @@ export interface FreshTeachOptions {
   model?: string;
   maxDurationMs?: number;
   fromSession?: string;
+  /** Reuse only the completed candidate-selection checkpoint from an earlier
+   * run of this site. Planning, compilation, checks, and agent conversations
+   * always start fresh. */
+  fromCandidates?: string;
   keepTest?: boolean;
   /** Optional explicit spelling for the same master-led flow. When no
    * provider is supplied, this also selects the Codex provider end to end. */
@@ -382,8 +391,22 @@ interface ChainInvocation {
 
 type ToolAdvice = Awaited<ReturnType<typeof requestToolSelectionAdvice>>;
 type FocusedPlan = Awaited<ReturnType<typeof requestFocusedPlan>>;
+type MasterDecision = Awaited<ReturnType<typeof requestMasterDecision>>;
 type CompletionReview = Awaited<ReturnType<typeof requestCompletionReview>>;
 type Detection = Awaited<ReturnType<typeof detectToolCandidates>>;
+
+interface CandidateSelection {
+  discoveryInput: ToolSelectionAdvisorInput;
+  discoveryEvidence: PromptEvidenceProjection;
+  toolAdvice: ToolAdvice;
+  discoveryDecision: MasterDecision;
+}
+
+interface CandidateSelectionCheckpoint {
+  version: 1;
+  selection: CandidateSelection;
+  bootstrap: FreshTeachBootstrapObject[];
+}
 
 /** Test seams are deliberately role-sized; production defaults use the shipped modules. */
 interface FreshTeachControllerDependencies {
@@ -601,6 +624,274 @@ function writeJsonAtomic(path: string, value: unknown): void {
   const temporary = `${path}.${randomUUID()}.tmp`;
   writeJson(temporary, value);
   renameSync(temporary, path);
+}
+
+const CANDIDATE_SELECTION_CHECKPOINT = 'candidate-selection.json';
+
+function contentRefKey(ref: ContentAddressedRef): string {
+  return `${ref.path}\u0000${ref.sha256}`;
+}
+
+function candidateSourceRunId(value: string): string {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value)) {
+    throw new Error(`invalid candidate-selection run id ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function parseCandidateSelectionCheckpoint(value: unknown): CandidateSelectionCheckpoint {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('candidate-selection checkpoint must be an object');
+  }
+  const record = value as Record<string, unknown>;
+  if (record.version !== 1) throw new Error('unsupported candidate-selection checkpoint version');
+  if (!record.selection || typeof record.selection !== 'object') {
+    throw new Error('candidate-selection checkpoint has no selection');
+  }
+  const rawSelection = record.selection as Record<string, unknown>;
+  const discoveryInput = ToolSelectionAdvisorInputSchema.parse(rawSelection.discoveryInput);
+  const discoveryEvidence = PromptEvidenceProjectionSchema.parse(rawSelection.discoveryEvidence);
+  if (
+    !sameContentRef(discoveryInput.evidence.ref, discoveryEvidence.ref) ||
+    canonicalTeachingPlanJson(discoveryInput.evidence.payload) !==
+      canonicalTeachingPlanJson(discoveryEvidence.payload)
+  ) {
+    throw new Error('candidate-selection checkpoint evidence does not match its discovery input');
+  }
+  const toolAdvice = ToolSelectionAdvisorOutputSchema.parse(rawSelection.toolAdvice);
+  const discoveryDecision = MasterDecisionOutputSchema.parse(rawSelection.discoveryDecision);
+  if (!Array.isArray(record.bootstrap)) {
+    throw new Error('candidate-selection checkpoint has no bootstrap objects');
+  }
+  const suppliedBootstrap = record.bootstrap.map((raw, index): FreshTeachBootstrapObject => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error(`candidate-selection bootstrap ${index} must be an object`);
+    }
+    const seed = raw as Record<string, unknown>;
+    if (seed.kind !== 'json') {
+      throw new Error(`candidate-selection bootstrap ${index} must contain JSON`);
+    }
+    const expected = jsonRef(seed.value);
+    const supplied = expected.ref;
+    if (
+      !seed.ref ||
+      typeof seed.ref !== 'object' ||
+      Array.isArray(seed.ref) ||
+      !sameContentRef(supplied, seed.ref as ContentAddressedRef)
+    ) {
+      throw new Error(`candidate-selection bootstrap ${index} has a stale content reference`);
+    }
+    return expected.seed;
+  });
+  const bootstrapByRef = new Map(
+    suppliedBootstrap.map((seed) => [contentRefKey(seed.ref), seed] as const),
+  );
+  const requiredRefs = uniqueRefs([
+    discoveryEvidence.ref,
+    ...discoveryEvidence.payload.entries.map(({ ref }) => ref),
+  ]);
+  const bootstrap = requiredRefs.map((ref) => {
+    const seed = bootstrapByRef.get(contentRefKey(ref));
+    if (!seed) {
+      throw new Error(`candidate-selection checkpoint is missing evidence object ${ref.path}`);
+    }
+    return seed;
+  });
+  if (bootstrapByRef.size !== bootstrap.length) {
+    throw new Error('candidate-selection checkpoint contains objects outside discovery evidence');
+  }
+  return {
+    version: 1,
+    selection: { discoveryInput, discoveryEvidence, toolAdvice, discoveryDecision },
+    bootstrap,
+  };
+}
+
+function rebindCandidateSelection(
+  selection: CandidateSelection,
+  run: ToolSelectionAdvisorInput['run'],
+): CandidateSelection {
+  const discoveryInput = ToolSelectionAdvisorInputSchema.parse({
+    ...selection.discoveryInput,
+    run,
+  });
+  const toolAdvice = ToolSelectionAdvisorOutputSchema.parse({
+    ...selection.toolAdvice,
+    binding: run,
+  });
+  const discoveryDecision = MasterDecisionOutputSchema.parse({
+    ...selection.discoveryDecision,
+    binding: run,
+  });
+  return {
+    discoveryInput,
+    discoveryEvidence: selection.discoveryEvidence,
+    toolAdvice,
+    discoveryDecision,
+  };
+}
+
+function writeCandidateSelectionCheckpoint(
+  runRoot: string,
+  selection: CandidateSelection,
+  seeds: Map<string, FreshTeachBootstrapObject>,
+): void {
+  const requiredRefs = uniqueRefs([
+    selection.discoveryEvidence.ref,
+    ...selection.discoveryEvidence.payload.entries.map(({ ref }) => ref),
+  ]);
+  const bootstrap = requiredRefs.map((ref) => {
+    const seed = seeds.get(contentRefKey(ref));
+    if (!seed) throw new Error(`candidate selection is missing evidence object ${ref.path}`);
+    return seed;
+  });
+  const checkpoint = parseCandidateSelectionCheckpoint({
+    version: 1,
+    selection,
+    bootstrap,
+  });
+  writeJsonAtomic(pathJoin(runRoot, CANDIDATE_SELECTION_CHECKPOINT), checkpoint);
+}
+
+function readJsonUnchecked(path: string): unknown {
+  return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+}
+
+function legacyCandidateSelectionCheckpoint(input: {
+  sourceRunRoot: string;
+  recordingIndex: ToolSelectionAdvisorInput['recordingIndex'];
+}): CandidateSelectionCheckpoint {
+  const journalRoot = pathJoin(input.sourceRunRoot, 'journal');
+  const state = FreshTeachJournalStateSchema.parse(
+    readJsonUnchecked(pathJoin(journalRoot, 'current.json')),
+  );
+  const earliestPlanRef = state.supersededPlanRefs[0] ?? state.currentPlanRef;
+  const readJournalObject = (ref: ContentAddressedRef): unknown => {
+    const value = readJsonUnchecked(pathJoin(journalRoot, ref.path));
+    if (!sameContentRef(jsonRef(value).ref, ref)) {
+      throw new Error(`source candidate object failed its content hash: ${ref.path}`);
+    }
+    return value;
+  };
+  const earliestPlan = EditableTeachingPlanSchema.parse(readJournalObject(earliestPlanRef));
+  let toolAdvice: ToolAdvice | undefined;
+  let discoveryDecision: MasterDecision | undefined;
+  for (const ref of earliestPlan.decision.advisorRefs) {
+    const value = readJournalObject(ref);
+    if (!toolAdvice) {
+      const parsed = ToolSelectionAdvisorOutputSchema.safeParse(value);
+      if (parsed.success) toolAdvice = parsed.data;
+    }
+    if (!discoveryDecision) {
+      const parsed = MasterDecisionOutputSchema.safeParse(value);
+      if (parsed.success && !('planRevision' in parsed.data.binding)) {
+        discoveryDecision = parsed.data;
+      }
+    }
+  }
+  if (!toolAdvice || !discoveryDecision) {
+    throw new Error(
+      'source run predates durable candidate selection and cannot be reused without rediscovery',
+    );
+  }
+  const selectedTools = new Map(
+    discoveryDecision.desiredPlan.tools.map((tool) => [tool.candidate.toolName, tool]),
+  );
+  const discoveryCandidates = toolAdvice.boundaries.map((boundary) => {
+    const selected = selectedTools.get(boundary.toolName);
+    if (!selected) {
+      throw new Error(
+        `legacy candidate selection cannot recover parameters for ${JSON.stringify(boundary.toolName)}`,
+      );
+    }
+    return { ...boundary, likelyParams: selected.candidate.likelyParams };
+  });
+  const candidateNames = new Set(discoveryCandidates.map(({ toolName }) => toolName));
+  const coveredNames = new Set(
+    discoveryDecision.desiredPlan.candidateCoverage.map(
+      ({ discoveryCandidateName }) => discoveryCandidateName,
+    ),
+  );
+  if (
+    candidateNames.size !== coveredNames.size ||
+    [...candidateNames].some((name) => !coveredNames.has(name))
+  ) {
+    throw new Error(
+      'legacy source merged or split detector candidates before checkpoints were available; use a newer source run',
+    );
+  }
+
+  const seeds = new Map<string, FreshTeachBootstrapObject>();
+  const copyJsonObject = (ref: ContentAddressedRef): unknown => {
+    const value = readJournalObject(ref);
+    const object = jsonRef(value);
+    if (!sameContentRef(object.ref, ref)) {
+      throw new Error(`source candidate evidence has a stale content reference: ${ref.path}`);
+    }
+    addBootstrap(seeds, object);
+    return value;
+  };
+  let discoveryEvidence: PromptEvidenceProjection | undefined;
+  for (const ref of earliestPlan.decision.evidenceRefs) {
+    const payload = copyJsonObject(ref);
+    const projection = PromptEvidenceProjectionSchema.safeParse({ ref, payload });
+    if (!projection.success) continue;
+    const isDiscoveryEvidence = projection.data.payload.entries.some(
+      (entry) =>
+        entry.kind === 'untrusted_redacted_quote' &&
+        entry.quote.includes('"kind":"discovery_detector_'),
+    );
+    if (!isDiscoveryEvidence) continue;
+    discoveryEvidence = projection.data;
+    for (const entry of discoveryEvidence.payload.entries) copyJsonObject(entry.ref);
+    break;
+  }
+  if (!discoveryEvidence) throw new Error('source run has no reusable discovery evidence');
+  const discoveryInput = ToolSelectionAdvisorInputSchema.parse({
+    run: discoveryDecision.binding,
+    recordingIndex: input.recordingIndex,
+    detectorSharedContext: {
+      loginRequestSeqs: [],
+      credentialNames: [],
+      tokenExtractionNotes: '',
+      sharedHelperNotes: '',
+      authRequestSeqs: [],
+      authNotes: '',
+    },
+    discoveryCandidates,
+    evidence: discoveryEvidence,
+  });
+  return parseCandidateSelectionCheckpoint({
+    version: 1,
+    selection: { discoveryInput, discoveryEvidence, toolAdvice, discoveryDecision },
+    bootstrap: [...seeds.values()],
+  });
+}
+
+function loadCandidateSelectionCheckpoint(input: {
+  site: string;
+  sourceRunId: string;
+  recordingSha256: string;
+  recordingIndex: ToolSelectionAdvisorInput['recordingIndex'];
+}): CandidateSelectionCheckpoint {
+  const sourceRunId = candidateSourceRunId(input.sourceRunId);
+  const sourceRunRoot = pathJoin(localSiteDir(input.site), '.teach-runs', sourceRunId);
+  const checkpointPath = pathJoin(sourceRunRoot, CANDIDATE_SELECTION_CHECKPOINT);
+  const checkpoint = existsSync(checkpointPath)
+    ? parseCandidateSelectionCheckpoint(readJsonUnchecked(checkpointPath))
+    : legacyCandidateSelectionCheckpoint({ sourceRunRoot, recordingIndex: input.recordingIndex });
+  const binding = checkpoint.selection.discoveryInput.run;
+  if (binding.site !== input.site) {
+    throw new Error(
+      `candidate selection belongs to site ${JSON.stringify(binding.site)}, not ${JSON.stringify(input.site)}`,
+    );
+  }
+  if (binding.recordingSha256 !== input.recordingSha256) {
+    throw new Error(
+      'candidate selection belongs to a different recording; rerun discovery for the selected recording',
+    );
+  }
+  return checkpoint;
 }
 
 /** Keep every master revision in a clean module namespace. */
@@ -1660,13 +1951,15 @@ async function discoverAndPlan(input: {
   runId: string;
   recordingSha256: string;
   triage: TriageResult;
-  candidatePayload: ReturnType<typeof buildToolCandidatePayload>;
-  detection: Detection;
+  candidatePayload?: ReturnType<typeof buildToolCandidatePayload>;
+  detection?: Detection;
+  selected?: CandidateSelection;
   independent: IndependentExecutionObservation;
   seeds: Map<string, FreshTeachBootstrapObject>;
   agent: MasterTeachAgentOptions;
   deps: FreshTeachControllerDependencies;
   now: Date;
+  onSelected?: (selection: CandidateSelection) => void;
 }): Promise<{
   plan: EditableTeachingPlan;
   discoveryInput: ToolSelectionAdvisorInput;
@@ -1676,54 +1969,71 @@ async function discoverAndPlan(input: {
   toolAdvice: ToolAdvice;
 }> {
   const recordingIndex = recordingIndexFromSession(input.triage.session, input.recordingSha256);
-  const recordingSeqs = {
-    eventSeqs: new Set(recordingIndex.eventSeqs),
-  };
-  const discoveryCandidates = input.detection.candidates.map((candidate) =>
-    groundDetectorCandidateForMaster(candidate, recordingSeqs),
-  );
-  const discoveryEvidence = buildPromptEvidenceProjection(
-    discoveryEvidenceDocuments({
-      candidatePayload: input.candidatePayload,
-    }),
-    input.seeds,
-    DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
-    new Set([
-      'discovery_detector_evidence',
-      'discovery_detector_narration',
-      'discovery_detector_events',
-      'discovery_detector_requests',
-    ]),
-  );
-  const detectorSharedContext = normalizeDetectorCompileContextForMaster(
-    input.detection.sharedContext,
-  );
   const run = {
     runId: input.runId,
     site: input.site,
     recordingSha256: input.recordingSha256,
   };
-  const discoveryInput: ToolSelectionAdvisorInput = {
-    run,
-    recordingIndex,
-    detectorSharedContext,
-    discoveryCandidates,
-    evidence: discoveryEvidence,
-  };
-  const advice = await input.deps.requestToolSelectionAdvice(discoveryInput, input.agent);
+  let discoveryInput: ToolSelectionAdvisorInput;
+  let discoveryEvidence: PromptEvidenceProjection;
+  let advice: ToolAdvice;
+  let discoveryDecision: MasterDecision;
+  if (input.selected) {
+    const rebound = rebindCandidateSelection(input.selected, run);
+    discoveryInput = ToolSelectionAdvisorInputSchema.parse({
+      ...rebound.discoveryInput,
+      recordingIndex,
+    });
+    discoveryEvidence = rebound.discoveryEvidence;
+    advice = rebound.toolAdvice;
+    discoveryDecision = rebound.discoveryDecision;
+  } else {
+    if (!input.detection || !input.candidatePayload) {
+      throw new Error('fresh discovery requires detector output and its candidate payload');
+    }
+    const recordingSeqs = { eventSeqs: new Set(recordingIndex.eventSeqs) };
+    const discoveryCandidates = input.detection.candidates.map((candidate) =>
+      groundDetectorCandidateForMaster(candidate, recordingSeqs),
+    );
+    discoveryEvidence = buildPromptEvidenceProjection(
+      discoveryEvidenceDocuments({ candidatePayload: input.candidatePayload }),
+      input.seeds,
+      DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
+      new Set([
+        'discovery_detector_evidence',
+        'discovery_detector_narration',
+        'discovery_detector_events',
+        'discovery_detector_requests',
+      ]),
+    );
+    const detectorSharedContext = normalizeDetectorCompileContextForMaster(
+      input.detection.sharedContext,
+    );
+    discoveryInput = ToolSelectionAdvisorInputSchema.parse({
+      run,
+      recordingIndex,
+      detectorSharedContext,
+      discoveryCandidates,
+      evidence: discoveryEvidence,
+    });
+    advice = await input.deps.requestToolSelectionAdvice(discoveryInput, input.agent);
+    const discoveryDecisionInput: MasterDecisionInput = {
+      phase: 'discovery',
+      discovery: discoveryInput,
+      toolSelectionAdvice: advice,
+      plannerProposals: [],
+      parameterAdvice: [],
+    };
+    discoveryDecision = await input.deps.requestMasterDecision(discoveryDecisionInput, input.agent);
+  }
   const adviceRef = addBootstrap(input.seeds, jsonRef(advice));
-  const discoveryDecisionInput: MasterDecisionInput = {
-    phase: 'discovery',
-    discovery: discoveryInput,
-    toolSelectionAdvice: advice,
-    plannerProposals: [],
-    parameterAdvice: [],
-  };
-  const discoveryDecision = await input.deps.requestMasterDecision(
-    discoveryDecisionInput,
-    input.agent,
-  );
   const discoveryDecisionRef = addBootstrap(input.seeds, jsonRef(discoveryDecision));
+  input.onSelected?.({
+    discoveryInput,
+    discoveryEvidence,
+    toolAdvice: advice,
+    discoveryDecision,
+  });
   const initialPlan = createEditableTeachingPlan(
     discoveryDecision.desiredPlan,
     {
@@ -1740,7 +2050,7 @@ async function discoverAndPlan(input: {
       recordingSha256: input.recordingSha256,
       requestSeqs: new Set(recordingIndex.requestSeqs),
       eventSeqs: new Set(recordingIndex.eventSeqs),
-      discoveryCandidateNames: discoveryCandidates.map(({ toolName }) => toolName),
+      discoveryCandidateNames: discoveryInput.discoveryCandidates.map(({ toolName }) => toolName),
     },
   );
   const initialPlanObject = jsonRef(initialPlan);
@@ -1777,7 +2087,11 @@ async function discoverAndPlan(input: {
     plannerProposals: plannerBundles.map(({ proposal }) => proposal),
     parameterAdvice: [],
   };
-  const finalDecision = await input.deps.requestMasterDecision(revisionInput, input.agent);
+  const finalDecision = await input.deps.requestMasterDecision(
+    revisionInput,
+    input.agent,
+    input.selected ? { selfContained: true } : undefined,
+  );
   const finalDecisionRef = addBootstrap(input.seeds, jsonRef(finalDecision));
   const proposalRefs = plannerBundles.map(({ proposal }) => proposal.ref);
   const plan = createEditableTeachingPlan(
@@ -1796,7 +2110,7 @@ async function discoverAndPlan(input: {
       recordingSha256: input.recordingSha256,
       requestSeqs: new Set(recordingIndex.requestSeqs),
       eventSeqs: new Set(recordingIndex.eventSeqs),
-      discoveryCandidateNames: discoveryCandidates.map(({ toolName }) => toolName),
+      discoveryCandidateNames: discoveryInput.discoveryCandidates.map(({ toolName }) => toolName),
     },
   );
   return {
@@ -3833,41 +4147,12 @@ export async function runFreshMasterTeach(
     const recording = await resolveRecordingForFreshRun(opts, site, deps);
     const redacted = redactRecording(recording, runRoot);
     const fullScope = prepareFullSessionForTeach(redacted.session);
-    reportProgress(opts, 'triaging the redacted recording');
-    let detectorScope = fullScope;
-    try {
-      detectorScope = await deps.prepareSession(redacted.session, llmOptions(opts), {
-        signal: opts.signal,
-        deadlineMs: deadline.deadlineMs,
-        runDeadline: deadline,
-      });
-    } catch (error) {
-      if (opts.signal?.aborted) throw abortSignalError(opts.signal);
-      const controlError = providerControlError(error);
-      if (controlError) throw controlError;
-      reportProgress(
-        opts,
-        `request triage was unavailable; discovering from the complete recording (${boundedTerminalMessage(error)})`,
-      );
-    }
     const triagedPath = pathJoin(runRoot, 'recording.triaged.json');
-    writeJson(triagedPath, detectorScope.session);
-    const detectorPayload = buildToolCandidatePayload(detectorScope.session, {
-      trustSessionScope: true,
-    });
     // The detector may use a narrowed advisory view, but the master must be
     // able to recover from both triage and telemetry-classifier mistakes.
     // Preserve every valid XHR/Fetch from the redacted recording here.
     const masterPayload = buildToolCandidatePayload(redacted.session, {
       trustSessionScope: true,
-    });
-    reportProgress(opts, 'discovering operations');
-    const detection = await deps.detectToolCandidates(detectorScope.session, llmOptions(opts), {
-      trustSessionScope: true,
-      candidatePayload: detectorPayload,
-      signal: opts.signal,
-      deadlineMs: deadline.deadlineMs,
-      runDeadline: deadline,
     });
     // The recording is the teaching evidence. Replaying the entire session in
     // Chrome before planning duplicated that evidence and put a multi-minute
@@ -3879,7 +4164,60 @@ export async function runFreshMasterTeach(
       unmatchedRecordingRequestSeqs: [],
     };
     const seeds = new Map<string, FreshTeachBootstrapObject>();
-    reportProgress(opts, `reviewing ${detection.candidates.length} discovered operation(s)`);
+    let detection: Detection | undefined;
+    let selected: CandidateSelection | undefined;
+    if (opts.fromCandidates) {
+      writeJson(triagedPath, fullScope.session);
+      reportProgress(
+        opts,
+        `reusing candidate selection from run ${candidateSourceRunId(opts.fromCandidates)}`,
+      );
+      const checkpoint = loadCandidateSelectionCheckpoint({
+        site,
+        sourceRunId: opts.fromCandidates,
+        recordingSha256: recording.recordingSha256,
+        recordingIndex: recordingIndexFromSession(fullScope.session, recording.recordingSha256),
+      });
+      for (const seed of checkpoint.bootstrap) {
+        seeds.set(contentRefKey(seed.ref), seed);
+      }
+      selected = checkpoint.selection;
+      reportProgress(
+        opts,
+        `reused ${selected.discoveryInput.discoveryCandidates.length} selected operation(s); planning starts fresh`,
+      );
+    } else {
+      reportProgress(opts, 'triaging the redacted recording');
+      let detectorScope = fullScope;
+      try {
+        detectorScope = await deps.prepareSession(redacted.session, llmOptions(opts), {
+          signal: opts.signal,
+          deadlineMs: deadline.deadlineMs,
+          runDeadline: deadline,
+        });
+      } catch (error) {
+        if (opts.signal?.aborted) throw abortSignalError(opts.signal);
+        const controlError = providerControlError(error);
+        if (controlError) throw controlError;
+        reportProgress(
+          opts,
+          `request triage was unavailable; discovering from the complete recording (${boundedTerminalMessage(error)})`,
+        );
+      }
+      writeJson(triagedPath, detectorScope.session);
+      const detectorPayload = buildToolCandidatePayload(detectorScope.session, {
+        trustSessionScope: true,
+      });
+      reportProgress(opts, 'discovering operations');
+      detection = await deps.detectToolCandidates(detectorScope.session, llmOptions(opts), {
+        trustSessionScope: true,
+        candidatePayload: detectorPayload,
+        signal: opts.signal,
+        deadlineMs: deadline.deadlineMs,
+        runDeadline: deadline,
+      });
+      reportProgress(opts, `reviewing ${detection.candidates.length} discovered operation(s)`);
+    }
     const planned = await discoverAndPlan({
       site,
       runId,
@@ -3887,11 +4225,13 @@ export async function runFreshMasterTeach(
       triage: fullScope,
       candidatePayload: masterPayload,
       detection,
+      selected,
       independent,
       seeds,
       agent: agents,
       deps,
       now: deps.now(),
+      onSelected: (selection) => writeCandidateSelectionCheckpoint(runRoot, selection, seeds),
     });
     plannedTools = planned.plan.tools.length;
     reportProgress(

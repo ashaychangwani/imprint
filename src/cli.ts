@@ -127,13 +127,18 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Record or load a session, then let the master discover, plan, compile, verify, and emit every supported tool.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--agent codex] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test]',
+      'imprint teach <site> [--url <url>] [--from-session <path>] [--from-candidates <run-id>] [--persist-profile] [--no-interactive] [--agent codex] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
       {
         name: '--from-session <path>',
         description: 'Skip recording; use an existing session file to compile from.',
+      },
+      {
+        name: '--from-candidates <run-id>',
+        description:
+          'Reuse only candidate selection from an earlier run of this same recording; planning and compilation start fresh.',
       },
       { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
       {
@@ -1409,6 +1414,7 @@ async function main(argv: string[]): Promise<number> {
         options: {
           url: { type: 'string' },
           'from-session': { type: 'string' },
+          'from-candidates': { type: 'string' },
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
           agent: { type: 'string' },
@@ -1466,6 +1472,7 @@ async function main(argv: string[]): Promise<number> {
             'imprint.site': site,
             'imprint.url': values.url,
             'imprint.from_session': values['from-session'],
+            'imprint.from_candidates': values['from-candidates'],
             'imprint.provider':
               values.provider ?? (values.agent === 'codex' ? 'codex-cli' : 'auto'),
             'imprint.model': values.model ?? 'auto',
@@ -1478,6 +1485,7 @@ async function main(argv: string[]): Promise<number> {
               site,
               url: values.url,
               fromSession: values['from-session'],
+              fromCandidates: values['from-candidates'],
               persistProfile: values['persist-profile'],
               signal: ctrl.signal,
               noInteractive: values['no-interactive'],

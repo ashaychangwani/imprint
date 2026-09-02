@@ -1220,6 +1220,31 @@ describe('prompts and pre-plan discovery', () => {
     expect(JSON.stringify(second).length).toBeLessThan(20_000);
   });
 
+  it('can send a self-contained Codex revision when no earlier master turn is retained', async () => {
+    const revision = revisionMasterInput();
+    let seen: unknown;
+    const analyzer: MasterTeachAnalyzer = {
+      async analyze(_prompt, payload) {
+        seen = payload;
+        return { text: JSON.stringify(revisionMasterOutput(revision)) };
+      },
+    };
+
+    await requestMasterDecision(
+      revision,
+      { provider: 'codex-cli', analyzer },
+      {
+        selfContained: true,
+      },
+    );
+
+    const sent = seen as { input: Record<string, unknown> };
+    expect(sent.input).toHaveProperty('discovery');
+    expect(sent.input).toHaveProperty('toolSelectionAdvice');
+    expect(sent.input).toHaveProperty('current');
+    expect((sent.input.current as Record<string, unknown> | undefined)?.plan).toBeDefined();
+  });
+
   it('runs one strict focused planner on only one tool and repairs invalid JSON once', async () => {
     const input = focusedInput();
     const output = focusedOutput(input);

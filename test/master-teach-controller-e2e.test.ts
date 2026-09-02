@@ -649,6 +649,116 @@ function lifecycleFailureFixture(input: {
 }
 
 describe('fresh foreground master controller end to end', () => {
+  it('reuses only candidate selection while planning and compilation start fresh', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const sourceRunId = 'run-e2e-candidate-source';
+      const source = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        lifecycleFailureFixture({
+          runId: sourceRunId,
+          events: [],
+          promotionBatches: [],
+          requestBaselineMvpReview: credibleBaselineMvpReview,
+        }),
+      );
+      expect(existsSync(join(source.runRoot, 'candidate-selection.json'))).toBeTrue();
+
+      const targetEvents: string[] = [];
+      const targetBase = lifecycleFailureFixture({
+        runId: 'run-e2e-candidate-target',
+        events: targetEvents,
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const targetMaster = targetBase.requestMasterDecision;
+      const targetPlanner = targetBase.requestFocusedPlan;
+      const targetCompiler = targetBase.compileFocusedTool;
+      if (!targetMaster || !targetPlanner || !targetCompiler) {
+        throw new Error('candidate fixture is incomplete');
+      }
+      const forbiddenCalls: string[] = [];
+      let revisionDecisions = 0;
+      let firstRevisionWasSelfContained: boolean | undefined;
+      const plannerCalls: Array<{ toolId: string; runId: string }> = [];
+      const compilerCalls: Array<{
+        toolId: string;
+        stagingDir: string;
+        priorToolDir?: string;
+        resumeSessionId?: string;
+      }> = [];
+      const target = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          fromCandidates: sourceRunId,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...targetBase,
+          prepareSession: async () => {
+            forbiddenCalls.push('triage');
+            throw new Error('candidate reuse must skip triage');
+          },
+          detectToolCandidates: async () => {
+            forbiddenCalls.push('detection');
+            throw new Error('candidate reuse must skip detection');
+          },
+          requestToolSelectionAdvice: async () => {
+            forbiddenCalls.push('tool-selection-advice');
+            throw new Error('candidate reuse must skip tool-selection advice');
+          },
+          requestMasterDecision: async (input, _agent, options) => {
+            if (input.phase === 'discovery') {
+              forbiddenCalls.push('discovery-master');
+              throw new Error('candidate reuse must skip the discovery master decision');
+            }
+            revisionDecisions += 1;
+            firstRevisionWasSelfContained ??= options?.selfContained;
+            return await targetMaster(input);
+          },
+          requestFocusedPlan: async (input) => {
+            plannerCalls.push({ toolId: input.tool.id, runId: input.run.runId });
+            return await targetPlanner(input);
+          },
+          compileFocusedTool: async (input) => {
+            compilerCalls.push({
+              toolId: input.tool.id,
+              stagingDir: input.stagingDir,
+              ...(input.priorToolDir ? { priorToolDir: input.priorToolDir } : {}),
+              ...(input.resumeSessionId ? { resumeSessionId: input.resumeSessionId } : {}),
+            });
+            return await targetCompiler(input);
+          },
+        },
+      );
+
+      expect(forbiddenCalls).toEqual([]);
+      expect(target.runRoot).not.toBe(source.runRoot);
+      expect(revisionDecisions).toBeGreaterThan(0);
+      expect(firstRevisionWasSelfContained).toBeTrue();
+      expect(plannerCalls).toEqual([
+        { toolId: PRODUCER_ID, runId: 'run-e2e-candidate-target' },
+        { toolId: CONSUMER_ID, runId: 'run-e2e-candidate-target' },
+      ]);
+      expect(compilerCalls.map(({ toolId }) => toolId)).toEqual([PRODUCER_ID, CONSUMER_ID]);
+      for (const call of compilerCalls) {
+        expect(call.stagingDir.startsWith(`${target.runRoot}/staging/`)).toBeTrue();
+        expect(call.priorToolDir).toBeUndefined();
+        expect(call.resumeSessionId).toBeUndefined();
+      }
+      expect(existsSync(join(target.runRoot, 'candidate-selection.json'))).toBeTrue();
+    });
+  });
+
   it('settles both dependency waves, every check, completion review, and promotion', async () => {
     await withTemporaryImprintHome(async (root, home) => {
       const recordingPath = syntheticSessionPath(root, true);
