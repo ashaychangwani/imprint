@@ -74,6 +74,13 @@ Rules:
    requests for that tool. dependencySeqs should include observed prerequisite
    requests that may be needed to replay it, especially authentication or state
    setup.
+   Prefer the smallest directly recorded request graph. Include a prerequisite
+   only when the evidence identifies an exact value from its response that the
+   load-bearing request consumes, or an exact state effect the later request
+   requires. Temporal order and similar human-readable values do not prove a
+   dependency. If the load-bearing request already contains a public input
+   directly, do not add a lookup merely because the browser performed one
+   first. The focused planner may revise every proposed dependency.
    Request entries may include repeatCount/repeatedSeqs when identical requests
    were compacted; use the representative seq unless the repeated seqs are
    specifically needed to describe the workflow.
@@ -144,8 +151,9 @@ Rules:
 21. Put independently callable prerequisite candidates in `dependsOnTools`.
     Dependencies are callable prerequisites, not workflows that merely contain
     the consumer's requests. When several candidates establish the required
-    state, choose the smallest producer. Keep unexposed setup requests in
-    `dependencySeqs`.
+    state, choose the smallest producer. Keep an unexposed setup request in
+    `dependencySeqs` only when its exact output or state effect is consumed by
+    the later request; do not preserve the browser's whole observed sequence.
 22. Candidates, parameters, and dependencies are proposals. The master may
     rename, merge, split, add, or revise boundaries after advisor and planner
     review, but its complete plan must still account for every credible

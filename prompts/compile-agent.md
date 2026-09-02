@@ -110,7 +110,38 @@ Follow these steps to compile the session:
    - bodySize is non-trivial (>1KB for data endpoints)
    - timestamp correlates with narration (occurred shortly after the user's stated action)
 
+   Start from the smallest directly recorded request that returns the core
+   result. Do not replay earlier requests just because they occurred first. For
+   every proposed dependency, prove the exact producer response path and exact
+   consumer request location. If the consumer already contains the public input
+   directly, challenge the dependency and omit it unless another consumed value
+   requires it. In master MVP mode, an implementation plan that includes an
+   unproved dependency is a plan contradiction: report the exact evidence with
+   `give_up` so the master can revise it, rather than silently building a longer
+   workflow.
+
 4. **Examine the load-bearing request.** Call `read_request` for the exact candidate sequence. Use `inspect_body_structure` when its body has nested or framed structure that is difficult to compare from the redacted request text alone. Start request construction from the complete recorded request template and change only the exact fields whose construction is supported by evidence. Do not rebuild a positional or multiply encoded protocol from a smaller guessed array merely because an authored unit test accepts that guess.
+
+   Before writing artifacts, make a transport-provenance checklist for every
+   query value, body field, header, cookie, or captured state that must differ
+   between the recording and a live request. Each must come from a public
+   parameter, an exact earlier response path, navigation/bootstrap content,
+   current captured browser state, a credential, or an exact supported
+   computation. Never treat a recorded session literal as its own live source.
+   Search the full redacted recording for the smallest matching navigation or
+   bootstrap request when the accepted plan names stale transport values but no
+   producer. Inspect sibling evidence included in the implementation plan and
+   reuse its grounded sequence or computation when applicable; this reuses
+   knowledge, not another tool's live session. If the plan omits or contradicts
+   that evidence, call `give_up` with the precise plan revision needed.
+
+   A document load used only to establish cookies or capture HTML/storage state
+   belongs in top-level `workflow.bootstrap`, not `workflow.requests[]` and not
+   `requestProvenance`. Before preserving an opaque query, header, or body
+   literal, compare two or three same-endpoint recordings when available. If it
+   changes, find its live producer or supported generator, prove that omission
+   works, or request a plan revision. Never combine fresh session values with
+   an unrelated recorded per-invocation value.
 
 5. **Write workflow.json.** Template the request(s):
    - Replace user-variable values with `${param.NAME}` placeholders (e.g., query, date, quantity)
@@ -585,7 +616,7 @@ You may call `give_up` only in these cases:
    supported combination remains untried, continue the API repair instead of
    recommending a browser playbook.
 
-6. **The accepted master contract is contradicted by the recording.** This case applies only in `MASTER MVP COMPILE MODE`. If an accepted public parameter has no honest grounded encoding, do not delete or rewrite it and do not keep repairing the same contract in place. Call `give_up` with the parameter name and type, the exact request sequence/path inspected, the attempted construction, and the contradiction. The master owns the resulting plan change and sends it back to this retained compiler conversation when the strategy remains the same.
+6. **The accepted master plan is contradicted by the recording.** This case applies only in `MASTER MVP COMPILE MODE`. It includes a public parameter with no honest grounded encoding, an unnecessary or missing request, a response dependency whose claimed value is not consumed, bootstrap placed in the API request list, or changing transport state with no live producer. Do not silently rewrite the plan and do not keep repairing the same contradiction in place. Call `give_up` with the exact parameter or request sequence/path, the attempted construction, and the contradiction. The master owns the plan change and sends it back to this retained compiler conversation when the strategy remains the same.
 
 In all cases, the `give_up` call must include a `what_was_tried` field listing concrete approaches and why each failed. "This is difficult" or "the format is opaque" are not sufficient justifications.
 

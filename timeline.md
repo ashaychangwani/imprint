@@ -3023,3 +3023,59 @@ repair turn. This remains an agent decision rule, not a runtime retry counter.
 
 The complete project check passes after this change: 1,842 tests, type checking,
 lint, unused-code analysis, and circular-dependency analysis are all clean.
+
+## 2026-09-02 00:32 PDT — The compiler kept its context, but the master kept the wrong plan
+
+Fresh Flights run `9e016566-8f4f-4c44-b07c-5ab5dafc573a` reused the accepted
+operation boundaries and ran for about 22 minutes. Location lookup passed and
+was published. Calendar, search, and the route resolver remained unfinished.
+The terminal said `failed`, even though one usable MVP had already shipped.
+
+Three independent reviews reached the same root cause. The compiler was not
+forgetting its work: calendar repairs all used the same retained compiler
+conversation. The problem was the plan it was required to follow. Calendar's
+direct result request already contained the airport codes, but the plan also
+forced two earlier location lookups without proving that their responses
+supplied anything the result request consumed. Separately, the resolver and
+search planners found useful fresh-page bootstrap requests, but the calendar
+planner could not see those discoveries because the first focused planning
+passes ran at the same time. The master saw all proposals afterward but was not
+told to reconcile them. It therefore sent the unchanged three-request plan
+back to the compiler several times.
+
+Search had the same class of problem: the accepted plan combined fresh session
+values from one request with a changing recorded value from a different
+invocation. The compiler could inspect the recording, but the accepted plan was
+host-bound, and its `give_up` instructions did not clearly allow it to report a
+wrong request graph or missing transport-value source to the master.
+
+The correction is site-neutral and stays in agent judgment. Candidate
+selection, focused planning, master review, and compilation now all start from
+the smallest directly recorded result request. Every earlier dependency must
+name the exact response value or state it produces and the exact later request
+location that consumes it. Planners receive compact evidence already grounded
+by sibling tools. Because initial planners run concurrently, the master is told
+to carry a newly discovered sibling bootstrap into only the affected tool,
+discard that stale implementation plan, and run one focused second planning
+pass. Changing query, body, header, cookie, and captured-state values must each
+have a named live source. A compiler can now use `give_up` to report that the
+accepted request graph, dependency, bootstrap placement, or transport source is
+wrong so the master can revise the plan instead of repeating artifact edits.
+
+The terminal failure was a separate runtime bug. Global proof correctly knew
+that three operations were unresolved, but per-tool filtering produced an empty
+repair list. The controller still asked the master to repair that empty list,
+received the same plan, and failed its recurrence check. A mixed result now
+undergoes independent review and ends explicitly as `partial`: verified MVPs
+remain promoted and unresolved discovered operations remain visible. It never
+claims full completion.
+
+Neutral end-to-end tests prove both important paths. One verified producer plus
+one supported unresolved operation ends once as partial. In the second test, a
+sibling planner discovers a bootstrap after the target's first pass; the master
+adds that evidence, only the target replans, no stale compiler recall occurs,
+and the compiler receives the revised bootstrap-plus-result request order once.
+The focused suite passes 229 tests; type checking, lint, unused-code analysis,
+and circular-dependency analysis pass. The first full run had one unrelated
+macOS hostile-process cleanup timing failure; that exact stress test passed when
+rerun immediately, and the complete project check then passed all 1,845 tests.

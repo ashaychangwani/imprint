@@ -771,6 +771,7 @@ describe('fresh foreground master controller end to end', () => {
       let compilerRequestSeqs: number[] = [];
       let compilerScopeSeqs: number[] = [];
       let consumerFocusedEvidenceWasComplete = false;
+      let consumerSawProducerTransportEvidence = false;
       let detectorEventCitationsWereGrounded = false;
       let groundedCandidateRemainedAdvisory = false;
       let narrationRemainedInEvidence = false;
@@ -904,6 +905,12 @@ describe('fresh foreground master controller end to end', () => {
               consumerFocusedEvidenceWasComplete = JSON.stringify(input.evidence).includes(
                 'Fixture item',
               );
+              const sibling = input.siblingToolEvidence.find(
+                ({ toolId }) => toolId === PRODUCER_ID,
+              );
+              consumerSawProducerTransportEvidence =
+                sibling?.toolName === PRODUCER_NAME &&
+                sibling.compileContext.sharedHelperNotes === sharedContext.sharedHelperNotes;
             }
             plannerGuidance.push(input.masterGuidance ?? '');
             if (
@@ -934,7 +941,8 @@ describe('fresh foreground master controller end to end', () => {
               reason: 'The focused request and expected result are explicit.',
             });
           },
-          compileFocusedTool: async ({ tool, triage, sessionPath, stagingDir }) => {
+          compileFocusedTool: async (compileInput) => {
+            const { tool, triage, sessionPath, stagingDir } = compileInput;
             events.push(`compile:${tool.id}`);
             if (tool.id === CONSUMER_ID) {
               const state = FreshTeachJournalStateSchema.parse(
@@ -1108,6 +1116,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(compilerRequestSeqs).toEqual([1, 2, 4]);
       expect(compilerScopeSeqs).toEqual([1, 2, 4]);
       expect(consumerFocusedEvidenceWasComplete).toBe(true);
+      expect(consumerSawProducerTransportEvidence).toBe(true);
       expect(detectorEventCitationsWereGrounded).toBe(true);
       expect(groundedCandidateRemainedAdvisory).toBe(true);
       expect(narrationRemainedInEvidence).toBe(true);
@@ -2955,6 +2964,124 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
+  it('finishes once as partial when a reviewed MVP remains beside an unresolved operation', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-partial-mvp',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      let unresolvedRevisionCount = 0;
+      let completionReviewCount = 0;
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          runApiTool: async ({ workflowPath }) => {
+            const producer = workflowPath.includes(`/${PRODUCER_ID}/`);
+            return {
+              result: producer
+                ? { ok: true as const, data: { items: [{ id: 'item-1' }] } }
+                : {
+                    ok: false as const,
+                    error: 'BAD_RESPONSE',
+                    message: 'The recorded consumer operation is unresolved.',
+                  },
+              executionMechanism: 'fixture-api',
+            };
+          },
+          requestMasterDecision: async (decisionInput) => {
+            let desiredPlan: DesiredTeachingPlan;
+            let outcome: 'accepted' | 'revised' = 'accepted';
+            if (decisionInput.phase === 'discovery') {
+              desiredPlan = initialDesiredPlan(decisionInput);
+            } else if (decisionInput.verificationFindings) {
+              unresolvedRevisionCount += 1;
+              outcome = 'revised';
+              desiredPlan = desiredFromCurrent(decisionInput);
+              desiredPlan.tools = desiredPlan.tools.filter(({ id }) => id === PRODUCER_ID);
+              desiredPlan.buildWaves = [[PRODUCER_ID]];
+              desiredPlan.chainEdges = [];
+              const coverage = desiredPlan.candidateCoverage.find(
+                ({ discoveryCandidateName }) => discoveryCandidateName === CONSUMER_NAME,
+              );
+              if (!coverage) throw new Error('fixture expected consumer coverage');
+              coverage.plannedToolIds = [];
+              coverage.unresolvedReason =
+                'The current grounded consumer request returned no usable result.';
+              coverage.excludedReason = null;
+            } else {
+              desiredPlan =
+                decisionInput.plannerProposals.length > 0
+                  ? proposalDesiredPlan(decisionInput)
+                  : desiredFromCurrent(decisionInput);
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome,
+              reason:
+                outcome === 'revised'
+                  ? 'Keep the verified producer and record the exhausted consumer honestly.'
+                  : 'The current fixture plan remains supported.',
+              recallToolNames: [],
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: { analyze: async () => ({ text: JSON.stringify(output) }) },
+            });
+          },
+          requestCompletionReview: async (input) => {
+            completionReviewCount += 1;
+            expect(input.terminalIntent).toBe('partial');
+            expect(input.claims.some(({ kind }) => kind === 'blocker')).toBe(true);
+            return CompletionReviewOutputSchema.parse({
+              binding: input.run,
+              verdict: 'passed',
+              summary:
+                'The producer is credible and the remaining operation is explicitly unresolved.',
+              findings: [],
+              toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
+                status: 'credible',
+                reason: 'The current producer result has the expected fixture shape.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: input.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The supplied evidence supports this explicit unresolved state.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            });
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('partial');
+      expect(terminal.readyTools).toBe(1);
+      expect(terminal.nonReadyTools).toBe(1);
+      expect(terminal.message).toContain('remain explicitly unresolved');
+      expect(unresolvedRevisionCount).toBe(1);
+      expect(completionReviewCount).toBe(1);
+      expect(promotionBatches).toEqual([[PRODUCER_NAME]]);
+      const state = FreshTeachJournalStateSchema.parse(
+        readJson(join(terminal.runRoot, 'journal', 'current.json')),
+      );
+      expect(state.status).toBe('partial');
+    });
+  });
+
   it('retains downstream artifacts without republishing them after a revised producer is rejected', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];
@@ -3579,6 +3706,244 @@ describe('fresh foreground master controller end to end', () => {
       expect(['active', 'paused']).not.toContain(terminal.status);
       expect(existsSync(join(terminal.runRoot, 'journal'))).toBe(false);
       expect(readJson(join(terminal.runRoot, 'terminal.json'))).toEqual(terminal);
+    });
+  });
+
+  it('replans only the target after a sibling proposal discovers bootstrap evidence', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root, true);
+      const session = SessionSchema.parse(readJson(recordingPath));
+      session.requests = session.requests.map((request) =>
+        request.seq === 4
+          ? {
+              seq: 4,
+              timestamp: request.timestamp,
+              method: 'GET',
+              url: 'https://fixture.invalid/bootstrap',
+              headers: { accept: 'text/html' },
+              resourceType: 'Document',
+              response: {
+                status: 200,
+                headers: { 'content-type': 'text/html' },
+                mimeType: 'text/html',
+                body: '<html>fixture bootstrap page</html>',
+              },
+            }
+          : request,
+      );
+      writeFileSync(recordingPath, `${JSON.stringify(SessionSchema.parse(session))}\n`);
+
+      const plannerCalls: string[] = [];
+      const recallCommands: string[][] = [];
+      const targetCompilerProvenance: number[][] = [];
+      let targetPlannerCalls = 0;
+      let firstTargetSawBootstrap = false;
+      let secondTargetSawBootstrap = false;
+      let secondTargetSawRevisedPlan = false;
+      let secondTargetSawSiblingBootstrap = false;
+
+      const implementationWithRequests = (input: FocusedPlannerInput, requestSeqs: number[]) => {
+        const implementation = focusedImplementation(input);
+        const resultIndex = requestSeqs.length - 1;
+        return ImplementationPlanPayloadSchema.parse({
+          ...implementation,
+          requestProvenance: requestSeqs.map((recordingRequestSeq, artifactRequestIndex) => ({
+            artifactRequestIndex,
+            recordingRequestSeq,
+          })),
+          parameterMappings: implementation.parameterMappings.map((mapping) => ({
+            ...mapping,
+            artifactRequestIndices: [resultIndex],
+          })),
+          resultSources: [
+            {
+              artifactRequestIndex: resultIndex,
+              source: 'Return the JSON body from the final recorded request.',
+            },
+          ],
+          verificationCases: implementation.verificationCases.map((verificationCase) => ({
+            ...verificationCase,
+            provenance: {
+              ...verificationCase.provenance,
+              recordingRequestSeqs: requestSeqs,
+            },
+          })),
+        });
+      };
+
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-sibling-bootstrap-replan',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestFocusedPlan: async (input) => {
+            plannerCalls.push(input.tool.id);
+            const tool = structuredClone(input.tool);
+            let requestSeqs = [tool.candidate.requestSeqs[0] ?? -1];
+            if (tool.id === PRODUCER_ID) {
+              tool.candidate.dependencySeqs = [4];
+              tool.compileContext = {
+                ...tool.compileContext,
+                tokenExtractionNotes: 'Bootstrap transport state with recording request 4.',
+              };
+              requestSeqs = [4, 1];
+            } else {
+              targetPlannerCalls += 1;
+              const evidenceHasBootstrap = JSON.stringify(input.evidence).includes(
+                'https://fixture.invalid/bootstrap',
+              );
+              if (targetPlannerCalls === 1) firstTargetSawBootstrap = evidenceHasBootstrap;
+              else {
+                secondTargetSawBootstrap = evidenceHasBootstrap;
+                secondTargetSawRevisedPlan =
+                  tool.candidate.dependencySeqs.includes(4) &&
+                  tool.compileContext.tokenExtractionNotes.includes('request 4');
+                const producer = input.siblingToolEvidence.find(
+                  ({ toolId }) => toolId === PRODUCER_ID,
+                );
+                secondTargetSawSiblingBootstrap =
+                  producer?.supportRequestSeqs.includes(4) === true &&
+                  producer.compileContext.tokenExtractionNotes.includes('request 4');
+              }
+              if (tool.candidate.dependencySeqs.includes(4)) requestSeqs = [4, 2];
+            }
+            return FocusedPlannerOutputSchema.parse({
+              binding: {
+                runId: input.run.runId,
+                site: input.run.site,
+                recordingSha256: input.run.recordingSha256,
+                toolId: tool.id,
+              },
+              tool: {
+                ...tool,
+                strategy: {
+                  kind: 'api',
+                  reason: 'The focused fixture has a grounded API request sequence.',
+                },
+              },
+              chainEdges: input.incomingChainEdges,
+              implementationPlan: implementationWithRequests(input, requestSeqs),
+              reason:
+                tool.id === PRODUCER_ID
+                  ? 'Recording request 4 supplies the bootstrap used by request 1.'
+                  : 'Use the target evidence currently authorized by the master.',
+            });
+          },
+          requestMasterDecision: async (input) => {
+            let desiredPlan: DesiredTeachingPlan;
+            let outcome: 'accepted' | 'revised' = 'accepted';
+            if (input.phase === 'discovery') {
+              desiredPlan = initialDesiredPlan(input);
+            } else if (input.plannerProposals.length === 2) {
+              desiredPlan = proposalDesiredPlan(input);
+              const target = desiredPlan.tools.find(({ id }) => id === CONSUMER_ID);
+              if (!target) throw new Error('fixture expected the target tool');
+              target.candidate.dependencySeqs = [4];
+              target.compileContext = {
+                ...target.compileContext,
+                tokenExtractionNotes: 'Bootstrap transport state with recording request 4.',
+              };
+              target.implementationPlan = undefined;
+              outcome = 'revised';
+            } else if (input.plannerProposals.length === 1) {
+              expect(input.plannerProposals[0]?.payload.tool.id).toBe(CONSUMER_ID);
+              desiredPlan = proposalDesiredPlan(input);
+            } else {
+              desiredPlan = desiredFromCurrent(input);
+            }
+            const output = MasterDecisionOutputSchema.parse({
+              binding: input.current?.run ?? input.discovery.run,
+              outcome,
+              reason:
+                outcome === 'revised'
+                  ? 'Carry the sibling bootstrap into the target and replan only that tool.'
+                  : 'The focused fixture plan is current.',
+              recallToolNames: [],
+              desiredPlan,
+            });
+            recallCommands.push(output.recallToolNames);
+            return requestValidatedMasterDecision(input, {
+              analyzer: { analyze: async () => ({ text: JSON.stringify(output) }) },
+            });
+          },
+          compileFocusedTool: async ({ tool, implementationPlan, stagingDir }) => {
+            events.push(`compile:${tool.id}`);
+            const provenance = implementationPlan.requestProvenance.map(
+              ({ recordingRequestSeq }) => recordingRequestSeq,
+            );
+            if (tool.id === CONSUMER_ID) targetCompilerProvenance.push(provenance);
+            mkdirSync(stagingDir, { recursive: true });
+            const workflow = WorkflowSchema.parse({
+              toolName: tool.candidate.toolName,
+              intent: { description: tool.candidate.description },
+              parameters: tool.candidate.likelyParams.map(({ name, type, description }) => ({
+                name,
+                type,
+                description,
+              })),
+              requests: provenance.map((recordingRequestSeq) => ({
+                recordingRequestSeq,
+                method: 'GET',
+                url:
+                  recordingRequestSeq === 4
+                    ? 'https://fixture.invalid/bootstrap'
+                    : recordingRequestSeq === 1
+                      ? 'https://fixture.invalid/api/items'
+                      : 'https://fixture.invalid/api/items/${param.item_id}',
+                headers: { accept: recordingRequestSeq === 4 ? 'text/html' : 'application/json' },
+              })),
+              site: SITE,
+            });
+            const workflowPath = join(stagingDir, 'workflow.json');
+            writeFileSync(workflowPath, `${JSON.stringify(workflow)}\n`);
+            return { workflow, workflowPath, toolDir: stagingDir };
+          },
+          requestCompletionReview: async (input) =>
+            CompletionReviewOutputSchema.parse({
+              binding: input.run,
+              verdict: 'passed',
+              summary: 'Both focused fixture tools have current factual evidence.',
+              findings: [],
+              toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
+                status: 'credible',
+                reason: 'The current fixture result has the expected shape.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: input.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The supplied evidence supports this terminal claim.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            }),
+        },
+      );
+
+      expect(terminal.status).toBe('completed');
+      expect(plannerCalls).toEqual([PRODUCER_ID, CONSUMER_ID, CONSUMER_ID]);
+      expect(firstTargetSawBootstrap).toBe(false);
+      expect(secondTargetSawBootstrap).toBe(true);
+      expect(secondTargetSawRevisedPlan).toBe(true);
+      expect(secondTargetSawSiblingBootstrap).toBe(true);
+      expect(recallCommands.every((names) => names.length === 0)).toBe(true);
+      expect(targetCompilerProvenance).toEqual([[4, 2]]);
+      expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(1);
+      expect(events.filter((event) => event === `compile:${CONSUMER_ID}`)).toHaveLength(1);
     });
   });
 

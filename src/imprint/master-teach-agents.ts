@@ -1152,8 +1152,15 @@ const CompletionInputSchema = CompletionReviewInputSchema.superRefine((input, ct
   });
   const planTools = new Map(input.currentPlan.payload.tools.map((tool) => [tool.id, tool]));
   const tools = new Set(planTools.keys());
-  if (input.terminalIntent === 'completed' && !input.toolResultEvidence)
-    issue(ctx, ['toolResultEvidence'], 'completed intent requires semantic live result evidence');
+  if (
+    (input.terminalIntent === 'completed' || input.terminalIntent === 'partial') &&
+    !input.toolResultEvidence
+  )
+    issue(
+      ctx,
+      ['toolResultEvidence'],
+      `${input.terminalIntent} intent requires semantic live result evidence`,
+    );
   if (input.toolResultEvidence) {
     const resultKey = (toolId: string, chainEdgeId?: string) =>
       `${toolId}\u0000${chainEdgeId ?? 'standalone'}`;
@@ -1225,9 +1232,24 @@ const CompletionInputSchema = CompletionReviewInputSchema.superRefine((input, ct
   const blockers = input.claims.filter(({ kind }) => kind === 'blocker');
   if (input.terminalIntent === 'blocked' && blockers.length === 0)
     issue(ctx, ['claims'], 'blocked intent requires a blocker claim');
+  if (input.terminalIntent === 'partial' && blockers.length === 0)
+    issue(ctx, ['claims'], 'partial intent requires unresolved-candidate blocker claims');
   if (input.terminalIntent === 'completed')
     for (const failure of mechanicalProofFailures(input.currentPlan.payload, input.snapshot))
       issue(ctx, ['snapshot'], failure);
+  if (input.terminalIntent === 'partial') {
+    if (input.currentPlan.payload.tools.length === 0)
+      issue(ctx, ['currentPlan'], 'partial intent requires at least one current tool');
+    if (unresolvedCandidateCoverage(input.currentPlan.payload).length === 0)
+      issue(ctx, ['currentPlan'], 'partial intent requires unresolved candidate coverage');
+    for (const tool of input.currentPlan.payload.tools)
+      for (const failure of mechanicalProofFailures(
+        input.currentPlan.payload,
+        input.snapshot,
+        tool.id,
+      ))
+        issue(ctx, ['snapshot'], failure);
+  }
 });
 function completionOutputSchema(input: CompletionReviewInput) {
   const claims = new Map(input.claims.map((claim) => [claim.id, claim]));
@@ -1329,19 +1351,23 @@ function completionOutputSchema(input: CompletionReviewInput) {
     if (input.terminalIntent === 'completed' && blockerStatuses.includes('supported'))
       issue(ctx, ['verdict'], 'completed intent cannot pass with a supported blocker');
     if (
-      input.terminalIntent === 'completed' &&
+      (input.terminalIntent === 'completed' || input.terminalIntent === 'partial') &&
       exclusionStatuses.some((status) => status !== 'supported')
     )
       issue(
         ctx,
         ['verdict'],
-        'completed intent requires every candidate exclusion to be supported',
+        `${input.terminalIntent} intent requires every candidate exclusion to be supported`,
       );
     if (
-      input.terminalIntent === 'blocked' &&
+      (input.terminalIntent === 'blocked' || input.terminalIntent === 'partial') &&
       blockerStatuses.some((status) => status !== 'supported')
     )
-      issue(ctx, ['verdict'], 'blocked intent requires every blocker claim to be supported');
+      issue(
+        ctx,
+        ['verdict'],
+        `${input.terminalIntent} intent requires every blocker claim to be supported`,
+      );
   });
 }
 export interface MasterTeachAnalyzer {

@@ -70,7 +70,9 @@ describe('teach help', () => {
   });
 
   it('labels interrupted work as unfinished instead of failed', () => {
-    const summary = (status: 'cancelled' | 'provider_unavailable' | 'failed' | 'blocked') =>
+    const summary = (
+      status: 'cancelled' | 'provider_unavailable' | 'partial' | 'failed' | 'blocked',
+    ) =>
       formatFreshTeachSummary({
         status,
         readyTools: 1,
@@ -79,6 +81,7 @@ describe('teach help', () => {
       });
     expect(summary('cancelled')).toContain('4 unfinished');
     expect(summary('provider_unavailable')).toContain('4 unfinished');
+    expect(summary('partial')).toContain('4 unresolved');
     expect(summary('failed')).toContain('4 not ready');
     expect(summary('blocked')).toContain('4 blocked');
   });

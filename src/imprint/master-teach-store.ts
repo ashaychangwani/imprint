@@ -16,7 +16,7 @@ import {
 } from './master-teach-agent-contracts.ts';
 import { mechanicalProofFailures, parseCompletionReviewOutput } from './master-teach-agents.ts';
 // biome-ignore format: these are the complete plan mechanics owned by this journal
-import { type ContentAddressedRef, ContentAddressedRefSchema, type DesiredTeachingPlan, type EditableTeachingPlan, type ImplementationPlanPayload, ImplementationPlanPayloadSchema, type TeachingPlanDecision, type TeachingPlanRevisionResult, type TeachingPlanValidation, TeachingPlanValidationError, bindImplementationPlanRef, canonicalTeachingPlanJson, chainInvocationForEdge, reviseEditableTeachingPlan, teachingPlanContentSha256, teachingToolCompileInputsSha256, validateBuildWorkflowProvenance, validateEditableTeachingPlan, validateImplementationPlanForTool } from './master-teach-plan.ts';
+import { type ContentAddressedRef, ContentAddressedRefSchema, type DesiredTeachingPlan, type EditableTeachingPlan, type ImplementationPlanPayload, ImplementationPlanPayloadSchema, type TeachingPlanDecision, type TeachingPlanRevisionResult, type TeachingPlanValidation, TeachingPlanValidationError, bindImplementationPlanRef, canonicalTeachingPlanJson, chainInvocationForEdge, reviseEditableTeachingPlan, teachingPlanContentSha256, teachingToolCompileInputsSha256, unresolvedCandidateCoverage, validateBuildWorkflowProvenance, validateEditableTeachingPlan, validateImplementationPlanForTool } from './master-teach-plan.ts';
 // biome-ignore format: these are the complete factual receipt/projection mechanics
 import { type CurrentExecutionSnapshot, CurrentExecutionSnapshotSchema, ExecutionReceiptSchema, type ReceiptFact, ReceiptHistoryProjectionSchema, RunIdentitySchema, ToolExecutionBindingSchema, ToolVerificationPayloadSchema } from './master-teach-prompt-projections.ts';
 import { WorkflowSchema } from './types.ts';
@@ -104,7 +104,15 @@ const JournalToolStateSchema = strict({
   currentReceiptRefs: z.array(ReceiptPointerSchema),
 });
 // biome-ignore format: this is the complete, closed terminal status set
-export const FreshTeachRunStatusSchema = z.enum(['active', 'completed', 'blocked', 'failed', 'cancelled', 'provider_unavailable']);
+export const FreshTeachRunStatusSchema = z.enum([
+  'active',
+  'completed',
+  'partial',
+  'blocked',
+  'failed',
+  'cancelled',
+  'provider_unavailable',
+]);
 export type FreshTeachRunStatus = z.infer<typeof FreshTeachRunStatusSchema>;
 export const FreshTeachJournalStateSchema = strict({
   version: z.literal(FRESH_TEACH_JOURNAL_VERSION),
@@ -153,12 +161,12 @@ export const FreshTeachJournalStateSchema = strict({
   });
   if (state.status === 'active' && state.terminalHostError)
     issue(ctx, ['terminalHostError'], 'active run has a terminal error');
-  if (['completed', 'blocked'].includes(state.status) && !state.completionReviewRef)
+  if (['completed', 'partial', 'blocked'].includes(state.status) && !state.completionReviewRef)
     issue(ctx, ['completionReviewRef'], 'reviewed terminal status requires a completion review');
 });
 type FreshTeachJournalState = z.infer<typeof FreshTeachJournalStateSchema>;
 const CompletionReviewRecordSchema = strict({
-  terminalIntent: z.enum(['completed', 'blocked']),
+  terminalIntent: z.enum(['completed', 'partial', 'blocked']),
   inputRef: ContentAddressedRefSchema,
   outputRef: ContentAddressedRefSchema,
   currentPlanRef: ContentAddressedRefSchema,
@@ -178,6 +186,7 @@ const JournalErrorMessages = {
   completion_input_stale: 'completion review input is not current',
   completion_intent_mismatch: 'completion review intent does not match terminal status',
   completion_proof_incomplete: 'completion proof is incomplete',
+  partial_proof_incomplete: 'partial completion proof is incomplete',
   completion_review_failed: 'completion review did not pass',
   completion_review_missing: 'current passed completion review is required',
   completion_review_stale: 'completion review is stale',
@@ -862,7 +871,7 @@ export class FreshTeachJournal {
   }
   #assertCompletionReview(
     state: FreshTeachJournalState,
-    terminalIntent: 'completed' | 'blocked',
+    terminalIntent: 'completed' | 'partial' | 'blocked',
   ): void {
     if (!state.completionReviewRef) throw journalFailure('completion_review_missing');
     const { record } = this.#readCompletionReview(state.completionReviewRef);
@@ -886,6 +895,16 @@ export class FreshTeachJournal {
       const failures = mechanicalProofFailures(this.#plan(state), this.currentExecutionSnapshot());
       if (failures.length) throw journalFailure('completion_proof_incomplete');
       this.#assertCompletionReview(state, 'completed');
+    } else if (status === 'partial') {
+      const plan = this.#plan(state);
+      const snapshot = this.currentExecutionSnapshot();
+      if (
+        plan.tools.length === 0 ||
+        unresolvedCandidateCoverage(plan).length === 0 ||
+        plan.tools.some((tool) => mechanicalProofFailures(plan, snapshot, tool.id).length > 0)
+      )
+        throw journalFailure('partial_proof_incomplete');
+      this.#assertCompletionReview(state, 'partial');
     } else if (status === 'blocked') {
       this.#assertCompletionReview(state, 'blocked');
     } else {
@@ -897,7 +916,7 @@ export class FreshTeachJournal {
     return this.#commit(state);
   }
   finishWithReview(
-    status: 'completed' | 'blocked',
+    status: 'completed' | 'partial' | 'blocked',
     reviewInput: CompletionReviewInput,
     reviewOutput: unknown,
     options: { hostError?: unknown } = {},

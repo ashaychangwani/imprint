@@ -47,11 +47,13 @@ export function formatFreshTeachSummary(
   const nonReadyLabel =
     result.status === 'cancelled' || result.status === 'provider_unavailable'
       ? 'unfinished'
-      : result.status === 'blocked'
-        ? 'blocked'
-        : result.status === 'failed'
-          ? 'not ready'
-          : 'failed';
+      : result.status === 'partial'
+        ? 'unresolved'
+        : result.status === 'blocked'
+          ? 'blocked'
+          : result.status === 'failed'
+            ? 'not ready'
+            : 'failed';
   return `[imprint] teach ${result.status}: ${result.readyTools} ready, ${result.nonReadyTools} ${nonReadyLabel} — ${result.runRoot}`;
 }
 
@@ -1498,14 +1500,14 @@ async function main(argv: string[]): Promise<number> {
             }),
         );
         const summary = formatFreshTeachSummary(result);
-        if (result.status === 'completed') {
+        if (result.status === 'completed' || result.status === 'partial') {
           console.log(summary);
           console.log(`[imprint] ${result.message}`);
         } else {
           console.error(summary);
           console.error(`[imprint] ${result.message}`);
         }
-        if (result.status === 'completed') return 0;
+        if (result.status === 'completed' || result.status === 'partial') return 0;
         if (result.status === 'cancelled') return 130;
         return 1;
       } finally {

@@ -43,12 +43,42 @@ sequence supported by the focused evidence, or repeat a sequence when the
 artifact truthfully makes repeated requests. Never invent an unrecorded API
 call. A `playbook_fallback` plan has an empty API request map.
 
+Begin an API plan with the smallest directly recorded request that returns the
+core result. Treat every earlier request as unnecessary until you can name the
+exact value it produces, the exact response path that contains that value, and
+the exact later request location that consumes it. Sequence order, temporal
+proximity, a similar label, or a request that happened to precede the result is
+not proof of dependency. If the result request already carries a public input
+directly, do not add a lookup merely because the browser performed one first.
+Prefer the smallest truthful request graph; dependencies are justified edges,
+not a transcript to replay wholesale.
+
+`siblingToolEvidence` is input-only agent-authored context from the master's
+other current tools. Inspect it before declaring that bootstrap or changing
+transport state is missing. Reuse a sibling's grounded navigation request,
+transport-value source, or supported computation when it applies to the same
+recording and request family. This shares evidence and construction knowledge,
+not a live browser session and not a runtime mandate. Disagree when the target
+request proves the sibling construction is irrelevant. If a useful sibling
+sequence is outside this tool's original candidate pool, you may add that known
+recording sequence to the proposed dependency evidence and explain why; the
+compiler can inspect the full redacted recording.
+
 Make every construction instruction executable from named evidence. If you say
 the compiler must resolve, regenerate, capture, derive, or refresh a value, name
 the recording request that supplies it, a `responseDependencies` entry, an
 incoming producer result path, or the exact supported computation that produces
 it. A promise to “resolve current state” with no such source is an incomplete
 plan. Do not fix that gap by asking the compiler to guess.
+
+For every URL query value, body field, header, cookie, or captured state that
+must change between the recording and a live call, write a short transport
+provenance ledger in the relevant compile-context or construction guidance:
+name the public parameter, earlier response path, navigation response, captured
+browser state, credential, or exact supported computation that produces it.
+Recorded session literals are evidence templates, not live producers. When a
+live response is empty or non-substantive, revisit this ledger and the minimal
+request graph before permuting unrelated headers or adding browser actions.
 
 Know the API artifact's actual vocabulary before proposing a plan. It can issue
 ordered recorded requests; substitute parameters, credentials, captured state,
@@ -63,6 +93,13 @@ construction step. Either explain how the declared artifact builds the
 recorded call from supported inputs, or report the missing primitive to the
 master. That limitation is a fact about the current artifact format, not
 evidence that the recorded API itself is incompatible.
+
+`requestProvenance` maps only `workflow.requests`. A document load used solely
+to establish cookies or capture HTML/storage state belongs in top-level
+`workflow.bootstrap`; it does not receive an `artifactRequestIndex`. Name its
+recording sequence, URL, captures, and every later `${state.*}` consumer in
+compile guidance. Do not inflate the API request graph merely to represent a
+bootstrap that the artifact already models separately.
 
 The focused evidence is intentionally split across several small entries. It
 contains a compact request summary for every owned and dependency sequence,

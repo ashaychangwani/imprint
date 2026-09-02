@@ -777,6 +777,7 @@ function focusedInput(tool: EditableTeachingTool = searchTool): FocusedPlannerIn
           },
         ]
       : [],
+    siblingToolEvidence: [],
     incomingChainEdges: isDetail ? edges : [],
     outgoingChainEdges: isDetail
       ? []
@@ -1062,6 +1063,28 @@ describe('prompts and pre-plan discovery', () => {
     expect(focusedPrompt).toMatch(/Never treat an\s+older build's failure as/);
   });
 
+  it('makes request minimization and sibling transport evidence agent decisions', () => {
+    const focusedPrompt = prompt('master-teach-focused-planner.md');
+    const masterPrompt = prompt('master-teach-decision.md');
+    const compilerPrompt = prompt('compile-agent.md');
+    for (const authorPrompt of [focusedPrompt, masterPrompt, compilerPrompt]) {
+      expect(authorPrompt).toMatch(/smallest directly recorded request/i);
+      expect(authorPrompt).toMatch(/response\s+path/i);
+      expect(authorPrompt).toMatch(/transport[\s-]+provenance/i);
+      expect(authorPrompt).toMatch(/sibling/i);
+    }
+    expect(focusedPrompt).toContain('`siblingToolEvidence`');
+    expect(focusedPrompt).toMatch(/not a runtime mandate/i);
+    expect(masterPrompt).toMatch(/runtime does not classify transport values/i);
+    expect(masterPrompt).toMatch(/Initial focused planners may run concurrently/);
+    expect(masterPrompt).toMatch(/omit that tool's stale `implementationPlan`/);
+    expect(masterPrompt).toMatch(/return no\s+`recallToolNames` entry/);
+
+    const detectorPrompt = prompt('tool-candidate-detection.md');
+    expect(detectorPrompt).toMatch(/smallest directly recorded request graph/i);
+    expect(detectorPrompt).toMatch(/Temporal order.*do not prove a\s+dependency/is);
+  });
+
   it('keeps baseline MVP review focused on one bounded result and exact current binding', async () => {
     const input = baselineMvpInput();
     const output = baselineMvpOutput(input);
@@ -1303,6 +1326,7 @@ describe('prompts and pre-plan discovery', () => {
       'outgoingChainEdges',
       'recordingIndex',
       'run',
+      'siblingToolEvidence',
       'tool',
     ]);
     expect(sent.masterGuidance).toBe(input.masterGuidance);

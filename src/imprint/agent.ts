@@ -126,7 +126,7 @@ export function giveUpTool(): AgentTool {
   return {
     name: 'give_up',
     description:
-      'Call this when you have encountered a categorical impossibility and cannot proceed.',
+      'Use for a categorical impossibility or an exact accepted-plan contradiction that only the master can revise.',
     input_schema: {
       type: 'object',
       properties: {

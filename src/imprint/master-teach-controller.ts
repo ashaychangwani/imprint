@@ -1889,6 +1889,15 @@ async function requestFocusedPlannerBundles(input: {
         masterGuidance: input.plan.decision.reason,
         tool,
         availableProducers: available.filter(({ toolId }) => toolId !== sourceTool.id),
+        siblingToolEvidence: input.plan.tools
+          .filter(({ id }) => id !== sourceTool.id)
+          .map((sibling) => ({
+            toolId: sibling.id,
+            toolName: sibling.candidate.toolName,
+            supportRequestSeqs: sibling.candidate.dependencySeqs,
+            compileContext: sibling.compileContext,
+            ...(sibling.strategy ? { strategy: sibling.strategy } : {}),
+          })),
         incomingChainEdges: input.plan.chainEdges.filter(
           ({ consumerToolId }) => consumerToolId === sourceTool.id,
         ),
@@ -3862,7 +3871,7 @@ function completionInput(input: {
   journal: FreshTeachJournal;
   discoveryInput: ToolSelectionAdvisorInput;
   evidence: PromptEvidenceProjection;
-  terminalIntent: 'completed' | 'blocked';
+  terminalIntent: 'completed' | 'partial' | 'blocked';
   liveByToolId?: ReadonlyMap<string, LiveCheckResult>;
   chainByEdgeId?: ReadonlyMap<string, LiveCheckResult>;
 }): CompletionReviewInput {
@@ -3883,6 +3892,22 @@ function completionInput(input: {
           ]
         : [],
   );
+  const unresolvedClaims = current.plan.candidateCoverage.flatMap(
+    ({ discoveryCandidateName, unresolvedReason }, index) =>
+      unresolvedReason
+        ? [
+            {
+              id: `candidate-unresolved-${index}`,
+              kind: 'blocker' as const,
+              statement: utf8Prefix(
+                `Unresolved detector candidate "${discoveryCandidateName}": ${unresolvedReason}`,
+                1_000,
+              ),
+              evidenceRefs: [input.evidence.ref],
+            },
+          ]
+        : [],
+  );
   const claims =
     input.terminalIntent === 'blocked'
       ? [
@@ -3893,9 +3918,11 @@ function completionInput(input: {
             evidenceRefs: [input.evidence.ref],
           },
         ]
-      : exclusionClaims;
+      : input.terminalIntent === 'partial'
+        ? [...exclusionClaims, ...unresolvedClaims]
+        : exclusionClaims;
   const toolResultEvidence =
-    input.terminalIntent === 'completed'
+    input.terminalIntent === 'completed' || input.terminalIntent === 'partial'
       ? completionToolResultEvidence(
           input.journal,
           current.plan,
@@ -4016,7 +4043,7 @@ async function requestIndependentReview(input: {
   journal: FreshTeachJournal;
   discoveryInput: ToolSelectionAdvisorInput;
   evidence: PromptEvidenceProjection;
-  terminalIntent: 'completed' | 'blocked';
+  terminalIntent: 'completed' | 'partial' | 'blocked';
   liveByToolId?: ReadonlyMap<string, LiveCheckResult>;
   chainByEdgeId?: ReadonlyMap<string, LiveCheckResult>;
   agent: MasterTeachAgentOptions;
@@ -4132,10 +4159,11 @@ export async function promoteReviewedCompletion(input: {
   reviewInput: CompletionReviewInput;
   review: CompletionReview;
   promote: () => Promise<void>;
+  status?: 'completed' | 'partial';
 }): Promise<void> {
   input.journal.recordCompletionReview(input.reviewInput, input.review);
   await input.promote();
-  input.journal.finish('completed');
+  input.journal.finish(input.status ?? 'completed');
 }
 
 /** Run the complete fresh teach in the caller's foreground process. */
@@ -4470,6 +4498,7 @@ export async function runFreshMasterTeach(
       }
 
       const finalPlan = activeJournal.currentPlan();
+      let terminalIntent: 'completed' | 'partial' = 'completed';
       const proofFailures = mechanicalProofFailures(
         finalPlan,
         activeJournal.currentExecutionSnapshot(),
@@ -4495,8 +4524,17 @@ export async function runFreshMasterTeach(
               ),
             ),
           );
-        await repair(verificationFailureProjection(activeJournal, failures));
-        continue;
+        if (failures.length > 0) {
+          await repair(verificationFailureProjection(activeJournal, failures));
+          continue;
+        }
+        if (finalPlan.tools.length > 0 && unresolvedCandidateCoverage(finalPlan).length > 0) {
+          terminalIntent = 'partial';
+        } else {
+          throw new Error(
+            `completion proof failed without an actionable tool or unresolved candidate: ${proofFailures.join('; ')}`,
+          );
+        }
       }
 
       reportProgress(opts, 'running independent completion review');
@@ -4504,7 +4542,7 @@ export async function runFreshMasterTeach(
         journal: activeJournal,
         discoveryInput: planned.discoveryInput,
         evidence: planned.discoveryEvidence,
-        terminalIntent: 'completed',
+        terminalIntent,
         liveByToolId,
         chainByEdgeId,
         agent: agents,
@@ -4517,12 +4555,12 @@ export async function runFreshMasterTeach(
       const finalState = activeJournal.readState();
       const missingPublishedTools = finalPlan.tools.filter((tool) => {
         const buildRef = finalState.tools.find(({ toolId }) => toolId === tool.id)?.buildRef;
-        if (!buildRef) throw new Error(`completed tool "${tool.id}" has no current build`);
+        if (!buildRef) throw new Error(`reviewed tool "${tool.id}" has no current build`);
         return !publishedMvpBuilds.has(`${tool.id}:${buildRef.sha256}`);
       });
       const missingCompiled = missingPublishedTools.map((tool) => {
         const compiled = compiledByToolId.get(tool.id);
-        if (!compiled) throw new Error(`completed tool "${tool.id}" has no staged artifact`);
+        if (!compiled) throw new Error(`reviewed tool "${tool.id}" has no staged artifact`);
         return compiled;
       });
       reportProgress(
@@ -4535,6 +4573,7 @@ export async function runFreshMasterTeach(
         journal: activeJournal,
         reviewInput: reviewed.reviewInput,
         review: reviewed.review,
+        status: terminalIntent,
         promote: async () => {
           if (missingCompiled.length === 0) return;
           await deps.promote({ site, runId, runRoot, tools: missingCompiled });
@@ -4551,12 +4590,16 @@ export async function runFreshMasterTeach(
         'The MVP was promoted before this optional finesse pass finished; its state is saved as deferred.',
       );
       const availableFinesse = finesseCounts.suggested;
+      const unresolvedTools = unresolvedCandidateCoverage(finalPlan).length;
       return writeTerminalResult({
-        status: 'completed',
+        status: terminalIntent,
         readyTools,
-        nonReadyTools: 0,
+        nonReadyTools: unresolvedTools,
         runRoot,
-        message: `Every one of ${readyTools} planned tool(s) reached a usable MVP and was promoted. ${availableFinesse} optional finesse suggestion(s) are saved under ${pathJoin(runRoot, 'finesse')}; unfinished work is recorded there as deferred and did not delay the MVP.`,
+        message:
+          terminalIntent === 'completed'
+            ? `Every one of ${readyTools} planned tool(s) reached a usable MVP and was promoted. ${availableFinesse} optional finesse suggestion(s) are saved under ${pathJoin(runRoot, 'finesse')}; unfinished work is recorded there as deferred and did not delay the MVP.`
+            : `${readyTools} usable MVP tool(s) were reviewed and promoted; ${unresolvedTools} discovered operation(s) remain explicitly unresolved. ${availableFinesse} optional finesse suggestion(s) are saved under ${pathJoin(runRoot, 'finesse')}.`,
       });
     }
   } catch (error) {

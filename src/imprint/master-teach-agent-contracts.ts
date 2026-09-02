@@ -66,6 +66,16 @@ const AvailableProducerSchema = strictObject({
   toolName: SemanticToolCandidateSchema.shape.toolName,
   expectedOutput: SemanticToolCandidateSchema.shape.expectedOutput,
 });
+/** Input-only context from the other tools in the master's current plan.
+ * This lets a focused planner reuse already-grounded transport/bootstrap
+ * evidence without turning that evidence into a runtime policy. */
+const SiblingToolEvidenceSchema = strictObject({
+  toolId: PromptToolIdSchema,
+  toolName: SemanticToolCandidateSchema.shape.toolName,
+  supportRequestSeqs: SemanticToolCandidateSchema.shape.dependencySeqs,
+  compileContext: TeachingCompileContextSchema,
+  strategy: TeachingToolStrategySchema.optional(),
+});
 export const FocusedPlannerRevisionContextSchema = strictObject({
   /** The exact older plan/build being revised. The failure facts are the
    * latest reason the master recalled this tool and may describe a direct
@@ -92,6 +102,7 @@ export const FocusedPlannerInputSchema = strictObject({
   masterGuidance: Reason,
   tool: PlannableTeachingToolSchema,
   availableProducers: z.array(AvailableProducerSchema),
+  siblingToolEvidence: z.array(SiblingToolEvidenceSchema),
   incomingChainEdges: z.array(ChainEdgeSchema),
   outgoingChainEdges: z.array(ChainEdgeSchema),
   evidence: PromptEvidenceProjectionSchema,
@@ -379,7 +390,7 @@ export const BaselineMvpReviewOutputSchema = strictObject({
   evidenceRefs: z.array(ContentAddressedRefSchema).min(1).max(4),
 });
 export const CompletionReviewInputSchema = strictObject({
-  terminalIntent: z.enum(['completed', 'blocked']),
+  terminalIntent: z.enum(['completed', 'partial', 'blocked']),
   run: CurrentPlanBindingSchema,
   recordingIndex: RecordingIndexSchema,
   currentPlan: CurrentPlanProjectionSchema,

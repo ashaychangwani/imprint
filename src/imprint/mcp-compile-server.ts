@@ -221,7 +221,7 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     const giveUpTool: Tool = {
       name: 'give_up',
       description:
-        'Call this when you have encountered a categorical impossibility and cannot proceed.',
+        'Use for a categorical impossibility or an exact accepted-plan contradiction that only the master can revise.',
       inputSchema: {
         type: 'object',
         properties: {

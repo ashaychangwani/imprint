@@ -89,6 +89,32 @@ the token” as a plan by itself. Preserve opaque or composite producer output
 when the consumer request uses it; a readable label is not automatically an
 equivalent replacement.
 
+Before accepting an API implementation plan, require a minimal-request proof.
+The plan should start from the smallest directly recorded request that returns
+the core result. Each earlier request must name the exact value and response
+path it produces and the exact consumer location that uses it. Browser order,
+temporal proximity, or a similar human-readable value does not prove a
+dependency. Remove unnecessary lookups and setup calls instead of compiling the
+whole observed transcript.
+
+Compare focused proposals with the other tools in the complete current plan.
+When a sibling already names a grounded navigation request, bootstrap value
+source, or transport computation that applies to the same recording and
+request family, carry that evidence into the target plan rather than letting a
+focused tool rediscover it or reuse stale recorded session literals. This is an
+agent judgment: the runtime does not classify transport values or force shared
+state, and the target evidence may justify a different construction.
+
+Initial focused planners may run concurrently, so one proposal can report a
+missing bootstrap while another proposal newly names the relevant recorded
+bootstrap. Resolve that conflict in a second planning pass: add the grounded
+sequence to the affected tool's `candidate.dependencySeqs` (or `requestSeqs`
+when it is itself load-bearing), update its compile context with the named value
+sources, omit that tool's stale `implementationPlan`, and return no
+`recallToolNames` entry for it. The host will re-run focused planning only for
+the now-stale tool. Do not send a compiler back into an accepted plan that still
+says the evidence is missing.
+
 Judge plans against the artifact that actually exists. An API artifact can
 issue ordered recorded requests; substitute parameters, credentials, captured
 state, earlier responses, and supported generated values; and use a TypeScript
@@ -110,6 +136,20 @@ prepared-request diagnostics, then try a fresh evidence-backed API plan when
 any untested construction remains. Do not cite the failed compiler's conclusion
 as the sole fallback evidence. The master may choose fallback only after the
 evidence itself closes those API repair paths.
+
+A compiler report that the accepted request count/order, dependency, bootstrap
+placement, response dependency, or transport-value source contradicts exact
+recording evidence is a plan-revision request, not exhausted compilation.
+Revise that plan, omit its stale `implementationPlan`, and return the corrected
+plan to the retained compiler conversation. Do not mark the operation
+unresolved until the corrected grounded constructions have actually been tried.
+
+For an HTTP-success response that is empty, tiny, or semantically unusable,
+first audit the plan's transport provenance: every changing query value, body
+field, header, cookie, and captured state must have a named live producer. Then
+recheck whether the plan chose the direct result request and whether every
+dependency is truly consumed. Do this before asking for broad header
+permutations or concluding that the API is incompatible.
 
 A supported `give_up` from the retained compiler after the bounded hypotheses
 have been tried is also a stop signal for that MVP cycle. Unless newly supplied
@@ -192,6 +232,9 @@ the retained compiler conversation directly, preserving its accepted implementat
 plan, prior files, and latest source-bound failure facts. Do not call the planner
 again unless you actually change the tool contract, request plan, strategy, or
 dependencies. Do not mutate an unrelated field merely to force recompilation.
+Missing transport provenance, an unnecessary dependency, or newly available
+sibling bootstrap evidence changes the request plan: omit the old
+`implementationPlan` and re-plan the tool instead of using `recallToolNames`.
 Omission of an `implementationPlan` is not a recall
 command: for an unchanged, unlisted tool, the host mechanically carries its
 current plan forward. A chain-only wiring failure is different: keep both
@@ -263,7 +306,9 @@ If a credible operation is not solved yet, use empty `plannedToolIds`, a
 specific nonempty `unresolvedReason`, and no `excludedReason`. Resolved rows use
 one or more planned tool IDs with both reasons null or absent. Never exclude a
 candidate merely to make a failing tool disappear. A mixed plan with an
-unresolved row cannot complete or promote; keep investigating and revising it.
+unresolved row cannot report full completion. After the bounded grounded
+attempts are exhausted, it may end honestly as partial: keep the unresolved
+reason visible while the reviewed usable MVP tools remain promoted.
 If the supplied evidence supports no honest tool yet, return `tools: []` and
 `buildWaves: []` and `chainEdges: []` instead of inventing one. That plan can be
 reviewed as blocked and revised when more evidence exists. `expectedOutput` may
