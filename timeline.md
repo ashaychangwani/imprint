@@ -3320,3 +3320,37 @@ service but its parser found no recognizable itineraries, and the other backend
 rungs failed. This means the example remains useful historical evidence about
 request design, but it is not a currently working answer that the teach process
 could simply rediscover. The fresh teach must still prove its own live result.
+
+## 2026-09-02 13:10 PDT — Let the compiler test its API before writing the parser
+
+The fresh Flights run reached 28 minutes with one working tool. Calendar and
+Search repeatedly wrote a complete artifact, handed it to the master for an
+expensive live check, received an empty result, and resumed the compiler. This
+was happening because master-MVP mode explicitly told the compiler to work
+offline and leave all live testing to the master. The compiler had enough
+reasoning context to repair the request, but no simple way to see the live raw
+response before committing to a parser.
+
+That run was cancelled before changing the code. It ended with one ready tool
+and three unfinished tools. Its candidate selection remains useful diagnostic
+evidence, but the run will not be resumed after this change.
+
+The compiler now has one small `probe_api` tool. It is the equivalent of curl
+for generated workflows: the compiler first writes only the request portion of
+`workflow.json`, and the probe runs it without a parser through the same normal
+API ladder already used elsewhere—fetch, fetch-bootstrap, CDP replay, and
+stealth fetch. The probe returns the factual rung attempts and a redacted raw
+response, with a longer copy under `notes/` for inspection. It creates no check
+receipt and cannot publish a tool.
+
+The teaching prompt now tells the retained compiler to repair and retry the API
+request itself, then write the parser only after the response shape is proven.
+If the master or the observed response shows rate limiting or repeated bot
+challenges, the compiler stops making live calls and infers the request from the
+recording; the independent verifier then owns the next live call. No site name,
+field-name rule, or new runtime strategy classifier was added.
+
+A local API fixture proved that a parser-free draft uses the ordinary fetch rung,
+returns its raw response, saves scratch evidence, removes its temporary workflow,
+and creates no verification receipt. Focused prompt/tool tests, type checking,
+and lint all pass.

@@ -11,6 +11,7 @@ const FRIENDLY_TOOL_NAMES: Record<string, string> = {
   search_response_body: 'searching response for anchors',
   write_file: 'writing artifact',
   read_file: 'reading file',
+  probe_api: 'probing API',
   run_bash: 'running command',
   run_tests: 'running tests',
 };

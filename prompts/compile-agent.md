@@ -152,12 +152,17 @@ Follow these steps to compile the session:
    A missing producer and a required field are different facts. If the accepted
    plan explicitly selects a bounded omission or evidence-backed generation
    hypothesis, implement that construction and call `done` so the independent
-   live verifier can measure it. Do not call `give_up` merely because the
+   live verifier can confirm it. First use `probe_api` when compiler-side live
+   probing is allowed, so an ordinary request defect is repaired in this
+   retained conversation instead of discovered through an expensive verifier
+   round trip. Do not call `give_up` merely because the
    browser originally supplied a value that this construction intentionally
    omits or generates. If the plan requires the recorded field but names no
    producer, generator, or omission hypothesis, report that precise plan gap;
-   do not guess. The compiler is not expected to prove a live omission before
-   producing the artifact that will be verified.
+   do not guess. When the master or prior live facts identify rate limiting,
+   repeated bot challenges, or an instruction to conserve live calls, skip
+   compiler probing and infer the best request from recording evidence; the
+   independent verifier then owns the live call.
 
    The built-in fresh-value placeholders are exactly `${generated.uuid}`,
    `${generated.epoch_ms}`, `${generated.epoch_s}`, `${generated.iso8601}`,
@@ -276,6 +281,28 @@ Follow these steps to compile the session:
    - **Chaining complementary endpoints.** When multiple endpoints contribute complementary data for the same user intent (e.g. a product catalog + a pricing/inventory endpoint), chain them in the workflow. The parser's `extract(rawResponse, context)` receives `context.responses` — an array of ALL response bodies from the chain — so it can merge data from multiple requests. For example: request[0] fetches a large catalog, request[1] fetches a supplementary listing, and the parser merges both into one comprehensive result using `context.responses[0]` and `context.responses[1]`. The parser also receives `context.params` for constructing values the API doesn't echo back (e.g. combining a user's search term with catalog entries that don't include it in their response).
    - **If you write a `parser.ts`, you MUST set `"parserModule": "./parser.ts"` in workflow.json.** Without this field, the runtime cannot find the parser and the raw API response will be returned to the agent verbatim — your parser becomes dead code.
    - Validate against `WorkflowSchema` (defined in the reference section below)
+
+   **Prove the API request before writing the parser.** For an ordinary safe API
+   tool, first write a valid request-only `workflow.json` with `parserModule`
+   omitted, then call `probe_api` with the baseline parameters and a short
+   statement of the hypothesis being tested. This is the compiler's curl-like
+   loop: it executes the draft through the normal API ladder—fetch,
+   fetch-bootstrap, CDP replay, then stealth fetch—without invoking a playbook
+   or semantic verifier. It returns the rung attempts and raw redacted response,
+   and saves the longer response under `notes/` for `read_file`, `rg`, `jq`, or
+   other bounded inspection through `run_bash`. It creates no verification
+   receipt and cannot publish the tool.
+
+   If the request fails or returns a diagnostic/empty payload, compare it with
+   the recording, revise the request hypothesis, and probe again in this same
+   retained conversation. Let the existing ladder remember a successful rung;
+   do not manually rebuild CDP or probe every transport yourself. Once a probe
+   returns a credible response, write `parser.ts` and its tests against that
+   proven response shape and the recorded fixture. If a probe reports 429,
+   repeated 403/challenge responses, or other credible rate-limit/bot evidence,
+   stop making compiler-side live calls, preserve the exact facts, and finish
+   from the recording so final live verification is the next call. These are
+   agent decisions from observed facts, not runtime site classifications.
 
 6. **Examine the response body.** Call `read_response_body` for the exact response sequence. Paginate when needed; use `inspect_body_structure` for bounded structural comparison of nested or explicitly framed bodies.
 
@@ -684,6 +711,7 @@ baseline integration case, then call `done` for the mode-specific handoff.
 | `search_response_body` | Find substrings in a response body and return matching offsets+context (essential for anchoring on known values inside opaque JSPB) |
 | `write_file` | Write the files allowed by the accepted strategy: API artifacts for `api`, or workflow.json + playbook.yaml for `playbook_fallback`; notes/*.md are also allowed. Input is `{"relativePath":"workflow.json","content":"..."}`. |
 | `read_file` | Read a file by relative path. Input is `{"path":"parser.ts"}` (the field is `path`, not `relativePath`). |
+| `probe_api` | Curl-like compiler probe: runs the request-only workflow through the normal API ladder without a parser or playbook, returns factual attempts plus a redacted raw preview, and saves the longer response under notes/ without creating a verification receipt |
 | `run_bash` | Run a bounded local diagnostic command in the tool directory |
 | `run_tests` | Run parser.test.ts and/or request.test.ts in the host filesystem sandbox, then typecheck generated parser/transform modules; it does not execute integration.test.ts, and network is disabled for irreversible workflows |
 | `done` | Claim the artifact handoff is complete; in master MVP mode this runs deterministic checks only, while standalone full mode continues into independent live verification |

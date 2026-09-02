@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import {
@@ -83,6 +91,85 @@ describe('body encoding compile contract', () => {
     expect(requestsNeedingBodyEncodingDecision(responseBound)).toEqual([0]);
     expect(bodyEncodingContractFailures(responseBound)).not.toEqual([]);
     expect(requestEncodingTestContractFailures(responseBound, undefined)).not.toEqual([]);
+  });
+});
+
+describe('probe_api compile tool', () => {
+  it('runs a parser-free draft through the normal ladder and saves the raw response', async () => {
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        return Response.json({
+          items: [{ id: 'working-shape' }],
+          query: url.searchParams.get('q'),
+        });
+      },
+    });
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-api-probe-'));
+    try {
+      const toolDir = pathJoin(root, 'fixture-site', 'search_items');
+      mkdirSync(toolDir, { recursive: true });
+      writeFileSync(
+        pathJoin(toolDir, 'workflow.json'),
+        JSON.stringify({
+          toolName: 'search_items',
+          intent: { description: 'Search items' },
+          site: `fixture-${server.port}`,
+          parameters: [
+            { name: 'query', type: 'string', description: 'Search text', required: true },
+          ],
+          requests: [
+            {
+              method: 'GET',
+              url: `http://127.0.0.1:${server.port}/search?q=\${param.query}`,
+              headers: {},
+              recordingRequestSeq: 1,
+              effect: 'safe',
+            },
+          ],
+        }),
+      );
+      const session: Session = {
+        site: `fixture-${server.port}`,
+        startedAt: '2026-09-02T00:00:00.000Z',
+        url: `http://127.0.0.1:${server.port}`,
+        imprintVersion: '0.1.0',
+        requests: [],
+        events: [],
+        narration: [],
+        cookieSnapshots: [],
+        storageSnapshots: [],
+      };
+      const probe = buildCompileTools(session, toolDir, pathJoin(root, 'session.json')).find(
+        (tool) => tool.name === 'probe_api',
+      );
+      expect(probe).toBeDefined();
+      if (!probe) throw new Error('probe_api tool missing');
+
+      const response = await probe.handler({
+        params: { query: 'direct' },
+        reason: 'prove the smallest recorded GET before writing parser.ts',
+      });
+      if (response.isError) throw new Error(response.result);
+      expect(response.isError).toBeUndefined();
+      const result = JSON.parse(response.result);
+      expect(result.usedBackend).toBe('fetch');
+      expect(result.result.ok).toBe(true);
+      expect(result.result.preview).toContain('working-shape');
+      expect(result.result.preview).toContain('direct');
+      expect(result.createsVerificationReceipt).toBe(false);
+      expect(readFileSync(pathJoin(toolDir, result.responseFile), 'utf8')).toContain(
+        'working-shape',
+      );
+      expect(readdirSync(toolDir).some((name) => name.startsWith('.imprint-api-probe-'))).toBe(
+        false,
+      );
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

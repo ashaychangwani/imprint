@@ -114,6 +114,11 @@ test('the pinned contract states applicability, edit invalidation, and playbook 
   expect(prompt).not.toContain('When parser tests pass, call `done`');
   expect(prompt).not.toContain('Get parser tests passing first, then call `done`');
   expect(prompt).toContain('Write integration.test.ts with the accepted baseline case');
+  expect(prompt).toMatch(/Prove the API request before writing the parser/);
+  expect(prompt).toMatch(/call `probe_api` with the baseline parameters/);
+  expect(prompt).toMatch(/fetch-bootstrap, CDP replay, then stealth fetch/);
+  expect(prompt).toMatch(/creates no verification\s+receipt/);
+  expect(prompt).toMatch(/reports 429,\s+repeated 403\/challenge responses/);
   expect(prompt).toMatch(
     /use\s+`search_requests` to find matching calls across the entire combined/i,
   );
