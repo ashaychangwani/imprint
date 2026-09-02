@@ -2984,7 +2984,42 @@ tests cover both the prompt contract and the saved retry; 186 tests pass.
 The full project run exposed an older process-cleanup race under parallel test
 load. Imprint stopped waiting when a killed child's ownership marker vanished,
 although macOS could still report the already-killed process id briefly. Cleanup
-now waits on the exact process ids it already observed, within the existing
-500 ms ceiling. This prevents a finished compiler from leaving a short-lived
+now waits on the exact process ids it already observed, within a bounded
+1.5-second ceiling. This prevents a finished compiler from leaving a short-lived
 grandchild behind. The final complete check passes: 1,841 tests, type checking,
+lint, unused-code analysis, and circular-dependency analysis are all clean.
+
+## 2026-09-01 22:27 PDT — Fallback stopped, but calendar repair did not stop
+
+Fresh Flights run `019b2d32-a635-4b03-9d9d-adb7b484cccd` again reused only the
+four accepted operation boundaries. It planned four API tools. Location passed
+live CDP and published. Search and calendar stayed on API throughout; the master
+never proposed a playbook. This proves the incomplete-browser-evidence rule
+prevented the earlier bad fallback.
+
+The new backend memory also worked on later revisions. Calendar skipped its
+known-unvalidated browser-bootstrap rung and reached ordinary fetch in 484 ms,
+417 ms, and 501 ms. Search skipped that rung and began with its previously
+successful CDP path. One warm CDP call took 1.0 second; later revisions paid a
+cold launch because the 15-second idle pool expired while the compiler was
+editing. No revision repeated the full four-rung probe.
+
+The run remained too slow. Planning took about five minutes. The first search
+compile then spent almost six minutes in many small read/write/test cycles before
+handoff. Search was eventually marked unresolved rather than converted to a
+playbook, which is honest. Calendar's transport repeatedly returned HTTP success
+but the semantic review kept finding an empty or unusable fare result. The
+retained compiler went through five repair turns and finally called `give_up`.
+The master then immediately launched a sixth calendar repair instead of shipping
+the verified location MVP. The run was cancelled at roughly 41 minutes with one
+ready tool and three unfinished tools.
+
+The master instructions now state that a supported retained-compiler `give_up`
+after the small hypothesis set is a stop signal for that MVP cycle. Without
+genuinely new evidence, the master must keep the candidate as specifically
+unresolved, remove it from current build waves, and finish with verified MVPs.
+It must not relabel the same idea or scan more events merely to create another
+repair turn. This remains an agent decision rule, not a runtime retry counter.
+
+The complete project check passes after this change: 1,842 tests, type checking,
 lint, unused-code analysis, and circular-dependency analysis are all clean.

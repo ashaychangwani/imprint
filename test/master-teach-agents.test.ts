@@ -940,6 +940,14 @@ describe('prompts and pre-plan discovery', () => {
     expect(compilePrompt).toContain('Do not brute');
   });
 
+  it('treats a bounded retained-compiler give-up as an MVP stop signal', () => {
+    const masterPrompt = prompt('master-teach-decision.md');
+    expect(masterPrompt).toContain('stop signal for that MVP cycle');
+    expect(masterPrompt).toMatch(/do not immediately recall the\s+same tool/);
+    expect(masterPrompt).toContain('finish with the verified MVPs');
+    expect(masterPrompt).toMatch(/Rephrasing the same failed construction is not new\s+evidence/);
+  });
+
   it('tells the master to account for changing request state', () => {
     const masterPrompt = prompt('master-teach-decision.md');
     expect(masterPrompt).toContain('rotating state');

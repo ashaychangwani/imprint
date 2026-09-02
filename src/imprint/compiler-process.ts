@@ -5,7 +5,7 @@ import { abortSignalError, abortableDelay } from './concurrency.ts';
 
 const OWNER_ENV = 'IMPRINT_PROCESS_OWNER_TOKEN';
 const DRAIN_MS = 150;
-const KILL_WAIT_MS = 500;
+const KILL_WAIT_MS = 1_500;
 
 type OwnedRow = { pid: number; pgid: number };
 type RootResult = { code: number | null; error?: Error };

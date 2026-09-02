@@ -111,6 +111,15 @@ any untested construction remains. Do not cite the failed compiler's conclusion
 as the sole fallback evidence. The master may choose fallback only after the
 evidence itself closes those API repair paths.
 
+A supported `give_up` from the retained compiler after the bounded hypotheses
+have been tried is also a stop signal for that MVP cycle. Unless newly supplied
+evidence names a genuinely untried construction, do not immediately recall the
+same tool or ask it to scan more recording events. Keep its candidate-coverage
+row, set a specific `unresolvedReason`, remove the unresolved tool from the
+current build waves, and finish with the verified MVPs. A later finesse or
+fresh teach can revisit it. Rephrasing the same failed construction is not new
+evidence.
+
 Do not turn API repair into a slow exhaustive search, but do require more than
 one plausible construction when several recorded/current/generated choices
 remain uncertain. Ask the retained compiler to work through a small, prioritized
