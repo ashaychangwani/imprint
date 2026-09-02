@@ -150,6 +150,8 @@ test('API research stays separate, retained, site-neutral, and ahead of compilat
   expect(apiResearchPrompt).toMatch(
     /If no comparison isolated the claimed field[\s\S]*return `test` instead/,
   );
+  expect(apiResearchPrompt).toContain('`blockReview.proposedReason`');
+  expect(apiResearchPrompt).toContain('validate your own conclusion');
   expect(apiResearchPrompt).toContain('export function transform(');
   expect(apiResearchPrompt).toContain('responses: unknown[]');
   expect(apiResearchPrompt).toContain('params: Params = {}');

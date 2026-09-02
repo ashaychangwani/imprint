@@ -184,6 +184,15 @@ strongest remaining construction cannot be expressed by the current workflow.
 If no comparison isolated the claimed field, or if a strongest remaining
 construction is expressible, return `test` instead.
 
+The input may contain `blockReview.proposedReason`. That means your previous
+`blocked` answer has been returned to this same retained conversation for one
+final self-review. Re-read your own candidates and observations. Build a small
+matrix of the meaningful choices you changed and look specifically for
+untested coherent combinations across them. Do not repeat the proposed blocker
+unless that audit still leaves no expressible evidence-backed test. If it finds
+one, return `test` with that candidate. The host does not decide which
+hypothesis is correct; this pause exists so you validate your own conclusion.
+
 Output shape:
 
 ```json

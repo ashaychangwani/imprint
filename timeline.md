@@ -3482,3 +3482,29 @@ no ready or unfinished tools. A new fresh run,
 `ae5108bd-968b-4caf-8409-d9c601a2d16f`, started from the same accepted candidate
 boundaries. It does not reuse the cancelled run's planning, research, or build
 state.
+
+## 2026-09-02 16:02 PDT — First prompt fix helped, but Calendar still missed one combination
+
+Fresh run `ae5108bd-968b-4caf-8409-d9c601a2d16f` showed that the stronger
+research prompt materially improved persistence. Calendar continued through
+roughly eight distinct live tests instead of stopping after three. It found
+the route-specific bootstrap, corrected request-body reasoning, tried current
+session values, omitted and recorded opaque fields, and finally tried a
+generated request ID. Search also continued, found an extra airport-array
+wrapper in its own request transform, and tested a corrected body.
+
+Calendar nevertheless proposed `blocked` while one clear combination from its
+own history remained untested: current session values plus a generated request
+ID plus the recorded opaque header. Its blocker claimed every meaningful
+construction had been tried, but its own list showed generated request IDs only
+with that header omitted. The run was stopped before accepting this result.
+
+The generic correction remains agent-driven. A researcher's first `blocked`
+answer is now returned once to that same retained conversation as a proposed
+blocker. The researcher is asked to compare its own candidate history as a
+small matrix and look for overlooked coherent combinations. It may continue
+with another test or repeat the blocker after its own review. The runtime does
+not choose a hypothesis, classify a field, or inspect site semantics. Focused
+tests prove that a researcher can recover from its proposed blocker and hand a
+subsequent proven candidate to compilation. Prompt tests, type checking, and
+lint pass.

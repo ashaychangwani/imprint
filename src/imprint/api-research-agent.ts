@@ -109,6 +109,7 @@ export async function researchApiMvpCall(input: {
   dependencies: ApiResearchDependencies;
 }): Promise<ApiResearchResult> {
   const observations: ApiResearchObservation[] = [];
+  let proposedBlockReason: string | undefined;
   while (true) {
     if (input.signal?.aborted) throw abortSignalError(input.signal);
     if (Date.now() >= input.runDeadline.deadlineMs) {
@@ -124,11 +125,17 @@ export async function researchApiMvpCall(input: {
       implementationPlan: input.implementationPlan,
       evidence: input.evidence,
       observations,
+      ...(proposedBlockReason ? { blockReview: { proposedReason: proposedBlockReason } } : {}),
     };
     const decision = await input.dependencies.requestStep(researchInput, input.agent);
     if (decision.action === 'blocked') {
+      if (!proposedBlockReason) {
+        proposedBlockReason = decision.reason;
+        continue;
+      }
       throw new ApiResearchBlockedError(decision.reason, observations);
     }
+    proposedBlockReason = undefined;
     const candidate = decision.candidate;
     if (!candidate) throw new Error('API researcher returned no candidate');
     if (decision.action === 'proven') {

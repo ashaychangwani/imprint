@@ -152,6 +152,7 @@ export const ApiResearchInputSchema = strictObject({
   implementationPlan: ImplementationPlanPayloadSchema,
   evidence: PromptEvidenceProjectionSchema,
   observations: z.array(ApiResearchObservationSchema).max(64),
+  blockReview: strictObject({ proposedReason: Reason }).optional(),
 });
 export type ApiResearchInput = z.infer<typeof ApiResearchInputSchema>;
 const ApiResearchBindingSchema = strictObject({

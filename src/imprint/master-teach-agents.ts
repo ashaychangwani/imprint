@@ -1835,6 +1835,7 @@ export async function requestApiResearchStep(
             instruction:
               'Continue the same API-research conversation. Evaluate the newest factual result, then either test one revised complete candidate, mark that exact tested candidate proven, or report the exact plan gap.',
             latestObservation,
+            ...(checked.blockReview ? { blockReview: checked.blockReview } : {}),
           }
         : checked,
     validation: {

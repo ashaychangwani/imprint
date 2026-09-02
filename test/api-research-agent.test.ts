@@ -215,4 +215,67 @@ describe('focused API research', () => {
       ),
     ).toThrow('proven candidate differs from the tested request');
   });
+
+  it('returns a proposed blocker to the same researcher for self-review', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-api-research-block-review-'));
+    const first = apiCandidate('failed');
+    const second = apiCandidate('overlooked');
+    let agentTurn = 0;
+    let execution = 0;
+    try {
+      const result = await researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool,
+        implementationPlan,
+        evidence,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          requestStep: async (input) => {
+            agentTurn += 1;
+            if (agentTurn === 1)
+              return { binding, action: 'test', candidate: first, reason: 'Test baseline.' };
+            if (agentTurn === 2)
+              return { binding, action: 'blocked', reason: 'No request can work.' };
+            if (agentTurn === 3) {
+              expect(input.blockReview?.proposedReason).toBe('No request can work.');
+              return {
+                binding,
+                action: 'test',
+                candidate: second,
+                reason: 'Self-review found an untested coherent candidate.',
+              };
+            }
+            const observed = input.observations[1];
+            if (!observed) throw new Error('missing self-review observation');
+            return {
+              binding,
+              action: 'proven',
+              candidate: second,
+              basedOnObservationId: observed.id,
+              reason: 'The overlooked candidate returned fixture records.',
+            };
+          },
+          runApiTool: async () => {
+            execution += 1;
+            return {
+              executionMechanism: 'fetch',
+              result:
+                execution === 1
+                  ? { ok: true as const, data: 'protocol error: no records' }
+                  : { ok: true as const, data: { items: [{ id: 'item-1' }] } },
+            };
+          },
+        },
+      });
+
+      expect(agentTurn).toBe(4);
+      expect(execution).toBe(2);
+      expect(result.observation.candidateSha256).toBe(apiResearchCandidateSha256(second));
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
 });
