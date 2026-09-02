@@ -144,6 +144,17 @@ Revise that plan, omit its stale `implementationPlan`, and return the corrected
 plan to the retained compiler conversation. Do not mark the operation
 unresolved until the corrected grounded constructions have actually been tried.
 
+For a changing recorded field, keep producer availability separate from field
+necessity. “No supported live producer” does not mean “the field is required.”
+If a compiler reports a missing producer, ask whether exact evidence proves the
+field must be present. When it does not, revise the plan to test one bounded
+omission construction. When repeated requests support an exact generator, test
+that as another bounded construction. The compiler cannot prove a live omission
+before it builds the artifact, so authorize the hypothesis and let the verifier
+measure it. Inability to intercept the browser's original XHR is not by itself
+an API blocker when the declared request can omit or generate the uncertain
+field. Do not invent a generator or exhaustively permute transport noise.
+
 For an HTTP-success response that is empty, tiny, or semantically unusable,
 first audit the plan's transport provenance: every changing query value, body
 field, header, cookie, and captured state must have a named live producer. Then

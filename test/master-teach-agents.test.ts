@@ -1087,6 +1087,29 @@ describe('prompts and pre-plan discovery', () => {
     expect(detectorPrompt).toMatch(/Temporal order.*do not prove a\s+dependency/is);
   });
 
+  it('separates a missing transport producer from proof that the field is required', () => {
+    const focusedPrompt = prompt('master-teach-focused-planner.md');
+    const masterPrompt = prompt('master-teach-decision.md');
+    const compilerPrompt = prompt('compile-agent.md');
+    const completionPrompt = prompt('master-teach-completion-review.md');
+
+    expect(focusedPrompt).toMatch(/missing live\s+producer/i);
+    expect(masterPrompt).toMatch(/No supported live producer/i);
+    expect(compilerPrompt).toMatch(/missing producer and a required field/i);
+    expect(completionPrompt).toMatch(/absence of a producer from proof/i);
+    for (const authorPrompt of [focusedPrompt, masterPrompt, compilerPrompt, completionPrompt]) {
+      expect(authorPrompt).toMatch(/omission/i);
+      expect(authorPrompt).toMatch(/generat/i);
+    }
+    expect(masterPrompt).toMatch(/does not mean [“"]the field is required/i);
+    expect(compilerPrompt).toMatch(
+      /call `done` so the independent\s+live verifier can measure it/i,
+    );
+    expect(completionPrompt).toMatch(
+      /absence of a producer from proof that the field is necessary/i,
+    );
+  });
+
   it('keeps baseline MVP review focused on one bounded result and exact current binding', async () => {
     const input = baselineMvpInput();
     const output = baselineMvpOutput(input);

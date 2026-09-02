@@ -3121,3 +3121,46 @@ two loops to consume the 60-minute ceiling. It is not resumable validation.
 Focused validation of the fixes passes type checking, lint, and 229 controller,
 prompt, store, and CLI tests. A neutral end-to-end test now proves that an
 unresolved consumer's actual failure is visible to the completion reviewer.
+
+## 2026-09-02 01:58 PDT — Fresh Flights teach finished partial in ten and a half minutes
+
+Fresh run `0528bc41-bee3-4723-b974-04876b90809e` reused only the four accepted
+operation boundaries and did all planning and compilation again. It used the
+latest combined recording, `combined-2026-08-30T02-48-09-040Z.json`; the hash
+stored in the run exactly matches that file. Its source manifest contains seven
+recordings. The combined file and the run copy both contain 1,240 requests, 321
+events, and 31 narration entries.
+
+The recording contains 68 flight-search requests, five booking requests, many
+location requests, and only one calendar-fare request. Therefore the planner's
+one-request search design was a deliberate minimal implementation chosen from
+many examples, while the one calendar request is genuinely the only recorded
+calendar example. No recording was skipped or replaced.
+
+The new planning guidance worked. Calendar chose its direct result request and
+explicitly rejected two location lookups because their responses supplied
+nothing the fare request consumed. Search also chose one direct result request.
+All four operations remained API designs. Location compiled, passed live CDP,
+returned credible Boston location matches, and published.
+
+Calendar tried two bounded constructions: current bootstrap values without the
+unexplained changing header, then the closest recorded construction. Both
+reached the server with HTTP 200 but returned the same 131-byte non-result, so
+the parsed fare list was empty. Search stopped in 51 seconds after proving that
+the bootstrap supplied two session values but not a changing request header.
+Booking stayed unresolved because its search producer was unavailable.
+
+The controller behaved correctly: the published location tool was not rebuilt,
+the independent reviewer received the real failure facts, and the run ended
+clearly as `partial` with one ready tool and three unresolved operations. The
+run lasted about ten and a half minutes instead of looping toward the 60-minute
+ceiling.
+
+The run also exposed one remaining reasoning gap. Search treated “no live
+producer for this recorded field” as “this field is required.” Those are
+different claims. Site-neutral agent instructions now require planners, the
+master, compiler, and completion reviewer to keep them separate. When necessity
+is not proven, the master must authorize a bounded omission construction and,
+when exact repeated-request evidence supports it, a generated-value construction
+before accepting the blocker. The runtime still makes no semantic classification
+and no Google-specific policy was added.

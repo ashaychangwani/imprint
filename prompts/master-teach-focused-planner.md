@@ -80,6 +80,17 @@ Recorded session literals are evidence templates, not live producers. When a
 live response is empty or non-substantive, revisit this ledger and the minimal
 request graph before permuting unrelated headers or adding browser actions.
 
+Keep two questions separate for every recorded transport field: where a fresh
+value comes from, and whether the field is actually required. A missing live
+producer proves only the first question. It does not prove that the request
+must carry the field. When the recording does not establish necessity, propose
+a small verification hypothesis that omits the field. When repeated requests
+support an exact generator, that may be a second hypothesis. Never invent a
+generator from the field name or appearance. State the exact request locations
+changed by each hypothesis so the compiler can build it and the live verifier
+can test it. Do not call the API incompatible merely because the current
+artifact cannot intercept the browser's original XHR.
+
 Know the API artifact's actual vocabulary before proposing a plan. It can issue
 ordered recorded requests; substitute parameters, credentials, captured state,
 earlier responses, and the supported generated values; and use a TypeScript

@@ -29,6 +29,15 @@ terminal intent. Each explicit claim must appear exactly once as supported or
 unsupported, and each disposition must cite at least one reference supplied on
 that claim. Blocking findings must cite evidence. Copy
 `validationContext.binding` exactly.
+
+For a blocker based on a changing field with no live producer, distinguish the
+absence of a producer from proof that the field is necessary. Support the
+blocker only when the supplied evidence also shows that necessity is grounded
+or that the bounded omission and any evidence-backed generation construction
+were actually tried and failed. The artifact's inability to intercept the
+browser's original XHR is not sufficient when a declared request could still
+test omission or an exact supported generator. Do not demand exhaustive
+permutations or invent a generator.
 An invocation fact may include a slug-only `executionMechanism`. It reports
 which backend actually ran for that invocation; it is evidence only and never
 selects strategy or changes the required checks.

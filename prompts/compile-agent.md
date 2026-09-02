@@ -143,6 +143,16 @@ Follow these steps to compile the session:
    works, or request a plan revision. Never combine fresh session values with
    an unrelated recorded per-invocation value.
 
+   A missing producer and a required field are different facts. If the accepted
+   plan explicitly selects a bounded omission or evidence-backed generation
+   hypothesis, implement that construction and call `done` so the independent
+   live verifier can measure it. Do not call `give_up` merely because the
+   browser originally supplied a value that this construction intentionally
+   omits or generates. If the plan requires the recorded field but names no
+   producer, generator, or omission hypothesis, report that precise plan gap;
+   do not guess. The compiler is not expected to prove a live omission before
+   producing the artifact that will be verified.
+
 5. **Write workflow.json.** Template the request(s):
    - Replace user-variable values with `${param.NAME}` placeholders (e.g., query, date, quantity)
    - Expose only caller-meaningful parameters. If a recorded field is an internal navigation/context/source constant (for example a page entry-point marker, tracking context, or continuation hint) and changing it does not correspond to a user-facing choice in the narration or UI, keep the recorded literal instead of advertising a caller parameter.
