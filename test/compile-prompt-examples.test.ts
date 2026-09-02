@@ -116,6 +116,10 @@ test('the pinned contract states applicability, edit invalidation, and playbook 
   expect(prompt).toContain('Write integration.test.ts with the accepted baseline case');
   expect(prompt).toMatch(/Prove the API request before writing the parser/);
   expect(prompt).toMatch(/call `probe_api` with the baseline parameters/);
+  expect(prompt).toMatch(/dry-run that transform with the\s+exact baseline parameters/i);
+  expect(prompt).toContain('must re-run the probe before `done`');
+  expect(prompt).toContain('a probe failure followed only by offline tests is not completion');
+  expect(prompt).not.toContain('call `done` so the mode-specific downstream master or verifier');
   expect(prompt).toMatch(/fetch-bootstrap, CDP replay, then stealth fetch/);
   expect(prompt).toMatch(/creates no verification\s+receipt/);
   expect(prompt).toMatch(/reports 429,\s+repeated 403\/challenge responses/);

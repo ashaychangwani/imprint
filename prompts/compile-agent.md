@@ -284,7 +284,10 @@ Follow these steps to compile the session:
 
    **Prove the API request before writing the parser.** For an ordinary safe API
    tool, first write a valid request-only `workflow.json` with `parserModule`
-   omitted, then call `probe_api` with the baseline parameters and a short
+   omitted. If it uses `request-transform.ts`, dry-run that transform with the
+   exact baseline parameters and run its offline request test first; a local
+   validation or encoding bug must not consume a slow browser-backed probe.
+   Then call `probe_api` with the baseline parameters and a short
    statement of the hypothesis being tested. This is the compiler's curl-like
    loop: it executes the draft through the normal API ladder—fetch,
    fetch-bootstrap, CDP replay, then stealth fetch—without invoking a playbook
@@ -298,7 +301,13 @@ Follow these steps to compile the session:
    retained conversation. Let the existing ladder remember a successful rung;
    do not manually rebuild CDP or probe every transport yourself. Once a probe
    returns a credible response, write `parser.ts` and its tests against that
-   proven response shape and the recorded fixture. If a probe reports 429,
+   proven response shape and the recorded fixture. A passing request unit test
+   or parser test is not a substitute for that response, and after repairing a
+   local bug found by a probe you must re-run the probe before `done`. If the
+   request still cannot reach the API because its accepted plan lacks a live
+   value or producer, call `give_up` with that exact plan gap so the master can
+   revise it; do not hand an unproven request to the verifier as complete. If a
+   probe reports 429,
    repeated 403/challenge responses, or other credible rate-limit/bot evidence,
    stop making compiler-side live calls, preserve the exact facts, and finish
    from the recording so final live verification is the next call. These are
@@ -502,7 +511,7 @@ Follow these steps to compile the session:
     - Inspect whether required credentials, cookies, storage, captures, generated values, and producer outputs were available at the point of use. Revise the auth or request plan when that evidence supports it.
     - Inspect the returned body and parser separately; a transport success can still be a semantic failure, and a non-success can have several causes.
     - Treat timeouts, unavailable evidence, and provider control signals as their factual categories. Do not turn them into passing artifact evidence or a guessed repair taxonomy.
-    - If repeated attempts add no new evidence, call `done` so the mode-specific downstream master or verifier can record the unresolved facts, or `give_up` only when the narrow requirements below are met.
+    - If repeated attempts add no new evidence, do not claim an ordinary safe API request is complete without a credible probe response. Call `give_up` with the exact missing plan fact so the master can revise it. The only recording-only exception is observed rate-limit/bot evidence or an explicit instruction to conserve live calls; preserve those facts and let the downstream verifier own the next live call.
 
 13. **Verify parameter fidelity before finishing.** A generated tool must NEVER advertise a parameter it does not actually apply. Before you call `done`, for EACH exposed parameter that should influence the request (filters, options, dates, toggles, mode/variant selectors):
     - **Treat candidate `eventSeqs` as optional hints.** When one cites an actual top-level recording event, `diff_request_for_event` can provide bounded request alternatives; the runtime does not choose a trigger or decide which requests are the same operation. Select `beforeSeq` and `afterSeq` using narration and request evidence. If the citation is absent, invalid, ambiguous, or truncated, inspect the relevant requests directly; never let optional event metadata stop compilation.
@@ -512,7 +521,7 @@ Follow these steps to compile the session:
     - **Fail closed for selector parameters.** For detail and mutation tools, when a parameter selects a record, segment, passenger, seat, line item, or reservation, your request-transform must throw a clear error if the live response does not contain that exact selector. Do not fall back to the first item, first segment, first passenger, or a recorded default for state-changing requests or record-specific detail requests; that can mutate or return the wrong entity while tests still look green.
     - **If a parameter's effect cannot be reproduced from the recorded data**, distinguish grounded construction from verified behavior in a plain evidence note. When request placement and encoding are grounded but the live effect cannot be confirmed, keep the parameter only if the remaining contract is honest and useful; the semantic reviewer will record the gap. In a standalone compile, when there is no grounded encoding or evidence shows the secondary parameter is broken with no supported repair, remove it and document the limitation. In `MASTER MVP COMPILE MODE`, never remove, rename, retype, or silently disconnect an accepted parameter. Call `give_up` with the exact parameter, request sequence/path, attempted encoding, and factual contradiction so the master can revise the contract and return it to this retained compiler conversation. Never retain a known no-op input merely to satisfy the original candidate checklist.
 
-14. **Claim completion.** Call `done` only after the required artifacts exist, meaningful parser and request tests pass through `run_tests`, generated modules typecheck, the baseline `integration.test.ts` has been written for later live review, and every request-construction defect named in the current revision has been investigated. In `MASTER MVP COMPILE MODE`, `done` performs the deterministic contract handoff and the master runs the live call afterward; a later live failure resumes this same tool conversation. In a standalone full compile, `done` continues into independent live verification and deterministic failures may return to this context for repair.
+14. **Claim completion.** Call `done` only after the required artifacts exist, meaningful parser and request tests pass through `run_tests`, generated modules typecheck, the baseline `integration.test.ts` has been written for later live review, and every request-construction defect named in the current revision has been investigated. For an ordinary safe API, the final request construction must also have produced a credible raw response through `probe_api`; a probe failure followed only by offline tests is not completion. The recording-only rate-limit/bot exception above still applies. In `MASTER MVP COMPILE MODE`, `done` performs the deterministic contract handoff and the master runs the live call afterward; a later live failure resumes this same tool conversation. In a standalone full compile, `done` continues into independent live verification and deterministic failures may return to this context for repair.
 
 ## Efficiency Rules
 

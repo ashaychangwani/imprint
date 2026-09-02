@@ -1052,7 +1052,7 @@ export function buildProbeApiTool(toolDir: string): AgentTool {
   return {
     name: 'probe_api',
     description:
-      'Run the current workflow.json through the normal API ladder (fetch → fetch-bootstrap → cdp-replay → stealth-fetch) without parser.ts. Returns factual rung attempts and a redacted raw-response preview, and saves the longer response under notes/ for inspection. This is compiler scratch work: it creates no verification receipt and cannot publish the tool.',
+      'Run the current workflow.json through the normal API ladder (fetch → fetch-bootstrap → cdp-replay → stealth-fetch) without parser.ts. Dry-run request transforms and their offline tests first so local bugs do not spend a browser probe. Returns factual rung attempts and a redacted raw-response preview, and saves the longer response under notes/ for inspection. A failed probe is not proof that the request works: repair and probe again, or report the exact missing plan fact. This is compiler scratch work: it creates no verification receipt and cannot publish the tool.',
     input_schema: {
       type: 'object',
       properties: {
