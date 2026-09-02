@@ -165,12 +165,25 @@ when the plan has not considered these actual mechanisms against the supplied
 repeated-request evidence.
 
 Review hypotheses as coherent constructions rather than an additive ladder.
-Prefer one strongest fresh construction that combines current session/bootstrap
-state, supported per-call generation, and omission of fields whose necessity is
-unproven. Keep one closest-recorded diagnostic construction. Do not infer that
-every omitted field is required when an omit-all request fails, and do not keep
-adding unrelated stale values until the request happens to work. Ask what each
-result isolated before authorizing the next construction.
+Coherent does not mean every field has the same lifetime. A valid request may
+combine current session/bootstrap state, a freshly generated per-call value,
+and a stable recorded protocol literal. Keep one closest-recorded diagnostic
+construction, but do not prohibit a mixed-lifecycle live construction merely
+because one component came from the recording. Do not infer that every omitted
+field is required when an omit-all request fails, and do not keep adding
+unrelated stale values until the request happens to work. Ask what each result
+isolated before authorizing the next construction. One failed generator shape
+does not exhaust other fresh-value shapes supported by the evidence or the
+artifact mechanisms.
+
+Before accepting an opaque-field blocker, check whether the retained compiler
+searched the entire combined recording for the same method/path and inspected
+calls spread across sessions. Candidate request IDs are a focused starting
+point, not a boundary around transport evidence. For a one-off endpoint, have
+the compiler inspect nearby calls in the same request family. “No producer was
+found” does not establish that a recorded value is per-session; it may be a
+longer-lived protocol literal. If this evidence was not examined, the API
+construction is not exhausted.
 
 For an HTTP-success response that is empty, tiny, or semantically unusable,
 first audit the plan's transport provenance: every changing query value, body

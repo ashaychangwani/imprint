@@ -46,6 +46,15 @@ When supplied repeated-request evidence supports a fresh per-invocation value,
 do not support a blocker that tried only omission and recorded stale literals
 without addressing a coherent fresh-generation construction. This is a review
 of the agent's evidence and hypotheses, not a runtime classification rule.
+One failed generator shape does not exhaust other shapes still supported by the
+evidence or the listed fresh-value mechanisms. Coherent does not require every
+field to have the same lifetime: fresh session state, a fresh per-call value,
+and a stable recorded protocol literal may legitimately coexist. Do not support
+a blocker that forbids such a mixed-lifecycle construction without evidence
+that the recorded component is stale or session-bound. If the compiler never
+searched the combined recording for same-endpoint calls across sessions (or
+nearby same-family calls for a one-off endpoint), treat its lifecycle claim as
+unsupported rather than final.
 An invocation fact may include a slug-only `executionMechanism`. It reports
 which backend actually ran for that invocation; it is evidence only and never
 selects strategy or changes the required checks.

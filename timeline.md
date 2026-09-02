@@ -3283,3 +3283,40 @@ empty wrapper objects, and it missed Calendar entirely. The current flow is not
 yet better at reconstructing the hard live requests, but it is now materially
 more honest: it discovers all four operations and refuses to ship hollow API
 results.
+
+## 2026-09-02 05:05 PDT — The request-repair prompt forbade the missing combination
+
+The retained Calendar and Search transcripts showed a clear reasoning mistake.
+The prompt said each request hypothesis must be “coherent,” then warned against
+combining fresh session values with a recorded opaque value. The master followed
+that literally. It tried fresh session state with an omitted opaque header, and
+it tried a fully recorded diagnostic, but it never tried fresh session state,
+a fresh call identifier, and a potentially longer-lived recorded protocol
+header together. Real requests often contain values with different lifetimes,
+so the prompt had incorrectly ruled out a plausible construction.
+
+The compilers also stayed inside the one representative request selected for
+each candidate. Neither used the existing `search_requests` tool to examine the
+many matching calls elsewhere in the combined recording. Search therefore
+treated one five-digit call-identifier generator as if it exhausted all fresh
+generator shapes. Calendar treated the absence of a known producer for its
+opaque header as proof that the recorded value could not be used, without first
+checking whether related calls showed it behaving like a longer-lived literal.
+
+The correction is prompt-only and site-neutral. Candidate scope now limits the
+operation being built, not the evidence the compiler may inspect. Compilers are
+told to search the entire combined recording for matching calls across sessions,
+and to inspect nearby calls in the same request family for one-off endpoints.
+“Coherent” now explicitly allows a request to combine fresh session state, a
+fresh per-call value, and a stable recorded protocol literal. One failed
+generator shape no longer counts as exhausting every generated construction,
+and the independent completion reviewer must reject blockers that skip this
+evidence. The old numeric three-hypothesis prompt cap was also removed; useful
+distinct hypotheses may continue until the shared run deadline.
+
+A direct postmortem call of the checked-in Flights Search example was also run
+with current future dates. It did not return flights today: CDP reached the
+service but its parser found no recognizable itineraries, and the other backend
+rungs failed. This means the example remains useful historical evidence about
+request design, but it is not a currently working answer that the teach process
+could simply rediscover. The fresh teach must still prove its own live result.

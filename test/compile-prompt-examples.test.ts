@@ -81,8 +81,8 @@ test('canonical TypeScript artifacts are syntactically valid named exports', () 
 });
 
 test('the pinned contract states applicability, edit invalidation, and playbook priority', () => {
-  expect(prompt).toContain('API workflow | contract → live');
-  expect(prompt).toContain('Browser playbook fallback | contract → live');
+  expect(prompt).toMatch(/API workflow\s+\| contract → live/);
+  expect(prompt).toMatch(/Browser playbook fallback\s+\| contract → live/);
   expect(prompt).toContain('Run the contract check again after every artifact edit.');
   expect(prompt).toContain('execution rungs have higher priority');
   expect(prompt).toContain('only when you are 100% certain');
@@ -114,6 +114,12 @@ test('the pinned contract states applicability, edit invalidation, and playbook 
   expect(prompt).not.toContain('When parser tests pass, call `done`');
   expect(prompt).not.toContain('Get parser tests passing first, then call `done`');
   expect(prompt).toContain('Write integration.test.ts with the accepted baseline case');
+  expect(prompt).toMatch(
+    /use\s+`search_requests` to find matching calls across the entire combined/i,
+  );
+  expect(prompt).toMatch(/Coherent does not\s+mean every field has the same lifetime/i);
+  expect(prompt).toMatch(/One failed\s+generator shape does not disprove other shapes/i);
+  expect(prompt).not.toContain('Do not expand beyond three without new evidence.');
 });
 
 test('the playbook compiler remains site-neutral and follows the accepted auth and fallback plans', () => {

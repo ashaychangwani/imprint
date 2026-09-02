@@ -1125,7 +1125,15 @@ describe('prompts and pre-plan discovery', () => {
       expect(authorPrompt).toContain('${generated.nonce}');
       expect(authorPrompt).toMatch(/coherent/i);
       expect(authorPrompt).toMatch(/classif|rule/i);
+      expect(authorPrompt).toMatch(/same lifetime/i);
+      expect(authorPrompt).toMatch(/one failed\s+generator shape/i);
     }
+    expect(prompt('master-teach-focused-planner.md')).toMatch(/entire combined recording/i);
+    expect(prompt('master-teach-decision.md')).toMatch(/same method\/path/i);
+    expect(prompt('compile-agent.md')).toContain('`search_requests`');
+    expect(prompt('master-teach-completion-review.md')).toMatch(
+      /same-endpoint calls across sessions/i,
+    );
   });
 
   it('keeps baseline MVP review focused on one bounded result and exact current binding', async () => {

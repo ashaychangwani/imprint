@@ -103,13 +103,23 @@ reasonable hypothesis; otherwise omit or report the uncertainty.
 
 Plan a small set of coherent request constructions, not an additive ladder that
 first drops every uncertain value and then pastes stale recorded values back one
-at a time. Group fields whose evidence indicates the same lifecycle. The
-strongest fresh construction should combine fresh bootstrap/session values with
-supported per-invocation generation while omitting fields whose necessity is
-unproven. Keep the closest recorded construction as a diagnostic comparison.
-Failure of an omit-everything construction does not prove that every omitted
-field is required, and failure after adding several recorded values does not
-identify which one mattered.
+at a time. Coherent does not mean every field has the same lifetime. A valid
+request may combine fresh bootstrap/session state, a newly generated per-call
+value, and a stable recorded protocol literal. Group only the fields whose
+evidence indicates the same lifetime, and keep plausible mixed-lifecycle
+combinations available for verification. Treat one failed generator shape as
+one failed hypothesis, not as proof that all supported fresh-value shapes fail.
+Keep the closest recorded construction as a diagnostic comparison. Failure of
+an omit-everything construction does not prove that every omitted field is
+required, and failure after adding several recorded values does not identify
+which one mattered.
+
+The representative request is a starting point, not the whole evidence set.
+Before claiming that an opaque transport value has no usable lifecycle, direct
+the compiler to search the entire combined recording for the same method and
+path and inspect calls spread across sessions. For a one-off endpoint, compare
+nearby calls in the same request family. A field with no observed producer may
+still be a stable literal; opacity and entropy do not make it session-bound.
 
 Know the API artifact's actual vocabulary before proposing a plan. It can issue
 ordered recorded requests; substitute parameters, credentials, captured state,
