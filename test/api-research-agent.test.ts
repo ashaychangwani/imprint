@@ -97,7 +97,10 @@ const run = {
   planSha256: `sha256:${'2'.repeat(64)}`,
 };
 const recordingIndex = { recordingSha256, requestSeqs: [12], eventSeqs: [] };
-const apiCandidate = (variant: string): ApiResearchCandidate => ({
+const apiCandidate = (
+  variant: string,
+  testBackend?: ApiResearchCandidate['testBackend'],
+): ApiResearchCandidate => ({
   workflow: {
     toolName: 'search_fixture',
     intent: { description: 'Search fixture records' },
@@ -113,6 +116,7 @@ const apiCandidate = (variant: string): ApiResearchCandidate => ({
     site: 'fixture.invalid',
   },
   parameterValues: { query: 'alpha' },
+  ...(testBackend ? { testBackend } : {}),
 });
 const binding = { runId: run.runId, recordingSha256, toolId: tool.id, compileInputsSha256 };
 
@@ -120,7 +124,7 @@ describe('focused API research', () => {
   it('keeps request testing separate and hands only the proven request to compilation', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-api-research-'));
     const first = apiCandidate('diagnostic');
-    const second = apiCandidate('working');
+    const second = apiCandidate('working', 'cdp-replay');
     let agentTurn = 0;
     let execution = 0;
     try {
@@ -152,8 +156,9 @@ describe('focused API research', () => {
               reason: 'The response contains fixture records.',
             };
           },
-          runApiTool: async () => {
+          runApiTool: async ({ backend }) => {
             execution += 1;
+            expect(backend).toBe(execution === 1 ? undefined : 'cdp-replay');
             return {
               executionMechanism: 'fetch',
               result:

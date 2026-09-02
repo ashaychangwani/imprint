@@ -48,6 +48,7 @@ export interface ApiResearchDependencies {
   runApiTool(input: {
     workflowPath: string;
     parameters: Record<string, string | number | boolean>;
+    backend?: 'auto' | 'fetch' | 'fetch-bootstrap' | 'cdp-replay' | 'stealth-fetch';
     signal?: AbortSignal;
   }): Promise<{
     result: ToolResult<unknown>;
@@ -154,6 +155,7 @@ export async function researchApiMvpCall(input: {
       const observed = await input.dependencies.runApiTool({
         workflowPath,
         parameters: candidate.parameterValues,
+        backend: candidate.testBackend,
         signal: input.signal,
       });
       observations.push({

@@ -135,6 +135,13 @@ test('the playbook compiler remains site-neutral and follows the accepted auth a
 test('API research stays separate, retained, site-neutral, and ahead of compilation', () => {
   expect(apiResearchPrompt).toContain('smallest credible live API call before the compiler');
   expect(apiResearchPrompt).toContain('same retained conversation');
+  expect(apiResearchPrompt).toContain('`candidate.testBackend` controls only this research test');
+  expect(apiResearchPrompt).toContain('Choosing a rung is your evidence-backed decision');
+  expect(apiResearchPrompt).toContain('The parser-free workflow still has the complete API');
+  expect(apiResearchPrompt).toContain('A top-level `bootstrap`');
+  expect(apiResearchPrompt).toContain('`${state.NAME}`');
+  expect(apiResearchPrompt).toContain('`${generated.epoch_ms}`');
+  expect(apiResearchPrompt).toMatch(/does not change\s+the accepted `requests` count/);
   expect(apiResearchPrompt).toContain('export function transform(');
   expect(apiResearchPrompt).toContain('responses: unknown[]');
   expect(apiResearchPrompt).toContain('params: Params = {}');

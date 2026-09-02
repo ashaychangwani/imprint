@@ -125,7 +125,13 @@ import {
 import { resolveTeachingRecording } from './session-merge.ts';
 import { buildToolCandidatePayload, detectToolCandidates } from './tool-candidates.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
-import { type Session, SessionSchema, type ToolResult, type Workflow } from './types.ts';
+import {
+  type ReplayBackend,
+  type Session,
+  SessionSchema,
+  type ToolResult,
+  type Workflow,
+} from './types.ts';
 
 const FOCUSED_COMPILE_CONCURRENCY = 2;
 const DEFAULT_PLAYBOOK_CHECK_TIMEOUT_MS = 150_000;
@@ -432,6 +438,7 @@ interface CandidateSelectionCheckpoint {
 type ApiToolRunner = (input: {
   workflowPath: string;
   parameters: Record<string, string | number | boolean>;
+  backend?: ReplayBackend;
   signal?: AbortSignal;
 }) => Promise<{
   result: ToolResult<unknown>;
@@ -498,10 +505,16 @@ interface FreshTeachControllerDependencies {
   }) => Promise<void>;
 }
 
-const runApiToolWithLadder: ApiToolRunner = async ({ workflowPath, parameters, signal }) => {
+const runApiToolWithLadder: ApiToolRunner = async ({
+  workflowPath,
+  parameters,
+  backend,
+  signal,
+}) => {
   const run = await runWorkflowWithLadder({
     workflowPath,
     params: parameters,
+    ...(backend && backend !== 'auto' ? { forceBackend: backend } : {}),
     signal,
   });
   return {

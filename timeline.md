@@ -3371,3 +3371,33 @@ public parameters are its only dynamic inputs. It also says to ask the master
 for a producer request when the accepted plan lacks one, instead of inventing a
 wrapper object with hidden bootstrap or state fields. This is a site-neutral
 prompt correction; runtime strategy rules were not added.
+
+## 2026-09-02 14:46 PDT — Calendar was close in diagnosis, not construction
+
+Fresh Flights run `269b06b3-2863-44df-ac2e-12c64177eceb` confirmed that the
+transform-contract fix worked. Calendar produced a loadable named `transform`,
+rebuilt the route/date body and matching `tfs` Referer, tested both a simplified
+request and a closest-recorded request, and rejected both 130-byte protocol
+error `[13]` responses. It then correctly concluded that fresh page-produced
+session values were missing. Location again proved real results and entered
+compilation.
+
+Comparison with the checked-in Calendar example showed that the researcher was
+only partly converging. The checked-in tool loads the Flights page as a
+top-level bootstrap, extracts fresh `f.sid` and `bl` from the returned HTML,
+substitutes them through `${state...}`, generates a fresh `_reqid`, and uses
+CDP replay. Its saved backend evidence says fetch lacked state,
+fetch-bootstrap was rejected, and warm CDP replay succeeded in 550 ms. The
+researcher reached the same need for fresh state, but asked the master to add
+the page navigation as an ordinary operation request because its prompt did not
+show the workflow bootstrap schema.
+
+The run was stopped rather than resumed. The researcher now receives the exact
+parser-free workflow surface for bootstrap captures, state/response/generated
+placeholders, and request captures. It is explicitly told that top-level
+bootstrap is preparation and does not change the accepted operation-request
+count. The researcher may also select one existing API rung for a test. This is
+needed when fetch returns HTTP 200 with a semantic protocol error: automatic
+transport stops at that HTTP success, but the agent can now test the same
+request through CDP without changing the artifact or adding a semantic runtime
+classifier. Focused end-to-end tests, type checking, and lint passed.

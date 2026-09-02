@@ -126,6 +126,9 @@ export const ApiResearchCandidateSchema = strictObject({
   workflow: WorkflowSchema,
   requestTransformSource: utf8Text(1, 100_000).optional(),
   parameterValues: ScalarParameterValuesSchema,
+  testBackend: z
+    .enum(['auto', 'fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'])
+    .optional(),
 });
 export type ApiResearchCandidate = z.infer<typeof ApiResearchCandidateSchema>;
 export const ApiResearchObservationSchema = strictObject({

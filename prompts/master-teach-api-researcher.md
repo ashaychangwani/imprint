@@ -15,6 +15,14 @@ write its request transform when supplied, run it through the normal API ladder
 (fetch, fetch-bootstrap, CDP replay, then stealth fetch), and return a factual
 observation in this same retained conversation.
 
+`candidate.testBackend` controls only this research test. Omit it or use
+`"auto"` for the normal ladder. You may select `"fetch"`,
+`"fetch-bootstrap"`, `"cdp-replay"`, or `"stealth-fetch"` to test one exact
+rung when the returned body shows that an earlier rung's HTTP success was not a
+semantic success. Choosing a rung is your evidence-backed decision; it does not
+change the generated workflow or the runtime's later preferred order. Do not
+rewrite the request merely to make the ladder advance.
+
 On later turns, use the newest observation and your prior reasoning. You may:
 
 - return `action: "test"` with one revised complete candidate;
@@ -45,6 +53,68 @@ coherent everywhere they appear, including bodies and Referers. Use a
 express the recorded encoding. When present, the workflow must set
 `requestTransformModule` to exactly `./request-transform.ts`. Never set
 `parserModule`.
+
+The parser-free workflow still has the complete API execution surface:
+
+```typescript
+Workflow = {
+  toolName: string;
+  intent: { description: string; userSaid?: string };
+  parameters: Array<{
+    name: string;
+    type: 'string' | 'number' | 'boolean';
+    description: string;
+    default?: string | number | boolean;
+  }>;
+  requests: Array<{
+    recordingRequestSeq: number;
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body?: string;
+    bodyPlaceholderEncoding?: 'raw' | 'json-string' | 'form-urlencoded';
+    extract?: Record<string, string>;
+    captures?: Array<
+      | { source: 'json'; name: string; path: string; decodeJsonPath?: string; required?: boolean; capability?: StateCapability }
+      | { source: 'response_header'; name: string; header: string; mode?: 'first' | 'last' | 'all'; required?: boolean; capability?: StateCapability }
+      | { source: 'text_regex'; name: string; pattern: string; group?: number; required?: boolean; capability?: StateCapability }
+      | { source: 'cookie'; name: string; cookie: string; url?: string; required?: boolean; capability?: StateCapability }
+    >;
+  }>;
+  site: string;
+  bootstrap?: {
+    url: string;
+    waitUntil?: 'domcontentloaded' | 'load' | 'networkidle';
+    waitMs?: number;
+    timeoutMs?: number;
+    captures?: Array<
+      | { source: 'html_regex'; name: string; pattern: string; group?: number; required?: boolean; capability?: StateCapability }
+      | { source: 'dom_attribute'; name: string; selector: string; attribute: string; timeoutMs?: number; required?: boolean; capability?: StateCapability }
+      | { source: 'dom_text'; name: string; selector: string; timeoutMs?: number; required?: boolean; capability?: StateCapability }
+      | { source: 'cookie'; name: string; cookie: string; url?: string; required?: boolean; capability?: StateCapability }
+      | { source: 'local_storage' | 'session_storage'; name: string; origin: string; key: string; required?: boolean; capability?: StateCapability }
+      | { source: 'response_header'; name: string; header: string; mode?: 'first' | 'last' | 'all'; required?: boolean; capability?: StateCapability }
+    >;
+  };
+  requestTransformModule?: './request-transform.ts';
+};
+
+type StateCapability =
+  | 'ordinary_http'
+  | 'browser_bootstrap'
+  | 'stealth_bootstrap'
+  | 'credential_required'
+  | 'unsupported';
+```
+
+Templates may use `${param.NAME}`, `${state.NAME}`,
+`${response[N].NAME}`, and `${generated.epoch_ms}`. A top-level `bootstrap`
+is request preparation, not another operation request, so it does not change
+the accepted `requests` count or provenance. When the recording shows that a
+page load produces fresh session state, express that page load as
+`workflow.bootstrap` with evidence-backed captures; do not add the navigation
+page to `workflow.requests` merely to make the state available. The requested
+test rung must be capable of satisfying every required capture.
 
 The request-transform contract is exact. The module must export a named
 function called `transform` with this signature:
@@ -107,7 +177,8 @@ Output shape:
       "site": "the fixed site"
     },
     "requestTransformSource": "optional complete TypeScript module source",
-    "parameterValues": {}
+    "parameterValues": {},
+    "testBackend": "auto"
   },
   "reason": "what this construction tests and why"
 }
