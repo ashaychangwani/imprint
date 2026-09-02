@@ -3468,3 +3468,10 @@ only the generated millisecond value. It now lists every supported generated
 value, including the nonce used for changing request IDs. No runtime rule,
 master-side candidate plumbing, transport classifier, or site-specific policy
 was added. Prompt schema tests, type checking, and lint all pass.
+
+A fresh Flights teach, `ed84534a-1ade-48aa-95e9-8b807800209d`, was then
+started from the previously accepted four candidate boundaries. Planning and
+all later work are fresh; no failed research or compilation run was resumed.
+Its first validation target is whether the retained Calendar and Search
+researchers continue through the strongest untried constructions instead of
+repeating the unsupported opaque-header blocker.
