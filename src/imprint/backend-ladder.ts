@@ -900,18 +900,6 @@ async function runFetchBootstrap(
   credentialOverride?: CredentialStore,
   onResponse?: (observation: ResponseObservation) => void,
 ): Promise<ToolResult> {
-  let baseUrl: string;
-  try {
-    baseUrl = pickBaseUrl(tool);
-  } catch {
-    return {
-      ok: false,
-      error: 'STATE_MISSING',
-      message: 'fetch-bootstrap needs at least one request URL to bootstrap from.',
-      remediation: 'Regenerate workflow.json — it has no requests.',
-    };
-  }
-
   const credentials = credentialOverride ??
     (await loadCredentialStore(tool.site)) ?? {
       site: tool.site,
@@ -920,6 +908,17 @@ async function runFetchBootstrap(
       storage: [],
     };
   const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
+  let baseUrl: string;
+  try {
+    baseUrl = pickBaseUrl(tool, paramsWithDefaults, credentials);
+  } catch {
+    return {
+      ok: false,
+      error: 'STATE_MISSING',
+      message: 'fetch-bootstrap needs a resolvable request URL to bootstrap from.',
+      remediation: 'Supply the workflow parameters required by its first request URL.',
+    };
+  }
   const bootstrapUrl = tool.workflow.bootstrap
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
@@ -1041,18 +1040,6 @@ async function runCdpReplay(
   signal?: AbortSignal,
   onResponse?: (observation: ResponseObservation) => void,
 ): Promise<ToolResult> {
-  let baseUrl: string;
-  try {
-    baseUrl = pickBaseUrl(tool);
-  } catch {
-    return {
-      ok: false,
-      error: 'STATE_MISSING',
-      message: 'cdp-replay needs at least one request URL to bootstrap from.',
-      remediation: 'Regenerate workflow.json — it has no requests.',
-    };
-  }
-
   const credentials = credentialOverride ??
     (await loadCredentialStore(tool.site)) ?? {
       site: tool.site,
@@ -1061,6 +1048,17 @@ async function runCdpReplay(
       storage: [],
     };
   const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
+  let baseUrl: string;
+  try {
+    baseUrl = pickBaseUrl(tool, paramsWithDefaults, credentials);
+  } catch {
+    return {
+      ok: false,
+      error: 'STATE_MISSING',
+      message: 'cdp-replay needs a resolvable request URL to bootstrap from.',
+      remediation: 'Supply the workflow parameters required by its first request URL.',
+    };
+  }
   const bootstrapUrl = tool.workflow.bootstrap
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
@@ -1486,14 +1484,15 @@ async function ensureStealthFetch(
     cookies: [],
     values: {},
   };
+  const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   const bootstrapUrl = tool.workflow.bootstrap?.url
-    ? substituteString(tool.workflow.bootstrap.url, params, credentials, [], 'url')
+    ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [], 'url')
     : undefined;
   const cacheKey = bootstrapUrl ? `${tool.site}:${bootstrapUrl}` : tool.site;
   const cached = cache.get(cacheKey);
   if (cached) return cached;
   const sf = createStealthFetch({
-    baseUrl: pickBaseUrl(tool),
+    baseUrl: pickBaseUrl(tool, paramsWithDefaults, credentials),
     // When the workflow declares a bootstrap page, navigate IT during the
     // stealth bootstrap so the session-token cookies it sets (CSRF etc.) are
     // minted in the same session as the anti-bot cookies. Otherwise the
@@ -1514,7 +1513,11 @@ async function ensureStealthFetch(
  *  without rendering an HTML page, so the anti-bot sensor JS never
  *  fires and the _abck cookie stays unvalidated. Fall back to
  *  requests[0] if every request looks like an API call. */
-export function pickBaseUrl(tool: ResolvedTool): string {
+export function pickBaseUrl(
+  tool: ResolvedTool,
+  params: Record<string, string | number | boolean> = {},
+  credentials: CredentialStore = { site: tool.site, cookies: [], values: {} },
+): string {
   const requests = tool.workflow.requests;
   if (!requests.length) {
     throw new Error(
@@ -1526,11 +1529,19 @@ export function pickBaseUrl(tool: ResolvedTool): string {
   // is the page the user was on when the API call fired, so it's the
   // correct bootstrap target. Referer is set by the browser and always
   // points to a real navigable page.
+  const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   for (const req of requests) {
     const referer = req.headers?.Referer ?? req.headers?.referer;
     if (referer) {
       try {
-        const u = new URL(referer);
+        const resolvedReferer = substituteString(
+          referer,
+          paramsWithDefaults,
+          credentials,
+          [],
+          'url',
+        );
+        const u = new URL(resolvedReferer);
         return `${u.origin}${u.pathname}`;
       } catch {
         // malformed referer — skip
@@ -1551,7 +1562,8 @@ export function pickBaseUrl(tool: ResolvedTool): string {
     );
   }
   try {
-    const u = new URL(first.url);
+    const resolvedUrl = substituteString(first.url, paramsWithDefaults, credentials, [], 'url');
+    const u = new URL(resolvedUrl);
     return u.origin;
   } catch {
     throw new Error(
@@ -1641,7 +1653,12 @@ export async function runWorkflowWithLadder(opts: {
   const stealthCache = new Map<string, StealthFetch>();
   try {
     const siteDir = pathResolve(toolDir, '..');
-    const baseUrl = pickBaseUrl(tool);
+    const compileCredentials = opts.credentials ?? { site: tool.site, cookies: [], values: {} };
+    const compileParams = withWorkflowDefaults(workflow, opts.params);
+    const baseUrl = pickBaseUrl(tool, compileParams, compileCredentials);
+    const bootstrapUrl = workflow.bootstrap?.url
+      ? substituteString(workflow.bootstrap.url, compileParams, compileCredentials, [], 'url')
+      : undefined;
     let fileCacheConsumed = false;
     const cachingBootstrap = async (args: BootstrapArgs): Promise<TokenCache> => {
       if (!fileCacheConsumed) {
@@ -1660,10 +1677,7 @@ export async function runWorkflowWithLadder(opts: {
     };
     stealthCache.set(
       tool.site,
-      createStealthFetch(
-        { baseUrl, bootstrapUrl: tool.workflow.bootstrap?.url },
-        { bootstrap: cachingBootstrap },
-      ),
+      createStealthFetch({ baseUrl, bootstrapUrl }, { bootstrap: cachingBootstrap }),
     );
   } catch {
     // No usable base URL → leave the cache empty; runWithLadder/ensureStealthFetch
@@ -1682,7 +1696,7 @@ export async function runWorkflowWithLadder(opts: {
 
   try {
     try {
-      await paceCompileRequest(new URL(pickBaseUrl(tool)).origin);
+      await paceCompileRequest(new URL(pickBaseUrl(tool, opts.params, opts.credentials)).origin);
     } catch {
       // no parseable base URL → nothing to pace
     }

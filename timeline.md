@@ -3864,3 +3864,32 @@ missing CLI only for an actual operating-system spawn error or the SDK's exact
 binary-resolution error. All other messages keep their original provider
 detail. Tests cover both a real missing executable and an unrelated provider
 `not found` response; the focused tests, type checking, and lint pass.
+
+## 2026-09-03 13:59–14:50 PDT — Browser backends now accept a parameterized URL
+
+One fresh start briefly failed while reading the mounted recording with a JSON
+parse error. The recording and candidate checkpoint both passed `jq`, the
+recording checksum was unchanged, and `imprint check` still found 491 complete
+successful requests. A second fresh start loaded the same files normally, so no
+code was changed for this one unrepeatable mounted-file read.
+
+Fresh run `525446ee-62b6-487c-96ff-d28efee9de9f` then proved both location tools
+through ordinary fetch and completed research for all five proposed operations.
+The master kept all five tools and planned them in one build wave. It did not
+repeat research for the two already-proven location tools, confirming that the
+previous research-reuse fix works.
+
+Search correctly narrowed its input to one complete, pre-encoded search URL
+after proving that the static version returns real flights in Chrome. The next
+test exposed a small generic runtime ordering bug: plain fetch substituted that
+URL before sending it, but the browser backends tried to choose a bootstrap
+origin from the unresolved `${param.search_url}` text. They returned
+`STATE_MISSING` without opening the page. The run was cancelled once the defect
+was proven instead of spending the rest of its deadline on a known blocker.
+
+The browser backends now substitute caller parameters and defaults before they
+derive the bootstrap origin, just as plain fetch already does. This is a
+mechanical fix for any parameterized URL; it adds no site rule or teaching
+strategy. Tests cover whole-URL parameters through the CDP rung and parameters
+inside a Referer. The focused backend suite passes 86 tests, and type checking
+and lint pass.

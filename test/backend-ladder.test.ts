@@ -1856,6 +1856,51 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     expect(closes).toBe(1);
   });
 
+  it('resolves a whole request URL parameter before cdp-replay bootstraps', async () => {
+    let seenBaseUrl: string | undefined;
+    __setCdpBrowserFetchFactoryForTest((opts) => {
+      seenBaseUrl = opts.baseUrl;
+      return {
+        fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+        navigate: async () => new Response('<html></html>', { status: 200 }),
+        snapshotCookies: async () => [],
+        ensureBootstrapped: async () => [],
+        mintJar: async () => defaultedJar,
+        close: async () => {},
+      };
+    });
+    const tool: ResolvedTool = {
+      site: 'dynamic-url',
+      dir: pathJoin(root, 'dynamic-url', 'tool'),
+      workflow: {
+        toolName: 'dynamic_url_tool',
+        intent: { description: 'Load a caller-provided URL.' },
+        parameters: [
+          {
+            name: 'search_url',
+            type: 'string',
+            description: 'Complete URL to load.',
+          },
+        ],
+        requests: [{ method: 'GET', url: '${param.search_url}', headers: {} }],
+        site: 'dynamic-url',
+      },
+      toolFn: async () => ({ ok: true, data: { via: 'cdp-replay' } }),
+    };
+
+    const r = await runWithLadder(
+      ['cdp-replay'],
+      tool,
+      { search_url: 'https://example.com/travel/search?q=one' },
+      root,
+      new Map(),
+    );
+
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(r.result.ok).toBe(true);
+    expect(seenBaseUrl).toBe('https://example.com');
+  });
+
   it('retains an inspectable failed page when the caller owns the CDP pool', async () => {
     let closes = 0;
     const inspectPage = async () => ({
@@ -2679,6 +2724,46 @@ describe('pickBaseUrl', () => {
   it('uses origin for single API request with no Referer', () => {
     const tool = toolWith([{ method: 'POST', url: 'https://example.com/api/booking/search?q=1' }]);
     expect(pickBaseUrl(tool)).toBe('https://example.com');
+  });
+
+  it('resolves parameters before deriving the bootstrap origin', () => {
+    const tool = toolWith([{ method: 'GET', url: '${param.search_url}' }]);
+    tool.workflow.parameters = [
+      {
+        name: 'search_url',
+        type: 'string',
+        description: 'Complete URL to load.',
+      },
+    ];
+
+    expect(
+      pickBaseUrl(tool, {
+        search_url: 'https://example.com/travel/search?q=one',
+      }),
+    ).toBe('https://example.com');
+  });
+
+  it('resolves parameters in a Referer before using it as the bootstrap page', () => {
+    const tool = toolWith([
+      {
+        method: 'GET',
+        url: 'https://example.com/api/search',
+        headers: { Referer: '${param.search_page}' },
+      },
+    ]);
+    tool.workflow.parameters = [
+      {
+        name: 'search_page',
+        type: 'string',
+        description: 'Page that initiated the request.',
+      },
+    ];
+
+    expect(
+      pickBaseUrl(tool, {
+        search_page: 'https://example.com/travel/search?q=one',
+      }),
+    ).toBe('https://example.com/travel/search');
   });
 
   it('throws for empty requests', () => {
