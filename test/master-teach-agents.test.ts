@@ -1094,6 +1094,9 @@ describe('prompts and pre-plan discovery', () => {
 
     expect(researchPrompt).toMatch(/as little as possible from\s+recorded headers/i);
     expect(researchPrompt).toMatch(/smallest candidate actually tested with real data/i);
+    expect(researchPrompt).toMatch(/materially different parameter set/i);
+    expect(researchPrompt).toMatch(/response reflects the changed route/i);
+    expect(researchPrompt).toMatch(/blind text\s+replacement inside an encoded/i);
     expect(researchPrompt).toMatch(/winning rung/i);
     expect(focusedPrompt).toMatch(
       /Request research for every selected operation has already finished/i,

@@ -57,6 +57,18 @@ preview. A short protocol error, challenge page, login shell, empty wrapper, or
 response without the promised core records is not a credible MVP response.
 Mark `proven` only when the cited test returned the operation's real core data.
 
+Real data for the recorded example proves only that one example. When the
+public tool has meaningful caller parameters, also prove that those parameters
+actually control the operation before returning `proven`. Test at least one
+coherent, materially different parameter set when the recording and live site
+make that possible, then verify that the response reflects the changed route,
+query, dates, identifier, or other core input. This is especially important
+when parameters are embedded inside an encoded URL, nested form value, binary
+token, or request transform: a response that still describes the recorded
+example is a failed parameterization even when it contains excellent real
+data. If rate limiting or bot protection makes a second live test unsafe, say
+which parameter mapping remains inferred instead of claiming it was proven.
+
 Start with the smallest directly recorded result request and the minimum wire
 shape that can plausibly return its core data. Reuse as little as possible from
 recorded headers, cookies, opaque tokens, page state, and unrelated body fields:
@@ -83,6 +95,14 @@ URL, bootstrap URL, Referer, body location, generated value, header, or cookie
 still distinguishes that candidate from the strongest recorded/current-state
 construction. Inability to observe a page's original outbound request is not
 by itself proof that its opaque fields must be freshly captured.
+
+Decode structured transport before reasoning from byte strings. For a form
+body, decode each field and then any nested JSON strings; for an encoded URL,
+separate its stable framing from its parameter-bearing payload. Rebuild from
+that structure whenever the supplied evidence supports it. Blind text
+replacement inside an encoded or binary-looking value does not prove a public
+parameter mapping, and a failure from such a mutation does not isolate an
+opaque header, cookie, or token as the cause.
 
 Dates and other caller inputs must come from `parameterValues` and remain
 coherent everywhere they appear, including bodies and Referers. Use a

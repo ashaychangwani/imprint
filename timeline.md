@@ -3929,3 +3929,44 @@ reporting; it does not add teaching or site policy.
 
 The LLM, retry, controller, and full controller end-to-end suites pass 124
 tests. Type checking and lint also pass.
+
+## 2026-09-03 15:27–16:28 PDT — Two MVPs shipped; recorded-value proof hid broken parameters
+
+Fresh Flights run `b5b39f8f-d547-4b5c-923c-cb2d63971660` used the checked
+September 2 recording and the saved five-operation candidate selection. The
+new provider recovery worked in the real run: one Codex process was interrupted,
+the terminal printed a two-second retry, and teaching continued instead of
+waiting silently. When the 60-minute deadline arrived, the terminal honestly
+reported `2 ready, 3 not ready`.
+
+The two location tools were researched, compiled, verified through ordinary
+fetch, reviewed for real result data, and published. Search research found 18
+real flights through a browser navigation, and booking research found real
+Southwest fare choices from a booking-page navigation. Calendar research
+stopped after concluding that a changing request header could not be recreated.
+The master planned four tools and left Calendar unresolved.
+
+Search exposed a more important general gap. Research tested only the recorded
+SJC-to-SAN inputs, saw real flights, and called the workflow proven. During live
+verification the compiler was asked for SFO-to-LAX, but every build still
+returned SJC-to-SAN and omitted the continuation values needed by Booking. The
+semantic reviewer correctly rejected four builds with those exact facts. The
+compiler conversation was retained, but it kept polishing the same bad
+navigation strategy. The master eventually sent Search back to research, but
+the run reached its deadline before a replacement could be planned or built.
+
+The public `Punitarani/fli` repository was inspected as a reference. Its design
+constructs the nested request body from typed inputs and parses framed results
+into typed rows. However, its current main branch did not return live data from
+this machine: Calendar returned no fares, and Search returned no flights for
+both SJC-to-SAN and JFK-to-LAX. It is therefore useful design evidence, not a
+working answer that should be copied or used to overrule current observations.
+
+The researcher prompt now makes its existing semantic responsibility explicit
+for parameterized tools: real data for recorded inputs proves only that one
+case. When practical, the researcher must test a materially different coherent
+input and confirm that the result changed accordingly. It is also told to
+decode forms and nested structured values before rebuilding them; blind edits
+inside opaque encoded strings neither prove parameterization nor isolate some
+other header as the cause. These are site-neutral agent instructions. The
+runtime still records and executes facts without imposing a semantic rule.
