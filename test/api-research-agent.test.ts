@@ -160,7 +160,7 @@ describe('focused API research', () => {
             execution += 1;
             expect(backend).toBe(execution === 1 ? undefined : 'cdp-replay');
             return {
-              executionMechanism: 'fetch',
+              executionMechanism: backend ?? 'fetch',
               result:
                 execution === 1
                   ? { ok: true as const, data: 'protocol error: no records' }
@@ -173,6 +173,8 @@ describe('focused API research', () => {
       expect(agentTurn).toBe(3);
       expect(execution).toBe(2);
       expect(result.observation.candidateSha256).toBe(apiResearchCandidateSha256(second));
+      expect(result.parameters).toEqual({ query: 'alpha' });
+      expect(result.backend).toBe('cdp-replay');
       expect(JSON.parse(readFileSync(join(toolDir, 'workflow.json'), 'utf8'))).toEqual(
         second.workflow,
       );

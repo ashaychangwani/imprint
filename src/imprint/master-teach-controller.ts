@@ -404,6 +404,9 @@ interface LiveCheckResult {
   backendAttempts?: BackendAttemptFact[];
   responseObservations?: BackendResponseObservation[];
   parameters: Record<string, string | number | boolean>;
+  /** The plan case this exact invocation was intended to prove. */
+  verificationCaseId?: string;
+  expectedResult?: string;
   buildRef: ContentAddressedRef;
   resultReceiptRef: ContentAddressedRef;
   /** Exact chain mappings bound together for this invocation. */
@@ -1817,6 +1820,43 @@ function liveVerificationParameters(
   );
 }
 
+function verificationParameters(
+  verification: ImplementationPlanPayload['verificationCases'][number],
+): Record<string, string | number | boolean> {
+  return Object.fromEntries(
+    verification.parameterValues.map(({ parameterName, value }) => [parameterName, value]),
+  );
+}
+
+function sameParameters(
+  left: Record<string, string | number | boolean>,
+  right: Record<string, string | number | boolean>,
+): boolean {
+  const leftEntries = Object.entries(left).sort(([a], [b]) => a.localeCompare(b));
+  const rightEntries = Object.entries(right).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
+}
+
+function provenBaselineVerification(
+  implementation: ImplementationPlanPayload,
+  parameters: Record<string, string | number | boolean>,
+) {
+  return (
+    implementation.verificationCases.find(
+      (verification) =>
+        verification.check === 'replay' &&
+        verification.parameterValueOrigin === 'recorded_baseline' &&
+        sameParameters(verificationParameters(verification), parameters),
+    ) ??
+    implementation.verificationCases.find(
+      (verification) =>
+        verification.check === 'replay' &&
+        verification.parameterValueOrigin === 'recorded_baseline',
+    ) ??
+    implementation.verificationCases.find(({ check }) => check === 'live')
+  );
+}
+
 function concreteParameterDeclarations(tool: EditableTeachingTool) {
   return tool.candidate.likelyParams.map(({ name, type }) => {
     if (!type) throw new Error(`tool "${tool.id}" has an unresolved parameter type`);
@@ -2402,8 +2442,14 @@ async function runLiveCheck(input: {
   runDeadline: RunDeadlineRef;
   signal?: AbortSignal;
   maxDurationMs?: number;
+  apiResearch?: ApiResearchResult;
 }): Promise<UnboundLiveCheckResult> {
-  const parameters = liveVerificationParameters(input.implementation);
+  const parameters =
+    input.apiResearch?.parameters ?? liveVerificationParameters(input.implementation);
+  const verification = input.apiResearch
+    ? provenBaselineVerification(input.implementation, parameters)
+    : input.implementation.verificationCases.find(({ check }) => check === 'live');
+  if (!verification) throw new Error('implementation plan has no usable MVP verification case');
   const startedAt = Date.now();
   if (input.tool.strategy?.kind === 'playbook_fallback') {
     const playbookPath = pathJoin(input.compiled.toolDir, 'playbook.yaml');
@@ -2420,14 +2466,27 @@ async function runLiveCheck(input: {
       maxDurationMs: input.maxDurationMs,
       label: `live check for "${input.tool.id}"`,
     });
-    return { ...checked, durationMs: Date.now() - startedAt, parameters };
+    return {
+      ...checked,
+      durationMs: Date.now() - startedAt,
+      parameters,
+      verificationCaseId: verification.id,
+      expectedResult: verification.expectedResult,
+    };
   }
   const checked = await input.deps.runApiTool({
     workflowPath: input.compiled.workflowPath,
     parameters,
+    ...(input.apiResearch?.backend ? { backend: input.apiResearch.backend } : {}),
     signal: input.signal,
   });
-  return { ...checked, durationMs: Date.now() - startedAt, parameters };
+  return {
+    ...checked,
+    durationMs: Date.now() - startedAt,
+    parameters,
+    verificationCaseId: verification.id,
+    expectedResult: verification.expectedResult,
+  };
 }
 
 /** Bound an external playbook promise even when an injected runner ignores
@@ -2916,6 +2975,9 @@ async function compileAndCheckCurrentPlan(input: {
     waveIndex: number,
   ): Promise<LiveCheckResult | undefined> => {
     let observed: UnboundLiveCheckResult;
+    const apiResearch = tool.implementationPlan
+      ? input.apiResearchByPlan?.get(`${tool.id}:${tool.implementationPlan.sha256}`)
+      : undefined;
     try {
       observed = await runLiveCheck({
         tool,
@@ -2925,6 +2987,7 @@ async function compileAndCheckCurrentPlan(input: {
         runDeadline: input.runDeadline,
         signal: input.signal,
         maxDurationMs: input.maxDurationMs,
+        apiResearch,
       });
     } catch (error) {
       const check = invocationOutcomeCheck({
@@ -3031,6 +3094,7 @@ async function compileAndCheckCurrentPlan(input: {
       | { kind: 'artifact_error'; error: Error }
       | { kind: 'host_error'; error: unknown };
     let parameters = liveVerificationParameters(implementation);
+    const liveVerification = implementation.verificationCases.find(({ check }) => check === 'live');
     let bindingFailure: { edge: ChainEdge; error: Error } | undefined;
     for (const edge of edges) {
       const producer = liveByToolId.get(edge.producerToolId);
@@ -3169,6 +3233,12 @@ async function compileAndCheckCurrentPlan(input: {
       executionMechanism: outcome.mechanism,
       responseObservations: outcome.responseObservations,
       parameters: outcome.parameters,
+      ...(liveVerification
+        ? {
+            verificationCaseId: liveVerification.id,
+            expectedResult: liveVerification.expectedResult,
+          }
+        : {}),
       buildRef,
       chainInvocationSha256: invocation.sha256,
     };
@@ -4163,7 +4233,9 @@ function completionToolResultEvidenceFor(
 ): CompletionToolResultEvidence {
   if (!tool.implementationPlan) throw new Error(`tool "${tool.id}" has no implementation plan`);
   const implementation = journal.readJson(tool.implementationPlan) as ImplementationPlanPayload;
-  const verification = implementation.verificationCases.find(({ check }) => check === 'live');
+  const verification =
+    implementation.verificationCases.find(({ id }) => id === live.verificationCaseId) ??
+    implementation.verificationCases.find(({ check }) => check === 'live');
   if (!verification) throw new Error(`tool "${tool.id}" has no live verification case`);
   const resultReceipt = journal
     .currentExecutionSnapshot()
@@ -4184,8 +4256,8 @@ function completionToolResultEvidenceFor(
     toolId: tool.id,
     toolName: tool.candidate.toolName,
     implementationPlanRef: tool.implementationPlan,
-    verificationCaseId: verification.id,
-    expectedResult: verification.expectedResult,
+    verificationCaseId: live.verificationCaseId ?? verification.id,
+    expectedResult: live.expectedResult ?? verification.expectedResult,
     resultReceiptRef: resultReceipt.ref,
     ...(chainEdge ? { chainEdgeId: chainEdge.id } : {}),
     actualResult: {

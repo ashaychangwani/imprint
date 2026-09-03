@@ -713,6 +713,107 @@ function lifecycleFailureFixture(input: {
 }
 
 describe('fresh foreground master controller end to end', () => {
+  it('verifies the researcher-proven API case before synthetic parameter breadth', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-proven-api-baseline',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const basePlanner = base.requestFocusedPlan;
+      if (!basePlanner) throw new Error('fixture planner is missing');
+      const calls: Array<{
+        toolId: string;
+        parameters: Record<string, string | number | boolean>;
+        backend?: string;
+      }> = [];
+      let reviewedConsumerCase: string | undefined;
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestFocusedPlan: async (input) => {
+            const output = await basePlanner(input);
+            if (input.tool.id !== CONSUMER_ID) return output;
+            const implementation = structuredClone(output.implementationPlan);
+            for (const verification of implementation.verificationCases) {
+              const parameter = verification.parameterValues.find(
+                ({ parameterName }) => parameterName === 'item_id',
+              );
+              if (parameter)
+                parameter.value =
+                  verification.check === 'replay' ? 'recorded-item' : 'synthetic-item';
+            }
+            return FocusedPlannerOutputSchema.parse({
+              ...output,
+              implementationPlan: implementation,
+            });
+          },
+          requestApiResearchStep: async (input) => {
+            const decision = await fixtureApiResearchStep(input);
+            if (input.tool.id !== CONSUMER_ID || !decision.candidate) return decision;
+            return {
+              ...decision,
+              candidate: {
+                ...decision.candidate,
+                parameterValues: { item_id: 'recorded-item' },
+                testBackend: 'cdp-replay' as const,
+              },
+            };
+          },
+          runApiResearchTool: async ({ parameters, backend }) => ({
+            result: { ok: true as const, data: { id: parameters.item_id ?? 'item-1' } },
+            executionMechanism: backend ?? 'fetch',
+          }),
+          runApiTool: async ({ workflowPath, parameters, backend }) => {
+            const toolId = workflowPath.includes(`/${PRODUCER_ID}/`) ? PRODUCER_ID : CONSUMER_ID;
+            calls.push({ toolId, parameters, ...(backend ? { backend } : {}) });
+            return {
+              result:
+                toolId === PRODUCER_ID
+                  ? { ok: true as const, data: { items: [{ id: 'item-1' }] } }
+                  : {
+                      ok: true as const,
+                      data: { id: parameters.item_id, name: 'Fixture item' },
+                    },
+              executionMechanism: backend ?? 'fetch',
+            };
+          },
+          requestBaselineMvpReview: async (input) => {
+            if (input.toolId === CONSUMER_ID && !input.resultEvidence.payload.chainEdgeId) {
+              reviewedConsumerCase = input.resultEvidence.payload.verificationCaseId;
+            }
+            return credibleBaselineMvpReview(input);
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('failed');
+      expect(
+        calls
+          .filter(({ toolId }) => toolId === CONSUMER_ID)
+          .map(({ parameters, backend }) => ({
+            parameters,
+            backend,
+          })),
+      ).toEqual([
+        { parameters: { item_id: 'recorded-item' }, backend: 'cdp-replay' },
+        { parameters: { item_id: 'item-1' }, backend: undefined },
+      ]);
+      expect(reviewedConsumerCase).toBe(`replay_${CONSUMER_ID}`);
+      expect(calls.some(({ parameters }) => parameters.item_id === 'synthetic-item')).toBe(false);
+    });
+  });
+
   it('reuses only candidate selection while planning and compilation start fresh', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);

@@ -1179,6 +1179,23 @@ describe('runWorkflowWithLadder', () => {
       expect(afterFirst).toBe(1);
       expect(second.attempts.some(({ backend }) => backend === 'fetch-bootstrap')).toBe(false);
       expect(mints).toBe(afterFirst);
+
+      writeFileSync(
+        workflowPath,
+        JSON.stringify({
+          toolName: 'unvalidated_tool',
+          intent: { description: 'Return records.' },
+          parameters: [],
+          requests: [{ method: 'GET', url: `http://127.0.0.1:${server.port}/y`, headers: {} }],
+          parserModule: './parser.ts',
+          site: 'unvalidated-site',
+        }),
+      );
+      const changedRequest = await runWorkflowWithLadder({ workflowPath, params: {} });
+      expect(changedRequest.attempts.some(({ backend }) => backend === 'fetch-bootstrap')).toBe(
+        true,
+      );
+      expect(mints).toBe(afterFirst + 1);
     } finally {
       server.stop(true);
       __resetCompileWinningBackendForTest();

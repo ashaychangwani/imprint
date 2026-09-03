@@ -3588,3 +3588,47 @@ master-controller end-to-end tests, type checking, and lint. A separate
 read-only connectivity check found that
 `server2.tail82e7b.ts.net` is reachable over Tailscale, but no `server2` share
 is mounted and this machine's current SSH credentials are not accepted.
+
+## 2026-09-02 17:52 PDT — Preserve the API researcher's proven baseline
+
+The `server2` WebDAV volume became available at `/Volumes/server2`. Fresh run
+`09a764de-8747-437f-8892-12c965f77a08` used its newest raw Google Flights
+recording, `2026-09-02T23-53-15-356Z.json` (SHA-256
+`869876cf9a59f5bca309d9ae1c474e272c594e8feae75534472d3fe42f6f4031`).
+The recording passed `imprint check` and contained 491 requests and 117 user
+events. Discovery found six real operations, rather than the narrow location
+surface found in the older aggregate.
+
+The Calendar API researcher behaved correctly. It rejected five HTTP 200
+responses whose bodies contained only a 131-byte protocol error. Its sixth
+test used the exact recorded route, dates, headers, and CDP rung and returned a
+10,493-byte body with real dated fares. The researcher inspected that body and
+marked the exact candidate proven.
+
+The later MVP check accidentally tested a different combination. It used the
+plan's synthetic 2027 dates instead of the researcher's proven recorded dates.
+It also started with plain fetch because compile-time transport memory was
+keyed only by public tool name and had remembered one of the earlier empty HTTP
+200 responses as a fetch success. Google can place an application-level error
+inside HTTP 200, so transport success was mistaken for the preferred route.
+The independent result reviewer correctly rejected the resulting zero-entry
+calendar. The run was stopped at 38 minutes before making code changes; its two
+working location MVPs and all failure receipts remain diagnostic evidence.
+
+The runtime now carries the researcher's exact proven parameters and backend
+into the first post-compile MVP check. That baseline is reviewed and may ship
+before separate best-effort parameter breadth work tries synthetic values.
+Compile-time backend memory is also scoped to the actual request construction,
+including its request transform, so a materially edited candidate cannot
+inherit another candidate's backend result. Parser-only edits retain the same
+transport preference. Focused tests cover the exact failure: a recorded value
+proven through CDP is checked through CDP, a different synthetic value is not
+used as the MVP gate, and changing request bytes clears an old failed-rung
+memo.
+
+The focused regression suite passed 112 tests. Type checking and lint passed.
+The full suite passed 1,856 of 1,857 tests; its sole failure was the existing
+hostile process-cleanup timing stress test, which passed immediately when run
+alone (20 repetitions). No teaching, backend, research, or controller test
+failed. A clean full-suite rerun then passed all 1,857 tests, including that
+stress test.

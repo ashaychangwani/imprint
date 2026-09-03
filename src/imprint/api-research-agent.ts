@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
-import type { BackendAttemptFact, BackendResponseObservation } from './backend-ladder.ts';
+import {
+  type BackendAttemptFact,
+  type BackendResponseObservation,
+  rememberProvenCompileBackend,
+} from './backend-ladder.ts';
 import { acquireSiteLiveLock } from './compile-verification.ts';
 import { abortSignalError } from './concurrency.ts';
 import { redactFreeformText } from './freeform-redact.ts';
@@ -23,6 +27,7 @@ import type {
 } from './master-teach-prompt-projections.ts';
 import type { RunDeadlineRef } from './provider-retry.ts';
 import type { ToolResult, Workflow } from './types.ts';
+import type { ConcreteBackend } from './types.ts';
 
 const RESULT_PREVIEW_BYTES = 12_000;
 
@@ -31,6 +36,9 @@ export interface ApiResearchResult {
   toolDir: string;
   summary: string;
   observation: ApiResearchObservation;
+  parameters: Record<string, string | number | boolean>;
+  /** The exact rung that produced the agent-approved semantic result. */
+  backend?: ConcreteBackend;
 }
 
 export class ApiResearchBlockedError extends Error {
@@ -95,6 +103,12 @@ function writeCandidate(toolDir: string, candidate: ApiResearchCandidate): strin
   return workflowPath;
 }
 
+function concreteBackend(value: string): ConcreteBackend | undefined {
+  return ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'].includes(value)
+    ? (value as ConcreteBackend)
+    : undefined;
+}
+
 export async function researchApiMvpCall(input: {
   run: CurrentPlanBinding;
   recordingIndex: RecordingIndex;
@@ -141,7 +155,9 @@ export async function researchApiMvpCall(input: {
     if (decision.action === 'proven') {
       const observation = observations.find(({ id }) => id === decision.basedOnObservationId);
       if (!observation) throw new Error('API researcher cited an unavailable observation');
-      writeCandidate(input.toolDir, candidate);
+      const workflowPath = writeCandidate(input.toolDir, candidate);
+      const backend = concreteBackend(observation.executionMechanism);
+      if (backend) rememberProvenCompileBackend(workflowPath, backend);
       writeFileSync(
         pathJoin(input.toolDir, 'api-research.json'),
         `${JSON.stringify({ decision, observation }, null, 2)}\n`,
@@ -152,6 +168,8 @@ export async function researchApiMvpCall(input: {
         toolDir: input.toolDir,
         summary: decision.reason,
         observation,
+        parameters: candidate.parameterValues,
+        ...(backend ? { backend } : {}),
       };
     }
 

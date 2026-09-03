@@ -14,6 +14,7 @@
  *  - `playbook`        — DOM-walk LAST RESORT (needs a compiled playbook.yaml).
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
 import type { Page } from 'playwright';
@@ -167,6 +168,32 @@ function rememberCompileUnavailableBackends(memoKey: string, result: LadderResul
   const unavailable = compileUnavailableBackends.get(memoKey) ?? new Set<ConcreteBackend>();
   unavailable.add('fetch-bootstrap');
   compileUnavailableBackends.set(memoKey, unavailable);
+}
+
+/** Keep compile-time transport memory scoped to one request construction.
+ * Parser-only edits intentionally retain the preference; request, bootstrap,
+ * or request-transform edits get a fresh key and cannot inherit stale rung
+ * outcomes from an earlier candidate for the same public tool. */
+function compileExecutionMemoKey(workflow: Workflow, toolDir: string): string {
+  const { parserModule: _parserModule, ...transportWorkflow } = workflow;
+  const transformPath = workflow.requestTransformModule
+    ? pathResolve(toolDir, workflow.requestTransformModule)
+    : undefined;
+  const transformSource =
+    transformPath && existsSync(transformPath) ? readFileSync(transformPath, 'utf8') : null;
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify({ workflow: transportWorkflow, transformSource }))
+    .digest('hex')
+    .slice(0, 16);
+  return `${workflow.site ?? ''}::${workflow.toolName}::${fingerprint}`;
+}
+
+/** Record only a backend whose response an agent has explicitly judged to be
+ * the promised operation. A transport-level HTTP success is not semantic
+ * proof, especially for APIs that return application errors inside HTTP 200. */
+export function rememberProvenCompileBackend(workflowPath: string, backend: ConcreteBackend): void {
+  const tool = resolveWorkflowTool(workflowPath);
+  compileWinningBackend.set(compileExecutionMemoKey(tool.workflow, tool.dir), backend);
 }
 
 /** Process-global CDP pool for the compile/test path (`runWorkflowWithLadder`).
@@ -1596,7 +1623,7 @@ export async function runWorkflowWithLadder(opts: {
   // ladder skips. Use a conventional value for completeness.
   const assetRoot = pathResolve(toolDir, '..', '..');
 
-  const memoKey = `${tool.site}::${workflow.toolName}`;
+  const memoKey = compileExecutionMemoKey(workflow, toolDir);
   const unavailable = compileUnavailableBackends.get(memoKey);
   const defaultCompileLadder: ConcreteBackend[] = [
     'fetch',
