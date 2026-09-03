@@ -783,7 +783,6 @@ export function enrichCodexCliError(err: unknown, _config: { model: string }): E
   const control = providerControlError(err);
   if (control) return control;
   const msg = err instanceof Error ? err.message : String(err);
-  const lc = msg.toLowerCase();
 
   // @openai/codex-sdk reports process exits as ordinary Error objects instead
   // of the structured provider error used by the older CLI adapter. Normalize
@@ -793,7 +792,15 @@ export function enrichCodexCliError(err: unknown, _config: { model: string }): E
   const sdkExit = /^Codex Exec exited with code (\d+):([\s\S]*)$/.exec(msg);
   if (sdkExit) return cliExitError('codex-cli', Number(sdkExit[1]), sdkExit[2] ?? '');
 
-  if (lc.includes('enoent') || lc.includes('not found') || lc.includes('command not found')) {
+  const errorCode =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code)
+      : undefined;
+  if (
+    errorCode === 'ENOENT' ||
+    errorCode === 'ENOTDIR' ||
+    /^Unable to locate Codex CLI binaries\b/.test(msg)
+  ) {
     return new Error(
       'codex-cli not found\n→ install Codex CLI, run `codex login`, and make sure `codex` is on PATH',
       { cause: err },

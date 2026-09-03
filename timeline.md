@@ -3848,3 +3848,19 @@ that the successful call actually used. The exact compiler request list must
 still match the proven call. The controller end-to-end tests, focused research
 tests, prompt tests, type checking, and lint all pass: 176 tests with no
 failures. The change adds no Google-specific policy.
+
+## 2026-09-03 07:43–07:56 PDT — A provider error was mislabeled as a missing CLI
+
+Fresh run `475b4157-dd30-4c2f-9e3a-bf1fadcad6a2` began correctly and proved the
+first location request through fetch. It then stopped all five research workers
+with `codex-cli not found`, even though the same process had already launched
+Codex agents successfully and the Codex executable remained installed.
+
+The diagnostic code was matching the words `not found` anywhere in any SDK
+error. A provider response such as a missing thread, model, or remote resource
+could therefore be rewritten as a nonexistent local executable. That destroyed
+the real error and made the terminal advice false. The check now reports a
+missing CLI only for an actual operating-system spawn error or the SDK's exact
+binary-resolution error. All other messages keep their original provider
+detail. Tests cover both a real missing executable and an unrelated provider
+`not found` response; the focused tests, type checking, and lint pass.

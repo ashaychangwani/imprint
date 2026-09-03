@@ -122,6 +122,16 @@ describe('structured CLI provider failures', () => {
     );
     expect(isTransientProviderCapacityError(embedded)).toBe(false);
 
+    const providerNotFound = enrichCodexCliError(new Error('requested model was not found'), {
+      model: 'gpt-5.6-sol',
+    });
+    expect(providerNotFound.message).toBe('codex-cli failed: requested model was not found');
+
+    const missingExecutable = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' });
+    expect(enrichCodexCliError(missingExecutable, { model: 'gpt-5.6-sol' }).message).toContain(
+      'codex-cli not found',
+    );
+
     let calls = 0;
     const retryReasons: string[] = [];
     const recovered = await retryTransientProviderFailure(
