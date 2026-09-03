@@ -112,12 +112,23 @@ There are no resume, phase-window, primary-tool, or partial-selection modes.
 Old run directories remain useful for diagnosis, but every new command starts
 a clean teach.
 
-To teach again from a specific existing recording, use `--from-session`. This
-still creates a fresh run:
+Without `--from-session`, teach uses only the newest valid raw recording for
+the site. It does not automatically combine older recordings. To teach from a
+specific existing recording, use `--from-session`. This still creates a fresh
+run:
 
 ```bash
 imprint teach google-flights \
   --from-session ~/.imprint/google-flights/sessions/<session>.json
+```
+
+To deliberately combine selected recordings, repeat the flag. Only the named
+recordings are merged:
+
+```bash
+imprint teach google-flights \
+  --from-session ~/.imprint/google-flights/sessions/<first-session>.json \
+  --from-session ~/.imprint/google-flights/sessions/<second-session>.json
 ```
 
 A completed teach leaves one generated directory per verified tool under

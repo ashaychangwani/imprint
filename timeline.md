@@ -3569,3 +3569,22 @@ contained no recognizable itineraries. Therefore the examples' old
 `liveVerified` flags and backend receipts show historical transport success,
 not current useful functionality. The diagnostic edits to the Calendar example
 were fully restored; the worktree remained clean before this timeline entry.
+
+## 2026-09-02 17:03 PDT — Recording selection is explicit and predictable
+
+Automatic recording combination was removed. A normal `imprint teach <site>`
+now chooses only the newest valid raw recording and ignores every old
+`combined-*` file. It does not create or refresh an aggregate behind the
+user's back.
+
+The existing `--from-session` option is now repeatable instead of adding a
+second selection mechanism. One occurrence uses that exact recording without
+copying it. Repeating the flag explicitly combines only the named recordings;
+an unselected recording is not included, and selecting the same path twice is
+rejected. Help text and the getting-started guide show both forms.
+
+Focused recording, merge, and CLI-help tests pass (109 tests), as do all 25
+master-controller end-to-end tests, type checking, and lint. A separate
+read-only connectivity check found that
+`server2.tail82e7b.ts.net` is reachable over Tailscale, but no `server2` share
+is mounted and this machine's current SSH credentials are not accepted.

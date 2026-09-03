@@ -94,6 +94,14 @@ describe('teach help', () => {
     expect(flag?.description).toContain('planning and compilation start fresh');
   });
 
+  it('documents latest-recording default and explicit selected-session merging', () => {
+    const teach = VERB_HELP.teach;
+    const flag = (teach?.flags ?? []).find(({ name }) => name === '--from-session <path>');
+    expect(teach?.usage.join(' ')).toContain('[--from-session <path> ...]');
+    expect(flag?.description).toContain('Repeat the flag');
+    expect(flag?.description).toContain('newest raw recording');
+  });
+
   it('does not expose retired selection or resume flags', () => {
     const names = (VERB_HELP.teach?.flags ?? []).map(({ name }) => name);
     for (const retired of [

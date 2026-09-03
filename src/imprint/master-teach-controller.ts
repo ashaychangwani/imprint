@@ -122,7 +122,7 @@ import {
   focusedEvidenceDocuments,
   observeIndependentExecution,
 } from './replay-evidence.ts';
-import { resolveTeachingRecording } from './session-merge.ts';
+import { resolveExplicitTeachingRecordings, resolveTeachingRecording } from './session-merge.ts';
 import { buildToolCandidatePayload, detectToolCandidates } from './tool-candidates.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
@@ -165,7 +165,8 @@ export interface FreshTeachOptions {
   provider?: ProviderName;
   model?: string;
   maxDurationMs?: number;
-  fromSession?: string;
+  /** Use one exact recording, or explicitly merge several selected recordings. */
+  fromSession?: string | string[];
   /** Reuse only the completed candidate-selection checkpoint from an earlier
    * run of this site. Planning, compilation, checks, and agent conversations
    * always start fresh. */
@@ -1011,14 +1012,24 @@ async function resolveRecordingForFreshRun(
   site: string,
   deps: FreshTeachControllerDependencies,
 ): Promise<RecordingResolution> {
-  if (opts.fromSession) {
-    const path = pathResolve(opts.fromSession);
-    const bytes = readFileSync(path);
-    const session = SessionSchema.parse(JSON.parse(bytes.toString('utf8')));
-    if (session.site !== site) {
-      throw new Error(`recording site "${session.site}" does not match requested site "${site}"`);
-    }
-    return { path, session, recordingSha256: sha256Id(bytes) };
+  const selectedRecordingPaths = opts.fromSession
+    ? Array.isArray(opts.fromSession)
+      ? opts.fromSession
+      : [opts.fromSession]
+    : [];
+  if (selectedRecordingPaths.length > 0) {
+    const paths = selectedRecordingPaths.map((selectedPath) => pathResolve(selectedPath));
+    const selected = resolveExplicitTeachingRecordings(site, paths);
+    return {
+      path: selected.path,
+      session: loadJsonFile(
+        selected.path,
+        SessionSchema,
+        { notFound: 'selected teaching recording is missing' },
+        'teaching recording',
+      ),
+      recordingSha256: selected.recordingSha256,
+    };
   }
 
   if (opts.url) {
