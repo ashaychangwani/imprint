@@ -35,6 +35,10 @@ const TRUNCATED_PREVIEW_SUFFIX = '\n[preview truncated]';
 
 export interface ApiResearchResult {
   researchInputsSha256: string;
+  researchedBoundary: {
+    requestSeqs: number[];
+    dependencySeqs: number[];
+  };
   candidate: ApiResearchCandidate;
   workflow: Workflow;
   toolDir: string;
@@ -200,6 +204,10 @@ export async function researchApiMvpCall(input: {
       );
       return {
         researchInputsSha256: apiResearchInputsSha256(input.tool),
+        researchedBoundary: {
+          requestSeqs: [...input.tool.candidate.requestSeqs],
+          dependencySeqs: [...input.tool.candidate.dependencySeqs],
+        },
         candidate,
         workflow: candidate.workflow,
         toolDir: input.toolDir,

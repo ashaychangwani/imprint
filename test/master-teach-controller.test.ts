@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'bun:test';
+import type { ApiResearchResult } from '../src/imprint/api-research-agent.ts';
 import { triageRequests } from '../src/imprint/compile.ts';
 import {
   ParameterAdvisorLane,
+  apiResearchCoversToolBoundary,
   apiResearchFailureMessage,
   compatibleFocusedPlannerIndexes,
   compileEveryToolInBuildWaves,
@@ -214,6 +216,96 @@ function focusedTool(index: number, dependencyNames: string[] = []): EditableTea
     evidenceRefs: [{ path: `evidence/tool-${index}.json`, sha256: SHA }],
   };
 }
+
+describe('API research boundary reuse', () => {
+  const researchFor = (tool: EditableTeachingTool): ApiResearchResult => ({
+    researchInputsSha256: SHA,
+    researchedBoundary: {
+      requestSeqs: [1, 2],
+      dependencySeqs: [],
+    },
+    candidate: {
+      workflow: {
+        toolName: tool.candidate.toolName,
+        intent: { description: tool.candidate.description },
+        parameters: [
+          { name: 'query', type: 'string', description: 'Query to send.' },
+          { name: 'mode', type: 'string', description: 'Optional researched breadth.' },
+        ],
+        requests: [
+          {
+            recordingRequestSeq: 1,
+            method: 'GET',
+            url: 'https://fixture.invalid/search',
+            headers: {},
+          },
+        ],
+        site: 'fixture-site',
+      },
+      parameterValues: { query: 'recorded', mode: 'broad' },
+      testBackend: 'fetch',
+    },
+    workflow: {
+      toolName: tool.candidate.toolName,
+      intent: { description: tool.candidate.description },
+      parameters: [
+        { name: 'query', type: 'string', description: 'Query to send.' },
+        { name: 'mode', type: 'string', description: 'Optional researched breadth.' },
+      ],
+      requests: [
+        {
+          recordingRequestSeq: 1,
+          method: 'GET',
+          url: 'https://fixture.invalid/search',
+          headers: {},
+        },
+      ],
+      site: 'fixture-site',
+    },
+    toolDir: '/tmp/fixture-research',
+    summary: 'The recorded request returned real results.',
+    observation: {
+      id: 'fixture-observation',
+      candidateSha256: SHA,
+      executionMechanism: 'fetch',
+      backendAttempts: [],
+      responseObservations: [],
+      result: { ok: true, preview: 'real result' },
+    },
+    parameters: { query: 'recorded', mode: 'broad' },
+    backend: 'fetch',
+  });
+
+  it('reuses proof after planning narrows parameters or rewrites notes', () => {
+    const tool = focusedTool(1);
+    tool.strategy = { kind: 'api', reason: 'Use the proven request.' };
+    tool.candidate.requestSeqs = [1, 2];
+    tool.candidate.likelyParams = [
+      { name: 'query', type: 'string', description: 'Public search query.' },
+    ];
+    tool.compileContext.sharedHelperNotes = 'Planner-authored implementation details.';
+    expect(apiResearchCoversToolBoundary(tool, researchFor(tool))).toBeTrue();
+  });
+
+  it('requires fresh research for a new parameter or a discarded proven request', () => {
+    const tool = focusedTool(1);
+    tool.strategy = { kind: 'api', reason: 'Use the proven request.' };
+    tool.candidate.requestSeqs = [1];
+    tool.candidate.likelyParams = [
+      { name: 'query', type: 'string', description: 'Public search query.' },
+    ];
+    const research = researchFor(tool);
+    tool.candidate.likelyParams.push({
+      name: 'unresearched',
+      type: 'string',
+      description: 'A new public input.',
+    });
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeFalse();
+    tool.candidate.likelyParams.pop();
+    tool.candidate.requestSeqs = [2];
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeFalse();
+  });
+});
 
 describe('master-owned focused build waves', () => {
   it('bounds an injected playbook invocation that ignores cancellation', async () => {

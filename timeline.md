@@ -3811,3 +3811,40 @@ visible-text projection instead of the beginning of several megabytes of script
 and markup, so it can judge whether real records are present. This is mechanical
 feedback and contains no site-specific classifier. Fan-out failures now include
 each tool name and exact error in the terminal message instead of only a count.
+
+## 2026-09-03 06:46–07:41 PDT — Planning no longer throws away compatible research
+
+Fresh run `0cef4b1e-3ec2-4d41-a87d-3b021466dd6c` again used the mounted
+September 2 Flights recording and the accepted five-operation candidate
+selection. Four researchers proved useful calls before planning: two small
+ordinary location requests, a rendered search page with 18 real flights, and a
+rendered booking page with real fare products and booking choices. Search also
+recovered from one temporary 90-second navigation timeout, and an unchanged
+calendar retry reused its warm browser and completed in 2.4 seconds.
+
+Calendar exhausted the plausible direct calls. One attempt corrected a hex
+request ID to the decimal format expected by the recorded request. The exact
+old request then produced a clear past-date response, while current dates still
+produced protocol errors. Browser navigation rendered the right route and
+calendar, but both the research output and a separate inspection of Chrome's
+raw HTML contained literal `????` fare placeholders rather than readable
+prices. The master therefore kept playbook as the fallback for calendar only;
+search and booking remained ordinary browser-navigation workflows.
+
+All five focused planners then completed, and the master accepted five tools in
+one build wave. Instead of beginning compilation, the runtime immediately
+started the same API research again. The cause was not an agent decision: the
+runtime used a hash of the entire pre-planning tool object to decide whether
+research was current. Normal planner edits to notes, parameters, and focused
+evidence changed that hash even when the proven request was still exactly the
+one the final plan intended to compile. The run was stopped rather than allowed
+to waste another research cycle.
+
+Research reuse now depends on the facts that matter. A plan may narrow public
+parameters or rewrite explanatory notes while keeping a proven call. Research
+runs again only when the plan adds an untested public parameter or recorded
+request, adds a new supporting request that was not tested, or drops a request
+that the successful call actually used. The exact compiler request list must
+still match the proven call. The controller end-to-end tests, focused research
+tests, prompt tests, type checking, and lint all pass: 176 tests with no
+failures. The change adds no Google-specific policy.

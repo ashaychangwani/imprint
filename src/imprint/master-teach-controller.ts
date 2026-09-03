@@ -86,6 +86,7 @@ import {
   EditableTeachingPlanSchema,
   type EditableTeachingTool,
   type ImplementationPlanPayload,
+  ImplementationPlanPayloadSchema,
   bindImplementationPlanRef,
   canonicalTeachingPlanJson,
   chainInvocationForEdge,
@@ -1875,17 +1876,7 @@ export function apiResearchMatchesPlan(
   research: ApiResearchResult,
 ): boolean {
   if (tool.strategy?.kind !== 'api' || implementation.strategyKind !== 'api') return false;
-  if (research.workflow.toolName !== tool.candidate.toolName) return false;
-  const plannedParameters = tool.candidate.likelyParams
-    .map(({ name, type }) => ({ name, type }))
-    .sort((left, right) => left.name.localeCompare(right.name));
-  const researchedParameters = research.workflow.parameters
-    .map(({ name, type }) => ({ name, type }))
-    .sort((left, right) => left.name.localeCompare(right.name));
-  if (
-    canonicalTeachingPlanJson(plannedParameters) !== canonicalTeachingPlanJson(researchedParameters)
-  )
-    return false;
+  if (!apiResearchCoversToolBoundary(tool, research)) return false;
   const plannedRequests = implementation.requestProvenance.map(
     ({ recordingRequestSeq }) => recordingRequestSeq,
   );
@@ -1894,6 +1885,52 @@ export function apiResearchMatchesPlan(
   );
   return (
     canonicalTeachingPlanJson(plannedRequests) === canonicalTeachingPlanJson(researchedRequests)
+  );
+}
+
+/**
+ * Research is evidence for a public operation boundary, not for planner prose.
+ * A later plan may narrow a proven operation by fixing researched parameters to
+ * constants, but it may not add an unresearched public parameter or discard the
+ * recorded request that actually passed.
+ */
+export function apiResearchCoversToolBoundary(
+  tool: EditableTeachingTool,
+  research: ApiResearchResult,
+): boolean {
+  if (tool.strategy?.kind !== 'api') return false;
+  if (research.workflow.toolName !== tool.candidate.toolName) return false;
+  const researchedParameters = new Map(
+    research.workflow.parameters.map(({ name, type }) => [name, type] as const),
+  );
+  if (
+    tool.candidate.likelyParams.some(
+      ({ name, type }) => !type || researchedParameters.get(name) !== type,
+    )
+  ) {
+    return false;
+  }
+  const plannedRequestSeqs = new Set([
+    ...tool.candidate.requestSeqs,
+    ...tool.candidate.dependencySeqs,
+  ]);
+  const researchedBoundarySeqs = new Set([
+    ...research.researchedBoundary.requestSeqs,
+    ...research.researchedBoundary.dependencySeqs,
+  ]);
+  const researchedRequestSeqs = new Set(
+    research.workflow.requests.flatMap(({ recordingRequestSeq }) =>
+      recordingRequestSeq === undefined ? [] : [recordingRequestSeq],
+    ),
+  );
+  return (
+    research.workflow.requests.every(
+      ({ recordingRequestSeq }) =>
+        recordingRequestSeq === undefined || plannedRequestSeqs.has(recordingRequestSeq),
+    ) &&
+    [...plannedRequestSeqs].every(
+      (seq) => researchedBoundarySeqs.has(seq) || researchedRequestSeqs.has(seq),
+    )
   );
 }
 
@@ -2490,12 +2527,16 @@ async function discoverAndPlan(input: {
       discoveryCandidateNames: discoveryInput.discoveryCandidates.map(({ toolName }) => toolName),
     },
   );
-  const researchByToolId = new Map(research.handoffs.map((handoff) => [handoff.toolId, handoff]));
   for (const tool of plan.tools) {
     if (!tool.implementationPlan || tool.strategy?.kind !== 'api') continue;
-    const { implementationPlan: _implementationPlan, ...researchTool } = tool;
+    const seed = input.seeds.get(contentRefKey(tool.implementationPlan));
+    const implementation =
+      seed?.kind === 'json' ? ImplementationPlanPayloadSchema.safeParse(seed.value) : undefined;
+    const result = research.resultsByToolId.get(tool.id);
     if (
-      researchByToolId.get(tool.id)?.researchInputsSha256 !== apiResearchInputsSha256(researchTool)
+      !implementation?.success ||
+      !result ||
+      !apiResearchMatchesPlan(tool, implementation.data, result)
     ) {
       tool.implementationPlan = undefined;
     }
@@ -3905,16 +3946,11 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
     const missingToolIds = implementationPlanRepairToolIds(current.plan);
     if (missingToolIds.length === 0 || current.plan.tools.length === 0) return;
 
-    const handoffByToolId = new Map(
-      context.apiResearch.map((handoff) => [handoff.toolId, handoff]),
-    );
     const researchToolIds = missingToolIds.filter((toolId) => {
       const tool = current.plan.tools.find(({ id }) => id === toolId);
-      if (!tool) return false;
-      const { implementationPlan: _implementationPlan, ...researchTool } = tool;
-      return (
-        handoffByToolId.get(toolId)?.researchInputsSha256 !== apiResearchInputsSha256(researchTool)
-      );
+      if (!tool || tool.strategy?.kind !== 'api') return false;
+      const result = context.apiResearchResults.get(toolId);
+      return !result || !apiResearchCoversToolBoundary(tool, result);
     });
     if (researchToolIds.length > 0) {
       const researchSeeds = new Map<string, FreshTeachBootstrapObject>();
