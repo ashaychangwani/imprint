@@ -141,6 +141,64 @@ describe('focused API research', () => {
     }
   });
 
+  it('returns bounded visible facts from a large rendered HTML response', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-api-research-html-'));
+    const candidate = apiCandidate('rendered', 'cdp-replay');
+    const request = candidate.workflow.requests[0];
+    if (!request) throw new Error('missing rendered request fixture');
+    candidate.workflow.requests[0] = {
+      ...request,
+      mode: 'navigate',
+      navigation: { resultSelector: 'body' },
+    };
+    let agentTurn = 0;
+    try {
+      const result = await researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool,
+        evidence,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          requestStep: async (input) => {
+            agentTurn += 1;
+            if (agentTurn === 1)
+              return { binding, action: 'test', candidate, reason: 'Test rendered result.' };
+            const observation = input.observations[0];
+            if (!observation) throw new Error('missing rendered observation');
+            expect(Buffer.byteLength(observation.result.preview, 'utf8')).toBeLessThanOrEqual(
+              12_000,
+            );
+            expect(observation.result.preview).toContain('[rendered HTML text]');
+            expect(observation.result.preview).toContain('18 results Alaska Airlines $117');
+            expect(observation.result.preview).not.toContain('opaque-script-noise');
+            return {
+              binding,
+              action: 'proven',
+              candidate,
+              basedOnObservationId: observation.id,
+              reason: 'The rendered page contains real result facts.',
+            };
+          },
+          runApiTool: async () => ({
+            executionMechanism: 'cdp-replay',
+            result: {
+              ok: true as const,
+              data: `<!doctype html><html><head><script>${'opaque-script-noise '.repeat(20_000)}</script></head><body><h1>18 results</h1><div>Alaska Airlines $117</div>${'é'.repeat(20_000)}</body></html>`,
+            },
+          }),
+        },
+      });
+
+      expect(agentTurn).toBe(2);
+      expect(result.backend).toBe('cdp-replay');
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a proven handoff that differs from the cited tested bytes', () => {
     const tested = apiCandidate('tested');
     const changed = apiCandidate('changed');

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { triageRequests } from '../src/imprint/compile.ts';
 import {
   ParameterAdvisorLane,
+  apiResearchFailureMessage,
   compatibleFocusedPlannerIndexes,
   compileEveryToolInBuildWaves,
   failureReceiptBindingError,
@@ -855,6 +856,21 @@ describe('master repair revisions', () => {
     expect(message).toContain('focused planning failed for 1 of 1 tools');
     expect(message).toContain('search_hotels: focused planner returned invalid output');
     expect(message).toContain('binding.toolId: stale binding');
+  });
+
+  it('keeps exact per-tool API-research failures in the terminal message', () => {
+    const message = apiResearchFailureMessage(
+      [
+        {
+          toolId: 'search_flights',
+          error: new Error('result.preview: expected 0..12000 UTF-8 bytes'),
+        },
+      ],
+      5,
+    );
+    expect(message).toContain('pre-plan API research failed for 1 of 5 selected operations');
+    expect(message).toContain('search_flights: result.preview');
+    expect(message).toContain('expected 0..12000 UTF-8 bytes');
   });
 
   it('focused-plans every missing or compile-input-stale final tool', () => {

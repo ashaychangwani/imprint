@@ -31,6 +31,7 @@ import type { ToolResult, Workflow } from './types.ts';
 import type { ConcreteBackend } from './types.ts';
 
 const RESULT_PREVIEW_BYTES = 12_000;
+const TRUNCATED_PREVIEW_SUFFIX = '\n[preview truncated]';
 
 export interface ApiResearchResult {
   researchInputsSha256: string;
@@ -69,6 +70,41 @@ export interface ApiResearchDependencies {
   }>;
 }
 
+function utf8Prefix(value: string, maximumBytes: number): string {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.length <= maximumBytes) return value;
+  let end = maximumBytes;
+  while (end > 0 && (bytes[end] ?? 0) >> 6 === 2) end -= 1;
+  return bytes.subarray(0, end).toString('utf8');
+}
+
+function boundedPreview(value: string): string {
+  if (Buffer.byteLength(value, 'utf8') <= RESULT_PREVIEW_BYTES) return value;
+  const suffixBytes = Buffer.byteLength(TRUNCATED_PREVIEW_SUFFIX, 'utf8');
+  return `${utf8Prefix(value, RESULT_PREVIEW_BYTES - suffixBytes)}${TRUNCATED_PREVIEW_SUFFIX}`;
+}
+
+function renderedHtmlText(value: string): string | undefined {
+  if (!/^\s*(?:<!doctype\s+html|<html\b)/i.test(value)) return undefined;
+  const withoutNonVisibleContent = value
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(
+      /<(?:script|style|template|noscript)\b[^>]*>[\s\S]*?<\/(?:script|style|template|noscript)>/gi,
+      ' ',
+    );
+  const text = withoutNonVisibleContent
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;|&#34;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text ? `[rendered HTML text]\n${text}` : undefined;
+}
+
 function preview(value: unknown): string {
   let serialized: string;
   try {
@@ -76,10 +112,8 @@ function preview(value: unknown): string {
   } catch {
     serialized = String(value);
   }
-  const redacted = redactFreeformText(serialized ?? '').redacted;
-  const bytes = Buffer.from(redacted, 'utf8');
-  if (bytes.length <= RESULT_PREVIEW_BYTES) return redacted;
-  return `${bytes.subarray(0, RESULT_PREVIEW_BYTES).toString('utf8')}\n[preview truncated]`;
+  const factualPreview = renderedHtmlText(serialized ?? '') ?? serialized ?? '';
+  return boundedPreview(redactFreeformText(factualPreview).redacted);
 }
 
 function resultFact(result: ToolResult<unknown>): ApiResearchObservation['result'] {

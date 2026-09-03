@@ -656,6 +656,20 @@ export function focusedPlanningFailureMessage(
   ].join('\n');
 }
 
+export function apiResearchFailureMessage(
+  failures: readonly { toolId: string; error: unknown }[],
+  targetCount: number,
+): string {
+  const details = failures.map(({ toolId, error }) => {
+    const message = error instanceof Error ? error.message : String(error);
+    return `${toolId}: ${utf8Prefix(message.trim() || 'unknown research failure', 800)}`;
+  });
+  return [
+    `pre-plan API research failed for ${failures.length} of ${targetCount} selected operations`,
+    ...details,
+  ].join('\n');
+}
+
 function reportProgress(opts: FreshTeachOptions, message: string): void {
   opts.onProgress?.(message);
 }
@@ -2271,7 +2285,7 @@ async function researchSelectedOperations(input: {
     throwTerminalFanoutFailure(researched.failures, input.agent.signal);
     throw new AggregateError(
       researched.failures.map(({ error }) => error),
-      `pre-plan API research failed for ${researched.failures.length} selected operation(s)`,
+      apiResearchFailureMessage(researched.failures, targetTools.length),
     );
   }
   return {

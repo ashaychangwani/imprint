@@ -3784,3 +3784,30 @@ prompts focused only on the inability to copy an internal XHR. The prompt now
 documents the existing navigation shape exactly and tells the researcher to
 test a parameterized rendered result page after direct API constructions fail.
 No new runtime mode or site-specific rule is being kept.
+
+## 2026-09-03 06:16–06:40 PDT — Fresh run found a generic preview bug
+
+Fresh run `f2d7edfa-9118-42fa-abf3-5e97ff7e3e6d` reused only the accepted
+five-operation candidate selection and started research from the mounted
+September 2 recording. `search_locations` and `get_location_details` proved
+small ordinary fetch calls. Search and calendar both tried several direct API
+constructions and then independently reached the newly documented rendered-page
+CDP route. Chrome successfully returned their rendered pages. Booking completed
+its comparison and reported that it still needs fresh values from a working
+search producer.
+
+The run then failed before planning with the unhelpful message that two research
+workers failed. Their retained transcripts showed that search and calendar had
+both returned a final navigation test, but neither received the successful CDP
+observation. The cause was a generic host bookkeeping bug: research allows a
+12,000-byte response preview, but the truncation code first kept 12,000 bytes
+and then appended a truncation label. The next agent turn rejected that preview
+for exceeding the same 12,000-byte schema. Large rendered pages exposed the bug;
+the site did not cause it.
+
+The preview now reserves room for its truncation label and stays inside the
+declared byte limit. For rendered HTML, research receives a bounded, redacted
+visible-text projection instead of the beginning of several megabytes of script
+and markup, so it can judge whether real records are present. This is mechanical
+feedback and contains no site-specific classifier. Fan-out failures now include
+each tool name and exact error in the terminal message instead of only a count.
