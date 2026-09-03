@@ -1087,6 +1087,22 @@ describe('prompts and pre-plan discovery', () => {
     expect(detectorPrompt).toMatch(/Temporal order.*do not prove a\s+dependency/is);
   });
 
+  it('researches minimal live calls before planning tool links and waves', () => {
+    const researchPrompt = prompt('master-teach-api-researcher.md');
+    const focusedPrompt = prompt('master-teach-focused-planner.md');
+    const masterPrompt = prompt('master-teach-decision.md');
+
+    expect(researchPrompt).toMatch(/as little as possible from\s+recorded headers/i);
+    expect(researchPrompt).toMatch(/smallest candidate actually tested with real data/i);
+    expect(researchPrompt).toMatch(/winning rung/i);
+    expect(focusedPrompt).toMatch(
+      /Request research for every selected operation has already finished/i,
+    );
+    expect(focusedPrompt).toMatch(/producer-consumer link/i);
+    expect(masterPrompt).toMatch(/request research completes.*before focused planning/is);
+    expect(masterPrompt).toMatch(/build waves together only after\s+reading every handoff/i);
+  });
+
   it('separates a missing transport producer from proof that the field is required', () => {
     const focusedPrompt = prompt('master-teach-focused-planner.md');
     const masterPrompt = prompt('master-teach-decision.md');
@@ -1383,6 +1399,7 @@ describe('prompts and pre-plan discovery', () => {
     expect((retries[0] as { role: string }).role).toBe('focused planner');
     const sent = (seen[0] as { input: Record<string, unknown> }).input;
     expect(Object.keys(sent).sort()).toEqual([
+      'apiResearch',
       'availableProducers',
       'evidence',
       'incomingChainEdges',

@@ -6,14 +6,10 @@ import { researchApiMvpCall } from '../src/imprint/api-research-agent.ts';
 import type { ApiResearchCandidate } from '../src/imprint/master-teach-agent-contracts.ts';
 import {
   apiResearchCandidateSha256,
+  apiResearchInputsSha256,
   parseApiResearchOutput,
 } from '../src/imprint/master-teach-agents.ts';
-import {
-  ImplementationPlanPayloadSchema,
-  teachingPlanContentSha256 as digest,
-  implementationPlanRequestProvenanceSha256,
-  teachingToolCompileInputsSha256,
-} from '../src/imprint/master-teach-plan.ts';
+import { teachingPlanContentSha256 as digest } from '../src/imprint/master-teach-plan.ts';
 import { PromptEvidenceProjectionSchema } from '../src/imprint/master-teach-prompt-projections.ts';
 import { RunDeadline } from '../src/imprint/provider-retry.ts';
 
@@ -50,51 +46,12 @@ const baseTool = {
   evidenceRefs: [evidence.ref],
   strategy: { kind: 'api' as const, reason: 'A recorded API request exists.' },
 };
-const implementationPlan = ImplementationPlanPayloadSchema.parse({
-  version: 1,
-  toolId: baseTool.id,
-  strategyKind: 'api',
-  requestProvenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 12 }],
-  parameterMappings: [
-    {
-      parameterName: 'query',
-      artifactRequestIndices: [0],
-      guidance: 'Place query in the recorded URL field.',
-    },
-  ],
-  responseDependencies: [],
-  resultSources: [{ artifactRequestIndex: 0, source: 'The recorded response body.' }],
-  outputGuidance: 'Return fixture records.',
-  verificationCases: [
-    {
-      id: 'fixture-live',
-      check: 'live',
-      parameterValues: [{ parameterName: 'query', value: 'alpha' }],
-      expectedResult: 'At least one fixture record.',
-      provenance: {
-        recordingRequestSeqs: [12],
-        recordingEventSeqs: [],
-        evidenceRefs: [evidence.ref],
-      },
-    },
-  ],
-});
-const compileInputsSha256 = teachingToolCompileInputsSha256(baseTool, []);
-const tool = {
-  ...baseTool,
-  implementationPlan: {
-    path: 'objects/implementation.json',
-    sha256: digest(implementationPlan),
-    basedOnCompileInputsSha256: compileInputsSha256,
-    requestProvenanceSha256: implementationPlanRequestProvenanceSha256(implementationPlan),
-  },
-};
+const compileInputsSha256 = apiResearchInputsSha256(baseTool);
+const tool = baseTool;
 const run = {
   runId: 'research-run',
   site: 'fixture.invalid',
   recordingSha256,
-  planRevision: 1,
-  planSha256: `sha256:${'2'.repeat(64)}`,
 };
 const recordingIndex = { recordingSha256, requestSeqs: [12], eventSeqs: [] };
 const apiCandidate = (
@@ -132,7 +89,6 @@ describe('focused API research', () => {
         run,
         recordingIndex,
         tool,
-        implementationPlan,
         evidence,
         toolDir,
         agent: {},
@@ -201,7 +157,6 @@ describe('focused API research', () => {
           run,
           recordingIndex,
           tool,
-          implementationPlan,
           evidence,
           observations: [
             {
@@ -229,7 +184,6 @@ describe('focused API research', () => {
         run,
         recordingIndex,
         tool,
-        implementationPlan,
         evidence,
         toolDir,
         agent: {},

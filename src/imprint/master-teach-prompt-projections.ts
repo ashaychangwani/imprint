@@ -41,6 +41,7 @@ export const RunIdentitySchema = strictObject({
   site: utf8Text(1, 255),
   recordingSha256: PromptShaSchema,
 });
+export type RunIdentity = z.infer<typeof RunIdentitySchema>;
 export const RecordingIndexSchema = strictObject({
   recordingSha256: PromptShaSchema,
   requestSeqs: z.array(z.number().int().nonnegative()).max(50_000),

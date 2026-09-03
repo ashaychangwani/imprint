@@ -13,17 +13,18 @@ import type {
   ApiResearchCandidate,
   ApiResearchInput,
   ApiResearchObservation,
-  CurrentPlanBinding,
+  PlannableTeachingTool,
 } from './master-teach-agent-contracts.ts';
 import {
   type MasterTeachAgentOptions,
   apiResearchCandidateSha256,
+  apiResearchInputsSha256,
   type requestApiResearchStep,
 } from './master-teach-agents.ts';
-import type { EditableTeachingTool, ImplementationPlanPayload } from './master-teach-plan.ts';
 import type {
   PromptEvidenceProjection,
   RecordingIndex,
+  RunIdentity,
 } from './master-teach-prompt-projections.ts';
 import type { RunDeadlineRef } from './provider-retry.ts';
 import type { ToolResult, Workflow } from './types.ts';
@@ -32,6 +33,8 @@ import type { ConcreteBackend } from './types.ts';
 const RESULT_PREVIEW_BYTES = 12_000;
 
 export interface ApiResearchResult {
+  researchInputsSha256: string;
+  candidate: ApiResearchCandidate;
   workflow: Workflow;
   toolDir: string;
   summary: string;
@@ -110,10 +113,9 @@ function concreteBackend(value: string): ConcreteBackend | undefined {
 }
 
 export async function researchApiMvpCall(input: {
-  run: CurrentPlanBinding;
+  run: RunIdentity;
   recordingIndex: RecordingIndex;
-  tool: EditableTeachingTool;
-  implementationPlan: ImplementationPlanPayload;
+  tool: PlannableTeachingTool;
   evidence: PromptEvidenceProjection;
   toolDir: string;
   agent: MasterTeachAgentOptions;
@@ -136,7 +138,6 @@ export async function researchApiMvpCall(input: {
       run: input.run,
       recordingIndex: input.recordingIndex,
       tool: input.tool,
-      implementationPlan: input.implementationPlan,
       evidence: input.evidence,
       observations,
       ...(proposedBlockReason ? { blockReview: { proposedReason: proposedBlockReason } } : {}),
@@ -164,6 +165,8 @@ export async function researchApiMvpCall(input: {
         'utf8',
       );
       return {
+        researchInputsSha256: apiResearchInputsSha256(input.tool),
+        candidate,
         workflow: candidate.workflow,
         toolDir: input.toolDir,
         summary: decision.reason,

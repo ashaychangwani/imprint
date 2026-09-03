@@ -24,7 +24,10 @@ import {
   type ToolSelectionAdvisorInput,
   ToolSelectionAdvisorOutputSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
-import { requestMasterDecision as requestValidatedMasterDecision } from '../src/imprint/master-teach-agents.ts';
+import {
+  apiResearchInputsSha256,
+  requestMasterDecision as requestValidatedMasterDecision,
+} from '../src/imprint/master-teach-agents.ts';
 import {
   runFreshMasterTeach,
   verificationForResearchParameters,
@@ -345,7 +348,10 @@ function initialThreeToolDesiredPlan(input: MasterDecisionInput): DesiredTeachin
 
 async function fixtureApiResearchStep(researchInput: ApiResearchInput) {
   const tool = researchInput.tool;
-  if (!tool.implementationPlan) throw new Error('fixture expected an implementation-plan ref');
+  const requestSeqs = [
+    ...tool.candidate.dependencySeqs.filter((seq) => seq === 4),
+    tool.candidate.requestSeqs[0],
+  ].filter((seq): seq is number => seq !== undefined);
   const candidate = {
     workflow: WorkflowSchema.parse({
       toolName: tool.candidate.toolName,
@@ -355,19 +361,21 @@ async function fixtureApiResearchStep(researchInput: ApiResearchInput) {
         type,
         description,
       })),
-      requests: [
-        {
-          recordingRequestSeq: tool.candidate.requestSeqs[0],
-          method: 'GET',
-          url:
-            tool.id === PRODUCER_ID
+      requests: requestSeqs.map((recordingRequestSeq) => ({
+        recordingRequestSeq,
+        method: 'GET',
+        url:
+          recordingRequestSeq === 4
+            ? 'https://fixture.invalid/bootstrap'
+            : tool.id === PRODUCER_ID
               ? 'https://fixture.invalid/api/items'
               : tool.id === CONSUMER_ID
                 ? 'https://fixture.invalid/api/items/${param.item_id}'
                 : 'https://fixture.invalid/api/render/${param.item_id}',
-          headers: { accept: 'application/json' },
+        headers: {
+          accept: recordingRequestSeq === 4 ? 'text/html' : 'application/json',
         },
-      ],
+      })),
       site: SITE,
     }),
     parameterValues: Object.fromEntries(
@@ -383,7 +391,7 @@ async function fixtureApiResearchStep(researchInput: ApiResearchInput) {
       runId: researchInput.run.runId,
       recordingSha256: researchInput.run.recordingSha256,
       toolId: tool.id,
-      compileInputsSha256: tool.implementationPlan.basedOnCompileInputsSha256,
+      compileInputsSha256: apiResearchInputsSha256(tool),
     },
     action: observation ? ('proven' as const) : ('test' as const),
     candidate,
@@ -779,6 +787,57 @@ describe('fresh foreground master controller end to end', () => {
     expect(
       verificationForResearchParameters(implementation, { query: 'researcher-chosen' })?.id,
     ).toBe('live_case');
+  });
+
+  it('finishes every request researcher before focused planning starts', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-research-before-planning',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const basePlanner = base.requestFocusedPlan;
+      if (!baseResearch || !basePlanner) throw new Error('fixture research roles are missing');
+      const proven = new Set<string>();
+      let plannerCalls = 0;
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            const decision = await baseResearch(input);
+            if (decision.action === 'proven') proven.add(input.tool.id);
+            return decision;
+          },
+          requestFocusedPlan: async (input) => {
+            plannerCalls += 1;
+            expect([...proven].sort()).toEqual([CONSUMER_ID, PRODUCER_ID].sort());
+            const apiResearch = input.apiResearch ?? [];
+            expect(apiResearch).toHaveLength(2);
+            expect(apiResearch.every(({ status }) => status === 'proven')).toBeTrue();
+            expect(
+              apiResearch.every(({ candidate, observation }) =>
+                Boolean(candidate && observation?.result.ok),
+              ),
+            ).toBeTrue();
+            return await basePlanner(input);
+          },
+        },
+      );
+
+      expect(plannerCalls).toBe(2);
+      expect(terminal.status).toBe('failed');
+    });
   });
 
   it('verifies the researcher-proven API case before synthetic parameter breadth', async () => {
@@ -3960,7 +4019,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('replans only the target after a sibling proposal discovers bootstrap evidence', async () => {
+  it('researches changed boundaries before replanning sibling bootstrap evidence', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root, true);
       const session = SessionSchema.parse(readJson(recordingPath));
@@ -4186,7 +4245,13 @@ describe('fresh foreground master controller end to end', () => {
       );
 
       expect(terminal.status).toBe('completed');
-      expect(plannerCalls).toEqual([PRODUCER_ID, CONSUMER_ID, CONSUMER_ID]);
+      expect(plannerCalls).toEqual([
+        PRODUCER_ID,
+        CONSUMER_ID,
+        PRODUCER_ID,
+        CONSUMER_ID,
+        CONSUMER_ID,
+      ]);
       expect(firstTargetSawBootstrap).toBe(false);
       expect(secondTargetSawBootstrap).toBe(true);
       expect(secondTargetSawRevisedPlan).toBe(true);

@@ -12,6 +12,18 @@ edges. Smaller agents advise; you may accept, reject, or revise their
 suggestions and explain why. You may add, remove, merge, split, rename, or
 revise tools and parameters.
 
+After candidate selection, request research completes for every selected
+operation before focused planning begins. On that planning turn, `apiResearch`
+contains each operation's result. For a proven result, treat its exact minimal
+workflow, test parameters, winning rung, backend facts, and reviewed response
+preview as the factual starting point. Plan all tool boundaries, internal
+request sequences, producer-consumer links, and build waves together only after
+reading every handoff. This ordering is what lets you see that one researched
+response produces a value another researched call consumes. Preserve the
+smallest proven call unless another handoff or exact focused evidence justifies
+a different graph. A blocked research result names an unresolved gap; it does
+not authorize playbook or make dependent tools disappear automatically.
+
 Treat the serialized `recordingIndex` as the authority for which request and
 event sequence numbers exist; reason from the supplied evidence and proposals
 without inventing additional facts.

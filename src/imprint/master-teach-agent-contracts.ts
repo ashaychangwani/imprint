@@ -54,9 +54,10 @@ const FocusedPlannerBindingSchema = RunIdentitySchema.extend({
 const PlannerProposalBindingSchema = FocusedPlannerBindingSchema.extend({
   compileInputsSha256: PromptShaSchema,
 }).strict();
-const PlannableTeachingToolSchema = EditableTeachingToolSchema.omit({
+export const PlannableTeachingToolSchema = EditableTeachingToolSchema.omit({
   implementationPlan: true,
 }).strict();
+export type PlannableTeachingTool = z.infer<typeof PlannableTeachingToolSchema>;
 const PlannedTeachingToolSchema = PlannableTeachingToolSchema.extend({
   candidate: TeachingToolCandidateSchema.extend({
     likelyParams: z.array(ConcreteTeachingParameterSchema).max(64),
@@ -107,12 +108,16 @@ export const FocusedPlannerInputSchema = strictObject({
   siblingToolEvidence: z.array(SiblingToolEvidenceSchema),
   incomingChainEdges: z.array(ChainEdgeSchema),
   outgoingChainEdges: z.array(ChainEdgeSchema),
+  /** Completed request research for every selected operation. Planning runs
+   * only after these handoffs exist so cross-tool dependencies can be chosen
+   * from tested calls and response shapes rather than guesses. */
+  apiResearch: z.array(z.lazy(() => ApiResearchHandoffSchema)).default([]),
   evidence: PromptEvidenceProjectionSchema,
   /** Optional input-only handoff from the immediately preceding failed
    * attempt. The planner never echoes this object. */
   revisionContext: FocusedPlannerRevisionContextSchema.optional(),
 });
-export type FocusedPlannerInput = z.infer<typeof FocusedPlannerInputSchema>;
+export type FocusedPlannerInput = z.input<typeof FocusedPlannerInputSchema>;
 export const FocusedPlannerOutputSchema = strictObject({
   binding: FocusedPlannerBindingSchema,
   tool: PlannedTeachingToolSchema,
@@ -146,10 +151,9 @@ export const ApiResearchObservationSchema = strictObject({
 });
 export type ApiResearchObservation = z.infer<typeof ApiResearchObservationSchema>;
 export const ApiResearchInputSchema = strictObject({
-  run: CurrentPlanBindingSchema,
+  run: RunIdentitySchema,
   recordingIndex: RecordingIndexSchema,
-  tool: EditableTeachingToolSchema,
-  implementationPlan: ImplementationPlanPayloadSchema,
+  tool: PlannableTeachingToolSchema,
   evidence: PromptEvidenceProjectionSchema,
   observations: z.array(ApiResearchObservationSchema).max(64),
   blockReview: strictObject({ proposedReason: Reason }).optional(),
@@ -169,6 +173,23 @@ export const ApiResearchOutputSchema = strictObject({
   reason: Reason,
 });
 export type ApiResearchOutput = z.infer<typeof ApiResearchOutputSchema>;
+export const ApiResearchHandoffSchema = strictObject({
+  toolId: PromptToolIdSchema,
+  toolName: SemanticToolCandidateSchema.shape.toolName,
+  researchInputsSha256: PromptShaSchema,
+  status: z.enum(['proven', 'blocked']),
+  summary: Reason,
+  candidate: ApiResearchCandidateSchema.optional(),
+  observation: ApiResearchObservationSchema.optional(),
+}).superRefine((handoff, ctx) => {
+  if (handoff.status === 'proven' && (!handoff.candidate || !handoff.observation)) {
+    schemaIssue(ctx, [], 'proven API research requires the exact candidate and observation');
+  }
+  if (handoff.status === 'blocked' && (handoff.candidate || handoff.observation)) {
+    schemaIssue(ctx, [], 'blocked API research cannot claim a proven candidate');
+  }
+});
+export type ApiResearchHandoff = z.infer<typeof ApiResearchHandoffSchema>;
 const HostedImplementationPlanSchema = strictObject({
   ref: ImplementationPlanRefSchema,
   payload: ImplementationPlanPayloadSchema,
@@ -268,6 +289,7 @@ export const MasterDecisionInputSchema = strictObject({
   current: MasterCurrentSchema.optional(),
   toolSelectionAdvice: ToolSelectionAdvisorOutputSchema.optional(),
   plannerProposals: z.array(FocusedPlannerProposalSchema),
+  apiResearch: z.array(ApiResearchHandoffSchema).default([]),
   parameterAdvice: z.array(ParameterAdviceSubmissionSchema),
   verificationFindings: PromptEvidenceProjectionSchema.optional(),
 }).superRefine((value, ctx) => {
@@ -276,7 +298,7 @@ export const MasterDecisionInputSchema = strictObject({
   if (value.phase === 'discovery' && value.parameterAdvice.length)
     schemaIssue(ctx, ['parameterAdvice'], 'pre-plan decisions cannot carry parameter advice');
 });
-export type MasterDecisionInput = z.infer<typeof MasterDecisionInputSchema>;
+export type MasterDecisionInput = z.input<typeof MasterDecisionInputSchema>;
 const MasterDecisionBindingSchema = z.union([RunIdentitySchema, CurrentPlanBindingSchema]);
 export const MasterDecisionOutputSchema = strictObject({
   binding: MasterDecisionBindingSchema,

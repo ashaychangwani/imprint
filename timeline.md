@@ -3709,3 +3709,37 @@ The total run took about 38 minutes. Roughly nine minutes were fresh planning;
 the largest remaining cost was the series of separate 30-second CDP search
 experiments. The terminal clearly reported `3 ready, 2 unresolved` and the
 independent completion review accepted only the three supported MVPs.
+
+## 2026-09-02 20:35 PDT — Research every operation before planning the tools
+
+The teaching order was backwards. The runtime required an accepted tool plan
+before it would start API research. That meant the master had to guess request
+boundaries, tool links, and build order before it knew which small live calls
+actually worked. The research prompt also began by copying the full recorded
+request, which encouraged stale browser headers and unrelated payload data to
+survive longer than necessary.
+
+The order is now candidate selection, research for every selected operation,
+planning across all research results, and then compilation. Each researcher
+starts from the smallest plausible recorded result call, uses as little
+recorded header, cookie, token, and page state as possible, and must inspect the
+returned body for real operation data. If a larger recorded request is needed
+for diagnosis, the researcher must remove unproven extras and retest a smaller
+version before calling the work proven.
+
+The master and every focused planner receive the exact smallest tested
+workflow, its public test values, the rung that worked, every backend attempt,
+and a redacted response preview for every selected operation. They use the
+complete set to decide tool boundaries, response-to-request links, and build
+waves. If the master later changes an operation boundary, that operation is
+researched again before it is replanned; unchanged research is preserved.
+Compilation no longer starts a separate request-research phase.
+
+A new end-to-end test proves that all operation researchers finish and their
+successful calls and responses are present before the first planner runs. The
+focused teach suite passed 141 tests; lint and type checking passed. Two full
+suite runs reached 1,858/1,860 and 1,859/1,860. Each had a different unrelated
+timing failure: the parser process test passed alone in 2.6 seconds, and the
+hostile process-cleanup test passed alone across all 20 repetitions. No changed
+teach, research, planning, or controller test failed. The next proof is a fresh
+Google Flights teach using the same mounted recording and candidate checkpoint.

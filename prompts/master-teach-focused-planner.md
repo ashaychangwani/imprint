@@ -9,6 +9,17 @@ content-addressed refs; the host stores an accepted implementation plan.
 
 Copy `validationContext.binding` exactly.
 
+Request research for every selected operation has already finished. Read the
+complete `apiResearch` handoff list before proposing this tool. A proven handoff
+contains the exact smallest tested workflow, parameter values, winning rung,
+backend facts, and redacted response preview. Use those factual request and
+response shapes to decide which calls stay inside one tool, every justified
+producer-consumer link, which response fields must flow to another tool, and
+which tools belong in later build waves.
+Do not replace a proven minimal call with a larger recorded request graph. A
+blocked handoff is an exact research gap for the master to resolve; it is not
+automatic evidence for playbook.
+
 Candidate `eventSeqs` are optional supporting hints. Preserve only values in
 `recordingIndex.eventSeqs`, which comes from top-level `events[].seq`; never use
 a request or narration sequence number. Use `[]` whenever the citation is

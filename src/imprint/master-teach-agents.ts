@@ -45,7 +45,6 @@ import {
   teachingCandidateIssues,
   teachingToolCompileInputsSha256,
   unresolvedCandidateCoverage,
-  validateBuildWorkflowProvenance,
   validateDesiredTeachingPlan,
   validateImplementationPlanForTool,
 } from './master-teach-plan.ts';
@@ -68,6 +67,12 @@ const PROMPTS = join(import.meta.dir, '..', '..', 'prompts');
 const same = (left: unknown, right: unknown) => digest(left) === digest(right);
 export const apiResearchCandidateSha256 = (candidate: ApiResearchCandidate): string =>
   digest(candidate);
+export const apiResearchInputsSha256 = (tool: ApiResearchInput['tool']): string =>
+  digest({
+    id: tool.id,
+    candidate: tool.candidate,
+    compileContext: tool.compileContext,
+  });
 const refKey = (ref: ContentAddressedRef) => `${ref.path}\u0000${ref.sha256}`;
 function checkSeqs(
   values: readonly number[],
@@ -151,24 +156,13 @@ function apiResearchBinding(input: ApiResearchInput) {
     runId: input.run.runId,
     recordingSha256: input.run.recordingSha256,
     toolId: input.tool.id,
-    compileInputsSha256:
-      input.tool.implementationPlan?.basedOnCompileInputsSha256 ??
-      teachingToolCompileInputsSha256(input.tool, []),
+    compileInputsSha256: apiResearchInputsSha256(input.tool),
   };
 }
 
 const ApiResearchInputValidationSchema = ApiResearchInputSchema.superRefine((input, ctx) => {
   if (input.run.recordingSha256 !== input.recordingIndex.recordingSha256)
     issue(ctx, ['run'], 'API research recording binding is stale');
-  if (input.tool.strategy?.kind !== 'api')
-    issue(ctx, ['tool', 'strategy'], 'API research requires an accepted API strategy');
-  if (!input.tool.implementationPlan)
-    issue(ctx, ['tool', 'implementationPlan'], 'API research requires the hosted plan binding');
-  if (
-    input.implementationPlan.toolId !== input.tool.id ||
-    input.implementationPlan.strategyKind !== 'api'
-  )
-    issue(ctx, ['implementationPlan'], 'API research plan does not match the tool');
   validateEvidence(input.evidence, input.recordingIndex, ctx, ['evidence']);
 });
 
@@ -222,14 +216,18 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
       if (!(parameter.name in parameterValues) && parameter.default === undefined)
         issue(ctx, ['candidate', 'parameterValues', parameter.name], 'missing required test value');
     }
-    try {
-      validateBuildWorkflowProvenance(workflow, input.implementationPlan);
-    } catch (error) {
-      issue(
-        ctx,
-        ['candidate', 'workflow', 'requests'],
-        error instanceof Error ? error.message : String(error),
-      );
+    const knownRequestSeqs = new Set(input.recordingIndex.requestSeqs);
+    for (const [index, request] of workflow.requests.entries()) {
+      if (
+        request.recordingRequestSeq === undefined ||
+        !knownRequestSeqs.has(request.recordingRequestSeq)
+      ) {
+        issue(
+          ctx,
+          ['candidate', 'workflow', 'requests', index, 'recordingRequestSeq'],
+          'API research request is absent from the selected recording',
+        );
+      }
     }
     if (output.action === 'test') {
       if (output.basedOnObservationId)
@@ -965,6 +963,7 @@ function masterDecisionConversationInput(input: MasterDecisionInput) {
         }
       : undefined,
     ...(input.plannerProposals.length ? { plannerProposals: input.plannerProposals } : {}),
+    ...(input.apiResearch?.length ? { apiResearch: input.apiResearch } : {}),
     ...(parameterAdvice.length ? { parameterAdvice } : {}),
     ...(input.verificationFindings ? { verificationFindings: input.verificationFindings } : {}),
   };
