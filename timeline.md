@@ -3632,3 +3632,31 @@ hostile process-cleanup timing stress test, which passed immediately when run
 alone (20 repetitions). No teaching, backend, research, or controller test
 failed. A clean full-suite rerun then passed all 1,857 tests, including that
 stress test.
+
+## 2026-09-02 19:10 PDT — Do not attach the wrong expectation to a proven call
+
+Fresh candidate-reuse run `fb3aadef-7ca1-4a6d-946c-f1319c2b2971` used the
+same mounted Google Flights recording and all five previously discovered
+operations. It published usable MVPs for location search, location details,
+and the flight calendar. Calendar research converged in two tests, the
+compiler produced a parser in 1 minute 39 seconds, and the post-compile check
+returned real fare rows. Search still could not reproduce the recorded
+shopping request because the successful recording included a changing
+`x-goog-batchexecute-bgr` header whose usable value and producer were not in
+the focused evidence. It never selected playbook.
+
+The run then exposed a separate bookkeeping error. When a researcher chose
+parameters that were not exactly one of the planner's named examples, the
+runtime attached the first recorded-example label anyway. The master saw that
+the actual parameters and the attached expectation disagreed, recalled two
+already-working location tools, and started recompiling them even though their
+artifacts were not broken. The run was cancelled with three usable MVPs
+preserved as evidence before that unnecessary work continued.
+
+Verification-case selection now uses an exact parameter match when one exists.
+If the researcher chose a different live value, the receipt uses the general
+live expectation and can never claim to be a different recorded baseline.
+The regression test covers exact recorded values, exact live values, and
+unmatched researcher-selected values. All 27 master-controller end-to-end
+tests, type checking, and lint pass. The complete suite then passed all 1,858
+tests across 96 files.

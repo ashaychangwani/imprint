@@ -25,7 +25,10 @@ import {
   ToolSelectionAdvisorOutputSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
 import { requestMasterDecision as requestValidatedMasterDecision } from '../src/imprint/master-teach-agents.ts';
-import { runFreshMasterTeach } from '../src/imprint/master-teach-controller.ts';
+import {
+  runFreshMasterTeach,
+  verificationForResearchParameters,
+} from '../src/imprint/master-teach-controller.ts';
 import {
   type DesiredTeachingPlan,
   ImplementationPlanPayloadSchema,
@@ -713,6 +716,71 @@ function lifecycleFailureFixture(input: {
 }
 
 describe('fresh foreground master controller end to end', () => {
+  it('never labels unmatched researcher parameters as a recorded baseline', () => {
+    const implementation = ImplementationPlanPayloadSchema.parse({
+      version: 1,
+      toolId: 'parameter-case-fixture',
+      strategyKind: 'api',
+      requestProvenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 1 }],
+      parameterMappings: [
+        {
+          parameterName: 'query',
+          artifactRequestIndices: [0],
+          guidance: 'Apply the query to the request.',
+        },
+      ],
+      responseDependencies: [],
+      resultSources: [{ artifactRequestIndex: 0, source: 'Return the matching items.' }],
+      outputGuidance: 'Return matching items.',
+      verificationCases: [
+        {
+          id: 'recorded_case',
+          check: 'replay',
+          parameterValueOrigin: 'recorded_baseline',
+          parameterValues: [{ parameterName: 'query', value: 'recorded' }],
+          expectedResult: 'Recorded-query matches.',
+          provenance: {
+            recordingRequestSeqs: [1],
+            recordingEventSeqs: [],
+            evidenceRefs: [
+              {
+                path: `objects/json/${'1'.repeat(64)}.json`,
+                sha256: `sha256:${'1'.repeat(64)}`,
+              },
+            ],
+          },
+        },
+        {
+          id: 'live_case',
+          check: 'live',
+          parameterValueOrigin: 'synthetic_live',
+          parameterValues: [{ parameterName: 'query', value: 'synthetic' }],
+          expectedResult: 'Live-query matches.',
+          provenance: {
+            recordingRequestSeqs: [1],
+            recordingEventSeqs: [],
+            evidenceRefs: [
+              {
+                path: `objects/json/${'2'.repeat(64)}.json`,
+                sha256: `sha256:${'2'.repeat(64)}`,
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(verificationForResearchParameters(implementation, { query: 'recorded' })?.id).toBe(
+      'recorded_case',
+    );
+    expect(verificationForResearchParameters(implementation, { query: 'synthetic' })?.id).toBe(
+      'live_case',
+    );
+    expect(
+      verificationForResearchParameters(implementation, { query: 'researcher-chosen' })?.id,
+    ).toBe('live_case');
+  });
+
   it('verifies the researcher-proven API case before synthetic parameter breadth', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);

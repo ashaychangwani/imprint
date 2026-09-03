@@ -1837,23 +1837,14 @@ function sameParameters(
   return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
 }
 
-function provenBaselineVerification(
+export function verificationForResearchParameters(
   implementation: ImplementationPlanPayload,
   parameters: Record<string, string | number | boolean>,
 ) {
   return (
-    implementation.verificationCases.find(
-      (verification) =>
-        verification.check === 'replay' &&
-        verification.parameterValueOrigin === 'recorded_baseline' &&
-        sameParameters(verificationParameters(verification), parameters),
-    ) ??
-    implementation.verificationCases.find(
-      (verification) =>
-        verification.check === 'replay' &&
-        verification.parameterValueOrigin === 'recorded_baseline',
-    ) ??
-    implementation.verificationCases.find(({ check }) => check === 'live')
+    implementation.verificationCases.find((verification) =>
+      sameParameters(verificationParameters(verification), parameters),
+    ) ?? implementation.verificationCases.find(({ check }) => check === 'live')
   );
 }
 
@@ -2447,7 +2438,7 @@ async function runLiveCheck(input: {
   const parameters =
     input.apiResearch?.parameters ?? liveVerificationParameters(input.implementation);
   const verification = input.apiResearch
-    ? provenBaselineVerification(input.implementation, parameters)
+    ? verificationForResearchParameters(input.implementation, parameters)
     : input.implementation.verificationCases.find(({ check }) => check === 'live');
   if (!verification) throw new Error('implementation plan has no usable MVP verification case');
   const startedAt = Date.now();
