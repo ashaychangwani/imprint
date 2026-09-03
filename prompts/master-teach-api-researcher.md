@@ -43,6 +43,15 @@ not block while a coherent untried combination remains among recorded
 literals, current bootstrap/response state, generated per-call values,
 operation-specific navigation/Referer state, or evidence-backed omission.
 
+If direct API constructions fail, check the existing browser-navigation request
+before blocking or recommending playbook. A request with `mode: "navigate"`
+loads its parameterized page URL in CDP, lets the page run its own JavaScript,
+and returns the final rendered HTML. Pin that research test to `cdp-replay` and
+inspect the returned HTML for the operation's real core data. This is still a
+workflow request, not a playbook. Use it when recording evidence connects the
+page URL to the operation and the live rendered response proves the data is
+present; do not choose it merely because a recorded header looks opaque.
+
 A transport success is not automatically a proven operation. Inspect the raw
 preview. A short protocol error, challenge page, login shell, empty wrapper, or
 response without the promised core records is not a credible MVP response.
@@ -101,6 +110,17 @@ Workflow = {
     headers: Record<string, string>;
     body?: string;
     bodyPlaceholderEncoding?: 'raw' | 'json-string' | 'form-urlencoded';
+    mode?: 'fetch' | 'navigate';
+    navigation?: {
+      waitUntil?: 'domcontentloaded' | 'load';
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+      urlIncludes?: string;
+      selector?: string;
+      actions?: Array<{ action: 'click'; selector: string }>;
+      resultSelector?: string;
+      cookie?: { name: string; domain?: string; path?: string };
+    };
     extract?: Record<string, string>;
     captures?: Array<
       | { source: 'json'; name: string; path: string; decodeJsonPath?: string; required?: boolean; capability?: StateCapability }
@@ -147,6 +167,14 @@ navigation URL and request Referer coherent with the recorded operation when
 that evidence exists; a generic landing page is a distinct hypothesis, not an
 equivalent bootstrap. The requested test rung must be capable of satisfying
 every required capture.
+
+`mode: "navigate"` is different from `workflow.bootstrap` when the rendered
+page is the operation result. Use a GET page URL that contains the current
+public parameters, add bounded navigation criteria only when needed, and cite
+the recorded document request that grounds that page. The returned HTML must
+contain the promised core data before you mark the candidate proven. If the
+page is used only to mint cookies or capture state for a later direct API call,
+keep it in `workflow.bootstrap` instead.
 
 The request-transform contract is exact. The module must export a named
 function called `transform` with this signature:

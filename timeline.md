@@ -3743,3 +3743,44 @@ timing failure: the parser process test passed alone in 2.6 seconds, and the
 hostile process-cleanup test passed alone across all 20 repetitions. No changed
 teach, research, planning, or controller test failed. The next proof is a fresh
 Google Flights teach using the same mounted recording and candidate checkpoint.
+
+## 2026-09-03 00:07 PDT — Research order works; the browser API path is incomplete
+
+Fresh run `dd18458e-4817-470c-8992-4d50d27c4884` used the mounted September 2
+Flights recording and the accepted five-candidate checkpoint. Every selected
+operation finished research before planning began, so the intended new order
+held. The run ended honestly at the 60-minute limit with two ready tools:
+`search_locations` and `search_flight_calendar`. `get_location_details`,
+`search_flights`, and `get_booking_options` remained unresolved. The master did
+not publish an empty search result or silently call the run complete.
+
+The search researcher tried minimal and closest-recorded requests through fetch,
+fetch bootstrap, CDP replay, and stealth fetch. Its direct requests either got a
+small protocol error or HTTP 200 without flight itineraries. The current
+recording's real `GetShoppingResults` request was produced by the Flights page
+itself and included a fresh, very large `X-Goog-BatchExecute-Bgr` header. The
+recording proves that request returned about 69 KB of real flight data, but the
+current CDP rung only executes an Imprint-authored `fetch()` inside Chrome. It
+does not let the page make its normal request while Imprint observes the response.
+
+The checked-in Flights search example was also tested live instead of being
+treated as truth. Its CDP and stealth calls now receive HTTP 200 but no
+recognizable itineraries, so its July `liveVerified` result is stale. Changing
+the request ID explains only the change from HTTP 400 to HTTP 200; it does not
+restore search results. This supports the researcher's browser-generated-request
+diagnosis without proving that one Google header should become a runtime rule.
+
+An isolated prototype then tested whether a new network-observation runtime mode
+was actually needed. CDP listened before the first page load, but the live page
+did not issue the recorded shopping endpoint or any matching Flights API POST.
+The prototype was removed instead of adding unproven runtime machinery.
+
+The same live CDP page did render 18 real flights, including airlines, times,
+durations, emissions, and prices. Imprint already supports this through the
+existing `mode: "navigate"` workflow request, which returns rendered HTML to the
+ordinary parser. The real setup bug was in the researcher prompt: its claimed
+complete workflow schema omitted `mode` and `navigation`, while the planning
+prompts focused only on the inability to copy an internal XHR. The prompt now
+documents the existing navigation shape exactly and tells the researcher to
+test a parameterized rendered result page after direct API constructions fail.
+No new runtime mode or site-specific rule is being kept.

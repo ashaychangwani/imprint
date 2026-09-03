@@ -71,6 +71,29 @@ test('canonical browser workflow and playbook parse with production schemas', ()
   expect(playbook.result.source).toBe('dom');
 });
 
+test('rendered-result navigation has an exact valid workflow shape', () => {
+  const workflow = WorkflowSchema.parse({
+    toolName: 'search_records',
+    intent: { description: 'Search records through a rendered result page.' },
+    site: 'example-search',
+    parameters: [{ name: 'query', type: 'string', description: 'Search query.' }],
+    requests: [
+      {
+        recordingRequestSeq: 73,
+        method: 'GET',
+        url: 'https://example.test/search?q=${param.query}',
+        headers: {},
+        mode: 'navigate',
+        navigation: { waitUntil: 'load', resultSelector: '[data-results]' },
+      },
+    ],
+  });
+  expect(workflow.requests[0]?.navigation).toEqual({
+    waitUntil: 'load',
+    resultSelector: '[data-results]',
+  });
+});
+
 test('canonical TypeScript artifacts are syntactically valid named exports', () => {
   expect(
     exportedFunction(canonicalExample('parser.ts', 'typescript'), 'parser.ts', 'extract'),
@@ -108,7 +131,7 @@ test('the pinned contract states applicability, edit invalidation, and playbook 
     'A `render_failed` result means only that this diagnostic did not complete',
   );
   expect(prompt).toContain('`mode` chooses transport');
-  expect(prompt).toContain('it cannot switch a fetch request into browser mode');
+  expect(prompt).toMatch(/it cannot switch a\s+fetch request into\s+browser mode/);
   expect(prompt).toContain('`capability` declares the minimum mechanism');
   expect(prompt).toContain('affects which existing runtime transports are eligible');
   expect(prompt).toMatch(/does\s+not infer the capture's meaning/);
@@ -139,6 +162,8 @@ test('API research stays separate, retained, site-neutral, and ahead of compilat
   expect(apiResearchPrompt).toContain('Choosing a rung is your evidence-backed decision');
   expect(apiResearchPrompt).toContain('The parser-free workflow still has the complete API');
   expect(apiResearchPrompt).toContain('A top-level `bootstrap`');
+  expect(apiResearchPrompt).toContain('`mode: "navigate"`');
+  expect(apiResearchPrompt).toContain('returns the final rendered HTML');
   expect(apiResearchPrompt).toContain('`${state.NAME}`');
   expect(apiResearchPrompt).toContain('`${generated.epoch_ms}`');
   expect(apiResearchPrompt).toContain('`${generated.nonce}`');
