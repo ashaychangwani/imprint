@@ -21,6 +21,8 @@ export interface TeachingRecordingResolution {
   sourceCount: number;
   /** True only when an explicit multi-recording selection wrote an aggregate. */
   refreshed: boolean;
+  /** Session parsed from the exact bytes represented by recordingSha256. */
+  session: Session;
 }
 
 /**
@@ -41,6 +43,30 @@ interface SessionInfo {
   requestCount: number;
   narrationCount: number;
   url: string;
+  recordingSha256: string;
+  session: Session;
+}
+
+const SESSION_READ_ATTEMPTS = 3;
+
+/** Read one session consistently, retrying only an incomplete JSON read. */
+export function readSessionFile(
+  path: string,
+  read: (path: string) => Buffer = (target) => readFileSync(target),
+): { contents: Buffer; session: Session } {
+  let lastParseError: unknown;
+  for (let attempt = 0; attempt < SESSION_READ_ATTEMPTS; attempt++) {
+    const contents = read(path);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(contents.toString('utf8'));
+    } catch (error) {
+      lastParseError = error;
+      continue;
+    }
+    return { contents, session: SessionSchema.parse(raw) };
+  }
+  throw lastParseError;
 }
 
 export function listSiteSessions(site: string): SessionInfo[] {
@@ -62,8 +88,7 @@ function listSessionsInDir(dir: string): SessionInfo[] {
   for (const filename of files) {
     const absPath = pathJoin(dir, filename);
     try {
-      const raw = JSON.parse(readFileSync(absPath, 'utf8'));
-      const session = SessionSchema.parse(raw);
+      const { contents, session } = readSessionFile(absPath);
       infos.push({
         absPath,
         filename,
@@ -71,6 +96,8 @@ function listSessionsInDir(dir: string): SessionInfo[] {
         requestCount: session.requests.length,
         narrationCount: session.narration.length,
         url: session.url,
+        recordingSha256: sha256Id(contents),
+        session,
       });
     } catch {
       // Skip malformed sessions
@@ -224,8 +251,7 @@ export function resolveExplicitTeachingRecordings(
   }
 
   const selected = selectedPaths.map((path) => {
-    const contents = readFileSync(path);
-    const session = SessionSchema.parse(JSON.parse(contents.toString('utf8')));
+    const { contents, session } = readSessionFile(path);
     if (session.site !== site) {
       throw new Error(`recording site "${session.site}" does not match requested site "${site}"`);
     }
@@ -239,6 +265,7 @@ export function resolveExplicitTeachingRecordings(
       recordingSha256: sha256Id(only.contents),
       sourceCount: 1,
       refreshed: false,
+      session: only.session,
     };
   }
 
@@ -249,6 +276,7 @@ export function resolveExplicitTeachingRecordings(
     recordingSha256: sha256Id(readFileSync(path)),
     sourceCount: selected.length,
     refreshed: true,
+    session: combined,
   };
 }
 
@@ -256,13 +284,12 @@ export function resolveExplicitTeachingRecordings(
 export function resolveTeachingRecording(site: string): TeachingRecordingResolution | undefined {
   const latest = listSiteSessions(site)[0];
   if (!latest) return undefined;
-  const contents = readFileSync(latest.absPath);
-  SessionSchema.parse(JSON.parse(contents.toString('utf8')));
   return {
     path: latest.absPath,
-    recordingSha256: sha256Id(contents),
+    recordingSha256: latest.recordingSha256,
     sourceCount: 1,
     refreshed: false,
+    session: latest.session,
   };
 }
 

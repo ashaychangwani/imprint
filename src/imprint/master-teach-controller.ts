@@ -1047,12 +1047,7 @@ async function resolveRecordingForFreshRun(
     const selected = resolveExplicitTeachingRecordings(site, paths);
     return {
       path: selected.path,
-      session: loadJsonFile(
-        selected.path,
-        SessionSchema,
-        { notFound: 'selected teaching recording is missing' },
-        'teaching recording',
-      ),
+      session: selected.session,
       recordingSha256: selected.recordingSha256,
     };
   }
@@ -1083,20 +1078,17 @@ async function resolveRecordingForFreshRun(
       recordingSha256: sha256Id(readFileSync(captured.sessionPath)),
       sourceCount: 1,
       refreshed: false,
+      session: loadJsonFile(
+        captured.sessionPath,
+        SessionSchema,
+        { notFound: 'selected teaching recording is missing' },
+        'teaching recording',
+      ),
     };
   }
-  const session = loadJsonFile(
-    selected.path,
-    SessionSchema,
-    {
-      notFound: 'selected teaching recording is missing',
-      badSchema: 'selected teaching recording is invalid',
-    },
-    'teaching recording',
-  );
   return {
     path: selected.path,
-    session,
+    session: selected.session,
     recordingSha256: selected.recordingSha256,
   };
 }

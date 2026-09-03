@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import {
   type TeachingRecordingResolution,
+  readSessionFile,
   resolveExplicitTeachingRecordings,
   resolveTeachingRecording,
   writeCombinedSession,
@@ -129,6 +130,7 @@ describe('resolveTeachingRecording', () => {
       recordingSha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       sourceCount: 1,
       refreshed: false,
+      session: makeSession(),
     });
     expect(readdirSync(sessionsDir).filter((name) => name.startsWith('combined-'))).toEqual([]);
   });
@@ -169,6 +171,30 @@ describe('resolveTeachingRecording', () => {
     expect(() => resolveExplicitTeachingRecordings('test-site', [path, path])).toThrow(
       'same recording was selected more than once',
     );
+  });
+
+  it('retries an incomplete network-file read and binds the hash to parsed bytes', () => {
+    const complete = Buffer.from(JSON.stringify(makeSession()), 'utf8');
+    let reads = 0;
+    const loaded = readSessionFile('/mounted/session.json', () => {
+      reads += 1;
+      return reads === 1 ? complete.subarray(0, complete.length - 10) : complete;
+    });
+
+    expect(reads).toBe(2);
+    expect(loaded.contents).toEqual(complete);
+    expect(loaded.session.requests).toHaveLength(1);
+  });
+
+  it('does not retry a complete session that fails schema validation', () => {
+    let reads = 0;
+    expect(() =>
+      readSessionFile('/mounted/session.json', () => {
+        reads += 1;
+        return Buffer.from('{}', 'utf8');
+      }),
+    ).toThrow();
+    expect(reads).toBe(1);
   });
 
   function writeRaw(filename: string, session: Session): string {

@@ -3970,3 +3970,19 @@ decode forms and nested structured values before rebuilding them; blind edits
 inside opaque encoded strings neither prove parameterization nor isolate some
 other header as the cause. These are site-neutral agent instructions. The
 runtime still records and executes facts without imposing a semantic rule.
+
+## 2026-09-03 16:31–16:36 PDT — Mounted recordings are read once and retried if incomplete
+
+The first validation after the research-prompt change was fresh run
+`9a86a996-00f9-462c-8716-34a3ff0a6da4`. It ended before any agent started
+because one read of the mounted 20 MB recording produced incomplete JSON. This
+was the second time the same unchanged network file had intermittently failed
+to parse, so the earlier assumption that it was a one-off was no longer valid.
+
+Session selection now retries only JSON parse failures, up to three reads. A
+complete file that fails the session schema is still rejected immediately.
+The selected session and its SHA-256 hash now come from the same successful
+byte read and are passed into teaching directly; the controller no longer
+opens and parses the mounted file a second time. This is generic file-loading
+mechanics, not teaching strategy. Session-loading tests, the complete fresh
+controller end-to-end suite, type checking, and lint pass.
