@@ -3660,3 +3660,52 @@ The regression test covers exact recorded values, exact live values, and
 unmatched researcher-selected values. All 27 master-controller end-to-end
 tests, type checking, and lint pass. The complete suite then passed all 1,858
 tests across 96 files.
+
+## 2026-09-02 19:37 PDT — Stop a run when the host disk fills
+
+Fresh candidate-reuse run `14158364-858d-4803-b312-85ca3bdebc41` planned the
+same five tools in two waves. Both location researchers proved their calls
+with plain fetch, both compilers finished in under two minutes, and their
+contract checks passed. Calendar and search then began testing higher-trust
+API routes. Neither chose playbook.
+
+The run was stopped when saving a temporary Chrome profile failed with
+`ENOSPC`. The machine had only 233 MB free, so later results would not have
+been trustworthy. The cleanup removed 2.7 GB of stale temporary
+`imprint-chrome-*` profiles left by stopped processes. It did not remove any
+recording, teach journal, generated tool, or retained run evidence. Available
+space rose to 3.3 GB. The next validation starts fresh from the same recording
+and candidate checkpoint; the interrupted run is diagnostic evidence only.
+
+## 2026-09-02 20:16 PDT — Three live MVPs ship; search remains unresolved
+
+Fresh run `d798a1ac-11a3-47f6-a795-7401a10f4e09` used the same recording and
+five-candidate checkpoint after macOS reclaimed 12 GB of free space. It ended
+honestly as `partial` with three ready tools and two unresolved operations.
+`search_locations`, `get_location_details`, and `search_flight_calendar` each
+have current contract and live receipts. All three were independently reviewed
+and published as usable MVPs, with optional parameter-breadth suggestions saved
+separately under the run's `finesse` directory. No playbook was used.
+
+The real-run regression check passed. Researcher-selected location parameters
+were checked against the matching live expectation, both location tools were
+published, and the master never recalled them. Calendar research converged in
+two cheap fetch tests. Its first compiled request then failed live; the master
+recalled only calendar and resumed the same compiler conversation with the
+exact failure. That one repair took 1 minute 18 seconds, after which calendar
+returned real results through fetch and passed semantic review.
+
+`search_flights` tried multiple evidence-driven API constructions through
+fetch, CDP replay, stealth fetch, and fetch bootstrap. Transport calls often
+returned successfully, but every response body contained the same framed
+protocol error. The strongest remaining construction needs the complete
+recorded `x-goog-batchexecute-bgr` header, but that oversized header was omitted
+from the focused evidence and no producer was available. The master correctly
+left search unresolved instead of accepting an empty result or switching to
+playbook. `get_booking_options` remains unresolved because it needs the
+`selection_token` and `selected_flights` outputs of a working search tool.
+
+The total run took about 38 minutes. Roughly nine minutes were fresh planning;
+the largest remaining cost was the series of separate 30-second CDP search
+experiments. The terminal clearly reported `3 ready, 2 unresolved` and the
+independent completion review accepted only the three supported MVPs.
