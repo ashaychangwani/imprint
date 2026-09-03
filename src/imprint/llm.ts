@@ -10,6 +10,7 @@ import {
   type RunDeadlineRef,
   boundedRunDeadline,
   providerControlError,
+  providerReportedError,
   resolvedRunDeadline,
   retryTransientProviderFailure,
 } from './provider-retry.ts';
@@ -482,7 +483,10 @@ ${cliFinalArtifactInstruction()}`;
         });
         let turn: Awaited<ReturnType<Thread['run']>>;
         try {
-          turn = await thread.run(combinedPrompt, { signal: opts.signal });
+          turn = await runCodexTurnWithWatchdog(
+            (signal) => thread.run(combinedPrompt, { signal }),
+            { signal: opts.signal },
+          );
         } catch (err) {
           opts.onEvent?.({
             type: 'process.spawn_failed',
@@ -533,6 +537,70 @@ ${cliFinalArtifactInstruction()}`;
   }
 }
 
+const DEFAULT_CODEX_TURN_WATCHDOG_MS = 5 * 60_000;
+
+export function codexTurnWatchdogMs(value = process.env.IMPRINT_CODEX_TURN_TIMEOUT_MS): number {
+  if (value === undefined || value.trim() === '') return DEFAULT_CODEX_TURN_WATCHDOG_MS;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : DEFAULT_CODEX_TURN_WATCHDOG_MS;
+}
+
+/**
+ * The Codex SDK can occasionally leave `Thread.run()` pending after its child
+ * process has already exited. Bound one SDK turn so the ordinary provider
+ * retry loop can continue the retained conversation instead of parking the
+ * complete teach run until its outer deadline.
+ */
+export async function runCodexTurnWithWatchdog<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<T> {
+  const timeoutMs = options.timeoutMs ?? codexTurnWatchdogMs();
+  const controller = new AbortController();
+  const abortFromParent = (): void => {
+    controller.abort(
+      options.signal?.reason instanceof Error
+        ? options.signal.reason
+        : new DOMException('Codex turn cancelled', 'AbortError'),
+    );
+  };
+  if (options.signal?.aborted) abortFromParent();
+  else options.signal?.addEventListener('abort', abortFromParent, { once: true });
+
+  const timeoutError = new ProviderReportedError(
+    'codex-cli',
+    {
+      codes: ['codex_turn_stalled'],
+      messages: [`Codex turn did not settle within ${timeoutMs}ms`],
+    },
+    undefined,
+    'provider_process_interrupted',
+  );
+  const timer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const rejectWithReason = (): void =>
+      reject(
+        controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : new DOMException('Codex turn cancelled', 'AbortError'),
+      );
+    if (controller.signal.aborted) rejectWithReason();
+    else controller.signal.addEventListener('abort', rejectWithReason, { once: true });
+  });
+  const pending = run(controller.signal);
+  // A broken SDK promise may remain pending even after its child is aborted.
+  // The race must not leave a later rejection unobserved.
+  void pending.catch(() => {});
+  try {
+    return await Promise.race([pending, aborted]);
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', abortFromParent);
+  }
+}
+
 export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string): string {
   if (!promptRequestsJsonObject(systemPrompt)) return stdout;
   return extractJsonObject(stdout) ?? stdout;
@@ -541,12 +609,17 @@ export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string):
 const CLI_STDERR_TAIL_LIMIT = 2000;
 
 export function cliExitError(provider: ProviderName, exitCode: number, stderr: string): Error {
-  if (provider === 'codex-cli' && exitCode === 101 && stderr.trim().length === 0) {
+  if (provider === 'codex-cli' && exitCode === 101) {
+    const diagnostic = stderr.trim();
     return new ProviderReportedError(
       provider,
       {
         codes: ['cli_exit_101'],
-        messages: [`${provider} process exited 101 without a diagnostic`],
+        messages: [
+          diagnostic
+            ? `${provider} process exited 101: ${cliStderrTail(diagnostic)}`
+            : `${provider} process exited 101 without a diagnostic`,
+        ],
       },
       undefined,
       'provider_process_interrupted',
@@ -782,6 +855,8 @@ function promptRequestsJsonObject(systemPrompt: string): boolean {
 export function enrichCodexCliError(err: unknown, _config: { model: string }): Error {
   const control = providerControlError(err);
   if (control) return control;
+  const reported = providerReportedError(err);
+  if (reported) return reported;
   const msg = err instanceof Error ? err.message : String(err);
 
   // @openai/codex-sdk reports process exits as ordinary Error objects instead

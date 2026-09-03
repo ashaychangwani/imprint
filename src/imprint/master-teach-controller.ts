@@ -1708,6 +1708,11 @@ function agentOptions(
     deadlineMs: deadline.deadlineMs,
     runDeadline: deadline,
     signal: opts.signal,
+    onProviderRetry: ({ attempt, delayMs, reason }) =>
+      reportProgress(
+        opts,
+        `model call interrupted (${reason}); retry ${attempt} starts in ${Math.ceil(delayMs / 1_000)}s`,
+      ),
     ...(analyzer ? { analyzer } : {}),
     ...deps,
   };
@@ -4770,7 +4775,10 @@ export async function runFreshMasterTeach(
       signal: opts.signal,
       report: (message) => reportProgress(opts, message),
       now: deps.now(),
-      onSelected: (selection) => writeCandidateSelectionCheckpoint(runRoot, selection, seeds),
+      onSelected: (selection) => {
+        plannedTools = selection.discoveryDecision.desiredPlan.tools.length;
+        writeCandidateSelectionCheckpoint(runRoot, selection, seeds);
+      },
     });
     plannedTools = planned.plan.tools.length;
     reportProgress(

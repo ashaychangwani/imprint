@@ -3893,3 +3893,39 @@ mechanical fix for any parameterized URL; it adds no site rule or teaching
 strategy. Tests cover whole-URL parameters through the CDP rung and parameters
 inside a Referer. The focused backend suite passes 86 tests, and type checking
 and lint pass.
+
+## 2026-09-03 14:51–15:23 PDT — A crashed Codex turn left the teach silently waiting
+
+Fresh run `ef190da3-e96d-415b-96bb-31d742a27035` used the same checked mounted
+recording and the same five-operation candidate checkpoint. Both location
+tools were proven again. Search, calendar, and booking performed new research.
+Warm browser reuse worked inside each tool: an unchanged Search retry took
+293 milliseconds, and Calendar recovered from one navigation timeout with a
+warm retry in about two seconds.
+
+Calendar concluded that its old recorded request needed a fresh changing
+header. Booking concluded that it needed a matching current token pair from a
+successful Search call. Search submitted another API test, the runtime
+completed it, and then no later agent turn appeared. The teach stayed silent
+until it was cancelled around the expected 30-minute mark.
+
+The cancellation exposed the actual cause: Search's Codex subprocess had
+crashed with exit 101 and a broken-pipe panic. The Codex SDK did not finish or
+reject its pending promise after that child process died, so Imprint never got
+an error it could retry. This was a provider-process lifecycle failure, not a
+Google request failure. Four research workers had already finished, while the
+fifth was waiting on that dead promise. The terminal's `0 unfinished` count was
+also false because the journal is created only after research.
+
+Each Codex turn now has a five-minute watchdog, configurable with
+`IMPRINT_CODEX_TURN_TIMEOUT_MS`. If the SDK does not settle, Imprint aborts that
+turn and feeds a factual process-interruption error into the existing bounded
+backoff loop. Exit 101 is handled the same way even when it includes useful
+crash diagnostics. The retry keeps the retained logical conversation, and the
+terminal now says when a model call is being retried. The selected tool count
+is saved before research starts, so cancellation during research reports the
+real unfinished count. This changes only generic provider lifecycle and status
+reporting; it does not add teaching or site policy.
+
+The LLM, retry, controller, and full controller end-to-end suites pass 124
+tests. Type checking and lint also pass.

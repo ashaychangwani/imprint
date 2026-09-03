@@ -12,6 +12,7 @@ import {
   availableModelsForProvider,
   cliExitError,
   cliStderrTail,
+  codexTurnWatchdogMs,
   detectProvider,
   detectTeachProvider,
   enrichCodexCliError,
@@ -22,6 +23,7 @@ import {
   normalizeCliAnalyzeOutput,
   preferredAgentModel,
   preferredVerificationModel,
+  runCodexTurnWithWatchdog,
 } from '../src/imprint/llm.ts';
 import {
   ProviderReportedError,
@@ -107,8 +109,9 @@ describe('structured CLI provider failures', () => {
       new Error('Codex Exec exited with code 101: worker panic'),
       { model: 'gpt-5.6-sol' },
     );
-    expect(diagnosed).not.toBeInstanceOf(ProviderReportedError);
-    expect(isTransientProviderCapacityError(diagnosed)).toBe(false);
+    expect(diagnosed).toBeInstanceOf(ProviderReportedError);
+    expect(isTransientProviderCapacityError(diagnosed)).toBe(true);
+    expect(diagnosed.message).toContain('worker panic');
 
     const otherExit = enrichCodexCliError(new Error('Codex Exec exited with code 1: '), {
       model: 'gpt-5.6-sol',
@@ -164,7 +167,42 @@ describe('structured CLI provider failures', () => {
     );
 
     expect(isTransientProviderCapacityError(cliExitError('codex-cli', 1, ''))).toBe(false);
-    expect(isTransientProviderCapacityError(cliExitError('codex-cli', 101, 'panic'))).toBe(false);
+    expect(isTransientProviderCapacityError(cliExitError('codex-cli', 101, 'panic'))).toBe(true);
+  });
+
+  it('bounds a Codex SDK turn that never settles and aborts its child', async () => {
+    let childSignal: AbortSignal | undefined;
+    const result = runCodexTurnWithWatchdog(
+      (signal) => {
+        childSignal = signal;
+        return new Promise<string>(() => {});
+      },
+      { timeoutMs: 5 },
+    );
+
+    await expect(result).rejects.toMatchObject({
+      name: 'ProviderReportedError',
+      interruption: 'provider_process_interrupted',
+      codes: ['codex_turn_stalled'],
+    });
+    expect(childSignal?.aborted).toBe(true);
+  });
+
+  it('propagates cancellation through the Codex turn watchdog', async () => {
+    const parent = new AbortController();
+    const cancelled = new DOMException('user cancelled', 'AbortError');
+    const result = runCodexTurnWithWatchdog(() => new Promise<string>(() => {}), {
+      signal: parent.signal,
+      timeoutMs: 1_000,
+    });
+    parent.abort(cancelled);
+    await expect(result).rejects.toBe(cancelled);
+  });
+
+  it('uses a five-minute Codex watchdog unless a valid override is supplied', () => {
+    expect(codexTurnWatchdogMs(undefined)).toBe(5 * 60_000);
+    expect(codexTurnWatchdogMs('1250')).toBe(1_250);
+    expect(codexTurnWatchdogMs('nope')).toBe(5 * 60_000);
   });
 
   it('backs off and reruns the same call after a diagnostic-free Codex exit 101', async () => {
