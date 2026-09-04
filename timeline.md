@@ -4014,3 +4014,32 @@ uses the same small helper. Regression tests rewrite both a transform and a
 parser in place and prove that the second execution sees the second version.
 The focused runtime and shared-module suites pass 61 tests; type checking and
 lint pass. This is module-loading mechanics for every site, not Flights policy.
+
+## 2026-09-03 17:08–17:34 PDT — Parameterized Search worked; one browser bootstrap never returned
+
+Fresh Flights run `d3dc50ba-3db0-468a-9a45-bb39f13d16c2` confirmed the module
+reload fix. Search rebuilt the encoded page URL from caller inputs and tested a
+materially different one-way SFO-to-LAX trip on October 20. The returned page
+contained 34 matching flights, so Search was proven rather than replaying the
+recorded SJC-to-SAN example. Both location tools were also proven with changed
+inputs through ordinary fetch.
+
+Calendar proved that its generated URL controlled all four caller inputs, but
+correctly refused to accept the result while fare cells still said "Loading."
+Booking correctly rejected several HTTP-success responses whose bodies
+contained protocol error 13. This shows the researchers are checking the
+meaning of the response themselves.
+
+Booking's final stealth-browser bootstrap then stopped returning after its
+normal sensor wait. Calendar queued behind the same site's live-request lock,
+so neither researcher could proceed. After more than five silent minutes the
+run was stopped; normal stealth tests in this run completed in about five
+seconds. Even cancellation could not interrupt the stuck browser operation,
+which confirmed that the backend call itself was unbounded.
+
+One stealth browser bootstrap is now limited to 60 seconds. If it exceeds that,
+the runtime closes the browser and returns an ordinary failure to the retained
+researcher so another hypothesis can proceed. This is a generic execution
+deadline, not a semantic rule. A regression test uses a bootstrap that never
+returns and proves the caller regains control. The stealth and backend suites
+pass 109 tests; type checking and lint pass.

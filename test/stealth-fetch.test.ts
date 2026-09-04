@@ -102,6 +102,19 @@ describe('Token lifecycle', () => {
     sf.invalidate();
     expect(sf.tokenAgeSeconds).toBe(-1);
   });
+
+  it('bounds a browser bootstrap that never returns', async () => {
+    const sf = createStealthFetch(
+      { baseUrl: 'https://example.com', bootstrapTimeoutMs: 10 },
+      {
+        bootstrap: () => new Promise<TokenCache>(() => {}),
+      },
+    );
+
+    await expect(sf.ensureBootstrapped()).rejects.toThrow(
+      'stealth browser bootstrap exceeded 0s timeout',
+    );
+  });
 });
 
 describe('Proactive TTL refresh (maxTokenAgeSeconds)', () => {
