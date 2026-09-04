@@ -1,15 +1,15 @@
 /**
- * File-backed stealth-fetch TokenCache, shared across compile-time `bun test`
- * processes.
+ * File-backed stealth-fetch TokenCache, shared across repeated compile-time
+ * calls for one tool and rung.
  *
  * Each integration / per-parameter test the compile agent writes runs in its own
  * `bun test` process, and `runWorkflowWithLadder` otherwise mints a fresh stealth
  * token (~12s headless Chromium bootstrap, see stealth-fetch.ts) every time. A
  * multi-test gate run therefore fires a burst of bootstraps against one origin in
  * seconds — exactly the pattern Akamai/PerimeterX flag, which forces the
- * integration test to be waived. Persisting one token per site (keyed by the site
- * asset dir) lets sibling processes reuse a single bootstrap, cutting both waivers
- * and compile time.
+ * integration test to be waived. Persisting one token in the caller-selected
+ * cache directory lets repeated calls reuse a single bootstrap without sharing
+ * live browser state with another tool or backend rung.
  *
  * The file holds a live session token. It lives under ~/.imprint/<site>/ (never
  * the repo) and is transient: stale entries are ignored on read, a malformed file
@@ -31,9 +31,9 @@ function tokenPath(siteDir: string): string {
   return pathJoin(siteDir, TOKEN_FILE);
 }
 
-/** Load a cached token for a site dir, or null if absent / malformed / stale. */
-export function loadCachedToken(siteDir: string, maxAgeSeconds: number): TokenCache | null {
-  const p = tokenPath(siteDir);
+/** Load a cached token, or null if absent / malformed / stale. */
+export function loadCachedToken(cacheDir: string, maxAgeSeconds: number): TokenCache | null {
+  const p = tokenPath(cacheDir);
   if (!existsSync(p)) return null;
   try {
     const raw = JSON.parse(readFileSync(p, 'utf8')) as Partial<TokenCache>;
@@ -49,7 +49,7 @@ export function loadCachedToken(siteDir: string, maxAgeSeconds: number): TokenCa
     const ageSeconds = (Date.now() - raw.bootstrappedAt) / 1000;
     if (ageSeconds >= maxAgeSeconds) {
       log(
-        `cached token in ${siteDir} is ${Math.round(ageSeconds)}s old (>= ${maxAgeSeconds}s) — ignoring`,
+        `cached token in ${cacheDir} is ${Math.round(ageSeconds)}s old (>= ${maxAgeSeconds}s) — ignoring`,
       );
       return null;
     }
@@ -63,25 +63,25 @@ export function loadCachedToken(siteDir: string, maxAgeSeconds: number): TokenCa
   }
 }
 
-/** Persist a token for a site dir (atomic temp + rename). Best-effort. */
-export function saveCachedToken(siteDir: string, token: TokenCache): void {
+/** Persist a token to a caller-scoped cache directory. Best-effort. */
+export function saveCachedToken(cacheDir: string, token: TokenCache): void {
   try {
-    mkdirSync(siteDir, { recursive: true });
-    const p = tokenPath(siteDir);
+    mkdirSync(cacheDir, { recursive: true });
+    const p = tokenPath(cacheDir);
     const tmp = `${p}.${process.pid}.tmp`;
     writeFileSync(tmp, `${JSON.stringify(token)}\n`, 'utf8');
     renameSync(tmp, p);
   } catch (err) {
     log(
-      `failed to persist stealth token to ${siteDir}: ${err instanceof Error ? err.message : String(err)}`,
+      `failed to persist stealth token to ${cacheDir}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
 
 /** Remove a cached token (best-effort) — call when a site's teach run ends. */
-export function clearCachedToken(siteDir: string): void {
+export function clearCachedToken(cacheDir: string): void {
   try {
-    rmSync(tokenPath(siteDir), { force: true });
+    rmSync(tokenPath(cacheDir), { force: true });
   } catch {
     // best-effort
   }

@@ -18,6 +18,7 @@ import {
   __setCdpJarMinterForTest,
   __setPlaybookRunnerForTest,
   cdpReplayPoolKey,
+  compileBackendStateDir,
   effectiveAutoLadder,
   evaluateBootstrapCapture,
   pickBaseUrl,
@@ -852,6 +853,17 @@ describe('runWithLadder — empty ladder', () => {
 });
 
 describe('runWorkflowWithLadder', () => {
+  it('isolates persistent browser state by tool and backend rung', () => {
+    const firstTool = pathJoin(root, 'site', 'first_tool');
+    const secondTool = pathJoin(root, 'site', 'second_tool');
+
+    const firstCdp = compileBackendStateDir(firstTool, 'cdp-replay');
+    expect(firstCdp).not.toBe(compileBackendStateDir(secondTool, 'cdp-replay'));
+    expect(firstCdp).not.toBe(compileBackendStateDir(firstTool, 'fetch-bootstrap'));
+    expect(firstCdp).not.toBe(compileBackendStateDir(firstTool, 'stealth-fetch'));
+    expect(firstCdp).toContain(pathJoin('.imprint-backend-state', 'first_tool', 'cdp-replay'));
+  });
+
   // The synthetic ResolvedTool path: takes a workflow.json on disk and
   // dispatches through the real `runWithLadder`. We use a local HTTP
   // server to keep the test hermetic — the only thing we're really
@@ -2108,8 +2120,8 @@ describe('cdp-replay cookie seeding by toolKind', () => {
   // A validated jar with an anti-bot cookie sitting in the site dir — the exact
   // shape `saveJar` leaves behind after any prior cdp-replay run.
   function seedJarOnDisk(site: string): void {
-    const siteDir = pathJoin(root, site);
-    mkdirSync(siteDir, { recursive: true });
+    const cacheDir = compileBackendStateDir(pathJoin(root, site, 'tool'), 'cdp-replay');
+    mkdirSync(cacheDir, { recursive: true });
     const jar: MintedJar = {
       cookies: [{ name: '_abck', value: 'SEED~0~SEED', domain: `.${site}.example.com`, path: '/' }],
       ua: 'JarUA/148',
@@ -2118,7 +2130,7 @@ describe('cdp-replay cookie seeding by toolKind', () => {
       abckFlag: '0',
       validated: true,
     };
-    writeFileSync(pathJoin(siteDir, '.cdp-jar.json'), `${JSON.stringify(jar)}\n`, 'utf8');
+    writeFileSync(pathJoin(cacheDir, '.cdp-jar.json'), `${JSON.stringify(jar)}\n`, 'utf8');
   }
 
   function captureSeed(): { seen: () => Array<{ name: string }> | undefined } {

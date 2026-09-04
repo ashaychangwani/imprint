@@ -4109,3 +4109,25 @@ loading text, placeholders, a route form, or missing results mean the operation
 should remain unresolved while proven tools ship. This is prompt guidance for
 agent judgment, not a runtime restriction or a site-specific rule. All 110
 master-agent tests, type checking, and lint pass.
+
+## 2026-09-03 19:20–19:43 PDT — Browser state was shared across unrelated tools
+
+Fresh Flights run `c5997d33-7d3a-4d4c-bb5e-4fd8465cf856` started with the
+stronger fallback instructions. Both location operations were proven again.
+Search and Calendar ran distinct API and CDP experiments, and Booking began its
+own research. Before planning, Booking's stealth rung reported that it reused a
+token created during Calendar research.
+
+That reuse violated the intended isolation boundary. The cache lived at the
+shared `api-research` parent directory, so unrelated tools could inherit one
+another's browser-created cookies and headers. Fetch-bootstrap and CDP also
+used one shared jar location. The run was cancelled immediately; its results
+are not valid completion evidence.
+
+Transient browser state is now stored outside generated artifacts but under a
+separate path for each public tool and each backend rung. Repeated unchanged
+calls for one tool/rung can still avoid the expensive bootstrap, while another
+tool or rung starts from its own state. Recording discovery remains rooted at
+the site directory, so the cache change does not hide available recordings.
+This is generic execution isolation, not a site rule. The backend, CDP-jar, and
+stealth-cache suites pass 108 tests; type checking and lint pass.

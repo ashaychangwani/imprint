@@ -16,7 +16,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve as pathResolve } from 'node:path';
+import { basename, dirname, resolve as pathResolve } from 'node:path';
 import type { Page } from 'playwright';
 import { loadBackendsCacheStatus } from './backend-cache.ts';
 import {
@@ -760,26 +760,36 @@ export function __setCdpBrowserFetchFactoryForTest(
   cdpBrowserFetchFactoryForTest = fn;
 }
 
+/** Scope transient browser state to one tool and one execution rung without
+ * placing cache files inside the generated artifact directory. */
+export function compileBackendStateDir(
+  toolDir: string,
+  backend: 'fetch-bootstrap' | 'cdp-replay' | 'stealth-fetch',
+): string {
+  return pathResolve(toolDir, '..', '.imprint-backend-state', basename(toolDir), backend);
+}
+
 async function getOrMintCdpJar(
   baseUrl: string,
   bootstrapUrl: string | undefined,
-  siteDir: string,
+  cacheDir: string,
+  recordingDir: string,
   forceFresh: boolean,
 ): Promise<MintedJar | null> {
   if (cdpJarMinterForTest) return cdpJarMinterForTest(baseUrl, bootstrapUrl);
   if (!forceFresh) {
-    let cached = loadJar(siteDir);
+    let cached = loadJar(cacheDir);
     // A recording NEWER than the cached jar supersedes it — e.g. the user
     // re-recorded on a new IP, so the cached (old-IP) jar would tarpit. Drop the
     // stale cache and re-seed from the fresh recording below.
-    const rec = newestRecording(siteDir);
+    const rec = newestRecording(recordingDir);
     if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
     // No (usable) cached jar? Prefer seeding from the user's most recent
     // RECORDING — a real-browser session whose `_abck` is HIGH-TRUST (sustains
     // many sequential .act), strictly better than a synthetic cdp-browser mint
     // (low-trust → tarpitted even on a fresh IP). "The recording IS the
     // executable." Reuse the `rec` stat above so we don't re-glob.
-    if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
+    if (!cached && seedJarFromRecording(cacheDir, rec, bootstrapUrl)) cached = loadJar(cacheDir);
     if (cached) {
       const provenance =
         cached.source === 'recording'
@@ -803,7 +813,7 @@ async function getOrMintCdpJar(
     if (jar.abckFlag !== '0') {
       log(`cdp jar minted with _abck~${jar.abckFlag}~ (not validated) — replay may be rejected`);
     }
-    saveJar(siteDir, jar);
+    saveJar(cacheDir, jar);
     return jar;
   } catch (err) {
     log(`cdp jar mint failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -922,10 +932,11 @@ async function runFetchBootstrap(
   const bootstrapUrl = tool.workflow.bootstrap
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
-  const siteDir = pathResolve(tool.dir, '..');
+  const recordingDir = pathResolve(tool.dir, '..');
+  const cacheDir = compileBackendStateDir(tool.dir, 'fetch-bootstrap');
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const jar = await getOrMintCdpJar(baseUrl, bootstrapUrl, siteDir, attempt > 0);
+    const jar = await getOrMintCdpJar(baseUrl, bootstrapUrl, cacheDir, recordingDir, attempt > 0);
     if (!jar) {
       // Couldn't even launch the bootstrap browser → let the ladder escalate.
       const stateMissing = bootstrapFailureStateMissingResult(
@@ -1002,7 +1013,7 @@ async function runFetchBootstrap(
     if (result.ok) return result;
     if (attempt === 0 && jarLikelyStale(result)) {
       log('fetch-bootstrap replay was rejected (403/auth) — clearing jar and re-minting once');
-      clearJar(siteDir);
+      clearJar(cacheDir);
       continue;
     }
     return result;
@@ -1063,7 +1074,8 @@ async function runCdpReplay(
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
 
-  const siteDir = pathResolve(tool.dir, '..');
+  const recordingDir = pathResolve(tool.dir, '..');
+  const cacheDir = compileBackendStateDir(tool.dir, 'cdp-replay');
   const poolKey = cdpReplayPoolKey(tool.site, tool.workflow.toolName, bootstrapUrl ?? baseUrl);
   const pooled = cdpPool?.get(poolKey);
   const ownsSession = !pooled;
@@ -1080,10 +1092,11 @@ async function runCdpReplay(
     // available unless the caller intentionally supplies a clean credential store.
     if (tool.workflow.toolKind !== 'authenticate') {
       try {
-        const rec = newestRecording(siteDir);
-        let cached = loadJar(siteDir);
+        const rec = newestRecording(recordingDir);
+        let cached = loadJar(cacheDir);
         if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
-        if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
+        if (!cached && seedJarFromRecording(cacheDir, rec, bootstrapUrl))
+          cached = loadJar(cacheDir);
         if (cached?.cookies.length) seeds.push(...cached.cookies);
       } catch {
         // best-effort
@@ -1161,7 +1174,7 @@ async function runCdpReplay(
       if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
       try {
         const postJar = await cf.mintJar();
-        saveJar(siteDir, postJar);
+        saveJar(cacheDir, postJar);
       } catch {
         // best-effort
       } finally {
@@ -1173,7 +1186,7 @@ async function runCdpReplay(
       if (ownsSession) cdpPool.set(poolKey, cf);
       try {
         const postJar = await cf.mintJar();
-        saveJar(siteDir, postJar);
+        saveJar(cacheDir, postJar);
       } catch {
         // best-effort
       }
@@ -1649,10 +1662,10 @@ export async function runWorkflowWithLadder(opts: {
   }
   let memoWinner = compileWinningBackend.get(memoKey);
 
-  // Share one stealth token across this site's compile-time test processes.
+  // Reuse stealth state only for repeated calls to this exact tool and rung.
   const stealthCache = new Map<string, StealthFetch>();
   try {
-    const siteDir = pathResolve(toolDir, '..');
+    const cacheDir = compileBackendStateDir(toolDir, 'stealth-fetch');
     const compileCredentials = opts.credentials ?? { site: tool.site, cookies: [], values: {} };
     const compileParams = withWorkflowDefaults(workflow, opts.params);
     const baseUrl = pickBaseUrl(tool, compileParams, compileCredentials);
@@ -1662,16 +1675,16 @@ export async function runWorkflowWithLadder(opts: {
     let fileCacheConsumed = false;
     const cachingBootstrap = async (args: BootstrapArgs): Promise<TokenCache> => {
       if (!fileCacheConsumed) {
-        const cached = loadCachedToken(siteDir, STEALTH_TOKEN_MAX_AGE_SECONDS);
+        const cached = loadCachedToken(cacheDir, STEALTH_TOKEN_MAX_AGE_SECONDS);
         if (cached) {
           fileCacheConsumed = true;
-          log(`reusing cached stealth token for ${tool.site || siteDir}`);
+          log(`reusing cached stealth token for ${workflow.toolName}`);
           return cached;
         }
       }
-      clearCachedToken(siteDir);
+      clearCachedToken(cacheDir);
       const token = await bootstrapStealthToken(args);
-      saveCachedToken(siteDir, token);
+      saveCachedToken(cacheDir, token);
       fileCacheConsumed = true;
       return token;
     };

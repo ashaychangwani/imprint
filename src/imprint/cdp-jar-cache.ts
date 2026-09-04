@@ -1,7 +1,8 @@
 /**
  * File-backed cache for a cdp-browser-minted Akamai jar (MintedJar), so the
  * "bootstrap-then-fetch" path launches a real Chrome ONCE per validity window
- * and then replays many searches via plain fetch with the cached jar.
+ * and then replays repeated calls via plain fetch with the cached jar. Callers
+ * choose the cache directory; teach scopes it by tool and backend rung.
  *
  * Validity window: Akamai's ak_bmsc + bm_sv expire ~2h FIXED from first page
  * load (non-sliding — activity does not extend it), so we operate well under
