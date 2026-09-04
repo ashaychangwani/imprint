@@ -4196,3 +4196,23 @@ instead of copying stale recording values. After that factual failure, the
 master must revise the request graph, representation, or chain edge before it
 recalls compilation. No runtime semantic rule and no site-specific policy were
 added. All 111 master-agent tests, type checking, and lint pass.
+
+## 2026-09-03 21:47–22:08 PDT — A new recording adds the missing calendar grid and graph evidence
+
+Fresh single-recording run `4db73951-e9d6-4a86-b7d4-652b534c3901` began after
+the response-surface prompt fix. Both location calls were proven again. Search
+proved caller-controlled initial one-way and round-trip results through CDP and
+explicitly reported that rendered text did not expose booking handoff values or
+prove multi-city support. This confirms the new research instruction worked.
+Calendar was still exploring request constructions and Booking had just begun
+when a newer recording became available, so the run was cancelled instead of
+continuing against incomplete evidence.
+
+Both selected mounted recordings pass `imprint check`. The earlier recording
+contains the broad five-tool journey. The newer recording,
+`2026-09-03T00-14-05-516Z.json`, contains 141 requests and 33 user events. It
+specifically records four `GetCalendarGrid` calls, including an 8.4 KB result,
+and a 10.4 KB `GetCalendarGraph` result. Its narration marks both “looked at
+date grid” and “looked at price graph.” The next teach explicitly combines
+only these two recordings and starts candidate discovery fresh because their
+combined evidence has a new identity. No old candidate plan or build is reused.
